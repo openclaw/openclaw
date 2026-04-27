@@ -135,7 +135,7 @@ describe("model-pricing-cache", () => {
             api: "ollama",
             models: [{ id: "llama3.2:latest" }],
           },
-          vllm: {
+          "my-local-gpu": {
             baseUrl: "http://192.168.1.25:8000/v1",
             api: "openai-completions",
             models: [{ id: "qwen2.5-coder:7b" }],
@@ -143,7 +143,7 @@ describe("model-pricing-cache", () => {
         },
       },
       tools: {
-        subagents: { model: { primary: "vllm/qwen2.5-coder:7b" } },
+        subagents: { model: { primary: "my-local-gpu/qwen2.5-coder:7b" } },
       },
     } as unknown as OpenClawConfig;
     const fetchImpl = vi.fn<typeof fetch>();
@@ -154,6 +154,46 @@ describe("model-pricing-cache", () => {
     expect(
       getCachedGatewayModelPricing({ provider: "ollama", model: "llama3.2:latest" }),
     ).toBeUndefined();
+  });
+
+  it("seeds pricing from explicit configured model cost without external catalog fetches", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "custom/gpt-local" },
+        },
+      },
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://models.example/v1",
+            api: "openai-completions",
+            models: [
+              {
+                id: "gpt-local",
+                name: "GPT Local",
+                reasoning: false,
+                input: ["text"],
+                contextWindow: 128000,
+                maxTokens: 8192,
+                cost: { input: 0.12, output: 0.48, cacheRead: 0.01, cacheWrite: 0.02 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = vi.fn<typeof fetch>();
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(getCachedGatewayModelPricing({ provider: "custom", model: "gpt-local" })).toEqual({
+      input: 0.12,
+      output: 0.48,
+      cacheRead: 0.01,
+      cacheWrite: 0.02,
+    });
   });
 
   it("loads openrouter pricing and maps provider aliases, wrappers, and anthropic dotted ids", async () => {
@@ -631,7 +671,7 @@ describe("model-pricing-cache", () => {
     const config = {
       agents: {
         defaults: {
-          model: { primary: "moonshot/kimi-k2.6" },
+          model: { primary: "kimi/kimi-k2.6" },
         },
       },
     } as unknown as OpenClawConfig;
@@ -669,7 +709,7 @@ describe("model-pricing-cache", () => {
 
     await refreshGatewayModelPricingCache({ config, fetchImpl });
 
-    expect(getCachedGatewayModelPricing({ provider: "moonshot", model: "kimi-k2.6" })).toEqual({
+    expect(getCachedGatewayModelPricing({ provider: "kimi", model: "kimi-k2.6" })).toEqual({
       input: 0.95,
       output: 4,
       cacheRead: 0.16,

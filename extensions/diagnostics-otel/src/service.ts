@@ -1834,6 +1834,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         const metricAttrs = {
           ...modelCallMetricAttrs(evt),
           "openclaw.errorCategory": errorType,
+          ...(evt.failureKind
+            ? { "openclaw.failureKind": lowCardinalityAttr(evt.failureKind, "other") }
+            : {}),
         };
         modelCallDurationHistogram.record(evt.durationMs, metricAttrs);
         recordModelCallSizeTimingMetrics(evt, metricAttrs);
@@ -1850,6 +1853,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           "openclaw.errorCategory": errorType,
           "error.type": errorType,
         };
+        if (evt.failureKind) {
+          spanAttrs["openclaw.failureKind"] = lowCardinalityAttr(evt.failureKind, "other");
+        }
         assignGenAiModelCallAttrs(spanAttrs, evt);
         if (evt.api) {
           spanAttrs["openclaw.api"] = evt.api;

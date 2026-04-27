@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Plugins/install: allow `OPENCLAW_PLUGIN_STAGE_DIR` to contain layered runtime-dependency roots, resolving read-only preinstalled deps before installing missing deps into the final writable root. Fixes #72396. Thanks @liorb-mountapps.
 - Control UI: polish the quick settings dashboard grid so common cards align across desktop, tablet, and mobile layouts without wasting horizontal space. Thanks @BunsDev.
 - Matrix/E2EE: add `openclaw matrix encryption setup` to enable Matrix encryption, bootstrap recovery, and print verification status from one setup flow. Thanks @gumadeiras.
 - Agents/compaction: add an opt-in `agents.defaults.compaction.maxActiveTranscriptBytes` preflight trigger that runs normal local compaction when the active JSONL grows too large, requiring transcript rotation so successful compaction moves future turns onto a smaller successor file instead of raw byte-splitting history. Thanks @vincentkoc.
@@ -13,6 +14,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/models: move local-provider pricing opt-outs, OpenRouter/LiteLLM aliases, and proxy passthrough pricing lookup into plugin manifest metadata so core no longer carries extension-specific pricing tables. Thanks @codex.
 - Agents/sessions: acquire the session write lock only after cold bootstrap, plugin, and tool setup so fallback runs are not blocked by stalled pre-model startup work. Thanks @codex.
 - Gateway/models: skip external OpenRouter and LiteLLM pricing refreshes for local/self-hosted model endpoints so startup does not wait on remote pricing catalogs for local-only Ollama, vLLM, and compatible providers. Thanks @codex.
 - CLI/plugins: stop security-blocked plugin installs from retrying as hook packs, so normal plugin packages report the scanner failure without a misleading "not a valid hook pack" follow-up. Fixes #61175; supersedes #64102. Thanks @KonsultDigital and @ziyincody.
@@ -21,6 +23,7 @@ Docs: https://docs.openclaw.ai
 - Agents/Bedrock: stop heartbeat runs from persisting blank user transcript turns and repair existing blank user text messages before replay, preventing AWS Bedrock `ContentBlock` blank-text validation failures. Fixes #72640 and #72622. Thanks @goldzulu.
 - Agents/LM Studio: promote standalone bracketed local-model tool requests into registered tool calls and hide unsupported bracket blocks from visible replies, so MemPalace MCP lookups do not print raw `[tool]` JSON scaffolding in chat. Fixes #66178. Thanks @detroit357.
 - Local models: warn when an assistant reply looks like a tool call but the provider emitted plain text instead of a structured tool invocation, making fake/non-executed tool calls visible in logs. Fixes #51332. Thanks @emilclaw.
+- Local models: classify terminated, reset, closed, timeout, and aborted model-call failures and attach a process memory snapshot to the diagnostic event, making LM Studio/Ollama RAM-pressure failures easier to prove from stability bundles. Refs #65551. Thanks @BigWiLLi111.
 - LM Studio: trust configured LM Studio loopback, LAN, and tailnet endpoints for guarded model requests by default, preserving explicit private-network opt-outs. Refs #60994. Thanks @tnowakow.
 - Docker/setup: route Docker onboarding defaults for host-side LM Studio and Ollama through `host.docker.internal` and add the Linux host-gateway mapping to the bundled Compose file, so containerized gateways can reach local providers without using container loopback. Fixes #68684; supersedes #68702. Thanks @safrano9999 and @skolez.
 - Agents/LM Studio: strip prior-turn Gemma 4 reasoning from OpenAI-compatible replay while preserving active tool-call continuation reasoning. Fixes #68704. Thanks @chip-snomo and @Kailigithub.
@@ -53,6 +56,7 @@ Docs: https://docs.openclaw.ai
 - Google Meet: clean stale chrome-node realtime audio bridges by URL before rejoining, expose active node bridge inspection, and tolerate transient node input pull failures instead of dropping the Meet session. Fixes #72371. (#72372) Thanks @BsnizND.
 - Google Meet: clear queued Gemini Live playback when realtime interruptions arrive, restart Chrome command-pair audio output after clears, and expose Google Live interruption/VAD config knobs for Meet and Voice Call realtime bridges. Fixes #72523. (#72524) Thanks @BsnizND.
 - Google Meet: add `realtime.agentId` so live meeting consults can target a named OpenClaw agent instead of always using `main`. (#72381) Thanks @BsnizND.
+- Google Meet: route stateful `google_meet` tool actions through the gateway-owned runtime so created or joined realtime sessions remain visible to status, speak, and leave after the agent turn ends. Fixes #72440. (#72441) Thanks @BsnizND.
 - Matrix/E2EE: stabilize recovery and broken-device QA flows while avoiding Matrix device-cleanup sync races that could leave shutdown-time crypto work running. Thanks @gumadeiras.
 - Cron: treat isolated run-level agent failures as job errors even when no reply payload is produced, synthesizing a safe error payload so model/provider failures increment error counters and trigger failure notifications instead of clearing as successful. Fixes #43604; carries forward #43631. Thanks @SPFAdvisors.
 - Cron: preserve exact `NO_REPLY` tool results from isolated jobs with empty final assistant turns as quiet successes instead of surfacing incomplete-turn errors. Fixes #68452; carries forward #68453. Thanks @anyech.
@@ -87,6 +91,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/startup: resolve channel runtime helpers asynchronously only when an enabled/configured channel starts, so no-channel Gateway boot skips auto-reply, media, pairing, and outbound channel helper imports. Thanks @vincentkoc.
 - Gateway/startup: lazy-load HTTP auth, canvas auth, and plugin route scope helpers from their request paths so Gateway bind no longer pays those utility graphs during boot. Thanks @vincentkoc.
 - Gateway/startup: defer isolated cron runner imports until `/hooks/agent` dispatch so Gateway boot skips the agent-turn runtime on installs that only need normal HTTP bind. Thanks @vincentkoc.
+- Gateway/startup: split hook request parsing into a request-path module and load the Gateway hook dispatcher only when a request matches the hooks base path, keeping hook mapping and throttle helpers off plain HTTP bind. Thanks @vincentkoc.
 - CLI/Gateway: use a parse-only config snapshot for plain `gateway status` reads and reuse same-path service config context so status no longer spends tens of seconds in full config validation before printing. Thanks @vincentkoc.
 - Lobster/Gateway: memoize repeated Ajv schema compilation before loading the embedded Lobster runtime so scheduled workflows and `llm.invoke` loops stop growing gateway heap on content-identical schemas. Fixes #71148. Thanks @cmi525, @vsolaz, and @vincentkoc.
 - Codex harness: normalize cached input tokens before session/context accounting so prompt cache reads are not double-counted in `/status`, `session_status`, or persisted `sessionEntry.totalTokens`. Fixes #69298. Thanks @richardmqq.
@@ -132,6 +137,7 @@ Docs: https://docs.openclaw.ai
 - CLI/models: include explicitly configured provider models in `openclaw models list --provider <id>` without requiring the full catalog path, so configured Ollama models are visible. Fixes #65207. Thanks @drzeast-png.
 - Docker/QA: add observability coverage to the normal Docker aggregate so QA-lab OTEL and Prometheus diagnostics run inside Docker. Thanks @vincentkoc.
 - Auto-reply: poison inbound message dedupe after replay-unsafe provider/runtime failures so retries stay safe before visible progress but cannot duplicate messages after block output, tool side effects, or session progress. Fixes #69303; keeps #58549 and #64606 as duplicate validation. Thanks @martingarramon, @NikolaFC, and @zeroth-blip.
+- Agents/model fallback: keep auto-persisted fallback model overrides selected across turns until `/new` or reset clears them, avoiding repeated probes of a known-bad primary while `/status` shows the selected and active models. Thanks @kibedu.
 - Agents/model fallback: jump directly to a known later live-session model redirect instead of walking unrelated fallback candidates, while preserving the already-landed live-session/fallback loop guard. Fixes #57471; related loop family already closed via #58496. Thanks @yuxiaoyang2007-prog.
 - Gateway/Bonjour: keep @homebridge/ciao cancellation handlers registered across advertiser restarts so late probing cancellations cannot crash Linux and other mDNS-churned gateways. Thanks @codex.
 - Plugins/startup: load the default `memory-core` slot during Gateway startup when permitted so active-memory recall can call `memory_search` and `memory_get` without requiring an explicit `plugins.slots.memory` entry, while preserving `plugins.slots.memory: "none"`. Thanks @codex.

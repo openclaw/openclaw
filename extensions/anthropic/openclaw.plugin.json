@@ -6,6 +6,15 @@
   "modelSupport": {
     "modelPrefixes": ["claude-"]
   },
+  "modelPricing": {
+    "providers": {
+      "anthropic": {
+        "openRouter": {
+          "modelIdTransforms": ["version-dots"]
+        }
+      }
+    }
+  },
   "cliBackends": ["claude-cli"],
   "syntheticAuthRefs": ["claude-cli"],
   "providerAuthEnvVars": {

@@ -144,6 +144,7 @@ or npm install metadata. Those belong in your plugin code and `package.json`.
 | `providerDiscoveryEntry`             | No       | `string`                         | Lightweight provider-discovery module path, relative to the plugin root, for manifest-scoped provider catalog metadata that can be loaded without activating the full plugin runtime.                                             |
 | `modelSupport`                       | No       | `object`                         | Manifest-owned shorthand model-family metadata used to auto-load the plugin before runtime.                                                                                                                                       |
 | `modelCatalog`                       | No       | `object`                         | Declarative model catalog metadata for providers owned by this plugin. This is the control-plane contract for future read-only listing, onboarding, model pickers, aliases, and suppression without loading plugin runtime.       |
+| `modelPricing`                       | No       | `object`                         | Provider-owned external pricing lookup policy. Use it to opt local/self-hosted providers out of remote pricing catalogs or map provider refs to OpenRouter/LiteLLM catalog ids without hardcoding provider ids in core.           |
 | `providerEndpoints`                  | No       | `object[]`                       | Manifest-owned endpoint host/baseUrl metadata for provider routes that core must classify before provider runtime loads.                                                                                                          |
 | `cliBackends`                        | No       | `string[]`                       | CLI inference backend ids owned by this plugin. Used for startup auto-activation from explicit config refs.                                                                                                                       |
 | `syntheticAuthRefs`                  | No       | `string[]`                       | Provider or CLI backend refs whose plugin-owned synthetic auth hook should be probed during cold model discovery before runtime loads.                                                                                            |
@@ -743,6 +744,47 @@ Model fields:
 Do not put runtime-only data in `modelCatalog`. If a provider needs account
 state, an API request, or local process discovery to know the complete model
 set, declare that provider as `refreshable` or `runtime` in `discovery`.
+
+## modelPricing reference
+
+Use `modelPricing` when a provider needs control-plane pricing behavior before
+runtime loads. The Gateway pricing cache reads this metadata without importing
+provider runtime code.
+
+```json
+{
+  "providers": ["ollama", "openrouter"],
+  "modelPricing": {
+    "providers": {
+      "ollama": {
+        "external": false
+      },
+      "openrouter": {
+        "openRouter": {
+          "passthroughProviderModel": true
+        },
+        "liteLLM": false
+      }
+    }
+  }
+}
+```
+
+Provider fields:
+
+| Field        | Type              | What it means                                                                                      |
+| ------------ | ----------------- | -------------------------------------------------------------------------------------------------- |
+| `external`   | `boolean`         | Set `false` for local/self-hosted providers that should never fetch OpenRouter or LiteLLM pricing. |
+| `openRouter` | `false \| object` | OpenRouter pricing lookup mapping. `false` disables OpenRouter lookup for this provider.           |
+| `liteLLM`    | `false \| object` | LiteLLM pricing lookup mapping. `false` disables LiteLLM lookup for this provider.                 |
+
+Source fields:
+
+| Field                      | Type               | What it means                                                                                                        |
+| -------------------------- | ------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| `provider`                 | `string`           | External catalog provider id when it differs from the OpenClaw provider id, for example `z-ai` for a `zai` provider. |
+| `passthroughProviderModel` | `boolean`          | Treat slash-containing model ids as nested provider/model refs, useful for proxy providers such as OpenRouter.       |
+| `modelIdTransforms`        | `"version-dots"[]` | Extra external catalog model-id variants. `version-dots` tries dotted version ids like `claude-opus-4.6`.            |
 
 ### OpenClaw Provider Index
 

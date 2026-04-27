@@ -30,7 +30,6 @@ import type { ChannelKind } from "./config-reload-plan.js";
 import { startGatewayConfigReloader, type GatewayReloadPlan } from "./config-reload.js";
 import { resolveHooksConfig } from "./hooks.js";
 import { buildGatewayCronService, type GatewayCronState } from "./server-cron.js";
-import type { HookClientIpConfig } from "./server-http.js";
 import {
   type GatewayChannelManager,
   startGatewayChannelHealthMonitor,
@@ -43,7 +42,8 @@ import {
   type SharedGatewaySessionGenerationState,
 } from "./server-shared-auth-generation.js";
 import type { ActivateRuntimeSecrets } from "./server-startup-config.js";
-import { resolveHookClientIpConfig } from "./server/hooks.js";
+import { resolveHookClientIpConfig } from "./server/hook-client-ip-config.js";
+import type { HookClientIpConfig } from "./server/hooks-request-handler.js";
 
 type GatewayHotReloadState = {
   hooksConfig: ReturnType<typeof resolveHooksConfig>;

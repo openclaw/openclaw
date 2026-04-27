@@ -24,7 +24,7 @@ vi.mock("../../config/config.js", () => ({
 
 let capturedDispatchAgentHook: ((...args: unknown[]) => unknown) | undefined;
 
-vi.mock("../server-http.js", () => ({
+vi.mock("./hooks-request-handler.js", () => ({
   createHooksRequestHandler: vi.fn((opts: Record<string, unknown>) => {
     capturedDispatchAgentHook = opts.dispatchAgentHook as typeof capturedDispatchAgentHook;
     return vi.fn();

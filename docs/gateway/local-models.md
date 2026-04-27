@@ -191,6 +191,11 @@ Compatibility notes for stricter OpenAI-compatible backends:
 
 - Gateway can reach the proxy? `curl http://127.0.0.1:1234/v1/models`.
 - LM Studio model unloaded? Reload; cold start is a common “hanging” cause.
+- Local server says `terminated`, `ECONNRESET`, or closes the stream mid-turn?
+  OpenClaw records a low-cardinality `model.call.error.failureKind` plus the
+  OpenClaw process RSS/heap snapshot in diagnostics. For LM Studio/Ollama
+  memory pressure, match that timestamp against the server log or macOS crash /
+  jetsam log to confirm whether the model server was killed.
 - OpenClaw warns when the detected context window is below **32k** and blocks below **16k**. If you hit that preflight, raise the server/model context limit or choose a larger model.
 - Context errors? Lower `contextWindow` or raise your server limit.
 - OpenAI-compatible server returns `messages[].content ... expected a string`?

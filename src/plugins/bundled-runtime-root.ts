@@ -3,7 +3,7 @@ import path from "node:path";
 import {
   ensureBundledPluginRuntimeDeps,
   materializeBundledRuntimeMirrorDistFile,
-  resolveBundledRuntimeDependencyInstallRoot,
+  resolveBundledRuntimeDependencyInstallRootPlan,
   resolveBundledRuntimeDependencyPackageRoot,
   registerBundledRuntimeDependencyNodePath,
   shouldMaterializeBundledRuntimeMirrorDistFile,
@@ -30,7 +30,10 @@ export function prepareBundledPluginRuntimeRoot(params: {
   logInstalled?: (installedSpecs: readonly string[]) => void;
 }): { pluginRoot: string; modulePath: string } {
   const env = params.env ?? process.env;
-  const installRoot = resolveBundledRuntimeDependencyInstallRoot(params.pluginRoot, { env });
+  const installRootPlan = resolveBundledRuntimeDependencyInstallRootPlan(params.pluginRoot, {
+    env,
+  });
+  const installRoot = installRootPlan.installRoot;
   const retainSpecs = bundledRuntimeDepsRetainSpecsByInstallRoot.get(installRoot) ?? [];
   const depsInstallResult = ensureBundledPluginRuntimeDeps({
     pluginId: params.pluginId,
@@ -54,7 +57,9 @@ export function prepareBundledPluginRuntimeRoot(params: {
   if (packageRoot) {
     registerBundledRuntimeDependencyNodePath(packageRoot);
   }
-  registerBundledRuntimeDependencyNodePath(installRoot);
+  for (const searchRoot of installRootPlan.searchRoots) {
+    registerBundledRuntimeDependencyNodePath(searchRoot);
+  }
   const mirrorRoot = mirrorBundledPluginRuntimeRoot({
     pluginId: params.pluginId,
     pluginRoot: params.pluginRoot,

@@ -563,6 +563,22 @@ describe("loadPluginManifestRegistry", () => {
           ignored: "unknown",
         },
       },
+      modelPricing: {
+        providers: {
+          moonshot: {
+            openRouter: {
+              provider: "moonshotai",
+              modelIdTransforms: ["version-dots", "unknown"],
+            },
+            liteLLM: {
+              provider: "moonshot",
+            },
+          },
+          openai: {
+            external: false,
+          },
+        },
+      },
       configSchema: { type: "object" },
     });
 
@@ -628,6 +644,19 @@ describe("loadPluginManifestRegistry", () => {
       ],
       discovery: {
         moonshot: "static",
+      },
+    });
+    expect(registry.plugins[0]?.modelPricing).toEqual({
+      providers: {
+        moonshot: {
+          openRouter: {
+            provider: "moonshotai",
+            modelIdTransforms: ["version-dots"],
+          },
+          liteLLM: {
+            provider: "moonshot",
+          },
+        },
       },
     });
   });

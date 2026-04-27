@@ -21,6 +21,7 @@ import {
   materializeBundledRuntimeMirrorDistFile,
   repairBundledRuntimeDepsInstallRootAsync,
   resolveBundledRuntimeDependencyInstallRoot,
+  resolveBundledRuntimeDependencyInstallRootPlan,
   resolveBundledRuntimeDepsNpmRunner,
   scanBundledPluginRuntimeDeps,
   type BundledRuntimeDepsInstallParams,
@@ -989,6 +990,47 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
     expect(result.deps[0]?.pluginIds).toEqual(["logger-plugin", "openclaw-core"]);
     expect(result.missing.map((dep) => `${dep.name}@${dep.version}`)).toEqual(["tslog@^4.10.2"]);
   });
+
+  it("resolves runtime deps from layered external stage dirs", () => {
+    const packageRoot = makeTempDir();
+    const baselineStageDir = makeTempDir();
+    const writableStageDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.25" }),
+    );
+    const pluginRoot = writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "slack",
+      deps: {
+        "@slack/web-api": "7.15.1",
+        grammy: "1.37.0",
+      },
+      enabledByDefault: true,
+    });
+    const env = {
+      OPENCLAW_PLUGIN_STAGE_DIR: [baselineStageDir, writableStageDir].join(path.delimiter),
+    };
+    const installRootPlan = resolveBundledRuntimeDependencyInstallRootPlan(pluginRoot, { env });
+    writeInstalledPackage(
+      installRootPlan.searchRoots[0] ?? baselineStageDir,
+      "@slack/web-api",
+      "7.15.1",
+    );
+
+    const result = scanBundledPluginRuntimeDeps({
+      packageRoot,
+      config: {},
+      env,
+    });
+
+    expect(installRootPlan.installRoot).toContain(writableStageDir);
+    expect(result.deps.map((dep) => `${dep.name}@${dep.version}`)).toEqual([
+      "@slack/web-api@7.15.1",
+      "grammy@1.37.0",
+    ]);
+    expect(result.missing.map((dep) => `${dep.name}@${dep.version}`)).toEqual(["grammy@1.37.0"]);
+  });
 });
 
 describe("ensureBundledPluginRuntimeDeps", () => {
@@ -1236,6 +1278,64 @@ describe("ensureBundledPluginRuntimeDeps", () => {
       pluginRoot,
     });
     expect(second).toEqual({ installedSpecs: [], retainSpecs: [] });
+  });
+
+  it("installs only missing deps into the final layered stage dir", () => {
+    const packageRoot = makeTempDir();
+    const baselineStageDir = makeTempDir();
+    const writableStageDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.25" }),
+    );
+    const pluginRoot = path.join(packageRoot, "dist", "extensions", "slack");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({
+        dependencies: {
+          "@slack/web-api": "7.15.1",
+          grammy: "1.37.0",
+        },
+      }),
+    );
+    const env = {
+      OPENCLAW_PLUGIN_STAGE_DIR: [baselineStageDir, writableStageDir].join(path.delimiter),
+    };
+    const installRootPlan = resolveBundledRuntimeDependencyInstallRootPlan(pluginRoot, { env });
+    const baselineRoot = installRootPlan.searchRoots[0] ?? baselineStageDir;
+    writeInstalledPackage(baselineRoot, "@slack/web-api", "7.15.1");
+
+    const calls: BundledRuntimeDepsInstallParams[] = [];
+    const result = ensureBundledPluginRuntimeDeps({
+      env,
+      installDeps: (params) => {
+        calls.push(params);
+        fs.rmSync(path.join(params.installRoot, "node_modules", "@slack", "web-api"), {
+          recursive: true,
+          force: true,
+        });
+        writeInstalledPackage(params.installRoot, "grammy", "1.37.0");
+      },
+      pluginId: "slack",
+      pluginRoot,
+    });
+
+    expect(installRootPlan.installRoot).toContain(writableStageDir);
+    expect(result).toEqual({
+      installedSpecs: ["grammy@1.37.0"],
+      retainSpecs: ["grammy@1.37.0"],
+    });
+    expect(calls).toEqual([
+      {
+        installRoot: installRootPlan.installRoot,
+        missingSpecs: ["grammy@1.37.0"],
+        installSpecs: ["grammy@1.37.0"],
+      },
+    ]);
+    expect(
+      fs.realpathSync(path.join(installRootPlan.installRoot, "node_modules", "@slack", "web-api")),
+    ).toBe(fs.realpathSync(path.join(baselineRoot, "node_modules", "@slack", "web-api")));
   });
 
   it("retains external staged deps across separate loader passes", () => {
