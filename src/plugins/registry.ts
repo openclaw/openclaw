@@ -2208,12 +2208,14 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 }),
               registerSessionSchedulerJob: (job) => registerSessionSchedulerJob(record, job),
               scheduleSessionTurn: (schedule) =>
-                schedulePluginSessionTurn({
-                  pluginId: record.id,
-                  pluginName: record.name,
-                  origin: record.origin,
-                  schedule,
-                }),
+                registryParams.activateGlobalSideEffects === false
+                  ? Promise.resolve(undefined)
+                  : schedulePluginSessionTurn({
+                      pluginId: record.id,
+                      pluginName: record.name,
+                      origin: record.origin,
+                      schedule,
+                    }),
               sendSessionAttachment: (params) =>
                 sendPluginSessionAttachment({ ...params, origin: record.origin }),
               registerSessionAction: (action) => registerSessionAction(record, action),
