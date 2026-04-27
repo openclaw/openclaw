@@ -210,7 +210,6 @@ const CronDeliveryWebhookSchema = Type.Object(
   {
     mode: Type.Literal("webhook"),
     ...CronDeliverySharedProperties,
-    // Webhook specifically requires 'to' to be a NonEmptyString
     to: NonEmptyString,
   },
   { additionalProperties: false },
@@ -381,5 +380,6 @@ export const CronRunLogEntrySchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
 
 
