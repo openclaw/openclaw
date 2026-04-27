@@ -4,6 +4,7 @@ import {
   DEFAULT_LOCAL_MODEL,
   listMemoryEmbeddingProviders,
   listRegisteredMemoryEmbeddingProviderAdapters,
+  registerMemoryEmbeddingProvider,
   type MemoryEmbeddingProviderAdapter,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveUserPath } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
@@ -133,6 +134,14 @@ export function registerBuiltInMemoryEmbeddingProviders(register: {
     registeredAdapters: listRegisteredMemoryEmbeddingProviderAdapters(),
   })) {
     register.registerMemoryEmbeddingProvider(adapter);
+  }
+}
+export function ensureBuiltInMemoryEmbeddingProvidersRegistered(): void {
+  for (const adapter of filterUnregisteredMemoryEmbeddingProviderAdapters({
+    builtinAdapters: builtinMemoryEmbeddingProviderAdapters,
+    registeredAdapters: listRegisteredMemoryEmbeddingProviderAdapters(),
+  })) {
+    registerMemoryEmbeddingProvider(adapter);
   }
 }
 

@@ -56,6 +56,7 @@ import {
   runMemorySyncWithReadonlyRecovery,
   type MemoryReadonlyRecoveryState,
 } from "./manager-sync-control.js";
+import { ensureBuiltInMemoryEmbeddingProvidersRegistered } from "./provider-adapters.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 const SNIPPET_MAX_CHARS = 700;
 const VECTOR_TABLE = "chunks_vec";
@@ -158,6 +159,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     agentId: string;
     settings: ResolvedMemorySearchConfig;
   }): Promise<EmbeddingProviderResult> {
+    ensureBuiltInMemoryEmbeddingProvidersRegistered();
     return await createEmbeddingProvider({
       config: params.cfg,
       agentDir: resolveAgentDir(params.cfg, params.agentId),

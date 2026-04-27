@@ -6,6 +6,7 @@ export {
   listMemoryEmbeddingProviders,
   listRegisteredMemoryEmbeddingProviderAdapters,
 } from "../plugins/memory-embedding-provider-runtime.js";
+export { registerMemoryEmbeddingProvider } from "../plugins/memory-embedding-providers.js";
 export type {
   MemoryEmbeddingBatchChunk,
   MemoryEmbeddingBatchOptions,
