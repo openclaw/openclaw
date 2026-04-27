@@ -746,6 +746,14 @@ async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
       continue;
     }
 
+    // Guard: if store is empty, skip cleanup to avoid false orphan archival
+    if (Object.keys(store).length === 0) {
+      logger.warn(
+        `[memory-core] dreaming cleanup: session store is empty for agent ${agentEntry.name}; skipping cleanup for this agent.`,
+      );
+      continue;
+    }
+
     const referencedSessionFiles = new Set<string>();
     let needsStoreUpdate = false;
     for (const [key, entry] of Object.entries(store)) {
@@ -943,3 +951,4 @@ export async function generateAndAppendDreamNarrative(params: {
     });
   }
 }
+
