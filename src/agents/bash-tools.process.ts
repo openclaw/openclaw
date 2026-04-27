@@ -138,6 +138,10 @@ function mergeTimeoutEmptyLogOutput(params: {
   });
 }
 
+function hasPendingOutput(session: ProcessSession) {
+  return (session.pendingStdoutChars ?? 0) > 0 || (session.pendingStderrChars ?? 0) > 0;
+}
+
 function recordPollRetrySuggestion(sessionId: string, hasNewOutput: boolean): number | undefined {
   try {
     const sessionState = getDiagnosticSessionState({ sessionId });
@@ -191,7 +195,7 @@ export function createProcessTool(
     displaySummary: PROCESS_TOOL_DISPLAY_SUMMARY,
     description: describeProcessTool({ hasCronTool: defaults?.hasCronTool === true }),
     parameters: processSchema,
-    execute: async (_toolCallId, args, _signal, _onUpdate): Promise<AgentToolResult<unknown>> => {
+    execute: async (_toolCallId, args, signal, _onUpdate): Promise<AgentToolResult<unknown>> => {
       const params = args as {
         action:
           | "list"
@@ -370,9 +374,21 @@ export function createProcessTool(
             return failText(`Session ${params.sessionId} is not backgrounded.`);
           }
           const pollWaitMs = resolvePollWaitMs(params.timeout);
-          if (pollWaitMs > 0 && !scopedSession.exited) {
+          if (
+            pollWaitMs > 0 &&
+            !scopedSession.exited &&
+            !hasPendingOutput(scopedSession) &&
+            !signal?.aborted
+          ) {
             const deadline = Date.now() + pollWaitMs;
-            while (!scopedSession.exited && Date.now() < deadline) {
+            while (
+              !scopedSession.exited &&
+              !hasPendingOutput(scopedSession) &&
+              Date.now() < deadline
+            ) {
+              if (signal?.aborted) {
+                break;
+              }
               await new Promise((resolve) =>
                 setTimeout(resolve, Math.max(0, Math.min(250, deadline - Date.now()))),
               );

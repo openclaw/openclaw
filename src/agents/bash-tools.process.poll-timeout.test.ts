@@ -30,13 +30,14 @@ async function pollSession(
   callId: string,
   sessionId: string,
   timeout?: number | string,
+  signal?: AbortSignal,
 ) {
   const args = {
     action: "poll",
     sessionId,
     ...(timeout === undefined ? {} : { timeout }),
   } as unknown as Parameters<ReturnType<typeof createProcessTool>["execute"]>[1];
-  return processTool.execute(callId, args);
+  return processTool.execute(callId, args, signal);
 }
 
 async function logSession(
@@ -113,6 +114,66 @@ test("process poll accepts string timeout values", async () => {
     timeout: "2000",
     advanceMs: 350,
   });
+});
+
+test("process poll returns unread output before entering a timed wait", async () => {
+  vi.useFakeTimers();
+  try {
+    const sessionId = "sess-timeout-pending";
+    const { processTool, session } = createProcessSessionHarness(sessionId);
+    appendOutput(session, "stdout", "ready\n");
+
+    let resolved = false;
+    const pollPromise = pollSession(processTool, "toolcall-timeout-pending", sessionId, 2000).then(
+      (result) => {
+        resolved = true;
+        return result;
+      },
+    );
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(resolved).toBe(true);
+    const poll = await pollPromise;
+    const text = poll.content[0]?.type === "text" ? poll.content[0].text : "";
+
+    expect(pollStatus(poll)).toBe("running");
+    expect(text).toContain("ready");
+    expect(text).toContain("Process still running.");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("process poll timed waits stop when the tool call is aborted", async () => {
+  vi.useFakeTimers();
+  try {
+    const sessionId = "sess-timeout-abort";
+    const { processTool } = createProcessSessionHarness(sessionId);
+    const controller = new AbortController();
+
+    let resolved = false;
+    const pollPromise = pollSession(
+      processTool,
+      "toolcall-timeout-abort",
+      sessionId,
+      2000,
+      controller.signal,
+    ).then((result) => {
+      resolved = true;
+      return result;
+    });
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(resolved).toBe(false);
+    controller.abort();
+    await vi.advanceTimersByTimeAsync(150);
+
+    expect(resolved).toBe(true);
+    const poll = await pollPromise;
+    expect(pollStatus(poll)).toBe("running");
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("process poll exposes adaptive retryInMs for repeated no-output polls", async () => {

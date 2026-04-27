@@ -97,11 +97,8 @@ function formatBashFinishedOutput(finished: {
     if (!trimmedOutput) {
       return failureReason;
     }
-    if (failureReason.includes(trimmedOutput)) {
+    if (failureReason === trimmedOutput) {
       return failureReason;
-    }
-    if (trimmedOutput.includes(failureReason)) {
-      return trimmedOutput;
     }
     return `${trimmedOutput}\n\n${failureReason}`;
   }
