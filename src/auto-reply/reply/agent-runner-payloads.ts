@@ -27,7 +27,12 @@ let replyPayloadsDedupeRuntimePromise: Promise<
   typeof import("./reply-payloads-dedupe.runtime.js")
 > | null = null;
 
-const EMOTION_RAW_TTS_TEXT_KEY = "__openclawEmotionRawTtsText";
+// Use a module-private Symbol as the carrier so untrusted upstream payloads
+// (plugin/tool/structured model output) cannot spoof the marker via a normal
+// string-key property — Symbols are not enumerable through JSON, never appear
+// in payloads parsed from external input, and can't be set without holding a
+// reference to this exact module-private value.
+const EMOTION_RAW_TTS_TEXT_KEY: unique symbol = Symbol("openclawEmotionRawTtsText");
 
 type EmotionTaggedPayload = ReplyPayload & {
   [EMOTION_RAW_TTS_TEXT_KEY]?: string;
