@@ -18,6 +18,7 @@ import {
   installPluginFromMarketplace,
   resolveMarketplaceInstallShortcut,
 } from "../plugins/marketplace.js";
+import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { defaultRuntime } from "../runtime.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
@@ -52,6 +53,64 @@ function resolveInstallSafetyOverrides(overrides: InstallSafetyOverrides): Insta
   };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function isEmptyRecord(value: Record<string, unknown>): boolean {
+  return Object.keys(value).length === 0;
+}
+
+function hasValidBundledPluginConfig(params: {
+  bundledSource: BundledPluginSource;
+  existingEntry: unknown;
+}): boolean {
+  if (!params.bundledSource.requiresConfig) {
+    return true;
+  }
+  if (!isRecord(params.existingEntry)) {
+    return false;
+  }
+  const config = params.existingEntry.config;
+  if (!isRecord(config)) {
+    return false;
+  }
+  if (!params.bundledSource.configSchema) {
+    return !isEmptyRecord(config);
+  }
+  return validateJsonSchemaValue({
+    schema: params.bundledSource.configSchema,
+    cacheKey: `bundled-install:${params.bundledSource.pluginId}`,
+    value: config,
+    applyDefaults: true,
+  }).ok;
+}
+
+function prepareConfigForDisabledBundledInstall(
+  config: OpenClawConfig,
+  pluginId: string,
+): OpenClawConfig {
+  const entries = config.plugins?.entries ?? {};
+  const existingEntry = entries[pluginId];
+  const nextEntry = {
+    ...(isRecord(existingEntry) ? existingEntry : {}),
+    enabled: false,
+  };
+  if (isRecord(nextEntry.config) && isEmptyRecord(nextEntry.config)) {
+    delete nextEntry.config;
+  }
+  return {
+    ...config,
+    plugins: {
+      ...config.plugins,
+      entries: {
+        ...entries,
+        [pluginId]: nextEntry,
+      },
+    },
+  };
+}
+
 async function installBundledPluginSource(params: {
   snapshot: ConfigSnapshotForInstallPersist;
   rawSpec: string;
@@ -61,27 +120,24 @@ async function installBundledPluginSource(params: {
   const existing = params.snapshot.config.plugins?.load?.paths ?? [];
   const mergedPaths = Array.from(new Set([...existing, params.bundledSource.localPath]));
   const existingEntry = params.snapshot.config.plugins?.entries?.[params.bundledSource.pluginId];
-  const shouldEnable =
-    !params.bundledSource.requiresConfig ||
-    Boolean(
-      existingEntry &&
-      typeof existingEntry === "object" &&
-      !Array.isArray(existingEntry) &&
-      existingEntry.config &&
-      typeof existingEntry.config === "object" &&
-      !Array.isArray(existingEntry.config),
-    );
+  const shouldEnable = hasValidBundledPluginConfig({
+    bundledSource: params.bundledSource,
+    existingEntry,
+  });
+  const configBase = shouldEnable
+    ? params.snapshot.config
+    : prepareConfigForDisabledBundledInstall(params.snapshot.config, params.bundledSource.pluginId);
   const configWarning = shouldEnable
     ? ""
     : `Installed bundled plugin "${params.bundledSource.pluginId}" without enabling it because it requires configuration first. Configure it, then run \`openclaw plugins enable ${params.bundledSource.pluginId}\`.`;
   await persistPluginInstall({
     snapshot: {
       config: {
-        ...params.snapshot.config,
+        ...configBase,
         plugins: {
-          ...params.snapshot.config.plugins,
+          ...configBase.plugins,
           load: {
-            ...params.snapshot.config.plugins?.load,
+            ...configBase.plugins?.load,
             paths: mergedPaths,
           },
         },

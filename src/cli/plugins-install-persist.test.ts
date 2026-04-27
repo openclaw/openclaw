@@ -132,7 +132,15 @@ describe("persistPluginInstall", () => {
       },
     });
 
-    expect(next).toEqual(baseConfig);
+    expect(next).toEqual({
+      plugins: {
+        entries: {
+          "memory-lancedb": {
+            enabled: false,
+          },
+        },
+      },
+    });
     expect(enablePluginInConfig).not.toHaveBeenCalled();
     expect(applyExclusiveSlotSelection).not.toHaveBeenCalled();
     expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({
@@ -141,6 +149,43 @@ describe("persistPluginInstall", () => {
         sourcePath: "/app/dist/extensions/memory-lancedb",
       }),
     });
-    expect(writeConfigFile).toHaveBeenCalledWith(baseConfig);
+    expect(writeConfigFile).toHaveBeenCalledWith({
+      plugins: {
+        entries: {
+          "memory-lancedb": {
+            enabled: false,
+          },
+        },
+      },
+    });
+  });
+
+  it("does not add disabled installs to restrictive allowlists", async () => {
+    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const baseConfig = {
+      plugins: {
+        allow: ["memory-core"],
+        deny: ["memory-lancedb"],
+      },
+    } as OpenClawConfig;
+
+    const next = await persistPluginInstall({
+      snapshot: {
+        config: baseConfig,
+        baseHash: "config-1",
+      },
+      pluginId: "memory-lancedb",
+      enable: false,
+      install: {
+        source: "path",
+        spec: "memory-lancedb",
+        sourcePath: "/app/dist/extensions/memory-lancedb",
+        installPath: "/app/dist/extensions/memory-lancedb",
+      },
+    });
+
+    expect(next.plugins?.allow).toEqual(["memory-core"]);
+    expect(next.plugins?.deny).toEqual(["memory-lancedb"]);
+    expect(next.plugins?.entries?.["memory-lancedb"]?.enabled).toBe(false);
   });
 });
