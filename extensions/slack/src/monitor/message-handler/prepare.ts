@@ -755,13 +755,15 @@ export async function prepareSlackMessage(params: {
     OriginatingTo: slackTo,
     NativeChannelId: message.channel,
   }) satisfies FinalizedMsgContext;
-  const pinnedMainDmOwner = isDirectMessage
-    ? resolvePinnedMainDmOwnerFromAllowlist({
-        dmScope: cfg.session?.dmScope,
-        allowFrom: ctx.allowFrom,
-        normalizeEntry: normalizeSlackAllowOwnerEntry,
-      })
-    : null;
+  const lastRouteSessionKey = route.lastRoutePolicy === "main" ? route.mainSessionKey : sessionKey;
+  const pinnedMainDmOwner =
+    isDirectMessage && route.lastRoutePolicy === "main"
+      ? resolvePinnedMainDmOwnerFromAllowlist({
+          dmScope: cfg.session?.dmScope,
+          allowFrom: ctx.allowFrom,
+          normalizeEntry: normalizeSlackAllowOwnerEntry,
+        })
+      : null;
 
   // Live DM replies should target the concrete Slack DM channel id we just
   // received on. This avoids depending on a follow-up conversations.open
@@ -789,7 +791,7 @@ export async function prepareSlackMessage(params: {
       record: {
         updateLastRoute: isDirectMessage
           ? {
-              sessionKey: route.mainSessionKey,
+              sessionKey: lastRouteSessionKey,
               channel: "slack",
               to: `user:${message.user}`,
               accountId: route.accountId,
