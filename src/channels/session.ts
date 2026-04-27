@@ -51,7 +51,7 @@ export async function recordInboundSession(params: {
     .catch(params.onRecordError);
 
   const update = params.updateLastRoute;
-  if (!update) {
+  if (!update || createIfMissing === false) {
     return;
   }
   if (shouldSkipPinnedMainDmRouteUpdate(update.mainDmOwnerPin)) {
