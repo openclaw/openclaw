@@ -222,9 +222,7 @@ export {
   archiveFileOnDisk,
   archiveSessionTranscripts,
   cleanupArchivedSessionTranscripts,
-  findLatestResetArchive,
   resolveSessionTranscriptCandidates,
-  unarchiveSessionTranscript,
 } from "./session-transcript-files.fs.js";
 
 export function capArrayByJsonBytes<T>(
