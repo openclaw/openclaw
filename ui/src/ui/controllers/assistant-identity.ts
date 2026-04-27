@@ -35,7 +35,7 @@ export async function loadAssistantIdentity(
     if (!res) {
       return;
     }
-    if (!opts?.sessionKey && state.sessionKey.trim() !== sessionKey) {
+    if (!opts?.sessionKey && sessionKey && state.sessionKey.trim() !== sessionKey) {
       return;
     }
     const normalized = normalizeAssistantIdentity(res);

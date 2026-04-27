@@ -80,6 +80,8 @@ export async function loadControlUiBootstrapConfig(state: ControlUiBootstrapStat
     const bootstrapAgentId = normalizeAgentId(normalized.agentId);
     const shouldApplyIdentity =
       !activeAgentId || normalizeAgentId(activeAgentId) === bootstrapAgentId;
+    // Non-default active sessions skip bootstrap identity and local avatar overrides here;
+    // the WebSocket identity load applies the session-specific state.
     if (shouldApplyIdentity) {
       state.assistantName = normalized.name;
       state.assistantAvatar = normalized.avatar;
