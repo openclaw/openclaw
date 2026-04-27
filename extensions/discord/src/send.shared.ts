@@ -517,7 +517,7 @@ async function sendDiscordText(
     });
     const body = stripUndefinedFields({
       ...serializePayload(payload),
-      ...(messageReference ? { message_reference: messageReference } : {}),
+      ...(messageReference && isFirst ? { message_reference: messageReference } : {}),
     });
     return (await request(
       () =>
@@ -616,7 +616,7 @@ async function sendDiscordMedia(
       rest,
       channelId,
       chunk,
-      replyTo,
+      undefined,
       request,
       maxLinesPerMessage,
       undefined,
