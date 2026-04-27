@@ -136,6 +136,7 @@ Rules of thumb:
 - **Reset** (`/new`, `/reset`) creates a new `sessionId` for that `sessionKey`.
 - **Daily reset** (default 4:00 AM local time on the gateway host) creates a new `sessionId` on the next message after the reset boundary.
 - **Idle expiry** (`session.reset.idleMinutes` or legacy `session.idleMinutes`) creates a new `sessionId` when a message arrives after the idle window. When daily + idle are both configured, whichever expires first wins.
+- **System events** (heartbeat, cron wakeups, exec notifications, gateway bookkeeping) may mutate the session row but do not extend daily/idle reset freshness. Reset rollover discards queued system-event notices for the previous session before the fresh prompt is built.
 - **Thread parent fork guard** (`session.parentForkMaxTokens`, default `100000`) skips parent transcript forking when the parent session is already too large; the new thread starts fresh. Set `0` to disable.
 
 Implementation detail: the decision happens in `initSessionState()` in `src/auto-reply/reply/session.ts`.
@@ -149,7 +150,14 @@ The store’s value type is `SessionEntry` in `src/config/sessions.ts`.
 Key fields (not exhaustive):
 
 - `sessionId`: current transcript id (filename is derived from this unless `sessionFile` is set)
-- `updatedAt`: last activity timestamp
+- `sessionStartedAt`: start timestamp for the current `sessionId`; daily reset
+  freshness uses this. Legacy rows may derive it from the JSONL session header.
+- `lastInteractionAt`: last real user/channel interaction timestamp; idle reset
+  freshness uses this so heartbeat, cron, and exec events do not keep sessions
+  alive. Legacy rows without this field fall back to the recovered session start
+  time for idle freshness.
+- `updatedAt`: last store-row mutation timestamp, used for listing, pruning, and
+  bookkeeping. It is not the authority for daily/idle reset freshness.
 - `sessionFile`: optional explicit transcript path override
 - `chatType`: `direct | group | room` (helps UIs and send policy)
 - `provider`, `subject`, `room`, `space`, `displayName`: metadata for group/channel labeling
@@ -251,6 +259,13 @@ Where:
 
 These are Pi runtime semantics (OpenClaw consumes the events, but Pi decides when to compact).
 
+OpenClaw can also trigger a preflight local compaction before opening the next
+run when `agents.defaults.compaction.maxActiveTranscriptBytes` is set and the
+active transcript file reaches that size. This is a file-size guard for local
+reopen cost, not raw archival: OpenClaw still runs normal semantic compaction,
+and it requires `truncateAfterCompaction` so the compacted summary can become a
+new successor transcript.
+
 ---
 
 ## Compaction settings (`reserveTokens`, `keepRecentTokens`)
@@ -277,6 +292,15 @@ OpenClaw also enforces a safety floor for embedded runs:
   and keeps Pi's recent-tail cut point. Without an explicit keep budget,
   manual compaction remains a hard checkpoint and rebuilt context starts from
   the new summary.
+- Set `agents.defaults.compaction.maxActiveTranscriptBytes` to a byte value or
+  string such as `"20mb"` to run local compaction before a turn when the active
+  transcript gets large. This guard is active only when
+  `truncateAfterCompaction` is also enabled. Leave it unset or set `0` to
+  disable.
+- When `agents.defaults.compaction.truncateAfterCompaction` is enabled,
+  OpenClaw rotates the active transcript to a compacted successor JSONL after
+  compaction. The old full transcript remains archived and linked from the
+  compaction checkpoint instead of being rewritten in place.
 
 Why: leave enough headroom for multi-turn “housekeeping” (like memory writes) before compaction becomes unavoidable.
 

@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import { normalizeProviderId } from "../agents/provider-id.js";
+import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import { loadPluginRegistrySnapshot } from "./plugin-registry.js";
 
 type SetupRegistryRuntimeModule = Pick<
@@ -34,20 +35,21 @@ function resolveBundledSetupCliBackends(): SetupCliBackendRuntimeEntry[] {
   if (bundledSetupCliBackendsCache) {
     return bundledSetupCliBackendsCache;
   }
-  bundledSetupCliBackendsCache = loadPluginRegistrySnapshot({ cache: true }).plugins.flatMap(
-    (plugin) => {
-      if (plugin.origin !== "bundled" || !plugin.enabled) {
-        return [];
-      }
-      return plugin.contributions.cliBackends.map(
-        (backendId) =>
-          ({
-            pluginId: plugin.pluginId,
-            backend: { id: backendId },
-          }) satisfies SetupCliBackendRuntimeEntry,
-      );
-    },
-  );
+  const index = loadPluginRegistrySnapshot({ cache: true });
+  bundledSetupCliBackendsCache = loadPluginManifestRegistryForInstalledIndex({
+    index,
+  }).plugins.flatMap((plugin) => {
+    if (plugin.origin !== "bundled") {
+      return [];
+    }
+    return [...plugin.cliBackends, ...(plugin.setup?.cliBackends ?? [])].map(
+      (backendId) =>
+        ({
+          pluginId: plugin.id,
+          backend: { id: backendId },
+        }) satisfies SetupCliBackendRuntimeEntry,
+    );
+  });
   return bundledSetupCliBackendsCache;
 }
 

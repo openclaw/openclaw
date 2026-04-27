@@ -54,8 +54,10 @@ describe("runtime context prompt submission", () => {
         transcriptPrompt: "",
       }),
     ).toEqual({
-      prompt: "[OpenClaw runtime event]",
+      prompt: "",
       runtimeContext: "internal event",
+      runtimeOnly: true,
+      runtimeSystemContext: expect.stringContaining("internal event"),
     });
   });
 
@@ -75,5 +77,12 @@ describe("runtime context prompt submission", () => {
       }),
       { deliverAs: "nextTurn" },
     );
+  });
+
+  it("labels runtime-only events as system context", async () => {
+    const { buildRuntimeEventSystemContext } = await import("./runtime-context-prompt.js");
+
+    expect(buildRuntimeEventSystemContext("internal event")).toContain("OpenClaw runtime event.");
+    expect(buildRuntimeEventSystemContext("internal event")).toContain("not user-authored");
   });
 });

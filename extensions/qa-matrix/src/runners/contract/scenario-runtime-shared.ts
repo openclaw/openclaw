@@ -30,9 +30,11 @@ export type MatrixQaScenarioContext = {
   gatewayRuntimeEnv?: NodeJS.ProcessEnv;
   gatewayStateDir?: string;
   outputDir?: string;
+  registrationToken?: string;
   restartGateway?: () => Promise<void>;
   restartGatewayAfterStateMutation?: (
     mutateState: (context: { stateDir: string }) => Promise<void>,
+    opts?: { timeoutMs?: number; waitAccountId?: string },
   ) => Promise<void>;
   restartGatewayWithQueuedMessage?: (queueMessage: () => Promise<void>) => Promise<void>;
   roomId: string;
@@ -50,6 +52,7 @@ export type MatrixQaScenarioContext = {
     patch: Record<string, unknown>,
     opts?: { restartDelayMs?: number },
   ) => Promise<void>;
+  waitGatewayAccountReady?: (accountId: string, opts?: { timeoutMs?: number }) => Promise<void>;
 };
 
 export const NO_REPLY_WINDOW_MS = 8_000;

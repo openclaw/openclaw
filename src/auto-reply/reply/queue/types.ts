@@ -93,6 +93,7 @@ traceAuthorized?: boolean;
     enforceFinalTag?: boolean;
     skipProviderRuntimeHints?: boolean;
     silentExpected?: boolean;
+    allowEmptyAssistantReplyAsSilent?: boolean;
   };
 };
 
