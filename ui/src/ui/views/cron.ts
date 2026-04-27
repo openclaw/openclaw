@@ -17,8 +17,8 @@ import {
   getNowPct,
   getNowLabel,
   getZoomLabel,
-  getGridLineCount,
-  getHourLabels,
+  getTimelineGridLines,
+  getTimelineHourLabels,
   getTimezoneLabel,
   getTodayLabel,
   formatHour,
@@ -411,7 +411,10 @@ function renderFreqChips(props: CronProps) {
   }
 
   return html`
-    <div class="cron-summary-item" style="grid-column: span 4; border: none; background: none; padding: 4px 0; min-height: auto;">
+    <div
+      class="cron-summary-item"
+      style="grid-column: span 4; border: none; background: none; padding: 4px 0; min-height: auto;"
+    >
       <div class="cron-freq-chips">
         <span class="cron-freq-chips-label">${t("cron.timeline.alwaysOn")}</span>
         ${chips.map((chip) => {
@@ -422,32 +425,51 @@ function renderFreqChips(props: CronProps) {
                 ? "var(--danger)"
                 : "var(--muted)";
           return html`
-            <div class="cron-freq-chip" @mouseenter=${onHoverEnter} @mouseleave=${onHoverLeave} @click=${() => props.onLoadRuns(chip.jobId)}>
-              <span class="cron-freq-chip-dot" style="background: ${chip.color}; color: ${chip.color}"></span>
+            <div
+              class="cron-freq-chip"
+              @mouseenter=${onHoverEnter}
+              @mouseleave=${onHoverLeave}
+              @click=${() => props.onLoadRuns(chip.jobId)}
+            >
+              <span
+                class="cron-freq-chip-dot"
+                style="background: ${chip.color}; color: ${chip.color}"
+              ></span>
               <span class="cron-freq-chip-name">${chip.jobName}</span>
               <span class="cron-freq-chip-interval">${chip.schedule}</span>
-              <span class="cron-freq-chip-status" style="color: ${statusColor}">${chip.lastStatus ?? t("cron.timeline.pending")}</span>
+              <span class="cron-freq-chip-status" style="color: ${statusColor}"
+                >${chip.lastStatus ?? t("cron.timeline.pending")}</span
+              >
               <div class="cron-freq-chip-actions">
-                <div class="cron-freq-action" @click=${(e: Event) => {
-                  e.stopPropagation();
-                  scrollToJob(chip.jobId);
-                }}>
-                  <span class="cron-freq-action-icon">\u{1F4CB}</span> ${t("cron.timeline.viewDetails")}
+                <div
+                  class="cron-freq-action"
+                  @click=${(e: Event) => {
+                    e.stopPropagation();
+                    scrollToJob(chip.jobId);
+                  }}
+                >
+                  <span class="cron-freq-action-icon">📋</span> ${t("cron.timeline.viewDetails")}
                 </div>
-                <div class="cron-freq-action" @click=${(e: Event) => {
-                  e.stopPropagation();
-                  props.onLoadRuns(chip.jobId);
-                }}>
-                  <span class="cron-freq-action-icon">\u{1F4DC}</span> ${t("cron.timeline.viewHistory")}
+                <div
+                  class="cron-freq-action"
+                  @click=${(e: Event) => {
+                    e.stopPropagation();
+                    props.onLoadRuns(chip.jobId);
+                  }}
+                >
+                  <span class="cron-freq-action-icon">📜</span> ${t("cron.timeline.viewHistory")}
                 </div>
-                <div class="cron-freq-action" @click=${(e: Event) => {
-                  e.stopPropagation();
-                  const job = props.jobs.find((j) => j.id === chip.jobId);
-                  if (job) {
-                    props.onRun(job);
-                  }
-                }}>
-                  <span class="cron-freq-action-icon">\u25B6</span> ${t("cron.timeline.runNow")}
+                <div
+                  class="cron-freq-action"
+                  @click=${(e: Event) => {
+                    e.stopPropagation();
+                    const job = props.jobs.find((j) => j.id === chip.jobId);
+                    if (job) {
+                      props.onRun(job);
+                    }
+                  }}
+                >
+                  <span class="cron-freq-action-icon">▶</span> ${t("cron.timeline.runNow")}
                 </div>
               </div>
             </div>
@@ -511,13 +533,13 @@ function renderTimelineCard(props: CronProps) {
   ensureTimelineTimer();
 
   const [zoomStart, zoomEnd] = getZoomRange(_timelineZoom);
-  const markers = getTimelineMarkers(props.jobs, zoomStart, zoomEnd);
+  const markers = getTimelineMarkers(props.jobs, zoomStart, zoomEnd, props.status?.gatewayTimezone);
   const clusters = clusterMarkers(markers);
   const nowPct = getNowPct(zoomStart, zoomEnd);
   const nowLabel = getNowLabel();
   const zoomLabel = getZoomLabel(zoomStart, zoomEnd);
-  const gridCount = getGridLineCount(zoomStart, zoomEnd);
-  const hourLabels = getHourLabels(zoomStart, zoomEnd);
+  const gridLines = getTimelineGridLines(zoomStart, zoomEnd);
+  const hourLabels = getTimelineHourLabels(zoomStart, zoomEnd);
   const tz = getTimezoneLabel();
   const todayLabel = getTodayLabel();
   // When now is within range, fill to nowPct. When now is past the range end, fill 100%.
@@ -542,31 +564,43 @@ function renderTimelineCard(props: CronProps) {
         <span class="cron-timeline-title">${t("cron.timeline.title")}</span>
         <div style="display: flex; align-items: center; gap: 12px;">
           <div class="cron-timeline-zoom">
-            <button class="btn ${_timelineZoom === "all" ? "active" : ""}" @click=${() => setZoom("all")}>${t("cron.timeline.zoomAll")}</button>
-            <button class="btn ${_timelineZoom === "work" ? "active" : ""}" @click=${() => setZoom("work")}>${t("cron.timeline.zoomWork")}</button>
-            <button class="btn ${_timelineZoom === "now" ? "active" : ""}" @click=${() => setZoom("now")}>${t("cron.timeline.zoomNow")}</button>
+            <button
+              class="btn ${_timelineZoom === "all" ? "active" : ""}"
+              @click=${() => setZoom("all")}
+            >
+              ${t("cron.timeline.zoomAll")}
+            </button>
+            <button
+              class="btn ${_timelineZoom === "work" ? "active" : ""}"
+              @click=${() => setZoom("work")}
+            >
+              ${t("cron.timeline.zoomWork")}
+            </button>
+            <button
+              class="btn ${_timelineZoom === "now" ? "active" : ""}"
+              @click=${() => setZoom("now")}
+            >
+              ${t("cron.timeline.zoomNow")}
+            </button>
             <span class="cron-timeline-zoom-label">${zoomLabel}</span>
           </div>
-          <span class="cron-timeline-tz">${tz} \u00b7 ${todayLabel}</span>
+          <span class="cron-timeline-tz">${tz} · ${todayLabel}</span>
         </div>
       </div>
       <div class="cron-timeline">
         <div class="cron-timeline-track">
           <div class="cron-timeline-track-fill" style="width: ${fillPct}%"></div>
           <div class="cron-timeline-grid">
-            ${Array.from(
-              { length: gridCount },
-              () =>
-                html`
-                  <div class="cron-timeline-grid-line"></div>
-                `,
+            ${gridLines.map(
+              (line) =>
+                html`<div class="cron-timeline-grid-line" style="left: ${line.pct}%"></div>`,
             )}
           </div>
-          ${
-            nowPct != null
-              ? html`<div class="cron-timeline-now" style="left: ${nowPct}%"><span class="cron-timeline-now-label">${nowLabel}</span></div>`
-              : nothing
-          }
+          ${nowPct != null
+            ? html`<div class="cron-timeline-now" style="left: ${nowPct}%">
+                <span class="cron-timeline-now-label">${nowLabel}</span>
+              </div>`
+            : nothing}
           ${clusters.map((cluster) =>
             cluster.items.length === 1
               ? renderTimelineMarker(cluster.items[0], props)
@@ -574,12 +608,15 @@ function renderTimelineCard(props: CronProps) {
           )}
         </div>
         <div class="cron-timeline-labels">
-          ${hourLabels.map((label) => html`<span class="cron-timeline-label">${label}</span>`)}
+          ${hourLabels.map(
+            (label) =>
+              html`<span class="cron-timeline-label" style="left: ${label.pct}%"
+                >${label.label}</span
+              >`,
+          )}
         </div>
       </div>
-      <div class="cron-timeline-mobile">
-        ${renderTimelineMobile(markers, props)}
-      </div>
+      <div class="cron-timeline-mobile">${renderTimelineMobile(markers, props)}</div>
     </section>
   `;
 }
@@ -608,9 +645,18 @@ function renderTimelineMarker(
   };
 
   return html`
-    <div class="cron-timeline-marker" style="left: ${marker.pct}%" @mouseenter=${onHoverEnter} @mouseleave=${onHoverLeave} @click=${onClick}>
+    <div
+      class="cron-timeline-marker"
+      style="left: ${marker.pct}%"
+      @mouseenter=${onHoverEnter}
+      @mouseleave=${onHoverLeave}
+      @click=${onClick}
+    >
       <div class="marker-hitarea"></div>
-      <div class="cron-timeline-dot ${dotClass}" style="border-color: ${marker.color}; background: ${marker.color}; color: ${marker.color}"></div>
+      <div
+        class="cron-timeline-dot ${dotClass}"
+        style="border-color: ${marker.color}; background: ${marker.color}; color: ${marker.color}"
+      ></div>
       <div class="cron-timeline-popup" style="${popupAlignStyle(marker.pct)}">
         <div class="cron-timeline-popup-name">${marker.jobName}</div>
         <div class="cron-timeline-popup-schedule">${marker.schedule}</div>
@@ -632,7 +678,12 @@ function renderTimelineCluster(
   props: CronProps,
 ) {
   return html`
-    <div class="cron-timeline-cluster" style="left: ${cluster.pct}%" @mouseenter=${onHoverEnter} @mouseleave=${onHoverLeave}>
+    <div
+      class="cron-timeline-cluster"
+      style="left: ${cluster.pct}%"
+      @mouseenter=${onHoverEnter}
+      @mouseleave=${onHoverLeave}
+    >
       <div class="marker-hitarea"></div>
       <div class="cron-timeline-cluster-badge">${cluster.items.length}</div>
       <div class="cron-timeline-cluster-popup" style="${popupAlignStyle(cluster.pct)}">
@@ -671,11 +722,11 @@ function renderTimelineMobile(
   return html`
     ${upcoming.map(
       (m) => html`
-      <div class="cron-timeline-mobile-item" @click=${() => scrollToJob(m.jobId)}>
-        <span style="color: ${m.color}">\u25CB ${m.jobName}</span>
-        <span>${formatHour(m.hour)}</span>
-      </div>
-    `,
+        <div class="cron-timeline-mobile-item" @click=${() => scrollToJob(m.jobId)}>
+          <span style="color: ${m.color}">○ ${m.jobName}</span>
+          <span>${formatHour(m.hour)}</span>
+        </div>
+      `,
     )}
   `;
 }
@@ -1809,11 +1860,7 @@ function renderJob(job: CronJob, props: CronProps) {
     action();
   };
   return html`
-    <div
-      class=${itemClass}
-      data-cron-job-id=${job.id}
-      @click=${() => props.onLoadRuns(job.id)}
-    >
+    <div class=${itemClass} data-cron-job-id=${job.id} @click=${() => props.onLoadRuns(job.id)}>
       <div class="cron-job-header">
         <div class="list-main">
           <div class="list-title">${job.name}</div>

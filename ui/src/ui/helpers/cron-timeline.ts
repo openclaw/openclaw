@@ -214,8 +214,10 @@ function convertTzHourToLocal(
   }
 }
 
-/** Compute scheduled run hours for today for a cron job. */
-function getTodayRunHours(schedule: CronSchedule): number[] {
+/** Compute scheduled run hours for today for a cron job.
+ *  `gatewayTz` is the gateway-resolved IANA tz used for tz-less cron expressions —
+ *  matches the runtime's `resolveCronTimezone` so markers align with actual runs. */
+function getTodayRunHours(schedule: CronSchedule, gatewayTz?: string): number[] {
   if (schedule.kind === "at") {
     const d = new Date(schedule.at);
     const today = new Date();
@@ -276,14 +278,12 @@ function getTodayRunHours(schedule: CronSchedule): number[] {
 
   const [minField, hourField, domField, monField, dowField] = parts;
 
-  // Determine "today" in the job's timezone (if specified).
-  // Note: tz-less cron expressions currently fall back to the browser's local
-  // time. The gateway resolves missing tz to its host timezone (see
-  // src/cron/schedule.ts:resolveCronTimezone), so remote setups where the
-  // operator browser tz differs from the gateway tz can render off-by-offset
-  // markers. The fix requires exposing the gateway tz through CronStatus and
-  // threading it through the controller; tracked separately.
-  const today = schedule.tz ? dateInTimezone(schedule.tz) : new Date();
+  // Determine "today" in the cron's effective timezone.
+  // - explicit schedule.tz wins
+  // - else use gateway tz (matches runtime resolveCronTimezone in src/cron/schedule.ts)
+  // - else fall back to browser local (older gateway with no gatewayTimezone)
+  const effectiveTz = schedule.tz ?? gatewayTz;
+  const today = effectiveTz ? dateInTimezone(effectiveTz) : new Date();
 
   const minutes = parseCronField(minField, 0, 59);
   const hours = parseCronField(hourField, 0, 23);
@@ -347,12 +347,12 @@ function getTodayRunHours(schedule: CronSchedule): number[] {
     return true;
   }
 
-  // Build hours in the job's timezone, then convert to browser local time.
-  // For cross-timezone jobs, a run on the previous/next job-TZ day may land
-  // on the local "today", so we check adjacent days as well.
-  const jobTz = schedule.tz;
+  // Build hours in the cron's effective timezone (explicit schedule.tz, else
+  // gateway tz), then convert to browser local time. For cross-timezone jobs,
+  // a run on the previous/next remote-TZ day may land on the local "today",
+  // so we check adjacent days as well.
   const result: number[] = [];
-  if (jobTz) {
+  if (effectiveTz) {
     const yesterday = new Date(today);
     yesterday.setDate(yesterday.getDate() - 1);
     const tomorrow = new Date(today);
@@ -364,7 +364,7 @@ function getTodayRunHours(schedule: CronSchedule): number[] {
       }
       for (const h of hours) {
         for (const m of minutes) {
-          const localHour = convertTzHourToLocal(h, m, tzDay, jobTz);
+          const localHour = convertTzHourToLocal(h, m, tzDay, effectiveTz);
           if (localHour != null) {
             result.push(localHour);
           }
@@ -515,6 +515,7 @@ export function getTimelineMarkers(
   jobs: CronJob[],
   zoomStart: number,
   zoomEnd: number,
+  gatewayTz?: string,
 ): TimelineMarker[] {
   const nowH = new Date().getHours() + new Date().getMinutes() / 60;
   // Stable color assignment: use index in full array
@@ -526,7 +527,7 @@ export function getTimelineMarkers(
       continue;
     }
 
-    const hours = getTodayRunHours(job.schedule);
+    const hours = getTodayRunHours(job.schedule, gatewayTz);
     for (const hour of hours) {
       if (hour < zoomStart || hour > zoomEnd) {
         continue;
@@ -594,20 +595,29 @@ export function getZoomLabel(zoomStart: number, zoomEnd: number): string {
   return `${fmt(zoomStart)} \u2013 ${fmt(zoomEnd)}`;
 }
 
-/** Generate grid line count for the zoom range. */
-export function getGridLineCount(zoomStart: number, zoomEnd: number): number {
+/** Compute grid line positions anchored to true hour offsets within the zoom range.
+ *  Each line carries its own pct so it can be absolutely positioned in the view —
+ *  necessary for fractional zoomStart (e.g. Now±3h centered at 10:37). */
+export function getTimelineGridLines(zoomStart: number, zoomEnd: number): { pct: number }[] {
   const span = zoomEnd - zoomStart;
   const step = span <= 6 ? 1 : span <= 12 ? 2 : span <= 18 ? 3 : 4;
-  return Math.floor(span / step);
+  const lines: { pct: number }[] = [];
+  for (let h = Math.ceil(zoomStart); h <= Math.floor(zoomEnd); h += step) {
+    lines.push({ pct: hourToPct(h, zoomStart, zoomEnd) });
+  }
+  return lines;
 }
 
-/** Generate hour labels for the timeline. */
-export function getHourLabels(zoomStart: number, zoomEnd: number): string[] {
+/** Compute hour labels anchored to true hour offsets within the zoom range. */
+export function getTimelineHourLabels(
+  zoomStart: number,
+  zoomEnd: number,
+): { label: string; pct: number }[] {
   const span = zoomEnd - zoomStart;
   const step = span <= 6 ? 1 : span <= 12 ? 2 : 4;
-  const labels: string[] = [];
+  const labels: { label: string; pct: number }[] = [];
   for (let h = Math.ceil(zoomStart); h <= Math.floor(zoomEnd); h += step) {
-    labels.push(String(h).padStart(2, "0"));
+    labels.push({ label: String(h).padStart(2, "0"), pct: hourToPct(h, zoomStart, zoomEnd) });
   }
   return labels;
 }
