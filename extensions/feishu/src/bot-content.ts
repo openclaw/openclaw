@@ -249,9 +249,9 @@ export function checkBotMentioned(event: FeishuMessageLike, botOpenId?: string):
   if (!botOpenId) {
     return false;
   }
-  if ((event.message.content ?? "").includes("@_all")) {
-    return true;
-  }
+  // @_all (@所有人) is NOT a direct bot mention — only explicit @bot counts.
+  // When requireMention=false the bot sees every message; treating @_all as
+  // a bot mention would force a response to broadcast pings.
   const mentions = event.message.mentions ?? [];
   if (mentions.length > 0) {
     return mentions.some((mention) => mention.id.open_id === botOpenId);

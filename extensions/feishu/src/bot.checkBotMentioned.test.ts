@@ -190,4 +190,40 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     const ctx = parseFeishuMessageEvent(event, "ou_bot_123");
     expect(ctx.content).toBe("[Forwarded message: sc_abc123]");
   });
+
+  it("returns mentionedBot=false for @_all mention (not a direct bot mention)", () => {
+    const event = makeEvent(
+      "group",
+      [{ key: "@_all", name: "所有人", id: { open_id: "" } }],
+      "@_all hello everyone",
+    );
+    const ctx = parseFeishuMessageEvent(event, BOT_OPEN_ID);
+    expect(ctx.mentionedBot).toBe(false);
+  });
+
+  it("returns mentionedBot=false when content contains @_all but no bot mention in mentions array", () => {
+    const event = makeEvent(
+      "group",
+      [
+        { key: "@_all", name: "所有人", id: { open_id: "" } },
+        { key: "@_user_1", name: "Alice", id: { open_id: "ou_alice" } },
+      ],
+      "@_all @Alice hello",
+    );
+    const ctx = parseFeishuMessageEvent(event, BOT_OPEN_ID);
+    expect(ctx.mentionedBot).toBe(false);
+  });
+
+  it("returns mentionedBot=true when both @_all and explicit bot mention are present", () => {
+    const event = makeEvent(
+      "group",
+      [
+        { key: "@_all", name: "所有人", id: { open_id: "" } },
+        { key: "@_bot_1", name: "Bot", id: { open_id: BOT_OPEN_ID } },
+      ],
+      "@_all @Bot hello",
+    );
+    const ctx = parseFeishuMessageEvent(event, BOT_OPEN_ID);
+    expect(ctx.mentionedBot).toBe(true);
+  });
 });
