@@ -12,7 +12,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 type ReadonlySessionManagerForRotation = Pick<
   SessionManager,
-  "buildSessionContext" | "getBranch" | "getCwd" | "getHeader"
+  "buildSessionContext" | "getBranch" | "getCwd" | "getEntries" | "getHeader"
 >;
 
 export type CompactionTranscriptRotation = {
@@ -54,6 +54,7 @@ export async function rotateTranscriptAfterCompaction(params: {
     timestamp,
   });
   const successorEntries = buildSuccessorEntries({
+    allEntries: params.sessionManager.getEntries(),
     branch,
     latestCompactionIndex,
   });
@@ -97,69 +98,66 @@ function findLatestCompactionIndex(entries: SessionEntry[]): number {
 }
 
 function buildSuccessorEntries(params: {
+  allEntries: SessionEntry[];
   branch: SessionEntry[];
   latestCompactionIndex: number;
 }): SessionEntry[] {
-  const { branch, latestCompactionIndex } = params;
+  const { allEntries, branch, latestCompactionIndex } = params;
   const compaction = branch[latestCompactionIndex] as CompactionEntry;
-  const firstKeptIndex = branch.findIndex((entry) => entry.id === compaction.firstKeptEntryId);
-  const keptBeforeCompaction =
-    firstKeptIndex >= 0 && firstKeptIndex < latestCompactionIndex
-      ? branch.slice(firstKeptIndex, latestCompactionIndex)
-      : [];
-  const afterCompaction = branch.slice(latestCompactionIndex + 1);
-  const statePrefix = collectLatestStatePrefix(branch.slice(0, latestCompactionIndex));
-  const successorEntries: SessionEntry[] = [];
-  const seenIds = new Set<string>();
-  let parentId: string | null = null;
 
-  const append = (entry: SessionEntry) => {
-    if (seenIds.has(entry.id)) {
-      return;
-    }
-    const nextEntry = { ...entry, parentId } as SessionEntry;
-    successorEntries.push(nextEntry);
-    seenIds.add(nextEntry.id);
-    parentId = nextEntry.id;
-  };
-
-  for (const entry of statePrefix) {
-    append(entry);
-  }
-  append(compaction);
-  for (const entry of [...keptBeforeCompaction, ...afterCompaction]) {
-    if (entry.type === "compaction" || entry.type === "label") {
+  const summarizedBranchIds = new Set<string>();
+  for (let index = 0; index < latestCompactionIndex; index += 1) {
+    const entry = branch[index];
+    if (!entry) {
       continue;
     }
-    append(entry);
+    if (compaction.firstKeptEntryId && entry.id === compaction.firstKeptEntryId) {
+      break;
+    }
+    summarizedBranchIds.add(entry.id);
   }
-  const retainedIds = new Set(successorEntries.map((entry) => entry.id));
-  for (const entry of branch) {
-    if (entry.type !== "label" || !retainedIds.has(entry.targetId)) {
+
+  const removedIds = new Set<string>();
+  for (const entry of allEntries) {
+    if (summarizedBranchIds.has(entry.id) && entry.type === "message") {
+      removedIds.add(entry.id);
+    }
+  }
+  for (const entry of allEntries) {
+    if (entry.type === "label" && removedIds.has(entry.targetId)) {
+      removedIds.add(entry.id);
+    }
+  }
+
+  const entryById = new Map(allEntries.map((entry) => [entry.id, entry]));
+  const activeBranchIds = new Set(branch.map((entry) => entry.id));
+  const keptEntries: SessionEntry[] = [];
+  for (const entry of allEntries) {
+    if (removedIds.has(entry.id)) {
       continue;
     }
-    append(entry);
-  }
-  return successorEntries;
-}
 
-function collectLatestStatePrefix(entries: SessionEntry[]): SessionEntry[] {
-  const customEntries: Array<{ index: number; entry: SessionEntry }> = [];
-  const latestByType = new Map<string, { index: number; entry: SessionEntry }>();
-  for (const [index, entry] of entries.entries()) {
-    if (entry.type === "custom") {
-      customEntries.push({ index, entry });
-    } else if (
-      entry.type === "thinking_level_change" ||
-      entry.type === "model_change" ||
-      entry.type === "session_info"
-    ) {
-      latestByType.set(entry.type, { index, entry });
+    let parentId = entry.parentId;
+    while (parentId !== null && removedIds.has(parentId)) {
+      parentId = entryById.get(parentId)?.parentId ?? null;
+    }
+
+    keptEntries.push(
+      parentId === entry.parentId ? entry : ({ ...entry, parentId } as SessionEntry),
+    );
+  }
+
+  const inactiveEntries: SessionEntry[] = [];
+  const activeEntries: SessionEntry[] = [];
+  for (const entry of keptEntries) {
+    if (activeBranchIds.has(entry.id)) {
+      activeEntries.push(entry);
+    } else {
+      inactiveEntries.push(entry);
     }
   }
-  return [...customEntries, ...latestByType.values()]
-    .toSorted((left, right) => left.index - right.index)
-    .map(({ entry }) => entry);
+
+  return [...inactiveEntries, ...activeEntries];
 }
 
 function buildSuccessorHeader(params: {

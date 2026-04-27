@@ -1073,11 +1073,6 @@ export async function compactEmbeddedPiSessionDirect(
               },
             },
           );
-          await runPostCompactionSideEffects({
-            config: params.config,
-            sessionKey: params.sessionKey,
-            sessionFile: params.sessionFile,
-          });
           let effectiveFirstKeptEntryId = result.firstKeptEntryId;
           let postCompactionLeafId =
             typeof sessionManager.getLeafId === "function"
@@ -1135,12 +1130,12 @@ export async function compactEmbeddedPiSessionDirect(
               `[compaction] rotated active transcript after compaction ` +
                 `(sessionKey=${params.sessionKey ?? params.sessionId})`,
             );
-            await runPostCompactionSideEffects({
-              config: params.config,
-              sessionKey: params.sessionKey,
-              sessionFile: activeSessionFile,
-            });
           }
+          await runPostCompactionSideEffects({
+            config: params.config,
+            sessionKey: params.sessionKey,
+            sessionFile: activeSessionFile,
+          });
           if (params.config && params.sessionKey && checkpointSnapshot) {
             try {
               const storedCheckpoint = await persistSessionCompactionCheckpoint({

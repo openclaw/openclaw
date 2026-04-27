@@ -163,6 +163,55 @@ describe("rotateTranscriptAfterCompaction", () => {
       firstKeptEntryId: compactionId,
     });
   });
+
+  it("preserves unsummarized sibling branches and branch summaries", async () => {
+    const dir = await createTmpDir();
+    const manager = SessionManager.create(dir, dir);
+
+    manager.appendMessage({ role: "user", content: "hello", timestamp: 1 });
+    const branchFromId = manager.appendMessage(makeAssistant("hi there", 2));
+
+    const branchSummaryId = manager.branchWithSummary(
+      branchFromId,
+      "Summary of the abandoned branch.",
+    );
+    const siblingMsgId = manager.appendMessage({
+      role: "user",
+      content: "do task B instead",
+      timestamp: 3,
+    });
+    manager.appendMessage(makeAssistant("done B", 4));
+
+    manager.branch(branchFromId);
+    manager.appendMessage({ role: "user", content: "do task A", timestamp: 5 });
+    const firstKeptId = manager.appendMessage(makeAssistant("done A", 6));
+    manager.appendCompaction("Summary of main branch.", firstKeptId, 5000);
+    manager.appendMessage({ role: "user", content: "next", timestamp: 7 });
+
+    const sessionFile = manager.getSessionFile()!;
+    const result = await rotateTranscriptAfterCompaction({
+      sessionManager: manager,
+      sessionFile,
+      now: () => new Date("2026-04-27T12:45:00.000Z"),
+    });
+
+    expect(result.rotated).toBe(true);
+    const successor = SessionManager.open(result.sessionFile!);
+    const allEntries = successor.getEntries();
+    expect(allEntries.find((entry) => entry.id === branchSummaryId)).toMatchObject({
+      type: "branch_summary",
+      summary: "Summary of the abandoned branch.",
+    });
+    expect(allEntries.find((entry) => entry.id === siblingMsgId)).toMatchObject({
+      type: "message",
+      message: expect.objectContaining({ content: "do task B instead" }),
+    });
+
+    const activeContextText = JSON.stringify(successor.buildSessionContext().messages);
+    expect(activeContextText).toContain("Summary of main branch.");
+    expect(activeContextText).toContain("next");
+    expect(activeContextText).not.toContain("do task B instead");
+  });
 });
 
 describe("shouldRotateCompactionTranscript", () => {

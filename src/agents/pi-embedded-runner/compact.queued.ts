@@ -164,7 +164,9 @@ export async function compactEmbeddedPiSession(
         });
         const delegatedSessionId = result.result?.sessionId;
         const delegatedSessionFile = result.result?.sessionFile;
-        const delegatedRotatedTranscript = Boolean(delegatedSessionId || delegatedSessionFile);
+        const delegatedRotatedTranscript =
+          (typeof delegatedSessionId === "string" && delegatedSessionId !== params.sessionId) ||
+          (typeof delegatedSessionFile === "string" && delegatedSessionFile !== params.sessionFile);
         let postCompactionSessionId = delegatedSessionId ?? params.sessionId;
         let postCompactionSessionFile = delegatedSessionFile ?? params.sessionFile;
         let postCompactionLeafId: string | undefined;
