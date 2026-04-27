@@ -462,7 +462,14 @@ function isInsideFence(fenceSpans: Array<{ start: number; end: number }>, offset
   return fenceSpans.some((span) => offset >= span.start && offset < span.end);
 }
 
-export function splitMediaFromOutput(raw: string): {
+export type SplitMediaFromOutputOptions = {
+  extractMarkdownImages?: boolean;
+};
+
+export function splitMediaFromOutput(
+  raw: string,
+  options: SplitMediaFromOutputOptions = {},
+): {
   text: string;
   mediaUrls?: string[];
   mediaUrl?: string; // legacy first item for backward compatibility
@@ -476,7 +483,8 @@ export function splitMediaFromOutput(raw: string): {
     return { text: "" };
   }
   const mayContainMediaToken = /media:/i.test(trimmedRaw);
-  const mayContainMarkdownImage = /!\[[^\]]*]\(/.test(trimmedRaw);
+  const shouldExtractMarkdownImages = options.extractMarkdownImages !== false;
+  const mayContainMarkdownImage = shouldExtractMarkdownImages && /!\[[^\]]*]\(/.test(trimmedRaw);
   const mayContainAudioTag = trimmedRaw.includes("[[");
   if (!mayContainMediaToken && !mayContainMarkdownImage && !mayContainAudioTag) {
     return { text: trimmedRaw };
@@ -518,6 +526,12 @@ export function splitMediaFromOutput(raw: string): {
 
     const trimmedStart = line.trimStart();
     if (!trimmedStart.toUpperCase().startsWith("MEDIA:")) {
+      if (!shouldExtractMarkdownImages) {
+        keptLines.push(line);
+        pushTextSegment(line);
+        lineOffset += line.length + 1; // +1 for newline
+        continue;
+      }
       const markdownImageResult = collectMarkdownImageSegments({ line, media });
       if (!markdownImageResult.foundMedia) {
         keptLines.push(line);

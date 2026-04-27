@@ -129,13 +129,20 @@ type PreparedOutboundPayloadPlanEntry = {
   isSilent: boolean;
 };
 
+function shouldExtractMarkdownImageMediaForSurface(surface?: string): boolean {
+  return surface?.toLowerCase() !== "discord";
+}
+
 function createOutboundPayloadPlanEntry(
   payload: ReplyPayload,
+  context: OutboundPayloadPlanContext,
 ): PreparedOutboundPayloadPlanEntry | null {
   if (shouldSuppressReasoningPayload(payload)) {
     return null;
   }
-  const parsed = parseReplyDirectives(payload.text ?? "");
+  const parsed = parseReplyDirectives(payload.text ?? "", {
+    extractMarkdownImages: shouldExtractMarkdownImageMediaForSurface(context.surface),
+  });
   const explicitMediaUrls = payload.mediaUrls ?? parsed.mediaUrls;
   const explicitMediaUrl = payload.mediaUrl ?? parsed.mediaUrl;
   const mergedMedia = mergeMediaUrls(
@@ -193,7 +200,7 @@ export function createOutboundPayloadPlan(
     context.hasPendingSpawnedChildren ?? resolvePendingSpawnedChildren(context.sessionKey);
   const prepared: PreparedOutboundPayloadPlanEntry[] = [];
   for (const payload of payloads) {
-    const entry = createOutboundPayloadPlanEntry(payload);
+    const entry = createOutboundPayloadPlanEntry(payload, context);
     if (!entry) {
       continue;
     }

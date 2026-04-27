@@ -319,7 +319,10 @@ export async function deliverAgentCommandResult(params: {
           accountId: resolvedAccountId,
         })
       : normalizedReplyPayloads;
-  const outboundPayloadPlan = createOutboundPayloadPlan(mediaNormalizedReplyPayloads);
+  const outboundPayloadPlan = createOutboundPayloadPlan(mediaNormalizedReplyPayloads, {
+    cfg,
+    surface: deliveryChannel,
+  });
   const normalizedPayloads = projectOutboundPayloadPlanForJson(outboundPayloadPlan);
   if (opts.json) {
     runtime.log(

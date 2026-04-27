@@ -237,13 +237,16 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
   const channel = await resolveRequiredChannel({ cfg, channel: params.channel });
   const plugin = resolveRequiredPlugin(channel, cfg);
   const deliveryMode = plugin.outbound?.deliveryMode ?? "direct";
-  const outboundPlan = createOutboundPayloadPlan([
-    {
-      text: params.content,
-      mediaUrl: params.mediaUrl,
-      mediaUrls: params.mediaUrls,
-    },
-  ]);
+  const outboundPlan = createOutboundPayloadPlan(
+    [
+      {
+        text: params.content,
+        mediaUrl: params.mediaUrl,
+        mediaUrls: params.mediaUrls,
+      },
+    ],
+    { cfg, surface: channel },
+  );
   const normalizedPayloads = projectOutboundPayloadPlanForDelivery(outboundPlan);
   const mirrorProjection = projectOutboundPayloadPlanForMirror(outboundPlan);
   const mirrorText = mirrorProjection.text;

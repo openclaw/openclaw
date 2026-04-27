@@ -140,6 +140,14 @@ describe("splitMediaFromOutput", () => {
     });
   });
 
+  it("can leave markdown image urls in text when extraction is disabled", () => {
+    const input = "Look ![chart](https://example.com/chart.png) now";
+
+    expect(splitMediaFromOutput(input, { extractMarkdownImages: false })).toEqual({
+      text: input,
+    });
+  });
+
   it("extracts multiple markdown image urls in order", () => {
     expectParsedMediaOutputCase(
       "Before\n![one](https://example.com/one.png)\nMiddle\n![two](https://example.com/two.png)\nAfter",

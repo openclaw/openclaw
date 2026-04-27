@@ -54,6 +54,46 @@ describe("normalizeReplyPayloadsForDelivery", () => {
     ]);
   });
 
+  it("keeps markdown images as text for discord outbound replies", () => {
+    const input = "tech: ![Node.js](https://img.shields.io/badge/Node.js-339933)";
+
+    expect(
+      projectOutboundPayloadPlanForDelivery(
+        createOutboundPayloadPlan([{ text: input }], { surface: "discord" }),
+      ),
+    ).toEqual([
+      {
+        text: input,
+        mediaUrls: undefined,
+        mediaUrl: undefined,
+        replyToId: undefined,
+        replyToCurrent: undefined,
+        replyToTag: false,
+        audioAsVoice: false,
+      },
+    ]);
+  });
+
+  it("continues lifting markdown images for non-discord outbound replies", () => {
+    expect(
+      projectOutboundPayloadPlanForDelivery(
+        createOutboundPayloadPlan([{ text: "Caption ![chart](https://example.com/chart.png)" }], {
+          surface: "telegram",
+        }),
+      ),
+    ).toEqual([
+      {
+        text: "Caption",
+        mediaUrls: ["https://example.com/chart.png"],
+        mediaUrl: "https://example.com/chart.png",
+        replyToId: undefined,
+        replyToCurrent: undefined,
+        replyToTag: false,
+        audioAsVoice: false,
+      },
+    ]);
+  });
+
   it("drops silent payloads without media and suppresses reasoning payloads", () => {
     expect(
       normalizeReplyPayloadsForDelivery([

@@ -468,7 +468,10 @@ export const sendHandlers: GatewayRequestHandlers = {
         const deliveryTarget = idLikeTarget?.to ?? resolvedTarget.to;
         const outboundDeps = context.deps ? createOutboundSendDeps(context.deps) : undefined;
         const outboundPayloads = [{ text: message, mediaUrl, mediaUrls }];
-        const outboundPayloadPlan = createOutboundPayloadPlan(outboundPayloads);
+        const outboundPayloadPlan = createOutboundPayloadPlan(outboundPayloads, {
+          cfg,
+          surface: channel,
+        });
         const mirrorProjection = projectOutboundPayloadPlanForMirror(outboundPayloadPlan);
         const mirrorText = mirrorProjection.text;
         const mirrorMediaUrls = mirrorProjection.mediaUrls;

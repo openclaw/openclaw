@@ -15,9 +15,15 @@ export type ReplyDirectiveParseResult = {
 
 export function parseReplyDirectives(
   raw: string,
-  options: { currentMessageId?: string; silentToken?: string } = {},
+  options: {
+    currentMessageId?: string;
+    silentToken?: string;
+    extractMarkdownImages?: boolean;
+  } = {},
 ): ReplyDirectiveParseResult {
-  const split = splitMediaFromOutput(raw);
+  const split = splitMediaFromOutput(raw, {
+    extractMarkdownImages: options.extractMarkdownImages,
+  });
   let text = split.text ?? "";
 
   const replyParsed = parseInlineDirectives(text, {
