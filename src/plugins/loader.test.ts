@@ -66,6 +66,7 @@ import {
 import {
   buildMemoryPromptSection,
   clearMemoryPluginState,
+  getMemoryCapabilityRegistration,
   getMemoryRuntime,
   listActiveMemoryPublicArtifacts,
   listMemoryCorpusSupplements,
@@ -4333,6 +4334,68 @@ module.exports = { id: "throws-after-import", register() {} };`,
     const configurable = registry.plugins.find((entry) => entry.id === "configurable");
     expect(configurable?.status).toBe("error");
     expect(registry.diagnostics.some((d) => d.level === "error")).toBe(true);
+  });
+
+  it("fails plugin load when registerHook is missing opts.name", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "hook-missing-name",
+      filename: "hook-missing-name.cjs",
+      body: `module.exports = { id: "hook-missing-name", register(api) {
+  api.registerHook("gateway:startup", () => {});
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["hook-missing-name"],
+      },
+    });
+
+    const loaded = registry.plugins.find((entry) => entry.id === "hook-missing-name");
+    expect(loaded?.status).toBe("error");
+    expect(loaded?.error).toContain("hook registration missing name");
+    expect(registry.hooks).toEqual([]);
+    expect(
+      registry.diagnostics.some(
+        (entry) =>
+          entry.level === "error" &&
+          entry.pluginId === "hook-missing-name" &&
+          entry.message.includes("hook registration missing name"),
+      ),
+    ).toBe(true);
+  });
+
+  it("fails plugin load when non-memory plugin registers a memory capability", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "memory-capability-wrong-kind",
+      filename: "memory-capability-wrong-kind.cjs",
+      body: `module.exports = { id: "memory-capability-wrong-kind", register(api) {
+  api.registerMemoryCapability({ promptBuilder: () => ["memory"] });
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["memory-capability-wrong-kind"],
+      },
+    });
+
+    const loaded = registry.plugins.find((entry) => entry.id === "memory-capability-wrong-kind");
+    expect(loaded?.status).toBe("error");
+    expect(loaded?.error).toContain("only memory plugins can register a memory capability");
+    expect(getMemoryCapabilityRegistration()).toBeUndefined();
+    expect(
+      registry.diagnostics.some(
+        (entry) =>
+          entry.level === "error" &&
+          entry.pluginId === "memory-capability-wrong-kind" &&
+          entry.message.includes("only memory plugins can register a memory capability"),
+      ),
+    ).toBe(true);
   });
 
   it("repairs incomplete registered channel metadata before storing registry entries", () => {
