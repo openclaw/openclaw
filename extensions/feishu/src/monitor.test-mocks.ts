@@ -18,6 +18,7 @@ export function createFeishuRuntimeMockModule(): {
         createInboundDebouncer: () => {
           enqueue: () => Promise<void>;
           flushKey: () => Promise<void>;
+          flushAll: () => Promise<void>;
         };
       };
       text: {
@@ -34,6 +35,7 @@ export function createFeishuRuntimeMockModule(): {
           createInboundDebouncer: () => ({
             enqueue: async () => {},
             flushKey: async () => {},
+            flushAll: async () => {},
           }),
         },
         text: {

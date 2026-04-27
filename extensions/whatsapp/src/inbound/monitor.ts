@@ -757,6 +757,7 @@ export async function attachWebInboxToSocket(
       try {
         detachMessagesUpsert();
         detachConnectionUpdate();
+        await debouncer.flushAll();
         closeInboundMonitorSocket(sock);
       } catch (err) {
         logWhatsAppVerbose(options.verbose, `Socket close failed: ${String(err)}`);

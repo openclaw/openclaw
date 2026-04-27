@@ -27,6 +27,7 @@ vi.mock("../../../../src/channels/inbound-debounce-policy.js", () => ({
         await params.onFlush([entry]);
       },
       flushKey: async (_key: string) => {},
+      flushAll: async () => {},
     },
   }),
 }));

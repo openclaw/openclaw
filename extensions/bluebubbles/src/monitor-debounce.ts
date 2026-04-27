@@ -32,6 +32,7 @@ function sanitizeDebounceEntry(entry: BlueBubblesDebounceEntry): BlueBubblesDebo
 export type BlueBubblesDebouncer = {
   enqueue: (item: BlueBubblesDebounceEntry) => Promise<void>;
   flushKey: (key: string) => Promise<void>;
+  flushAll: () => Promise<void>;
 };
 
 export type BlueBubblesDebounceRegistry = {
@@ -325,6 +326,7 @@ export function createBlueBubblesDebounceRegistry(params: {
           await baseDebouncer.enqueue(sanitizeDebounceEntry(item));
         },
         flushKey: (key) => baseDebouncer.flushKey(key),
+        flushAll: () => baseDebouncer.flushAll(),
       };
 
       targetDebouncers.set(target, debouncer);

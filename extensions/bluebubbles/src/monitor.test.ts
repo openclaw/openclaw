@@ -208,6 +208,7 @@ function installTimingAwareInboundDebouncer(core: PluginRuntime) {
       flushKey: vi.fn(async (key: string) => {
         await flush(key);
       }),
+      flushAll: vi.fn(async () => {}),
     };
   }) as unknown as PluginRuntime["channel"]["debounce"]["createInboundDebouncer"];
 }
