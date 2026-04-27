@@ -253,6 +253,8 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
 RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
  && chmod 755 /app/openclaw.mjs
 
+RUN install -d -m 0700 -o node -g node /home/node/.openclaw
+
 ENV NODE_ENV=production
 
 # Security hardening: Run as non-root user

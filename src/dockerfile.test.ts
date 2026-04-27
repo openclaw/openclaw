@@ -117,4 +117,16 @@ describe("Dockerfile", () => {
       'corepack prepare "$(node -p "require(\'./package.json\').packageManager")" --activate',
     );
   });
+
+  it("pre-creates the OpenClaw home before switching to the node user", async () => {
+    const dockerfile = await readFile(dockerfilePath, "utf8");
+    const stateDirIndex = dockerfile.indexOf(
+      "RUN install -d -m 0700 -o node -g node /home/node/.openclaw",
+    );
+    const userIndex = dockerfile.indexOf("USER node");
+
+    expect(stateDirIndex).toBeGreaterThan(-1);
+    expect(userIndex).toBeGreaterThan(-1);
+    expect(stateDirIndex).toBeLessThan(userIndex);
+  });
 });
