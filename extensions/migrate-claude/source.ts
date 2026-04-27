@@ -64,44 +64,47 @@ async function addArchivePath(
 }
 
 export async function discoverClaudeSource(input?: string): Promise<ClaudeSource> {
+  const explicitInput = Boolean(input?.trim());
   const root = resolveHomePath(input?.trim() || defaultClaudeHome());
   const rootIsHome = path.basename(root) === ".claude";
-  const homeDir = rootIsHome ? root : defaultClaudeHome();
+  const inspectGlobal = !explicitInput || rootIsHome;
+  const homeDir = inspectGlobal ? (rootIsHome ? root : defaultClaudeHome()) : undefined;
   const projectDir = rootIsHome ? undefined : root;
   const archivePaths: ClaudeArchivePath[] = [];
 
-  const userSettingsPath = path.join(homeDir, "settings.json");
-  const userLocalSettingsPath = path.join(homeDir, "settings.local.json");
-  const userClaudeJsonPath = path.join(os.homedir(), ".claude.json");
-  const userMemoryPath = path.join(homeDir, "CLAUDE.md");
-  const desktopConfigPath = defaultDesktopConfig();
-  const homeProjectsDir = path.join(homeDir, "projects");
+  const userSettingsPath = homeDir ? path.join(homeDir, "settings.json") : undefined;
+  const userLocalSettingsPath = homeDir ? path.join(homeDir, "settings.local.json") : undefined;
+  const userClaudeJsonPath = inspectGlobal ? path.join(os.homedir(), ".claude.json") : undefined;
+  const userMemoryPath = homeDir ? path.join(homeDir, "CLAUDE.md") : undefined;
+  const desktopConfigPath = inspectGlobal ? defaultDesktopConfig() : undefined;
+  const homeProjectsDir = homeDir ? path.join(homeDir, "projects") : undefined;
+  const userSkillsDir = homeDir ? path.join(homeDir, "skills") : undefined;
+  const userCommandsDir = homeDir ? path.join(homeDir, "commands") : undefined;
+  const userAgentsDir = homeDir ? path.join(homeDir, "agents") : undefined;
 
-  for (const dir of HOME_ARCHIVE_DIRS) {
-    await addArchivePath(archivePaths, `archive:home:${dir}`, path.join(homeDir, dir), dir);
+  if (homeDir) {
+    for (const dir of HOME_ARCHIVE_DIRS) {
+      await addArchivePath(archivePaths, `archive:home:${dir}`, path.join(homeDir, dir), dir);
+    }
   }
 
   const source: ClaudeSource = {
     root,
     confidence: "low",
     archivePaths,
-    ...((await isDirectory(homeDir)) ? { homeDir } : {}),
-    ...((await isDirectory(homeProjectsDir)) ? { homeProjectsDir } : {}),
+    ...(homeDir && (await isDirectory(homeDir)) ? { homeDir } : {}),
+    ...(homeProjectsDir && (await isDirectory(homeProjectsDir)) ? { homeProjectsDir } : {}),
     ...(projectDir ? { projectDir } : {}),
-    ...((await exists(userSettingsPath)) ? { userSettingsPath } : {}),
-    ...((await exists(userLocalSettingsPath)) ? { userLocalSettingsPath } : {}),
-    ...((await exists(userClaudeJsonPath)) ? { userClaudeJsonPath } : {}),
-    ...((await exists(userMemoryPath)) ? { userMemoryPath } : {}),
-    ...((await isDirectory(path.join(homeDir, "skills")))
-      ? { userSkillsDir: path.join(homeDir, "skills") }
+    ...(userSettingsPath && (await exists(userSettingsPath)) ? { userSettingsPath } : {}),
+    ...(userLocalSettingsPath && (await exists(userLocalSettingsPath))
+      ? { userLocalSettingsPath }
       : {}),
-    ...((await isDirectory(path.join(homeDir, "commands")))
-      ? { userCommandsDir: path.join(homeDir, "commands") }
-      : {}),
-    ...((await isDirectory(path.join(homeDir, "agents")))
-      ? { userAgentsDir: path.join(homeDir, "agents") }
-      : {}),
-    ...((await exists(desktopConfigPath)) ? { desktopConfigPath } : {}),
+    ...(userClaudeJsonPath && (await exists(userClaudeJsonPath)) ? { userClaudeJsonPath } : {}),
+    ...(userMemoryPath && (await exists(userMemoryPath)) ? { userMemoryPath } : {}),
+    ...(userSkillsDir && (await isDirectory(userSkillsDir)) ? { userSkillsDir } : {}),
+    ...(userCommandsDir && (await isDirectory(userCommandsDir)) ? { userCommandsDir } : {}),
+    ...(userAgentsDir && (await isDirectory(userAgentsDir)) ? { userAgentsDir } : {}),
+    ...(desktopConfigPath && (await exists(desktopConfigPath)) ? { desktopConfigPath } : {}),
   };
 
   if (projectDir) {
