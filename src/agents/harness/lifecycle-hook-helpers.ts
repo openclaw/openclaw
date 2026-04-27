@@ -12,11 +12,22 @@ import { buildAgentHookContext, type AgentHarnessHookContext } from "./hook-cont
 
 const log = createSubsystemLogger("agents/harness");
 const FINALIZE_RETRY_BUDGET_KEY = Symbol.for("openclaw.pluginFinalizeRetryBudget");
+const FINALIZE_RETRY_BUDGET_MAX_ENTRIES = 2048;
 
 type AgentHarnessHookRunner = ReturnType<typeof getGlobalHookRunner>;
 
 function getFinalizeRetryBudget(): Map<string, number> {
   return resolveGlobalSingleton<Map<string, number>>(FINALIZE_RETRY_BUDGET_KEY, () => new Map());
+}
+
+function pruneFinalizeRetryBudget(budget: Map<string, number>): void {
+  while (budget.size > FINALIZE_RETRY_BUDGET_MAX_ENTRIES) {
+    const oldest = budget.keys().next().value as string | undefined;
+    if (oldest === undefined) {
+      return;
+    }
+    budget.delete(oldest);
+  }
 }
 
 export function clearAgentHarnessFinalizeRetryBudget(params?: { runId?: string }): void {
@@ -125,7 +136,9 @@ function normalizeBeforeAgentFinalizeResult(
       ].join(":");
       const budget = getFinalizeRetryBudget();
       const nextCount = (budget.get(retryKey) ?? 0) + 1;
+      budget.delete(retryKey);
       budget.set(retryKey, nextCount);
+      pruneFinalizeRetryBudget(budget);
       if (nextCount > maxAttempts) {
         return { action: "continue" };
       }

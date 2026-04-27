@@ -102,12 +102,37 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
           false,
           undefined,
           errorShape(ErrorCodes.INVALID_REQUEST, result.error, {
-            details: result.details,
+            details:
+              result.code !== undefined
+                ? { code: result.code, details: result.details }
+                : result.details,
           }),
         );
         return;
       }
       const success = result;
+      if (success?.data !== undefined && !isPluginJsonValue(success.data)) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "plugin session action result must be JSON-compatible",
+          ),
+        );
+        return;
+      }
+      if (success?.reply !== undefined && !isPluginJsonValue(success.reply)) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "plugin session action reply must be JSON-compatible",
+          ),
+        );
+        return;
+      }
       respond(true, {
         ok: true,
         ...(success?.data !== undefined ? { result: success.data } : {}),
