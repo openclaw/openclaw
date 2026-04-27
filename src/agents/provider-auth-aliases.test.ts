@@ -14,11 +14,13 @@ vi.mock("../plugins/manifest-registry-installed.js", () => ({
     pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex,
 }));
 
-vi.mock("../plugins/plugin-registry.js", () => ({
-  loadPluginManifestRegistryForPluginRegistry:
-    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry,
-  loadPluginRegistrySnapshot: pluginRegistryMocks.loadPluginRegistrySnapshot,
-}));
+vi.mock("../plugins/plugin-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/plugin-registry.js")>();
+  return {
+    ...actual,
+    loadPluginRegistrySnapshot: pluginRegistryMocks.loadPluginRegistrySnapshot,
+  };
+});
 
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 

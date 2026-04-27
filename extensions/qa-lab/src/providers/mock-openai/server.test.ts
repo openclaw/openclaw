@@ -1180,6 +1180,52 @@ describe("qa mock openai server", () => {
       "Protocol note: I checked memory and the current Project Nebula codename is ORBIT-10.",
     );
 
+    const runtimeThreadMemorySearch = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        instructions:
+          "Runtime context: @openclaw Thread memory check: what is the hidden thread codename stored only in memory? Use memory tools first and reply only in this thread.",
+        input: [
+          {
+            role: "user",
+            content: [{ type: "input_text", text: "Continue with the QA scenario plan." }],
+          },
+        ],
+      }),
+    });
+    expect(runtimeThreadMemorySearch.status).toBe(200);
+    expect(await runtimeThreadMemorySearch.text()).toContain('"name":"memory_search"');
+
+    const threadMemoryFollowup = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        instructions:
+          "Runtime context: @openclaw Thread memory check: what is the hidden thread codename stored only in memory? Use memory tools first and reply only in this thread.",
+        input: [
+          {
+            role: "user",
+            content: [{ type: "input_text", text: "Continue with the QA scenario plan." }],
+          },
+          {
+            type: "function_call_output",
+            output: JSON.stringify({ text: "Thread-hidden codename: ORBIT-22." }),
+          },
+        ],
+      }),
+    });
+    expect(threadMemoryFollowup.status).toBe(200);
+    expect(await threadMemoryFollowup.text()).toContain(
+      "Protocol note: I checked memory in-thread and the hidden thread codename is ORBIT-22.",
+    );
+
     const activeMemorySearch = await fetch(`${server.baseUrl}/v1/responses`, {
       method: "POST",
       headers: {

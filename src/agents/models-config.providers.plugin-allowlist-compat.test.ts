@@ -3,33 +3,29 @@ import {
   withBundledPluginAllowlistCompat,
   withBundledPluginEnablementCompat,
 } from "../plugins/bundled-compat.js";
-import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginRegistrySnapshot } from "../plugins/plugin-registry.js";
 import { resolveEnabledProviderPluginIds } from "../plugins/providers.js";
 
-const PROVIDER_PLUGIN_IDS = ["kilocode", "moonshot", "openrouter"] as const;
+const TEST_ENV = {
+  VITEST: "1",
+} as NodeJS.ProcessEnv;
 
-function createProviderManifestRecord(pluginId: string): PluginManifestRecord {
-  return {
-    id: pluginId,
-    channels: [],
-    providers: [pluginId],
-    cliBackends: [],
-    skills: [],
-    hooks: [],
-    origin: "bundled",
-    rootDir: `/virtual/${pluginId}`,
-    source: `/virtual/${pluginId}/index.ts`,
-    manifestPath: `/virtual/${pluginId}/openclaw.plugin.json`,
-  };
-}
+const PLUGIN_IDS = ["kilocode", "moonshot", "openrouter"] as const;
 
-function createProviderRegistryRecord(pluginId: string): PluginRegistrySnapshot["plugins"][number] {
-  return {
+const TEST_REGISTRY: PluginRegistrySnapshot = {
+  version: 1,
+  hostContractVersion: "test",
+  compatRegistryVersion: "test",
+  migrationVersion: 1,
+  policyHash: "test",
+  generatedAtMs: 0,
+  installRecords: {},
+  plugins: PLUGIN_IDS.map((pluginId) => ({
     pluginId,
-    manifestPath: `/virtual/${pluginId}/openclaw.plugin.json`,
-    manifestHash: `${pluginId}-manifest-hash`,
-    rootDir: `/virtual/${pluginId}`,
+    manifestPath: `/tmp/openclaw-test/${pluginId}/openclaw.plugin.json`,
+    manifestHash: `${pluginId}-hash`,
+    rootDir: `/tmp/openclaw-test/${pluginId}`,
     origin: "bundled",
     enabled: true,
     enabledByDefault: true,
@@ -40,23 +36,24 @@ function createProviderRegistryRecord(pluginId: string): PluginRegistrySnapshot[
       agentHarnesses: [],
     },
     compat: [],
-  };
-}
-
-const providerRegistry: PluginRegistrySnapshot = {
-  version: 1,
-  hostContractVersion: "2026.4.25",
-  compatRegistryVersion: "compat-v1",
-  migrationVersion: 1,
-  policyHash: "policy-v1",
-  generatedAtMs: 1777118400000,
-  installRecords: {},
-  plugins: PROVIDER_PLUGIN_IDS.map(createProviderRegistryRecord),
+  })),
   diagnostics: [],
 };
 
-const providerManifestRegistry: PluginManifestRegistry = {
-  plugins: PROVIDER_PLUGIN_IDS.map(createProviderManifestRecord),
+const TEST_MANIFEST_REGISTRY: PluginManifestRegistry = {
+  plugins: PLUGIN_IDS.map((pluginId) => ({
+    id: pluginId,
+    origin: "bundled",
+    manifestPath: `/tmp/openclaw-test/${pluginId}/openclaw.plugin.json`,
+    source: `/tmp/openclaw-test/${pluginId}/index.ts`,
+    rootDir: `/tmp/openclaw-test/${pluginId}`,
+    channels: [],
+    providers: [pluginId],
+    cliBackends: [],
+    skills: [],
+    hooks: [],
+    contracts: {},
+  })),
   diagnostics: [],
 };
 
@@ -77,9 +74,10 @@ describe("implicit provider plugin allowlist compatibility", () => {
     expect(
       resolveEnabledProviderPluginIds({
         config,
-        registry: providerRegistry,
-        manifestRegistry: providerManifestRegistry,
-        onlyPluginIds: PROVIDER_PLUGIN_IDS,
+        env: TEST_ENV,
+        onlyPluginIds: [...PLUGIN_IDS],
+        registry: TEST_REGISTRY,
+        manifestRegistry: TEST_MANIFEST_REGISTRY,
       }),
     ).toEqual(["kilocode", "moonshot", "openrouter"]);
   });
@@ -101,9 +99,10 @@ describe("implicit provider plugin allowlist compatibility", () => {
     expect(
       resolveEnabledProviderPluginIds({
         config,
-        registry: providerRegistry,
-        manifestRegistry: providerManifestRegistry,
-        onlyPluginIds: PROVIDER_PLUGIN_IDS,
+        env: TEST_ENV,
+        onlyPluginIds: [...PLUGIN_IDS],
+        registry: TEST_REGISTRY,
+        manifestRegistry: TEST_MANIFEST_REGISTRY,
       }),
     ).toEqual(["moonshot", "openrouter"]);
   });
