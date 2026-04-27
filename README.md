@@ -125,7 +125,11 @@ Foreground/debug mode:
 ```bash
 openclaw gateway stop
 openclaw gateway --port 18789 --verbose
+```
 
+Send a test message or ask the assistant after either startup mode is running:
+
+```bash
 # Send a message
 openclaw message send --target +1234567890 --message "Hello from OpenClaw"
 

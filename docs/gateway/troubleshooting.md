@@ -41,11 +41,15 @@ which openclaw
 openclaw gateway status
 ```
 
-On Linux/systemd, also inspect the actual user service:
+On Linux/systemd, also inspect the actual service command:
 
 ```bash
-systemctl --user cat openclaw-gateway.service
+systemctl --user show openclaw-gateway.service --property=ExecStart
 ```
+
+If support asks for the full unit, redact `Environment=` lines and any tokens, keys,
+secrets, or passwords before sharing `systemctl --user cat openclaw-gateway.service`
+output.
 
 The shell Node and service Node can point at different binaries. Restart the gateway
 after Node upgrades or PATH changes:

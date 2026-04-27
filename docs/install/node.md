@@ -33,11 +33,15 @@ which openclaw
 openclaw gateway status
 ```
 
-On Linux/systemd, inspect the user service after installing the daemon:
+On Linux/systemd, inspect the runtime command after installing the daemon:
 
 ```bash
-systemctl --user cat openclaw-gateway.service
+systemctl --user show openclaw-gateway.service --property=ExecStart
 ```
+
+Avoid sharing unsanitized `systemctl --user cat openclaw-gateway.service` output in
+issues or support threads; unit files can include `Environment=` values with tokens,
+keys, or other secrets.
 
 If you change Node versions or global install paths, restart the gateway so the service
 uses the intended runtime:
