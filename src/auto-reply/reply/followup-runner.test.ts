@@ -25,6 +25,7 @@ let saveSessionStore: typeof import("../../config/sessions/store.js").saveSessio
 let clearSessionStoreCacheForTest: typeof import("../../config/sessions/store.js").clearSessionStoreCacheForTest;
 let clearFollowupQueue: typeof import("./queue.js").clearFollowupQueue;
 let enqueueFollowupRun: typeof import("./queue.js").enqueueFollowupRun;
+let getReplyPayloadMetadata: typeof import("openclaw/plugin-sdk/reply-payload").getReplyPayloadMetadata;
 let sessionRunAccounting: typeof import("./session-run-accounting.js");
 let setRuntimeConfigSnapshot: typeof import("../../config/config.js").setRuntimeConfigSnapshot;
 let createMockFollowupRun: typeof import("./test-helpers.js").createMockFollowupRun;
@@ -345,6 +346,7 @@ async function loadFreshFollowupRunnerModuleForTest() {
   ({ clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } =
     await import("../../config/sessions/store.js"));
   ({ clearFollowupQueue, enqueueFollowupRun } = await import("./queue.js"));
+  ({ getReplyPayloadMetadata } = await import("openclaw/plugin-sdk/reply-payload"));
   sessionRunAccounting = await import("./session-run-accounting.js");
   ({ createMockFollowupRun, createMockTypingController } = await import("./test-helpers.js"));
 }
@@ -1360,6 +1362,40 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expect(routeReplyMock).not.toHaveBeenCalled();
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     expect(onBlockReply).toHaveBeenCalledWith(expect.objectContaining({ text: "hello world!" }));
+  });
+
+  it("applies emotion sanitization and TTS metadata to queued followup delivery", async () => {
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [{ text: "[warmly] hello there" }] },
+      queued: createQueuedRun({
+        run: { emotionMode: "on" },
+        originatingChannel: "discord",
+        originatingTo: undefined,
+      }),
+    });
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    const payload = onBlockReply.mock.calls[0]?.[0];
+    expect(payload).toEqual(expect.objectContaining({ text: "hello there" }));
+    expect(getReplyPayloadMetadata(payload)).toMatchObject({
+      ttsSourceText: "[warmly] hello there",
+      ttsPlainText: "hello there",
+    });
+  });
+
+  it("defaults queued followup delivery to emotion mode off", async () => {
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [{ text: "[warmly] hello there" }] },
+      queued: createQueuedRun({
+        originatingChannel: "discord",
+        originatingTo: undefined,
+      }),
+    });
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    const payload = onBlockReply.mock.calls[0]?.[0];
+    expect(payload).toEqual(expect.objectContaining({ text: "hello there" }));
+    expect(getReplyPayloadMetadata(payload)).toBeUndefined();
   });
 
   it("lets provider followup route hooks force dispatcher delivery", async () => {

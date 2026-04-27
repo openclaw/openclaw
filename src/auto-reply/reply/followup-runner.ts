@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
+  setReplyPayloadMetadata,
 } from "openclaw/plugin-sdk/reply-payload";
 import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
@@ -16,10 +17,14 @@ import {
 } from "../../agents/runtime-plan/build.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
+import type { EmotionMode } from "../../emotion-mode.js";
+import { isEmotionModeEnabled } from "../../emotion-mode.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
+import { sanitizeEmotionTagsForMode } from "../../shared/text/emotion-tags.js";
+import { stripInlineDirectiveTagsForDelivery } from "../../utils/directive-tags.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -39,6 +44,73 @@ import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 type EmbeddedAgentRunResult = Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
+
+const FOLLOWUP_EMOTION_RAW_TTS_TEXT_KEY = "__openclawFollowupEmotionRawTtsText";
+
+type FollowupEmotionTaggedPayload = ReplyPayload & {
+  [FOLLOWUP_EMOTION_RAW_TTS_TEXT_KEY]?: string;
+};
+
+function normalizeFollowupPayloadForDelivery(
+  payload: ReplyPayload,
+  emotionMode: EmotionMode | undefined,
+): FollowupEmotionTaggedPayload[] {
+  let text = payload.text;
+  if (!text) {
+    return [payload as FollowupEmotionTaggedPayload];
+  }
+
+  let nextPayload: FollowupEmotionTaggedPayload = payload;
+  if (text.includes("HEARTBEAT_OK")) {
+    const stripped = stripHeartbeatToken(text, { mode: "message" });
+    const hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
+    if (stripped.shouldSkip && !hasMedia) {
+      return [];
+    }
+    text = stripped.text;
+    nextPayload = { ...payload, text };
+  }
+
+  const normalizedEmotionMode = emotionMode ?? "off";
+  const rawEmotionTtsText = isEmotionModeEnabled(normalizedEmotionMode) ? text : undefined;
+  const emotionSanitized = sanitizeEmotionTagsForMode(text, normalizedEmotionMode);
+  nextPayload = {
+    ...nextPayload,
+    text: emotionSanitized.text,
+  };
+
+  if (typeof rawEmotionTtsText === "string" && rawEmotionTtsText.trim().length > 0) {
+    nextPayload[FOLLOWUP_EMOTION_RAW_TTS_TEXT_KEY] = rawEmotionTtsText;
+  }
+
+  return [nextPayload];
+}
+
+function finalizeFollowupPayloadEmotionMetadata(payload: ReplyPayload): ReplyPayload {
+  const taggedPayload = payload as FollowupEmotionTaggedPayload;
+  const rawEmotionTtsText = taggedPayload[FOLLOWUP_EMOTION_RAW_TTS_TEXT_KEY];
+  delete taggedPayload[FOLLOWUP_EMOTION_RAW_TTS_TEXT_KEY];
+  if (typeof rawEmotionTtsText !== "string" || rawEmotionTtsText.trim().length === 0) {
+    return taggedPayload;
+  }
+
+  const cleanedRawEmotionTtsText = stripInlineDirectiveTagsForDelivery(rawEmotionTtsText).text;
+  if (cleanedRawEmotionTtsText.trim().length === 0) {
+    return taggedPayload;
+  }
+
+  const cleanedPlainTtsText = sanitizeEmotionTagsForMode(
+    cleanedRawEmotionTtsText,
+    "on",
+  ).text.trim();
+  setReplyPayloadMetadata(taggedPayload, {
+    ttsSourceText: cleanedRawEmotionTtsText,
+    ...(cleanedPlainTtsText !== cleanedRawEmotionTtsText
+      ? { ttsPlainText: cleanedPlainTtsText }
+      : {}),
+  });
+  return taggedPayload;
+}
 
 export function createFollowupRunner(params: {
   opts?: GetReplyOptions;
@@ -414,18 +486,9 @@ export function createFollowupRunner(params: {
       if (payloadArray.length === 0) {
         return;
       }
-      const sanitizedPayloads = payloadArray.flatMap((payload) => {
-        const text = payload.text;
-        if (!text || !text.includes("HEARTBEAT_OK")) {
-          return [payload];
-        }
-        const stripped = stripHeartbeatToken(text, { mode: "message" });
-        const hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
-        if (stripped.shouldSkip && !hasMedia) {
-          return [];
-        }
-        return [{ ...payload, text: stripped.text }];
-      });
+      const sanitizedPayloads = payloadArray.flatMap((payload) =>
+        normalizeFollowupPayloadForDelivery(payload, run.emotionMode),
+      );
       const finalPayloads = resolveFollowupDeliveryPayloads({
         cfg: runtimeConfig,
         payloads: sanitizedPayloads,
@@ -437,7 +500,7 @@ export function createFollowupRunner(params: {
         sentMediaUrls: runResult.messagingToolSentMediaUrls,
         sentTargets: runResult.messagingToolSentTargets,
         sentTexts: runResult.messagingToolSentTexts,
-      });
+      }).map(finalizeFollowupPayloadEmotionMetadata);
 
       if (finalPayloads.length === 0) {
         return;
