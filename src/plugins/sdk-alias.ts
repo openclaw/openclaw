@@ -695,7 +695,21 @@ export function buildPluginLoaderJitiOptions(aliasMap: Record<string, string>) {
 
 function supportsNativeJitiRuntime(): boolean {
   const versions = process.versions as { bun?: string };
-  return typeof versions.bun !== "string" && process.platform !== "win32";
+  if (typeof versions.bun === "string") {
+    return false;
+  }
+  // On native Windows, jiti's native import() path passes the resolved
+  // module path directly to Node's ESM loader, which rejects raw absolute
+  // paths like `C:\…` with `ERR_UNSUPPORTED_ESM_URL_SCHEME — Received
+  // protocol 'c:'`. Until jiti normalizes those paths via pathToFileURL
+  // upstream, force the non-native (vfs/transpile) path on win32 so plugin
+  // loading does not crash channel providers like Telegram on startup.
+  // See https://github.com/openclaw/openclaw/issues/71749 (and the prior
+  // related issue #61911).
+  if (process.platform === "win32") {
+    return false;
+  }
+  return true;
 }
 
 function isBundledPluginDistModulePath(modulePath: string): boolean {
