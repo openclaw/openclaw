@@ -167,4 +167,35 @@ describe("sanitizeToolCallInputs redacts sessions_spawn attachments", () => {
     expect(JSON.stringify(out)).not.toContain(argumentResumeSessionId);
     expect(JSON.stringify(out)).not.toContain(inputResumeSessionId);
   });
+
+  it("redacts ACP-only routing fields with non-string payloads", () => {
+    const nestedResumeSessionId = "ACP_NESTED_SESSION_ID_SHOULD_NOT_PERSIST"; // pragma: allowlist secret
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolUse",
+            id: "call_6",
+            name: "sessions_spawn",
+            input: {
+              task: "do nested thing",
+              resumeSessionId: { value: nestedResumeSessionId },
+              streamTo: ["parent"],
+            },
+          },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input);
+    const msg = out[0] as { content?: unknown[] };
+    const tool = (msg.content?.[0] ?? null) as {
+      input?: { resumeSessionId?: string; streamTo?: string };
+    } | null;
+
+    expect(tool?.input?.resumeSessionId).toBe("__OPENCLAW_REDACTED__");
+    expect(tool?.input?.streamTo).toBe("__OPENCLAW_REDACTED__");
+    expect(JSON.stringify(out)).not.toContain(nestedResumeSessionId);
+  });
 });
