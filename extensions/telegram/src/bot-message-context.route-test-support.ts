@@ -1,7 +1,7 @@
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { vi, type Mock } from "vitest";
 import { finalizeTelegramInboundContextForTest } from "./bot-message-context.session-runtime-test-support.js";
 
