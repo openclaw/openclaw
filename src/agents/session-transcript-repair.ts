@@ -330,7 +330,6 @@ export function repairToolCallInputs(
           messageChanged = true;
           continue;
         }
-<<<<<<< HEAD
       }
       // Strip partialJson early so sessions_spawn sanitization still runs on
       // otherwise-complete blocks retained from the OpenAI Responses transport.
