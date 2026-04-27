@@ -57,6 +57,18 @@ describe("probeTelegram retry logic", () => {
     expect(result.bot?.username).toBe("test_bot");
   }
 
+  it("skips webhook info when disabled", async () => {
+    const fetchMock = installFetchMock();
+    mockGetMeSuccess(fetchMock);
+
+    const result = await probeTelegram(token, timeoutMs, { includeWebhookInfo: false });
+
+    expect(result.ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api.telegram.org/bottest-token/getMe");
+    expect(result.webhook).toBeUndefined();
+  });
+
   afterEach(() => {
     resetTelegramProbeFetcherCacheForTests();
     resolveTelegramFetch.mockReset();

@@ -23,6 +23,7 @@ export type TelegramProbeOptions = {
   network?: TelegramNetworkConfig;
   accountId?: string;
   apiRoot?: string;
+  includeWebhookInfo?: boolean;
 };
 
 const probeFetcherCache = new Map<string, typeof fetch>();
@@ -105,6 +106,7 @@ export async function probeTelegram(
   const fetcher = resolveProbeFetcher(token, options);
   const apiBase = resolveTelegramApiBase(options?.apiRoot);
   const base = `${apiBase}/bot${token}`;
+  const includeWebhookInfo = options?.includeWebhookInfo !== false;
   const retryDelayMs = Math.max(50, Math.min(1000, Math.floor(timeoutBudgetMs / 5)));
   const resolveRemainingBudgetMs = () => Math.max(0, deadlineMs - Date.now());
 
@@ -184,29 +186,31 @@ export async function probeTelegram(
           : null,
     };
 
-    // Try to fetch webhook info, but don't fail health if it errors.
-    try {
-      const webhookRemainingBudgetMs = resolveRemainingBudgetMs();
-      if (webhookRemainingBudgetMs > 0) {
-        const webhookRes = await fetchWithTimeout(
-          `${base}/getWebhookInfo`,
-          {},
-          Math.max(1, Math.min(timeoutBudgetMs, webhookRemainingBudgetMs)),
-          fetcher,
-        );
-        const webhookJson = (await webhookRes.json()) as {
-          ok?: boolean;
-          result?: { url?: string; has_custom_certificate?: boolean };
-        };
-        if (webhookRes.ok && webhookJson?.ok) {
-          result.webhook = {
-            url: webhookJson.result?.url ?? null,
-            hasCustomCert: webhookJson.result?.has_custom_certificate ?? null,
+    // Try to fetch webhook info when requested, but don't fail health if it errors.
+    if (includeWebhookInfo) {
+      try {
+        const webhookRemainingBudgetMs = resolveRemainingBudgetMs();
+        if (webhookRemainingBudgetMs > 0) {
+          const webhookRes = await fetchWithTimeout(
+            `${base}/getWebhookInfo`,
+            {},
+            Math.max(1, Math.min(timeoutBudgetMs, webhookRemainingBudgetMs)),
+            fetcher,
+          );
+          const webhookJson = (await webhookRes.json()) as {
+            ok?: boolean;
+            result?: { url?: string; has_custom_certificate?: boolean };
           };
+          if (webhookRes.ok && webhookJson?.ok) {
+            result.webhook = {
+              url: webhookJson.result?.url ?? null,
+              hasCustomCert: webhookJson.result?.has_custom_certificate ?? null,
+            };
+          }
         }
+      } catch {
+        // ignore webhook errors for probe
       }
-    } catch {
-      // ignore webhook errors for probe
     }
 
     result.ok = true;
