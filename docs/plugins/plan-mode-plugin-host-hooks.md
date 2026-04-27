@@ -386,8 +386,8 @@ Expose safe agent event subscriptions and run-context storage:
 
 ```ts
 api.onAgentEvent("tool_result", handler);
-ctx.runContext.set(runId, "example", value);
-ctx.runContext.get(runId, "example");
+ctx.runContext.set("example", value);
+ctx.runContext.get("example");
 ```
 
 Add scheduler lifecycle helpers tied to session extension state:
