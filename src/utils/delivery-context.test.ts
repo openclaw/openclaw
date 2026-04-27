@@ -81,6 +81,25 @@ describe("delivery context helpers", () => {
       accountId: "acct-1",
     });
 
+    expect(
+      normalizeDeliveryContext({
+        channel: " webchat ",
+        to: " webchat:user-123 ",
+        accountId: " acct-1 ",
+      }),
+    ).toEqual({
+      channel: "webchat",
+      to: "webchat:user-123",
+      accountId: "acct-1",
+    });
+
+    expect(
+      normalizeDeliveryContext({ channel: " webchat ", to: " +15555550123 ", accountId: "acct-1" }),
+    ).toEqual({
+      channel: "webchat",
+      accountId: "acct-1",
+    });
+
     expect(normalizeDeliveryContext({ channel: "  " })).toBeUndefined();
   });
 
