@@ -17,6 +17,7 @@ const baseConfig: ResolvedCovenPluginConfig = {
   covenHome: "",
   socketPath: "",
   workspaceDir: "",
+  allowFallback: false,
   fallbackBackend: "acpx",
   pollIntervalMs: 25,
   harnesses: {},
@@ -117,11 +118,31 @@ afterEach(() => {
 });
 
 describe("CovenAcpRuntime", () => {
-  it("falls back to the direct ACP backend when Coven is unavailable", async () => {
+  it("fails closed by default when Coven is unavailable", async () => {
+    const runtime = new CovenAcpRuntime({
+      config,
+      client: fakeClient({
+        health: vi.fn(async () => {
+          throw new Error("offline");
+        }),
+      }),
+    });
+
+    await expect(
+      runtime.ensureSession({
+        sessionKey: "agent:codex:test",
+        agent: "codex",
+        mode: "oneshot",
+        cwd: workspaceDir,
+      }),
+    ).rejects.toThrow(/fallback is disabled/);
+  });
+
+  it("falls back to the direct ACP backend when Coven is unavailable and fallback is enabled", async () => {
     const fallback = fallbackRuntime();
     registerAcpRuntimeBackend({ id: "acpx", runtime: fallback });
     const runtime = new CovenAcpRuntime({
-      config,
+      config: { ...config, allowFallback: true },
       client: fakeClient({
         health: vi.fn(async () => {
           throw new Error("offline");
@@ -154,7 +175,7 @@ describe("CovenAcpRuntime", () => {
           }),
       ),
     });
-    const runtime = new CovenAcpRuntime({ config, client });
+    const runtime = new CovenAcpRuntime({ config: { ...config, allowFallback: true }, client });
 
     const pending = runtime.ensureSession({
       sessionKey: "agent:codex:test",
@@ -205,11 +226,10 @@ describe("CovenAcpRuntime", () => {
     ]);
   });
 
-  it("sanitizes daemon-controlled session fields in start status", async () => {
+  it("sanitizes daemon-controlled harness fields in start status", async () => {
     const client = fakeClient({
       launchSession: vi.fn(async () =>
         session({
-          id: "\u001b]0;spoof\u0007session-1\r",
           harness: "\u001b[31mcodex\u001b[0m",
         }),
       ),
@@ -236,11 +256,65 @@ describe("CovenAcpRuntime", () => {
     );
   });
 
-  it("falls back without launching Coven when prompts exceed the Coven request limit", async () => {
+  it("rejects unsafe daemon-controlled session ids before exposing handle fields", async () => {
+    const client = fakeClient({
+      launchSession: vi.fn(async () =>
+        session({
+          id: "\u001b]0;spoof\u0007session-1\r",
+        }),
+      ),
+    });
+    const runtime = new CovenAcpRuntime({ config, client });
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:test",
+      agent: "codex",
+      mode: "oneshot",
+      cwd: workspaceDir,
+    });
+
+    await expect(
+      collect(
+        runtime.runTurn({
+          handle,
+          text: "Fix tests",
+          mode: "prompt",
+          requestId: "req-1",
+        }),
+      ),
+    ).rejects.toThrow(/session id is invalid/);
+    expect(handle.backendSessionId).toBeUndefined();
+    expect(handle.agentSessionId).toBeUndefined();
+  });
+
+  it("fails closed without launching Coven when prompts exceed the Coven request limit", async () => {
+    const client = fakeClient();
+    const runtime = new CovenAcpRuntime({ config, client });
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:test",
+      agent: "codex",
+      mode: "oneshot",
+      cwd: workspaceDir,
+    });
+
+    await expect(
+      collect(
+        runtime.runTurn({
+          handle,
+          text: "x".repeat(500_001),
+          mode: "prompt",
+          requestId: "req-1",
+        }),
+      ),
+    ).rejects.toThrow(/fallback is disabled/);
+
+    expect(client.launchSession).not.toHaveBeenCalled();
+  });
+
+  it("falls back on oversized prompts when fallback is explicitly enabled", async () => {
     const fallback = fallbackRuntime();
     registerAcpRuntimeBackend({ id: "acpx", runtime: fallback });
     const client = fakeClient();
-    const runtime = new CovenAcpRuntime({ config, client });
+    const runtime = new CovenAcpRuntime({ config: { ...config, allowFallback: true }, client });
     const handle = await runtime.ensureSession({
       sessionKey: "agent:codex:test",
       agent: "codex",
@@ -428,7 +502,7 @@ describe("CovenAcpRuntime", () => {
     expect(sleep).toHaveBeenCalledWith(25, undefined);
   });
 
-  it("bounds daemon events processed during one poll cycle", async () => {
+  it("fails the turn when the daemon returns too many events in one poll", async () => {
     const client = fakeClient({
       listEvents: vi.fn(async () =>
         Array.from({ length: 600 }, (_, index) =>
@@ -439,7 +513,7 @@ describe("CovenAcpRuntime", () => {
           }),
         ),
       ),
-      getSession: vi.fn(async () => session({ status: "completed", exitCode: 0 })),
+      killSession: vi.fn(async () => undefined),
     });
     const runtime = new CovenAcpRuntime({ config, client });
     const handle = await runtime.ensureSession({
@@ -453,11 +527,12 @@ describe("CovenAcpRuntime", () => {
       runtime.runTurn({ handle, text: "Fix tests", mode: "prompt", requestId: "req-1" }),
     );
 
-    const outputEvents = events.filter((item) => item.type === "text_delta");
-    expect(outputEvents).toHaveLength(500);
-    expect(outputEvents).not.toContainEqual(
-      expect.objectContaining({ type: "text_delta", text: "line-500\n" }),
-    );
+    expect(client.killSession).toHaveBeenCalledWith("session-1", undefined);
+    expect(events).toEqual([
+      expect.objectContaining({ type: "status", text: "coven session session-1 started (codex)" }),
+      expect.objectContaining({ type: "status", text: "coven session polling failed" }),
+      expect.objectContaining({ type: "done", stopReason: "error" }),
+    ]);
   });
 
   it("converts Coven polling failures into controlled terminal events", async () => {
@@ -648,7 +723,7 @@ describe("CovenAcpRuntime", () => {
     const fallback = fallbackRuntime();
     registerAcpRuntimeBackend({ id: "acpx", runtime: fallback });
     const runtime = new CovenAcpRuntime({
-      config,
+      config: { ...config, allowFallback: true },
       client: fakeClient({
         launchSession: vi.fn(async () => {
           throw new Error("launch failed");
@@ -671,5 +746,26 @@ describe("CovenAcpRuntime", () => {
       expect.objectContaining({ type: "text_delta", text: "direct fallback\n" }),
       expect.objectContaining({ type: "done", stopReason: "complete" }),
     ]);
+  });
+
+  it("fails closed when Coven launch fails after detection and fallback is disabled", async () => {
+    const runtime = new CovenAcpRuntime({
+      config,
+      client: fakeClient({
+        launchSession: vi.fn(async () => {
+          throw new Error("launch failed");
+        }),
+      }),
+    });
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:test",
+      agent: "codex",
+      mode: "oneshot",
+      cwd: workspaceDir,
+    });
+
+    await expect(
+      collect(runtime.runTurn({ handle, text: "Fix tests", mode: "prompt", requestId: "req-1" })),
+    ).rejects.toThrow(/fallback is disabled/);
   });
 });

@@ -103,5 +103,15 @@ describe("resolveCovenPluginConfig", () => {
 
     expect(resolved.covenHome).toBe(path.join(os.homedir(), ".custom-coven"));
     expect(resolved.socketPath).toBe(path.join(os.homedir(), ".custom-coven", "coven.sock"));
+    expect(resolved.allowFallback).toBe(false);
+  });
+
+  it("only enables fallback when configured explicitly", () => {
+    const resolved = resolveCovenPluginConfig({
+      rawConfig: { allowFallback: true },
+      workspaceDir: "/repo",
+    });
+
+    expect(resolved.allowFallback).toBe(true);
   });
 });

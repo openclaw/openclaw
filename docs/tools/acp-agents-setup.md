@@ -220,7 +220,9 @@ Minimal opt-in config:
           covenHome: "~/.coven",
           // Optional. Defaults to <covenHome>/coven.sock.
           socketPath: "~/.coven/coven.sock",
-          // Optional. Used when Coven is unavailable or launch fails.
+          // Optional. Defaults to false; enable only when direct ACP fallback is acceptable.
+          allowFallback: false,
+          // Optional. Used only when allowFallback is true.
           fallbackBackend: "acpx",
         },
       },
@@ -232,8 +234,9 @@ Minimal opt-in config:
 When selected, OpenClaw checks Coven daemon health over the configured Unix
 socket before launching. A successful launch creates a Coven session and records
 the Coven session id in the ACP runtime handle. If the health check or launch
-fails, OpenClaw falls back to the configured direct ACP backend (`acpx` by
-default) instead of breaking existing ACP behavior.
+fails, OpenClaw fails closed by default so `acp.backend="coven"` cannot silently
+downgrade to direct ACP execution. Set `allowFallback: true` only when direct
+ACP fallback is an explicit, acceptable operator choice.
 
 For path safety, `~` in `covenHome` and `socketPath` expands to the current
 user home directory, and configured Coven paths must be absolute after that
@@ -242,8 +245,8 @@ daemon socket is a local user trust anchor, not repository-controlled state.
 `socketPath` must stay inside `covenHome`; use the default
 `<covenHome>/coven.sock` unless your Coven daemon uses a different socket
 filename in the same home directory. Keep `covenHome` owned by the OpenClaw user
-and not group/world-writable; OpenClaw rejects symlinked, shared-writable, or
-non-socket Coven socket paths before connecting.
+and private (`0700`); OpenClaw rejects symlinked, shared-accessible,
+shared-writable, or non-socket Coven socket paths before connecting.
 
 The default harness mapping sends common ACP agent ids such as `codex`,
 `claude`, `gemini`, and `opencode` to the matching Coven harness id. Override

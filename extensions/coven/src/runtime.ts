@@ -44,6 +44,8 @@ const MAX_RUNTIME_SESSION_NAME_BYTES = 2_048;
 const MAX_RUNTIME_AGENT_CHARS = 128;
 const MAX_RUNTIME_MODE_CHARS = 32;
 const MAX_STATUS_FIELD_CHARS = 256;
+const MAX_SESSION_ID_CHARS = 128;
+const SAFE_SESSION_ID_REGEX = /^[A-Za-z0-9._:-]+$/;
 
 type CovenRuntimeSessionState = {
   agent: string;
@@ -183,6 +185,14 @@ function sanitizeStatusField(input: string, fallback = "unknown"): string {
   return sanitizeStatusText(input).slice(0, MAX_STATUS_FIELD_CHARS) || fallback;
 }
 
+function requireSafeSessionId(input: string): string {
+  const value = input.trim();
+  if (!value || value.length > MAX_SESSION_ID_CHARS || !SAFE_SESSION_ID_REGEX.test(value)) {
+    throw new Error("Coven session id is invalid");
+  }
+  return value;
+}
+
 function boundedCovenPrompt(input: string): string {
   if (Buffer.byteLength(input, "utf8") > MAX_COVEN_PROMPT_BYTES) {
     throw new Error("Coven prompt exceeded size limit");
@@ -278,6 +288,12 @@ export class CovenAcpRuntime implements AcpRuntime {
     input: Parameters<AcpRuntime["ensureSession"]>[0],
   ): Promise<AcpRuntimeHandle> {
     if (!(await this.isCovenAvailable())) {
+      if (!this.config.allowFallback) {
+        throw new AcpRuntimeError(
+          "ACP_BACKEND_UNAVAILABLE",
+          "Coven is unavailable and fallback is disabled.",
+        );
+      }
       return await this.ensureFallbackSession(input);
     }
     const agent = normalizeAgentId(input.agent);
@@ -308,6 +324,7 @@ export class CovenAcpRuntime implements AcpRuntime {
 
     const cwd = this.resolveWorkspaceCwd(input.handle.cwd);
     let session: CovenSessionRecord;
+    let sessionId: string;
     try {
       const prompt = boundedCovenPrompt(input.text);
       session = await this.client.launchSession(
@@ -320,7 +337,15 @@ export class CovenAcpRuntime implements AcpRuntime {
         },
         input.signal,
       );
+      sessionId = requireSafeSessionId(session.id);
     } catch (error) {
+      if (!this.config.allowFallback) {
+        throw new AcpRuntimeError(
+          "ACP_TURN_FAILED",
+          `Coven launch failed and fallback is disabled: ${String(error)}`,
+          { cause: error },
+        );
+      }
       this.logger?.warn(
         `coven launch failed; falling back to ${this.config.fallbackBackend}: ${String(error)}`,
       );
@@ -328,12 +353,12 @@ export class CovenAcpRuntime implements AcpRuntime {
       return;
     }
 
-    input.handle.backendSessionId = session.id;
-    input.handle.agentSessionId = session.id;
-    this.activeSessionIdsBySessionKey.set(input.handle.sessionKey, session.id);
+    input.handle.backendSessionId = sessionId;
+    input.handle.agentSessionId = sessionId;
+    this.activeSessionIdsBySessionKey.set(input.handle.sessionKey, sessionId);
     yield {
       type: "status",
-      text: `coven session ${sanitizeStatusField(session.id)} started (${sanitizeStatusField(session.harness)})`,
+      text: `coven session ${sessionId} started (${sanitizeStatusField(session.harness)})`,
       tag: "session_info_update",
     };
 
@@ -342,29 +367,23 @@ export class CovenAcpRuntime implements AcpRuntime {
     let lastSeenEventId: string | undefined;
     while (true) {
       if (input.signal?.aborted) {
-        await this.killActiveSession(session.id).catch(() => undefined);
+        await this.killActiveSession(sessionId).catch(() => undefined);
         throw input.signal.reason ?? new Error("Coven turn aborted");
       }
 
       try {
         const events = await this.client.listEvents(
-          session.id,
+          sessionId,
           lastSeenEventId ? { afterEventId: lastSeenEventId } : undefined,
           input.signal,
         );
-        const cursorIndex = lastSeenEventId
-          ? events.findIndex((event) => event.id === lastSeenEventId)
-          : -1;
-        const nextEvents = cursorIndex >= 0 ? events.slice(cursorIndex + 1) : events;
-        let processedEvents = 0;
-        for (const event of nextEvents) {
+        if (events.length > MAX_EVENTS_PER_POLL) {
+          throw new Error("Coven daemon returned too many events");
+        }
+        for (const event of events) {
           if (seenEventIds.has(event.id)) {
             continue;
           }
-          if (processedEvents >= MAX_EVENTS_PER_POLL) {
-            break;
-          }
-          processedEvents += 1;
           seenEventIds.add(event.id);
           seenEventQueue.push(event.id);
           while (seenEventQueue.length > MAX_TRACKED_EVENT_IDS) {
@@ -383,7 +402,7 @@ export class CovenAcpRuntime implements AcpRuntime {
           }
         }
 
-        const latest = await this.client.getSession(session.id, input.signal);
+        const latest = await this.client.getSession(sessionId, input.signal);
         if (sessionIsTerminal(latest)) {
           yield terminalStatusEvent(latest);
           yield { type: "done", stopReason: normalizeStopReason(latest.status) };
@@ -392,11 +411,11 @@ export class CovenAcpRuntime implements AcpRuntime {
         }
       } catch (error) {
         if (input.signal?.aborted) {
-          await this.killActiveSession(session.id).catch(() => undefined);
+          await this.killActiveSession(sessionId).catch(() => undefined);
           throw input.signal.reason ?? error;
         }
         this.logger?.warn(`coven polling failed: ${String(error)}`);
-        await this.killActiveSession(session.id).catch(() => undefined);
+        await this.killActiveSession(sessionId).catch(() => undefined);
         this.activeSessionIdsBySessionKey.delete(input.handle.sessionKey);
         yield { type: "status", text: "coven session polling failed", tag: "session_info_update" };
         yield { type: "done", stopReason: "error" };
@@ -424,14 +443,15 @@ export class CovenAcpRuntime implements AcpRuntime {
     if (!sessionId) {
       return { summary: "coven runtime ready" };
     }
+    const session = await this.client.getSession(sessionId, input.signal);
     const status = sanitizeStatusField(session.status, "completed");
     const harness = sanitizeStatusField(session.harness);
     const title = sanitizeStatusField(session.title, "untitled");
-    const sessionId = sanitizeStatusField(session.id);
     return {
       summary: `${status} ${harness} ${title}`,
       backendSessionId: sessionId,
       agentSessionId: sessionId,
+      details: {
         projectRoot: sanitizeStatusField(session.projectRoot),
         harness,
         status,

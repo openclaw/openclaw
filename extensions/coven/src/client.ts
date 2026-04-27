@@ -71,6 +71,14 @@ type HttpResponse = {
   body: string;
 };
 
+type SocketFingerprint = {
+  dev: number;
+  ino: number;
+  mode: number;
+  uid: number;
+  gid: number;
+};
+
 export class CovenApiError extends Error {
   readonly status: number;
   readonly body: string;
@@ -103,9 +111,32 @@ function realpathExistingPath(filePath: string, label: string): string {
   }
 }
 
-function validateSocketPathForUse(socketPath: string, socketRoot: string | undefined): void {
+function fingerprintSocket(stat: fs.Stats): SocketFingerprint {
+  return {
+    dev: stat.dev,
+    ino: stat.ino,
+    mode: stat.mode,
+    uid: stat.uid,
+    gid: stat.gid,
+  };
+}
+
+function socketFingerprintMatches(left: SocketFingerprint, right: SocketFingerprint): boolean {
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.mode === right.mode &&
+    left.uid === right.uid &&
+    left.gid === right.gid
+  );
+}
+
+function validateSocketPathForUse(
+  socketPath: string,
+  socketRoot: string | undefined,
+): SocketFingerprint | null {
   if (!socketRoot) {
-    return;
+    return null;
   }
   const socketRootLstat = lstatIfExists(socketRoot);
   if (socketRootLstat?.isSymbolicLink()) {
@@ -113,6 +144,7 @@ function validateSocketPathForUse(socketPath: string, socketRoot: string | undef
   }
   const socketRootStat = statExistingPath(socketRoot, "Coven covenHome");
   validateSocketOwnerAndMode(socketRootStat, "Coven covenHome");
+  validatePrivateDirectory(socketRootStat, "Coven covenHome");
 
   const socketStat = lstatIfExists(socketPath);
   if (socketStat?.isSymbolicLink()) {
@@ -129,6 +161,9 @@ function validateSocketPathForUse(socketPath: string, socketRoot: string | undef
     path.dirname(socketPath),
     "Coven socketPath directory",
   );
+  const socketDirStat = statExistingPath(path.dirname(socketPath), "Coven socketPath directory");
+  validateSocketOwnerAndMode(socketDirStat, "Coven socketPath directory");
+  validatePrivateDirectory(socketDirStat, "Coven socketPath directory");
   if (!pathIsInside(realSocketRoot, realSocketDir)) {
     throw new Error("Coven socketPath must stay inside covenHome");
   }
@@ -136,6 +171,7 @@ function validateSocketPathForUse(socketPath: string, socketRoot: string | undef
   if (!pathIsInside(realSocketRoot, realSocketPath)) {
     throw new Error("Coven socketPath must stay inside covenHome");
   }
+  return fingerprintSocket(resolvedSocketStat);
 }
 
 function validateSocketOwnerAndMode(stat: fs.Stats, label: string): void {
@@ -148,6 +184,18 @@ function validateSocketOwnerAndMode(stat: fs.Stats, label: string): void {
   }
   if ((stat.mode & 0o022) !== 0) {
     throw new Error(`${label} must not be group or world writable`);
+  }
+}
+
+function validatePrivateDirectory(stat: fs.Stats, label: string): void {
+  if (process.platform === "win32") {
+    return;
+  }
+  if (!stat.isDirectory()) {
+    throw new Error(`${label} must be a directory`);
+  }
+  if ((stat.mode & 0o077) !== 0) {
+    throw new Error(`${label} must not be group or world accessible`);
   }
 }
 
@@ -181,8 +229,9 @@ function requestOverSocket(options: RequestOptions): Promise<HttpResponse> {
     }
     let requestBody = "";
     let requestBodyBytes = 0;
+    let socketFingerprint: SocketFingerprint | null = null;
     try {
-      validateSocketPathForUse(options.socketPath, options.socketRoot);
+      socketFingerprint = validateSocketPathForUse(options.socketPath, options.socketRoot);
       const serialized = serializeRequestBody(options.body);
       requestBody = serialized.text;
       requestBodyBytes = serialized.byteLength;
@@ -208,8 +257,23 @@ function requestOverSocket(options: RequestOptions): Promise<HttpResponse> {
       {
         createConnection: () => {
           try {
-            validateSocketPathForUse(options.socketPath, options.socketRoot);
-            return net.createConnection({ path: options.socketPath });
+            const beforeConnect = validateSocketPathForUse(options.socketPath, options.socketRoot);
+            const socket = net.createConnection({ path: options.socketPath });
+            socket.once("connect", () => {
+              try {
+                const afterConnect = validateSocketPathForUse(
+                  options.socketPath,
+                  options.socketRoot,
+                );
+                const expected = beforeConnect ?? socketFingerprint;
+                if (expected && afterConnect && !socketFingerprintMatches(expected, afterConnect)) {
+                  socket.destroy(new Error("Coven socketPath changed during connection"));
+                }
+              } catch (error) {
+                socket.destroy(errorToError(error));
+              }
+            });
+            return socket;
           } catch (error) {
             return socketThatFailsWith(error);
           }

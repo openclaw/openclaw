@@ -7,6 +7,7 @@ import { lstatIfExists, pathIsInside, realpathIfExists } from "./path-utils.js";
 export type CovenPluginConfig = {
   covenHome?: string;
   socketPath?: string;
+  allowFallback?: boolean;
   fallbackBackend?: string;
   pollIntervalMs?: number;
   harnesses?: Record<string, string>;
@@ -16,6 +17,7 @@ export type ResolvedCovenPluginConfig = {
   covenHome: string;
   socketPath: string;
   workspaceDir: string;
+  allowFallback: boolean;
   fallbackBackend: string;
   pollIntervalMs: number;
   harnesses: Record<string, string>;
@@ -29,6 +31,7 @@ const nonEmptyString = z.string().trim().min(1);
 export const CovenPluginConfigSchema = z.strictObject({
   covenHome: nonEmptyString.optional(),
   socketPath: nonEmptyString.optional(),
+  allowFallback: z.boolean().optional(),
   fallbackBackend: nonEmptyString.optional(),
   pollIntervalMs: z.number().min(25).max(10_000).optional(),
   harnesses: z.record(z.string(), nonEmptyString).optional(),
@@ -125,6 +128,7 @@ export function resolveCovenPluginConfig(params: {
     covenHome,
     socketPath: resolveSocketPath(covenHome, config.socketPath),
     workspaceDir,
+    allowFallback: config.allowFallback === true,
     fallbackBackend: normalizeBackendId(config.fallbackBackend),
     pollIntervalMs: config.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
     harnesses: normalizeHarnesses(config.harnesses),

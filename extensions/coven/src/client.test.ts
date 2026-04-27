@@ -126,6 +126,7 @@ describe("createCovenClient", () => {
   it("revalidates socket paths before connecting", async () => {
     const covenHome = path.join(tmpDir, ".coven");
     await fs.mkdir(covenHome);
+    await fs.chmod(covenHome, 0o700);
     const socketPath = path.join(covenHome, "coven.sock");
     await fs.symlink("/var/run/docker.sock", socketPath);
 
@@ -138,6 +139,7 @@ describe("createCovenClient", () => {
     const realHome = path.join(tmpDir, "real-coven");
     const symlinkHome = path.join(tmpDir, "symlink-coven");
     await fs.mkdir(realHome);
+    await fs.chmod(realHome, 0o700);
     await fs.symlink(realHome, symlinkHome);
 
     await expect(
@@ -169,6 +171,7 @@ describe("createCovenClient", () => {
   it("rejects socket paths that are not Unix sockets", async () => {
     const covenHome = path.join(tmpDir, ".coven");
     await fs.mkdir(covenHome);
+    await fs.chmod(covenHome, 0o700);
     const socketPath = path.join(covenHome, "coven.sock");
     await fs.writeFile(socketPath, "");
 

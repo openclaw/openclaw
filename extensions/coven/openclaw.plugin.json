@@ -15,9 +15,13 @@
         "type": "string",
         "description": "Path to the Coven daemon Unix socket. Defaults to <covenHome>/coven.sock and must stay inside covenHome."
       },
+      "allowFallback": {
+        "type": "boolean",
+        "description": "When true, fall back to fallbackBackend if Coven is unavailable or launch fails. Defaults to false."
+      },
       "fallbackBackend": {
         "type": "string",
-        "description": "ACP backend to use when Coven is unavailable. Defaults to acpx."
+        "description": "ACP backend to use only when allowFallback is true. Defaults to acpx."
       },
       "pollIntervalMs": {
         "type": "number",
