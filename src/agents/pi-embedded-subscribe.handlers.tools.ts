@@ -45,7 +45,13 @@ import {
 import { inferToolMetaFromArgs } from "./pi-embedded-utils.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
-import { isStrictToolMode, resolveToolStrictnessMode } from "./tool-strictness.js";
+import {
+  createToolArgumentAliasEvent,
+  emitToolStrictnessRepairEvent,
+  isWarnToolMode,
+  resolveToolStrictnessMode,
+  shouldAllowToolArgumentAlias,
+} from "./tool-strictness.js";
 
 type ExecApprovalReplyModule = typeof import("../infra/exec-approval-reply.js");
 type HookRunnerGlobalModule = typeof import("../plugins/hook-runner-global.js");
@@ -605,9 +611,21 @@ export function handleToolExecutionStart(
       const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
       const strictnessMode = resolveToolStrictnessMode({ env: process.env });
       const hasCanonicalPath = typeof record.path === "string" && record.path.trim().length > 0;
-      const hasAliasPath = typeof record.file_path === "string" && record.file_path.trim().length > 0;
-      if (!hasCanonicalPath && hasAliasPath && isStrictToolMode(strictnessMode)) {
+      const hasAliasPath =
+        typeof record.file_path === "string" && record.file_path.trim().length > 0;
+      if (!hasCanonicalPath && hasAliasPath && !shouldAllowToolArgumentAlias(strictnessMode)) {
         throw new Error("strict tool mode rejected read.file_path alias; expected path");
+      }
+      if (!hasCanonicalPath && hasAliasPath && isWarnToolMode(strictnessMode)) {
+        emitToolStrictnessRepairEvent({
+          event: createToolArgumentAliasEvent({
+            tool: "read",
+            from: "file_path",
+            to: "path",
+            mode: strictnessMode,
+          }),
+          logger: (message) => ctx.log.debug(message),
+        });
       }
       const filePathValue =
         typeof record.path === "string"

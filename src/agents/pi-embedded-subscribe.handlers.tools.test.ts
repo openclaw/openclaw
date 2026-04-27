@@ -147,8 +147,7 @@ describe("handleToolExecutionStart read path checks", () => {
       toolCallId: "tool-strict-alias",
       args: { file_path: "/tmp/example.txt" },
     };
-
-    await expect(handleToolExecutionStart(ctx, evt)).rejects.toThrow(
+    expect(() => handleToolExecutionStart(ctx, evt)).toThrow(
       "strict tool mode rejected read.file_path alias; expected path",
     );
   });

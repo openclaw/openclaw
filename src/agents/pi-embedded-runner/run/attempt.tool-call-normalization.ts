@@ -11,7 +11,14 @@ import {
 } from "../../tool-call-id.js";
 import { hasUnredactedSessionsSpawnAttachments } from "../../tool-call-shared.js";
 import { normalizeToolName } from "../../tool-policy.js";
-import { isStrictToolMode, type ToolStrictnessMode } from "../../tool-strictness.js";
+import {
+  createToolNameNormalizationEvent,
+  emitToolStrictnessRepairEvent,
+  isStrictToolMode,
+  isWarnToolMode,
+  type ToolStrictnessMode,
+  type ToolStrictnessRepairEvent,
+} from "../../tool-strictness.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import type { TranscriptPolicy } from "../../transcript-policy.js";
 import { wrapStreamObjectEvents } from "./stream-wrapper.js";
@@ -192,38 +199,119 @@ function looksLikeMalformedToolNameCounter(rawName: string): boolean {
   );
 }
 
+function resolveExactCanonicalToolCallNameForDispatch(
+  trimmedName: string,
+  allowedToolNames: Set<string>,
+): string | null {
+  return resolveExactAllowedToolName(trimmedName, allowedToolNames);
+}
+
+function recoverMalformedToolCallNameForDispatch(
+  trimmedName: string,
+  allowedToolNames: Set<string>,
+): string | null {
+  const inferredFromName = inferToolNameFromToolCallId(trimmedName, allowedToolNames);
+  if (inferredFromName) {
+    return inferredFromName;
+  }
+  if (looksLikeMalformedToolNameCounter(trimmedName)) {
+    return trimmedName;
+  }
+  return null;
+}
+
+function resolveStructuredCanonicalToolCallNameForDispatch(
+  trimmedName: string,
+  allowedToolNames: Set<string>,
+): string | null {
+  return resolveStructuredAllowedToolName(trimmedName, allowedToolNames);
+}
+
+function resolveBlankToolCallNameFallback(
+  rawName: string,
+  rawToolCallId: string | undefined,
+  allowedToolNames?: Set<string>,
+): string | null {
+  const trimmed = rawName.trim();
+  if (trimmed) {
+    return null;
+  }
+  return inferToolNameFromToolCallId(rawToolCallId, allowedToolNames) ?? rawName;
+}
+
+function resolveStrictToolCallName(
+  rawName: string,
+  trimmedName: string,
+  allowedToolNames: Set<string>,
+): string {
+  return allowedToolNames.has(trimmedName) ? trimmedName : rawName;
+}
+
 function normalizeToolCallNameForDispatch(
   rawName: string,
   allowedToolNames?: Set<string>,
   rawToolCallId?: string,
   mode: ToolStrictnessMode = "off",
+  onRepairEvent?: (event: ToolStrictnessRepairEvent) => void,
 ): string {
   const trimmed = rawName.trim();
-  if (!trimmed) {
-    return inferToolNameFromToolCallId(rawToolCallId, allowedToolNames) ?? rawName;
+
+  const blankFallback = resolveBlankToolCallNameFallback(rawName, rawToolCallId, allowedToolNames);
+  if (blankFallback !== null) {
+    return blankFallback;
   }
+
   if (!allowedToolNames || allowedToolNames.size === 0) {
     return trimmed;
   }
 
   if (isStrictToolMode(mode)) {
-    return allowedToolNames.has(trimmed) ? trimmed : rawName;
+    return resolveStrictToolCallName(rawName, trimmed, allowedToolNames);
   }
 
-  const exact = resolveExactAllowedToolName(trimmed, allowedToolNames);
-  if (exact) {
-    return exact;
-  }
-  const inferredFromName = inferToolNameFromToolCallId(trimmed, allowedToolNames);
-  if (inferredFromName) {
-    return inferredFromName;
+  const exactCanonical = resolveExactCanonicalToolCallNameForDispatch(trimmed, allowedToolNames);
+  if (exactCanonical) {
+    if (isWarnToolMode(mode) && exactCanonical !== trimmed) {
+      emitToolStrictnessRepairEvent({
+        event: createToolNameNormalizationEvent({
+          from: trimmed,
+          to: exactCanonical,
+          mode,
+          detail: "exact-canonical",
+        }),
+        onRepairEvent,
+        logger: (message) => console.debug(message),
+      });
+    }
+    return exactCanonical;
   }
 
-  if (looksLikeMalformedToolNameCounter(trimmed)) {
-    return trimmed;
+  const recoveredMalformed = recoverMalformedToolCallNameForDispatch(trimmed, allowedToolNames);
+  if (recoveredMalformed) {
+    return recoveredMalformed;
   }
 
-  return resolveStructuredAllowedToolName(trimmed, allowedToolNames) ?? trimmed;
+  const structuredCanonical = resolveStructuredCanonicalToolCallNameForDispatch(
+    trimmed,
+    allowedToolNames,
+  );
+  if (structuredCanonical) {
+    if (isWarnToolMode(mode) && structuredCanonical !== trimmed) {
+      emitToolStrictnessRepairEvent({
+        event: createToolNameNormalizationEvent({
+          from: trimmed,
+          to: structuredCanonical,
+          mode,
+          detail: "structured-canonical",
+        }),
+        onRepairEvent,
+        logger: (message) => console.debug(message),
+      });
+    }
+    return structuredCanonical;
+  }
+
+  return trimmed;
 }
 
 function isToolCallBlockType(type: unknown): boolean {
@@ -238,6 +326,36 @@ type ReplayToolCallBlock = {
   name?: unknown;
   input?: unknown;
   arguments?: unknown;
+};
+
+export type ToolCallCompatibilityObservationKind = "toolCallBlockTypeCompatibility";
+export type ToolCallCompatibilityObservationPhase = "replay-sanitize";
+export type ToolCallCompatibilityObservationFrom = "tool_call" | "functionCall";
+export type ToolCallCompatibilityObservationTo = "toolCall";
+
+export type ToolCallCompatibilityObservation = {
+  kind: ToolCallCompatibilityObservationKind;
+  from: ToolCallCompatibilityObservationFrom;
+  to: ToolCallCompatibilityObservationTo;
+  mode: ToolStrictnessMode;
+  phase: ToolCallCompatibilityObservationPhase;
+};
+
+export type ToolCallCompatibilityEvent = ToolCallCompatibilityObservation;
+
+export type ToolUseReplayDiagnosticReason =
+  | "pairingSensitiveReplay"
+  | "providerOwnedThinkingReplay";
+export type ToolUseReplayDiagnosticProvider = "anthropic" | "generic";
+
+export type ToolUseReplayDiagnosticEvent = {
+  kind: "toolUseReplayDiagnostic";
+  phase: "replay-sanitize";
+  mode: ToolStrictnessMode;
+  reason: ToolUseReplayDiagnosticReason;
+  provider: ToolUseReplayDiagnosticProvider;
+  hasEmbeddedToolResult: boolean;
+  toolUseCount: number;
 };
 
 type ReplayToolCallSanitizeReport = {
@@ -309,11 +427,19 @@ function resolveReplayToolCallName(
   rawName: string,
   rawId: string,
   allowedToolNames?: Set<string>,
+  mode: ToolStrictnessMode = "off",
+  onRepairEvent?: (event: ToolStrictnessRepairEvent) => void,
 ): string | null {
   if (rawName.length > REPLAY_TOOL_CALL_NAME_MAX_CHARS * 2) {
     return null;
   }
-  const normalized = normalizeToolCallNameForDispatch(rawName, allowedToolNames, rawId);
+  const normalized = normalizeToolCallNameForDispatch(
+    rawName,
+    allowedToolNames,
+    rawId,
+    mode,
+    onRepairEvent,
+  );
   const trimmed = normalized.trim();
   if (!trimmed || trimmed.length > REPLAY_TOOL_CALL_NAME_MAX_CHARS || /\s/.test(trimmed)) {
     return null;
@@ -328,6 +454,10 @@ function sanitizeReplayToolCallInputs(
   messages: AgentMessage[],
   allowedToolNames?: Set<string>,
   allowProviderOwnedThinkingReplay?: boolean,
+  mode: ToolStrictnessMode = "off",
+  onCompatibilityEvent?: (event: ToolCallCompatibilityEvent) => void,
+  onToolUseReplayDiagnostic?: (event: ToolUseReplayDiagnosticEvent) => void,
+  onRepairEvent?: (event: ToolStrictnessRepairEvent) => void,
 ): ReplayToolCallSanitizeReport {
   let changed = false;
   let droppedAssistantMessages = 0;
@@ -343,6 +473,50 @@ function sanitizeReplayToolCallInputs(
       out.push(message);
       continue;
     }
+    const toolUseCount = message.content.filter(
+      (block) =>
+        block && typeof block === "object" && (block as { type?: unknown }).type === "toolUse",
+    ).length;
+    if (toolUseCount > 0) {
+      const hasEmbeddedToolResult = messages.some(
+        (candidate) =>
+          candidate &&
+          typeof candidate === "object" &&
+          candidate.role === "user" &&
+          Array.isArray(candidate.content) &&
+          candidate.content.some(
+            (block) =>
+              block &&
+              typeof block === "object" &&
+              ((block as { type?: unknown }).type === "toolResult" ||
+                (block as { type?: unknown }).type === "tool"),
+          ),
+      );
+      onToolUseReplayDiagnostic?.({
+        kind: "toolUseReplayDiagnostic",
+        phase: "replay-sanitize",
+        mode,
+        reason: "pairingSensitiveReplay",
+        provider: allowProviderOwnedThinkingReplay ? "anthropic" : "generic",
+        hasEmbeddedToolResult,
+        toolUseCount,
+      });
+      if (
+        allowProviderOwnedThinkingReplay &&
+        message.content.some((block) => isThinkingLikeReplayBlock(block))
+      ) {
+        onToolUseReplayDiagnostic?.({
+          kind: "toolUseReplayDiagnostic",
+          phase: "replay-sanitize",
+          mode,
+          reason: "providerOwnedThinkingReplay",
+          provider: "anthropic",
+          hasEmbeddedToolResult,
+          toolUseCount,
+        });
+      }
+    }
+
     if (
       allowProviderOwnedThinkingReplay &&
       message.content.some((block) => isThinkingLikeReplayBlock(block)) &&
@@ -368,6 +542,36 @@ function sanitizeReplayToolCallInputs(
     let messageChanged = false;
 
     for (const block of message.content) {
+      if (
+        block &&
+        typeof block === "object" &&
+        (block as { type?: unknown }).type === "tool_call"
+      ) {
+        onCompatibilityEvent?.({
+          kind: "toolCallBlockTypeCompatibility",
+          from: "tool_call",
+          to: "toolCall",
+          mode,
+          phase: "replay-sanitize",
+        });
+        nextContent.push(block);
+        changed = true;
+        messageChanged = true;
+        continue;
+      }
+      if (
+        block &&
+        typeof block === "object" &&
+        (block as { type?: unknown }).type === "functionCall"
+      ) {
+        onCompatibilityEvent?.({
+          kind: "toolCallBlockTypeCompatibility",
+          from: "functionCall",
+          to: "toolCall",
+          mode,
+          phase: "replay-sanitize",
+        });
+      }
       if (!isReplayToolCallBlock(block)) {
         nextContent.push(block);
         continue;
@@ -381,7 +585,13 @@ function sanitizeReplayToolCallInputs(
       }
 
       const rawName = typeof replayBlock.name === "string" ? replayBlock.name : "";
-      const resolvedName = resolveReplayToolCallName(rawName, replayBlock.id, allowedToolNames);
+      const resolvedName = resolveReplayToolCallName(
+        rawName,
+        replayBlock.id,
+        allowedToolNames,
+        mode,
+        onRepairEvent,
+      );
       if (!resolvedName) {
         changed = true;
         messageChanged = true;
@@ -615,7 +825,49 @@ function normalizeToolCallIdsInMessage(message: unknown): void {
   }
 }
 
-function trimWhitespaceFromToolCallNamesInMessage(
+function trimToolCallNamesInMessage(
+  message: unknown,
+  allowedToolNames?: Set<string>,
+  mode: ToolStrictnessMode = "off",
+  onRepairEvent?: (event: ToolStrictnessRepairEvent) => void,
+): void {
+  if (!message || typeof message !== "object") {
+    return;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return;
+  }
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const typedBlock = block as { type?: unknown; name?: unknown; id?: unknown };
+    if (!isToolCallBlockType(typedBlock.type) || typeof typedBlock.name !== "string") {
+      continue;
+    }
+    const rawId = typeof typedBlock.id === "string" ? typedBlock.id : undefined;
+    if (mode === "strict") {
+      const trimmed = typedBlock.name.trim();
+      if (trimmed !== typedBlock.name) {
+        typedBlock.name = trimmed;
+      }
+    } else {
+      const normalized = normalizeToolCallNameForDispatch(
+        typedBlock.name,
+        allowedToolNames,
+        rawId,
+        mode,
+        onRepairEvent,
+      );
+      if (normalized !== typedBlock.name) {
+        typedBlock.name = normalized;
+      }
+    }
+  }
+}
+
+function inferMissingToolCallNamesInMessage(
   message: unknown,
   allowedToolNames?: Set<string>,
 ): void {
@@ -637,6 +889,15 @@ function trimWhitespaceFromToolCallNamesInMessage(
       typedBlock.name = inferred;
     }
   });
+}
+
+function trimWhitespaceFromToolCallNamesInMessage(
+  message: unknown,
+  allowedToolNames?: Set<string>,
+  mode: ToolStrictnessMode = "off",
+): void {
+  trimToolCallNamesInMessage(message, allowedToolNames, mode);
+  inferMissingToolCallNamesInMessage(message, allowedToolNames);
   normalizeToolCallIdsInMessage(message);
 }
 
@@ -778,7 +1039,11 @@ function guardUnknownToolLoopInMessage(
 function wrapStreamTrimToolCallNames(
   stream: ReturnType<typeof streamSimple>,
   allowedToolNames?: Set<string>,
-  options?: { unknownToolThreshold?: number; state?: UnknownToolLoopGuardState },
+  options?: {
+    unknownToolThreshold?: number;
+    state?: UnknownToolLoopGuardState;
+    mode?: ToolStrictnessMode;
+  },
 ): ReturnType<typeof streamSimple> {
   const unknownToolGuardState = options?.state ?? {
     count: 0,
@@ -788,7 +1053,7 @@ function wrapStreamTrimToolCallNames(
   const originalResult = stream.result.bind(stream);
   stream.result = async () => {
     const message = await originalResult();
-    trimWhitespaceFromToolCallNamesInMessage(message, allowedToolNames);
+    trimWhitespaceFromToolCallNamesInMessage(message, allowedToolNames, options?.mode ?? "off");
     guardUnknownToolLoopInMessage(message, unknownToolGuardState, {
       allowedToolNames,
       threshold: options?.unknownToolThreshold,
@@ -799,8 +1064,8 @@ function wrapStreamTrimToolCallNames(
   };
 
   wrapStreamObjectEvents(stream, (event) => {
-    trimWhitespaceFromToolCallNamesInMessage(event.partial, allowedToolNames);
-    trimWhitespaceFromToolCallNamesInMessage(event.message, allowedToolNames);
+    trimWhitespaceFromToolCallNamesInMessage(event.partial, allowedToolNames, options?.mode ?? "off");
+    trimWhitespaceFromToolCallNamesInMessage(event.message, allowedToolNames, options?.mode ?? "off");
     if (event.message && typeof event.message === "object") {
       const countedStreamAttempt = guardUnknownToolLoopInMessage(
         event.message,
@@ -828,25 +1093,28 @@ function wrapStreamTrimToolCallNames(
 export function wrapStreamFnTrimToolCallNames(
   baseFn: StreamFn,
   allowedToolNames?: Set<string>,
-  guardOptions?: { unknownToolThreshold?: number },
+  guardOptions?: { unknownToolThreshold?: number; mode?: ToolStrictnessMode },
 ): StreamFn {
   const unknownToolGuardState: UnknownToolLoopGuardState = {
     count: 0,
     countedMessages: new WeakSet<object>(),
   };
   return (model, context, streamOptions) => {
+    const mode = guardOptions?.mode ?? "off";
     const maybeStream = baseFn(model, context, streamOptions);
     if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
       return Promise.resolve(maybeStream).then((stream) =>
         wrapStreamTrimToolCallNames(stream, allowedToolNames, {
           unknownToolThreshold: guardOptions?.unknownToolThreshold,
           state: unknownToolGuardState,
+          mode,
         }),
       );
     }
     return wrapStreamTrimToolCallNames(maybeStream, allowedToolNames, {
       unknownToolThreshold: guardOptions?.unknownToolThreshold,
       state: unknownToolGuardState,
+      mode,
     });
   };
 }
@@ -877,12 +1145,18 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
     TranscriptPolicy,
     "validateGeminiTurns" | "validateAnthropicTurns" | "preserveSignatures" | "dropThinkingBlocks"
   >,
+  wrapperOptions?: {
+    mode?: ToolStrictnessMode;
+    onCompatibilityEvent?: (event: ToolCallCompatibilityEvent) => void;
+    onToolUseReplayDiagnostic?: (event: ToolUseReplayDiagnosticEvent) => void;
+    onRepairEvent?: (event: ToolStrictnessRepairEvent) => void;
+  },
 ): StreamFn {
-  return (model, context, options) => {
+  return (model, context, streamOptions) => {
     const ctx = context as unknown as { messages?: unknown };
     const messages = ctx?.messages;
     if (!Array.isArray(messages)) {
-      return baseFn(model, context, options);
+      return baseFn(model, context, streamOptions);
     }
     const allowProviderOwnedThinkingReplay = shouldAllowProviderOwnedThinkingReplay({
       modelApi: (model as { api?: unknown })?.api as string | null | undefined,
@@ -896,6 +1170,10 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
       messages as AgentMessage[],
       allowedToolNames,
       allowProviderOwnedThinkingReplay,
+      wrapperOptions?.mode ?? "off",
+      wrapperOptions?.onCompatibilityEvent,
+      wrapperOptions?.onToolUseReplayDiagnostic,
+      wrapperOptions?.onRepairEvent,
     );
     const replayInputsChanged = sanitized.messages !== messages;
     let nextMessages = replayInputsChanged
@@ -913,7 +1191,7 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
       strippedTrailingAssistantPrefill ||= nextMessages !== beforeStrip;
     }
     if (nextMessages === messages) {
-      return baseFn(model, context, options);
+      return baseFn(model, context, streamOptions);
     }
     if (
       sanitized.droppedAssistantMessages > 0 ||
@@ -931,6 +1209,6 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
       ...(context as unknown as Record<string, unknown>),
       messages: nextMessages,
     } as unknown;
-    return baseFn(model, nextContext as typeof context, options);
+    return baseFn(model, nextContext as typeof context, streamOptions);
   };
 }

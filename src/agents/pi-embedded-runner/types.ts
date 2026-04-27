@@ -3,6 +3,7 @@ import type { CliSessionBinding, SessionSystemPromptReport } from "../../config/
 import type { DiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
 import type { MessagingToolSend } from "../pi-embedded-messaging.types.js";
+import type { ToolStrictnessReport } from "./tool-strictness-report.types.js";
 
 export type EmbeddedPiAgentMeta = {
   sessionId: string;
@@ -174,6 +175,10 @@ export type EmbeddedPiRunResult = {
   }>;
   meta: EmbeddedPiRunMeta;
   diagnosticTrace?: DiagnosticTraceContext;
+  // Optional structured strict-tool diagnostics surfaced from the embedded attempt
+  // so higher-level callers can consume strictness observations without reaching
+  // back into attempt-only internals.
+  toolStrictnessReport?: ToolStrictnessReport;
   // True if a messaging tool successfully sent a message.
   // Used to suppress agent's confirmation text.
   didSendViaMessagingTool?: boolean;
