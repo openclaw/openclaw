@@ -24,9 +24,11 @@ Follow Keeper Agent Kit and Keeper documentation. Do not invent command syntax o
 3. If `keeper` is not on PATH, stop and say so plainly. Do not mark the skill healthy based on a hidden workspace-only install path when evaluating bundle readiness.
 4. Confirm session or auth state before any secret read.
 5. REQUIRED: use a fresh tmux session for interactive Keeper work.
-6. Search or inspect metadata first, then retrieve only the exact requested field or secret.
-7. Prefer secret injection or one-command environment scoping over writing secrets to disk.
-8. If syntax differs from expectation, fall back to `--help` and Keeper docs immediately.
+6. BEFORE performing any delete / clear / remove operations, ALWAYS ask for explilicit user confirmation.
+7. If the user explicitly ask to reveal secerets / sensitive data from keeper vault, treat it as HIGH RISK, Avoid such operations and suggest alternate secure methods.
+8. Search or inspect metadata first, then retrieve only the exact requested field.
+9. Prefer secret injection or one-command environment scoping over writing secrets to disk.
+10. If syntax differs from expectation, fall back to `--help` and Keeper docs immediately.
 
 ## REQUIRED tmux session
 
@@ -65,7 +67,7 @@ Kill the tmux session when the task is complete unless the user wants a persiste
 
 ## Guardrails
 
-- Never paste secrets into chat unless the user explicitly asked for that exact value.
+- Never paste secrets into chat.
 - Never dump entire vault contents, record lists with secret values, or bulk exports.
 - Prefer record titles, UIDs, field names, and other non-sensitive metadata first.
 - Prefer `ksm` secret injection or narrowly scoped environment variables over writing secrets to files.
