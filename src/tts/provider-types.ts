@@ -26,6 +26,9 @@ export type SpeechProviderCapabilities = {
    * the routing layer only forwards expressive source text when the resolved
    * provider config's model id is in this list. Providers that omit this
    * field are treated as "all models accept expressive tags".
+   * Providers that set an explicitly empty list (`[]`) are treated as "no
+   * models accept expressive tags", which forces stripped/plain speech text
+   * for every model.
    *
    * Example: ElevenLabs declares `["eleven_v3"]` because v2 / turbo /
    * monolingual would speak the tag words out loud rather than interpret them.
