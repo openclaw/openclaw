@@ -254,6 +254,37 @@ describe("normalizeToolParameters", () => {
     ).toThrow('Validation failed for tool "query"');
   });
 
+  it("leaves null arguments invalid when required params are nested in composite schemas", () => {
+    const tool: AnyAgentTool = {
+      name: "query",
+      label: "query",
+      description: "Run query",
+      parameters: {
+        type: "object",
+        allOf: [
+          {
+            type: "object",
+            properties: { q: { type: "string" } },
+            required: ["q"],
+          },
+        ],
+      },
+      execute: vi.fn(),
+    };
+
+    const normalized = normalizeToolParameters(tool);
+
+    expect(normalized.prepareArguments).toBeUndefined();
+    expect(() =>
+      validateToolArguments(normalized, {
+        type: "toolCall",
+        id: "call-1",
+        name: "query",
+        arguments: null as never,
+      }),
+    ).toThrow('Validation failed for tool "query"');
+  });
+
   it("runs null arguments for parameterless tools through the agent loop without validation failure", async () => {
     const execute = vi.fn().mockResolvedValue({
       content: [{ type: "text", text: "wiki ok" }],

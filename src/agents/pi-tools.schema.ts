@@ -19,7 +19,31 @@ function isObjectSchemaWithNoRequiredParams(schema: unknown): boolean {
   if (!hasObjectType) {
     return false;
   }
-  return !Array.isArray(record.required) || record.required.length === 0;
+  return !schemaHasRequiredParams(record);
+}
+
+function schemaHasRequiredParams(schema: Record<string, unknown>): boolean {
+  if (Array.isArray(schema.required) && schema.required.length > 0) {
+    return true;
+  }
+  for (const key of ["allOf", "anyOf", "oneOf"]) {
+    const variants = schema[key];
+    if (!Array.isArray(variants)) {
+      continue;
+    }
+    if (
+      variants.some(
+        (variant) =>
+          variant !== null &&
+          typeof variant === "object" &&
+          !Array.isArray(variant) &&
+          schemaHasRequiredParams(variant as Record<string, unknown>),
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function addEmptyObjectArgumentPreparation(tool: AnyAgentTool, parameters: unknown): AnyAgentTool {
