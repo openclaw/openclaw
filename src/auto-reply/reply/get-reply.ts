@@ -584,6 +584,12 @@ export async function getReplyFromConfig(
           messageProvider: hookMessageProvider,
           trigger: opts?.isHeartbeat ? "heartbeat" : "user",
           channelId: hookMessageProvider,
+          ...(sessionCtx.SenderId ? { senderId: sessionCtx.SenderId } : {}),
+          // NativeChannelId is the transport-native conversation identifier
+          // (Feishu chat_id, Telegram chat_id, Discord channel_id, etc.).
+          ...(sessionCtx.NativeChannelId ? { chatId: sessionCtx.NativeChannelId } : {}),
+          // senderExternalId (cross-app ID, e.g. Feishu union_id) is not available
+          // in MsgContext; channel plugins can populate it via their own hook handlers.
         },
       );
       if (hookResult?.handled) {

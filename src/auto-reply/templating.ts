@@ -63,6 +63,11 @@ export type MsgContext = {
   To?: string;
   SessionKey?: string;
   /**
+   * Explicit sender-scoped session key override.
+   * Resolution priority: senderSessionKey > threadSessionKey (SessionKey) > route.sessionKey.
+   */
+  SenderSessionKey?: string;
+  /**
    * Session-like key used for runtime policy (sandbox/tool policy) when the
    * conversation key intentionally remains broader, such as a main-session DM.
    */

@@ -172,6 +172,12 @@ export type PluginHookAgentContext = {
   messageProvider?: string;
   trigger?: string;
   channelId?: string;
+  /** Channel-scoped sender ID (e.g. Feishu open_id, Discord user ID). */
+  senderId?: string;
+  /** Cross-app sender ID (e.g. Feishu union_id, WeCom unionId). */
+  senderExternalId?: string;
+  /** Conversation/chat ID (e.g. Feishu chat_id, Discord channel ID). */
+  chatId?: string;
 };
 
 export type PluginHookBeforeAgentReplyEvent = {
