@@ -32,6 +32,32 @@ describe("listSessionsFromStore subagent metadata", () => {
     agents: { list: [{ id: "main", default: true }] },
   } as OpenClawConfig;
 
+  test("search matches channel-derived display names before row enrichment", () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:slack:group:general": {
+        sessionId: "sess-general",
+        channel: "slack",
+        updatedAt: 20_000,
+      } as SessionEntry,
+      "agent:main:slack:group:random": {
+        sessionId: "sess-random",
+        channel: "slack",
+        updatedAt: 10_000,
+      } as SessionEntry,
+    };
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: { search: "slack:g-general" },
+    });
+
+    expect(result.sessions.map((session) => session.key)).toEqual([
+      "agent:main:slack:group:general",
+    ]);
+  });
+
   test("applies sessions.list limit before transcript-backed row enrichment", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-limit-"));
     const storePath = path.join(dir, "sessions.json");

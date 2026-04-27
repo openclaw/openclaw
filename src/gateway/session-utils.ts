@@ -1487,6 +1487,28 @@ export function buildGatewaySessionRow(params: {
   };
 }
 
+function resolveSessionListSearchDisplayName(
+  key: string,
+  entry?: SessionEntry,
+): string | undefined {
+  if (entry?.displayName) {
+    return entry.displayName;
+  }
+  const parsed = parseGroupKey(key);
+  const channel = entry?.channel ?? parsed?.channel;
+  if (!channel) {
+    return undefined;
+  }
+  return buildGroupDisplayName({
+    provider: channel,
+    subject: entry?.subject,
+    groupChannel: entry?.groupChannel,
+    space: entry?.space,
+    id: parsed?.id,
+    key,
+  });
+}
+
 export function loadGatewaySessionRow(
   sessionKey: string,
   options?: { includeDerivedTitles?: boolean; includeLastMessage?: boolean; now?: number },
@@ -1586,7 +1608,13 @@ export function listSessionsFromStore(params: {
 
   if (search) {
     entries = entries.filter(([key, entry]) => {
-      const fields = [entry?.displayName, entry?.label, entry?.subject, entry?.sessionId, key];
+      const fields = [
+        resolveSessionListSearchDisplayName(key, entry),
+        entry?.label,
+        entry?.subject,
+        entry?.sessionId,
+        key,
+      ];
       return fields.some(
         (f) => typeof f === "string" && normalizeLowercaseStringOrEmpty(f).includes(search),
       );
