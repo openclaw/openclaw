@@ -66,6 +66,7 @@ import {
 import {
   buildMemoryPromptSection,
   clearMemoryPluginState,
+  getMemoryCapabilityRegistration,
   getMemoryRuntime,
   listActiveMemoryPublicArtifacts,
   listMemoryCorpusSupplements,
@@ -5979,6 +5980,70 @@ module.exports = {
     expect(
       unknownHookDiagnostics.some((diag) =>
         diag.message.includes('unknown typed hook "123" ignored'),
+      ),
+    ).toBe(true);
+  });
+
+  it("fails plugin load when hook registration omits required name", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "hook-missing-name",
+      filename: "hook-missing-name.cjs",
+      body: `module.exports = { id: "hook-missing-name", register(api) {
+  api.registerHook("gateway:startup", () => {});
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["hook-missing-name"],
+      },
+    });
+
+    const loaded = registry.plugins.find((entry) => entry.id === "hook-missing-name");
+    expect(loaded?.status).toBe("error");
+    expect(loaded?.failurePhase).toBe("register");
+    expect(loaded?.error).toContain("hook registration missing name");
+    expect(registry.hooks).toEqual([]);
+    expect(
+      registry.diagnostics.some(
+        (diag) =>
+          diag.pluginId === "hook-missing-name" &&
+          diag.level === "error" &&
+          diag.message.includes("hook registration missing name"),
+      ),
+    ).toBe(true);
+  });
+
+  it("fails plugin load when non-memory plugins register memory capability", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "memory-capability-wrong-kind",
+      filename: "memory-capability-wrong-kind.cjs",
+      body: `module.exports = { id: "memory-capability-wrong-kind", kind: "provider", register(api) {
+  api.registerMemoryCapability({ promptBuilder: () => ["bad"] });
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["memory-capability-wrong-kind"],
+      },
+    });
+
+    const loaded = registry.plugins.find((entry) => entry.id === "memory-capability-wrong-kind");
+    expect(loaded?.status).toBe("error");
+    expect(loaded?.failurePhase).toBe("register");
+    expect(loaded?.error).toContain("only memory plugins can register a memory capability");
+    expect(getMemoryCapabilityRegistration()).toBeUndefined();
+    expect(
+      registry.diagnostics.some(
+        (diag) =>
+          diag.pluginId === "memory-capability-wrong-kind" &&
+          diag.level === "error" &&
+          diag.message.includes("only memory plugins can register a memory capability"),
       ),
     ).toBe(true);
   });

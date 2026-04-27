@@ -413,13 +413,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     const entry = opts?.entry ?? null;
     const name = entry?.hook.name ?? opts?.name?.trim();
     if (!name) {
-      pushDiagnostic({
-        level: "warn",
-        pluginId: record.id,
-        source: record.source,
-        message: "hook registration missing name",
-      });
-      return;
+      throw new Error("hook registration missing name");
     }
     const existingHook = registry.hooks.find((entry) => entry.entry.hook.name === name);
     if (existingHook) {
@@ -1559,13 +1553,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               },
               registerMemoryCapability: (capability) => {
                 if (!hasKind(record.kind, "memory")) {
-                  pushDiagnostic({
-                    level: "error",
-                    pluginId: record.id,
-                    source: record.source,
-                    message: "only memory plugins can register a memory capability",
-                  });
-                  return;
+                  throw new Error("only memory plugins can register a memory capability");
                 }
                 if (
                   Array.isArray(record.kind) &&
