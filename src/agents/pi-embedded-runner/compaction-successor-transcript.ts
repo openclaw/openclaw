@@ -117,9 +117,20 @@ function buildSuccessorEntries(params: {
     summarizedBranchIds.add(entry.id);
   }
 
+  const latestStateEntryIds = collectLatestStateEntryIds(branch.slice(0, latestCompactionIndex));
+  const staleStateEntryIds = new Set<string>();
+  for (const entry of branch.slice(0, latestCompactionIndex)) {
+    if (isDedupedStateEntry(entry) && !latestStateEntryIds.has(entry.id)) {
+      staleStateEntryIds.add(entry.id);
+    }
+  }
+
   const removedIds = new Set<string>();
   for (const entry of allEntries) {
-    if (summarizedBranchIds.has(entry.id) && entry.type === "message") {
+    if (
+      (summarizedBranchIds.has(entry.id) && entry.type === "message") ||
+      staleStateEntryIds.has(entry.id)
+    ) {
       removedIds.add(entry.id);
     }
   }
@@ -131,6 +142,7 @@ function buildSuccessorEntries(params: {
 
   const entryById = new Map(allEntries.map((entry) => [entry.id, entry]));
   const activeBranchIds = new Set(branch.map((entry) => entry.id));
+  const originalIndexById = new Map(allEntries.map((entry, index) => [entry.id, index]));
   const keptEntries: SessionEntry[] = [];
   for (const entry of allEntries) {
     if (removedIds.has(entry.id)) {
@@ -147,17 +159,80 @@ function buildSuccessorEntries(params: {
     );
   }
 
-  const inactiveEntries: SessionEntry[] = [];
-  const activeEntries: SessionEntry[] = [];
-  for (const entry of keptEntries) {
-    if (activeBranchIds.has(entry.id)) {
-      activeEntries.push(entry);
-    } else {
-      inactiveEntries.push(entry);
+  return orderSuccessorEntries({
+    entries: keptEntries,
+    activeBranchIds,
+    originalIndexById,
+  });
+}
+
+function collectLatestStateEntryIds(entries: SessionEntry[]): Set<string> {
+  const latestByType = new Map<string, SessionEntry>();
+  for (const entry of entries) {
+    if (isDedupedStateEntry(entry)) {
+      latestByType.set(entry.type, entry);
     }
   }
+  return new Set(Array.from(latestByType.values(), (entry) => entry.id));
+}
 
-  return [...inactiveEntries, ...activeEntries];
+function isDedupedStateEntry(entry: SessionEntry): boolean {
+  return (
+    entry.type === "model_change" ||
+    entry.type === "thinking_level_change" ||
+    entry.type === "session_info"
+  );
+}
+
+function orderSuccessorEntries(params: {
+  entries: SessionEntry[];
+  activeBranchIds: Set<string>;
+  originalIndexById: Map<string, number>;
+}): SessionEntry[] {
+  const { entries, activeBranchIds, originalIndexById } = params;
+  const entryIds = new Set(entries.map((entry) => entry.id));
+  const childrenByParentId = new Map<string | null, SessionEntry[]>();
+
+  for (const entry of entries) {
+    const parentId =
+      entry.parentId !== null && entryIds.has(entry.parentId) ? entry.parentId : null;
+    const children = childrenByParentId.get(parentId) ?? [];
+    children.push(parentId === entry.parentId ? entry : ({ ...entry, parentId } as SessionEntry));
+    childrenByParentId.set(parentId, children);
+  }
+
+  const sortForActiveLeaf = (left: SessionEntry, right: SessionEntry) => {
+    const leftActive = activeBranchIds.has(left.id);
+    const rightActive = activeBranchIds.has(right.id);
+    if (leftActive !== rightActive) {
+      return leftActive ? 1 : -1;
+    }
+    return (originalIndexById.get(left.id) ?? 0) - (originalIndexById.get(right.id) ?? 0);
+  };
+
+  const ordered: SessionEntry[] = [];
+  const emittedIds = new Set<string>();
+  const emitSubtree = (entry: SessionEntry) => {
+    if (emittedIds.has(entry.id)) {
+      return;
+    }
+    emittedIds.add(entry.id);
+    ordered.push(entry);
+    for (const child of (childrenByParentId.get(entry.id) ?? []).toSorted(sortForActiveLeaf)) {
+      emitSubtree(child);
+    }
+  };
+
+  for (const root of (childrenByParentId.get(null) ?? []).toSorted(sortForActiveLeaf)) {
+    emitSubtree(root);
+  }
+
+  // Defensive fallback for malformed transcripts with cycles or broken parents.
+  for (const entry of entries.toSorted(sortForActiveLeaf)) {
+    emitSubtree(entry);
+  }
+
+  return ordered;
 }
 
 function buildSuccessorHeader(params: {

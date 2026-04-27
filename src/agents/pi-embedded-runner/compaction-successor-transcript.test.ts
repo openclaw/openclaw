@@ -102,6 +102,57 @@ describe("rotateTranscriptAfterCompaction", () => {
     expect(successor.getLabel(oldUserId)).toBeUndefined();
   });
 
+  it("deduplicates stale pre-compaction session state", async () => {
+    const dir = await createTmpDir();
+    const manager = SessionManager.create(dir, dir);
+
+    const staleModelId = manager.appendModelChange("anthropic", "claude-sonnet-4-5");
+    const staleThinkingId = manager.appendThinkingLevelChange("low");
+    const staleSessionInfoId = manager.appendSessionInfo("stale title");
+    manager.appendCustomEntry("test-extension", { cursor: "preserved" });
+    manager.appendMessage({ role: "user", content: "old user", timestamp: 1 });
+    manager.appendMessage(makeAssistant("old assistant", 2));
+
+    manager.appendModelChange("openai", "gpt-5.2");
+    manager.appendThinkingLevelChange("high");
+    manager.appendSessionInfo("current title");
+    const firstKeptId = manager.appendMessage({ role: "user", content: "kept user", timestamp: 3 });
+    manager.appendMessage(makeAssistant("kept assistant", 4));
+    manager.appendCompaction("Summary of old user and old assistant.", firstKeptId, 5000);
+    manager.appendMessage({ role: "user", content: "post user", timestamp: 5 });
+
+    const result = await rotateTranscriptAfterCompaction({
+      sessionManager: manager,
+      sessionFile: manager.getSessionFile()!,
+      now: () => new Date("2026-04-27T12:05:00.000Z"),
+    });
+
+    expect(result.rotated).toBe(true);
+    const successor = SessionManager.open(result.sessionFile!);
+    const entries = successor.getEntries();
+    expect(entries.find((entry) => entry.id === staleModelId)).toBeUndefined();
+    expect(entries.find((entry) => entry.id === staleThinkingId)).toBeUndefined();
+    expect(entries.find((entry) => entry.id === staleSessionInfoId)).toBeUndefined();
+    expect(entries.filter((entry) => entry.type === "model_change")).toHaveLength(1);
+    expect(entries.filter((entry) => entry.type === "thinking_level_change")).toHaveLength(1);
+    expect(entries.filter((entry) => entry.type === "session_info")).toHaveLength(1);
+    expect(entries.find((entry) => entry.type === "model_change")).toMatchObject({
+      provider: "openai",
+      modelId: "gpt-5.2",
+    });
+    expect(entries).toContainEqual(
+      expect.objectContaining({
+        type: "custom",
+        customType: "test-extension",
+        data: { cursor: "preserved" },
+      }),
+    );
+
+    const context = successor.buildSessionContext();
+    expect(context.thinkingLevel).toBe("high");
+    expect(successor.getSessionName()).toBe("current title");
+  });
+
   it("skips sessions with no compaction entry", async () => {
     const dir = await createTmpDir();
     const manager = SessionManager.create(dir, dir);
@@ -211,6 +262,55 @@ describe("rotateTranscriptAfterCompaction", () => {
     expect(activeContextText).toContain("Summary of main branch.");
     expect(activeContextText).toContain("next");
     expect(activeContextText).not.toContain("do task B instead");
+  });
+
+  it("orders preserved sibling branches after their surviving parents", async () => {
+    const dir = await createTmpDir();
+    const manager = SessionManager.create(dir, dir);
+
+    manager.appendMessage({ role: "user", content: "hello", timestamp: 1 });
+    const branchFromId = manager.appendMessage(makeAssistant("hi there", 2));
+
+    const branchSummaryId = manager.branchWithSummary(
+      branchFromId,
+      "Summary of the inactive branch.",
+    );
+    const inactiveMsgId = manager.appendMessage({
+      role: "user",
+      content: "inactive branch",
+      timestamp: 3,
+    });
+    manager.appendMessage(makeAssistant("inactive done", 4));
+
+    manager.branch(branchFromId);
+    manager.appendMessage({ role: "user", content: "active branch", timestamp: 5 });
+    manager.appendMessage(makeAssistant("active done", 6));
+    manager.appendCompaction("Summary of active work.", branchFromId, 5000);
+    const activeLeafId = manager.appendMessage({
+      role: "user",
+      content: "next active",
+      timestamp: 7,
+    });
+
+    const result = await rotateTranscriptAfterCompaction({
+      sessionManager: manager,
+      sessionFile: manager.getSessionFile()!,
+      now: () => new Date("2026-04-27T13:00:00.000Z"),
+    });
+
+    expect(result.rotated).toBe(true);
+    const successor = SessionManager.open(result.sessionFile!);
+    const entries = successor.getEntries();
+    const indexById = new Map(entries.map((entry, index) => [entry.id, index]));
+    expect(indexById.get(branchFromId)).toBeLessThan(indexById.get(branchSummaryId)!);
+    expect(indexById.get(branchSummaryId)).toBeLessThan(indexById.get(inactiveMsgId)!);
+    expect(entries.at(-1)?.id).toBe(activeLeafId);
+    expect(successor.getLeafId()).toBe(activeLeafId);
+
+    const activeContextText = JSON.stringify(successor.buildSessionContext().messages);
+    expect(activeContextText).toContain("Summary of active work.");
+    expect(activeContextText).toContain("next active");
+    expect(activeContextText).not.toContain("inactive branch");
   });
 });
 
