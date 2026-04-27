@@ -76,6 +76,28 @@ describe("auth.cooldowns auth_permanent backoff config", () => {
   });
 });
 
+describe("security.trustModel", () => {
+  it("accepts personal-assistant and multi-tenant", () => {
+    for (const trustModel of ["personal-assistant", "multi-tenant"] as const) {
+      const result = OpenClawSchema.safeParse({
+        security: {
+          trustModel,
+        },
+      });
+      expect(result.success).toBe(true);
+    }
+  });
+
+  it("rejects unsupported values", () => {
+    const result = OpenClawSchema.safeParse({
+      security: {
+        trustModel: "whatever",
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
 describe("ui.seamColor", () => {
   it("accepts hex colors", () => {
     const res = validateConfigObject({ ui: { seamColor: "#FF4500" } });

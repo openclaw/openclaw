@@ -455,6 +455,14 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    security: z
+      .object({
+        trustModel: z
+          .union([z.literal("personal-assistant"), z.literal("multi-tenant")])
+          .optional(),
+      })
+      .strict()
+      .optional(),
     acp: z
       .object({
         enabled: z.boolean().optional(),
