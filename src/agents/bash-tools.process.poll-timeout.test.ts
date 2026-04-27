@@ -152,3 +152,31 @@ test("process poll reports timeout exit reasons for finished sessions", async ()
   expect(text).toContain("Process exited with timeout.");
   expect(text).not.toContain("code 0");
 });
+
+test("process poll includes timeout guidance when a waited poll observes exit", async () => {
+  vi.useFakeTimers();
+  try {
+    const sessionId = "sess-timeout-wait";
+    const { processTool, session } = createProcessSessionHarness(sessionId);
+    const timeoutText =
+      "Command timed out after 30 seconds. If this command is expected to take longer, re-run with a higher timeout.";
+
+    setTimeout(() => {
+      session.aggregated = timeoutText;
+      session.tail = timeoutText;
+      markExited(session, null, "SIGKILL", "failed", "overall-timeout");
+    }, 10);
+
+    const pollPromise = pollSession(processTool, "toolcall-timeout-wait", sessionId, 2000);
+    await vi.advanceTimersByTimeAsync(300);
+    const poll = await pollPromise;
+    const text = poll.content[0]?.type === "text" ? poll.content[0].text : "";
+
+    expect(pollStatus(poll)).toBe("failed");
+    expect(text).toContain(timeoutText);
+    expect(text).toContain("Process exited with timeout.");
+    expect(text).not.toContain("code 0");
+  } finally {
+    vi.useRealTimers();
+  }
+});

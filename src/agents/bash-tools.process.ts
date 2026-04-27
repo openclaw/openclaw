@@ -77,9 +77,11 @@ function failText(text: string): AgentToolResult<unknown> {
 }
 
 function isFailedExitReason(reason: unknown): boolean {
-  return (
-    reason === "overall-timeout" || reason === "no-output-timeout" || reason === "manual-cancel"
-  );
+  return isTimeoutExitReason(reason) || reason === "manual-cancel";
+}
+
+function isTimeoutExitReason(reason: unknown): boolean {
+  return reason === "overall-timeout" || reason === "no-output-timeout";
 }
 
 function formatProcessExitLabel(params: {
@@ -97,6 +99,30 @@ function formatProcessExitLabel(params: {
     return "manual cancel";
   }
   return params.exitSignal ? `signal ${params.exitSignal}` : `code ${params.exitCode ?? 0}`;
+}
+
+function mergeTimeoutPollOutput(params: {
+  drainedOutput: string;
+  session: ProcessSession;
+  exitReason: unknown;
+}) {
+  if (!isTimeoutExitReason(params.exitReason)) {
+    return params.drainedOutput;
+  }
+  const timeoutOutput = (params.session.tail || params.session.aggregated || "").trim();
+  if (!timeoutOutput) {
+    return params.drainedOutput;
+  }
+  if (!params.drainedOutput) {
+    return timeoutOutput;
+  }
+  if (timeoutOutput.includes(params.drainedOutput)) {
+    return timeoutOutput;
+  }
+  if (params.drainedOutput.includes(timeoutOutput)) {
+    return params.drainedOutput;
+  }
+  return `${params.drainedOutput}\n\n${timeoutOutput}`;
 }
 
 function recordPollRetrySuggestion(sessionId: string, hasNewOutput: boolean): number | undefined {
@@ -358,7 +384,13 @@ export function createProcessTool(
               ? "completed"
               : "failed"
             : "running";
-          const output = [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n").trim();
+          const drainedOutput = [stdout.trimEnd(), stderr.trimEnd()]
+            .filter(Boolean)
+            .join("\n")
+            .trim();
+          const output = exited
+            ? mergeTimeoutPollOutput({ drainedOutput, session: scopedSession, exitReason })
+            : drainedOutput;
           const hasNewOutput = output.length > 0;
           const retryInMs = exited
             ? undefined
