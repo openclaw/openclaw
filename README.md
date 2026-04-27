@@ -481,3 +481,11 @@ yuweuii
 yxjsxy
 zijiess
 clawtributors:hidden:end -->
+
+## 💰 Bounty Contribution
+
+- **Task:** Gateway writes streamed usage.cost.total for OpenRouter calls — up to 4× under a
+- **Reward:** $180
+- **Source:** GitHub-Paid
+- **Date:** 2026-04-27
+
