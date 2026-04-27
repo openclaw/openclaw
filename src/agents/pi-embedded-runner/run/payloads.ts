@@ -43,10 +43,26 @@ const RECOVERABLE_TOOL_ERROR_KEYWORDS = [
   "needs",
   "requires",
 ] as const;
+const EDIT_EXACT_MATCH_ERROR_PREFIX = "could not find the exact text in";
 
 function isRecoverableToolError(error: string | undefined): boolean {
   const errorLower = normalizeOptionalLowercaseString(error) ?? "";
   return RECOVERABLE_TOOL_ERROR_KEYWORDS.some((keyword) => errorLower.includes(keyword));
+}
+
+function summarizeToolErrorForUi(lastToolError: ToolErrorSummary): string | undefined {
+  const toolName = normalizeOptionalLowercaseString(lastToolError.toolName) ?? "";
+  const error = lastToolError.error?.trim();
+  if (!error) {
+    return undefined;
+  }
+  if (toolName === "edit") {
+    const errorLower = normalizeOptionalLowercaseString(error) ?? "";
+    if (errorLower.includes(EDIT_EXACT_MATCH_ERROR_PREFIX)) {
+      return "exact text not found — oldText must match the file exactly, including whitespace/newlines";
+    }
+  }
+  return undefined;
 }
 
 function isVerboseToolDetailEnabled(level?: VerboseLevel): boolean {
@@ -358,8 +374,12 @@ export function buildEmbeddedRunPayloads(params: {
         params.lastToolError.meta ? [params.lastToolError.meta] : undefined,
         { markdown: useMarkdown },
       );
-      const errorSuffix =
-        warningPolicy.includeDetails && params.lastToolError.error
+      const summarizedDetail = !warningPolicy.includeDetails
+        ? summarizeToolErrorForUi(params.lastToolError)
+        : undefined;
+      const errorSuffix = summarizedDetail
+        ? `: ${summarizedDetail}`
+        : warningPolicy.includeDetails && params.lastToolError.error
           ? `: ${params.lastToolError.error}`
           : "";
       const warningText = `⚠️ ${toolSummary} failed${errorSuffix}`;

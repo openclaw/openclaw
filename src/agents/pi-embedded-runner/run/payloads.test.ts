@@ -164,6 +164,42 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
+  it("surfaces actionable edit mismatch guidance even when verbose mode is off", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "edit",
+        error:
+          "Could not find the exact text in /tmp/demo.txt. The old text must match exactly including all whitespace and newlines.",
+      },
+      verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Edit",
+      detail: "exact text not found",
+    });
+    expect(payloads[0]?.text).toContain("whitespace/newlines");
+    expect(payloads[0]?.text).not.toContain("/tmp/demo.txt");
+  });
+
+  it("preserves the raw edit mismatch error when verbose mode is on", () => {
+    const rawError =
+      "Could not find the exact text in /tmp/demo.txt. The old text must match exactly including all whitespace and newlines.";
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "edit",
+        error: rawError,
+      },
+      verboseLevel: "on",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Edit",
+      detail: rawError,
+      absentDetail: "exact text not found",
+    });
+  });
+
   it.each([
     {
       name: "includes details for mutating tool failures when verbose is on",
