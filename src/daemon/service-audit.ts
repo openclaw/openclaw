@@ -414,6 +414,23 @@ function getEquivalentMinimalPathEntries(
   return normalizedExpected.has(normalizedEquivalent) ? [equivalent] : [];
 }
 
+function isVersionManagerServicePathEntry(entry: string): boolean {
+  const normalized = entry.replaceAll("\\", "/");
+  return (
+    normalized.includes("/.nvm") ||
+    normalized.includes("/.fnm/") ||
+    normalized.includes("/Library/Application Support/fnm/") ||
+    normalized.includes("/.volta/") ||
+    normalized.includes("/.asdf/") ||
+    normalized.includes("/.bun/") ||
+    normalized.includes("/.nix-profile/") ||
+    normalized.includes("/.n/") ||
+    normalized.includes("/.nodenv/") ||
+    normalized.includes("/.nodebrew/") ||
+    normalized.includes("/nvs/")
+  );
+}
+
 function auditGatewayServicePath(
   command: GatewayServiceCommand,
   issues: ServiceConfigIssue[],
@@ -440,7 +457,11 @@ function auditGatewayServicePath(
     .filter(Boolean);
   const normalizedParts = new Set(parts.map((entry) => normalizePathEntry(entry, platform)));
   const normalizedExpected = new Set(expected.map((entry) => normalizePathEntry(entry, platform)));
-  const missing = expected.filter((entry) => {
+  const expectedForMissing =
+    platform === "darwin"
+      ? expected.filter((entry) => !isVersionManagerServicePathEntry(entry))
+      : expected;
+  const missing = expectedForMissing.filter((entry) => {
     const normalized = normalizePathEntry(entry, platform);
     if (normalizedParts.has(normalized)) {
       return false;
@@ -452,7 +473,11 @@ function auditGatewayServicePath(
   if (missing.length > 0) {
     issues.push({
       code: SERVICE_AUDIT_CODES.gatewayPathMissingDirs,
-      message: `Gateway service PATH missing required dirs: ${missing.join(", ")}`,
+      message: `Gateway service PATH missing recommended non-version-manager dirs: ${missing.join(", ")}`,
+      detail:
+        platform === "darwin"
+          ? "macOS LaunchAgents should prefer stable Homebrew/system paths; shell version-manager dirs such as nvm/fnm/volta/asdf are intentionally not required."
+          : undefined,
       level: "recommended",
     });
   }

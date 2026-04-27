@@ -100,6 +100,47 @@ describe("auditGatewayServiceConfig", () => {
     ).toBe(true);
   });
 
+  it("does not require macOS LaunchAgent PATH entries for shell version managers", async () => {
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/Users/test" },
+      platform: "darwin",
+      command: {
+        programArguments: ["/opt/homebrew/bin/node", "gateway"],
+        environment: {
+          PATH: "/Users/test/.local/bin:/Users/test/.npm-global/bin:/Users/test/bin:/Users/test/Library/pnpm:/Users/test/.local/share/pnpm:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+        },
+      },
+    });
+
+    expect(
+      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayPathMissingDirs),
+    ).toBe(false);
+    expect(
+      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayPathNonMinimal),
+    ).toBe(false);
+  });
+
+  it("explains missing macOS LaunchAgent PATH entries as non-version-manager recommendations", async () => {
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/Users/test" },
+      platform: "darwin",
+      command: {
+        programArguments: ["/opt/homebrew/bin/node", "gateway"],
+        environment: { PATH: "/opt/homebrew/bin:/usr/bin:/bin" },
+      },
+    });
+
+    const issue = audit.issues.find(
+      (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayPathMissingDirs,
+    );
+    expect(issue).toMatchObject({
+      message:
+        "Gateway service PATH missing recommended non-version-manager dirs: /Users/test/.local/bin, /Users/test/.npm-global/bin, /Users/test/bin, /Users/test/Library/pnpm, /Users/test/.local/share/pnpm, /usr/local/bin",
+      detail:
+        "macOS LaunchAgents should prefer stable Homebrew/system paths; shell version-manager dirs such as nvm/fnm/volta/asdf are intentionally not required.",
+    });
+  });
+
   it("accepts Linux minimal PATH with user directories", async () => {
     const env = { HOME: "/tmp/openclaw-testuser", PNPM_HOME: "/opt/pnpm" };
     const minimalPath = buildMinimalServicePath({ platform: "linux", env });
