@@ -1,10 +1,16 @@
-[tool.ruff]
-target-version = "py310"
-line-length = 100
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
 
-[tool.ruff.lint]
-select = ["E9", "F63", "F7", "F82", "I"]
+[project]
+name = "exec-denylist"
+version = "1.0.0"
+description = "Denylist support for exec approvals — block high-risk commands by pattern"
+requires-python = ">=3.9"
+dependencies = ["pyyaml>=6.0"]
 
-[tool.pytest.ini_options]
-testpaths = ["skills"]
-python_files = ["test_*.py"]
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+exec-denylist = "exec_denylist.cli:main"

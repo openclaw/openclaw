@@ -1,0 +1,60 @@
+rules:
+  - id: recursive-force-delete
+   pattern: 'rm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+-[a-zA-Z]*r|--force.*-r|-rf|-fr)\s'
+   severity: critical
+   description: "Recursive force delete on unscoped path"
+
+  - id: root-delete
+   pattern: 'rm\s.*\s/\s*$'
+   severity: critical
+   description: "Delete targeting filesystem root"
+
+  - id: disk-format
+   pattern: 'mkfs\.|dd\s+.*of=/dev/'
+   severity: critical
+   description: "Disk format or raw device write"
+
+  - id: drop-database
+   pattern: '(?i)drop\s+(database|table|schema)\s'
+   severity: critical
+   description: "SQL DROP statement"
+
+  - id: truncate-table
+   pattern: '(?i)truncate\s+table\s'
+   severity: high
+   description: "SQL TRUNCATE statement"
+
+  - id: chmod-world-writable
+   pattern: 'chmod\s+(-[a-zA-Z]+\s+)*[0-7]*7[0-7]{0,2}\s|chmod\s+.*a\+w'
+   severity: high
+   description: "Setting world-writable permissions"
+
+  - id: curl-pipe-shell
+   pattern: 'curl\s.*\|\s*(bash|sh|zsh)'
+   severity: high
+   description: "Piping remote content to shell"
+
+  - id: wget-pipe-shell
+   pattern: 'wget\s.*-O\s*-\s*\|\s*(bash|sh|zsh)'
+   severity: high
+   description: "Piping remote content to shell"
+
+  - id: shutdown-reboot
+   pattern: '(shutdown|reboot|init\s+[06]|systemctl\s+(halt|poweroff|reboot))'
+   severity: high
+   description: "System shutdown or reboot"
+
+  - id: iptables-flush
+   pattern: 'iptables\s+-F'
+   severity: high
+   description: "Flushing all firewall rules"
+
+  - id: passwd-shadow-read
+   pattern: 'cat\s+.*/etc/(shadow|passwd)'
+   severity: medium
+   description: "Reading sensitive auth files"
+
+  - id: env-secrets-dump
+   pattern: '(?i)(printenv|env\s*$|set\s*$|export\s+-p)'
+   severity: medium
+   description: "Dumping environment variables (may contain secrets)"
