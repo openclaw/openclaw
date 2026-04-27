@@ -66,6 +66,7 @@ export type CodexPluginConfig = {
     url?: string;
     authToken?: string;
     headers?: Record<string, string>;
+    clearEnv?: string[];
     requestTimeoutMs?: number;
     approvalPolicy?: CodexAppServerApprovalPolicy;
     sandbox?: CodexAppServerSandboxMode;
@@ -83,6 +84,7 @@ export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "url",
   "authToken",
   "headers",
+  "clearEnv",
   "requestTimeoutMs",
   "approvalPolicy",
   "sandbox",
@@ -152,6 +154,7 @@ const codexPluginConfigSchema = z
         url: z.string().optional(),
         authToken: z.string().optional(),
         headers: z.record(z.string(), z.string()).optional(),
+        clearEnv: z.array(z.string()).optional(),
         requestTimeoutMs: z.number().positive().optional(),
         approvalPolicy: codexAppServerApprovalPolicySchema.optional(),
         sandbox: codexAppServerSandboxSchema.optional(),
@@ -188,6 +191,7 @@ export function resolveCodexAppServerRuntimeOptions(
       : "managed";
   const args = resolveArgs(config.args, env.OPENCLAW_CODEX_APP_SERVER_ARGS);
   const headers = normalizeHeaders(config.headers);
+  const clearEnv = normalizeStringList(config.clearEnv);
   const authToken = readNonEmptyString(config.authToken);
   const url = readNonEmptyString(config.url);
   const policyMode =
@@ -210,6 +214,7 @@ export function resolveCodexAppServerRuntimeOptions(
       ...(url ? { url } : {}),
       ...(authToken ? { authToken } : {}),
       headers,
+      ...(clearEnv.length > 0 ? { clearEnv } : {}),
     },
     requestTimeoutMs: normalizePositiveNumber(config.requestTimeoutMs, 60_000),
     approvalPolicy:
@@ -371,6 +376,15 @@ function normalizeHeaders(value: unknown): Record<string, string> {
       .map(([key, child]) => [key.trim(), readNonEmptyString(child)] as const)
       .filter((entry): entry is readonly [string, string] => Boolean(entry[0] && entry[1])),
   );
+}
+
+function normalizeStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => readNonEmptyString(entry))
+    .filter((entry): entry is string => entry !== undefined);
 }
 
 function readBooleanEnv(value: string | undefined): boolean | undefined {

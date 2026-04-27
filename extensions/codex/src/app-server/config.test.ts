@@ -18,6 +18,7 @@ describe("Codex app-server config", () => {
           transport: "websocket",
           url: "ws://127.0.0.1:39175",
           headers: { "X-Test": "yes" },
+          clearEnv: ["OPENAI_API_KEY"],
           approvalPolicy: "on-request",
           sandbox: "danger-full-access",
           approvalsReviewer: "guardian_subagent",
@@ -40,7 +41,25 @@ describe("Codex app-server config", () => {
           transport: "websocket",
           url: "ws://127.0.0.1:39175",
           headers: { "X-Test": "yes" },
+          clearEnv: ["OPENAI_API_KEY"],
         }),
+      }),
+    );
+  });
+
+  it("normalizes app-server environment variables to clear", () => {
+    const runtime = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: {
+        appServer: {
+          clearEnv: [" OPENAI_API_KEY ", "", "  "],
+        },
+      },
+      env: {},
+    });
+
+    expect(runtime.start).toEqual(
+      expect.objectContaining({
+        clearEnv: ["OPENAI_API_KEY"],
       }),
     );
   });

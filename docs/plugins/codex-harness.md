@@ -508,22 +508,47 @@ For an already-running app-server, use WebSocket transport:
 }
 ```
 
+Stdio app-server launches inherit OpenClaw's process environment by default.
+When the Gateway needs `OPENAI_API_KEY` for embeddings or direct OpenAI models
+but Codex should use the local ChatGPT login, clear that variable only for the
+Codex child:
+
+```json5
+{
+  plugins: {
+    entries: {
+      codex: {
+        enabled: true,
+        config: {
+          appServer: {
+            clearEnv: ["OPENAI_API_KEY"],
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+`appServer.clearEnv` only affects the spawned Codex app-server child process.
+
 Supported `appServer` fields:
 
-| Field               | Default                                  | Meaning                                                                                                      |
-| ------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `transport`         | `"stdio"`                                | `"stdio"` spawns Codex; `"websocket"` connects to `url`.                                                     |
-| `command`           | managed Codex binary                     | Executable for stdio transport. Leave unset to use the managed binary; set it only for an explicit override. |
-| `args`              | `["app-server", "--listen", "stdio://"]` | Arguments for stdio transport.                                                                               |
-| `url`               | unset                                    | WebSocket app-server URL.                                                                                    |
-| `authToken`         | unset                                    | Bearer token for WebSocket transport.                                                                        |
-| `headers`           | `{}`                                     | Extra WebSocket headers.                                                                                     |
-| `requestTimeoutMs`  | `60000`                                  | Timeout for app-server control-plane calls.                                                                  |
-| `mode`              | `"yolo"`                                 | Preset for YOLO or guardian-reviewed execution.                                                              |
-| `approvalPolicy`    | `"never"`                                | Native Codex approval policy sent to thread start/resume/turn.                                               |
-| `sandbox`           | `"danger-full-access"`                   | Native Codex sandbox mode sent to thread start/resume.                                                       |
-| `approvalsReviewer` | `"user"`                                 | Use `"auto_review"` to let Codex review native approval prompts. `guardian_subagent` remains a legacy alias. |
-| `serviceTier`       | unset                                    | Optional Codex app-server service tier: `"fast"`, `"flex"`, or `null`. Invalid legacy values are ignored.    |
+| Field               | Default                                  | Meaning                                                                                                                       |
+| ------------------- | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `transport`         | `"stdio"`                                | `"stdio"` spawns Codex; `"websocket"` connects to `url`.                                                                      |
+| `command`           | managed Codex binary                     | Executable for stdio transport. Leave unset to use the managed binary; set it only for an explicit override.                  |
+| `args`              | `["app-server", "--listen", "stdio://"]` | Arguments for stdio transport.                                                                                                |
+| `url`               | unset                                    | WebSocket app-server URL.                                                                                                     |
+| `authToken`         | unset                                    | Bearer token for WebSocket transport.                                                                                         |
+| `headers`           | `{}`                                     | Extra WebSocket headers.                                                                                                      |
+| `clearEnv`          | `[]`                                     | Environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment. |
+| `requestTimeoutMs`  | `60000`                                  | Timeout for app-server control-plane calls.                                                                                   |
+| `mode`              | `"yolo"`                                 | Preset for YOLO or guardian-reviewed execution.                                                                               |
+| `approvalPolicy`    | `"never"`                                | Native Codex approval policy sent to thread start/resume/turn.                                                                |
+| `sandbox`           | `"danger-full-access"`                   | Native Codex sandbox mode sent to thread start/resume.                                                                        |
+| `approvalsReviewer` | `"user"`                                 | Use `"auto_review"` to let Codex review native approval prompts. `guardian_subagent` remains a legacy alias.                  |
+| `serviceTier`       | unset                                    | Optional Codex app-server service tier: `"fast"`, `"flex"`, or `null`. Invalid legacy values are ignored.                     |
 
 Environment overrides remain available for local testing:
 
