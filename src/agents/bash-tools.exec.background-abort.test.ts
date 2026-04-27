@@ -177,12 +177,18 @@ async function expectBackgroundSessionTimesOut(params: {
   executeParams: ExecToolExecuteParams;
   signal?: AbortSignal;
   abortAfterStart?: boolean;
+  expectedTimeoutSec?: number;
 }) {
   const abortController = new AbortController();
   const signal = params.signal ?? abortController.signal;
   const result = await params.tool.execute("toolcall", params.executeParams, signal);
   expect(result.details.status).toBe("running");
   const sessionId = (result.details as { sessionId: string }).sessionId;
+  if (typeof params.expectedTimeoutSec === "number") {
+    expect(supervisorMockState.spawnInputs.at(-1)?.timeoutMs).toBe(
+      Math.floor(params.expectedTimeoutSec * 1000),
+    );
+  }
 
   if (params.abortAfterStart) {
     abortController.abort();
@@ -226,20 +232,30 @@ test("background exec still times out after tool signal abort", async () => {
   });
 });
 
-test("background exec without explicit timeout ignores default timeout", async () => {
+test("background exec without explicit timeout uses default timeout", async () => {
   const tool = createTestExecTool({
     allowBackground: true,
     backgroundMs: 0,
     timeoutSec: BACKGROUND_TIMEOUT_SEC,
   });
-  const result = await tool.execute("toolcall", { command: BACKGROUND_HOLD_CMD, background: true });
-  expect(result.details.status).toBe("running");
-  const sessionId = (result.details as { sessionId: string }).sessionId;
-  expect(supervisorMockState.spawnInputs.at(-1)?.timeoutMs).toBeUndefined();
-  expect(getFinishedSession(sessionId)).toBeUndefined();
-  expect(getSession(sessionId)?.exited).toBe(false);
+  await expectBackgroundSessionTimesOut({
+    tool,
+    executeParams: { command: BACKGROUND_HOLD_CMD, background: true },
+    expectedTimeoutSec: BACKGROUND_TIMEOUT_SEC,
+  });
+});
 
-  cleanupRunningSession(sessionId);
+test("yielded background exec without explicit timeout uses default timeout", async () => {
+  const tool = createTestExecTool({
+    allowBackground: true,
+    backgroundMs: 10,
+    timeoutSec: BACKGROUND_TIMEOUT_SEC,
+  });
+  await expectBackgroundSessionTimesOut({
+    tool,
+    executeParams: { command: BACKGROUND_HOLD_CMD, yieldMs: 5 },
+    expectedTimeoutSec: BACKGROUND_TIMEOUT_SEC,
+  });
 });
 
 test("yielded background exec still times out", async () => {
