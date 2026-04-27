@@ -26,6 +26,7 @@ import {
   clearPluginHostRuntimeState,
   getPluginRunContext,
   listPluginSessionSchedulerJobs,
+  registerPluginSessionSchedulerJob,
   setPluginRunContext,
 } from "../host-hook-runtime.js";
 import {
@@ -1782,6 +1783,41 @@ describe("host-hook fixture plugin contract", () => {
         kind: "monitor",
       },
     ]);
+  });
+
+  it("cleans runtime-only scheduler jobs when registry-backed cleanup runs", async () => {
+    const cleanupEvents: string[] = [];
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push(
+      createPluginRecord({
+        id: "runtime-scheduler-fixture",
+        name: "Runtime Scheduler Fixture",
+        status: "loaded",
+      }),
+    );
+    registry.sessionSchedulerJobs = [];
+    registerPluginSessionSchedulerJob({
+      pluginId: "runtime-scheduler-fixture",
+      pluginName: "Runtime Scheduler Fixture",
+      job: {
+        id: "scheduled-turn",
+        sessionKey: "agent:main:main",
+        kind: "session-turn",
+        cleanup: ({ reason, jobId }) => {
+          cleanupEvents.push(`${reason}:${jobId}`);
+        },
+      },
+    });
+
+    await expect(
+      runPluginHostCleanup({
+        registry,
+        pluginId: "runtime-scheduler-fixture",
+        reason: "disable",
+      }),
+    ).resolves.toMatchObject({ failures: [] });
+    expect(cleanupEvents).toEqual(["disable:scheduled-turn"]);
+    expect(listPluginSessionSchedulerJobs("runtime-scheduler-fixture")).toEqual([]);
   });
 
   it("preserves restarted scheduler jobs while cleaning the replaced registry", async () => {
