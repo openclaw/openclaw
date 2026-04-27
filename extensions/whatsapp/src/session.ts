@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import type { Agent } from "node:https";
+import { HttpsProxyAgent } from "https-proxy-agent";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
-import { resolveAmbientNodeProxyAgent } from "openclaw/plugin-sdk/extension-shared";
+import { resolveEnvHttpProxyUrl } from "openclaw/plugin-sdk/infra-runtime";
 import { danger, success } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger, toPinoLikeLogger } from "openclaw/plugin-sdk/runtime-env";
 import { ensureDir, resolveUserPath } from "openclaw/plugin-sdk/text-runtime";
@@ -210,17 +211,32 @@ export async function createWaSocket(
 async function resolveEnvProxyAgent(
   logger: ReturnType<typeof getChildLogger>,
 ): Promise<Agent | undefined> {
-  return resolveAmbientNodeProxyAgent<Agent>({
-    onError: (err) => {
-      logger.warn(
-        { error: String(err) },
-        "Failed to initialize env proxy agent for WhatsApp WebSocket connection",
-      );
-    },
-    onUsingProxy: () => {
-      logger.info("Using ambient env proxy for WhatsApp WebSocket connection");
-    },
-  });
+  // The WhatsApp WebSocket connects to mmg.whatsapp.net via wss://; the
+  // upgrade handshake is HTTPS, so prefer the HTTPS proxy URL and fall back
+  // to HTTP_PROXY (matching undici EnvHttpProxyAgent semantics).
+  //
+  // Earlier versions wired this through `resolveAmbientNodeProxyAgent`, which
+  // dynamically imports the `proxy-agent` meta-package. That package is not a
+  // declared dependency of the whatsapp extension, so the dynamic import
+  // silently failed in bundled installs (the warn path was easy to miss) and
+  // the WebSocket fell back to a direct connection — observed as a 408
+  // Request Time-out from behind regional firewalls. See
+  // https://github.com/openclaw/openclaw/issues/72547
+  const proxyUrl = resolveEnvHttpProxyUrl("https");
+  if (!proxyUrl) {
+    return undefined;
+  }
+  try {
+    const agent = new HttpsProxyAgent(proxyUrl) as unknown as Agent;
+    logger.info({ proxyUrl }, "Using ambient env proxy for WhatsApp WebSocket connection");
+    return agent;
+  } catch (error) {
+    logger.warn(
+      { error: String(error) },
+      "Failed to initialize env proxy agent for WhatsApp WebSocket connection",
+    );
+    return undefined;
+  }
 }
 
 async function resolveEnvFetchDispatcher(
