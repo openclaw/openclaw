@@ -86,15 +86,14 @@ function looksLikeAuthClose(code: number | undefined, reason: string | undefined
   if (!normalized) {
     return false;
   }
-  // The restart probe runs against loopback only. These policy closes prove the
-  // OpenClaw Gateway handshake answered, but keep the list explicit so unrelated
-  // 1008 closes do not mask stale listeners or broken restarts.
+  // The restart probe runs against loopback only and only decides restart
+  // liveness, not authorization. Keep this allowlist exact so a local listener
+  // cannot satisfy the health check with broad device/auth-looking text.
   return (
     normalized === "auth required" ||
     normalized === "owner auth required" ||
     normalized === "connect failed" ||
     normalized === "device required" ||
-    normalized === "device identity required" ||
     normalized === "pairing required" ||
     normalized.startsWith("pairing required:") ||
     normalized.startsWith("unauthorized: gateway token missing") ||
