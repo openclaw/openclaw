@@ -613,22 +613,58 @@ enum ExecApprovalsSocketPathGuard {
     static func hardenParentDirectory(for socketPath: String) throws {
         let parentURL = URL(fileURLWithPath: socketPath).deletingLastPathComponent()
         let hardenedParentURL = try self.trustedParentDirectoryURL(for: parentURL)
+        try self.createHardenedDirectoryPath(hardenedParentURL)
+    }
 
-        do {
-            try FileManager().createDirectory(at: hardenedParentURL, withIntermediateDirectories: true)
-        } catch {
-            throw ExecApprovalsSocketPathGuardError.createParentDirectoryFailed(
-                path: hardenedParentURL.path,
-                message: error.localizedDescription)
+    private static func createHardenedDirectoryPath(_ directoryURL: URL) throws {
+        let standardizedURL = directoryURL.standardizedFileURL
+        let components = standardizedURL.pathComponents
+        guard !components.isEmpty else {
+            return
         }
 
+        var currentURL = URL(fileURLWithPath: components[0], isDirectory: true)
+        for component in components.dropFirst() {
+            currentURL.appendPathComponent(component, isDirectory: true)
+            switch try self.pathKind(at: currentURL.path) {
+            case .missing:
+                try self.createHardenedDirectory(currentURL)
+            case .directory:
+                if currentURL.path == standardizedURL.path {
+                    try self.setHardenedDirectoryPermissions(currentURL)
+                }
+            case let kind:
+                throw ExecApprovalsSocketPathGuardError.parentPathInvalid(
+                    path: currentURL.path,
+                    kind: kind)
+            }
+        }
+    }
+
+    private static func createHardenedDirectory(_ directoryURL: URL) throws {
+        do {
+            try FileManager().createDirectory(
+                at: directoryURL,
+                withIntermediateDirectories: false,
+                attributes: [.posixPermissions: self.parentDirectoryPermissions])
+        } catch {
+            if (try? self.pathKind(at: directoryURL.path)) != .directory {
+                throw ExecApprovalsSocketPathGuardError.createParentDirectoryFailed(
+                    path: directoryURL.path,
+                    message: error.localizedDescription)
+            }
+        }
+        try self.setHardenedDirectoryPermissions(directoryURL)
+    }
+
+    private static func setHardenedDirectoryPermissions(_ directoryURL: URL) throws {
         do {
             try FileManager().setAttributes(
                 [.posixPermissions: self.parentDirectoryPermissions],
-                ofItemAtPath: hardenedParentURL.path)
+                ofItemAtPath: directoryURL.path)
         } catch {
             throw ExecApprovalsSocketPathGuardError.setParentDirectoryPermissionsFailed(
-                path: hardenedParentURL.path,
+                path: directoryURL.path,
                 message: error.localizedDescription)
         }
     }
