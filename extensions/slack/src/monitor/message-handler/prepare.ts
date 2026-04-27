@@ -313,7 +313,7 @@ export async function prepareSlackMessage(params: {
       }));
   let mentionRegexes = resolveCachedMentionRegexes(ctx, routing.route.agentId);
   let wasMentioned = resolveWasMentioned(mentionRegexes);
-  const hasRuntimeBoundSession = Boolean(routing.runtimeBinding?.targetSessionKey?.trim());
+  const hasRuntimeBoundSession = Boolean(routing.runtimeBoundSessionKey);
   // Runtime bindings already pin the root and later thread replies to the same
   // target session, so only unbound regex mentions need a seeded thread reroute.
   if (

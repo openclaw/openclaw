@@ -20,6 +20,7 @@ export type SlackRoutingContextDeps = {
 export type SlackRoutingContext = {
   route: ReturnType<typeof resolveAgentRoute>;
   runtimeBinding: RuntimeConversationBindingRouteResult["bindingRecord"];
+  runtimeBoundSessionKey: string | undefined;
   chatType: "direct" | "group" | "channel";
   replyToMode: ReturnType<typeof resolveSlackReplyToMode>;
   threadContext: ReturnType<typeof resolveSlackThreadContext>;
@@ -154,6 +155,7 @@ export function resolveSlackRoutingContext(params: {
   return {
     route,
     runtimeBinding: runtimeRoute.bindingRecord,
+    runtimeBoundSessionKey: runtimeRoute.boundSessionKey,
     chatType,
     replyToMode,
     threadContext,
