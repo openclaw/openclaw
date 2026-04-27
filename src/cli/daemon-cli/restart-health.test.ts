@@ -243,13 +243,15 @@ describe("inspectGatewayRestart", () => {
 
   it.each([
     "auth required",
+    "owner auth required",
     "connect failed",
     "device required",
+    "device identity required",
     "pairing required",
-    "token expired",
-    "password required",
-    "missing scope: operator.admin",
-    "role denied",
+    "pairing required: device is asking for more scopes than currently approved",
+    "unauthorized: gateway token missing (set gateway.remote.token to match gateway.auth.token)",
+    "unauthorized: gateway password mismatch (set gateway.remote.password to match gateway.auth.password)",
+    "unauthorized: device token rejected (pair/repair this device, or provide gateway token)",
   ])(
     "treats local policy-close probe reason %s as healthy gateway reachability",
     async (reason) => {
@@ -270,6 +272,15 @@ describe("inspectGatewayRestart", () => {
     "unpairing required",
     "connect challenge missing nonce",
     "connect challenge timeout",
+    "authoritative policy close",
+    "device identity mismatch",
+    "device signature invalid",
+    "device nonce required",
+    "token expired",
+    "password required",
+    "missing scope: operator.admin",
+    "role denied",
+    "unauthorized: session revoked",
   ])(
     "does not treat ambiguous 1008 close reason %s as healthy gateway reachability",
     async (reason) => {

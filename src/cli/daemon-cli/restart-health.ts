@@ -86,16 +86,31 @@ function looksLikeAuthClose(code: number | undefined, reason: string | undefined
   if (!normalized) {
     return false;
   }
+  // The restart probe runs against loopback only. These policy closes prove the
+  // OpenClaw Gateway handshake answered, but keep the list explicit so unrelated
+  // 1008 closes do not mask stale listeners or broken restarts.
   return (
-    normalized.includes("auth") ||
+    normalized === "auth required" ||
+    normalized === "owner auth required" ||
     normalized === "connect failed" ||
-    normalized.includes("device") ||
+    normalized === "device required" ||
+    normalized === "device identity required" ||
     normalized === "pairing required" ||
     normalized.startsWith("pairing required:") ||
-    normalized.includes("token") ||
-    normalized.includes("password") ||
-    normalized.includes("scope") ||
-    normalized.includes("role")
+    normalized.startsWith("unauthorized: gateway token missing") ||
+    normalized.startsWith("unauthorized: gateway token mismatch") ||
+    normalized.startsWith("unauthorized: gateway token not configured") ||
+    normalized.startsWith("unauthorized: gateway password missing") ||
+    normalized.startsWith("unauthorized: gateway password mismatch") ||
+    normalized.startsWith("unauthorized: gateway password not configured") ||
+    normalized.startsWith("unauthorized: bootstrap token invalid or expired") ||
+    normalized.startsWith("unauthorized: tailscale identity missing") ||
+    normalized.startsWith("unauthorized: tailscale proxy headers missing") ||
+    normalized.startsWith("unauthorized: tailscale identity check failed") ||
+    normalized.startsWith("unauthorized: tailscale identity mismatch") ||
+    normalized.startsWith("unauthorized: too many failed authentication attempts") ||
+    normalized.startsWith("unauthorized: device token mismatch") ||
+    normalized.startsWith("unauthorized: device token rejected")
   );
 }
 
