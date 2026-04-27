@@ -364,9 +364,10 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
         accountId: account.accountId,
         name: account.name,
         enabled: account.enabled,
-        configured: Boolean(account.botToken && account.baseUrl),
+        configured: account.configured ?? Boolean(account.botToken && account.baseUrl),
         extra: {
           botTokenSource: account.botTokenSource,
+          botTokenStatus: account.botTokenStatus,
           baseUrl: account.baseUrl,
           connected: runtime?.connected ?? false,
           lastConnectedAt: runtime?.lastConnectedAt ?? null,
