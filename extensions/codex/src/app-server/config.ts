@@ -304,7 +304,9 @@ export function codexAppServerStartOptionsKey(
     headers: Object.entries(options.headers).toSorted(([left], [right]) =>
       left.localeCompare(right),
     ),
-    env: Object.entries(options.env ?? {}).toSorted(([left], [right]) => left.localeCompare(right)),
+    env: Object.entries(options.env ?? {})
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([key, value]) => [key, hashSecretForKey(value)]),
     clearEnv: [...(options.clearEnv ?? [])].toSorted(),
     authProfileId: params.authProfileId ?? null,
   });

@@ -302,6 +302,27 @@ describe("Codex app-server config", () => {
     expect(second).not.toContain("tok_second");
   });
 
+  it("derives distinct shared-client keys for distinct env values without exposing them", () => {
+    const first = codexAppServerStartOptionsKey({
+      transport: "stdio",
+      command: "codex",
+      args: ["app-server"],
+      headers: {},
+      env: { OPENAI_API_KEY: "sk-first" },
+    });
+    const second = codexAppServerStartOptionsKey({
+      transport: "stdio",
+      command: "codex",
+      args: ["app-server"],
+      headers: {},
+      env: { OPENAI_API_KEY: "sk-second" },
+    });
+
+    expect(first).not.toEqual(second);
+    expect(first).not.toContain("sk-first");
+    expect(second).not.toContain("sk-second");
+  });
+
   it("keeps runtime config keys aligned with manifest schema and UI hints", async () => {
     const manifest = JSON.parse(
       await fs.readFile(new URL("../../openclaw.plugin.json", import.meta.url), "utf8"),
