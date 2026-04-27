@@ -201,6 +201,10 @@ describe("lookupContextTokens", () => {
     const { shouldEagerWarmContextWindowCache } = await importContextModule();
 
     expect(shouldEagerWarmContextWindowCache(["node", "openclaw", "chat"])).toBe(true);
+    expect(shouldEagerWarmContextWindowCache(["node", "openclaw", "chat", "--help"])).toBe(false);
+    expect(
+      shouldEagerWarmContextWindowCache(["node", "openclaw", "browser", "status", "--help"]),
+    ).toBe(false);
     expect(
       shouldEagerWarmContextWindowCache([
         "node",
@@ -215,6 +219,9 @@ describe("lookupContextTokens", () => {
       false,
     );
     expect(shouldEagerWarmContextWindowCache(["node", "openclaw", "status", "--json"])).toBe(false);
+    expect(shouldEagerWarmContextWindowCache(["node", "openclaw", "sessions", "--json"])).toBe(
+      false,
+    );
     expect(
       shouldEagerWarmContextWindowCache(["node", "scripts/test-built-plugin-singleton.mjs"]),
     ).toBe(false);

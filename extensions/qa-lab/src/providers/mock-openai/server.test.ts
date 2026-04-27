@@ -68,6 +68,7 @@ function makeUserInput(text: string) {
 }
 
 const SESSIONS_SPAWN_TOOL = { type: "function", name: "sessions_spawn" } as const;
+const SESSIONS_YIELD_TOOL = { type: "function", name: "sessions_yield" } as const;
 const THREAD_SUBAGENT_CHILD_ERROR_TOKEN = "QA_SUBAGENT_CHILD_ERROR";
 const THREAD_SUBAGENT_TOOL_ERROR =
   "thread=true requested but thread delivery is unavailable in this test harness.";
@@ -707,6 +708,75 @@ describe("qa mock openai server", () => {
     });
   });
 
+  it("drives yielded-parent subagent fallback QA through sessions_spawn and sessions_yield", async () => {
+    const server = await startMockServer();
+    const prompt =
+      "Subagent direct fallback QA check: spawn one worker and yield until QA-SUBAGENT-DIRECT-FALLBACK-OK is delivered.";
+
+    await expectResponsesText(server, {
+      stream: true,
+      tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
+      input: [makeUserInput(prompt)],
+    });
+
+    await expect(
+      (await fetch(`${server.baseUrl}/debug/last-request`)).json(),
+    ).resolves.toMatchObject({
+      plannedToolName: "sessions_spawn",
+      plannedToolArgs: {
+        label: "qa-direct-fallback-worker",
+        thread: false,
+        mode: "run",
+      },
+    });
+
+    const body = await expectResponsesText(server, {
+      stream: true,
+      tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
+      input: [
+        makeUserInput(prompt),
+        {
+          type: "function_call_output",
+          call_id: "call_mock_sessions_spawn_1",
+          output: JSON.stringify({
+            status: "accepted",
+            childSessionKey: "agent:qa:subagent:child",
+            runId: "run-child-1",
+          }),
+        },
+      ],
+    });
+
+    expect(body).toContain('"name":"sessions_yield"');
+    expect(body).toContain("QA-SUBAGENT-DIRECT-FALLBACK-OK");
+    await expect(
+      (await fetch(`${server.baseUrl}/debug/last-request`)).json(),
+    ).resolves.toMatchObject({
+      plannedToolName: "sessions_yield",
+    });
+  });
+
+  it("returns no visible announce output for the direct fallback QA marker", async () => {
+    const server = await startMockServer();
+
+    const body = await expectResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      input: [
+        makeUserInput(
+          [
+            "[Internal task completion event]",
+            "Task: qa-direct-fallback-worker",
+            "Result: QA-SUBAGENT-DIRECT-FALLBACK-OK",
+          ].join("\n"),
+        ),
+      ],
+    });
+
+    expect(body.output?.[0]?.content?.[0]?.text).toBe("");
+  });
+
   it("surfaces sessions_spawn tool errors instead of echoing child-task tokens", async () => {
     const server = await startMockServer();
 
@@ -892,6 +962,64 @@ describe("qa mock openai server", () => {
     const memoryText = await memory.text();
     expect(memoryText).toContain('"name":"memory_search"');
     expect(memoryText).toContain('\\"corpus\\":\\"sessions\\"');
+
+    const threadMemorySearch = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        instructions:
+          "@openclaw Thread memory check: what is the hidden thread codename stored only in memory? Use memory tools first and reply only in this thread.",
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Protocol note: acknowledged. Continue with the QA scenario plan.",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(threadMemorySearch.status).toBe(200);
+    const threadMemorySearchText = await threadMemorySearch.text();
+    expect(threadMemorySearchText).toContain('"name":"memory_search"');
+    expect(threadMemorySearchText).toContain("ORBIT-22");
+
+    const threadMemorySummary = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: false,
+        instructions:
+          "@openclaw Thread memory check: what is the hidden thread codename stored only in memory? Use memory tools first and reply only in this thread.",
+        input: [
+          {
+            type: "function_call_output",
+            output: JSON.stringify({
+              text: "Thread-hidden codename: ORBIT-22.",
+            }),
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Protocol note: acknowledged. Continue with the QA scenario plan.",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(threadMemorySummary.status).toBe(200);
+    expect(JSON.stringify(await threadMemorySummary.json())).toContain("ORBIT-22");
 
     const memoryFollowup = await fetch(`${server.baseUrl}/v1/responses`, {
       method: "POST",

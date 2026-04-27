@@ -1442,6 +1442,7 @@
                       "gateway/doctor",
                       "logging",
                       "gateway/opentelemetry",
+                      "gateway/prometheus",
                       "gateway/logging",
                       "gateway/diagnostics",
                       "gateway/troubleshooting"

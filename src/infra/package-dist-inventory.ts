@@ -1,24 +1,29 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { NPM_UPDATE_COMPAT_SIDECAR_PATHS } from "./npm-update-compat-sidecars.js";
 
 export const PACKAGE_DIST_INVENTORY_RELATIVE_PATH = "dist/postinstall-inventory.json";
 const LEGACY_QA_CHANNEL_DIR = ["qa", "channel"].join("-");
 const LEGACY_QA_LAB_DIR = ["qa", "lab"].join("-");
-const LEGACY_VERIFIER_COMPAT_INVENTORY_PATHS = [
-  `dist/extensions/${LEGACY_QA_CHANNEL_DIR}/runtime-api.js`,
-];
 const OMITTED_QA_EXTENSION_PREFIXES = [
   `dist/extensions/${LEGACY_QA_CHANNEL_DIR}/`,
   `dist/extensions/${LEGACY_QA_LAB_DIR}/`,
   "dist/extensions/qa-matrix/",
 ];
-const OMITTED_PRIVATE_QA_PLUGIN_SDK_PREFIXES = [`dist/plugin-sdk/extensions/${LEGACY_QA_LAB_DIR}/`];
+const OMITTED_PRIVATE_QA_PLUGIN_SDK_PREFIXES = [
+  `dist/plugin-sdk/extensions/${LEGACY_QA_CHANNEL_DIR}/`,
+  `dist/plugin-sdk/extensions/${LEGACY_QA_LAB_DIR}/`,
+];
 const OMITTED_PRIVATE_QA_PLUGIN_SDK_FILES = new Set([
+  `dist/plugin-sdk/${LEGACY_QA_CHANNEL_DIR}.d.ts`,
+  `dist/plugin-sdk/${LEGACY_QA_CHANNEL_DIR}.js`,
+  `dist/plugin-sdk/${LEGACY_QA_CHANNEL_DIR}-protocol.d.ts`,
+  `dist/plugin-sdk/${LEGACY_QA_CHANNEL_DIR}-protocol.js`,
   `dist/plugin-sdk/${LEGACY_QA_LAB_DIR}.d.ts`,
   `dist/plugin-sdk/${LEGACY_QA_LAB_DIR}.js`,
   "dist/plugin-sdk/qa-runtime.d.ts",
   "dist/plugin-sdk/qa-runtime.js",
+  `dist/plugin-sdk/src/plugin-sdk/${LEGACY_QA_CHANNEL_DIR}.d.ts`,
+  `dist/plugin-sdk/src/plugin-sdk/${LEGACY_QA_CHANNEL_DIR}-protocol.d.ts`,
   `dist/plugin-sdk/src/plugin-sdk/${LEGACY_QA_LAB_DIR}.d.ts`,
   "dist/plugin-sdk/src/plugin-sdk/qa-runtime.d.ts",
 ]);
@@ -26,14 +31,30 @@ const OMITTED_PRIVATE_QA_DIST_PREFIXES = ["dist/qa-runtime-"];
 const OMITTED_DIST_SUBTREE_PATTERNS = [
   /^dist\/extensions\/node_modules(?:\/|$)/u,
   /^dist\/extensions\/[^/]+\/node_modules(?:\/|$)/u,
-  /^dist\/extensions\/[^/]+\/\.openclaw-install-stage(?:-[^/]+)?(?:\/|$)/u,
   /^dist\/extensions\/[^/]+\/\.openclaw-runtime-deps-[^/]+(?:\/|$)/u,
   /^dist\/extensions\/qa-matrix(?:\/|$)/u,
+  new RegExp(`^dist/plugin-sdk/extensions/${LEGACY_QA_CHANNEL_DIR}(?:/|$)`, "u"),
   new RegExp(`^dist/plugin-sdk/extensions/${LEGACY_QA_LAB_DIR}(?:/|$)`, "u"),
 ] as const;
+const INSTALL_STAGE_DEBRIS_DIR_PATTERN = /^\.openclaw-install-stage(?:-[^/]+)?$/iu;
 
 function normalizeRelativePath(value: string): string {
   return value.replace(/\\/g, "/");
+}
+
+function isInstallStageDirName(value: string): boolean {
+  return INSTALL_STAGE_DEBRIS_DIR_PATTERN.test(value);
+}
+
+export function isBundledRuntimeDepsInstallStagePath(relativePath: string): boolean {
+  const parts = normalizeRelativePath(relativePath).split("/");
+  return (
+    parts.length >= 4 &&
+    parts[0]?.toLowerCase() === "dist" &&
+    parts[1]?.toLowerCase() === "extensions" &&
+    Boolean(parts[2]) &&
+    isInstallStageDirName(parts[3] ?? "")
+  );
 }
 
 function isPackagedDistPath(relativePath: string): boolean {
@@ -52,9 +73,6 @@ function isPackagedDistPath(relativePath: string): boolean {
   if (relativePath === "dist/plugin-sdk/.tsbuildinfo") {
     return false;
   }
-  if (LEGACY_VERIFIER_COMPAT_INVENTORY_PATHS.includes(relativePath)) {
-    return true;
-  }
   if (
     OMITTED_PRIVATE_QA_PLUGIN_SDK_PREFIXES.some((prefix) => relativePath.startsWith(prefix)) ||
     OMITTED_PRIVATE_QA_PLUGIN_SDK_FILES.has(relativePath) ||
@@ -69,7 +87,10 @@ function isPackagedDistPath(relativePath: string): boolean {
 }
 
 function isOmittedDistSubtree(relativePath: string): boolean {
-  return OMITTED_DIST_SUBTREE_PATTERNS.some((pattern) => pattern.test(relativePath));
+  return (
+    isBundledRuntimeDepsInstallStagePath(relativePath) ||
+    OMITTED_DIST_SUBTREE_PATTERNS.some((pattern) => pattern.test(relativePath))
+  );
 }
 
 async function collectRelativeFiles(rootDir: string, baseDir: string): Promise<string[]> {
@@ -114,13 +135,96 @@ export async function collectPackageDistInventory(packageRoot: string): Promise<
   return await collectRelativeFiles(path.join(packageRoot, "dist"), packageRoot);
 }
 
+export async function collectBundledRuntimeDepsStagingDebrisPaths(
+  packageRoot: string,
+): Promise<string[]> {
+  const distDirs: string[] = [];
+  try {
+    const packageRootEntries = await fs.readdir(packageRoot, { withFileTypes: true });
+    for (const entry of packageRootEntries) {
+      if (entry.isDirectory() && entry.name.toLowerCase() === "dist") {
+        distDirs.push(path.join(packageRoot, entry.name));
+      }
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+
+  const debris: string[] = [];
+  for (const distDir of distDirs) {
+    let distEntries: import("node:fs").Dirent[];
+    try {
+      distEntries = await fs.readdir(distDir, { withFileTypes: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        continue;
+      }
+      throw error;
+    }
+
+    for (const distEntry of distEntries) {
+      if (!distEntry.isDirectory() || distEntry.name.toLowerCase() !== "extensions") {
+        continue;
+      }
+      const extensionsDir = path.join(distDir, distEntry.name);
+      let extensionEntries: import("node:fs").Dirent[];
+      try {
+        extensionEntries = await fs.readdir(extensionsDir, { withFileTypes: true });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          continue;
+        }
+        throw error;
+      }
+
+      for (const extensionEntry of extensionEntries) {
+        if (!extensionEntry.isDirectory()) {
+          continue;
+        }
+        const extensionPath = path.join(extensionsDir, extensionEntry.name);
+        let stagingEntries: import("node:fs").Dirent[];
+        try {
+          stagingEntries = await fs.readdir(extensionPath, { withFileTypes: true });
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+            continue;
+          }
+          throw error;
+        }
+        for (const stagingEntry of stagingEntries) {
+          if (!isInstallStageDirName(stagingEntry.name)) {
+            continue;
+          }
+          debris.push(
+            normalizeRelativePath(
+              path.relative(packageRoot, path.join(extensionPath, stagingEntry.name)),
+            ),
+          );
+        }
+      }
+    }
+  }
+  return debris.toSorted((left, right) => left.localeCompare(right));
+}
+
+export async function assertNoBundledRuntimeDepsStagingDebris(packageRoot: string): Promise<void> {
+  const debris = await collectBundledRuntimeDepsStagingDebrisPaths(packageRoot);
+  if (debris.length === 0) {
+    return;
+  }
+  throw new Error(
+    `unexpected bundled-runtime-deps install staging debris in package dist: ${debris.join(", ")}`,
+  );
+}
+
 export async function writePackageDistInventory(packageRoot: string): Promise<string[]> {
-  const inventory = [
-    ...new Set([
-      ...(await collectPackageDistInventory(packageRoot)),
-      ...LEGACY_VERIFIER_COMPAT_INVENTORY_PATHS,
-    ]),
-  ].toSorted((left, right) => left.localeCompare(right));
+  await assertNoBundledRuntimeDepsStagingDebris(packageRoot);
+  const inventory = [...new Set(await collectPackageDistInventory(packageRoot))].toSorted(
+    (left, right) => left.localeCompare(right),
+  );
   const inventoryPath = path.join(packageRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH);
   await fs.mkdir(path.dirname(inventoryPath), { recursive: true });
   await fs.writeFile(inventoryPath, `${JSON.stringify(inventory, null, 2)}\n`, "utf8");
@@ -165,9 +269,6 @@ export async function collectPackageDistInventoryErrors(packageRoot: string): Pr
 
   for (const relativePath of expectedFiles) {
     if (!actualSet.has(relativePath)) {
-      if (NPM_UPDATE_COMPAT_SIDECAR_PATHS.has(relativePath)) {
-        continue;
-      }
       errors.push(`missing packaged dist file ${relativePath}`);
     }
   }

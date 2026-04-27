@@ -231,6 +231,9 @@ Prefer the narrowest metadata that already describes ownership. Use
 `providers`, `channels`, `commandAliases`, setup descriptors, or `contracts`
 when those fields express the relationship. Use `activation` for extra planner
 hints that cannot be represented by those ownership fields.
+Use top-level `cliBackends` for CLI runtime aliases such as `claude-cli`,
+`codex-cli`, or `google-gemini-cli`; `activation.onAgentHarnesses` is only for
+embedded agent harness ids that do not already have an ownership field.
 
 This block is metadata only. It does not register runtime behavior, and it does
 not replace `register(...)`, `setupEntry`, or other runtime/plugin entrypoints.
@@ -250,18 +253,21 @@ change correctness while legacy manifest ownership fallbacks still exist.
 }
 ```
 
-| Field            | Required | Type                                                 | What it means                                                                                           |
-| ---------------- | -------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `onProviders`    | No       | `string[]`                                           | Provider ids that should include this plugin in activation/load plans.                                  |
-| `onCommands`     | No       | `string[]`                                           | Command ids that should include this plugin in activation/load plans.                                   |
-| `onChannels`     | No       | `string[]`                                           | Channel ids that should include this plugin in activation/load plans.                                   |
-| `onRoutes`       | No       | `string[]`                                           | Route kinds that should include this plugin in activation/load plans.                                   |
-| `onCapabilities` | No       | `Array<"provider" \| "channel" \| "tool" \| "hook">` | Broad capability hints used by control-plane activation planning. Prefer narrower fields when possible. |
+| Field              | Required | Type                                                 | What it means                                                                                                                                     |
+| ------------------ | -------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `onProviders`      | No       | `string[]`                                           | Provider ids that should include this plugin in activation/load plans.                                                                            |
+| `onAgentHarnesses` | No       | `string[]`                                           | Embedded agent harness runtime ids that should include this plugin in activation/load plans. Use top-level `cliBackends` for CLI backend aliases. |
+| `onCommands`       | No       | `string[]`                                           | Command ids that should include this plugin in activation/load plans.                                                                             |
+| `onChannels`       | No       | `string[]`                                           | Channel ids that should include this plugin in activation/load plans.                                                                             |
+| `onRoutes`         | No       | `string[]`                                           | Route kinds that should include this plugin in activation/load plans.                                                                             |
+| `onCapabilities`   | No       | `Array<"provider" \| "channel" \| "tool" \| "hook">` | Broad capability hints used by control-plane activation planning. Prefer narrower fields when possible.                                           |
 
 Current live consumers:
 
 - command-triggered CLI planning falls back to legacy
   `commandAliases[].cliCommand` or `commandAliases[].name`
+- agent-runtime startup planning uses `activation.onAgentHarnesses` for
+  embedded harnesses and top-level `cliBackends[]` for CLI runtime aliases
 - channel-triggered setup/channel planning falls back to legacy `channels[]`
   ownership when explicit channel activation metadata is missing
 - provider-triggered setup/runtime planning falls back to legacy

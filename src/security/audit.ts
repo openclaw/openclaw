@@ -58,6 +58,8 @@ export type SecurityAuditOptions = {
   deepTimeoutMs?: number;
   /** Dependency injection for tests. */
   plugins?: ChannelPlugin[];
+  /** Whether to import plugin modules to discover plugin security audit collectors. */
+  loadPluginSecurityCollectors?: boolean;
   /** Dependency injection for tests (Windows ACL checks). */
   execIcacls?: ExecFn;
   /** Dependency injection for tests (Docker label checks). */
@@ -89,6 +91,7 @@ export type AuditExecutionContext = {
   execDockerRawFn?: ExecDockerRawFn;
   probeGatewayFn?: ProbeGatewayFn;
   plugins?: ChannelPlugin[];
+  loadPluginSecurityCollectors: boolean;
   configSnapshot: ConfigFileSnapshot | null;
   codeSafetySummaryCache: Map<string, Promise<unknown>>;
   deepProbeAuth?: { token?: string; password?: string };
@@ -338,6 +341,9 @@ export function collectGatewayConfigFindings(
 export async function collectPluginSecurityAuditFindings(
   context: AuditExecutionContext,
 ): Promise<SecurityAuditFinding[]> {
+  if (!context.loadPluginSecurityCollectors) {
+    return [];
+  }
   const { getActivePluginRegistry } = await loadPluginRuntimeModule();
   let collectors = getActivePluginRegistry()?.securityAuditCollectors ?? [];
   if (collectors.length === 0) {
@@ -940,6 +946,7 @@ async function createAuditExecutionContext(
     execDockerRawFn: opts.execDockerRawFn,
     probeGatewayFn: opts.probeGatewayFn,
     plugins: opts.plugins,
+    loadPluginSecurityCollectors: opts.loadPluginSecurityCollectors !== false,
     workspaceDir,
     configSnapshot,
     codeSafetySummaryCache: opts.codeSafetySummaryCache ?? new Map<string, Promise<unknown>>(),

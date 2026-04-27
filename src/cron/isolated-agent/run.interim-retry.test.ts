@@ -89,5 +89,11 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
 
     mockRunCronFallbackPassthrough();
     await runTurnAndExpectOk(1, 1);
+    expect(listDescendantRunsForRequesterMock).toHaveBeenCalledWith(
+      "agent:default:cron:test:run:test-session-id",
+    );
+    expect(countActiveDescendantRunsMock).toHaveBeenCalledWith(
+      "agent:default:cron:test:run:test-session-id",
+    );
   });
 });

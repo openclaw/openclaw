@@ -11,17 +11,20 @@ import {
   getCachedPluginJitiLoader,
   type PluginJitiLoaderCache,
 } from "../../plugins/jiti-loader-cache.js";
-import type { loadOpenClawPlugins as loadOpenClawPluginsType } from "../../plugins/loader.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "../../plugins/plugin-registry.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import { getBundledChannelSetupPlugin } from "./bundled.js";
+import {
+  isSafeManifestChannelId,
+  normalizeChannelCommandDefaults,
+  readOwnRecordValue,
+  resolveReadOnlyChannelCommandDefaults,
+} from "./read-only-command-defaults.js";
 import { listChannelPlugins } from "./registry.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 
-const SAFE_MANIFEST_CHANNEL_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 const LOADER_MODULE_CANDIDATES = [
   new URL("../../plugins/loader.js", import.meta.url),
   new URL("../../plugins/loader.ts", import.meta.url),
@@ -29,7 +32,23 @@ const LOADER_MODULE_CANDIDATES = [
 const jitiLoaders: PluginJitiLoaderCache = new Map();
 
 type PluginLoaderModule = {
-  loadOpenClawPlugins: typeof loadOpenClawPluginsType;
+  loadOpenClawPlugins: (params: {
+    config: OpenClawConfig;
+    activationSourceConfig?: OpenClawConfig;
+    env?: NodeJS.ProcessEnv;
+    workspaceDir?: string;
+    cache?: boolean;
+    activate?: boolean;
+    includeSetupOnlyChannelPlugins?: boolean;
+    forceSetupOnlyChannelPlugins?: boolean;
+    requireSetupEntryForSetupOnlyChannelPlugins?: boolean;
+    onlyPluginIds?: readonly string[];
+  }) => {
+    channelSetups: Iterable<{
+      pluginId: string;
+      plugin: ChannelPlugin;
+    }>;
+  };
 };
 
 let pluginLoaderModule: PluginLoaderModule | undefined;
@@ -73,10 +92,6 @@ type ReadOnlyChannelPluginResolution = {
   missingConfiguredChannelIds: string[];
 };
 type ManifestChannelConfigRecord = NonNullable<PluginManifestRecord["channelConfigs"]>[string];
-type ChannelCommandDefaults = Pick<
-  NonNullable<ChannelPlugin["commands"]>,
-  "nativeCommandsAutoEnabled" | "nativeSkillsAutoEnabled"
->;
 
 function addChannelPlugins(
   byId: Map<string, ChannelPlugin>,
@@ -115,39 +130,8 @@ function rebindChannelScopedString(
   return value;
 }
 
-function isSafeManifestChannelId(channelId: string): boolean {
-  return SAFE_MANIFEST_CHANNEL_ID_PATTERN.test(channelId) && !isBlockedObjectKey(channelId);
-}
-
-function readOwnRecordValue(record: Record<string, unknown>, key: string): unknown {
-  if (isBlockedObjectKey(key) || !Object.prototype.hasOwnProperty.call(record, key)) {
-    return undefined;
-  }
-  return record[key];
-}
-
 function normalizeManifestText(value: string | undefined, fallback: string): string {
   return sanitizeForLog(value?.trim() || fallback).trim();
-}
-
-function normalizeChannelCommandDefaults(
-  value: ChannelCommandDefaults | undefined,
-): ChannelCommandDefaults | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const nativeCommandsAutoEnabled =
-    typeof value.nativeCommandsAutoEnabled === "boolean"
-      ? value.nativeCommandsAutoEnabled
-      : undefined;
-  const nativeSkillsAutoEnabled =
-    typeof value.nativeSkillsAutoEnabled === "boolean" ? value.nativeSkillsAutoEnabled : undefined;
-  return nativeCommandsAutoEnabled !== undefined || nativeSkillsAutoEnabled !== undefined
-    ? {
-        ...(nativeCommandsAutoEnabled !== undefined ? { nativeCommandsAutoEnabled } : {}),
-        ...(nativeSkillsAutoEnabled !== undefined ? { nativeSkillsAutoEnabled } : {}),
-      }
-    : undefined;
 }
 
 function rebindChannelConfig(
@@ -347,46 +331,7 @@ function canUseManifestChannelPlugin(record: PluginManifestRecord, channelId: st
   return record.channelCatalogMeta?.id === channelId;
 }
 
-export function resolveReadOnlyChannelCommandDefaults(
-  channelId: string,
-  options: {
-    env?: NodeJS.ProcessEnv;
-    stateDir?: string;
-    workspaceDir?: string;
-  } = {},
-): ChannelCommandDefaults | undefined {
-  const normalizedChannelId = normalizeOptionalString(channelId) ?? "";
-  if (!normalizedChannelId || !isSafeManifestChannelId(normalizedChannelId)) {
-    return undefined;
-  }
-  const registry = loadPluginManifestRegistryForPluginRegistry({
-    stateDir: options.stateDir,
-    workspaceDir: options.workspaceDir,
-    env: options.env ?? process.env,
-    includeDisabled: true,
-  });
-  for (const record of registry.plugins) {
-    if (!record.channels.includes(normalizedChannelId)) {
-      continue;
-    }
-    const channelConfigValue = record.channelConfigs
-      ? readOwnRecordValue(record.channelConfigs as Record<string, unknown>, normalizedChannelId)
-      : undefined;
-    const channelConfig =
-      channelConfigValue &&
-      typeof channelConfigValue === "object" &&
-      !Array.isArray(channelConfigValue)
-        ? (channelConfigValue as ManifestChannelConfigRecord)
-        : undefined;
-    const commands = normalizeChannelCommandDefaults(
-      channelConfig?.commands ?? record.channelCatalogMeta?.commands,
-    );
-    if (commands) {
-      return commands;
-    }
-  }
-  return undefined;
-}
+export { resolveReadOnlyChannelCommandDefaults };
 
 function rebindChannelPluginConfig(
   config: ChannelPlugin["config"],

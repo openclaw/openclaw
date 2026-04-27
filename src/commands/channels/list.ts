@@ -61,6 +61,7 @@ function formatAccountLine(params: {
     channel: channel.id,
     accountId: snapshot.accountId,
     name: snapshot.name,
+    channelLabel: channel.meta.label ?? channel.id,
     channelStyle: theme.accent,
     accountStyle: theme.heading,
   });

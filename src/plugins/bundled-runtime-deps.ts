@@ -341,9 +341,13 @@ function removeRuntimeDepsLockIfStale(lockDir: string, nowMs: number): boolean {
   }
 }
 
-function withBundledRuntimeDepsInstallRootLock<T>(installRoot: string, run: () => T): T {
+export function withBundledRuntimeDepsFilesystemLock<T>(
+  installRoot: string,
+  lockName: string,
+  run: () => T,
+): T {
   fs.mkdirSync(installRoot, { recursive: true });
-  const lockDir = path.join(installRoot, BUNDLED_RUNTIME_DEPS_LOCK_DIR);
+  const lockDir = path.join(installRoot, lockName);
   const startedAt = Date.now();
   let locked = false;
   while (!locked) {
@@ -388,6 +392,10 @@ function withBundledRuntimeDepsInstallRootLock<T>(installRoot: string, run: () =
   } finally {
     fs.rmSync(lockDir, { recursive: true, force: true });
   }
+}
+
+function withBundledRuntimeDepsInstallRootLock<T>(installRoot: string, run: () => T): T {
+  return withBundledRuntimeDepsFilesystemLock(installRoot, BUNDLED_RUNTIME_DEPS_LOCK_DIR, run);
 }
 
 function collectRuntimeDeps(packageJson: JsonObject): Record<string, unknown> {
@@ -877,17 +885,31 @@ export function resolveBundledRuntimeDepsNpmRunner(params: {
     },
   };
 }
-function readBundledPluginChannels(pluginDir: string): string[] {
+type BundledPluginRuntimeDepsManifest = {
+  channels: string[];
+  enabledByDefault: boolean;
+};
+
+type BundledPluginRuntimeDepsManifestCache = Map<string, BundledPluginRuntimeDepsManifest>;
+
+function readBundledPluginRuntimeDepsManifest(
+  pluginDir: string,
+  cache?: BundledPluginRuntimeDepsManifestCache,
+): BundledPluginRuntimeDepsManifest {
+  const cached = cache?.get(pluginDir);
+  if (cached) {
+    return cached;
+  }
   const manifest = readJsonObject(path.join(pluginDir, "openclaw.plugin.json"));
   const channels = manifest?.channels;
-  if (!Array.isArray(channels)) {
-    return [];
-  }
-  return channels.filter((entry): entry is string => typeof entry === "string" && entry !== "");
-}
-
-function readBundledPluginEnabledByDefault(pluginDir: string): boolean {
-  return readJsonObject(path.join(pluginDir, "openclaw.plugin.json"))?.enabledByDefault === true;
+  const runtimeDepsManifest = {
+    channels: Array.isArray(channels)
+      ? channels.filter((entry): entry is string => typeof entry === "string" && entry !== "")
+      : [],
+    enabledByDefault: manifest?.enabledByDefault === true,
+  };
+  cache?.set(pluginDir, runtimeDepsManifest);
+  return runtimeDepsManifest;
 }
 
 function isBundledPluginConfiguredForRuntimeDeps(params: {
@@ -895,6 +917,7 @@ function isBundledPluginConfiguredForRuntimeDeps(params: {
   pluginId: string;
   pluginDir: string;
   includeConfiguredChannels?: boolean;
+  manifestCache?: BundledPluginRuntimeDepsManifestCache;
 }): boolean {
   const plugins = normalizePluginsConfig(params.config.plugins);
   if (!plugins.enabled) {
@@ -907,11 +930,10 @@ function isBundledPluginConfiguredForRuntimeDeps(params: {
   if (entry?.enabled === false) {
     return false;
   }
-  if (entry?.enabled === true) {
-    return true;
-  }
+  const manifest = readBundledPluginRuntimeDepsManifest(params.pluginDir, params.manifestCache);
   let hasExplicitChannelDisable = false;
-  for (const channelId of readBundledPluginChannels(params.pluginDir)) {
+  let hasConfiguredChannel = false;
+  for (const channelId of manifest.channels) {
     const normalizedChannelId = normalizeOptionalLowercaseString(channelId);
     if (!normalizedChannelId) {
       continue;
@@ -932,16 +954,32 @@ function isBundledPluginConfiguredForRuntimeDeps(params: {
       channelConfig &&
       typeof channelConfig === "object" &&
       !Array.isArray(channelConfig) &&
-      (params.includeConfiguredChannels ||
-        (channelConfig as { enabled?: unknown }).enabled === true)
+      (channelConfig as { enabled?: unknown }).enabled === true
     ) {
       return true;
+    }
+    if (
+      channelConfig &&
+      typeof channelConfig === "object" &&
+      !Array.isArray(channelConfig) &&
+      params.includeConfiguredChannels
+    ) {
+      hasConfiguredChannel = true;
     }
   }
   if (hasExplicitChannelDisable) {
     return false;
   }
-  return readBundledPluginEnabledByDefault(params.pluginDir);
+  if (plugins.allow.length > 0 && !plugins.allow.includes(params.pluginId)) {
+    return false;
+  }
+  if (entry?.enabled === true) {
+    return true;
+  }
+  if (hasConfiguredChannel) {
+    return true;
+  }
+  return manifest.enabledByDefault;
 }
 
 function shouldIncludeBundledPluginRuntimeDeps(params: {
@@ -950,18 +988,34 @@ function shouldIncludeBundledPluginRuntimeDeps(params: {
   pluginId: string;
   pluginDir: string;
   includeConfiguredChannels?: boolean;
+  manifestCache?: BundledPluginRuntimeDepsManifestCache;
 }): boolean {
-  if (params.pluginIds && !params.pluginIds.has(params.pluginId)) {
-    return false;
+  const scopedToPluginIds = Boolean(params.pluginIds);
+  if (params.pluginIds) {
+    if (!params.pluginIds.has(params.pluginId)) {
+      return false;
+    }
+    if (!params.config) {
+      return true;
+    }
   }
   if (!params.config) {
     return true;
+  }
+  if (scopedToPluginIds) {
+    const plugins = normalizePluginsConfig(params.config.plugins);
+    if (!plugins.enabled || plugins.deny.includes(params.pluginId)) {
+      return false;
+    }
+    const entry = plugins.entries[params.pluginId];
+    return entry?.enabled !== false;
   }
   return isBundledPluginConfiguredForRuntimeDeps({
     config: params.config,
     pluginId: params.pluginId,
     pluginDir: params.pluginDir,
     includeConfiguredChannels: params.includeConfiguredChannels,
+    manifestCache: params.manifestCache,
   });
 }
 
@@ -975,6 +1029,7 @@ function collectBundledPluginRuntimeDeps(params: {
   conflicts: RuntimeDepConflict[];
 } {
   const versionMap = new Map<string, Map<string, Set<string>>>();
+  const manifestCache: BundledPluginRuntimeDepsManifestCache = new Map();
 
   for (const entry of fs.readdirSync(params.extensionsDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) {
@@ -989,6 +1044,7 @@ function collectBundledPluginRuntimeDeps(params: {
         pluginId,
         pluginDir,
         includeConfiguredChannels: params.includeConfiguredChannels,
+        manifestCache,
       })
     ) {
       continue;

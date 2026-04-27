@@ -38,6 +38,7 @@ import {
   resolveBundledRuntimeDependencyInstallRoot,
   resolveBundledRuntimeDependencyPackageRoot,
   registerBundledRuntimeDependencyNodePath,
+  withBundledRuntimeDepsFilesystemLock,
   type BundledRuntimeDepsInstallParams,
 } from "./bundled-runtime-deps.js";
 import {
@@ -70,6 +71,7 @@ import {
   restorePluginInteractiveHandlers,
 } from "./interactive-registry.js";
 import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "./jiti-loader-cache.js";
+import { PluginLoaderCacheState } from "./loader-cache-state.js";
 import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginBundleFormat, PluginDiagnostic, PluginFormat } from "./manifest-types.js";
 import type { PluginManifestContracts } from "./manifest.js";
@@ -133,6 +135,7 @@ import type {
 } from "./types.js";
 
 export type PluginLoadResult = PluginRegistry;
+export { PluginLoadReentryError } from "./loader-cache-state.js";
 
 export type PluginLoadOptions = {
   config?: OpenClawConfig;
@@ -206,16 +209,6 @@ export class PluginLoadFailureError extends Error {
   }
 }
 
-export class PluginLoadReentryError extends Error {
-  readonly cacheKey: string;
-
-  constructor(cacheKey: string) {
-    super(`plugin load reentry detected for cache key: ${cacheKey}`);
-    this.name = "PluginLoadReentryError";
-    this.cacheKey = cacheKey;
-  }
-}
-
 type CachedPluginState = {
   registry: PluginRegistry;
   detachedTaskRuntimeRegistration: ReturnType<typeof getDetachedTaskLifecycleRuntimeRegistration>;
@@ -233,10 +226,9 @@ type CachedPluginState = {
 };
 
 const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 128;
-let pluginRegistryCacheEntryCap = MAX_PLUGIN_REGISTRY_CACHE_ENTRIES;
-const registryCache = new Map<string, CachedPluginState>();
-const inFlightPluginRegistryLoads = new Set<string>();
-const openAllowlistWarningCache = new Set<string>();
+const pluginLoaderCacheState = new PluginLoaderCacheState<CachedPluginState>(
+  MAX_PLUGIN_REGISTRY_CACHE_ENTRIES,
+);
 const LAZY_RUNTIME_REFLECTION_KEYS = [
   "version",
   "config",
@@ -254,9 +246,7 @@ const LAZY_RUNTIME_REFLECTION_KEYS = [
 ] as const satisfies readonly (keyof PluginRuntime)[];
 
 export function clearPluginLoaderCache(): void {
-  registryCache.clear();
-  inFlightPluginRegistryLoads.clear();
-  openAllowlistWarningCache.clear();
+  pluginLoaderCacheState.clear();
   clearBundledRuntimeDependencyNodePaths();
   bundledRuntimeDependencyJitiAliases.clear();
   clearAgentHarnesses();
@@ -269,6 +259,7 @@ export function clearPluginLoaderCache(): void {
 }
 
 const defaultLogger = () => createSubsystemLogger("plugins");
+const BUNDLED_RUNTIME_MIRROR_LOCK_DIR = ".openclaw-runtime-mirror.lock";
 
 function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
   return (
@@ -706,34 +697,40 @@ function mirrorBundledPluginRuntimeRoot(params: {
   pluginRoot: string;
   installRoot: string;
 }): string {
-  const mirrorParent = prepareBundledPluginRuntimeDistMirror({
-    installRoot: params.installRoot,
-    pluginRoot: params.pluginRoot,
-  });
-  const mirrorRoot = path.join(mirrorParent, params.pluginId);
-  fs.mkdirSync(params.installRoot, { recursive: true });
-  try {
-    fs.chmodSync(params.installRoot, 0o755);
-  } catch {
-    // Best-effort only: staged roots may live on filesystems that reject chmod.
-  }
-  fs.mkdirSync(mirrorParent, { recursive: true });
-  try {
-    fs.chmodSync(mirrorParent, 0o755);
-  } catch {
-    // Best-effort only: the access check below will surface non-writable dirs.
-  }
-  fs.accessSync(mirrorParent, fs.constants.W_OK);
-  const tempDir = fs.mkdtempSync(path.join(mirrorParent, `.plugin-${params.pluginId}-`));
-  const stagedRoot = path.join(tempDir, "plugin");
-  try {
-    copyBundledPluginRuntimeRoot(params.pluginRoot, stagedRoot);
-    fs.rmSync(mirrorRoot, { recursive: true, force: true });
-    fs.renameSync(stagedRoot, mirrorRoot);
-  } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
-  return mirrorRoot;
+  return withBundledRuntimeDepsFilesystemLock(
+    params.installRoot,
+    BUNDLED_RUNTIME_MIRROR_LOCK_DIR,
+    () => {
+      const mirrorParent = prepareBundledPluginRuntimeDistMirror({
+        installRoot: params.installRoot,
+        pluginRoot: params.pluginRoot,
+      });
+      const mirrorRoot = path.join(mirrorParent, params.pluginId);
+      fs.mkdirSync(params.installRoot, { recursive: true });
+      try {
+        fs.chmodSync(params.installRoot, 0o755);
+      } catch {
+        // Best-effort only: staged roots may live on filesystems that reject chmod.
+      }
+      fs.mkdirSync(mirrorParent, { recursive: true });
+      try {
+        fs.chmodSync(mirrorParent, 0o755);
+      } catch {
+        // Best-effort only: the access check below will surface non-writable dirs.
+      }
+      fs.accessSync(mirrorParent, fs.constants.W_OK);
+      const tempDir = fs.mkdtempSync(path.join(mirrorParent, `.plugin-${params.pluginId}-`));
+      const stagedRoot = path.join(tempDir, "plugin");
+      try {
+        copyBundledPluginRuntimeRoot(params.pluginRoot, stagedRoot);
+        fs.rmSync(mirrorRoot, { recursive: true, force: true });
+        fs.renameSync(stagedRoot, mirrorRoot);
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+      return mirrorRoot;
+    },
+  );
 }
 
 function prepareBundledPluginRuntimeDistMirror(params: {
@@ -759,6 +756,9 @@ function prepareBundledPluginRuntimeDistMirror(params: {
     try {
       fs.symlinkSync(sourcePath, targetPath, entry.isDirectory() ? "junction" : "file");
     } catch {
+      if (fs.existsSync(targetPath)) {
+        continue;
+      }
       if (entry.isDirectory()) {
         copyBundledPluginRuntimeRoot(sourcePath, targetPath);
       } else if (entry.isFile()) {
@@ -853,17 +853,21 @@ function writeRuntimeModuleWrapper(sourcePath: string, targetPath: string): void
         `  defaultExport = defaultExport.default;`,
         `}`,
       ];
+  const content = [
+    `export * from ${JSON.stringify(normalizedSpecifier)};`,
+    ...defaultForwarder,
+    "export { defaultExport as default };",
+    "",
+  ].join("\n");
+  try {
+    if (fs.readFileSync(targetPath, "utf8") === content) {
+      return;
+    }
+  } catch {
+    // Missing or unreadable wrapper; rewrite below.
+  }
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-  fs.writeFileSync(
-    targetPath,
-    [
-      `export * from ${JSON.stringify(normalizedSpecifier)};`,
-      ...defaultForwarder,
-      "export { defaultExport as default };",
-      "",
-    ].join("\n"),
-    "utf8",
-  );
+  fs.writeFileSync(targetPath, content, "utf8");
 }
 
 function ensureOpenClawPluginSdkAlias(distRoot: string): void {
@@ -934,39 +938,19 @@ export const __testing = {
   getCompatibleActivePluginRegistry,
   resolvePluginLoadCacheContext,
   get maxPluginRegistryCacheEntries() {
-    return pluginRegistryCacheEntryCap;
+    return pluginLoaderCacheState.maxEntries;
   },
   setMaxPluginRegistryCacheEntriesForTest(value?: number) {
-    pluginRegistryCacheEntryCap =
-      typeof value === "number" && Number.isFinite(value) && value > 0
-        ? Math.max(1, Math.floor(value))
-        : MAX_PLUGIN_REGISTRY_CACHE_ENTRIES;
+    pluginLoaderCacheState.setMaxEntriesForTest(value);
   },
 };
 
 function getCachedPluginRegistry(cacheKey: string): CachedPluginState | undefined {
-  const cached = registryCache.get(cacheKey);
-  if (!cached) {
-    return undefined;
-  }
-  // Refresh insertion order so frequently reused registries survive eviction.
-  registryCache.delete(cacheKey);
-  registryCache.set(cacheKey, cached);
-  return cached;
+  return pluginLoaderCacheState.get(cacheKey);
 }
 
 function setCachedPluginRegistry(cacheKey: string, state: CachedPluginState): void {
-  if (registryCache.has(cacheKey)) {
-    registryCache.delete(cacheKey);
-  }
-  registryCache.set(cacheKey, state);
-  while (registryCache.size > pluginRegistryCacheEntryCap) {
-    const oldestKey = registryCache.keys().next().value;
-    if (!oldestKey) {
-      break;
-    }
-    registryCache.delete(oldestKey);
-  }
+  pluginLoaderCacheState.set(cacheKey, state);
 }
 
 function buildCacheKey(params: {
@@ -1383,7 +1367,7 @@ export function resolvePluginRegistryLoadCacheKey(options: PluginLoadOptions = {
 }
 
 export function isPluginRegistryLoadInFlight(options: PluginLoadOptions = {}): boolean {
-  return inFlightPluginRegistryLoads.has(resolvePluginRegistryLoadCacheKey(options));
+  return pluginLoaderCacheState.isLoadInFlight(resolvePluginRegistryLoadCacheKey(options));
 }
 
 export function resolveCompatibleRuntimePluginRegistry(
@@ -2074,7 +2058,7 @@ function warnWhenAllowlistIsOpen(params: {
   if (autoDiscoverable.length === 0) {
     return;
   }
-  if (openAllowlistWarningCache.has(params.warningCacheKey)) {
+  if (pluginLoaderCacheState.hasOpenAllowlistWarning(params.warningCacheKey)) {
     return;
   }
   const preview = autoDiscoverable
@@ -2082,7 +2066,7 @@ function warnWhenAllowlistIsOpen(params: {
     .map((entry) => `${entry.id} (${entry.source})`)
     .join(", ");
   const extra = autoDiscoverable.length > 6 ? ` (+${autoDiscoverable.length - 6} more)` : "";
-  openAllowlistWarningCache.add(params.warningCacheKey);
+  pluginLoaderCacheState.recordOpenAllowlistWarning(params.warningCacheKey);
   params.logger.warn(
     `[plugins] plugins.allow is empty; discovered non-bundled plugins may auto-load: ${preview}${extra}. Set plugins.allow to explicit trusted ids.`,
   );
@@ -2195,10 +2179,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       return cached.registry;
     }
   }
-  if (inFlightPluginRegistryLoads.has(cacheKey)) {
-    throw new PluginLoadReentryError(cacheKey);
-  }
-  inFlightPluginRegistryLoads.add(cacheKey);
+  pluginLoaderCacheState.beginLoad(cacheKey);
   try {
     // Clear previously registered plugin state before reloading.
     // Skip for non-activating (snapshot) loads to avoid wiping commands from other plugins.
@@ -3180,7 +3161,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     }
     return registry;
   } finally {
-    inFlightPluginRegistryLoads.delete(cacheKey);
+    pluginLoaderCacheState.finishLoad(cacheKey);
   }
 }
 
