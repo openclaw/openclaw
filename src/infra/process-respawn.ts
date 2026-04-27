@@ -32,6 +32,17 @@ function spawnDetachedGatewayProcess(): { child: ChildProcess; pid?: number } {
   return { child, pid: child.pid ?? undefined };
 }
 
+function relaunchWindowsScheduledTask(): GatewayRespawnResult | null {
+  const restart = relaunchGatewayScheduledTask(process.env);
+  if (!restart.ok) {
+    return {
+      mode: "failed",
+      detail: restart.detail ?? `${restart.method} restart failed`,
+    };
+  }
+  return null;
+}
+
 /**
  * Attempt to restart this process with a fresh PID.
  * - supervised environments (launchd/systemd/schtasks): caller should exit and let supervisor restart
@@ -48,18 +59,9 @@ export function restartGatewayProcessWithFreshPid(): GatewayRespawnResult {
     // Avoid detached kickstart/start handoffs here so restart timing stays tied
     // to launchd's native supervision rather than a second helper process.
     if (supervisor === "schtasks") {
-      // Call the scheduled-task relaunch directly rather than routing through
-      // triggerOpenClawRestart. This codepath is already the Windows-specific
-      // handoff, and triggerOpenClawRestart carries cross-cutting logic
-      // (stale-pid cleanup, platform dispatch, SIGUSR1 fast-path for top-level
-      // callers) that is either redundant here or can skip the scheduled-task
-      // spawn entirely, leaving the gateway dead on exit (see closed #68507).
-      const restart = relaunchGatewayScheduledTask(process.env);
-      if (!restart.ok) {
-        return {
-          mode: "failed",
-          detail: restart.detail ?? `${restart.method} restart failed`,
-        };
+      const failed = relaunchWindowsScheduledTask();
+      if (failed) {
+        return failed;
       }
     }
     return { mode: "supervised" };
@@ -97,12 +99,9 @@ export function respawnGatewayProcessForUpdate(): GatewayUpdateRespawnResult {
   const supervisor = detectRespawnSupervisor(process.env);
   if (supervisor) {
     if (supervisor === "schtasks") {
-      const restart = triggerOpenClawRestart();
-      if (!restart.ok) {
-        return {
-          mode: "failed",
-          detail: restart.detail ?? `${restart.method} restart failed`,
-        };
+      const failed = relaunchWindowsScheduledTask();
+      if (failed) {
+        return failed;
       }
     }
     return { mode: "supervised" };

@@ -257,6 +257,38 @@ describe("respawnGatewayProcessForUpdate", () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
+  it("relaunches the Windows scheduled task directly when update restart is supervised", () => {
+    clearSupervisorHints();
+    setPlatform("win32");
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    process.env.OPENCLAW_SERVICE_KIND = "gateway";
+    relaunchGatewayScheduledTaskMock.mockReturnValue({ ok: true, method: "schtasks" });
+
+    const result = respawnGatewayProcessForUpdate();
+
+    expect(result).toEqual({ mode: "supervised" });
+    expect(relaunchGatewayScheduledTaskMock).toHaveBeenCalledOnce();
+    expect(relaunchGatewayScheduledTaskMock).toHaveBeenCalledWith(process.env);
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("propagates supervised Windows update schtasks failure", () => {
+    clearSupervisorHints();
+    setPlatform("win32");
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    process.env.OPENCLAW_SERVICE_KIND = "gateway";
+    relaunchGatewayScheduledTaskMock.mockReturnValue({
+      ok: false,
+      method: "schtasks",
+      detail: "scheduled task not registered",
+    });
+
+    const result = respawnGatewayProcessForUpdate();
+
+    expect(result).toEqual({ mode: "failed", detail: "scheduled task not registered" });
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   it("allows detached respawn on unmanaged Windows during updates", () => {
     clearSupervisorHints();
     setPlatform("win32");
