@@ -84,7 +84,7 @@ struct ExecApprovalsStoreRefactorTests {
             .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager().removeItem(at: root) }
         let target = root.appendingPathComponent("state-target", isDirectory: true)
-        let linkedState = root.appendingPathComponent(".openclaw", isDirectory: true)
+        let linkedState = root.appendingPathComponent("state-link", isDirectory: true)
         try FileManager().createDirectory(at: target, withIntermediateDirectories: true)
         try FileManager().setAttributes([.posixPermissions: 0o700], ofItemAtPath: target.path)
         try FileManager().createSymbolicLink(at: linkedState, withDestinationURL: target)
@@ -106,7 +106,7 @@ struct ExecApprovalsStoreRefactorTests {
             .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager().removeItem(at: root) }
         let target = root.appendingPathComponent("state-target", isDirectory: true)
-        let linkedState = root.appendingPathComponent(".openclaw", isDirectory: true)
+        let linkedState = root.appendingPathComponent("state-link", isDirectory: true)
         try FileManager().createDirectory(at: target, withIntermediateDirectories: true)
         try FileManager().setAttributes([.posixPermissions: 0o777], ofItemAtPath: target.path)
         try FileManager().createSymbolicLink(at: linkedState, withDestinationURL: target)

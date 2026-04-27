@@ -618,23 +618,36 @@ enum ExecApprovalsSocketPathGuard {
         return .other
     }
 
-    static func hardenParentDirectory(for socketPath: String) throws {
+    static func hardenParentDirectory(
+        for socketPath: String,
+        allowingSymlinksIn stateDirURL: URL? = nil
+    ) throws {
         let parentURL = URL(fileURLWithPath: socketPath).deletingLastPathComponent()
-        let trustedParent = try self.trustedParentDirectory(for: parentURL)
+        let trustedParent = try self.trustedParentDirectory(
+            for: parentURL,
+            allowingSymlinksIn: stateDirURL)
         try self.createHardenedDirectoryPath(
             trustedParent.url,
             hardenFrom: trustedParent.hardenFromURL)
     }
 
-    static func validateApprovalsFilePath(for filePath: String) throws {
+    static func validateApprovalsFilePath(
+        for filePath: String,
+        allowingSymlinksIn stateDirURL: URL? = nil
+    ) throws {
         let parentURL = URL(fileURLWithPath: filePath).deletingLastPathComponent()
-        _ = try self.trustedParentDirectory(for: parentURL)
+        _ = try self.trustedParentDirectory(for: parentURL, allowingSymlinksIn: stateDirURL)
         try self.validateApprovalsFileDestination(at: filePath)
     }
 
-    static func hardenApprovalsFilePath(for filePath: String) throws {
+    static func hardenApprovalsFilePath(
+        for filePath: String,
+        allowingSymlinksIn stateDirURL: URL? = nil
+    ) throws {
         let parentURL = URL(fileURLWithPath: filePath).deletingLastPathComponent()
-        let trustedParent = try self.trustedParentDirectory(for: parentURL)
+        let trustedParent = try self.trustedParentDirectory(
+            for: parentURL,
+            allowingSymlinksIn: stateDirURL)
         try self.createHardenedDirectoryPath(
             trustedParent.url,
             hardenFrom: trustedParent.hardenFromURL)
@@ -712,7 +725,10 @@ enum ExecApprovalsSocketPathGuard {
         }
     }
 
-    private static func trustedParentDirectory(for parentURL: URL) throws -> TrustedParentDirectory {
+    private static func trustedParentDirectory(
+        for parentURL: URL,
+        allowingSymlinksIn stateDirURL: URL?
+    ) throws -> TrustedParentDirectory {
         let standardizedURL = parentURL.standardizedFileURL
         let components = standardizedURL.pathComponents
         guard !components.isEmpty else {
@@ -722,7 +738,7 @@ enum ExecApprovalsSocketPathGuard {
         var rawURL = URL(fileURLWithPath: components[0], isDirectory: true)
         var hardenedURL = rawURL
         var hardenFromURL: URL?
-        var acceptedStateSymlink = false
+        var acceptedDefaultStateSymlink = false
 
         for component in components.dropFirst() {
             rawURL.appendPathComponent(component, isDirectory: true)
@@ -730,18 +746,34 @@ enum ExecApprovalsSocketPathGuard {
             switch try self.pathKind(at: rawURL.path) {
             case .missing, .directory:
                 hardenedURL = nextHardenedURL
-                if component == ".openclaw", hardenFromURL == nil {
+                if hardenFromURL == nil,
+                   self.isStateDirectoryBoundary(rawURL.path, stateDirURL: stateDirURL)
+                    || (stateDirURL == nil && component == ".openclaw")
+                {
                     hardenFromURL = hardenedURL
                 }
             case .symlink:
-                guard component == ".openclaw" && !acceptedStateSymlink else {
+                let isConfiguredStateSymlink = self.isStateDirectoryPrefix(
+                    rawURL.path,
+                    stateDirURL: stateDirURL)
+                let isDefaultStateSymlink = stateDirURL == nil
+                    && component == ".openclaw"
+                    && !acceptedDefaultStateSymlink
+                guard isConfiguredStateSymlink || isDefaultStateSymlink else {
                     throw ExecApprovalsSocketPathGuardError.parentPathInvalid(
                         path: rawURL.path,
                         kind: .symlink)
                 }
-                acceptedStateSymlink = true
+                if isDefaultStateSymlink {
+                    acceptedDefaultStateSymlink = true
+                }
                 hardenedURL = try self.trustedParentSymlinkTarget(for: rawURL)
-                hardenFromURL = hardenedURL
+                if hardenFromURL == nil,
+                   self.isStateDirectoryBoundary(rawURL.path, stateDirURL: stateDirURL)
+                    || (stateDirURL == nil && component == ".openclaw")
+                {
+                    hardenFromURL = hardenedURL
+                }
             case let kind:
                 throw ExecApprovalsSocketPathGuardError.parentPathInvalid(
                     path: rawURL.path,
@@ -750,6 +782,22 @@ enum ExecApprovalsSocketPathGuard {
         }
 
         return TrustedParentDirectory(url: hardenedURL, hardenFromURL: hardenFromURL)
+    }
+
+    private static func isStateDirectoryPrefix(_ path: String, stateDirURL: URL?) -> Bool {
+        guard let stateDirPath = stateDirURL?.standardizedFileURL.path else {
+            return false
+        }
+        let candidatePath = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL.path
+        return stateDirPath == candidatePath || stateDirPath.hasPrefix("\(candidatePath)/")
+    }
+
+    private static func isStateDirectoryBoundary(_ path: String, stateDirURL: URL?) -> Bool {
+        guard let stateDirPath = stateDirURL?.standardizedFileURL.path else {
+            return false
+        }
+        let candidatePath = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL.path
+        return stateDirPath == candidatePath
     }
 
     private static func trustedParentSymlinkTarget(for parentURL: URL) throws -> URL {
@@ -1038,7 +1086,9 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
             return -1
         }
         do {
-            try ExecApprovalsSocketPathGuard.hardenParentDirectory(for: self.socketPath)
+            try ExecApprovalsSocketPathGuard.hardenParentDirectory(
+                for: self.socketPath,
+                allowingSymlinksIn: OpenClawPaths.stateDirURL)
             try ExecApprovalsSocketPathGuard.removeExistingSocket(at: self.socketPath)
         } catch {
             self.logger

@@ -560,11 +560,15 @@ enum ExecApprovalsStore {
     }
 
     private static func validateStateFilePath() throws {
-        try ExecApprovalsSocketPathGuard.validateApprovalsFilePath(for: self.fileURL().path)
+        try ExecApprovalsSocketPathGuard.validateApprovalsFilePath(
+            for: self.fileURL().path,
+            allowingSymlinksIn: OpenClawPaths.stateDirURL)
     }
 
     private static func hardenStateFilePath() throws {
-        try ExecApprovalsSocketPathGuard.hardenApprovalsFilePath(for: self.fileURL().path)
+        try ExecApprovalsSocketPathGuard.hardenApprovalsFilePath(
+            for: self.fileURL().path,
+            allowingSymlinksIn: OpenClawPaths.stateDirURL)
     }
 
     private static func logUnsafeStatePath(_ error: Error) {
