@@ -14,6 +14,47 @@ const CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.3-codex", "gpt-5.2-codex"] as const;
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 const DEFAULT_MAX_TOKENS = 8192;
 
+/**
+ * Known capability overrides for Copilot model variants whose limits diverge from
+ * the synthetic catch-all defaults. Keys are the lowercased model id as it appears
+ * in GitHub Copilot's `/models` response.
+ *
+ * These mirror what Copilot's upstream `/models` endpoint advertises in
+ * `capabilities.limits` and `capabilities.supports`. The synthetic resolver and the
+ * built-in default registry both consult this table so context windows, output
+ * limits, and reasoning flags stay accurate without requiring users to set
+ * agents.defaults.models[<id>] overrides in openclaw.json.
+ */
+export type CopilotKnownCapabilities = {
+  contextWindow: number;
+  maxTokens: number;
+  reasoning: boolean;
+};
+
+const COPILOT_KNOWN_CAPABILITIES: Readonly<Record<string, CopilotKnownCapabilities>> = {
+  // Long-context Opus 4.6 variant exposed by Copilot. Upstream advertises a 1M
+  // input window, 64K output, and adaptive thinking up to high effort.
+  "claude-opus-4.6-1m": {
+    contextWindow: 1_000_000,
+    maxTokens: 64_000,
+    reasoning: true,
+  },
+  // Long-context Opus 4.7 variant exposed by Copilot. Upstream advertises a 1M
+  // input window, 64K output, and adaptive thinking up to xhigh effort.
+  "claude-opus-4.7-1m-internal": {
+    contextWindow: 1_000_000,
+    maxTokens: 64_000,
+    reasoning: true,
+  },
+};
+
+export function resolveCopilotKnownCapabilities(
+  modelId: string,
+): CopilotKnownCapabilities | undefined {
+  const key = normalizeOptionalLowercaseString(modelId) ?? "";
+  return key ? COPILOT_KNOWN_CAPABILITIES[key] : undefined;
+}
+
 function isCopilotCodexModelId(modelId: string): boolean {
   return /(?:^|[-_.])codex(?:$|[-_.])/.test(modelId);
 }
@@ -66,7 +107,9 @@ export function resolveCopilotForwardCompatModel(
   // model isn't available on the user's plan. This lets new models be used
   // by simply adding them to agents.defaults.models in openclaw.json — no
   // code change required.
-  const reasoning = /^o[13](\b|$)/.test(lowerModelId) || isCopilotCodexModelId(lowerModelId);
+  const known = resolveCopilotKnownCapabilities(trimmedModelId);
+  const reasoning =
+    known?.reasoning ?? (/^o[13](\b|$)/.test(lowerModelId) || isCopilotCodexModelId(lowerModelId));
   return normalizeModelCompat({
     id: trimmedModelId,
     name: trimmedModelId,
@@ -77,7 +120,7 @@ export function resolveCopilotForwardCompatModel(
     // image payloads for text-only models rather than failing silently.
     input: ["text", "image"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: DEFAULT_CONTEXT_WINDOW,
-    maxTokens: DEFAULT_MAX_TOKENS,
+    contextWindow: known?.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+    maxTokens: known?.maxTokens ?? DEFAULT_MAX_TOKENS,
   } as ProviderRuntimeModel);
 }
