@@ -1,5 +1,5 @@
+import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/channel-contract-testing";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
-import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.useRealTimers();
 const [
@@ -34,9 +34,9 @@ vi.mock("../send.js", () => ({
   sendReadReceiptSignal: sendReadReceiptMock,
 }));
 
-vi.mock("../../../../src/auto-reply/dispatch.js", async () => {
-  const actual = await vi.importActual<typeof import("../../../../src/auto-reply/dispatch.js")>(
-    "../../../../src/auto-reply/dispatch.js",
+vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/reply-runtime")>(
+    "openclaw/plugin-sdk/reply-runtime",
   );
   return {
     ...actual,
@@ -46,10 +46,16 @@ vi.mock("../../../../src/auto-reply/dispatch.js", async () => {
   };
 });
 
-vi.mock("../../../../src/pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: vi.fn().mockResolvedValue([]),
-  upsertChannelPairingRequest: vi.fn(),
-}));
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/conversation-runtime")>(
+    "openclaw/plugin-sdk/conversation-runtime",
+  );
+  return {
+    ...actual,
+    readChannelAllowFromStore: vi.fn().mockResolvedValue([]),
+    upsertChannelPairingRequest: vi.fn(),
+  };
+});
 
 describe("signal createSignalEventHandler inbound context", () => {
   beforeEach(() => {
@@ -139,11 +145,26 @@ describe("signal createSignalEventHandler inbound context", () => {
       }),
     );
 
-    expect(sendTypingMock).toHaveBeenCalledWith("+15550001111", expect.any(Object));
+    expect(sendTypingMock).toHaveBeenCalledWith(
+      "+15550001111",
+      expect.objectContaining({
+        cfg: expect.objectContaining({
+          channels: expect.objectContaining({
+            signal: expect.objectContaining({ dmPolicy: "open" }),
+          }),
+        }),
+      }),
+    );
     expect(sendReadReceiptMock).toHaveBeenCalledWith(
       "signal:+15550001111",
       1700000000000,
-      expect.any(Object),
+      expect.objectContaining({
+        cfg: expect.objectContaining({
+          channels: expect.objectContaining({
+            signal: expect.objectContaining({ dmPolicy: "open" }),
+          }),
+        }),
+      }),
     );
   });
 
@@ -278,6 +299,37 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(capture.ctx?.MediaPaths).toEqual(["/tmp/a1.dat", "/tmp/a2.dat"]);
     expect(capture.ctx?.MediaUrls).toEqual(["/tmp/a1.dat", "/tmp/a2.dat"]);
     expect(capture.ctx?.MediaTypes).toEqual(["image/jpeg", "application/octet-stream"]);
+  });
+
+  it("threads resolved audio contentType for Signal voice attachments", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        },
+        ignoreAttachments: false,
+        fetchAttachment: async ({ attachment }) => ({
+          path: `/tmp/${String(attachment.id)}.aac`,
+          contentType: "audio/aac",
+        }),
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "",
+          attachments: [{ id: "voice1", contentType: undefined, filename: "voice.aac" }],
+        },
+      }),
+    );
+
+    expect(capture.ctx).toBeTruthy();
+    expect(capture.ctx?.MediaPath).toBe("/tmp/voice1.aac");
+    expect(capture.ctx?.MediaType).toBe("audio/aac");
+    expect(capture.ctx?.MediaTypes).toEqual(["audio/aac"]);
   });
 
   it("drops own UUID inbound messages when only accountUuid is configured", async () => {

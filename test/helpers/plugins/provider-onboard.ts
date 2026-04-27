@@ -3,8 +3,8 @@ import {
   resolveAgentModelPrimaryValue,
 } from "openclaw/plugin-sdk/provider-onboard";
 import type { ModelApi } from "openclaw/plugin-sdk/provider-onboard";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/testing";
 import { expect } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
 import {
   createConfigWithFallbacks,
   createLegacyProviderConfig,

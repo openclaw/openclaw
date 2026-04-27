@@ -1,4 +1,4 @@
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -6,7 +6,7 @@ import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { createRunningTaskRun } from "../tasks/detached-task-runtime.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
-import { waitForAgentRun } from "./run-wait.js";
+import { isRecoverableAgentWaitError, waitForAgentRun } from "./run-wait.js";
 import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
 import { type SubagentRunOutcome, withSubagentOutcomeTiming } from "./subagent-announce-output.js";
 import {
@@ -30,6 +30,7 @@ import {
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const log = createSubsystemLogger("agents/subagent-registry");
+const RECOVERABLE_WAIT_RETRY_DELAY_MS = process.env.OPENCLAW_TEST_FAST === "1" ? 25 : 5_000;
 
 function shouldDeleteAttachments(entry: SubagentRunRecord) {
   return entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
@@ -61,7 +62,7 @@ export function createSubagentRunManager(params: {
   endedHookInFlightRunIds: Set<string>;
   persist(): void;
   callGateway: typeof callGateway;
-  loadConfig: typeof loadConfig;
+  getRuntimeConfig: typeof getRuntimeConfig;
   ensureRuntimePluginsLoaded:
     | typeof ensureRuntimePluginsLoadedFn
     | ((args: {
@@ -75,6 +76,7 @@ export function createSubagentRunManager(params: {
   resumeSubagentRun(runId: string): void;
   clearPendingLifecycleError(runId: string): void;
   resolveSubagentWaitTimeoutMs(cfg: OpenClawConfig, runTimeoutSeconds?: number): number;
+  scheduleOrphanRecovery(args?: { delayMs?: number; maxRetries?: number }): void;
   notifyContextEngineSubagentEnded(args: {
     childSessionKey: string;
     reason: "completed" | "deleted" | "released";
@@ -112,6 +114,26 @@ export function createSubagentRunManager(params: {
         return;
       }
       if (wait.status === "pending") {
+        return;
+      }
+      if (wait.status === "error" && isRecoverableAgentWaitError(wait.error)) {
+        log.info("subagent wait interrupted; scheduling recovery", {
+          runId,
+          childSessionKey: expectedEntry?.childSessionKey ?? entry?.childSessionKey,
+          error: wait.error,
+        });
+        params.scheduleOrphanRecovery({ delayMs: 1_000 });
+        const scheduledEntry = entry;
+        setTimeout(() => {
+          if (!scheduledEntry) {
+            return;
+          }
+          const current = params.runs.get(runId);
+          if (!current || current !== scheduledEntry || typeof current.endedAt === "number") {
+            return;
+          }
+          void waitForSubagentCompletion(runId, waitTimeoutMs, scheduledEntry);
+        }, RECOVERABLE_WAIT_RETRY_DELAY_MS).unref?.();
         return;
       }
       let mutated = false;
@@ -232,7 +254,7 @@ export function createSubagentRunManager(params: {
     }
 
     const now = Date.now();
-    const cfg = params.loadConfig();
+    const cfg = params.getRuntimeConfig();
     const archiveAfterMs = resolveArchiveAfterMs(cfg);
     const spawnMode = source.spawnMode === "session" ? "session" : "run";
     const archiveAtMs =
@@ -298,7 +320,7 @@ export function createSubagentRunManager(params: {
       return;
     }
     const now = Date.now();
-    const cfg = params.loadConfig();
+    const cfg = params.getRuntimeConfig();
     const archiveAfterMs = resolveArchiveAfterMs(cfg);
     const spawnMode = registerParams.spawnMode === "session" ? "session" : "run";
     const archiveAtMs =
@@ -477,7 +499,7 @@ export function createSubagentRunManager(params: {
           });
           continue;
         }
-        const cfg = params.loadConfig();
+        const cfg = params.getRuntimeConfig();
         void Promise.resolve(
           params.ensureRuntimePluginsLoaded({
             config: cfg,

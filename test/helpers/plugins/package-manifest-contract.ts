@@ -1,8 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
+import {
+  isAtLeast,
+  parseMinHostVersionRequirement,
+  parseSemver,
+} from "openclaw/plugin-sdk/testing";
 import { describe, expect, it } from "vitest";
-import { isAtLeast, parseSemver } from "../../../src/infra/runtime-guard.js";
-import { parseMinHostVersionRequirement } from "../../../src/plugins/min-host-version.js";
 import { bundledPluginFile } from "../bundled-plugin-paths.js";
 
 type PackageManifest = {

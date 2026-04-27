@@ -1,7 +1,14 @@
 import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { analyzeShellCommand } from "../infra/exec-approvals-analysis.js";
-import { type ExecHost, loadExecApprovals, maxAsk, minSecurity } from "../infra/exec-approvals.js";
+import {
+  type ExecAsk,
+  type ExecHost,
+  type ExecSecurity,
+  loadExecApprovals,
+  maxAsk,
+  minSecurity,
+} from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { sanitizeHostExecEnvWithDiagnostics } from "../infra/host-env-security.js";
 import {
@@ -1036,6 +1043,14 @@ async function validateScriptFileForShellBleed(params: {
   }
 }
 
+function shouldSkipExecScriptPreflight(params: {
+  host: ExecHost;
+  security: ExecSecurity;
+  ask: ExecAsk;
+}): boolean {
+  return params.host === "gateway" && params.security === "full" && params.ask === "off";
+}
+
 type ParsedExecApprovalCommand = {
   approvalId: string;
   decision: "allow-once" | "allow-always" | "deny";
@@ -1613,6 +1628,7 @@ export function createExecTool(
           approvalRunningNoticeMs,
           warnings,
           notifySessionKey,
+          notifyOnExit,
           trustedSafeBinDirs,
         });
       }
@@ -1660,17 +1676,15 @@ export function createExecTool(
       }
 
       const explicitTimeoutSec = typeof params.timeout === "number" ? params.timeout : null;
-      const backgroundTimeoutBypass =
-        allowBackground && explicitTimeoutSec === null && (backgroundRequested || yieldRequested);
-      const effectiveTimeout = backgroundTimeoutBypass
-        ? null
-        : (explicitTimeoutSec ?? defaultTimeoutSec);
+      const effectiveTimeout = explicitTimeoutSec ?? defaultTimeoutSec;
       const getWarningText = () => (warnings.length ? `${warnings.join("\n")}\n\n` : "");
       const usePty = params.pty === true && !sandbox;
 
       // Preflight: catch a common model failure mode (shell syntax leaking into Python/JS sources)
       // before we execute and burn tokens in cron loops.
-      await validateScriptFileForShellBleed({ command: params.command, workdir });
+      if (!shouldSkipExecScriptPreflight({ host, security, ask })) {
+        await validateScriptFileForShellBleed({ command: params.command, workdir });
+      }
 
       const run = await runExecProcess({
         command: params.command,

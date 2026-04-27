@@ -13,7 +13,10 @@ import {
   immediateEnqueue,
   makeEmbeddedRunnerAttempt,
 } from "./test-helpers/pi-embedded-runner-e2e-fixtures.js";
-import { installEmbeddedRunnerBaseE2eMocks } from "./test-helpers/pi-embedded-runner-e2e-mocks.js";
+import {
+  installEmbeddedRunnerBaseE2eMocks,
+  installEmbeddedRunnerFastRunE2eMocks,
+} from "./test-helpers/pi-embedded-runner-e2e-mocks.js";
 
 const runEmbeddedAttemptMock = vi.fn();
 const disposeSessionMcpRuntimeMock = vi.fn<(sessionId: string) => Promise<void>>(async () => {
@@ -21,6 +24,10 @@ const disposeSessionMcpRuntimeMock = vi.fn<(sessionId: string) => Promise<void>>
 });
 const resolveSessionKeyForRequestMock = vi.fn();
 const resolveStoredSessionKeyForSessionIdMock = vi.fn();
+const resolveModelAsyncMock = vi.fn(async (provider: string, modelId: string) =>
+  createResolvedEmbeddedRunnerModel(provider, modelId),
+);
+const ensureOpenClawModelsJsonMock = vi.fn(async () => ({ wrote: false }));
 const loggerWarnMock = vi.fn();
 let refreshRuntimeAuthOnFirstPromptError = false;
 
@@ -84,6 +91,9 @@ vi.mock("@mariozechner/pi-ai", async () => {
 
 const installRunEmbeddedMocks = () => {
   installEmbeddedRunnerBaseE2eMocks({ hookRunner: "full" });
+  installEmbeddedRunnerFastRunE2eMocks({
+    runEmbeddedAttempt: (params) => runEmbeddedAttemptMock(params),
+  });
   vi.doMock("./command/session.js", async () => {
     const actual =
       await vi.importActual<typeof import("./command/session.js")>("./command/session.js");
@@ -106,11 +116,11 @@ const installRunEmbeddedMocks = () => {
       },
     };
   });
-  vi.doMock("./pi-embedded-runner/run/attempt.js", () => ({
-    runEmbeddedAttempt: (params: unknown) => runEmbeddedAttemptMock(params),
-  }));
   vi.doMock("./pi-bundle-mcp-tools.js", () => ({
     disposeSessionMcpRuntime: (sessionId: string) => disposeSessionMcpRuntimeMock(sessionId),
+    retireSessionMcpRuntimeForSessionKey: () => Promise.resolve(false),
+    retireSessionMcpRuntime: ({ sessionId }: { sessionId?: string | null }) =>
+      sessionId ? disposeSessionMcpRuntimeMock(sessionId) : Promise.resolve(false),
   }));
   vi.doMock("./pi-embedded-runner/model.js", async () => {
     const actual = await vi.importActual<typeof import("./pi-embedded-runner/model.js")>(
@@ -118,8 +128,8 @@ const installRunEmbeddedMocks = () => {
     );
     return {
       ...actual,
-      resolveModelAsync: async (provider: string, modelId: string) =>
-        createResolvedEmbeddedRunnerModel(provider, modelId),
+      resolveModelAsync: (...args: Parameters<typeof resolveModelAsyncMock>) =>
+        resolveModelAsyncMock(...args),
     };
   });
   vi.doMock("./pi-embedded-runner/run/auth-controller.js", () => ({
@@ -132,20 +142,12 @@ const installRunEmbeddedMocks = () => {
       stopRuntimeAuthRefreshTimer: vi.fn(),
     }),
   }));
-  vi.doMock("../plugins/provider-runtime.js", async () => {
-    const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
-      "../plugins/provider-runtime.js",
-    );
-    return {
-      ...actual,
-      prepareProviderRuntimeAuth: vi.fn(async () => undefined),
-    };
-  });
   vi.doMock("./models-config.js", async () => {
     const mod = await vi.importActual<typeof import("./models-config.js")>("./models-config.js");
     return {
       ...mod,
-      ensureOpenClawModelsJson: vi.fn(async () => ({ wrote: false })),
+      ensureOpenClawModelsJson: (...args: Parameters<typeof ensureOpenClawModelsJsonMock>) =>
+        ensureOpenClawModelsJsonMock(...args),
     };
   });
 };
@@ -179,6 +181,12 @@ beforeEach(() => {
   disposeSessionMcpRuntimeMock.mockReset();
   resolveSessionKeyForRequestMock.mockReset();
   resolveStoredSessionKeyForSessionIdMock.mockReset();
+  resolveModelAsyncMock.mockReset();
+  resolveModelAsyncMock.mockImplementation(async (provider: string, modelId: string) =>
+    createResolvedEmbeddedRunnerModel(provider, modelId),
+  );
+  ensureOpenClawModelsJsonMock.mockReset();
+  ensureOpenClawModelsJsonMock.mockResolvedValue({ wrote: false });
   loggerWarnMock.mockReset();
   refreshRuntimeAuthOnFirstPromptError = false;
   runEmbeddedAttemptMock.mockImplementation(async () => {
@@ -282,6 +290,42 @@ const runDefaultEmbeddedTurn = async (sessionFile: string, prompt: string, sessi
 };
 
 describe("runEmbeddedPiAgent", () => {
+  it("skips models.json generation when dynamic model resolution succeeds", async () => {
+    const sessionFile = nextSessionFile();
+    const cfg = createEmbeddedPiRunnerOpenAiConfig([]);
+    runEmbeddedAttemptMock.mockResolvedValueOnce(
+      makeEmbeddedRunnerAttempt({
+        assistantTexts: ["ok"],
+        lastAssistant: buildEmbeddedRunnerAssistant({
+          content: [{ type: "text", text: "ok" }],
+        }),
+      }),
+    );
+
+    await runEmbeddedPiAgent({
+      sessionId: "dynamic-model",
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      prompt: "hello",
+      provider: "openrouter",
+      model: "openrouter/auto",
+      timeoutMs: 5_000,
+      agentDir,
+      runId: nextRunId("dynamic-model"),
+      enqueue: immediateEnqueue,
+    });
+
+    expect(resolveModelAsyncMock).toHaveBeenCalledWith(
+      "openrouter",
+      "openrouter/auto",
+      agentDir,
+      cfg,
+      expect.objectContaining({ skipPiDiscovery: true }),
+    );
+    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+  });
+
   it("backfills a trimmed session key from sessionId when the embedded run omits it", async () => {
     const sessionFile = nextSessionFile();
     const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-1"]);

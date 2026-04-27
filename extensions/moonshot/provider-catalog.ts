@@ -15,6 +15,18 @@ const MOONSHOT_DEFAULT_COST = {
   cacheRead: 0,
   cacheWrite: 0,
 };
+const MOONSHOT_K2_6_COST = {
+  input: 0.95,
+  output: 4,
+  cacheRead: 0.16,
+  cacheWrite: 0,
+};
+const MOONSHOT_K2_5_COST = {
+  input: 0.6,
+  output: 3,
+  cacheRead: 0.1,
+  cacheWrite: 0,
+};
 
 const MOONSHOT_MODEL_CATALOG = [
   {
@@ -22,7 +34,7 @@ const MOONSHOT_MODEL_CATALOG = [
     name: "Kimi K2.6",
     reasoning: false,
     input: ["text", "image"],
-    cost: MOONSHOT_DEFAULT_COST,
+    cost: MOONSHOT_K2_6_COST,
     contextWindow: MOONSHOT_DEFAULT_CONTEXT_WINDOW,
     maxTokens: MOONSHOT_DEFAULT_MAX_TOKENS,
   },
@@ -31,7 +43,7 @@ const MOONSHOT_MODEL_CATALOG = [
     name: "Kimi K2.5",
     reasoning: false,
     input: ["text", "image"],
-    cost: MOONSHOT_DEFAULT_COST,
+    cost: MOONSHOT_K2_5_COST,
     contextWindow: MOONSHOT_DEFAULT_CONTEXT_WINDOW,
     maxTokens: MOONSHOT_DEFAULT_MAX_TOKENS,
   },

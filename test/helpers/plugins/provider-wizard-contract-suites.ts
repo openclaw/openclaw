@@ -1,18 +1,16 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ProviderAuthMethod } from "openclaw/plugin-sdk/plugin-entry";
+import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   buildProviderPluginMethodChoice,
   resolveProviderModelPickerEntries,
   resolveProviderPluginChoice,
   resolveProviderWizardOptions,
-} from "../../../src/plugins/provider-wizard.js";
-import type { ProviderAuthMethod, ProviderPlugin } from "../../../src/plugins/types.js";
+  setProviderWizardProvidersResolverForTest,
+} from "openclaw/plugin-sdk/testing";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolvePluginProvidersMock = vi.fn();
-
-vi.mock("../../../src/plugins/providers.runtime.js", () => ({
-  isPluginProvidersLoadInFlight: () => false,
-  resolvePluginProviders: (...args: unknown[]) => resolvePluginProvidersMock(...args),
-}));
+let restoreProviderResolver: (() => void) | undefined;
 
 function createAuthMethod(
   params: Pick<ProviderAuthMethod, "id" | "label"> &
@@ -175,6 +173,15 @@ function expectAllChoicesResolve(
 beforeEach(() => {
   resolvePluginProvidersMock.mockReset();
   resolvePluginProvidersMock.mockReturnValue(TEST_PROVIDERS);
+  restoreProviderResolver?.();
+  restoreProviderResolver = setProviderWizardProvidersResolverForTest((params) =>
+    resolvePluginProvidersMock(params),
+  );
+});
+
+afterEach(() => {
+  restoreProviderResolver?.();
+  restoreProviderResolver = undefined;
 });
 
 export function describeProviderWizardSetupOptionsContract() {

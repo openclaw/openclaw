@@ -1,9 +1,9 @@
-import { describe, expect, it } from "vitest";
 import {
   pluginRegistrationContractRegistry,
+  resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
   resolveWebSearchProviderContractEntriesForPluginId,
-} from "../../../src/plugins/contracts/registry.js";
-import { resolveBundledExplicitWebSearchProvidersFromPublicArtifacts } from "../../../src/plugins/web-provider-public-artifacts.explicit.js";
+} from "openclaw/plugin-sdk/testing";
+import { describe, expect, it } from "vitest";
 import { installWebSearchProviderContractSuite } from "./provider-contract-suites.js";
 
 type WebSearchContractEntry = ReturnType<

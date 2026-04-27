@@ -1,13 +1,15 @@
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { createPluginRegistry, type PluginRecord } from "../../../src/plugins/registry.js";
-import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
-import { createPluginRecord } from "../../../src/plugins/status.test-helpers.js";
-import type { OpenClawPluginApi } from "../../../src/plugins/types.js";
-
-export {
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  createPluginRecord,
+  createPluginRegistry,
   registerProviderPlugins as registerProviders,
   requireRegisteredProvider as requireProvider,
-} from "../../../src/test-utils/plugin-registration.js";
+  type OpenClawConfig,
+  type PluginRecord,
+  type PluginRuntime,
+} from "openclaw/plugin-sdk/testing";
+
+export { registerProviders, requireProvider };
 
 export function uniqueSortedStrings(values: readonly string[]) {
   return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));

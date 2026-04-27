@@ -66,9 +66,9 @@ export function registerCronEditCommand(cron: Command) {
       .option("--no-light-context", "Disable lightweight bootstrap context for agent jobs")
       .option("--tools <list>", "Tool allow-list (e.g. exec,read,write or exec read write)")
       .option("--clear-tools", "Remove tool allow-list (use all tools)", false)
-      .option("--announce", "Announce summary to a chat (subagent-style)")
-      .option("--deliver", "Deprecated (use --announce). Announces a summary to a chat.")
-      .option("--no-deliver", "Disable announce delivery")
+      .option("--announce", "Fallback-deliver final text to a chat")
+      .option("--deliver", "Deprecated (use --announce). Fallback-delivers final text to a chat.")
+      .option("--no-deliver", "Disable runner fallback delivery")
       .option("--channel <channel>", `Delivery channel (${getCronChannelOptions()})`)
       .option(
         "--to <dest>",
@@ -86,6 +86,8 @@ export function registerCronEditCommand(cron: Command) {
       )
       .option("--failure-alert-to <dest>", "Failure alert destination")
       .option("--failure-alert-cooldown <duration>", "Minimum time between alerts (e.g. 1h, 30m)")
+      .option("--failure-alert-include-skipped", "Count consecutive skipped runs toward alerts")
+      .option("--failure-alert-exclude-skipped", "Alert only on execution errors")
       .option("--failure-alert-mode <mode>", "Failure alert delivery mode (announce or webhook)")
       .option(
         "--failure-alert-account-id <id>",
@@ -260,13 +262,24 @@ export function registerCronEditCommand(cron: Command) {
           const hasFailureAlertChannel = typeof opts.failureAlertChannel === "string";
           const hasFailureAlertTo = typeof opts.failureAlertTo === "string";
           const hasFailureAlertCooldown = typeof opts.failureAlertCooldown === "string";
+          const hasFailureAlertIncludeSkipped =
+            typeof opts.failureAlertIncludeSkipped === "boolean";
+          const hasFailureAlertExcludeSkipped =
+            typeof opts.failureAlertExcludeSkipped === "boolean";
           const hasFailureAlertMode = typeof opts.failureAlertMode === "string";
           const hasFailureAlertAccountId = typeof opts.failureAlertAccountId === "string";
+          if (hasFailureAlertIncludeSkipped && hasFailureAlertExcludeSkipped) {
+            throw new Error(
+              "Use either --failure-alert-include-skipped or --failure-alert-exclude-skipped.",
+            );
+          }
           const hasFailureAlertFields =
             hasFailureAlertAfter ||
             hasFailureAlertChannel ||
             hasFailureAlertTo ||
             hasFailureAlertCooldown ||
+            hasFailureAlertIncludeSkipped ||
+            hasFailureAlertExcludeSkipped ||
             hasFailureAlertMode ||
             hasFailureAlertAccountId;
           const failureAlertFlag =
@@ -298,6 +311,9 @@ export function registerCronEditCommand(cron: Command) {
                 throw new Error("Invalid --failure-alert-cooldown.");
               }
               failureAlert.cooldownMs = cooldownMs;
+            }
+            if (hasFailureAlertIncludeSkipped || hasFailureAlertExcludeSkipped) {
+              failureAlert.includeSkipped = hasFailureAlertIncludeSkipped;
             }
             if (hasFailureAlertMode) {
               const mode = normalizeOptionalLowercaseString(opts.failureAlertMode);

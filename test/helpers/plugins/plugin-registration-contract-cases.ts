@@ -53,8 +53,9 @@ export const pluginRegistrationContractCases = {
   },
   google: {
     pluginId: "google",
-    providerIds: ["google", "google-gemini-cli"],
+    providerIds: ["google", "google-gemini-cli", "google-vertex"],
     webSearchProviderIds: ["gemini"],
+    realtimeVoiceProviderIds: ["google"],
     speechProviderIds: ["google"],
     mediaUnderstandingProviderIds: ["google"],
     imageGenerationProviderIds: ["google"],
@@ -113,21 +114,33 @@ export const pluginRegistrationContractCases = {
     pluginId: "openrouter",
     providerIds: ["openrouter"],
     mediaUnderstandingProviderIds: ["openrouter"],
+    imageGenerationProviderIds: ["openrouter"],
     requireDescribeImages: true,
+    requireGenerateImage: true,
   },
   perplexity: {
     pluginId: "perplexity",
     webSearchProviderIds: ["perplexity"],
+  },
+  senseaudio: {
+    pluginId: "senseaudio",
+    mediaUnderstandingProviderIds: ["senseaudio"],
   },
   tavily: {
     pluginId: "tavily",
     webSearchProviderIds: ["tavily"],
     toolNames: ["tavily_search", "tavily_extract"],
   },
+  "tts-local-cli": {
+    pluginId: "tts-local-cli",
+    speechProviderIds: ["tts-local-cli", "cli"],
+  },
   xai: {
     pluginId: "xai",
     providerIds: ["xai"],
     webSearchProviderIds: ["grok"],
+    realtimeTranscriptionProviderIds: ["xai"],
+    mediaUnderstandingProviderIds: ["xai"],
   },
   zai: {
     pluginId: "zai",

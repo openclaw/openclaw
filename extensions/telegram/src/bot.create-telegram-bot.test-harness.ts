@@ -1,19 +1,17 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import {
-  createReplyDispatcher,
-  resetInboundDedupe,
-  type GetReplyOptions,
-  type MsgContext,
-} from "openclaw/plugin-sdk/reply-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import type { MockFn } from "openclaw/plugin-sdk/testing";
 import { beforeEach, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
 
 type AnyMock = ReturnType<typeof vi.fn>;
 type AnyAsyncMock = ReturnType<typeof vi.fn>;
-type LoadConfigFn = typeof import("openclaw/plugin-sdk/config-runtime").loadConfig;
-type LoadSessionStoreFn = typeof import("openclaw/plugin-sdk/config-runtime").loadSessionStore;
-type ResolveStorePathFn = typeof import("openclaw/plugin-sdk/config-runtime").resolveStorePath;
+type GetRuntimeConfigFn =
+  typeof import("openclaw/plugin-sdk/runtime-config-snapshot").getRuntimeConfig;
+type LoadSessionStoreFn =
+  typeof import("openclaw/plugin-sdk/session-store-runtime").loadSessionStore;
+type ResolveStorePathFn =
+  typeof import("openclaw/plugin-sdk/session-store-runtime").resolveStorePath;
 type SessionStore = ReturnType<LoadSessionStoreFn>;
 type TelegramBotRuntimeForTest = NonNullable<
   Parameters<typeof import("./bot.js").setTelegramBotRuntimeForTest>[0]
@@ -29,12 +27,6 @@ type ReplyPayloadLike = {
   mediaUrl?: string;
   mediaUrls?: string[];
   replyToId?: string;
-};
-
-const _EMPTY_REPLY_COUNTS: DispatchReplyWithBufferedBlockDispatcherResult["counts"] = {
-  block: 0,
-  final: 0,
-  tool: 0,
 };
 
 const { sessionStorePath } = vi.hoisted(() => ({
@@ -53,26 +45,27 @@ vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia,
 }));
 
-const { loadConfig, loadSessionStoreMock, resolveStorePathMock, sessionStoreEntries } = vi.hoisted(
-  (): {
-    loadConfig: MockFn<LoadConfigFn>;
-    loadSessionStoreMock: MockFn<LoadSessionStoreFn>;
-    resolveStorePathMock: MockFn<ResolveStorePathFn>;
-    sessionStoreEntries: { value: SessionStore };
-  } => ({
-    loadConfig: vi.fn<LoadConfigFn>(() => ({})),
-    loadSessionStoreMock: vi.fn<LoadSessionStoreFn>(
-      (_storePath, _opts) => sessionStoreEntries.value,
-    ),
-    resolveStorePathMock: vi.fn<ResolveStorePathFn>(
-      (storePath?: string) => storePath ?? sessionStorePath,
-    ),
-    sessionStoreEntries: { value: {} as SessionStore },
-  }),
-);
+const { getRuntimeConfig, loadSessionStoreMock, resolveStorePathMock, sessionStoreEntries } =
+  vi.hoisted(
+    (): {
+      getRuntimeConfig: MockFn<GetRuntimeConfigFn>;
+      loadSessionStoreMock: MockFn<LoadSessionStoreFn>;
+      resolveStorePathMock: MockFn<ResolveStorePathFn>;
+      sessionStoreEntries: { value: SessionStore };
+    } => ({
+      getRuntimeConfig: vi.fn<GetRuntimeConfigFn>(() => ({})),
+      loadSessionStoreMock: vi.fn<LoadSessionStoreFn>(
+        (_storePath, _opts) => sessionStoreEntries.value,
+      ),
+      resolveStorePathMock: vi.fn<ResolveStorePathFn>(
+        (storePath?: string) => storePath ?? sessionStorePath,
+      ),
+      sessionStoreEntries: { value: {} as SessionStore },
+    }),
+  );
 
 export function getLoadConfigMock(): AnyMock {
-  return loadConfig;
+  return getRuntimeConfig;
 }
 
 export function getLoadSessionStoreMock(): AnyMock {
@@ -133,29 +126,22 @@ async function dispatchHarnessReplies(
   const reply = await runReply(params);
   const payloads: ReplyPayloadLike[] =
     reply === undefined ? [] : Array.isArray(reply) ? reply : [reply];
-  const dispatcher = createReplyDispatcher({
-    deliver: async (payload, info) => {
-      await params.dispatcherOptions.deliver?.(payload, info);
-    },
-    responsePrefix: params.dispatcherOptions.responsePrefix,
-    responsePrefixContextProvider: params.dispatcherOptions.responsePrefixContextProvider,
-    responsePrefixContext: params.dispatcherOptions.responsePrefixContext,
-    onHeartbeatStrip: params.dispatcherOptions.onHeartbeatStrip,
-    onSkip: (payload, info) => {
-      params.dispatcherOptions.onSkip?.(payload, info);
-    },
-    onError: (err, info) => {
-      params.dispatcherOptions.onError?.(err, info);
-    },
-  });
   let finalCount = 0;
   for (const payload of payloads) {
-    if (dispatcher.sendFinalReply(payload)) {
+    const text =
+      typeof payload.text === "string" &&
+      params.dispatcherOptions.responsePrefix &&
+      !payload.text.startsWith(params.dispatcherOptions.responsePrefix)
+        ? `${params.dispatcherOptions.responsePrefix} ${payload.text}`
+        : payload.text;
+    const finalPayload = text === payload.text ? payload : { ...payload, text };
+    try {
+      await params.dispatcherOptions.deliver?.(finalPayload, { kind: "final" });
       finalCount += 1;
+    } catch (err) {
+      params.dispatcherOptions.onError?.(err, { kind: "final" });
     }
   }
-  dispatcher.markComplete();
-  await dispatcher.waitForIdle();
   return {
     queuedFinal: finalCount > 0,
     counts: {
@@ -380,7 +366,7 @@ export const telegramBotRuntimeForTest: TelegramBotRuntimeForTest = {
     )()) as unknown as TelegramBotRuntimeForTest["apiThrottler"],
 };
 export const telegramBotDepsForTest: TelegramBotDeps = {
-  loadConfig,
+  getRuntimeConfig,
   loadSessionStore: loadSessionStoreMock as TelegramBotDeps["loadSessionStore"],
   resolveStorePath: resolveStorePathMock,
   readChannelAllowFromStore:
@@ -472,9 +458,8 @@ export function makeForumGroupMessageCtx(params?: {
 }
 
 beforeEach(() => {
-  resetInboundDedupe();
-  loadConfig.mockReset();
-  loadConfig.mockReturnValue(DEFAULT_TELEGRAM_TEST_CONFIG);
+  getRuntimeConfig.mockReset();
+  getRuntimeConfig.mockReturnValue(DEFAULT_TELEGRAM_TEST_CONFIG);
   sessionStoreEntries.value = {};
   loadSessionStoreMock.mockReset();
   loadSessionStoreMock.mockImplementation(() => sessionStoreEntries.value);

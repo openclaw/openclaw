@@ -24,14 +24,14 @@ describe("resolveApprovalOverGateway", () => {
       approvalId: "approval-1",
       decision: "allow-once",
       gatewayUrl: "ws://gateway.example.test",
-      clientDisplayName: "Discord approval (default)",
+      clientDisplayName: "QuietChat approval (default)",
     });
 
     expect(hoisted.withOperatorApprovalsGatewayClient).toHaveBeenCalledWith(
       {
         config: { gateway: { auth: { token: "cfg-token" } } },
         gatewayUrl: "ws://gateway.example.test",
-        clientDisplayName: "Discord approval (default)",
+        clientDisplayName: "QuietChat approval (default)",
       },
       expect.any(Function),
     );

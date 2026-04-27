@@ -1,3 +1,4 @@
+import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const setDefaultResultOrder = vi.hoisted(() => vi.fn());
@@ -96,7 +97,6 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   isWSL2Sync: () => false,
 }));
 
-let resolveFetch: typeof import("../../../src/infra/fetch.js").resolveFetch;
 let resolveTelegramFetch: typeof import("./fetch.js").resolveTelegramFetch;
 let resolveTelegramTransport: typeof import("./fetch.js").resolveTelegramTransport;
 
@@ -105,7 +105,6 @@ type TelegramDispatcherPolicy = NonNullable<
 >[number]["dispatcherPolicy"];
 
 beforeAll(async () => {
-  ({ resolveFetch } = await import("../../../src/infra/fetch.js"));
   ({ resolveTelegramFetch, resolveTelegramTransport } = await import("./fetch.js"));
 });
 

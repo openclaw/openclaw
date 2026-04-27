@@ -1,14 +1,12 @@
 ---
-title: "Plugin Testing"
-sidebarTitle: "Testing"
 summary: "Testing utilities and patterns for OpenClaw plugins"
+title: "Plugin testing"
+sidebarTitle: "Testing"
 read_when:
   - You are writing tests for a plugin
   - You need test utilities from the plugin SDK
   - You want to understand contract tests for bundled plugins
 ---
-
-# Plugin Testing
 
 Reference for test utilities, patterns, and lint enforcement for OpenClaw
 plugins.
@@ -21,7 +19,11 @@ plugins.
 
 ## Test utilities
 
-**Import:** `openclaw/plugin-sdk/testing`
+**General import:** `openclaw/plugin-sdk/testing`
+
+**Plugin API mock import:** `openclaw/plugin-sdk/plugin-test-api`
+
+**Channel contract import:** `openclaw/plugin-sdk/channel-contract-testing`
 
 The testing subpath exports a narrow set of helpers for plugin authors:
 
@@ -31,15 +33,51 @@ import {
   shouldAckReaction,
   removeAckReactionAfterReply,
 } from "openclaw/plugin-sdk/testing";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { expectChannelInboundContextContract } from "openclaw/plugin-sdk/channel-contract-testing";
 ```
 
 ### Available exports
 
-| Export                                 | Purpose                                                |
-| -------------------------------------- | ------------------------------------------------------ |
-| `installCommonResolveTargetErrorCases` | Shared test cases for target resolution error handling |
-| `shouldAckReaction`                    | Check whether a channel should add an ack reaction     |
-| `removeAckReactionAfterReply`          | Remove ack reaction after reply delivery               |
+| Export                                       | Purpose                                                                                                      |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `createTestPluginApi`                        | Build a minimal plugin API mock for direct registration unit tests. Import from `plugin-sdk/plugin-test-api` |
+| `expectChannelInboundContextContract`        | Assert channel inbound context shape. Import from `plugin-sdk/channel-contract-testing`                      |
+| `installChannelOutboundPayloadContractSuite` | Install channel outbound payload contract cases. Import from `plugin-sdk/channel-contract-testing`           |
+| `installCommonResolveTargetErrorCases`       | Shared test cases for target resolution error handling                                                       |
+| `shouldAckReaction`                          | Check whether a channel should add an ack reaction                                                           |
+| `removeAckReactionAfterReply`                | Remove ack reaction after reply delivery                                                                     |
+| `createTestRegistry`                         | Build a channel plugin registry fixture                                                                      |
+| `createEmptyPluginRegistry`                  | Build an empty plugin registry fixture                                                                       |
+| `setActivePluginRegistry`                    | Install a registry fixture for plugin runtime tests                                                          |
+| `createRequestCaptureJsonFetch`              | Capture JSON fetch requests in media helper tests                                                            |
+| `withFetchPreconnect`                        | Run fetch tests with preconnect hooks installed                                                              |
+| `withEnv` / `withEnvAsync`                   | Temporarily patch environment variables                                                                      |
+| `createTempHomeEnv` / `withTempDir`          | Create isolated filesystem test fixtures                                                                     |
+| `createMockServerResponse`                   | Create a minimal HTTP server response mock                                                                   |
+| `registerSingleProviderPlugin`               | Register one provider plugin in loader smoke tests                                                           |
+| `registerProviderPlugin`                     | Capture all provider kinds from one plugin                                                                   |
+| `registerProviderPlugins`                    | Capture provider registrations across multiple plugins                                                       |
+| `requireRegisteredProvider`                  | Assert that a provider collection contains an id                                                             |
+| `runProviderCatalog`                         | Execute a provider catalog hook with test dependencies                                                       |
+| `resolveProviderWizardOptions`               | Resolve provider setup wizard choices in contract tests                                                      |
+| `resolveProviderModelPickerEntries`          | Resolve provider model-picker entries in contract tests                                                      |
+| `buildProviderPluginMethodChoice`            | Build provider wizard choice ids for assertions                                                              |
+| `setProviderWizardProvidersResolverForTest`  | Inject provider wizard providers for isolated tests                                                          |
+| `createProviderUsageFetch`                   | Build provider usage fetch fixtures                                                                          |
+| `useFrozenTime` / `useRealTime`              | Freeze and restore timers for time-sensitive tests                                                           |
+| `createRuntimeEnv`                           | Build a mocked CLI/plugin runtime environment                                                                |
+| `createTestWizardPrompter`                   | Build a mocked setup wizard prompter                                                                         |
+| `createPluginSetupWizardStatus`              | Build setup status helpers for channel plugins                                                               |
+| `createRuntimeTaskFlow`                      | Create isolated runtime task-flow state                                                                      |
+| `typedCases`                                 | Preserve literal types for table-driven tests                                                                |
+
+Bundled-plugin contract suites also use SDK testing subpaths for test-only
+registry, manifest, public-artifact, and runtime fixture helpers. Keep new
+extension tests on `openclaw/plugin-sdk/testing` or a narrower documented SDK
+subpath such as `plugin-sdk/plugin-test-api` or
+`plugin-sdk/channel-contract-testing` rather than importing repo `src/**` files
+directly.
 
 ### Types
 
@@ -82,6 +120,27 @@ describe("my-channel target resolution", () => {
 ```
 
 ## Testing patterns
+
+### Testing registration contracts
+
+Unit tests that pass a hand-written `api` mock to `register(api)` do not exercise
+OpenClaw's loader acceptance gates. Add at least one loader-backed smoke test
+for each registration surface your plugin depends on, especially hooks and
+exclusive capabilities such as memory.
+
+The real loader fails plugin registration when required metadata is missing or a
+plugin calls a capability API it does not own. For example,
+`api.registerHook(...)` requires a hook name, and
+`api.registerMemoryCapability(...)` requires the plugin manifest or exported
+entry to declare `kind: "memory"`.
+
+### Testing runtime config access
+
+Prefer the shared plugin runtime mock from the repo test helpers when testing
+bundled plugins. Its deprecated `runtime.config.loadConfig()` and
+`runtime.config.writeConfigFile(...)` mocks throw by default so tests catch new
+usage of compatibility APIs. Override those mocks only when the test is
+explicitly covering legacy compatibility behavior.
 
 ### Unit testing a channel plugin
 
@@ -167,8 +226,9 @@ const mockRuntime = {
     // ... other mocks
   },
   config: {
-    loadConfig: vi.fn(),
-    writeConfigFile: vi.fn(),
+    current: vi.fn(() => ({}) as const),
+    mutateConfigFile: vi.fn(),
+    replaceConfigFile: vi.fn(),
   },
   // ... other namespaces
 } as unknown as PluginRuntime;

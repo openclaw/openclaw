@@ -91,11 +91,6 @@ vi.mock("./subagent-hooks.js", () => ({
   registerFeishuSubagentHooks: registerFeishuSubagentHooksMock,
 }));
 
-vi.mock("../../../src/channels/plugins/bundled.js", () => ({
-  bundledChannelPlugins: [],
-  bundledChannelSetupPlugins: [],
-}));
-
 const baseAccount: ResolvedFeishuAccount = {
   accountId: "main",
   selectionSource: "explicit",

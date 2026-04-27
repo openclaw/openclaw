@@ -40,7 +40,13 @@ export const fullSuiteVitestShards = [
   {
     config: "test/vitest/vitest.full-core-contracts.config.ts",
     name: "core-contracts",
-    projects: ["test/vitest/vitest.contracts.config.ts"],
+    projects: [
+      "test/vitest/vitest.contracts-channel-surface.config.ts",
+      "test/vitest/vitest.contracts-channel-config.config.ts",
+      "test/vitest/vitest.contracts-channel-registry.config.ts",
+      "test/vitest/vitest.contracts-channel-session.config.ts",
+      "test/vitest/vitest.contracts-plugin.config.ts",
+    ],
   },
   {
     config: "test/vitest/vitest.full-core-bundled.config.ts",
@@ -125,6 +131,7 @@ export const fullSuiteVitestShards = [
       "test/vitest/vitest.extension-browser.config.ts",
       "test/vitest/vitest.extension-qa.config.ts",
       "test/vitest/vitest.extension-media.config.ts",
+      "test/vitest/vitest.extensions.config.ts",
       "test/vitest/vitest.extension-misc.config.ts",
     ],
   },

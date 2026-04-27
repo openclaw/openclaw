@@ -21,6 +21,7 @@ vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
+    getRuntimeConfig: mocks.loadConfig,
     loadConfig: mocks.loadConfig,
   };
 });
@@ -42,7 +43,12 @@ vi.mock("./runtime-lifecycle.js", () => ({
   stopBrowserRuntime: vi.fn(async () => {}),
 }));
 
+vi.mock("./server-context.js", () => ({
+  createBrowserRouteContext: vi.fn(),
+}));
+
 const { startBrowserControlServiceFromConfig } = await import("../control-service.js");
+vi.doUnmock("./server-context.js");
 
 describe("startBrowserControlServiceFromConfig", () => {
   beforeEach(() => {

@@ -6,7 +6,7 @@ import {
 } from "./subagent-announce-capture.js";
 import {
   callGateway,
-  loadConfig,
+  getRuntimeConfig,
   loadSessionStore,
   resolveAgentIdFromSessionKey,
   resolveStorePath,
@@ -19,13 +19,13 @@ const FAST_TEST_RETRY_INTERVAL_MS = 8;
 
 type SubagentAnnounceOutputDeps = {
   callGateway: typeof callGateway;
-  loadConfig: typeof loadConfig;
+  getRuntimeConfig: typeof getRuntimeConfig;
   readLatestAssistantReply: typeof readLatestAssistantReply;
 };
 
 const defaultSubagentAnnounceOutputDeps: SubagentAnnounceOutputDeps = {
   callGateway,
-  loadConfig,
+  getRuntimeConfig,
   readLatestAssistantReply,
 };
 
@@ -152,6 +152,9 @@ function extractSubagentOutputText(message: unknown): string {
   const role = (message as { role?: unknown }).role;
   const content = (message as { content?: unknown }).content;
   if (role === "assistant") {
+    if (typeof content === "string") {
+      return sanitizeTextContent(content);
+    }
     return extractAssistantText(message) ?? "";
   }
   if (role === "toolResult" || role === "tool") {
@@ -347,14 +350,15 @@ export function applySubagentWaitOutcome(params: {
 
 export async function captureSubagentCompletionReply(
   sessionKey: string,
-  options?: { waitForReply?: boolean },
+  options?: { waitForReply?: boolean; outcome?: SubagentRunOutcome },
 ): Promise<string | undefined> {
   return await captureSubagentCompletionReplyUsing({
     sessionKey,
     waitForReply: options?.waitForReply,
     maxWaitMs: isFastTestMode() ? 50 : 1_500,
     retryIntervalMs: isFastTestMode() ? FAST_TEST_RETRY_INTERVAL_MS : 100,
-    readSubagentOutput: async (nextSessionKey) => await readSubagentOutput(nextSessionKey),
+    readSubagentOutput: async (nextSessionKey) =>
+      await readSubagentOutput(nextSessionKey, options?.outcome),
   });
 }
 
@@ -519,7 +523,7 @@ export async function buildCompactAnnounceStatsLine(params: {
   startedAt?: number;
   endedAt?: number;
 }) {
-  const cfg = subagentAnnounceOutputDeps.loadConfig();
+  const cfg = subagentAnnounceOutputDeps.getRuntimeConfig();
   const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   let entry = loadSessionStore(storePath)[params.sessionKey];

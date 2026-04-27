@@ -1,21 +1,21 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearRuntimeAuthProfileStoreSnapshots } from "../../../src/agents/auth-profiles/store.js";
-import type { AuthProfileStore } from "../../../src/agents/auth-profiles/types.js";
-import { createNonExitingRuntime } from "../../../src/runtime.js";
+import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  type AuthProfileStore,
+} from "openclaw/plugin-sdk/agent-runtime";
+import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime";
 import type {
   WizardMultiSelectParams,
   WizardPrompter,
   WizardProgress,
   WizardSelectParams,
-} from "../../../src/wizard/prompts.js";
+} from "openclaw/plugin-sdk/setup";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerProviders, requireProvider } from "./contracts-testkit.js";
 
 type LoginOpenAICodexOAuth =
   (typeof import("openclaw/plugin-sdk/provider-auth-login"))["loginOpenAICodexOAuth"];
 type GithubCopilotLoginCommand =
   (typeof import("openclaw/plugin-sdk/provider-auth-login"))["githubCopilotLoginCommand"];
-type CreateVpsAwareHandlers =
-  (typeof import("../../../src/plugins/provider-oauth-flow.js"))["createVpsAwareOAuthHandlers"];
 type EnsureAuthProfileStore =
   typeof import("openclaw/plugin-sdk/provider-auth").ensureAuthProfileStore;
 type ListProfilesForProvider =
@@ -83,7 +83,7 @@ function buildAuthContext() {
     isRemote: false,
     openUrl: async () => {},
     oauth: {
-      createVpsAwareHandlers: vi.fn<CreateVpsAwareHandlers>(),
+      createVpsAwareHandlers: vi.fn(),
     },
   };
 }
@@ -119,12 +119,12 @@ function buildOpenAICodexOAuthResult(params: {
       agents: {
         defaults: {
           models: {
-            "openai-codex/gpt-5.4": {},
+            "openai-codex/gpt-5.5": {},
           },
         },
       },
     },
-    defaultModel: "openai-codex/gpt-5.4",
+    defaultModel: "openai-codex/gpt-5.5",
     notes: undefined,
   };
 }
@@ -347,7 +347,7 @@ export function describeGithubCopilotProviderAuthContract(load: ProviderAuthCont
               },
             },
           ],
-          defaultModel: "github-copilot/claude-opus-4.6",
+          defaultModel: "github-copilot/claude-opus-4.7",
         });
       } finally {
         if (previousIsTTYDescriptor) {

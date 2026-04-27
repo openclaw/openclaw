@@ -13,7 +13,7 @@ vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
-    loadConfig: () => mockConfig,
+    getRuntimeConfig: () => mockConfig,
     resolveGatewayPort: () => 18789,
   };
 });
@@ -67,7 +67,7 @@ describe("sessions tools visibility", () => {
     const tool = getSessionsHistoryTool();
 
     const denied = await tool.execute("call1", {
-      sessionKey: "agent:main:discord:direct:someone-else",
+      sessionKey: "agent:main:quietchat:direct:someone-else",
     });
     expect(denied.details).toMatchObject({ status: "forbidden" });
 
@@ -86,10 +86,10 @@ describe("sessions tools visibility", () => {
     const tool = getSessionsHistoryTool();
 
     const result = await tool.execute("call3", {
-      sessionKey: "agent:main:discord:direct:someone-else",
+      sessionKey: "agent:main:quietchat:direct:someone-else",
     });
     expect(result.details).toMatchObject({
-      sessionKey: "agent:main:discord:direct:someone-else",
+      sessionKey: "agent:main:quietchat:direct:someone-else",
     });
   });
 

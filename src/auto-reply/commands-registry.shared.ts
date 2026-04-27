@@ -191,6 +191,15 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
       tier: "essential",
     }),
     defineChatCommand({
+      key: "crestodian",
+      description: "Run the Crestodian setup and repair helper.",
+      textAlias: "/crestodian",
+      acceptsArgs: true,
+      scope: "text",
+      category: "management",
+      tier: "essential",
+    }),
+    defineChatCommand({
       key: "tasks",
       nativeName: "tasks",
       description: "List background tasks for this session.",
@@ -246,6 +255,23 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
         {
           name: "path",
           description: "Output path (default: workspace)",
+          type: "string",
+          required: false,
+        },
+      ],
+    }),
+    defineChatCommand({
+      key: "export-trajectory",
+      nativeName: "export-trajectory",
+      description: "Export a JSONL trajectory bundle for the active session.",
+      textAliases: ["/export-trajectory", "/trajectory"],
+      acceptsArgs: true,
+      category: "status",
+      tier: "essential",
+      args: [
+        {
+          name: "path",
+          description: "Output directory (default: workspace)",
           type: "string",
           required: false,
         },
@@ -686,7 +712,7 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
       args: [
         {
           name: "level",
-          description: "off, minimal, low, medium, high, xhigh",
+          description: "Thinking level",
           type: "string",
           choices: ({ provider, model }) => listThinkingLevels(provider, model),
         },
@@ -831,7 +857,7 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
     defineChatCommand({
       key: "models",
       nativeName: "models",
-      description: "List model providers or provider models.",
+      description: "List model providers/models.",
       textAlias: "/models",
       tier: "standard",
       argsParsing: "none",

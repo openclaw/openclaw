@@ -1,8 +1,8 @@
-import { describe, expect, it } from "vitest";
 import {
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
-} from "../../src/media-understanding/audio.test-helpers.ts";
+} from "openclaw/plugin-sdk/testing";
+import { describe, expect, it } from "vitest";
 import { describeMoonshotVideo } from "./media-understanding-provider.js";
 
 installPinnedHostnameTestHooks();

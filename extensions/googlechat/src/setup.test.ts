@@ -1,12 +1,12 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
-import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createPluginSetupWizardConfigure,
   createPluginSetupWizardStatus,
   createTestWizardPrompter,
   runSetupWizardConfigure,
   type WizardPrompter,
-} from "../../../test/helpers/plugins/setup-wizard.js";
+} from "openclaw/plugin-sdk/testing";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   expectLifecyclePatch,
   expectPendingUntilAbort,

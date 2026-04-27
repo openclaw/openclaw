@@ -22,6 +22,7 @@ export type ResolvedMemorySearchConfig = {
     baseUrl?: string;
     apiKey?: SecretInput;
     headers?: Record<string, string>;
+    nonBatchConcurrency?: number;
     batch?: {
       enabled: boolean;
       wait: boolean;
@@ -35,10 +36,14 @@ export type ResolvedMemorySearchConfig = {
   };
   fallback: string;
   model: string;
+  inputType?: string;
+  queryInputType?: string;
+  documentInputType?: string;
   outputDimensionality?: number;
   local: {
     modelPath?: string;
     modelCacheDir?: string;
+    contextSize?: number | "auto";
   };
   store: {
     driver: "sqlite";
@@ -61,6 +66,7 @@ export type ResolvedMemorySearchConfig = {
     watch: boolean;
     watchDebounceMs: number;
     intervalMinutes: number;
+    embeddingBatchTimeoutSeconds: number | undefined;
     sessions: {
       deltaBytes: number;
       deltaMessages: number;
@@ -160,9 +166,11 @@ function mergeConfig(
     overrideRemote?.baseUrl ||
     overrideRemote?.apiKey ||
     overrideRemote?.headers ||
+    overrideRemote?.nonBatchConcurrency != null ||
     defaultRemote?.baseUrl ||
     defaultRemote?.apiKey ||
-    defaultRemote?.headers,
+    defaultRemote?.headers ||
+    defaultRemote?.nonBatchConcurrency != null,
   );
   const includeRemote =
     hasRemoteConfig ||
@@ -186,15 +194,23 @@ function mergeConfig(
         baseUrl: overrideRemote?.baseUrl ?? defaultRemote?.baseUrl,
         apiKey: overrideRemote?.apiKey ?? defaultRemote?.apiKey,
         headers: overrideRemote?.headers ?? defaultRemote?.headers,
+        nonBatchConcurrency:
+          overrideRemote?.nonBatchConcurrency ?? defaultRemote?.nonBatchConcurrency,
         batch,
       }
     : undefined;
   const modelDefault = provider === "auto" ? undefined : primaryAdapter?.defaultModel;
   const model = overrides?.model ?? defaults?.model ?? modelDefault ?? "";
+  const inputType = overrides?.inputType?.trim() || defaults?.inputType?.trim() || undefined;
+  const queryInputType =
+    overrides?.queryInputType?.trim() || defaults?.queryInputType?.trim() || undefined;
+  const documentInputType =
+    overrides?.documentInputType?.trim() || defaults?.documentInputType?.trim() || undefined;
   const outputDimensionality = overrides?.outputDimensionality ?? defaults?.outputDimensionality;
   const local = {
     modelPath: overrides?.local?.modelPath ?? defaults?.local?.modelPath,
     modelCacheDir: overrides?.local?.modelCacheDir ?? defaults?.local?.modelCacheDir,
+    contextSize: overrides?.local?.contextSize ?? defaults?.local?.contextSize,
   };
   const sources = normalizeSources(overrides?.sources ?? defaults?.sources, sessionMemory);
   const rawPaths = [...(defaults?.extraPaths ?? []), ...(overrides?.extraPaths ?? [])]
@@ -303,6 +319,9 @@ function mergeConfig(
     },
     fallback,
     model,
+    inputType,
+    queryInputType,
+    documentInputType,
     outputDimensionality,
     local,
     store,
@@ -358,6 +377,8 @@ function resolveSyncConfig(
       defaults?.sync?.watchDebounceMs ??
       DEFAULT_WATCH_DEBOUNCE_MS,
     intervalMinutes: overrides?.sync?.intervalMinutes ?? defaults?.sync?.intervalMinutes ?? 0,
+    embeddingBatchTimeoutSeconds:
+      overrides?.sync?.embeddingBatchTimeoutSeconds ?? defaults?.sync?.embeddingBatchTimeoutSeconds,
     sessions: {
       deltaBytes:
         overrides?.sync?.sessions?.deltaBytes ??

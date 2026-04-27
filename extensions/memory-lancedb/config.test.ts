@@ -1,11 +1,11 @@
 import fs from "node:fs";
+import { type JsonSchemaObject, validateJsonSchemaValue } from "openclaw/plugin-sdk/config-schema";
 import { describe, expect, it } from "vitest";
-import { validateJsonSchemaValue } from "../../src/plugins/schema-validator.js";
 import { memoryConfigSchema } from "./config.js";
 
 const manifest = JSON.parse(
   fs.readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf-8"),
-) as { configSchema: Record<string, unknown> };
+) as { configSchema: JsonSchemaObject };
 
 describe("memory-lancedb config", () => {
   it("accepts dreaming in the manifest schema and preserves it in runtime parsing", () => {

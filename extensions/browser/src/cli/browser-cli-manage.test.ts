@@ -29,6 +29,7 @@ describe("browser manage output", () => {
             userDataDir: null,
             color: "#00AA00",
             headless: false,
+            headlessSource: "default",
             noSandbox: false,
             executablePath: null,
             attachOnly: true,
@@ -43,6 +44,7 @@ describe("browser manage output", () => {
 
     const output = getBrowserCliRuntime().log.mock.calls.at(-1)?.[0] as string;
     expect(output).toContain("transport: chrome-mcp");
+    expect(output).toContain("headless: false (default)");
     expect(output).not.toContain("cdpPort:");
     expect(output).not.toContain("cdpUrl:");
   });
@@ -178,5 +180,56 @@ describe("browser manage output", () => {
     expect(output).not.toContain("alice");
     expect(output).not.toContain("supersecretpasswordvalue1234");
     expect(output).not.toContain("supersecrettokenvalue1234567890");
+  });
+
+  it("prints a readable browser doctor report", async () => {
+    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
+      if (req.path === "/") {
+        return {
+          enabled: true,
+          profile: "openclaw",
+          driver: "openclaw",
+          transport: "cdp",
+          running: true,
+          cdpReady: true,
+          cdpHttp: true,
+          pid: 4321,
+          cdpPort: 18792,
+          cdpUrl: "http://127.0.0.1:18792",
+          chosenBrowser: "chrome",
+          userDataDir: null,
+          color: "#00AA00",
+          headless: false,
+          noSandbox: false,
+          executablePath: null,
+          attachOnly: false,
+        };
+      }
+      if (req.path === "/profiles") {
+        return { profiles: [{ name: "openclaw", running: true }] };
+      }
+      if (req.path === "/tabs") {
+        return {
+          running: true,
+          tabs: [
+            {
+              targetId: "abc",
+              tabId: "t1",
+              suggestedTargetId: "t1",
+              title: "Example",
+              url: "https://example.com",
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const program = createBrowserManageProgram();
+    await program.parseAsync(["browser", "doctor"], { from: "user" });
+
+    const output = getBrowserCliRuntime().log.mock.calls.at(-1)?.[0] as string;
+    expect(output).toContain("OK gateway: browser control endpoint reachable");
+    expect(output).toContain("OK tabs: 1 visible, use target t1");
   });
 });

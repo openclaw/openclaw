@@ -1,13 +1,15 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ProviderPlugin, ProviderRuntimeModel } from "../../../src/plugins/types.js";
+import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
+import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   createProviderUsageFetch,
   makeResponse,
-} from "../../../src/test-utils/provider-usage-fetch.js";
-import { registerProviderPlugin, requireRegisteredProvider } from "./provider-registration.js";
+  registerProviderPlugin,
+  requireRegisteredProvider,
+} from "openclaw/plugin-sdk/testing";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const CONTRACT_SETUP_TIMEOUT_MS = 300_000;
 
@@ -30,6 +32,10 @@ vi.mock("@mariozechner/pi-ai/oauth", async () => {
     getOAuthProviders: getOAuthProvidersMock,
   };
 });
+
+vi.mock("../../../extensions/openai/openai-codex-provider.runtime.js", () => ({
+  refreshOpenAICodexToken: refreshOpenAICodexTokenMock,
+}));
 
 function createModel(overrides: Partial<ProviderRuntimeModel> & Pick<ProviderRuntimeModel, "id">) {
   return {
@@ -441,6 +447,27 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
       });
     });
 
+    it("leaves openai gpt-5.5 forward-compat resolution to Pi", () => {
+      const provider = requireProviderContractProvider("openai");
+      const model = provider.resolveDynamicModel?.({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        modelRegistry: {
+          find: (_provider: string, id: string) =>
+            id === "gpt-5.4"
+              ? createModel({
+                  id,
+                  provider: "openai",
+                  baseUrl: "https://api.openai.com/v1",
+                  input: ["text", "image"],
+                })
+              : null,
+        } as never,
+      });
+
+      expect(model).toBeUndefined();
+    });
+
     it("owns openai gpt-5.4 mini forward-compat resolution", () => {
       const provider = requireProviderContractProvider("openai");
       const model = provider.resolveDynamicModel?.({
@@ -534,6 +561,38 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
         provider: "openai-codex",
         api: "openai-codex-responses",
         contextWindow: 1_050_000,
+        maxTokens: 128_000,
+      });
+    });
+
+    it("keeps Pi cost metadata but applies Codex context metadata for gpt-5.5 models", () => {
+      const provider = requireProviderContractProvider("openai-codex");
+      const model = provider.resolveDynamicModel?.({
+        provider: "openai-codex",
+        modelId: "gpt-5.5",
+        modelRegistry: {
+          find: (_provider: string, id: string) =>
+            id === "gpt-5.5"
+              ? createModel({
+                  id,
+                  api: "openai-codex-responses",
+                  provider: "openai-codex",
+                  baseUrl: "https://chatgpt.com/backend-api",
+                  input: ["text", "image"],
+                  cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+                  contextWindow: 272_000,
+                  maxTokens: 128_000,
+                })
+              : null,
+        } as never,
+      });
+
+      expect(model).toMatchObject({
+        id: "gpt-5.5",
+        provider: "openai-codex",
+        api: "openai-codex-responses",
+        contextWindow: 400_000,
+        contextTokens: 272_000,
         maxTokens: 128_000,
       });
     });

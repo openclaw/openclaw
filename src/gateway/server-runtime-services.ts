@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
+import type { PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
 import { startGatewayModelPricingRefresh } from "./model-pricing-cache.js";
@@ -68,17 +69,37 @@ function recoverPendingOutboundDeliveries(params: {
   })().catch((err) => params.log.error(`Delivery recovery failed: ${String(err)}`));
 }
 
+function recoverPendingSessionDeliveries(params: {
+  deps: import("../cli/deps.types.js").CliDeps;
+  log: GatewayRuntimeServiceLogger;
+  maxEnqueuedAt: number;
+}): void {
+  const timer = setTimeout(() => {
+    void (async () => {
+      const { recoverPendingRestartContinuationDeliveries } =
+        await import("./server-restart-sentinel.js");
+      const logRecovery = params.log.child("session-delivery-recovery");
+      await recoverPendingRestartContinuationDeliveries({
+        deps: params.deps,
+        log: logRecovery,
+        maxEnqueuedAt: params.maxEnqueuedAt,
+      });
+    })().catch((err) => params.log.error(`Session delivery recovery failed: ${String(err)}`));
+  }, 1_250);
+  timer.unref?.();
+}
+
 export function startGatewayRuntimeServices(params: {
   minimalTestGateway: boolean;
   cfgAtStart: OpenClawConfig;
   channelManager: GatewayChannelManager;
   log: GatewayRuntimeServiceLogger;
+  pluginLookUpTable?: Pick<PluginLookUpTable, "index" | "manifestRegistry">;
 }): {
   heartbeatRunner: HeartbeatRunner;
   channelHealthMonitor: ChannelHealthMonitor | null;
   stopModelPricingRefresh: () => void;
 } {
-  // Keep scheduled work inert until post-attach sidecars finish.
   const channelHealthMonitor = startGatewayChannelHealthMonitor({
     cfg: params.cfgAtStart,
     channelManager: params.channelManager,
@@ -89,18 +110,19 @@ export function startGatewayRuntimeServices(params: {
     channelHealthMonitor,
     stopModelPricingRefresh:
       !params.minimalTestGateway && !isVitestRuntimeEnv()
-        ? startGatewayModelPricingRefresh({ config: params.cfgAtStart })
+        ? startGatewayModelPricingRefresh({
+            config: params.cfgAtStart,
+            ...(params.pluginLookUpTable ? { pluginLookUpTable: params.pluginLookUpTable } : {}),
+          })
         : () => {},
   };
 }
 
-/**
- * Activate cron scheduler, heartbeat runner, and pending delivery recovery
- * after gateway sidecars are fully started and chat.history is available.
- */
 export function activateGatewayScheduledServices(params: {
   minimalTestGateway: boolean;
   cfgAtStart: OpenClawConfig;
+  deps: import("../cli/deps.types.js").CliDeps;
+  sessionDeliveryRecoveryMaxEnqueuedAt: number;
   cron: { start: () => Promise<void> };
   logCron: { error: (message: string) => void };
   log: GatewayRuntimeServiceLogger;
@@ -116,6 +138,11 @@ export function activateGatewayScheduledServices(params: {
   recoverPendingOutboundDeliveries({
     cfg: params.cfgAtStart,
     log: params.log,
+  });
+  recoverPendingSessionDeliveries({
+    deps: params.deps,
+    log: params.log,
+    maxEnqueuedAt: params.sessionDeliveryRecoveryMaxEnqueuedAt,
   });
   return { heartbeatRunner };
 }

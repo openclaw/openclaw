@@ -9,6 +9,7 @@ import {
   collectQaSuitePluginIds,
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,
+  resolveQaSuiteWorkerStartStaggerMs,
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,
   selectQaSuiteScenarios,
@@ -91,6 +92,56 @@ describe("qa suite planning helpers", () => {
     expect(result).toEqual([10, 20, 30, 40]);
   });
 
+  it("staggers scenario starts without reducing mapped concurrency", async () => {
+    const sleeps: number[] = [];
+    const releaseSleeps: Array<() => void> = [];
+    const started: number[] = [];
+    const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+    const resultPromise = mapQaSuiteWithConcurrency(
+      [1, 2, 3, 4],
+      3,
+      async (item) => {
+        started.push(item);
+        return item;
+      },
+      {
+        startStaggerMs: 25,
+        sleepImpl: async (ms) => {
+          sleeps.push(ms);
+          await new Promise<void>((resolve) => {
+            releaseSleeps.push(resolve);
+          });
+        },
+      },
+    );
+
+    await tick();
+    expect(started).toEqual([1]);
+    releaseSleeps.shift()?.();
+    await tick();
+    expect(started).toEqual([1, 2]);
+    releaseSleeps.shift()?.();
+    await tick();
+    expect(started).toEqual([1, 2, 3]);
+    releaseSleeps.shift()?.();
+    await tick();
+    expect(started).toEqual([1, 2, 3, 4]);
+
+    const result = await resultPromise;
+    expect(result).toEqual([1, 2, 3, 4]);
+    expect(sleeps).toEqual([25, 25, 25]);
+  });
+
+  it("resolves a default worker startup stagger for concurrent suite workers", () => {
+    expect(resolveQaSuiteWorkerStartStaggerMs(1, {})).toBe(0);
+    expect(resolveQaSuiteWorkerStartStaggerMs(4, {})).toBe(1500);
+    expect(
+      resolveQaSuiteWorkerStartStaggerMs(4, {
+        OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS: "0",
+      }),
+    ).toBe(0);
+  });
+
   it("keeps explicitly requested provider-specific scenarios", () => {
     const scenarios = [
       makeQaSuiteTestScenario("generic"),
@@ -107,7 +158,7 @@ describe("qa suite planning helpers", () => {
         scenarios,
         scenarioIds: ["anthropic-only"],
         providerMode: "live-frontier",
-        primaryModel: "openai/gpt-5.4",
+        primaryModel: "openai/gpt-5.5",
       }).map((scenario) => scenario.id),
     ).toEqual(["anthropic-only"]);
   });
@@ -223,7 +274,7 @@ describe("qa suite planning helpers", () => {
     const scenarios = [
       makeQaSuiteTestScenario("generic"),
       makeQaSuiteTestScenario("openai-only", {
-        config: { requiredProvider: "openai", requiredModel: "gpt-5.4" },
+        config: { requiredProvider: "openai", requiredModel: "gpt-5.5" },
       }),
       makeQaSuiteTestScenario("anthropic-only", {
         config: { requiredProvider: "anthropic", requiredModel: "claude-opus-4-6" },
@@ -237,7 +288,7 @@ describe("qa suite planning helpers", () => {
       selectQaSuiteScenarios({
         scenarios,
         providerMode: "live-frontier",
-        primaryModel: "openai/gpt-5.4",
+        primaryModel: "openai/gpt-5.5",
       }).map((scenario) => scenario.id),
     ).toEqual(["generic", "openai-only"]);
 
@@ -249,5 +300,33 @@ describe("qa suite planning helpers", () => {
         claudeCliAuthMode: "subscription",
       }).map((scenario) => scenario.id),
     ).toEqual(["generic", "claude-subscription"]);
+  });
+
+  it("filters provider-mode-specific scenarios from implicit suite selections", () => {
+    const scenarios = [
+      makeQaSuiteTestScenario("generic"),
+      makeQaSuiteTestScenario("live-only", {
+        config: { requiredProviderMode: "live-frontier" },
+      }),
+      makeQaSuiteTestScenario("mock-only", {
+        config: { requiredProviderMode: "mock-openai" },
+      }),
+    ];
+
+    expect(
+      selectQaSuiteScenarios({
+        scenarios,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.5",
+      }).map((scenario) => scenario.id),
+    ).toEqual(["generic", "mock-only"]);
+
+    expect(
+      selectQaSuiteScenarios({
+        scenarios,
+        providerMode: "live-frontier",
+        primaryModel: "openai/gpt-5.5",
+      }).map((scenario) => scenario.id),
+    ).toEqual(["generic", "live-only"]);
   });
 });

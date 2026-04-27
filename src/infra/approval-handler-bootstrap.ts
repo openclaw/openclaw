@@ -155,7 +155,11 @@ export async function startChannelApprovalHandlerBootstrap(params: {
   if (existingContext !== undefined) {
     clearRetryTimer();
     invalidateActiveHandler();
-    await startHandlerForContext(existingContext, activeGeneration);
+    const generation = activeGeneration;
+    spawn(
+      "failed to start native approval handler",
+      startHandlerForRegisteredContext(existingContext, generation),
+    );
   }
 
   return async () => {

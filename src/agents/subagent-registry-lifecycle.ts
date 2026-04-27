@@ -9,6 +9,8 @@ import {
   setDetachedTaskDeliveryStatusByRunId,
 } from "../tasks/detached-task-runtime.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
+import { retireSessionMcpRuntimeForSessionKey } from "./pi-bundle-mcp-tools.js";
+import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import { type SubagentRunOutcome, withSubagentOutcomeTiming } from "./subagent-announce-output.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -125,10 +127,25 @@ export function createSubagentRegistryLifecycleController(params: {
     return name ? { name, message } : { message };
   };
 
+  const formatAnnounceDeliveryError = (delivery: SubagentAnnounceDeliveryResult): string => {
+    const errors = [
+      delivery.error,
+      ...(delivery.phases ?? []).map((phase) =>
+        phase.error ? `${phase.phase}: ${phase.error}` : undefined,
+      ),
+    ]
+      .map((value) => value?.trim())
+      .filter((value): value is string => Boolean(value));
+    return errors.length > 0
+      ? [...new Set(errors)].join("; ")
+      : `delivery path ${delivery.path} did not complete`;
+  };
+
   const safeSetSubagentTaskDeliveryStatus = (args: {
     runId: string;
     childSessionKey: string;
     deliveryStatus: "delivered" | "failed";
+    deliveryError?: string;
   }) => {
     try {
       setDetachedTaskDeliveryStatusByRunId({
@@ -136,6 +153,7 @@ export function createSubagentRegistryLifecycleController(params: {
         runtime: "subagent",
         sessionKey: args.childSessionKey,
         deliveryStatus: args.deliveryStatus,
+        error: args.deliveryStatus === "failed" ? args.deliveryError : undefined,
       });
     } catch (err) {
       params.warn("failed to update subagent background task delivery state", {
@@ -187,13 +205,22 @@ export function createSubagentRegistryLifecycleController(params: {
     }
   };
 
-  const freezeRunResultAtCompletion = async (entry: SubagentRunRecord): Promise<boolean> => {
+  const freezeRunResultAtCompletion = async (
+    entry: SubagentRunRecord,
+    outcome: SubagentRunOutcome,
+  ): Promise<boolean> => {
     if (entry.frozenResultText !== undefined) {
       return false;
+    }
+    if (outcome.status === "error") {
+      entry.frozenResultText = null;
+      entry.frozenResultCapturedAt = Date.now();
+      return true;
     }
     try {
       const captured = await params.captureSubagentCompletionReply(entry.childSessionKey, {
         waitForReply: entry.expectsCompletionMessage === true,
+        outcome,
       });
       entry.frozenResultText = captured?.trim() ? capFrozenResultText(captured) : null;
     } catch {
@@ -228,7 +255,9 @@ export function createSubagentRegistryLifecycleController(params: {
   };
 
   const refreshFrozenResultFromSession = async (sessionKey: string): Promise<boolean> => {
-    const candidates = listPendingCompletionRunsForSession(sessionKey);
+    const candidates = listPendingCompletionRunsForSession(sessionKey).filter(
+      (entry) => entry.outcome?.status !== "error",
+    );
     if (candidates.length === 0) {
       return false;
     }
@@ -289,6 +318,7 @@ export function createSubagentRegistryLifecycleController(params: {
       runId: giveUpParams.runId,
       childSessionKey: giveUpParams.entry.childSessionKey,
       deliveryStatus: "failed",
+      deliveryError: giveUpParams.entry.lastAnnounceDeliveryError,
     });
     giveUpParams.entry.wakeOnDescendantSettle = undefined;
     giveUpParams.entry.fallbackFrozenResultText = undefined;
@@ -372,6 +402,20 @@ export function createSubagentRegistryLifecycleController(params: {
     cleanup: "delete" | "keep";
     completedAt: number;
   }) => {
+    if (cleanupParams.entry.spawnMode !== "session") {
+      void retireSessionMcpRuntimeForSessionKey({
+        sessionKey: cleanupParams.entry.childSessionKey,
+        reason: "subagent-run-cleanup",
+        onError: (error, sessionId) => {
+          params.warn("failed to retire subagent bundle MCP runtime", {
+            error: buildSafeLifecycleErrorMeta(error),
+            sessionId,
+            runId: maskRunId(cleanupParams.runId),
+            childSessionKey: maskSessionKey(cleanupParams.entry.childSessionKey),
+          });
+        },
+      });
+    }
     if (cleanupParams.cleanup === "delete") {
       params.clearPendingLifecycleError(cleanupParams.runId);
       void params.notifyContextEngineSubagentEnded({
@@ -392,6 +436,28 @@ export function createSubagentRegistryLifecycleController(params: {
     cleanupParams.entry.cleanupCompletedAt = cleanupParams.completedAt;
     params.persist();
     retryDeferredCompletedAnnounces(cleanupParams.runId);
+  };
+
+  const retireRunModeBundleMcpRuntime = (cleanupParams: {
+    runId: string;
+    entry: SubagentRunRecord;
+    reason: string;
+  }) => {
+    if (cleanupParams.entry.spawnMode === "session") {
+      return;
+    }
+    void retireSessionMcpRuntimeForSessionKey({
+      sessionKey: cleanupParams.entry.childSessionKey,
+      reason: cleanupParams.reason,
+      onError: (error, sessionId) => {
+        params.warn("failed to retire subagent bundle MCP runtime", {
+          error: buildSafeLifecycleErrorMeta(error),
+          sessionId,
+          runId: maskRunId(cleanupParams.runId),
+          childSessionKey: maskSessionKey(cleanupParams.entry.childSessionKey),
+        });
+      },
+    });
   };
 
   const finalizeSubagentCleanup = async (
@@ -416,6 +482,7 @@ export function createSubagentRegistryLifecycleController(params: {
         childSessionKey: entry.childSessionKey,
         deliveryStatus: "delivered",
       });
+      entry.lastAnnounceDeliveryError = undefined;
       entry.wakeOnDescendantSettle = undefined;
       entry.fallbackFrozenResultText = undefined;
       entry.fallbackFrozenResultCapturedAt = undefined;
@@ -470,6 +537,7 @@ export function createSubagentRegistryLifecycleController(params: {
         runId,
         childSessionKey: entry.childSessionKey,
         deliveryStatus: "failed",
+        deliveryError: entry.lastAnnounceDeliveryError,
       });
       entry.wakeOnDescendantSettle = undefined;
       entry.fallbackFrozenResultText = undefined;
@@ -523,7 +591,11 @@ export function createSubagentRegistryLifecycleController(params: {
       return false;
     }
     const requesterOrigin = normalizeDeliveryContext(entry.requesterOrigin);
+    let latestDeliveryError = entry.lastAnnounceDeliveryError;
     const finalizeAnnounceCleanup = (didAnnounce: boolean) => {
+      if (!didAnnounce && latestDeliveryError) {
+        entry.lastAnnounceDeliveryError = latestDeliveryError;
+      }
       void finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce).catch((err) => {
         defaultRuntime.log(`[warn] subagent cleanup finalize failed (${runId}): ${String(err)}`);
         const current = params.runs.get(runId);
@@ -555,6 +627,21 @@ export function createSubagentRegistryLifecycleController(params: {
         spawnMode: entry.spawnMode,
         expectsCompletionMessage: entry.expectsCompletionMessage,
         wakeOnDescendantSettle: entry.wakeOnDescendantSettle === true,
+        onDeliveryResult: (delivery) => {
+          if (delivery.delivered) {
+            if (entry.lastAnnounceDeliveryError !== undefined) {
+              entry.lastAnnounceDeliveryError = undefined;
+              params.persist();
+            }
+            latestDeliveryError = undefined;
+            return;
+          }
+          latestDeliveryError = formatAnnounceDeliveryError(delivery);
+          if (entry.lastAnnounceDeliveryError !== latestDeliveryError) {
+            entry.lastAnnounceDeliveryError = latestDeliveryError;
+            params.persist();
+          }
+        },
       })
       .then((didAnnounce) => {
         finalizeAnnounceCleanup(didAnnounce);
@@ -615,7 +702,7 @@ export function createSubagentRegistryLifecycleController(params: {
       mutated = true;
     }
 
-    if (await freezeRunResultAtCompletion(entry)) {
+    if (await freezeRunResultAtCompletion(entry, outcome)) {
       mutated = true;
     }
 
@@ -676,6 +763,12 @@ export function createSubagentRegistryLifecycleController(params: {
     await cleanupBrowserSessions({
       sessionKeys: [entry.childSessionKey],
       onWarn: (msg) => params.warn(msg, { runId: entry.runId }),
+    });
+
+    retireRunModeBundleMcpRuntime({
+      runId: completeParams.runId,
+      entry,
+      reason: "subagent-run-complete",
     });
 
     startSubagentAnnounceCleanupFlow(completeParams.runId, entry);

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { describe } from "vitest";
 import { installChannelActionsContractSuite } from "../../../test/helpers/channels/registry-contract-suites.js";
 import { discordPlugin } from "../api.js";
@@ -38,7 +38,7 @@ describe("discord actions contract", () => {
           },
         } as OpenClawConfig,
         expectedActions: ["send", "poll", "react", "reactions", "emoji-list"],
-        expectedCapabilities: ["interactive", "components"],
+        expectedCapabilities: ["presentation"],
       },
     ],
   });

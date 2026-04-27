@@ -11,6 +11,13 @@ const OPENROUTER_DEFAULT_COST = {
   cacheRead: 0,
   cacheWrite: 0,
 };
+const OPENROUTER_PROXY_REASONING_UNSUPPORTED_MODEL_IDS = new Set(["openrouter/hunter-alpha"]);
+const OPENROUTER_KIMI_K2_6_COST = {
+  input: 0.8,
+  output: 3.5,
+  cacheRead: 0.2,
+  cacheWrite: 0,
+};
 
 function normalizeBaseUrl(baseUrl: string | undefined): string {
   return (baseUrl ?? "").trim().replace(/\/+$/, "");
@@ -25,6 +32,17 @@ export function normalizeOpenRouterBaseUrl(baseUrl: string | undefined): string 
     return OPENROUTER_BASE_URL;
   }
   return undefined;
+}
+
+export function isOpenRouterProxyReasoningUnsupportedModel(modelId: string | undefined): boolean {
+  const normalized = (modelId ?? "").trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    OPENROUTER_PROXY_REASONING_UNSUPPORTED_MODEL_IDS.has(normalized) ||
+    normalized.startsWith("openrouter/hunter-alpha:")
+  );
 }
 
 export function buildOpenrouterProvider(): ModelProviderConfig {
@@ -42,22 +60,13 @@ export function buildOpenrouterProvider(): ModelProviderConfig {
         maxTokens: OPENROUTER_DEFAULT_MAX_TOKENS,
       },
       {
-        id: "openrouter/hunter-alpha",
-        name: "Hunter Alpha",
-        reasoning: true,
-        input: ["text"],
-        cost: OPENROUTER_DEFAULT_COST,
-        contextWindow: 1048576,
-        maxTokens: 65536,
-      },
-      {
-        id: "openrouter/healer-alpha",
-        name: "Healer Alpha",
+        id: "moonshotai/kimi-k2.6",
+        name: "MoonshotAI: Kimi K2.6",
         reasoning: true,
         input: ["text", "image"],
-        cost: OPENROUTER_DEFAULT_COST,
+        cost: OPENROUTER_KIMI_K2_6_COST,
         contextWindow: 262144,
-        maxTokens: 65536,
+        maxTokens: 262144,
       },
     ],
   };

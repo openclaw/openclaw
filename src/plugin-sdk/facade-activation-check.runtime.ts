@@ -4,7 +4,10 @@ import JSON5 from "json5";
 import { resolveConfigPath } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { configMayNeedPluginAutoEnable } from "../config/plugin-auto-enable.shared.js";
-import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import {
@@ -16,6 +19,7 @@ import {
   loadPluginManifestRegistry,
   type PluginManifestRecord,
 } from "../plugins/manifest-registry.js";
+import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { resolveRegistryPluginModuleLocationFromRecords } from "./facade-resolution-shared.js";
 
 const ALWAYS_ALLOWED_RUNTIME_DIR_NAMES = new Set([
@@ -66,6 +70,10 @@ function readFacadeBoundaryConfigSafely(): {
   cacheKey?: string;
 } {
   try {
+    const sourceSnapshot = getRuntimeConfigSourceSnapshot();
+    if (sourceSnapshot) {
+      return { rawConfig: sourceSnapshot };
+    }
     const runtimeSnapshot = getRuntimeConfigSnapshot();
     if (runtimeSnapshot) {
       return { rawConfig: runtimeSnapshot };
@@ -188,7 +196,7 @@ function readBundledPluginManifestRecordFromDir(params: {
     return null;
   }
   try {
-    const raw = JSON5.parse(fs.readFileSync(manifestPath, "utf8")) as {
+    const raw = parseJsonWithJson5Fallback(fs.readFileSync(manifestPath, "utf8")) as {
       id?: unknown;
       enabledByDefault?: unknown;
       channels?: unknown;

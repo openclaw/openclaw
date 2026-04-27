@@ -64,11 +64,6 @@ describe("git-hooks/pre-commit (integration)", () => {
 
     // Use the real hook script and lightweight helper stubs.
     const fakeBinDir = installPreCommitFixture(dir);
-    // The hook can end with `pnpm check:changed --staged`, but this fixture is only
-    // exercising staged-file handling.
-    // Stub pnpm too so Windows CI does not invoke a real package-manager command in the temp repo.
-    writeExecutable(fakeBinDir, "pnpm", "#!/usr/bin/env bash\nexit 0\n");
-
     // Create an untracked file that should NOT be staged by the hook.
     writeFileSync(path.join(dir, "secret.txt"), "do-not-stage\n", "utf8");
 
@@ -85,8 +80,8 @@ describe("git-hooks/pre-commit (integration)", () => {
     expect(staged).toEqual(["--all"]);
   });
 
-  it("runs changed-scope check for non-doc staged changes", () => {
-    const dir = makeTempRepoRoot(tempDirs, "openclaw-pre-commit-check-changed-");
+  it("does not run the changed-scope check for non-doc staged changes", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-pre-commit-no-check-changed-");
     run(dir, "git", ["init", "-q", "--initial-branch=main"]);
 
     const fakeBinDir = installPreCommitFixture(dir);
@@ -95,7 +90,7 @@ describe("git-hooks/pre-commit (integration)", () => {
     writeExecutable(
       fakeBinDir,
       "pnpm",
-      "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" > pnpm-args.txt\n",
+      "#!/usr/bin/env bash\necho 'pnpm should not run from pre-commit' >&2\nexit 99\n",
     );
 
     writeFileSync(path.join(dir, "tracked.txt"), "hello\n", "utf8");
@@ -105,11 +100,35 @@ describe("git-hooks/pre-commit (integration)", () => {
       PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
     });
 
-    expect(run(dir, "cat", ["pnpm-args.txt"])).toBe("check:changed --staged");
+    expect(run(dir, "git", ["diff", "--cached", "--name-only"])).toBe("tracked.txt");
   });
 
-  it("skips changed-scope check when FAST_COMMIT is enabled", () => {
-    const dir = makeTempRepoRoot(tempDirs, "openclaw-pre-commit-yolo-");
+  it("does not re-add staged paths that are ignored by the current .gitignore", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-pre-commit-ignored-staged-");
+    run(dir, "git", ["init", "-q", "--initial-branch=main"]);
+
+    const fakeBinDir = installPreCommitFixture(dir);
+    mkdirSync(path.join(dir, ".agents", "skills", "discord-clawd"), { recursive: true });
+    writeFileSync(path.join(dir, ".gitignore"), ".agents/skills/discord-clawd/\n", "utf8");
+    writeFileSync(
+      path.join(dir, ".agents", "skills", "discord-clawd", "SKILL.md"),
+      "# Discord Clawd\n",
+      "utf8",
+    );
+
+    run(dir, "git", ["add", "--", ".gitignore"]);
+    run(dir, "git", ["add", "-f", "--", ".agents/skills/discord-clawd/SKILL.md"]);
+
+    run(dir, "bash", ["git-hooks/pre-commit"], {
+      PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
+    });
+
+    const staged = run(dir, "git", ["diff", "--cached", "--name-only"]).split("\n").filter(Boolean);
+    expect(staged).toEqual([".agents/skills/discord-clawd/SKILL.md", ".gitignore"]);
+  });
+
+  it("ignores FAST_COMMIT because the hook is already formatting-only", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-pre-commit-fast-");
     run(dir, "git", ["init", "-q", "--initial-branch=main"]);
 
     const fakeBinDir = installPreCommitFixture(dir);
@@ -125,13 +144,11 @@ describe("git-hooks/pre-commit (integration)", () => {
     writeFileSync(path.join(dir, "tracked.txt"), "hello\n", "utf8");
     run(dir, "git", ["add", "--", "tracked.txt"]);
 
-    const output = run(dir, "bash", ["git-hooks/pre-commit"], {
+    run(dir, "bash", ["git-hooks/pre-commit"], {
       PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
       FAST_COMMIT: "1",
     });
 
-    expect(output).toContain(
-      "FAST_COMMIT enabled: skipping changed-scope check in pre-commit hook.",
-    );
+    expect(run(dir, "git", ["diff", "--cached", "--name-only"])).toBe("tracked.txt");
   });
 });

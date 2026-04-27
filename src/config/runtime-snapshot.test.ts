@@ -1,12 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   finalizeRuntimeSnapshotWrite,
+  getRuntimeConfigSnapshotMetadata,
   getRuntimeConfigSourceSnapshot,
   getRuntimeConfigSnapshot,
   loadPinnedRuntimeConfig,
   notifyRuntimeConfigWriteListeners,
   registerRuntimeConfigWriteListener,
   resetConfigRuntimeState,
+  resolveRuntimeConfigCacheKey,
+  selectApplicableRuntimeConfig,
   setRuntimeConfigSnapshot,
   setRuntimeConfigSnapshotRefreshHandler,
 } from "./runtime-snapshot.js";
@@ -70,11 +73,80 @@ describe("runtime snapshot state", () => {
     expect(getRuntimeConfigSourceSnapshot()).toEqual(sourceConfig);
   });
 
+  it("tracks snapshot metadata and cache keys across runtime refreshes", () => {
+    const firstConfig: OpenClawConfig = { gateway: { port: 18789 } };
+    const secondConfig: OpenClawConfig = { gateway: { port: 19001 } };
+
+    setRuntimeConfigSnapshot(firstConfig);
+    const firstMetadata = getRuntimeConfigSnapshotMetadata();
+    expect(firstMetadata?.revision).toBe(1);
+    expect(resolveRuntimeConfigCacheKey(firstConfig)).toBe(
+      `runtime:${firstMetadata?.revision}:${firstMetadata?.fingerprint}`,
+    );
+
+    setRuntimeConfigSnapshot(secondConfig);
+    const secondMetadata = getRuntimeConfigSnapshotMetadata();
+    expect(secondMetadata?.revision).toBe(2);
+    expect(secondMetadata?.fingerprint).not.toBe(firstMetadata?.fingerprint);
+    expect(resolveRuntimeConfigCacheKey(secondConfig)).toBe(
+      `runtime:${secondMetadata?.revision}:${secondMetadata?.fingerprint}`,
+    );
+  });
+
+  it("selects runtime config only when input still matches the runtime source", () => {
+    const sourceConfig: OpenClawConfig = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+            models: [],
+          },
+        },
+      },
+    };
+    const runtimeConfig: OpenClawConfig = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: "sk-runtime-resolved",
+            models: [],
+          },
+        },
+      },
+    };
+    const scopedResolvedConfig: OpenClawConfig = {
+      ...runtimeConfig,
+      tools: {
+        experimental: {
+          planTool: true,
+        },
+      },
+    };
+
+    expect(
+      selectApplicableRuntimeConfig({
+        inputConfig: structuredClone(sourceConfig),
+        runtimeConfig,
+        runtimeSourceConfig: sourceConfig,
+      }),
+    ).toBe(runtimeConfig);
+    expect(
+      selectApplicableRuntimeConfig({
+        inputConfig: scopedResolvedConfig,
+        runtimeConfig,
+        runtimeSourceConfig: sourceConfig,
+      }),
+    ).toBe(scopedResolvedConfig);
+  });
+
   it("clears runtime source snapshot when runtime snapshot is cleared", () => {
     setRuntimeConfigSnapshot({ gateway: { port: 18789 } }, { gateway: { port: 18789 } });
     resetRuntimeConfigState();
     expect(getRuntimeConfigSnapshot()).toBeNull();
     expect(getRuntimeConfigSourceSnapshot()).toBeNull();
+    expect(getRuntimeConfigSnapshotMetadata()).toBeNull();
   });
 
   it("refreshes both snapshots from disk after a write when source + runtime snapshots exist", async () => {
@@ -236,6 +308,9 @@ describe("runtime snapshot state", () => {
         sourceConfig: { gateway: { port: 18789 } },
         runtimeConfig: { gateway: { port: 19003 } },
         persistedHash: "abc123",
+        revision: 1,
+        fingerprint: "runtime-fingerprint",
+        sourceFingerprint: "source-fingerprint",
         writtenAtMs: 1,
       });
     } finally {

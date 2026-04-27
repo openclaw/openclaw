@@ -39,7 +39,7 @@ describe("buildStatusCommandReportData", () => {
     );
     expect(result.pluginCompatibilityLines).toEqual(["  warn(WARN) legacy"]);
     expect(result.pairingRecoveryLines[0]).toBe("warn(Gateway pairing approval required.)");
-    expect(result.channelsRows[0]?.Channel).toBe("Discord");
+    expect(result.channelsRows[0]?.Channel).toBe("QuietChat");
     expect(result.sessionsRows[0]?.Cache).toBe("cache ok");
     expect(result.healthRows?.[0]).toEqual({
       Item: "Gateway",
@@ -47,5 +47,18 @@ describe("buildStatusCommandReportData", () => {
       Detail: "42ms",
     });
     expect(result.footerLines.at(-1)).toBe("  Need to test channels? cmd:openclaw status --deep");
+  });
+
+  it("shows skipped audit text when fast status omits the security audit", async () => {
+    const result = await buildStatusCommandReportData(
+      createStatusCommandReportDataParams({
+        securityAudit: undefined,
+      }),
+    );
+
+    expect(result.securityAuditLines).toEqual([
+      "muted(Skipped in fast status. Full report: cmd:openclaw security audit)",
+      "muted(Deep probe: cmd:openclaw status --deep)",
+    ]);
   });
 });

@@ -1,3 +1,4 @@
+import { registerProviderPlugin, requireRegisteredProvider } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it } from "vitest";
 import { resolveOpenClawAgentDir } from "../src/agents/agent-paths.js";
 import { collectProviderApiKeys } from "../src/agents/live-auth-keys.js";
@@ -18,10 +19,6 @@ import { getShellEnvAppliedKeys } from "../src/infra/shell-env.js";
 import { encodePngRgba, fillPixel } from "../src/media/png-encode.js";
 import { maybeLoadShellEnvForGenerationProviders } from "../src/test-utils/generation-live-test-helpers.js";
 import { loadBundledProviderPlugin as loadBundledProviderPluginFromTestHelper } from "./helpers/media-generation/bundled-provider-builders.js";
-import {
-  registerProviderPlugin,
-  requireRegisteredProvider,
-} from "./helpers/plugins/provider-registration.js";
 
 const LIVE = isLiveTestEnabled();
 const REQUIRE_PROFILE_KEYS =
@@ -75,9 +72,19 @@ const PROVIDER_CASES: LiveProviderCase[] = [
     providerId: "openai",
   },
   {
+    pluginId: "openrouter",
+    pluginName: "OpenRouter Provider",
+    providerId: "openrouter",
+  },
+  {
     pluginId: "vydra",
     pluginName: "Vydra Provider",
     providerId: "vydra",
+  },
+  {
+    pluginId: "xai",
+    pluginName: "xAI Provider",
+    providerId: "xai",
   },
 ]
   .filter((entry) => (providerFilter ? providerFilter.has(entry.providerId) : true))

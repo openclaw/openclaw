@@ -5,8 +5,6 @@ read_when:
 title: "Network model"
 ---
 
-# Network Model
-
 > This content has been merged into [Network](/network#core-model). See that page for the current guide.
 
 Most operations flow through the Gateway (`openclaw gateway`), a single long-running
@@ -23,3 +21,9 @@ process that owns channel connections and the WebSocket control plane.
   - `/__openclaw__/a2ui/`
     When `gateway.auth` is configured and the Gateway binds beyond loopback, these routes are protected by Gateway auth. Node clients use node-scoped capability URLs tied to their active WS session. See [Gateway configuration](/gateway/configuration) (`canvasHost`, `gateway`).
 - Remote use is typically SSH tunnel or tailnet VPN. See [Remote access](/gateway/remote) and [Discovery](/gateway/discovery).
+
+## Related
+
+- [Remote access](/gateway/remote)
+- [Trusted proxy auth](/gateway/trusted-proxy-auth)
+- [Gateway protocol](/gateway/protocol)

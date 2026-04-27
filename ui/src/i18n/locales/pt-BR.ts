@@ -109,6 +109,14 @@ export const pt_BR: TranslationMap = {
       lightningHelp: "Endereço Lightning para gorjetas (LUD-16)",
     },
   },
+  lazyView: {
+    loadingTitle: "Carregando painel",
+    errorTitle: "Falha ao carregar o painel",
+    errorSubtitle:
+      "Recarregue a página para carregar o pacote mais recente do Control UI ou tente novamente se a solicitação de rede falhou.",
+    retry: "Tentar novamente",
+    unknownError: "Erro desconhecido ao carregar módulo.",
+  },
   nodes: {
     binding: {
       loadConfigHint: "Carregue a configuração para editar os bindings.",
@@ -275,6 +283,8 @@ export const pt_BR: TranslationMap = {
       tailscaleDocsLink: "Docs: Tailscale Serve",
       insecureHttpDocsTitle: "Documentação de HTTP inseguro (abre em nova aba)",
       insecureHttpDocsLink: "Docs: HTTP inseguro",
+      copyCommand: "Copiar comando",
+      copyCommandAria: "Copiar comando: {command}",
     },
     cards: {
       cost: "Custo",
@@ -310,6 +320,30 @@ export const pt_BR: TranslationMap = {
     palette: {
       placeholder: "Digite um comando…",
       noResults: "Sem resultados",
+      categories: {
+        search: "Pesquisar",
+        navigation: "Navegação",
+        skills: "Skills",
+      },
+      items: {
+        overview: "Visão geral",
+        sessions: "Sessões",
+        scheduled: "Agendado",
+        skills: "Skills",
+        settings: "Configurações",
+        agents: "Agentes",
+        shellCommand: "Comando de shell",
+        debugMode: "Modo de depuração",
+      },
+      descriptions: {
+        shellCommand: "Executar shell",
+        debugMode: "Alternar depuração",
+      },
+      footer: {
+        navigate: "navegar",
+        select: "selecionar",
+        close: "fechar",
+      },
     },
   },
   dreaming: {
@@ -323,6 +357,15 @@ export const pt_BR: TranslationMap = {
       refreshing: "Atualizando…",
       on: "Dreaming ativado",
       off: "Dreaming desativado",
+    },
+    restartConfirmation: {
+      title: "Restart Gateway to Apply Change",
+      subtitle: "Changing Dreaming mode restarts the gateway.",
+      warning:
+        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      confirm: "Confirm Restart",
+      restarting: "Restarting…",
+      failed: "Could not apply change. Check your connection and try again.",
     },
     status: {
       active: "Dreaming ativo",
@@ -679,6 +722,7 @@ export const pt_BR: TranslationMap = {
     uk: "Українська (ucraniano)",
     id: "Bahasa Indonesia (Indonésio)",
     pl: "Polski (Polonês)",
+    th: "ไทย (tailandês)",
   },
   cron: {
     summary: {

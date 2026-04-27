@@ -1,7 +1,6 @@
 import type { RequestListener } from "node:http";
+import { createEmptyPluginRegistry, setActivePluginRegistry } from "openclaw/plugin-sdk/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createEmptyPluginRegistry } from "../../../src/plugins/registry-empty.js";
-import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
 import { withServer } from "../../../test/helpers/http-test-server.js";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import {
@@ -62,7 +61,10 @@ function registerTarget(params: {
     core: params.core ?? ({} as PluginRuntime),
     secret: params.secret ?? "secret",
     path: params.path,
+    webhookUrl: `https://example.com${params.path}`,
+    webhookPath: params.path,
     mediaMaxMb: 5,
+    canHostMedia: true,
     statusSink: params.statusSink,
   });
 }

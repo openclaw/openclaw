@@ -1,12 +1,17 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
+import { afterAll, describe, expect, it } from "vitest";
+import {
+  applyPluginAutoEnable,
+  materializePluginAutoEnableCandidates,
+} from "./plugin-auto-enable.js";
 import {
   makeIsolatedEnv,
   makeRegistry,
   resetPluginAutoEnableTestState,
 } from "./plugin-auto-enable.test-helpers.js";
 
-afterEach(() => {
+const env = makeIsolatedEnv();
+
+afterAll(() => {
   resetPluginAutoEnableTestState();
 });
 
@@ -23,13 +28,20 @@ describe("applyPluginAutoEnable providers", () => {
           },
         },
       },
-      env: makeIsolatedEnv(),
+      env,
+      manifestRegistry: makeRegistry([
+        {
+          id: "google",
+          channels: [],
+          autoEnableWhenConfiguredProviders: ["google-gemini-cli"],
+        },
+      ]),
     });
 
     expect(result.config.plugins?.entries?.google?.enabled).toBe(true);
   });
 
-  it("auto-enables bundled provider plugins when plugin-owned web search config exists", () => {
+  it("auto-enables provider plugins when plugin-owned web search config exists", () => {
     const result = applyPluginAutoEnable({
       config: {
         plugins: {
@@ -44,15 +56,25 @@ describe("applyPluginAutoEnable providers", () => {
           },
         },
       },
-      env: makeIsolatedEnv(),
+      env,
+      manifestRegistry: makeRegistry([
+        {
+          id: "xai",
+          channels: [],
+          providers: ["xai"],
+          contracts: {
+            webSearchProviders: ["grok"],
+          },
+        },
+      ]),
     });
 
     expect(result.config.plugins?.entries?.xai?.enabled).toBe(true);
     expect(result.changes).toContain("xai web search configured, enabled automatically.");
   });
 
-  it("auto-enables xai when the plugin-owned x_search tool is configured", () => {
-    const result = applyPluginAutoEnable({
+  it("materializes xai setup auto-enable when the plugin-owned x_search tool is configured", () => {
+    const result = materializePluginAutoEnableCandidates({
       config: {
         plugins: {
           entries: {
@@ -66,15 +88,23 @@ describe("applyPluginAutoEnable providers", () => {
           },
         },
       },
-      env: makeIsolatedEnv(),
+      candidates: [
+        {
+          pluginId: "xai",
+          kind: "setup-auto-enable",
+          reason: "xai tool configured",
+        },
+      ],
+      env,
+      manifestRegistry: makeRegistry([{ id: "xai", channels: [] }]),
     });
 
     expect(result.config.plugins?.entries?.xai?.enabled).toBe(true);
     expect(result.changes).toContain("xai tool configured, enabled automatically.");
   });
 
-  it("auto-enables xai when the plugin-owned codeExecution config is configured", () => {
-    const result = applyPluginAutoEnable({
+  it("materializes xai setup auto-enable when the plugin-owned codeExecution config is configured", () => {
+    const result = materializePluginAutoEnableCandidates({
       config: {
         plugins: {
           entries: {
@@ -89,7 +119,15 @@ describe("applyPluginAutoEnable providers", () => {
           },
         },
       },
-      env: makeIsolatedEnv(),
+      candidates: [
+        {
+          pluginId: "xai",
+          kind: "setup-auto-enable",
+          reason: "xai tool configured",
+        },
+      ],
+      env,
+      manifestRegistry: makeRegistry([{ id: "xai", channels: [] }]),
     });
 
     expect(result.config.plugins?.entries?.xai?.enabled).toBe(true);
@@ -108,7 +146,14 @@ describe("applyPluginAutoEnable providers", () => {
           },
         },
       },
-      env: makeIsolatedEnv(),
+      env,
+      manifestRegistry: makeRegistry([
+        {
+          id: "minimax",
+          channels: [],
+          autoEnableWhenConfiguredProviders: ["minimax-portal"],
+        },
+      ]),
     });
 
     expect(result.config.plugins?.entries?.minimax?.enabled).toBe(true);
@@ -127,7 +172,14 @@ describe("applyPluginAutoEnable providers", () => {
           },
         },
       },
-      env: makeIsolatedEnv(),
+      env,
+      manifestRegistry: makeRegistry([
+        {
+          id: "minimax",
+          channels: [],
+          autoEnableWhenConfiguredProviders: ["minimax"],
+        },
+      ]),
     });
 
     expect(result.config.plugins?.entries?.minimax?.enabled).toBe(true);
@@ -145,7 +197,8 @@ describe("applyPluginAutoEnable providers", () => {
           },
         },
       },
-      env: makeIsolatedEnv(),
+      env,
+      manifestRegistry: makeRegistry([]),
     });
 
     expect(result.config.plugins?.entries?.openai).toBeUndefined();
@@ -164,7 +217,7 @@ describe("applyPluginAutoEnable providers", () => {
           },
         },
       },
-      env: makeIsolatedEnv(),
+      env,
       manifestRegistry: makeRegistry([
         {
           id: "acme",
@@ -192,7 +245,7 @@ describe("applyPluginAutoEnable providers", () => {
           },
         },
       },
-      env: makeIsolatedEnv(),
+      env,
       manifestRegistry: makeRegistry([
         {
           id: "acme",
@@ -224,7 +277,7 @@ describe("applyPluginAutoEnable providers", () => {
           },
         },
       },
-      env: makeIsolatedEnv(),
+      env,
       manifestRegistry: makeRegistry([
         {
           id: "acme",
@@ -247,31 +300,44 @@ describe("applyPluginAutoEnable providers", () => {
     expect(result.changes).toContain("acme tool configured, enabled automatically.");
   });
 
-  it("auto-enables acpx plugin when ACP is configured", () => {
-    const result = applyPluginAutoEnable({
+  it("materializes acpx setup auto-enable when ACP is configured", () => {
+    const result = materializePluginAutoEnableCandidates({
       config: {
         acp: {
           enabled: true,
         },
+        plugins: {
+          allow: ["telegram"],
+        },
       },
-      env: makeIsolatedEnv(),
+      candidates: [
+        {
+          pluginId: "acpx",
+          kind: "setup-auto-enable",
+          reason: "ACP runtime configured",
+        },
+      ],
+      env,
     });
 
+    expect(result.config.plugins?.allow).toEqual(["telegram", "acpx"]);
     expect(result.config.plugins?.entries?.acpx?.enabled).toBe(true);
     expect(result.changes.join("\n")).toContain("ACP runtime configured, enabled automatically.");
   });
 
-  it("does not auto-enable acpx when a different ACP backend is configured", () => {
-    const result = applyPluginAutoEnable({
+  it("does not materialize acpx when no setup auto-enable candidate is present", () => {
+    const result = materializePluginAutoEnableCandidates({
       config: {
         acp: {
           enabled: true,
           backend: "custom-runtime",
         },
       },
-      env: makeIsolatedEnv(),
+      candidates: [],
+      env,
     });
 
     expect(result.config.plugins?.entries?.acpx?.enabled).toBeUndefined();
+    expect(result.changes).toEqual([]);
   });
 });

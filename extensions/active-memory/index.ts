@@ -7,13 +7,18 @@ import {
   resolveAgentDir,
   resolveAgentEffectiveModelPrimary,
   resolveAgentWorkspaceDir,
+  resolveDefaultModelForAgent,
 } from "openclaw/plugin-sdk/agent-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import {
+  resolveLivePluginConfigObject,
+  resolvePluginConfigObject,
+} from "openclaw/plugin-sdk/plugin-config-runtime";
+import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
   resolveSessionStoreEntry,
   updateSessionStore,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/config-runtime";
-import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -216,7 +221,8 @@ type ActiveMemoryThinkingLevel =
   | "medium"
   | "high"
   | "xhigh"
-  | "adaptive";
+  | "adaptive"
+  | "max";
 type ActiveMemoryPromptStyle =
   | "balanced"
   | "strict"
@@ -572,12 +578,8 @@ function isActiveMemoryGloballyEnabled(cfg: OpenClawConfig): boolean {
   if (entry?.enabled === false) {
     return false;
   }
-  const pluginConfig = asRecord(entry?.config);
+  const pluginConfig = resolvePluginConfigObject(cfg, "active-memory");
   return pluginConfig?.enabled !== false;
-}
-
-function resolveActiveMemoryPluginConfigFromConfig(cfg: OpenClawConfig): unknown {
-  return asRecord(cfg.plugins?.entries?.["active-memory"])?.config;
 }
 
 function updateActiveMemoryGlobalEnabledInConfig(
@@ -698,7 +700,8 @@ function resolveThinkingLevel(thinking: unknown): ActiveMemoryThinkingLevel {
     thinking === "medium" ||
     thinking === "high" ||
     thinking === "xhigh" ||
-    thinking === "adaptive"
+    thinking === "adaptive" ||
+    thinking === "max"
   ) {
     return thinking;
   }
@@ -787,6 +790,7 @@ function buildRecallPrompt(params: {
     "Your job is to search memory and return only the most relevant memory context for that model.",
     "You receive conversation context, including the user's latest message.",
     "Use only memory_search and memory_get.",
+    "When searching for preference or habit recall, use a permissive memory_search threshold before deciding that no useful memory exists.",
     "Do not answer the user directly.",
     `Prompt style: ${params.config.promptStyle}.`,
     ...buildPromptStyleLines(params.config.promptStyle),
@@ -1549,13 +1553,11 @@ function extractRecentTurns(messages: unknown[]): ActiveRecallRecentTurn[] {
   return turns;
 }
 
-function parseModelCandidate(modelRef: string | undefined) {
+function parseModelCandidate(modelRef: string | undefined, defaultProvider = DEFAULT_PROVIDER) {
   if (!modelRef) {
     return undefined;
   }
-  return (
-    parseModelRef(modelRef, DEFAULT_PROVIDER) ?? { provider: DEFAULT_PROVIDER, model: modelRef }
-  );
+  return parseModelRef(modelRef, defaultProvider) ?? { provider: defaultProvider, model: modelRef };
 }
 
 function getModelRef(
@@ -1569,14 +1571,20 @@ function getModelRef(
 ): { provider: string; model: string } | undefined {
   const currentRunModel =
     ctx?.modelProviderId && ctx?.modelId ? `${ctx.modelProviderId}/${ctx.modelId}` : undefined;
+  const configuredDefaultModel = resolveAgentEffectiveModelPrimary(api.config, agentId)
+    ? resolveDefaultModelForAgent({ cfg: api.config, agentId })
+    : undefined;
+  const defaultProvider = configuredDefaultModel?.provider ?? DEFAULT_PROVIDER;
   const candidates = [
     config.model,
     currentRunModel,
-    resolveAgentEffectiveModelPrimary(api.config, agentId),
+    configuredDefaultModel
+      ? `${configuredDefaultModel.provider}/${configuredDefaultModel.model}`
+      : undefined,
     config.modelFallback,
   ];
   for (const candidate of candidates) {
-    const parsed = parseModelCandidate(candidate);
+    const parsed = parseModelCandidate(candidate, defaultProvider);
     if (parsed) {
       return parsed;
     }
@@ -1684,6 +1692,8 @@ async function runRecallSubagent(params: {
       thinkLevel: params.config.thinking,
       reasoningLevel: "off",
       silentExpected: true,
+      authProfileFailurePolicy: "local",
+      cleanupBundleMcpOnRunEnd: true,
       abortSignal: params.abortSignal,
     });
     if (params.abortSignal?.aborted) {
@@ -1776,17 +1786,56 @@ async function maybeResolveActiveRecall(params: {
   }
 
   const controller = new AbortController();
+  const TIMEOUT_SENTINEL = Symbol("timeout");
   const timeoutId = setTimeout(() => {
     controller.abort(new Error(`active-memory timeout after ${params.config.timeoutMs}ms`));
   }, params.config.timeoutMs);
   timeoutId.unref?.();
 
+  const timeoutPromise = new Promise<typeof TIMEOUT_SENTINEL>((resolve) => {
+    controller.signal.addEventListener(
+      "abort",
+      () => {
+        resolve(TIMEOUT_SENTINEL);
+      },
+      { once: true },
+    );
+  });
+
   try {
-    const { rawReply, transcriptPath, searchDebug } = await runRecallSubagent({
+    const subagentPromise = runRecallSubagent({
       ...params,
       modelRef: resolvedModelRef,
       abortSignal: controller.signal,
     });
+    // Silently catch late rejections after timeout so they don't become
+    // unhandled promise rejections.
+    subagentPromise.catch(() => undefined);
+
+    const raceResult = await Promise.race([subagentPromise, timeoutPromise]);
+
+    if (raceResult === TIMEOUT_SENTINEL) {
+      const result: ActiveRecallResult = {
+        status: "timeout",
+        elapsedMs: Date.now() - startedAt,
+        summary: null,
+      };
+      if (params.config.logging) {
+        params.api.logger.info?.(
+          `${logPrefix} done status=${result.status} elapsedMs=${String(result.elapsedMs)} summaryChars=0`,
+        );
+      }
+      await persistPluginStatusLines({
+        api: params.api,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        statusLine: buildPluginStatusLine({ result, config: params.config }),
+        searchDebug: result.searchDebug,
+      });
+      return result;
+    }
+
+    const { rawReply, transcriptPath, searchDebug } = raceResult;
     const summary = truncateSummary(
       normalizeActiveSummary(rawReply) ?? "",
       params.config.maxSummaryChars,
@@ -1884,11 +1933,17 @@ export default definePluginEntry({
     };
     warnDeprecatedModelFallbackPolicy(api.pluginConfig);
     const refreshLiveConfigFromRuntime = () => {
-      const livePluginConfig =
-        resolveActiveMemoryPluginConfigFromConfig(api.runtime.config.loadConfig()) ??
-        api.pluginConfig;
-      config = normalizePluginConfig(livePluginConfig);
-      warnDeprecatedModelFallbackPolicy(livePluginConfig);
+      const livePluginConfig = resolveLivePluginConfigObject(
+        api.runtime.config?.current
+          ? () => api.runtime.config.current() as OpenClawConfig
+          : undefined,
+        "active-memory",
+        api.pluginConfig as Record<string, unknown>,
+      );
+      config = normalizePluginConfig(livePluginConfig ?? { enabled: false });
+      if (livePluginConfig) {
+        warnDeprecatedModelFallbackPolicy(livePluginConfig);
+      }
     };
     api.registerCommand({
       name: "active-memory",
@@ -1902,7 +1957,7 @@ export default definePluginEntry({
           return { text: formatActiveMemoryCommandHelp() };
         }
         if (isGlobal) {
-          const currentConfig = api.runtime.config.loadConfig();
+          const currentConfig = api.runtime.config.current() as OpenClawConfig;
           if (action === "status") {
             return {
               text: `Active Memory: ${isActiveMemoryGloballyEnabled(currentConfig) ? "on" : "off"} globally.`,
@@ -1910,13 +1965,19 @@ export default definePluginEntry({
           }
           if (action === "on" || action === "enable" || action === "enabled") {
             const nextConfig = updateActiveMemoryGlobalEnabledInConfig(currentConfig, true);
-            await api.runtime.config.writeConfigFile(nextConfig);
+            await api.runtime.config.replaceConfigFile({
+              nextConfig,
+              afterWrite: { mode: "auto" },
+            });
             refreshLiveConfigFromRuntime();
             return { text: "Active Memory: on globally." };
           }
           if (action === "off" || action === "disable" || action === "disabled") {
             const nextConfig = updateActiveMemoryGlobalEnabledInConfig(currentConfig, false);
-            await api.runtime.config.writeConfigFile(nextConfig);
+            await api.runtime.config.replaceConfigFile({
+              nextConfig,
+              afterWrite: { mode: "auto" },
+            });
             refreshLiveConfigFromRuntime();
             return { text: "Active Memory: off globally." };
           }
@@ -1958,83 +2019,94 @@ export default definePluginEntry({
     });
 
     api.on("before_prompt_build", async (event, ctx) => {
-      const resolvedAgentId = resolveStatusUpdateAgentId(ctx);
-      const resolvedSessionKey =
-        ctx.sessionKey?.trim() ||
-        (resolvedAgentId
-          ? resolveCanonicalSessionKeyFromSessionId({
-              api,
-              agentId: resolvedAgentId,
-              sessionId: ctx.sessionId,
-            })
-          : undefined);
-      const effectiveAgentId =
-        resolvedAgentId || resolveStatusUpdateAgentId({ sessionKey: resolvedSessionKey });
-      if (await isSessionActiveMemoryDisabled({ api, sessionKey: resolvedSessionKey })) {
-        await persistPluginStatusLines({
+      try {
+        refreshLiveConfigFromRuntime();
+        const resolvedAgentId = resolveStatusUpdateAgentId(ctx);
+        const resolvedSessionKey =
+          ctx.sessionKey?.trim() ||
+          (resolvedAgentId
+            ? resolveCanonicalSessionKeyFromSessionId({
+                api,
+                agentId: resolvedAgentId,
+                sessionId: ctx.sessionId,
+              })
+            : undefined);
+        const effectiveAgentId =
+          resolvedAgentId || resolveStatusUpdateAgentId({ sessionKey: resolvedSessionKey });
+        if (await isSessionActiveMemoryDisabled({ api, sessionKey: resolvedSessionKey })) {
+          await persistPluginStatusLines({
+            api,
+            agentId: effectiveAgentId,
+            sessionKey: resolvedSessionKey,
+          });
+          return undefined;
+        }
+        if (!isEnabledForAgent(config, effectiveAgentId)) {
+          await persistPluginStatusLines({
+            api,
+            agentId: effectiveAgentId,
+            sessionKey: resolvedSessionKey,
+          });
+          return undefined;
+        }
+        if (!isEligibleInteractiveSession(ctx)) {
+          await persistPluginStatusLines({
+            api,
+            agentId: effectiveAgentId,
+            sessionKey: resolvedSessionKey,
+          });
+          return undefined;
+        }
+        if (
+          !isAllowedChatType(config, {
+            ...ctx,
+            sessionKey: resolvedSessionKey ?? ctx.sessionKey,
+            mainKey: api.config.session?.mainKey,
+          })
+        ) {
+          await persistPluginStatusLines({
+            api,
+            agentId: effectiveAgentId,
+            sessionKey: resolvedSessionKey,
+          });
+          return undefined;
+        }
+        const query = buildQuery({
+          latestUserMessage: event.prompt,
+          recentTurns: extractRecentTurns(event.messages),
+          config,
+        });
+        const result = await maybeResolveActiveRecall({
           api,
+          config,
           agentId: effectiveAgentId,
           sessionKey: resolvedSessionKey,
+          sessionId: ctx.sessionId,
+          messageProvider: ctx.messageProvider,
+          channelId: ctx.channelId,
+          query,
+          currentModelProviderId: ctx.modelProviderId,
+          currentModelId: ctx.modelId,
         });
+        if (!result.summary) {
+          return undefined;
+        }
+        const promptPrefix = buildPromptPrefix(result.summary);
+        if (!promptPrefix) {
+          return undefined;
+        }
+        return {
+          prependContext: promptPrefix,
+        };
+      } catch (error) {
+        const message = toSingleLineLogValue(
+          error instanceof Error ? error.message : String(error),
+        );
+        api.logger.warn?.(
+          `active-memory: before_prompt_build failed, skipping memory lookup: ${message}`,
+        );
         return undefined;
       }
-      if (!isEnabledForAgent(config, effectiveAgentId)) {
-        await persistPluginStatusLines({
-          api,
-          agentId: effectiveAgentId,
-          sessionKey: resolvedSessionKey,
-        });
-        return undefined;
-      }
-      if (!isEligibleInteractiveSession(ctx)) {
-        await persistPluginStatusLines({
-          api,
-          agentId: effectiveAgentId,
-          sessionKey: resolvedSessionKey,
-        });
-        return undefined;
-      }
-      if (
-        !isAllowedChatType(config, {
-          ...ctx,
-          sessionKey: resolvedSessionKey ?? ctx.sessionKey,
-          mainKey: api.config.session?.mainKey,
-        })
-      ) {
-        await persistPluginStatusLines({
-          api,
-          agentId: effectiveAgentId,
-          sessionKey: resolvedSessionKey,
-        });
-        return undefined;
-      }
-      const query = buildQuery({
-        latestUserMessage: event.prompt,
-        recentTurns: extractRecentTurns(event.messages),
-        config,
-      });
-      const result = await maybeResolveActiveRecall({
-        api,
-        config,
-        agentId: effectiveAgentId,
-        sessionKey: resolvedSessionKey,
-        sessionId: ctx.sessionId,
-        messageProvider: ctx.messageProvider,
-        channelId: ctx.channelId,
-        query,
-        currentModelProviderId: ctx.modelProviderId,
-        currentModelId: ctx.modelId,
-      });
-      if (!result.summary) {
-        return undefined;
-      }
-      const promptPrefix = buildPromptPrefix(result.summary);
-      if (!promptPrefix) {
-        return undefined;
-      }
-      return {
-        prependContext: promptPrefix,
-      };
     });
   },
 });

@@ -2,7 +2,7 @@
 summary: "How inbound audio/voice notes are downloaded, transcribed, and injected into replies"
 read_when:
   - Changing audio transcription or media handling
-title: "Audio and Voice Notes"
+title: "Audio and voice notes"
 ---
 
 # Audio / Voice Notes (2026-01-17)
@@ -31,7 +31,7 @@ OpenClaw auto-detects in this order and stops at the first working option:
 3. **Gemini CLI** (`gemini`) using `read_many_files`
 4. **Provider auth**
    - Configured `models.providers.*` entries that support audio are tried first
-   - Bundled fallback order: OpenAI → Groq → Deepgram → Google → Mistral
+   - Bundled fallback order: OpenAI → Groq → xAI → Deepgram → Google → SenseAudio → ElevenLabs → Mistral
 
 To disable auto-detection, set `tools.media.audio.enabled: false`.
 To customize, set `tools.media.audio.models`.
@@ -112,6 +112,21 @@ Note: Binary detection is best-effort across macOS/Linux/Windows; ensure the CLI
 }
 ```
 
+### Provider-only (SenseAudio)
+
+```json5
+{
+  tools: {
+    media: {
+      audio: {
+        enabled: true,
+        models: [{ provider: "senseaudio", model: "senseaudio-asr-pro-1.5-260319" }],
+      },
+    },
+  },
+}
+```
+
 ### Echo transcript to chat (opt-in)
 
 ```json5
@@ -136,6 +151,8 @@ Note: Binary detection is best-effort across macOS/Linux/Windows; ensure the CLI
 - Deepgram picks up `DEEPGRAM_API_KEY` when `provider: "deepgram"` is used.
 - Deepgram setup details: [Deepgram (audio transcription)](/providers/deepgram).
 - Mistral setup details: [Mistral](/providers/mistral).
+- SenseAudio picks up `SENSEAUDIO_API_KEY` when `provider: "senseaudio"` is used.
+- SenseAudio setup details: [SenseAudio](/providers/senseaudio).
 - Audio providers can override `baseUrl`, `headers`, and `providerOptions` via `tools.media.audio`.
 - Default size cap is 20MB (`tools.media.audio.maxBytes`). Oversize audio is skipped for that model and the next entry is tried.
 - Tiny/empty audio files below 1024 bytes are skipped before provider/CLI transcription.
@@ -146,6 +163,7 @@ Note: Binary detection is best-effort across macOS/Linux/Windows; ensure the CLI
 - `tools.media.audio.echoTranscript` is off by default; enable it to send transcript confirmation back to the originating chat before agent processing.
 - `tools.media.audio.echoFormat` customizes the echo text (placeholder: `{transcript}`).
 - CLI stdout is capped (5MB); keep CLI output concise.
+- CLI `args` should use `{{MediaPath}}` for the local audio file path. Run `openclaw doctor --fix` to migrate deprecated `{input}` placeholders from older `audio.transcription.command` configs.
 
 ### Proxy environment support
 
@@ -153,12 +171,14 @@ Provider-based audio transcription honors standard outbound proxy env vars:
 
 - `HTTPS_PROXY`
 - `HTTP_PROXY`
+- `ALL_PROXY`
 - `https_proxy`
 - `http_proxy`
+- `all_proxy`
 
 If no proxy env vars are set, direct egress is used. If proxy config is malformed, OpenClaw logs a warning and falls back to direct fetch.
 
-## Mention Detection in Groups
+## Mention detection in groups
 
 When `requireMention: true` is set for a group chat, OpenClaw now transcribes audio **before** checking for mentions. This allows voice notes to be processed even when they contain mentions.
 
@@ -189,3 +209,9 @@ When `requireMention: true` is set for a group chat, OpenClaw now transcribes au
 - For `parakeet-mlx`, if you pass `--output-dir`, OpenClaw reads `<output-dir>/<media-basename>.txt` when `--output-format` is `txt` (or omitted); non-`txt` output formats fall back to stdout parsing.
 - Keep timeouts reasonable (`timeoutSeconds`, default 60s) to avoid blocking the reply queue.
 - Preflight transcription only processes the **first** audio attachment for mention detection. Additional audio is processed during the main media understanding phase.
+
+## Related
+
+- [Media understanding](/nodes/media-understanding)
+- [Talk mode](/nodes/talk)
+- [Voice wake](/nodes/voicewake)

@@ -127,11 +127,15 @@ describe("memory search config", () => {
   function expectMergedRemoteConfig(
     resolved: ReturnType<typeof resolveMemorySearchConfig>,
     apiKey: unknown,
+    extras?: { nonBatchConcurrency?: number },
   ) {
     expect(resolved?.remote).toEqual({
       baseUrl: "https://agent.example/v1",
       apiKey,
       headers: { "X-Default": "on" },
+      ...(typeof extras?.nonBatchConcurrency === "number"
+        ? { nonBatchConcurrency: extras.nonBatchConcurrency }
+        : {}),
       batch: {
         enabled: false,
         wait: true,
@@ -225,12 +229,30 @@ describe("memory search config", () => {
       watch: false,
       watchDebounceMs: 25,
       intervalMinutes: 3,
+      embeddingBatchTimeoutSeconds: undefined,
       sessions: {
         deltaBytes: 321,
         deltaMessages: 7,
         postCompactionForce: false,
       },
     });
+  });
+
+  it("uses configured embeddingBatchTimeoutSeconds when set", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            sync: {
+              embeddingBatchTimeoutSeconds: 600,
+            },
+          },
+        },
+      },
+    });
+
+    expect(resolveMemorySearchSyncConfig(cfg, "main")?.embeddingBatchTimeoutSeconds).toBe(600);
   });
 
   it("merges defaults and overrides", () => {
@@ -462,6 +484,33 @@ describe("memory search config", () => {
     expect(resolved?.model).toBe("nomic-embed-text");
   });
 
+  it("merges memory search input_type overrides", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            inputType: "passage",
+            queryInputType: "query",
+          },
+        },
+        list: [
+          {
+            id: "main",
+            default: true,
+            memorySearch: {
+              documentInputType: "document",
+            },
+          },
+        ],
+      },
+    });
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expect(resolved?.inputType).toBe("passage");
+    expect(resolved?.queryInputType).toBe("query");
+    expect(resolved?.documentInputType).toBe("document");
+  });
+
   it("defaults session delta thresholds", () => {
     const cfg = asConfig({
       agents: {
@@ -488,6 +537,18 @@ describe("memory search config", () => {
     });
     const resolved = resolveMemorySearchConfig(cfg, "main");
     expectMergedRemoteConfig(resolved, "default-key"); // pragma: allowlist secret
+  });
+
+  it("merges remote non-batch concurrency from defaults with agent overrides", () => {
+    const cfg = configWithRemoteDefaults({
+      apiKey: "default-key", // pragma: allowlist secret
+      headers: { "X-Default": "on" },
+      nonBatchConcurrency: 1,
+    });
+
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+
+    expectMergedRemoteConfig(resolved, "default-key", { nonBatchConcurrency: 1 }); // pragma: allowlist secret
   });
 
   it("preserves SecretRef remote apiKey when merging defaults with agent overrides", () => {

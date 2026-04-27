@@ -8,6 +8,7 @@ import { WebSocket } from "ws";
 import type { VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
 import type { VoiceCallProvider } from "../providers/base.js";
+import type { CallRecord } from "../types.js";
 import { connectWs, startUpgradeWsServer, waitForClose } from "../websocket-test-support.js";
 import { RealtimeCallHandler } from "./realtime-handler.js";
 
@@ -19,21 +20,22 @@ function makeRequest(url: string, host = "gateway.ts.net"): http.IncomingMessage
   return req;
 }
 
-function makeBridge(): RealtimeVoiceBridge {
+function makeBridge(overrides: Partial<RealtimeVoiceBridge> = {}): RealtimeVoiceBridge {
   return {
     connect: async () => {},
     sendAudio: () => {},
     setMediaTimestamp: () => {},
-    submitToolResult: () => {},
+    submitToolResult: vi.fn(),
     acknowledgeMark: () => {},
     close: () => {},
     isConnected: () => true,
     triggerGreeting: () => {},
+    ...overrides,
   };
 }
 
 function makeRealtimeProvider(
-  createBridge: () => RealtimeVoiceBridge,
+  createBridge: RealtimeVoiceProviderPlugin["createBridge"],
 ): RealtimeVoiceProviderPlugin {
   return {
     id: "openai",
@@ -51,15 +53,17 @@ function makeHandler(
     realtimeProvider?: RealtimeVoiceProviderPlugin;
   },
 ) {
+  const config: VoiceCallRealtimeConfig = {
+    enabled: true,
+    streamPath: overrides?.streamPath ?? "/voice/stream/realtime",
+    instructions: overrides?.instructions ?? "Be helpful.",
+    toolPolicy: overrides?.toolPolicy ?? "safe-read-only",
+    tools: overrides?.tools ?? [],
+    providers: overrides?.providers ?? {},
+    ...(overrides?.provider ? { provider: overrides.provider } : {}),
+  };
   return new RealtimeCallHandler(
-    {
-      enabled: true,
-      streamPath: "/voice/stream/realtime",
-      instructions: "Be helpful.",
-      tools: [],
-      providers: {},
-      ...overrides,
-    },
+    config,
     {
       processEvent: vi.fn(),
       getCallByProviderCallId: vi.fn(),
@@ -123,6 +127,213 @@ describe("RealtimeCallHandler path routing", () => {
     expect(payload.body).toMatch(
       /wss:\/\/public\.example\/api\/custom\/stream\/realtime\/[0-9a-f-]{36}/,
     );
+  });
+
+  it("normalizes Twilio outbound realtime directions", async () => {
+    let callbacks:
+      | {
+          onReady?: () => void;
+        }
+      | undefined;
+    const createBridge = vi.fn(
+      (request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]) => {
+        callbacks = request;
+        return makeBridge();
+      },
+    );
+    const processEvent = vi.fn();
+    const getCallByProviderCallId = vi.fn(
+      (): CallRecord => ({
+        callId: "call-1",
+        providerCallId: "CA-outbound",
+        provider: "twilio",
+        direction: "outbound",
+        state: "ringing",
+        from: "+15550001234",
+        to: "+15550009999",
+        startedAt: Date.now(),
+        transcript: [],
+        processedEventIds: [],
+        metadata: {},
+      }),
+    );
+    const handler = makeHandler(undefined, {
+      manager: {
+        processEvent,
+        getCallByProviderCallId,
+      },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    const payload = handler.buildTwiMLPayload(
+      makeRequest("/voice/webhook"),
+      new URLSearchParams({
+        Direction: "outbound-dial",
+        From: "+15550001234",
+        To: "+15550009999",
+      }),
+    );
+    const match = payload.body.match(/wss:\/\/[^/]+(\/[^"]+)/);
+    if (!match) {
+      throw new Error("Failed to extract realtime stream path");
+    }
+    const server = await startUpgradeWsServer({
+      urlPath: match[1],
+      onUpgrade: (request, socket, head) => {
+        handler.handleWebSocketUpgrade(request, socket, head);
+      },
+    });
+
+    try {
+      const ws = await connectWs(server.url);
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            start: { streamSid: "MZ-outbound", callSid: "CA-outbound" },
+          }),
+        );
+        await vi.waitFor(() => {
+          expect(createBridge).toHaveBeenCalled();
+        });
+        callbacks?.onReady?.();
+        expect(processEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: "call.initiated",
+            direction: "outbound",
+            from: "+15550001234",
+            to: "+15550009999",
+          }),
+        );
+      } finally {
+        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+          ws.close();
+        }
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("submits continuing responses only for realtime agent consult calls", async () => {
+    let callbacks:
+      | {
+          onToolCall?: (event: {
+            itemId: string;
+            callId: string;
+            name: string;
+            args: unknown;
+          }) => void;
+        }
+      | undefined;
+    let resolveConsult: ((value: unknown) => void) | undefined;
+    const submitToolResult = vi.fn();
+    const bridge = makeBridge({
+      supportsToolResultContinuation: true,
+      submitToolResult,
+    });
+    const createBridge = vi.fn(
+      (request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]) => {
+        callbacks = request;
+        return bridge;
+      },
+    );
+    const getCallByProviderCallId = vi.fn(
+      (): CallRecord => ({
+        callId: "call-1",
+        providerCallId: "CA-tool",
+        provider: "twilio",
+        direction: "inbound",
+        state: "ringing",
+        from: "+15550001234",
+        to: "+15550009999",
+        startedAt: Date.now(),
+        transcript: [],
+        processedEventIds: [],
+        metadata: {},
+      }),
+    );
+    const handler = makeHandler(undefined, {
+      manager: {
+        getCallByProviderCallId,
+      },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    handler.registerToolHandler(
+      "openclaw_agent_consult",
+      () =>
+        new Promise((resolve) => {
+          resolveConsult = resolve;
+        }),
+    );
+    handler.registerToolHandler("custom_lookup", async () => ({ ok: true }));
+    const server = await startRealtimeServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            start: { streamSid: "MZ-tool", callSid: "CA-tool" },
+          }),
+        );
+        await vi.waitFor(() => {
+          expect(createBridge).toHaveBeenCalled();
+        });
+
+        callbacks?.onToolCall?.({
+          itemId: "item-1",
+          callId: "consult-call",
+          name: "openclaw_agent_consult",
+          args: { question: "Are the basement lights on?" },
+        });
+
+        await vi.waitFor(() => {
+          expect(submitToolResult).toHaveBeenCalledWith(
+            "consult-call",
+            expect.objectContaining({
+              status: "working",
+              tool: "openclaw_agent_consult",
+            }),
+            { willContinue: true },
+          );
+        });
+        expect(submitToolResult).toHaveBeenCalledTimes(1);
+
+        resolveConsult?.({ text: "The basement lights are on." });
+
+        await vi.waitFor(() => {
+          expect(submitToolResult).toHaveBeenLastCalledWith(
+            "consult-call",
+            {
+              text: "The basement lights are on.",
+            },
+            undefined,
+          );
+        });
+
+        submitToolResult.mockClear();
+        callbacks?.onToolCall?.({
+          itemId: "item-2",
+          callId: "custom-call",
+          name: "custom_lookup",
+          args: {},
+        });
+
+        await vi.waitFor(() => {
+          expect(submitToolResult).toHaveBeenCalledWith("custom-call", { ok: true }, undefined);
+        });
+        expect(submitToolResult).not.toHaveBeenCalledWith("custom-call", expect.anything(), {
+          willContinue: true,
+        });
+      } finally {
+        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+          ws.close();
+        }
+      }
+    } finally {
+      await server.close();
+    }
   });
 });
 

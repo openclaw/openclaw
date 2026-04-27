@@ -1,13 +1,37 @@
+import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import {
-  installBundledRuntimeDeps,
+  createBundledRuntimeDepsWritableInstallSpecs,
+  repairBundledRuntimeDepsInstallRootAsync,
+  resolveBundledRuntimeDependencyPackageInstallRootPlan,
   scanBundledPluginRuntimeDeps,
+  type BundledRuntimeDepsInstallParams,
 } from "../plugins/bundled-runtime-deps.js";
+import { resolveEffectivePluginIds } from "../plugins/effective-plugin-ids.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+
+const RUNTIME_DEPS_INSTALL_HEARTBEAT_MS = 15_000;
+
+function formatElapsedMs(elapsedMs: number): string {
+  if (elapsedMs < 1000) {
+    return `${elapsedMs}ms`;
+  }
+  const seconds = Math.round(elapsedMs / 1000);
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return remainingSeconds > 0 ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`;
+}
+
+function logRuntimeDepsInstallProgress(runtime: RuntimeEnv, message: string): void {
+  runtime.log(message);
+}
 
 export async function maybeRepairBundledPluginRuntimeDeps(params: {
   runtime: RuntimeEnv;
@@ -15,7 +39,8 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   packageRoot?: string | null;
-  installDeps?: (params: { installRoot: string; missingSpecs: string[] }) => void;
+  includeConfiguredChannels?: boolean;
+  installDeps?: (params: BundledRuntimeDepsInstallParams) => void | Promise<void>;
 }): Promise<void> {
   const packageRoot =
     params.packageRoot ??
@@ -28,9 +53,23 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
     return;
   }
 
-  const { missing, conflicts } = scanBundledPluginRuntimeDeps({
+  const env = params.env ?? process.env;
+  const bundledPluginsDir = path.join(packageRoot, "dist", "extensions");
+  const effectivePluginIds = params.config
+    ? resolveEffectivePluginIds({
+        config: params.config,
+        env: {
+          ...env,
+          OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
+        },
+      })
+    : undefined;
+  const { deps, missing, conflicts } = scanBundledPluginRuntimeDeps({
     packageRoot,
     config: params.config,
+    pluginIds: effectivePluginIds,
+    includeConfiguredChannels: params.includeConfiguredChannels,
+    env,
   });
   if (conflicts.length > 0) {
     const conflictLines = conflicts.flatMap((conflict) =>
@@ -56,6 +95,14 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
   }
 
   const missingSpecs = missing.map((dep) => `${dep.name}@${dep.version}`);
+  const installRootPlan = resolveBundledRuntimeDependencyPackageInstallRootPlan(packageRoot, {
+    env,
+  });
+  const installSpecs = createBundledRuntimeDepsWritableInstallSpecs({
+    deps,
+    searchRoots: installRootPlan.searchRoots,
+    installRoot: installRootPlan.installRoot,
+  });
   note(
     [
       "Bundled plugin runtime deps are missing.",
@@ -67,6 +114,7 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
 
   const shouldRepair =
     params.prompter.shouldRepair ||
+    params.prompter.repairMode.nonInteractive ||
     (await params.prompter.confirmAutoFix({
       message: "Install missing bundled plugin runtime deps now?",
       initialValue: true,
@@ -75,18 +123,52 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
     return;
   }
 
+  let heartbeat: NodeJS.Timeout | undefined;
+  let progress: { setLabel: (label: string) => void; done: () => void } | undefined;
   try {
-    const install =
-      params.installDeps ??
-      ((installParams) =>
-        installBundledRuntimeDeps({
-          installRoot: installParams.installRoot,
-          missingSpecs: installParams.missingSpecs,
-          env: params.env ?? process.env,
-        }));
-    install({ installRoot: packageRoot, missingSpecs });
-    note(`Installed bundled plugin deps: ${missingSpecs.join(", ")}`, "Bundled plugins");
+    const { createCliProgress } = await import("../cli/progress.js");
+    progress = createCliProgress({
+      label: `Installing bundled plugin runtime deps (${missingSpecs.length})`,
+      indeterminate: true,
+      enabled: process.env.VITEST !== "true" || process.env.OPENCLAW_TEST_RUNTIME_LOG === "1",
+    });
+    const installStartedAt = Date.now();
+    logRuntimeDepsInstallProgress(
+      params.runtime,
+      `Installing bundled plugin runtime deps (${missingSpecs.length} missing, ${installSpecs.length} install specs): ${missingSpecs.join(", ")}`,
+    );
+    heartbeat = setInterval(() => {
+      logRuntimeDepsInstallProgress(
+        params.runtime,
+        `Still installing bundled plugin runtime deps after ${formatElapsedMs(Date.now() - installStartedAt)}...`,
+      );
+    }, RUNTIME_DEPS_INSTALL_HEARTBEAT_MS);
+    heartbeat.unref?.();
+    const result = await repairBundledRuntimeDepsInstallRootAsync({
+      installRoot: installRootPlan.installRoot,
+      missingSpecs,
+      installSpecs,
+      env: params.env ?? process.env,
+      installDeps: params.installDeps
+        ? async (installParams) => {
+            await params.installDeps?.(installParams);
+          }
+        : undefined,
+      warn: (message) => logRuntimeDepsInstallProgress(params.runtime, message),
+      onProgress: (message) => progress?.setLabel(message),
+    });
+    logRuntimeDepsInstallProgress(
+      params.runtime,
+      `Installed bundled plugin runtime deps in ${formatElapsedMs(Date.now() - installStartedAt)}: ${result.installSpecs.join(", ")}`,
+    );
+    note(`Installed bundled plugin deps: ${result.installSpecs.join(", ")}`, "Bundled plugins");
   } catch (error) {
     params.runtime.error(`Failed to install bundled plugin runtime deps: ${String(error)}`);
+    throw error instanceof Error ? error : new Error(String(error));
+  } finally {
+    if (heartbeat) {
+      clearInterval(heartbeat);
+    }
+    progress?.done();
   }
 }

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   listAgentIds,
+  resolveAgentConfig,
   resolveAgentEffectiveModelPrimary,
   resolveAgentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
@@ -17,15 +18,23 @@ import {
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
   resolvePersistedSelectedModelRef,
+  resolveThinkingDefault,
 } from "../agents/model-selection.js";
 import {
+  countActiveDescendantRuns,
   getSessionDisplaySubagentRunByChildSessionKey,
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
+  isSubagentRunLive,
   listSubagentRunsForController,
   resolveSubagentSessionStatus,
 } from "../agents/subagent-registry-read.js";
-import { loadConfig } from "../config/config.js";
+import {
+  RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
+  shouldKeepSubagentRunChildLink,
+} from "../agents/subagent-run-liveness.js";
+import { listThinkingLevelOptions } from "../auto-reply/thinking.js";
+import { getRuntimeConfig } from "../config/io.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -77,6 +86,7 @@ import type {
   GatewayAgentRow,
   GatewaySessionRow,
   GatewaySessionsDefaults,
+  SessionRunStatus,
   SessionsListResult,
 } from "./session-utils.types.js";
 
@@ -287,9 +297,36 @@ function resolveEstimatedSessionCostUsd(params: {
   return resolveNonNegativeNumber(estimated);
 }
 
+const STALE_STORE_ONLY_CHILD_LINK_MS = 60 * 60 * 1_000;
+
+function isFinitePositiveTimestamp(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function isTerminalSessionStatus(status: unknown): status is Exclude<SessionRunStatus, "running"> {
+  return status === "done" || status === "failed" || status === "killed" || status === "timeout";
+}
+
+function shouldKeepStoreOnlyChildLink(entry: SessionEntry, now: number): boolean {
+  if (isTerminalSessionStatus(entry.status) || isFinitePositiveTimestamp(entry.endedAt)) {
+    const endedAt = isFinitePositiveTimestamp(entry.endedAt) ? entry.endedAt : entry.updatedAt;
+    return (
+      isFinitePositiveTimestamp(endedAt) && now - endedAt <= RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS
+    );
+  }
+  if (entry.status === "running" || isFinitePositiveTimestamp(entry.startedAt)) {
+    return true;
+  }
+  return (
+    isFinitePositiveTimestamp(entry.updatedAt) &&
+    now - entry.updatedAt <= STALE_STORE_ONLY_CHILD_LINK_MS
+  );
+}
+
 function resolveChildSessionKeys(
   controllerSessionKey: string,
   store: Record<string, SessionEntry>,
+  now = Date.now(),
 ): string[] | undefined {
   const childSessionKeys = new Set<string>();
   for (const entry of listSubagentRunsForController(controllerSessionKey)) {
@@ -298,10 +335,21 @@ function resolveChildSessionKeys(
       continue;
     }
     const latest = getSessionDisplaySubagentRunByChildSessionKey(childSessionKey);
+    if (!latest) {
+      continue;
+    }
     const latestControllerSessionKey =
       normalizeOptionalString(latest?.controllerSessionKey) ||
       normalizeOptionalString(latest?.requesterSessionKey);
     if (latestControllerSessionKey !== controllerSessionKey) {
+      continue;
+    }
+    if (
+      !shouldKeepSubagentRunChildLink(latest, {
+        activeDescendants: countActiveDescendantRuns(childSessionKey),
+        now,
+      })
+    ) {
       continue;
     }
     childSessionKeys.add(childSessionKey);
@@ -323,6 +371,16 @@ function resolveChildSessionKeys(
       if (latestControllerSessionKey !== controllerSessionKey) {
         continue;
       }
+      if (
+        !shouldKeepSubagentRunChildLink(latest, {
+          activeDescendants: countActiveDescendantRuns(key),
+          now,
+        })
+      ) {
+        continue;
+      }
+    } else if (!shouldKeepStoreOnlyChildLink(entry, now)) {
+      continue;
     }
     childSessionKeys.add(key);
   }
@@ -414,7 +472,7 @@ export function resolveDeletedAgentIdFromSessionKey(
 }
 
 export function loadSessionEntry(sessionKey: string) {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const key = normalizeOptionalString(sessionKey) ?? "";
   const target = resolveGatewaySessionStoreTarget({
     cfg,
@@ -977,88 +1035,25 @@ export function resolveGatewaySessionStoreTarget(params: {
   };
 }
 
-// Merge with existing entry based on latest timestamp to ensure data consistency and avoid overwriting with less complete data.
-function mergeSessionEntryIntoCombined(params: {
+export { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
+
+function resolveGatewaySessionThinkingDefault(params: {
   cfg: OpenClawConfig;
-  combined: Record<string, SessionEntry>;
-  entry: SessionEntry;
-  agentId: string;
-  canonicalKey: string;
+  provider: string;
+  model: string;
+  agentId?: string;
 }) {
-  const { cfg, combined, entry, agentId, canonicalKey } = params;
-  const existing = combined[canonicalKey];
-
-  if (existing && (existing.updatedAt ?? 0) > (entry.updatedAt ?? 0)) {
-    combined[canonicalKey] = {
-      ...entry,
-      ...existing,
-      spawnedBy: canonicalizeSpawnedByForAgent(cfg, agentId, existing.spawnedBy ?? entry.spawnedBy),
-    };
-  } else {
-    combined[canonicalKey] = {
-      ...existing,
-      ...entry,
-      spawnedBy: canonicalizeSpawnedByForAgent(
-        cfg,
-        agentId,
-        entry.spawnedBy ?? existing?.spawnedBy,
-      ),
-    };
-  }
-}
-
-export function loadCombinedSessionStoreForGateway(cfg: OpenClawConfig): {
-  storePath: string;
-  store: Record<string, SessionEntry>;
-} {
-  const storeConfig = cfg.session?.store;
-  if (storeConfig && !isStorePathTemplate(storeConfig)) {
-    const storePath = resolveStorePath(storeConfig);
-    const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
-    const store = loadSessionStore(storePath);
-    const combined: Record<string, SessionEntry> = {};
-    for (const [key, entry] of Object.entries(store)) {
-      const canonicalKey = resolveStoredSessionKeyForAgentStore({
-        cfg,
-        agentId: defaultAgentId,
-        sessionKey: key,
-      });
-      mergeSessionEntryIntoCombined({
-        cfg,
-        combined,
-        entry,
-        agentId: defaultAgentId,
-        canonicalKey,
-      });
-    }
-    return { storePath, store: combined };
-  }
-
-  const targets = resolveAllAgentSessionStoreTargetsSync(cfg);
-  const combined: Record<string, SessionEntry> = {};
-  for (const target of targets) {
-    const agentId = target.agentId;
-    const storePath = target.storePath;
-    const store = loadSessionStore(storePath);
-    for (const [key, entry] of Object.entries(store)) {
-      const canonicalKey = resolveStoredSessionKeyForAgentStore({
-        cfg,
-        agentId,
-        sessionKey: key,
-      });
-      mergeSessionEntryIntoCombined({
-        cfg,
-        combined,
-        entry,
-        agentId,
-        canonicalKey,
-      });
-    }
-  }
-
-  const storePath =
-    typeof storeConfig === "string" && storeConfig.trim() ? storeConfig.trim() : "(multiple)";
-  return { storePath, store: combined };
+  const agentThinkingDefault = params.agentId
+    ? resolveAgentConfig(params.cfg, params.agentId)?.thinkingDefault
+    : undefined;
+  return (
+    agentThinkingDefault ??
+    resolveThinkingDefault({
+      cfg: params.cfg,
+      provider: params.provider,
+      model: params.model,
+    })
+  );
 }
 
 export function getSessionDefaults(cfg: OpenClawConfig): GatewaySessionsDefaults {
@@ -1071,10 +1066,18 @@ export function getSessionDefaults(cfg: OpenClawConfig): GatewaySessionsDefaults
     cfg.agents?.defaults?.contextTokens ??
     lookupContextTokens(resolved.model, { allowAsyncLoad: false }) ??
     DEFAULT_CONTEXT_TOKENS;
+  const thinkingLevels = listThinkingLevelOptions(resolved.provider, resolved.model);
   return {
     modelProvider: resolved.provider ?? null,
     model: resolved.model ?? null,
     contextTokens: contextTokens ?? null,
+    thinkingLevels,
+    thinkingOptions: thinkingLevels.map((level) => level.label),
+    thinkingDefault: resolveGatewaySessionThinkingDefault({
+      cfg,
+      provider: resolved.provider,
+      model: resolved.model,
+    }),
   };
 }
 
@@ -1273,10 +1276,51 @@ export function buildGatewaySessionRow(params: {
   const subagentOwner =
     normalizeOptionalString(subagentRun?.controllerSessionKey) ||
     normalizeOptionalString(subagentRun?.requesterSessionKey);
-  const subagentStatus = subagentRun ? resolveSubagentSessionStatus(subagentRun) : undefined;
-  const subagentStartedAt = subagentRun ? getSubagentSessionStartedAt(subagentRun) : undefined;
-  const subagentEndedAt = subagentRun ? subagentRun.endedAt : undefined;
-  const subagentRuntimeMs = subagentRun ? resolveSessionRuntimeMs(subagentRun, now) : undefined;
+  const liveSubagentRunActive = isSubagentRunLive(subagentRun);
+  const persistedSessionStatus = entry?.status;
+  const persistedSessionEndedAt = entry?.endedAt;
+  const persistedSessionStartedAt = entry?.startedAt;
+  const persistedSessionRuntimeMs = entry?.runtimeMs;
+  const subagentRunState = subagentRun
+    ? liveSubagentRunActive
+      ? "active"
+      : typeof subagentRun.endedAt === "number" ||
+          persistedSessionStatus === "done" ||
+          persistedSessionStatus === "failed" ||
+          persistedSessionStatus === "killed" ||
+          persistedSessionStatus === "timeout" ||
+          typeof persistedSessionEndedAt === "number"
+        ? "historical"
+        : "interrupted"
+    : undefined;
+  const subagentStatus = subagentRun
+    ? liveSubagentRunActive
+      ? resolveSubagentSessionStatus(subagentRun)
+      : persistedSessionStatus === "running"
+        ? undefined
+        : (persistedSessionStatus ??
+          (typeof subagentRun.endedAt === "number"
+            ? resolveSubagentSessionStatus(subagentRun)
+            : undefined))
+    : undefined;
+  const subagentStartedAt = subagentRun
+    ? liveSubagentRunActive
+      ? getSubagentSessionStartedAt(subagentRun)
+      : (persistedSessionStartedAt ?? getSubagentSessionStartedAt(subagentRun))
+    : undefined;
+  const subagentEndedAt = subagentRun
+    ? liveSubagentRunActive
+      ? subagentRun.endedAt
+      : (persistedSessionEndedAt ?? subagentRun.endedAt)
+    : undefined;
+  const subagentRuntimeMs = subagentRun
+    ? liveSubagentRunActive
+      ? resolveSessionRuntimeMs(subagentRun, now)
+      : (persistedSessionRuntimeMs ??
+        (typeof subagentRun.endedAt === "number"
+          ? resolveSessionRuntimeMs(subagentRun, now)
+          : undefined))
+    : undefined;
   const selectedModel = entry?.modelOverride?.trim()
     ? resolveSessionModelRef(cfg, entry, sessionAgentId)
     : null;
@@ -1333,7 +1377,7 @@ export function buildGatewaySessionRow(params: {
     typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0
       ? true
       : transcriptUsage?.totalTokensFresh === true;
-  const childSessions = resolveChildSessionKeys(key, store);
+  const childSessions = resolveChildSessionKeys(key, store, now);
   const latestCompactionCheckpoint = resolveLatestCompactionCheckpoint(entry);
   const estimatedCostUsd =
     resolveEstimatedSessionCostUsd({
@@ -1372,6 +1416,12 @@ export function buildGatewaySessionRow(params: {
     }
   }
 
+  const rowModelProvider = selectedModel?.provider ?? modelProvider;
+  const rowModel = selectedModel?.model ?? model;
+  const thinkingProvider = rowModelProvider ?? DEFAULT_PROVIDER;
+  const thinkingModel = rowModel ?? DEFAULT_MODEL;
+  const thinkingLevels = listThinkingLevelOptions(thinkingProvider, thinkingModel);
+
   return {
     key,
     spawnedBy: subagentOwner || entry?.spawnedBy,
@@ -1396,6 +1446,14 @@ export function buildGatewaySessionRow(params: {
     systemSent: entry?.systemSent,
     abortedLastRun: entry?.abortedLastRun,
     thinkingLevel: entry?.thinkingLevel,
+    thinkingLevels,
+    thinkingOptions: thinkingLevels.map((level) => level.label),
+    thinkingDefault: resolveGatewaySessionThinkingDefault({
+      cfg,
+      provider: thinkingProvider,
+      model: thinkingModel,
+      agentId: sessionAgentId,
+    }),
     fastMode: entry?.fastMode,
     verboseLevel: entry?.verboseLevel,
     traceLevel: entry?.traceLevel,
@@ -1408,14 +1466,16 @@ export function buildGatewaySessionRow(params: {
     totalTokensFresh,
     estimatedCostUsd,
     status: subagentRun ? subagentStatus : entry?.status,
+    subagentRunState,
+    hasActiveSubagentRun: subagentRun ? liveSubagentRunActive : undefined,
     startedAt: subagentRun ? subagentStartedAt : entry?.startedAt,
     endedAt: subagentRun ? subagentEndedAt : entry?.endedAt,
     runtimeMs: subagentRun ? subagentRuntimeMs : entry?.runtimeMs,
     parentSessionKey: subagentOwner || entry?.parentSessionKey,
     childSessions,
     responseUsage: entry?.responseUsage,
-    modelProvider: selectedModel?.provider ?? modelProvider,
-    model: selectedModel?.model ?? model,
+    modelProvider: rowModelProvider,
+    model: rowModel,
     contextTokens,
     deliveryContext: deliveryFields.deliveryContext,
     lastChannel: deliveryFields.lastChannel ?? entry?.lastChannel,
@@ -1425,6 +1485,28 @@ export function buildGatewaySessionRow(params: {
     compactionCheckpointCount: entry?.compactionCheckpoints?.length,
     latestCompactionCheckpoint,
   };
+}
+
+function resolveSessionListSearchDisplayName(
+  key: string,
+  entry?: SessionEntry,
+): string | undefined {
+  if (entry?.displayName) {
+    return entry.displayName;
+  }
+  const parsed = parseGroupKey(key);
+  const channel = entry?.channel ?? parsed?.channel;
+  if (!channel) {
+    return undefined;
+  }
+  return buildGroupDisplayName({
+    provider: channel,
+    subject: entry?.subject,
+    groupChannel: entry?.groupChannel,
+    space: entry?.space,
+    id: parsed?.id,
+    key,
+  });
 }
 
 export function loadGatewaySessionRow(
@@ -1469,7 +1551,7 @@ export function listSessionsFromStore(params: {
       ? Math.max(1, Math.floor(opts.activeMinutes))
       : undefined;
 
-  let sessions = Object.entries(store)
+  let entries = Object.entries(store)
     .filter(([key]) => {
       if (isCronRunSessionKey(key)) {
         return false;
@@ -1504,9 +1586,18 @@ export function listSessionsFromStore(params: {
         const latestControllerSessionKey =
           normalizeOptionalString(latest.controllerSessionKey) ||
           normalizeOptionalString(latest.requesterSessionKey);
-        return latestControllerSessionKey === spawnedBy;
+        return (
+          latestControllerSessionKey === spawnedBy &&
+          shouldKeepSubagentRunChildLink(latest, {
+            activeDescendants: countActiveDescendantRuns(key),
+            now,
+          })
+        );
       }
-      return entry?.spawnedBy === spawnedBy || entry?.parentSessionKey === spawnedBy;
+      return (
+        shouldKeepStoreOnlyChildLink(entry, now) &&
+        (entry?.spawnedBy === spawnedBy || entry?.parentSessionKey === spawnedBy)
+      );
     })
     .filter(([, entry]) => {
       if (!label) {
@@ -1514,23 +1605,17 @@ export function listSessionsFromStore(params: {
       }
       return entry?.label === label;
     })
-    .map(([key, entry]) =>
-      buildGatewaySessionRow({
-        cfg,
-        storePath,
-        store,
-        key,
-        entry,
-        now,
-        includeDerivedTitles,
-        includeLastMessage,
-      }),
-    )
-    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+    .toSorted((a, b) => (b[1]?.updatedAt ?? 0) - (a[1]?.updatedAt ?? 0));
 
   if (search) {
-    sessions = sessions.filter((s) => {
-      const fields = [s.displayName, s.label, s.subject, s.sessionId, s.key];
+    entries = entries.filter(([key, entry]) => {
+      const fields = [
+        resolveSessionListSearchDisplayName(key, entry),
+        entry?.label,
+        entry?.subject,
+        entry?.sessionId,
+        key,
+      ];
       return fields.some(
         (f) => typeof f === "string" && normalizeLowercaseStringOrEmpty(f).includes(search),
       );
@@ -1539,13 +1624,26 @@ export function listSessionsFromStore(params: {
 
   if (activeMinutes !== undefined) {
     const cutoff = now - activeMinutes * 60_000;
-    sessions = sessions.filter((s) => (s.updatedAt ?? 0) >= cutoff);
+    entries = entries.filter(([, entry]) => (entry?.updatedAt ?? 0) >= cutoff);
   }
 
   if (typeof opts.limit === "number" && Number.isFinite(opts.limit)) {
     const limit = Math.max(1, Math.floor(opts.limit));
-    sessions = sessions.slice(0, limit);
+    entries = entries.slice(0, limit);
   }
+
+  const sessions = entries.map(([key, entry]) =>
+    buildGatewaySessionRow({
+      cfg,
+      storePath,
+      store,
+      key,
+      entry,
+      now,
+      includeDerivedTitles,
+      includeLastMessage,
+    }),
+  );
 
   return {
     ts: now,

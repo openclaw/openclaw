@@ -110,6 +110,14 @@ export const fr: TranslationMap = {
       lightningHelp: "Adresse Lightning pour les pourboires (LUD-16)",
     },
   },
+  lazyView: {
+    loadingTitle: "Chargement du panneau",
+    errorTitle: "Échec du chargement du panneau",
+    errorSubtitle:
+      "Rechargez la page pour charger la dernière version du bundle Control UI, ou réessayez si la requête réseau a échoué.",
+    retry: "Réessayer",
+    unknownError: "Erreur inconnue de chargement du module.",
+  },
   nodes: {
     binding: {
       loadConfigHint: "Chargez la config pour modifier les bindings.",
@@ -279,6 +287,8 @@ export const fr: TranslationMap = {
       tailscaleDocsLink: "Documentation : Tailscale Serve",
       insecureHttpDocsTitle: "Documentation sur HTTP non sécurisé (s’ouvre dans un nouvel onglet)",
       insecureHttpDocsLink: "Documentation : HTTP non sécurisé",
+      copyCommand: "Copier la commande",
+      copyCommandAria: "Copier la commande : {command}",
     },
     cards: {
       cost: "Coût",
@@ -314,6 +324,30 @@ export const fr: TranslationMap = {
     palette: {
       placeholder: "Saisissez une commande…",
       noResults: "Aucun résultat",
+      categories: {
+        search: "Recherche",
+        navigation: "Navigation",
+        skills: "Skills",
+      },
+      items: {
+        overview: "Vue d’ensemble",
+        sessions: "Sessions",
+        scheduled: "Planifié",
+        skills: "Skills",
+        settings: "Paramètres",
+        agents: "Agents",
+        shellCommand: "Commande shell",
+        debugMode: "Mode débogage",
+      },
+      descriptions: {
+        shellCommand: "Exécuter le shell",
+        debugMode: "Basculer le débogage",
+      },
+      footer: {
+        navigate: "naviguer",
+        select: "sélectionner",
+        close: "fermer",
+      },
     },
   },
   dreaming: {
@@ -327,6 +361,15 @@ export const fr: TranslationMap = {
       refreshing: "Actualisation…",
       on: "Rêverie activée",
       off: "Rêverie désactivée",
+    },
+    restartConfirmation: {
+      title: "Restart Gateway to Apply Change",
+      subtitle: "Changing Dreaming mode restarts the gateway.",
+      warning:
+        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      confirm: "Confirm Restart",
+      restarting: "Restarting…",
+      failed: "Could not apply change. Check your connection and try again.",
     },
     status: {
       active: "Rêverie active",
@@ -684,6 +727,7 @@ export const fr: TranslationMap = {
     uk: "Українська (ukrainien)",
     id: "Bahasa Indonesia (indonésien)",
     pl: "Polski (polonais)",
+    th: "ไทย (thaï)",
   },
   cron: {
     summary: {

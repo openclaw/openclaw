@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../../test/helpers/import-fresh.ts";
+import { shouldExpectNativeJitiForJavaScriptTestRuntime } from "../../test-utils/jiti-runtime.js";
 import {
   isJavaScriptModulePath,
   resolveCompiledBundledModulePath,
@@ -68,7 +69,31 @@ describe("channel plugin module loader helpers", () => {
     expect(isJavaScriptModulePath("/tmp/entry.ts")).toBe(false);
   });
 
-  it("keeps Windows dist loads off Jiti native import", async () => {
+  it("uses native require for eligible JavaScript modules before falling back to Jiti", async () => {
+    const createJiti = vi.fn(() => vi.fn(() => ({ ok: false })));
+    vi.doMock("jiti", () => ({
+      createJiti,
+    }));
+    const loaderModule = await importFreshModule<typeof import("./module-loader.js")>(
+      import.meta.url,
+      "./module-loader.js?scope=native-require",
+    );
+    const rootDir = createTempDir();
+    const modulePath = path.join(rootDir, "dist", "extensions", "demo", "index.cjs");
+    fs.mkdirSync(path.dirname(modulePath), { recursive: true });
+    fs.writeFileSync(modulePath, "module.exports = { ok: true };\n", "utf8");
+
+    expect(
+      loaderModule.loadChannelPluginModule({
+        modulePath,
+        rootDir,
+        shouldTryNativeRequire: () => true,
+      }),
+    ).toEqual({ ok: true });
+    expect(createJiti).not.toHaveBeenCalled();
+  });
+
+  it("uses the runtime-supported Jiti boundary for Windows dist loads", async () => {
     const createJiti = vi.fn(() => vi.fn(() => ({ ok: true })));
     vi.doMock("jiti", () => ({
       createJiti,
@@ -95,7 +120,7 @@ describe("channel plugin module loader helpers", () => {
       expect(createJiti).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({
-          tryNative: false,
+          tryNative: shouldExpectNativeJitiForJavaScriptTestRuntime(),
         }),
       );
     } finally {

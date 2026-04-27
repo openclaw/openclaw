@@ -1,10 +1,10 @@
-import { describe, expect, it } from "vitest";
+import type { WebFetchProviderPlugin } from "openclaw/plugin-sdk/provider-web-fetch-contract";
 import {
   pluginRegistrationContractRegistry,
+  resolveBundledExplicitWebFetchProvidersFromPublicArtifacts,
   resolveWebFetchProviderContractEntriesForPluginId,
-} from "../../../src/plugins/contracts/registry.js";
-import type { WebFetchProviderPlugin } from "../../../src/plugins/types.js";
-import { resolveBundledExplicitWebFetchProvidersFromPublicArtifacts } from "../../../src/plugins/web-provider-public-artifacts.explicit.js";
+} from "openclaw/plugin-sdk/testing";
+import { describe, expect, it } from "vitest";
 import { installWebFetchProviderContractSuite } from "./provider-contract-suites.js";
 
 function resolveWebFetchCredentialValue(provider: WebFetchProviderPlugin): unknown {
