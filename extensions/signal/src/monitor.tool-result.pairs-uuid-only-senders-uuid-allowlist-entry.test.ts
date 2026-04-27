@@ -109,6 +109,8 @@ describe("monitorSignalProvider tool results", () => {
       await monitorPromise;
 
       expect(streamMock).toHaveBeenCalledTimes(2);
+      expect(streamMock.mock.calls[0]?.[0]).toMatchObject({ timeoutMs: 0 });
+      expect(streamMock.mock.calls[1]?.[0]).toMatchObject({ timeoutMs: 0 });
     } finally {
       randomSpy.mockRestore();
       vi.useRealTimers();

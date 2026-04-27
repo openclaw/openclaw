@@ -45,6 +45,13 @@ function createSignalSseAbortError(): Error {
   return error;
 }
 
+function normalizeSignalSseTimeoutMs(timeoutMs: number): number | null {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return null;
+  }
+  return timeoutMs;
+}
+
 function normalizeBaseUrl(url: string): string {
   const trimmed = url.trim();
   if (!trimmed) {
@@ -248,15 +255,23 @@ function openSignalEventStream(
     let response: IncomingMessage | undefined;
     let onAbort: () => void = () => {};
     let request: ClientRequest;
-    const headerDeadline = setTimeout(() => {
-      const error = new Error(`Signal SSE connection timed out after ${timeoutMs}ms`);
-      response?.destroy(error);
-      request.destroy(error);
-      rejectOnce(error);
-    }, timeoutMs);
-    headerDeadline.unref?.();
+    const effectiveTimeoutMs = normalizeSignalSseTimeoutMs(timeoutMs);
+    const headerDeadline =
+      effectiveTimeoutMs === null
+        ? undefined
+        : setTimeout(() => {
+            const error = new Error(
+              `Signal SSE connection timed out after ${effectiveTimeoutMs}ms`,
+            );
+            response?.destroy(error);
+            request.destroy(error);
+            rejectOnce(error);
+          }, effectiveTimeoutMs);
+    headerDeadline?.unref?.();
     const cleanup = () => {
-      clearTimeout(headerDeadline);
+      if (headerDeadline) {
+        clearTimeout(headerDeadline);
+      }
       abortSignal?.removeEventListener("abort", onAbort);
     };
     const rejectOnce = (error: unknown) => {
@@ -284,7 +299,9 @@ function openSignalEventStream(
           res.destroy();
           return;
         }
-        clearTimeout(headerDeadline);
+        if (headerDeadline) {
+          clearTimeout(headerDeadline);
+        }
         settled = true;
         response = res;
         resolve({ response: res, cleanup });

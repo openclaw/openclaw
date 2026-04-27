@@ -489,6 +489,8 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       account,
       abortSignal: daemonLifecycle.abortSignal,
       runtime,
+      // signal-cli can keep the SSE event endpoint idle until the next inbound event.
+      timeoutMs: 0,
       policy: opts.reconnectPolicy,
       onEvent: (event) => {
         void handleEvent(event).catch((err) => {

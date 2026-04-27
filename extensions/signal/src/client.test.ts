@@ -230,6 +230,24 @@ describe("streamSignalEvents", () => {
     ).rejects.toThrow("Signal SSE connection timed out after 25ms");
   });
 
+  it("allows idle event streams to wait for abort when the deadline is disabled", async () => {
+    const baseUrl = await withSignalServer(() => {
+      // Leave the request open without response headers, matching idle signal-cli behavior.
+    });
+    const abortController = new AbortController();
+    const abortTimer = setTimeout(() => abortController.abort(), 25);
+    abortTimer.unref?.();
+
+    await expect(
+      streamSignalEvents({
+        baseUrl,
+        timeoutMs: 0,
+        abortSignal: abortController.signal,
+        onEvent: () => {},
+      }),
+    ).rejects.toMatchObject({ name: "AbortError", message: "Signal SSE aborted" });
+  });
+
   it("rejects oversized SSE line buffers by byte size", async () => {
     const baseUrl = await withSignalServer((_req, res) => {
       res.writeHead(200, { "Content-Type": "text/event-stream" });
