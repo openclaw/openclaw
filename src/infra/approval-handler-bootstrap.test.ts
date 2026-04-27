@@ -29,6 +29,17 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     await Promise.resolve();
   };
 
+  const createTestLogger = () => ({
+    error: vi.fn(),
+    warn: vi.fn(),
+    info: vi.fn(),
+    debug: vi.fn(),
+    child: vi.fn(),
+    isEnabled: vi.fn().mockReturnValue(true),
+    isVerboseEnabled: vi.fn().mockReturnValue(false),
+    verbose: vi.fn(),
+  });
+
   const createApprovalPlugin = () =>
     ({
       id: "slack",
@@ -181,16 +192,7 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     const channelRuntime = createRuntimeChannel();
     const start = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce(undefined);
     const stop = vi.fn().mockResolvedValue(undefined);
-    const logger = {
-      error: vi.fn(),
-      warn: vi.fn(),
-      info: vi.fn(),
-      debug: vi.fn(),
-      child: vi.fn(),
-      isEnabled: vi.fn().mockReturnValue(true),
-      isVerboseEnabled: vi.fn().mockReturnValue(false),
-      verbose: vi.fn(),
-    };
+    const logger = createTestLogger();
     createChannelApprovalHandlerFromCapability
       .mockResolvedValueOnce({ start, stop })
       .mockResolvedValueOnce({ start, stop });
@@ -210,6 +212,85 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     expect(logger.error).toHaveBeenCalledWith(
       "failed to start native approval handler: Error: boom",
     );
+
+    await cleanup();
+  });
+
+  it("backs off repeated registered-context startup failures", async () => {
+    vi.useFakeTimers();
+    const channelRuntime = createRuntimeChannel();
+    const start = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("boom 1"))
+      .mockRejectedValueOnce(new Error("boom 2"))
+      .mockResolvedValueOnce(undefined);
+    const stop = vi.fn().mockResolvedValue(undefined);
+    const logger = createTestLogger();
+    createChannelApprovalHandlerFromCapability
+      .mockResolvedValueOnce({ start, stop })
+      .mockResolvedValueOnce({ start, stop })
+      .mockResolvedValueOnce({ start, stop });
+
+    const cleanup = await startTestBootstrap({ channelRuntime, logger });
+
+    registerApprovalContext(channelRuntime);
+    await flushTransitions();
+
+    expect(start).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flushTransitions();
+
+    expect(start).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1_999);
+    await flushTransitions();
+
+    expect(start).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    await flushTransitions();
+
+    expect(start).toHaveBeenCalledTimes(3);
+    expect(logger.warn).toHaveBeenCalledWith("retrying native approval handler startup in 1s");
+    expect(logger.warn).toHaveBeenCalledWith("retrying native approval handler startup in 2s");
+
+    await cleanup();
+  });
+
+  it("backs off pairing-required startup failures and reports the approval pairing action", async () => {
+    vi.useFakeTimers();
+    const channelRuntime = createRuntimeChannel();
+    const pairingError = Object.assign(new Error("pairing required"), {
+      name: "GatewayClientRequestError",
+      details: {
+        code: "PAIRING_REQUIRED",
+        reason: "scope-upgrade",
+        requestId: "req-approval-123",
+      },
+    });
+    const start = vi.fn().mockRejectedValueOnce(pairingError).mockResolvedValueOnce(undefined);
+    const stop = vi.fn().mockResolvedValue(undefined);
+    const logger = createTestLogger();
+    createChannelApprovalHandlerFromCapability
+      .mockResolvedValueOnce({ start, stop })
+      .mockResolvedValueOnce({ start, stop });
+
+    const cleanup = await startTestBootstrap({ channelRuntime, logger });
+
+    registerApprovalContext(channelRuntime);
+    await flushTransitions();
+
+    expect(start).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flushTransitions();
+
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      "native approval handler startup requires gateway device pairing for operator.approvals; retrying in 300s. Approve pending request req-approval-123 with `openclaw devices approve req-approval-123`.",
+    );
+
+    await vi.advanceTimersByTimeAsync(299_000);
+    await flushTransitions();
+
+    expect(start).toHaveBeenCalledTimes(2);
 
     await cleanup();
   });
