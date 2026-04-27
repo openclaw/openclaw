@@ -69,7 +69,13 @@ type SlashHttpHandlerParams = {
 const MAX_BODY_BYTES = 64 * 1024;
 const BODY_READ_TIMEOUT_MS = 5_000;
 const COMMAND_LOOKUP_TIMEOUT_MS = 1_000;
+const COMMAND_LOOKUP_CACHE_SUCCESS_MS = 5_000;
+const COMMAND_LOOKUP_CACHE_FAILURE_MS = 5_000;
 const commandLookupInflight = new Map<string, Promise<MattermostCommandResponse | null>>();
+const commandLookupCache = new Map<
+  string,
+  { command: MattermostCommandResponse | null; expiresAt: number }
+>();
 
 /**
  * Read the full request body as a string.
@@ -140,8 +146,16 @@ async function withCommandLookupTimeout<T>(task: (signal: AbortSignal) => Promis
   }
 }
 
-function commandLookupKey(registered: MattermostRegisteredCommand): string {
-  return `${registered.teamId}:${registered.id}`;
+function commandLookupKey(
+  client: ReturnType<typeof createMattermostClient>,
+  registered: MattermostRegisteredCommand,
+): string {
+  return `${client.apiBaseUrl}:${registered.teamId}:${registered.id}`;
+}
+
+export function resetMattermostSlashCommandValidationCacheForTests(): void {
+  commandLookupInflight.clear();
+  commandLookupCache.clear();
 }
 
 async function fetchCurrentMattermostCommandUncached(params: {
@@ -181,15 +195,33 @@ async function fetchCurrentMattermostCommand(params: {
   registered: MattermostRegisteredCommand;
   log?: (msg: string) => void;
 }): Promise<MattermostCommandResponse | null> {
-  const key = commandLookupKey(params.registered);
+  const key = commandLookupKey(params.client, params.registered);
+  const cached = commandLookupCache.get(key);
+  if (cached) {
+    if (cached.expiresAt > Date.now()) {
+      return cached.command;
+    }
+    commandLookupCache.delete(key);
+  }
+
   const existing = commandLookupInflight.get(key);
   if (existing) {
     return await existing;
   }
 
-  const lookup = fetchCurrentMattermostCommandUncached(params).finally(() => {
-    commandLookupInflight.delete(key);
-  });
+  const lookup = fetchCurrentMattermostCommandUncached(params)
+    .then((command) => {
+      commandLookupCache.set(key, {
+        command,
+        expiresAt:
+          Date.now() +
+          (command ? COMMAND_LOOKUP_CACHE_SUCCESS_MS : COMMAND_LOOKUP_CACHE_FAILURE_MS),
+      });
+      return command;
+    })
+    .finally(() => {
+      commandLookupInflight.delete(key);
+    });
   commandLookupInflight.set(key, lookup);
   return await lookup;
 }

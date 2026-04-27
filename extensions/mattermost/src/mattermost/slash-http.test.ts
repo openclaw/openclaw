@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { PassThrough } from "node:stream";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, RuntimeEnv } from "../../runtime-api.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import type { MattermostClient } from "./client.js";
@@ -11,6 +11,7 @@ import {
 } from "./slash-commands.js";
 import {
   createSlashCommandHttpHandler,
+  resetMattermostSlashCommandValidationCacheForTests,
   validateMattermostSlashCommandToken,
 } from "./slash-http.js";
 
@@ -141,6 +142,10 @@ async function runSlashRequest(params: {
 }
 
 describe("slash-http", () => {
+  beforeEach(() => {
+    resetMattermostSlashCommandValidationCacheForTests();
+  });
+
   it("rejects non-POST methods", async () => {
     const handler = createSlashCommandHttpHandler({
       account: accountFixture,
@@ -278,6 +283,72 @@ describe("slash-http", () => {
         },
       }),
     ).resolves.toBe(true);
+  });
+
+  it("briefly caches matching current command validation", async () => {
+    const registeredCommand = createRegisteredCommand({ token: "valid-token" });
+    const client = createCommandLookupClient({
+      command: {
+        id: "cmd-1",
+        token: "valid-token",
+        team_id: "t1",
+        trigger: "oc_status",
+        method: MATTERMOST_SLASH_POST_METHOD,
+        url: "https://gateway.example.com/slash",
+        auto_complete: true,
+        delete_at: 0,
+      },
+    });
+    const payload = {
+      token: "valid-token",
+      team_id: "t1",
+      channel_id: "c1",
+      user_id: "u1",
+      command: "/oc_status",
+      text: "",
+    };
+
+    await expect(
+      validateMattermostSlashCommandToken({ client, registeredCommand, payload }),
+    ).resolves.toBe(true);
+    await expect(
+      validateMattermostSlashCommandToken({ client, registeredCommand, payload }),
+    ).resolves.toBe(true);
+
+    expect(client.requests).toEqual(["/commands/cmd-1"]);
+  });
+
+  it("briefly caches failed current command validation", async () => {
+    const registeredCommand = createRegisteredCommand({ token: "old-token" });
+    const client = createCommandLookupClient({
+      command: {
+        id: "cmd-1",
+        token: "new-token",
+        team_id: "t1",
+        trigger: "oc_status",
+        method: MATTERMOST_SLASH_POST_METHOD,
+        url: "https://gateway.example.com/slash",
+        auto_complete: true,
+        delete_at: 0,
+      },
+    });
+    const payload = {
+      token: "old-token",
+      team_id: "t1",
+      channel_id: "c1",
+      user_id: "u1",
+      command: "/oc_status",
+      text: "",
+    };
+
+    await expect(
+      validateMattermostSlashCommandToken({ client, registeredCommand, payload }),
+    ).resolves.toBe(false);
+    await expect(
+      validateMattermostSlashCommandToken({ client, registeredCommand, payload }),
+    ).resolves.toBe(false);
+
+    expect(client.requests).toEqual(["/commands/cmd-1"]);
   });
 
   it("rejects a command that Mattermost reports as deleted", async () => {

@@ -93,8 +93,8 @@ Native slash commands are opt-in. When enabled, OpenClaw registers `oc_*` slash 
     - If `callbackUrl` is omitted, OpenClaw derives one from gateway host/port + `callbackPath`.
     - For multi-account setups, `commands` can be set at the top level or under `channels.mattermost.accounts.<id>.commands` (account values override top-level fields).
     - Command callbacks are validated with the per-command tokens returned by Mattermost when OpenClaw registers `oc_*` commands.
-    - OpenClaw re-checks the current Mattermost command registration before processing a callback, so stale tokens from deleted or regenerated slash commands stop being accepted without a gateway restart.
-    - Callback validation fails closed if the Mattermost API cannot confirm the command is still current.
+    - OpenClaw refreshes current Mattermost command registration during callback validation, using a short in-memory cache to bound upstream lookup volume while stale tokens from deleted or regenerated slash commands stop being accepted without a gateway restart.
+    - On cache misses, callback validation fails closed if the Mattermost API cannot confirm the command is still current.
     - Slash callbacks fail closed when registration failed, startup was partial, or the callback token does not match one of the registered commands.
 
   </Accordion>
