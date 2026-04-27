@@ -186,6 +186,60 @@ Override the command or version in plugin config:
 
 See [Plugins](/tools/plugin).
 
+## Optional Coven backend
+
+OpenClaw can also register a bundled, opt-in `coven` ACP backend for operators
+who want ACP coding sessions supervised by a local [Coven](https://github.com/OpenCoven/coven)
+daemon instead of launched directly through ACPX.
+
+This is intentionally an extension, not a core runtime path:
+
+- the default ACPX backend stays unchanged for normal installs;
+- Coven has its own daemon, socket, session store, harness mapping, and project
+  boundary model;
+- the bridge can be enabled, disabled, configured, and reviewed independently
+  through the plugin system; and
+- OpenClaw remains responsible for ACP session routing, chat bindings, task
+  state, and fallback policy while Coven owns harness supervision.
+
+Minimal opt-in config:
+
+```json5
+{
+  acp: {
+    enabled: true,
+    backend: "coven",
+    defaultAgent: "codex",
+  },
+  plugins: {
+    entries: {
+      coven: {
+        enabled: true,
+        config: {
+          // Optional. Defaults to COVEN_HOME or ~/.coven.
+          covenHome: "~/.coven",
+          // Optional. Defaults to <covenHome>/coven.sock.
+          socketPath: "~/.coven/coven.sock",
+          // Optional. Used when Coven is unavailable or launch fails.
+          fallbackBackend: "acpx",
+        },
+      },
+    },
+  },
+}
+```
+
+When selected, OpenClaw checks Coven daemon health over the configured Unix
+socket before launching. A successful launch creates a Coven session and records
+the Coven session id in the ACP runtime handle. If the health check or launch
+fails, OpenClaw falls back to the configured direct ACP backend (`acpx` by
+default) instead of breaking existing ACP behavior.
+
+The default harness mapping sends common ACP agent ids such as `codex`,
+`claude`, `gemini`, and `opencode` to the matching Coven harness id. Override
+`plugins.entries.coven.config.harnesses` only when your local Coven install uses
+custom harness names.
+
 ### Automatic dependency install
 
 When you install OpenClaw globally with `npm install -g openclaw`, the acpx

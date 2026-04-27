@@ -9,6 +9,7 @@ Docs: https://docs.openclaw.ai
 - Channels/Yuanbao: register the Tencent Yuanbao external channel plugin (`openclaw-plugin-yuanbao`) in the official channel catalog, contract suites, and community plugin docs, with a new `docs/channels/yuanbao.md` quick-start guide for WebSocket bot DMs and group chats. (#72756) Thanks @loongfay.
 - Channels/QQBot: add full group chat support (history tracking, @-mention gating, activation modes, per-group config, FIFO message queue with deliver debounce), C2C `stream_messages` streaming with a `StreamingController` lifecycle manager, unified `sendMedia` with chunked upload for large files, and refactor the engine into pipeline stages, focused outbound submodules, builtin slash-command modules, and explicit DI ports via `createEngineAdapters()`. (#70624) Thanks @cxyhhhhh.
 - Gateway/startup: pass the plugin metadata snapshot from config validation into plugin bootstrap so startup reuses one manifest product instead of rebuilding plugin metadata. Thanks @shakkernerd.
+- ACP/runtime: add an opt-in bundled Coven backend extension that routes ACP coding sessions through a local Coven daemon when `acp.backend="coven"`, while preserving the existing ACPX backend as the default fallback path. Thanks @BunsDev.
 
 ## 2026.4.26
 
