@@ -138,12 +138,12 @@ import { renderCommandPalette } from "./views/command-palette.ts";
 import { getPresetById } from "./views/config-presets.ts";
 import { renderQuickSettings, type QuickSettingsChannel } from "./views/config-quick.ts";
 import { renderConfig, type ConfigProps } from "./views/config.ts";
-import { renderDreamingRestartConfirmation } from "./views/dreaming-restart-confirmation.ts";
 import {
   renderCronQuickCreate,
   createDefaultDraft,
   draftToCronFormPatch,
 } from "./views/cron-quick-create.ts";
+import { renderDreamingRestartConfirmation } from "./views/dreaming-restart-confirmation.ts";
 import { renderDreaming } from "./views/dreaming.ts";
 import { renderExecApprovalPrompt } from "./views/exec-approval.ts";
 import { renderGatewayUrlConfirmation } from "./views/gateway-url-confirmation.ts";
