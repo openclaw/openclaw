@@ -265,6 +265,50 @@ describe("loadBundledEntryExportSync", () => {
     }
   });
 
+  it("normalizes Windows absolute sidecar paths before Jiti loads them", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-contract-"));
+    tempDirs.push(tempRoot);
+    const openedFdPath = path.join(tempRoot, "opened");
+    fs.writeFileSync(openedFdPath, "opened\n", "utf8");
+    const jitiLoad = vi.fn(() => ({ load: 42 }));
+    const createJiti = vi.fn(() => jitiLoad);
+    vi.doMock("jiti", () => ({
+      createJiti,
+    }));
+    vi.doMock("../infra/boundary-file-read.js", () => ({
+      openBoundaryFileSync: () => ({
+        ok: true,
+        path: "C:\\Users\\alice\\openclaw\\dist\\extensions\\feishu\\helper.ts",
+        fd: fs.openSync(openedFdPath, "r"),
+      }),
+    }));
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+    try {
+      const channelEntryContract = await importFreshModule<
+        typeof import("./channel-entry-contract.js")
+      >(import.meta.url, "./channel-entry-contract.js?scope=windows-safe-jiti-path");
+
+      expect(
+        channelEntryContract.loadBundledEntryExportSync<number>(
+          "file:///C:/Users/alice/openclaw/dist/extensions/feishu/index.js",
+          {
+            specifier: "./helper.ts",
+            exportName: "load",
+          },
+          { installRuntimeDeps: false },
+        ),
+      ).toBe(42);
+      expect(jitiLoad).toHaveBeenCalledWith(
+        "file:///C:/Users/alice/openclaw/dist/extensions/feishu/helper.ts",
+      );
+    } finally {
+      platformSpy.mockRestore();
+      vi.doUnmock("../infra/boundary-file-read.js");
+      vi.doUnmock("jiti");
+    }
+  });
+
   it("loads packaged telegram setup sidecars from dist-facing api modules", () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-contract-"));
     tempDirs.push(tempRoot);

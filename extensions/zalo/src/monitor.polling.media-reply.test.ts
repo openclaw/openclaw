@@ -1,6 +1,5 @@
+import { createEmptyPluginRegistry, setActivePluginRegistry } from "openclaw/plugin-sdk/testing";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createEmptyPluginRegistry } from "../../../src/plugins/registry-empty.js";
-import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
 import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import type { PluginRuntime } from "../runtime-api.js";
 import {

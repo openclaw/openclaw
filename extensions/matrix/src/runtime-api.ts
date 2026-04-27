@@ -40,16 +40,16 @@ export type {
   ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
-} from "openclaw/plugin-sdk/config-runtime";
-export type { GroupToolPolicyConfig } from "openclaw/plugin-sdk/config-runtime";
-export type { WizardPrompter } from "openclaw/plugin-sdk/matrix-runtime-shared";
+} from "openclaw/plugin-sdk/config-types";
+export type { GroupToolPolicyConfig } from "openclaw/plugin-sdk/config-types";
+export type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 export type { SecretInput } from "openclaw/plugin-sdk/secret-input";
 export {
   GROUP_POLICY_BLOCKED_LABEL,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/runtime-group-policy";
 export {
   addWildcardAllowFrom,
   formatDocsLink,

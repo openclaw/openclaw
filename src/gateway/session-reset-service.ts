@@ -15,7 +15,7 @@ import {
   buildSessionStartHookPayload,
 } from "../auto-reply/reply/session-hooks.js";
 import { clearSessionResetRuntimeState } from "../auto-reply/reply/session-reset-cleanup.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/io.js";
 import {
   snapshotSessionOrigin,
   type SessionEntry,
@@ -477,7 +477,7 @@ export async function performGatewaySessionReset(params: {
   | { ok: false; error: ReturnType<typeof errorShape> }
 > {
   const { cfg, target, storePath } = (() => {
-    const cfg = loadConfig();
+    const cfg = getRuntimeConfig();
     const target = resolveGatewaySessionStoreTarget({ cfg, key: params.key });
     return { cfg, target, storePath: target.storePath };
   })();

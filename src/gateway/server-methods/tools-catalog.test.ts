@@ -4,7 +4,7 @@ import { ErrorCodes } from "../protocol/index.js";
 import { toolsCatalogHandlers } from "./tools-catalog.js";
 
 vi.mock("../../config/config.js", () => ({
-  loadConfig: vi.fn(() => ({})),
+  getRuntimeConfig: vi.fn(() => ({})),
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
@@ -39,7 +39,7 @@ function createInvokeParams(params: Record<string, unknown>) {
       await toolsCatalogHandlers["tools.catalog"]({
         params,
         respond: respond as never,
-        context: {} as never,
+        context: { getRuntimeConfig: () => ({}) } as never,
         client: null,
         req: { type: "req", id: "req-1", method: "tools.catalog" },
         isWebchatConnect: () => false,

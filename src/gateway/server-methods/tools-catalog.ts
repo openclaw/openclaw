@@ -10,7 +10,6 @@ import {
   resolveCoreToolProfiles,
 } from "../../agents/tool-catalog.js";
 import { summarizeToolDescriptionText } from "../../agents/tool-description-summary.js";
-import { loadConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginToolMeta, resolvePluginTools } from "../../plugins/tools.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -41,8 +40,11 @@ type ToolCatalogGroup = {
   tools: ToolCatalogEntry[];
 };
 
-function resolveAgentIdOrRespondError(rawAgentId: unknown, respond: RespondFn) {
-  const cfg = loadConfig();
+function resolveAgentIdOrRespondError(
+  rawAgentId: unknown,
+  respond: RespondFn,
+  cfg: OpenClawConfig,
+) {
   const knownAgents = listAgentIds(cfg);
   const requestedAgentId = normalizeOptionalString(rawAgentId) ?? "";
   const agentId = requestedAgentId || resolveDefaultAgentId(cfg);
@@ -154,7 +156,7 @@ export function buildToolsCatalogResult(params: {
 }
 
 export const toolsCatalogHandlers: GatewayRequestHandlers = {
-  "tools.catalog": ({ params, respond }) => {
+  "tools.catalog": ({ params, respond, context }) => {
     if (!validateToolsCatalogParams(params)) {
       respond(
         false,
@@ -166,7 +168,11 @@ export const toolsCatalogHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const resolved = resolveAgentIdOrRespondError(params.agentId, respond);
+    const resolved = resolveAgentIdOrRespondError(
+      params.agentId,
+      respond,
+      context.getRuntimeConfig(),
+    );
     if (!resolved) {
       return;
     }

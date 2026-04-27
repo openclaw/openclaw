@@ -6,6 +6,7 @@ import {
   isSessionIdentityPending,
   resolveSessionIdentityFromMeta,
 } from "../../acp/runtime/session-identity.js";
+import { resolveAgentDir } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
@@ -420,6 +421,7 @@ export async function tryDispatchAcpReply(params: {
         await applyMediaUnderstanding({
           ctx: params.ctx,
           cfg: params.cfg,
+          agentDir: resolveAgentDir(params.cfg, acpAgentId),
         });
       } catch (err) {
         logVerbose(

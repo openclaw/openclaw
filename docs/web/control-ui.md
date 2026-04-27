@@ -82,12 +82,18 @@ The Control UI can localize itself on first load based on your browser locale. T
 - The selected locale is saved in browser storage and reused on future visits.
 - Missing translation keys fall back to English.
 
+## Appearance themes
+
+The Appearance panel keeps the built-in Claw, Knot, and Dash themes, plus one browser-local tweakcn import slot. To import a theme, open [tweakcn themes](https://tweakcn.com/themes), choose or create a theme, click **Share**, and paste the copied theme link into Appearance. The importer also accepts `https://tweakcn.com/r/themes/<id>` registry URLs, editor URLs like `https://tweakcn.com/editor/theme?theme=amethyst-haze`, relative `/themes/<id>` paths, raw theme IDs, and default theme names such as `amethyst-haze`.
+
+Imported themes are stored only in the current browser profile. They are not written to gateway config and do not sync across devices. Replacing the imported theme updates the one local slot; clearing it switches the active theme back to Claw if the imported theme was selected.
+
 ## What it can do (today)
 
 <AccordionGroup>
   <Accordion title="Chat and Talk">
     - Chat with the model via Gateway WS (`chat.history`, `chat.send`, `chat.abort`, `chat.inject`).
-    - Talk to OpenAI Realtime directly from the browser via WebRTC. The Gateway mints a short-lived Realtime client secret with `talk.realtime.session`; the browser sends microphone audio directly to OpenAI and relays `openclaw_agent_consult` tool calls back through `chat.send` for the larger configured OpenClaw model.
+    - Talk through browser realtime sessions. OpenAI uses direct WebRTC, Google Live uses a constrained one-use browser token over WebSocket, and backend-only realtime voice plugins use the Gateway relay transport. The relay keeps provider credentials on the Gateway while the browser streams microphone PCM through `talk.realtime.relay*` RPCs and sends `openclaw_agent_consult` tool calls back through `chat.send` for the larger configured OpenClaw model.
     - Stream tool calls + live tool output cards in Chat (agent events).
   </Accordion>
   <Accordion title="Channels, instances, sessions, dreams">
@@ -115,7 +121,7 @@ The Control UI can localize itself on first load based on your browser locale. T
   <Accordion title="Debug, logs, update">
     - Debug: status/health/models snapshots + event log + manual RPC calls (`status`, `health`, `models.list`).
     - Logs: live tail of gateway file logs with filter/export (`logs.tail`).
-    - Update: run a package/git update + restart (`update.run`) with a restart report.
+    - Update: run a package/git update + restart (`update.run`) with a restart report, then poll `update.status` after reconnect to verify the running gateway version.
   </Accordion>
   <Accordion title="Cron jobs panel notes">
     - For isolated jobs, delivery defaults to announce summary. You can switch to none if you want internal-only runs.
@@ -144,10 +150,12 @@ The Control UI can localize itself on first load based on your browser locale. T
     - The chat header model and thinking pickers patch the active session immediately through `sessions.patch`; they are persistent session overrides, not one-turn-only send options.
     - When fresh Gateway session usage reports show high context pressure, the chat composer area shows a context notice and, at recommended compaction levels, a compact button that runs the normal session compaction path. Stale token snapshots are hidden until the Gateway reports fresh usage again.
   </Accordion>
-  <Accordion title="Talk mode (browser WebRTC)">
-    Talk mode uses a registered realtime voice provider that supports browser WebRTC sessions. Configure OpenAI with `talk.provider: "openai"` plus `talk.providers.openai.apiKey`, or reuse the Voice Call realtime provider config. The browser never receives the standard OpenAI API key; it receives only the ephemeral Realtime client secret. Google Live realtime voice is supported for backend Voice Call and Google Meet bridges, but not this browser WebRTC path yet. The Realtime session prompt is assembled by the Gateway; `talk.realtime.session` does not accept caller-provided instruction overrides.
+  <Accordion title="Talk mode (browser realtime)">
+    Talk mode uses a registered realtime voice provider. Configure OpenAI with `talk.provider: "openai"` plus `talk.providers.openai.apiKey`, or configure Google with `talk.provider: "google"` plus `talk.providers.google.apiKey`; Voice Call realtime provider config can still be reused as the fallback. The browser never receives a standard provider API key. OpenAI receives an ephemeral Realtime client secret for WebRTC. Google Live receives a one-use constrained Live API auth token for a browser WebSocket session, with instructions and tool declarations locked into the token by the Gateway. Providers that only expose a backend realtime bridge run through the Gateway relay transport, so credentials and vendor sockets stay server-side while browser audio moves through authenticated Gateway RPCs. The Realtime session prompt is assembled by the Gateway; `talk.realtime.session` does not accept caller-provided instruction overrides.
 
     In the Chat composer, the Talk control is the waves button next to the microphone dictation button. When Talk starts, the composer status row shows `Connecting Talk...`, then `Talk live` while audio is connected, or `Asking OpenClaw...` while a realtime tool call is consulting the configured larger model through `chat.send`.
+
+    Maintainer live smoke: `OPENAI_API_KEY=... GEMINI_API_KEY=... node --import tsx scripts/dev/realtime-talk-live-smoke.ts` verifies the OpenAI browser WebRTC SDP exchange, Google Live constrained-token browser WebSocket setup, and the Gateway relay browser adapter with fake microphone media. The command prints provider status only and does not log secrets.
 
   </Accordion>
   <Accordion title="Stop and abort">
@@ -321,7 +329,7 @@ Documented exceptions:
 
 See [Tailscale](/gateway/tailscale) for HTTPS setup guidance.
 
-## Content Security Policy
+## Content security policy
 
 The Control UI ships with a tight `img-src` policy: only **same-origin** assets, `data:` URLs, and locally generated `blob:` URLs are allowed. Remote `http(s)` and protocol-relative image URLs are rejected by the browser and do not issue network fetches.
 

@@ -102,6 +102,7 @@ cat ~/.openclaw/openclaw.json
     - Gateway runtime checks (service installed but not running; cached launchd label).
     - Channel status warnings (probed from the running gateway).
     - Supervisor config audit (launchd/systemd/schtasks) with optional repair.
+    - Embedded proxy environment cleanup for gateway services that captured shell `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` values during install or update.
     - Gateway runtime best-practice checks (Node vs Bun, version-manager paths).
     - Gateway port collision diagnostics (default `18789`).
   </Accordion>
@@ -194,9 +195,11 @@ That stages grounded durable candidates into the short-term dreaming store while
     - `identity` → `agents.list[].identity`
     - `agent.*` → `agents.defaults` + `tools.*` (tools/elevated/exec/sandbox/subagents)
     - `agent.model`/`allowedModels`/`modelAliases`/`modelFallbacks`/`imageModelFallbacks` → `agents.defaults.models` + `agents.defaults.model.primary/fallbacks` + `agents.defaults.imageModel.primary/fallbacks`
+    - remove `agents.defaults.llm`; use `models.providers.<id>.timeoutSeconds` for slow provider/model timeouts
     - `browser.ssrfPolicy.allowPrivateNetwork` → `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork`
     - `browser.profiles.*.driver: "extension"` → `"existing-session"`
     - remove `browser.relayBindHost` (legacy extension relay setting)
+    - legacy `models.providers.*.api: "openai"` → `"openai-completions"` (gateway startup also skips providers whose `api` is set to a future or unknown enum value rather than failing closed)
 
     Doctor warnings also include account-default guidance for multi-account channels:
 
@@ -325,11 +328,14 @@ That stages grounded durable candidates into the short-term dreaming store while
   <Accordion title="7b. Bundled plugin runtime deps">
     Doctor verifies runtime dependencies only for bundled plugins that are active in the current config or enabled by their bundled manifest default, for example `plugins.entries.discord.enabled: true`, legacy `channels.discord.enabled: true`, or a default-enabled bundled provider. If any are missing, doctor reports the packages and installs them in `openclaw doctor --fix` / `openclaw doctor --repair` mode. External plugins still use `openclaw plugins install` / `openclaw plugins update`; doctor does not install dependencies for arbitrary plugin paths.
 
-    The Gateway and local CLI can also repair active bundled plugin runtime dependencies on demand before importing a bundled plugin. These installs are scoped to the plugin runtime install root, run with scripts disabled, do not write a package lock, and are guarded by an install-root lock so concurrent CLI or Gateway starts do not mutate the same `node_modules` tree at the same time.
+    During doctor repair, bundled runtime-dependency npm installs report spinner progress in TTY sessions and periodic line progress in piped/headless output. The Gateway and local CLI can also repair active bundled plugin runtime dependencies on demand before importing a bundled plugin. These installs are scoped to the plugin runtime install root, run with scripts disabled, do not write a package lock, and are guarded by an install-root lock so concurrent CLI or Gateway starts do not mutate the same `node_modules` tree at the same time.
 
   </Accordion>
   <Accordion title="8. Gateway service migrations and cleanup hints">
     Doctor detects legacy gateway services (launchd/systemd/schtasks) and offers to remove them and install the OpenClaw service using the current gateway port. It can also scan for extra gateway-like services and print cleanup hints. Profile-named OpenClaw gateway services are considered first-class and are not flagged as "extra."
+
+    On Linux, if the user-level gateway service is missing but a system-level OpenClaw gateway service exists, doctor does not install a second user-level service automatically. Inspect with `openclaw gateway status --deep` or `openclaw doctor --deep`, then remove the duplicate or set `OPENCLAW_SERVICE_REPAIR_POLICY=external` when a system supervisor owns the gateway lifecycle.
+
   </Accordion>
   <Accordion title="8b. Startup Matrix migration">
     When a Matrix channel account has a pending or actionable legacy state migration, doctor (in `--fix` / `--repair` mode) creates a pre-migration snapshot and then runs the best-effort migration steps: legacy Matrix state migration and legacy encrypted-state preparation. Both steps are non-fatal; errors are logged and startup continues. In read-only mode (`openclaw doctor` without `--fix`) this check is skipped entirely.
@@ -376,6 +382,9 @@ That stages grounded durable candidates into the short-term dreaming store while
   <Accordion title="11b. Bootstrap file size">
     Doctor checks whether workspace bootstrap files (for example `AGENTS.md`, `CLAUDE.md`, or other injected context files) are near or over the configured character budget. It reports per-file raw vs. injected character counts, truncation percentage, truncation cause (`max/file` or `max/total`), and total injected characters as a fraction of the total budget. When files are truncated or near the limit, doctor prints tips for tuning `agents.defaults.bootstrapMaxChars` and `agents.defaults.bootstrapTotalMaxChars`.
   </Accordion>
+  <Accordion title="11d. Stale channel plugin cleanup">
+    When `openclaw doctor --fix` removes a missing channel plugin, it also removes the dangling channel-scoped config that referenced that plugin: `channels.<id>` entries, heartbeat targets that named the channel, and `agents.*.models["<channel>/*"]` overrides. This prevents Gateway boot loops where the channel runtime is gone but config still asks the gateway to bind to it.
+  </Accordion>
   <Accordion title="11c. Shell completion">
     Doctor checks whether tab completion is installed for the current shell (zsh, bash, fish, or PowerShell):
 
@@ -413,7 +422,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     - **Explicit remote provider** (`openai`, `voyage`, etc.): verifies an API key is present in the environment or auth store. Prints actionable fix hints if missing.
     - **Auto provider**: checks local model availability first, then tries each remote provider in auto-selection order.
 
-    When a gateway probe result is available (gateway was healthy at the time of the check), doctor cross-references its result with the CLI-visible config and notes any discrepancy.
+    When a cached gateway probe result is available (gateway was healthy at the time of the check), doctor cross-references its result with the CLI-visible config and notes any discrepancy. Doctor does not start a fresh embedding ping on the default path; use the deep memory status command when you want a live provider check.
 
     Use `openclaw memory status --deep` to verify embedding readiness at runtime.
 
@@ -432,6 +441,8 @@ That stages grounded durable candidates into the short-term dreaming store while
     - `openclaw doctor --repair --force` overwrites custom supervisor configs.
     - `OPENCLAW_SERVICE_REPAIR_POLICY=external` keeps doctor read-only for gateway service lifecycle. It still reports service health and runs non-service repairs, but skips service install/start/restart/bootstrap, supervisor config rewrites, and legacy service cleanup because an external supervisor owns that lifecycle.
     - If token auth requires a token and `gateway.auth.token` is SecretRef-managed, doctor service install/repair validates the SecretRef but does not persist resolved plaintext token values into supervisor service environment metadata.
+    - Doctor detects managed `.env`/SecretRef-backed service environment values that older LaunchAgent, systemd, or Windows Scheduled Task installs embedded inline and rewrites the service metadata so those values load from the runtime source instead of the supervisor definition.
+    - Doctor detects when the service command still pins an old `--port` after `gateway.port` changes and rewrites the service metadata to the current port.
     - If token auth requires a token and the configured token SecretRef is unresolved, doctor blocks the install/repair path with actionable guidance.
     - If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, doctor blocks install/repair until mode is set explicitly.
     - For Linux user-systemd units, doctor token drift checks now include both `Environment=` and `EnvironmentFile=` sources when comparing service auth metadata.

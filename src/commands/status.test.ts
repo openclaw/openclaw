@@ -689,6 +689,7 @@ vi.mock("../infra/update-check.js", () => ({
   compareSemverStrings: vi.fn(() => 0),
 }));
 vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: mocks.loadConfig,
   loadConfig: mocks.loadConfig,
   readBestEffortConfig: vi.fn(async () => mocks.loadConfig()),
   resolveGatewayPort: vi.fn(() => 18789),

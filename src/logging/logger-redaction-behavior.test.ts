@@ -123,4 +123,37 @@ describe("file log redaction", () => {
       spanId: SPAN_ID,
     });
   });
+
+  it("writes hostname and flattened message as top-level JSONL fields", () => {
+    const logPath = logPathTracker.nextPath();
+    setLoggerOverride({ level: "info", file: logPath });
+
+    getLogger().info({ route: "/api/health" }, "request completed");
+
+    const [line] = fs.readFileSync(logPath, "utf8").trim().split("\n");
+    const record = JSON.parse(line ?? "{}") as Record<string, unknown>;
+    expect(record.hostname).toEqual(expect.any(String));
+    expect(record.hostname).not.toBe("");
+    expect(record.message).toBe("request completed");
+  });
+
+  it("promotes agent, session, and channel context to top-level JSONL fields", () => {
+    const logPath = logPathTracker.nextPath();
+    setLoggerOverride({ level: "info", file: logPath });
+    const logger = getChildLogger({
+      agentId: "agent-main",
+      messageProvider: "discord",
+    });
+
+    logger.info({ sessionKey: "agent:main:discord:channel:c1" }, "session routed");
+
+    const [line] = fs.readFileSync(logPath, "utf8").trim().split("\n");
+    const record = JSON.parse(line ?? "{}") as Record<string, unknown>;
+    expect(record).toMatchObject({
+      agent_id: "agent-main",
+      session_id: "agent:main:discord:channel:c1",
+      channel: "discord",
+      message: "session routed",
+    });
+  });
 });

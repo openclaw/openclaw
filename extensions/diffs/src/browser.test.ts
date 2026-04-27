@@ -256,7 +256,7 @@ describe("diffs plugin registration", () => {
       },
       runtime: {
         config: {
-          loadConfig: () => configFile,
+          current: () => configFile,
         },
       } as never,
       registerTool(tool: Parameters<OpenClawPluginApi["registerTool"]>[0]) {
@@ -384,7 +384,7 @@ describe("diffs plugin registration", () => {
       },
       runtime: {
         config: {
-          loadConfig: () => configFile,
+          current: () => configFile,
         },
       } as never,
       registerTool(tool: Parameters<OpenClawPluginApi["registerTool"]>[0]) {
@@ -521,7 +521,7 @@ describe("diffs plugin registration", () => {
       },
       runtime: {
         config: {
-          loadConfig: () => configFile,
+          current: () => configFile,
         },
       } as never,
       registerTool(tool: Parameters<OpenClawPluginApi["registerTool"]>[0]) {

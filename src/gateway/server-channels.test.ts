@@ -116,9 +116,10 @@ function installTestRegistry(...plugins: ChannelPlugin<TestAccount>[]) {
 
 function createManager(options?: {
   channelRuntime?: PluginRuntime["channel"];
-  resolveChannelRuntime?: () => PluginRuntime["channel"];
-  loadConfig?: () => Record<string, unknown>;
+  resolveChannelRuntime?: () => PluginRuntime["channel"] | Promise<PluginRuntime["channel"]>;
+  getRuntimeConfig?: () => Record<string, unknown>;
   channelIds?: ChannelId[];
+  startupTrace?: { measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T> };
 }) {
   const log = createSubsystemLogger("gateway/server-channels-test");
   const channelLogs = { discord: log } as Record<ChannelId, SubsystemLogger>;
@@ -130,13 +131,14 @@ function createManager(options?: {
     channelRuntimeEnvs[channelId] ??= runtime;
   }
   return createChannelManager({
-    loadConfig: () => options?.loadConfig?.() ?? {},
+    getRuntimeConfig: () => options?.getRuntimeConfig?.() ?? {},
     channelLogs,
     channelRuntimeEnvs,
     ...(options?.channelRuntime ? { channelRuntime: options.channelRuntime } : {}),
     ...(options?.resolveChannelRuntime
       ? { resolveChannelRuntime: options.resolveChannelRuntime }
       : {}),
+    ...(options?.startupTrace ? { startupTrace: options.startupTrace } : {}),
   });
 }
 
@@ -375,6 +377,25 @@ describe("server-channels auto restart", () => {
     expect(ctx?.channelRuntime).not.toBe(channelRuntime);
   });
 
+  it("does not resolve channelRuntime for disabled accounts", async () => {
+    const channelRuntime = createRuntimeChannel();
+    const resolveChannelRuntime = vi.fn(() => channelRuntime);
+    const startAccount = vi.fn(async (_ctx: ChannelGatewayContext<TestAccount>) => {});
+
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        account: { enabled: false, configured: true },
+      }),
+    );
+    const manager = createManager({ resolveChannelRuntime });
+
+    await manager.startChannels();
+
+    expect(resolveChannelRuntime).not.toHaveBeenCalled();
+    expect(startAccount).not.toHaveBeenCalled();
+  });
+
   it("fails fast when channelRuntime is not a full plugin runtime surface", async () => {
     installTestRegistry(createTestPlugin({ startAccount: vi.fn(async () => {}) }));
     const manager = createManager({
@@ -435,6 +456,30 @@ describe("server-channels auto restart", () => {
 
     expect(failingStart).toHaveBeenCalledTimes(1);
     expect(succeedingStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("emits startup trace spans for channel preflight and handoff", async () => {
+    const measureMock = vi.fn(async (name: string, run: () => unknown) => await run());
+    const startupTrace = {
+      measure: async <T>(name: string, run: () => T | Promise<T>) =>
+        (await measureMock(name, run)) as T,
+    };
+    const startAccount = vi.fn(async () => {});
+
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager({ startupTrace });
+
+    await manager.startChannels();
+
+    const names = measureMock.mock.calls.map(([name]) => name);
+    expect(names).toEqual(
+      expect.arrayContaining([
+        "channels.discord.start",
+        "channels.discord.list-accounts",
+        "channels.discord.runtime",
+        "channels.discord.approval-bootstrap",
+      ]),
+    );
   });
 
   it("evicts stale account lifecycle state during whole-channel reload", async () => {
@@ -499,7 +544,7 @@ describe("server-channels auto restart", () => {
     );
 
     const manager = createManager({
-      loadConfig: () => ({
+      getRuntimeConfig: () => ({
         channels: {
           discord: {
             accounts: {
@@ -528,7 +573,7 @@ describe("server-channels auto restart", () => {
     );
 
     const manager = createManager({
-      loadConfig: () => ({
+      getRuntimeConfig: () => ({
         channels: {
           discord: {
             healthMonitor: { enabled: false },
@@ -551,7 +596,7 @@ describe("server-channels auto restart", () => {
     );
 
     const manager = createManager({
-      loadConfig: () => ({
+      getRuntimeConfig: () => ({
         channels: {
           discord: {
             accounts: {
@@ -592,7 +637,7 @@ describe("server-channels auto restart", () => {
     );
 
     const manager = createManager({
-      loadConfig: () => ({
+      getRuntimeConfig: () => ({
         channels: {
           discord: {
             accounts: {

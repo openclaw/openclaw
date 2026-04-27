@@ -2,6 +2,13 @@
   "id": "nvidia",
   "enabledByDefault": true,
   "providers": ["nvidia"],
+  "modelIdNormalization": {
+    "providers": {
+      "nvidia": {
+        "prefixWhenBare": "nvidia"
+      }
+    }
+  },
   "providerAuthEnvVars": {
     "nvidia": ["NVIDIA_API_KEY"]
   },

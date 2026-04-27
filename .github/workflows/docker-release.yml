@@ -55,6 +55,7 @@ jobs:
     # WARNING: KEEP MANUAL BACKFILLS GATED BY THE docker-release ENVIRONMENT.
     runs-on: ubuntu-24.04
     environment: docker-release
+    permissions: {}
     steps:
       - name: Approve Docker backfill
         env:
@@ -63,7 +64,7 @@ jobs:
 
   # KEEP THIS WORKFLOW ON GITHUB-HOSTED RUNNERS.
   # DO NOT MOVE IT BACK TO BLACKSMITH WITHOUT RE-VALIDATING TAG BUILDS AND BACKFILLS.
-  # Build amd64 images (default + slim share the build stage cache)
+  # Build amd64 image. Default and slim tags point to the same slim runtime.
   build-amd64:
     needs: [approve_manual_backfill]
     if: ${{ always() && (github.event_name != 'workflow_dispatch' || needs.approve_manual_backfill.result == 'success') }}
@@ -74,7 +75,6 @@ jobs:
       contents: read
     outputs:
       digest: ${{ steps.build.outputs.digest }}
-      slim-digest: ${{ steps.build-slim.outputs.digest }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -117,12 +117,7 @@ jobs:
           fi
           {
             echo "value<<EOF"
-            printf "%s\n" "${tags[@]}"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-          {
-            echo "slim<<EOF"
-            printf "%s\n" "${slim_tags[@]}"
+            printf "%s\n" "${tags[@]}" "${slim_tags[@]}"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
@@ -167,25 +162,7 @@ jobs:
           provenance: mode=max
           push: true
 
-      - name: Build and push amd64 slim image
-        id: build-slim
-        # WARNING: KEEP THE OFFICIAL DOCKER ACTION HERE; DO NOT SWITCH THIS BACK TO BLACKSMITH BLINDLY.
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
-        with:
-          context: .
-          platforms: linux/amd64
-          cache-from: type=gha,scope=docker-release-amd64
-          cache-to: type=gha,mode=max,scope=docker-release-amd64
-          build-args: |
-            OPENCLAW_EXTENSIONS=diagnostics-otel
-            OPENCLAW_VARIANT=slim
-          tags: ${{ steps.tags.outputs.slim }}
-          labels: ${{ steps.labels.outputs.value }}
-          sbom: true
-          provenance: mode=max
-          push: true
-
-  # Build arm64 images (default + slim share the build stage cache)
+  # Build arm64 image. Default and slim tags point to the same slim runtime.
   build-arm64:
     needs: [approve_manual_backfill]
     if: ${{ always() && (github.event_name != 'workflow_dispatch' || needs.approve_manual_backfill.result == 'success') }}
@@ -196,7 +173,6 @@ jobs:
       contents: read
     outputs:
       digest: ${{ steps.build.outputs.digest }}
-      slim-digest: ${{ steps.build-slim.outputs.digest }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -239,12 +215,7 @@ jobs:
           fi
           {
             echo "value<<EOF"
-            printf "%s\n" "${tags[@]}"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-          {
-            echo "slim<<EOF"
-            printf "%s\n" "${slim_tags[@]}"
+            printf "%s\n" "${tags[@]}" "${slim_tags[@]}"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
@@ -284,24 +255,6 @@ jobs:
           build-args: |
             OPENCLAW_EXTENSIONS=diagnostics-otel
           tags: ${{ steps.tags.outputs.value }}
-          labels: ${{ steps.labels.outputs.value }}
-          sbom: true
-          provenance: mode=max
-          push: true
-
-      - name: Build and push arm64 slim image
-        id: build-slim
-        # WARNING: KEEP THE OFFICIAL DOCKER ACTION HERE; DO NOT SWITCH THIS BACK TO BLACKSMITH BLINDLY.
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
-        with:
-          context: .
-          platforms: linux/arm64
-          cache-from: type=gha,scope=docker-release-arm64
-          cache-to: type=gha,mode=max,scope=docker-release-arm64
-          build-args: |
-            OPENCLAW_EXTENSIONS=diagnostics-otel
-            OPENCLAW_VARIANT=slim
-          tags: ${{ steps.tags.outputs.slim }}
           labels: ${{ steps.labels.outputs.value }}
           sbom: true
           provenance: mode=max
@@ -361,16 +314,11 @@ jobs:
           fi
           {
             echo "value<<EOF"
-            printf "%s\n" "${tags[@]}"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-          {
-            echo "slim<<EOF"
-            printf "%s\n" "${slim_tags[@]}"
+            printf "%s\n" "${tags[@]}" "${slim_tags[@]}"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Create and push default manifest
+      - name: Create and push manifest
         shell: bash
         env:
           TAGS: ${{ steps.tags.outputs.value }}
@@ -387,24 +335,6 @@ jobs:
           docker buildx imagetools create "${args[@]}" \
             "${AMD64_DIGEST}" \
             "${ARM64_DIGEST}"
-
-      - name: Create and push slim manifest
-        shell: bash
-        env:
-          SLIM_TAGS: ${{ steps.tags.outputs.slim }}
-          AMD64_SLIM_DIGEST: ${{ needs.build-amd64.outputs.slim-digest }}
-          ARM64_SLIM_DIGEST: ${{ needs.build-arm64.outputs.slim-digest }}
-        run: |
-          set -euo pipefail
-          mapfile -t tags <<< "${SLIM_TAGS}"
-          args=()
-          for tag in "${tags[@]}"; do
-            [ -z "$tag" ] && continue
-            args+=("-t" "$tag")
-          done
-          docker buildx imagetools create "${args[@]}" \
-            "${AMD64_SLIM_DIGEST}" \
-            "${ARM64_SLIM_DIGEST}"
 
   verify-attestations:
     needs: [create-manifest]
