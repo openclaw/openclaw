@@ -94,7 +94,15 @@ function recordMcpMessagingToolSend(params: {
   args: Record<string, unknown>;
   isError: boolean;
 }): void {
-  if (params.isError || params.toolName !== "message") {
+  if (params.isError || (params.toolName !== "message" && params.toolName !== "sessions_send")) {
+    return;
+  }
+  if (params.toolName === "sessions_send") {
+    recordCliMessagingToolSend({
+      sessionKey: params.requestContext.sessionKey,
+      runId: params.requestContext.runId,
+      text: resolveMessageToolSentText(params.args),
+    });
     return;
   }
   const action = readStringField(params.args, "action") ?? "send";
