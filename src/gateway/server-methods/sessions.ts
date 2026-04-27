@@ -1757,6 +1757,20 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    const interruptResult = await interruptSessionRunIfActive({
+      req,
+      context,
+      client,
+      isWebchatConnect,
+      requestedKey: key,
+      canonicalKey: target.canonicalKey,
+      sessionId,
+    });
+    if (interruptResult.error) {
+      respond(false, undefined, interruptResult.error);
+      return;
+    }
+
     const raw = fs.readFileSync(filePath, "utf-8");
     const lines = raw.split(/\r?\n/).filter((l) => Boolean(normalizeOptionalString(l)));
     if (lines.length <= maxLines) {
