@@ -302,6 +302,29 @@ describe("discoverOpenClawPlugins", () => {
     expectCandidateIds(candidates, { includes: ["alpha", "beta"] });
   });
 
+  it("discovers symlinked plugin directories in scanned roots", async () => {
+    const stateDir = makeTempDir();
+    const globalExt = path.join(stateDir, "extensions");
+    mkdirSafe(globalExt);
+
+    const linkedPluginDir = path.join(stateDir, "linked-plugin-src");
+    createPackagePluginWithEntry({
+      packageDir: linkedPluginDir,
+      packageName: "@openclaw/linked-plugin",
+      pluginId: "linked-plugin",
+    });
+
+    const symlinkPath = path.join(globalExt, "linked-plugin");
+    fs.symlinkSync(linkedPluginDir, symlinkPath, process.platform === "win32" ? "junction" : "dir");
+
+    const { candidates, diagnostics } = await discoverWithStateDir(stateDir, {});
+    expectCandidateIds(candidates, { includes: ["linked-plugin"] });
+    expect(findCandidateById(candidates, "linked-plugin")?.rootDir).toBe(
+      fs.realpathSync(linkedPluginDir),
+    );
+    expect(diagnostics).toEqual([]);
+  });
+
   it("does not recurse arbitrary workspace directories for plugin auto-discovery", () => {
     const stateDir = makeTempDir();
     const workspaceDir = path.join(stateDir, "workspace");
