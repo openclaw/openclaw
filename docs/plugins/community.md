@@ -129,6 +129,7 @@ formatting, built-in access control, and document/meeting/messaging skills.
 ```bash
 openclaw plugins install @wecom/wecom-openclaw-plugin
 ```
+
 ### Yuanbao
 
 Yuanbao channel plugin for OpenClaw by the Tencent Yuanbao team. Powered by
