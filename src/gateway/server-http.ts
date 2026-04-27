@@ -8,7 +8,12 @@ import {
 import { createServer as createHttpsServer } from "node:https";
 import type { TlsOptions } from "node:tls";
 import type { WebSocketServer } from "ws";
-import { A2UI_PATH, CANVAS_WS_PATH, handleA2uiHttpRequest } from "../canvas-host/a2ui.js";
+import {
+  A2UI_PATH,
+  CANVAS_HOST_PATH,
+  CANVAS_WS_PATH,
+  handleA2uiHttpRequest,
+} from "../canvas-host/a2ui.js";
 import type { CanvasHostHandler } from "../canvas-host/server.js";
 import { resolveBundledChannelGatewayAuthBypassPaths } from "../channels/plugins/gateway-auth-bypass.js";
 import { loadConfig } from "../config/config.js";
@@ -56,17 +61,10 @@ import {
   resolveHookChannel,
   resolveHookDeliver,
 } from "./hooks.js";
-import {
-  type AuthorizedGatewayHttpRequest,
-  authorizeGatewayHttpRequestOrReply,
-  getBearerToken,
-  resolveHttpBrowserOriginPolicy,
-} from "./http-auth-utils.js";
+import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common.js";
 import { resolveRequestClientIp } from "./net.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "./server-constants.js";
-import { authorizeCanvasRequest, isCanvasPath } from "./server/http-auth.js";
-import { resolvePluginRouteRuntimeOperatorScopes } from "./server/plugin-route-runtime-scopes.js";
 import {
   isProtectedPluginRoutePathFromContext,
   resolvePluginRoutePathContext,
@@ -108,6 +106,11 @@ let sessionKillHttpModulePromise: Promise<typeof import("./session-kill-http.js"
 let toolsInvokeHttpModulePromise: Promise<typeof import("./tools-invoke-http.js")> | undefined;
 let voiceClawRealtimeUpgradeModulePromise:
   | Promise<typeof import("./voiceclaw-realtime/upgrade.js")>
+  | undefined;
+let canvasAuthModulePromise: Promise<typeof import("./server/http-auth.js")> | undefined;
+let httpAuthUtilsModulePromise: Promise<typeof import("./http-auth-utils.js")> | undefined;
+let pluginRouteRuntimeScopesModulePromise:
+  | Promise<typeof import("./server/plugin-route-runtime-scopes.js")>
   | undefined;
 
 function getIdentityAvatarModule() {
@@ -163,6 +166,21 @@ function getToolsInvokeHttpModule() {
 function getVoiceClawRealtimeUpgradeModule() {
   voiceClawRealtimeUpgradeModulePromise ??= import("./voiceclaw-realtime/upgrade.js");
   return voiceClawRealtimeUpgradeModulePromise;
+}
+
+function getCanvasAuthModule() {
+  canvasAuthModulePromise ??= import("./server/http-auth.js");
+  return canvasAuthModulePromise;
+}
+
+function getHttpAuthUtilsModule() {
+  httpAuthUtilsModulePromise ??= import("./http-auth-utils.js");
+  return httpAuthUtilsModulePromise;
+}
+
+function getPluginRouteRuntimeScopesModule() {
+  pluginRouteRuntimeScopesModulePromise ??= import("./server/plugin-route-runtime-scopes.js");
+  return pluginRouteRuntimeScopesModulePromise;
 }
 
 type HookDispatchers = {
@@ -283,6 +301,16 @@ function isA2uiPath(pathname: string): boolean {
   return pathname === A2UI_PATH || pathname.startsWith(`${A2UI_PATH}/`);
 }
 
+function isCanvasPath(pathname: string): boolean {
+  return (
+    pathname === A2UI_PATH ||
+    pathname.startsWith(`${A2UI_PATH}/`) ||
+    pathname === CANVAS_HOST_PATH ||
+    pathname.startsWith(`${CANVAS_HOST_PATH}/`) ||
+    pathname === CANVAS_WS_PATH
+  );
+}
+
 function shouldEnforceDefaultPluginGatewayAuth(pathContext: PluginRoutePathContext): boolean {
   return (
     pathContext.malformedEncoding ||
@@ -304,6 +332,7 @@ async function canRevealReadinessDetails(params: {
     return false;
   }
 
+  const { getBearerToken, resolveHttpBrowserOriginPolicy } = await getHttpAuthUtilsModule();
   const bearerToken = getBearerToken(params.req);
   const authResult = await authorizeHttpGatewayConnect({
     auth: params.resolvedAuth,
@@ -474,6 +503,7 @@ function buildPluginRequestStages(params: {
         if ((await params.getGatewayAuthBypassPaths()).has(params.requestPath)) {
           return false;
         }
+        const { authorizeGatewayHttpRequestOrReply } = await getHttpAuthUtilsModule();
         const requestAuth = await authorizeGatewayHttpRequestOrReply({
           req: params.req,
           res: params.res,
@@ -487,6 +517,8 @@ function buildPluginRequestStages(params: {
         }
         pluginGatewayAuthSatisfied = true;
         pluginGatewayRequestAuth = requestAuth;
+        const { resolvePluginRouteRuntimeOperatorScopes } =
+          await getPluginRouteRuntimeScopesModule();
         pluginRequestOperatorScopes = resolvePluginRouteRuntimeOperatorScopes(
           params.req,
           requestAuth,
@@ -1092,6 +1124,7 @@ export function createGatewayHttpServer(opts: {
             if (!isCanvasPath(scopedRequestPath)) {
               return false;
             }
+            const { authorizeCanvasRequest } = await getCanvasAuthModule();
             const ok = await authorizeCanvasRequest({
               req,
               auth: resolvedAuth,
@@ -1258,6 +1291,7 @@ export function attachGatewayUpgradeHandler(opts: {
       const url = new URL(req.url ?? "/", "http://localhost");
       if (canvasHost) {
         if (url.pathname === CANVAS_WS_PATH) {
+          const { authorizeCanvasRequest } = await getCanvasAuthModule();
           const ok = await authorizeCanvasRequest({
             req,
             auth: resolvedAuth,
