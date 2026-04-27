@@ -606,8 +606,8 @@ export function createOpenClawCodingTools(options?: {
       sandboxed: !!sandbox,
       config: options?.config,
       pluginToolAllowlist: collectExplicitAllowlist([
-        profilePolicy,
-        providerProfilePolicy,
+        profilePolicyWithAlsoAllow,
+        providerProfilePolicyWithAlsoAllow,
         globalPolicy,
         globalProviderPolicy,
         agentPolicy,

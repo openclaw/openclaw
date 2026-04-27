@@ -93,8 +93,8 @@ export function resolveGatewayScopedTools(params: {
     config: params.cfg,
     workspaceDir,
     pluginToolAllowlist: collectExplicitAllowlist([
-      profilePolicy,
-      providerProfilePolicy,
+      profilePolicyWithAlsoAllow,
+      providerProfilePolicyWithAlsoAllow,
       globalPolicy,
       globalProviderPolicy,
       agentPolicy,
