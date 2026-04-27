@@ -428,6 +428,29 @@ describe("pruneOrphanedTranscripts", () => {
     expect(remaining).toContain("empty-subdir");
   });
 
+  it("defensively skips *.checkpoint.*.jsonl snapshots even when not in preservedPaths", async () => {
+    // Compaction-checkpoint snapshots written by session-compaction-checkpoints
+    // are referenced from entry.compactionCheckpoints[] rather than
+    // resolveSessionTranscriptCandidates, so a caller that forgets to
+    // enumerate them must not lose live snapshots. The dirent filter skips
+    // `*.checkpoint.*.jsonl` regardless of preservedPaths.
+    const sessionName = "abc-uuid";
+    const checkpointName = `${sessionName}.checkpoint.${crypto.randomUUID()}`;
+    await writeTranscript(sessionName, "abc-uuid", 0);
+    await writeTranscript(checkpointName, "abc-uuid", -60 * DAY_MS);
+    const preservedPaths = [path.join(testDir, `${sessionName}.jsonl`)];
+
+    const result = await pruneOrphanedTranscripts(testDir, preservedPaths, {
+      mode: "enforce",
+      pruneAfterMs: 30 * DAY_MS,
+    });
+
+    expect(result.pruned).toBe(0);
+    const remaining = await fs.readdir(testDir);
+    expect(remaining).toContain(`${checkpointName}.jsonl`);
+    expect(remaining).toContain(`${sessionName}.jsonl`);
+  });
+
   it("does not delete unrelated .jsonl files lacking a session header (custom session.store scenario)", async () => {
     // Simulate a custom session.store dir that contains unrelated logs or
     // exports. An old-enough .jsonl without a valid session header is left

@@ -412,6 +412,20 @@ const ORPHAN_TRANSCRIPT_SUFFIX = ".jsonl";
 const ORPHAN_HEADER_READ_MAX_BYTES = 16 * 1024;
 const ORPHAN_CANDIDATE_CONCURRENCY = 32;
 
+// Compaction checkpoint snapshots produced by `session-compaction-checkpoints`
+// are written as `<sessionName>.checkpoint.<uuid>.jsonl`. They carry valid
+// session headers and are referenced from `entry.compactionCheckpoints[]`, not
+// from `resolveSessionTranscriptCandidates`. We skip them at the dirent filter
+// regardless of `preservedPaths` so a caller that forgets to enumerate
+// checkpoint paths cannot accidentally unlink live snapshots.
+const ORPHAN_CHECKPOINT_FILENAME_FRAGMENT = ".checkpoint.";
+
+function isCompactionCheckpointFilename(name: string): boolean {
+  return (
+    name.endsWith(ORPHAN_TRANSCRIPT_SUFFIX) && name.includes(ORPHAN_CHECKPOINT_FILENAME_FRAGMENT)
+  );
+}
+
 function canonicalizePathForOrphanComparison(filePath: string): string {
   const resolved = path.resolve(filePath);
   try {
@@ -477,16 +491,18 @@ export type OrphanTranscriptPruneResult = {
  * primary transcripts, `resolveSessionTranscriptCandidates` in
  * `gateway/session-transcript-files` enumerates the valid paths per session
  * (covering explicit `sessionFile` values, legacy absolute paths, and the
- * agent/topic-thread derivations). For compaction-checkpoint snapshots, the
- * caller must additionally include each
- * `entry.compactionCheckpoints[].preCompaction.sessionFile` and
- * `entry.compactionCheckpoints[].postCompaction.sessionFile` — those
- * `*.checkpoint.*.jsonl` files are referenced by the store but are not
- * returned by `resolveSessionTranscriptCandidates`. When `sessionsDir` may
- * host multiple `sessions.json` stores side by side, the caller is expected
- * to union `preservedPaths` across every neighbouring store. Paths are
- * compared after `fs.realpathSync` canonicalization, so symlinked
- * `sessionsDir` access still matches the stored realpath forms.
+ * agent/topic-thread derivations). When `sessionsDir` may host multiple
+ * `sessions.json` stores side by side, the caller is expected to union
+ * `preservedPaths` across every neighbouring store. Paths are compared after
+ * `fs.realpathSync` canonicalization, so symlinked `sessionsDir` access still
+ * matches the stored realpath forms.
+ *
+ * Compaction-checkpoint snapshots (`*.checkpoint.*.jsonl`, written by
+ * `session-compaction-checkpoints` and referenced from
+ * `entry.compactionCheckpoints[].{pre,post}Compaction.sessionFile`) are
+ * defensively skipped at the dirent filter regardless of whether the caller
+ * included them in `preservedPaths`. Callers may still include them for
+ * symmetry, but a forgotten enumeration will not cause checkpoint loss.
  *
  * Every candidate file also passes a content check: we read its header line
  * and require `type: "session"` plus a non-empty `id`. Files without a valid
@@ -545,6 +561,14 @@ export async function pruneOrphanedTranscripts(
       continue;
     }
     if (!dirent.name.endsWith(ORPHAN_TRANSCRIPT_SUFFIX)) {
+      continue;
+    }
+    // Defense-in-depth for the checkpoint-preservation contract: even if the
+    // caller omits compaction-checkpoint paths from `preservedPaths`, never
+    // treat a `*.checkpoint.*.jsonl` file as an orphan candidate. Live
+    // snapshots are referenced via `entry.compactionCheckpoints[]` and would
+    // otherwise pass the session-header content gate.
+    if (isCompactionCheckpointFilename(dirent.name)) {
       continue;
     }
     // Node 22+ exposes `parentPath`; older builds used `path`. Fall back to
