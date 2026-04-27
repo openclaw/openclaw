@@ -602,6 +602,14 @@ describe("host-hook fixture plugin contract", () => {
             details: { field: "version" },
           }),
         });
+        api.registerSessionAction({
+          id: "bad-error-details",
+          handler: () => ({
+            ok: false,
+            error: "bad details",
+            details: { value: 1n } as never,
+          }),
+        });
       },
     });
     setActivePluginRegistry(registry.registry);
@@ -650,6 +658,20 @@ describe("host-hook fixture plugin contract", () => {
           code: "needs_input",
           details: { field: "version" },
         },
+      },
+    });
+    await expect(
+      callPluginSessionActionForTest({
+        body: {
+          pluginId: "session-action-validation-fixture",
+          actionId: "bad-error-details",
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "plugin session action error details must be JSON-compatible",
       },
     });
   });
