@@ -424,6 +424,17 @@ export async function buildProbeTargets(params: {
       continue;
     }
 
+    if (model && isCliProvider(cliExecutionProvider, cfg)) {
+      targets.push({
+        provider: providerKey,
+        model,
+        label: "CLI runtime",
+        source: "models.json",
+        mode: "cli",
+      });
+      continue;
+    }
+
     const envKey = resolveEnvApiKey(providerKey, process.env, {
       config: cfg,
       workspaceDir,

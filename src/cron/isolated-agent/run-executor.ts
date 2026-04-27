@@ -1,3 +1,4 @@
+import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import { clearCliSession, setCliSessionBinding } from "../../agents/cli-session.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import type { SkillSnapshot } from "../../agents/skills.js";
@@ -118,6 +119,7 @@ export function createCronPromptExecutor(params: {
   let fallbackProvider = params.liveSelection.provider;
   let fallbackModel = params.liveSelection.model;
   let runEndedAt = Date.now();
+  let activeCliSessionBinding: Awaited<ReturnType<typeof getCliSessionBinding>> | undefined;
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.cronSession.sessionEntry.systemPromptReport,
   );
@@ -145,9 +147,23 @@ export function createCronPromptExecutor(params: {
               params.cronSession.sessionEntry.agentRuntimeOverride?.trim() || undefined,
           }) ?? providerOverride;
         if (isCliProvider(cliExecutionProvider, params.cfgWithAgentDefaults)) {
-          const cliSessionBinding = params.cronSession.isNewSession
-            ? undefined
-            : await getCliSessionBinding(params.cronSession.sessionEntry, cliExecutionProvider);
+          const cliSessionBinding =
+            activeCliSessionBinding ??
+            (params.cronSession.isNewSession
+              ? undefined
+              : await getCliSessionBinding(params.cronSession.sessionEntry, cliExecutionProvider));
+          const authProfileId =
+            cliExecutionProvider === providerOverride
+              ? params.liveSelection.authProfileId
+              : ((await resolveSessionAuthProfileOverride({
+                  cfg: params.cfgWithAgentDefaults,
+                  provider: cliExecutionProvider,
+                  agentDir: params.agentDir,
+                  sessionEntry: params.cronSession.sessionEntry,
+                  sessionStore: params.cronSession.store,
+                  sessionKey: params.agentSessionKey,
+                  isNewSession: params.cronSession.isNewSession,
+                })) ?? params.liveSelection.authProfileId);
           const cliParams: Parameters<typeof runCliAgent>[0] = {
             sessionId: params.cronSession.sessionEntry.sessionId,
             sessionKey: params.runSessionKey,
@@ -160,7 +176,7 @@ export function createCronPromptExecutor(params: {
             prompt: promptText,
             provider: cliExecutionProvider,
             model: modelOverride,
-            authProfileId: params.liveSelection.authProfileId,
+            authProfileId,
             thinkLevel: params.thinkLevel,
             timeoutMs: params.timeoutMs,
             runId: params.cronSession.sessionEntry.sessionId,
@@ -203,6 +219,7 @@ export function createCronPromptExecutor(params: {
             });
           }
           if (result.meta.agentMeta?.cliSessionBinding) {
+            activeCliSessionBinding = result.meta.agentMeta.cliSessionBinding;
             setCliSessionBinding(
               params.cronSession.sessionEntry,
               cliExecutionProvider,
