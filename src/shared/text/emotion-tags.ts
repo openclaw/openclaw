@@ -1,7 +1,7 @@
 import type { EmotionMode } from "../../emotion-mode.js";
 import { findCodeRegions, isInsideCode } from "./code-regions.js";
 
-const EMOTION_TAG_RE = /\[([A-Za-z]+(?:[ /-][A-Za-z]+){0,7})\](?!\()/g;
+const EMOTION_TAG_RE = /\[([A-Za-z]+(?:[ /-][A-Za-z]+){0,7})\](?!\s*\()/g;
 const TRAILING_EMOTION_TAG_RE = /\[[A-Za-z]+(?:[ /-][A-Za-z]+){0,7}$/u;
 const EMOTION_TAG_WORDS = new Set([
   "amused",
@@ -160,7 +160,7 @@ function isEmotionTagBoundary(char: string | undefined, side: "before" | "after"
   }
   // `[` is added to the "after" boundary so back-to-back tags `[a][b]` strip
   // (the first tag's "after" is the next `[`).
-  return /[\s.,!?;:)\]}>\/[\\"'`-]/u.test(char);
+  return /[\s.,!?;:)\]}>/[\\"'`-]/u.test(char);
 }
 
 function isLikelyEmotionTag(text: string, index: number, rawTag: string, body: string): boolean {
@@ -183,11 +183,13 @@ function isLikelyEmotionTag(text: string, index: number, rawTag: string, body: s
   return isEmotionTagBoundary(before, "before") && isEmotionTagBoundary(after, "after");
 }
 
-function stripTrailingPartialEmotionTag(text: string): StripEmotionTagsResult {
+function stripTrailingPartialEmotionTag(
+  text: string,
+  codeRegions = findCodeRegions(text),
+): StripEmotionTagsResult {
   if (!text.endsWith("[") && !TRAILING_EMOTION_TAG_RE.test(text)) {
     return { text, changed: false };
   }
-  const codeRegions = findCodeRegions(text);
   if (text.endsWith("[")) {
     const index = text.length - 1;
     if (isInsideCode(index, codeRegions)) {
@@ -292,7 +294,7 @@ export function stripEmotionTags(
     if (!options.allowTrailingPartialTag) {
       return { text, changed: false };
     }
-    return stripTrailingPartialEmotionTag(text);
+    return stripTrailingPartialEmotionTag(text, codeRegions);
   }
 
   result += text.slice(cursor);
