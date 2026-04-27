@@ -37,9 +37,22 @@ const { inferAction, registerCapabilityCli } = vi.hoisted(() => {
   return { inferAction: action, registerCapabilityCli: register };
 });
 
+const { registerPluginsCli, registerPluginCliCommandsFromValidatedConfig } = vi.hoisted(() => ({
+  registerPluginsCli: vi.fn((program: Command) => {
+    const plugins = program.command("plugins");
+    plugins
+      .command("update")
+      .argument("[id]")
+      .action(() => undefined);
+  }),
+  registerPluginCliCommandsFromValidatedConfig: vi.fn(async () => null),
+}));
+
 vi.mock("../acp-cli.js", () => ({ registerAcpCli }));
 vi.mock("../nodes-cli.js", () => ({ registerNodesCli }));
 vi.mock("../capability-cli.js", () => ({ registerCapabilityCli }));
+vi.mock("../plugins-cli.js", () => ({ registerPluginsCli }));
+vi.mock("../../plugins/cli.js", () => ({ registerPluginCliCommandsFromValidatedConfig }));
 vi.mock("./private-qa-cli.js", async () => {
   const actual = await vi.importActual<typeof import("./private-qa-cli.js")>("./private-qa-cli.js");
   return {
@@ -78,6 +91,8 @@ describe("registerSubCliCommands", () => {
     loadPrivateQaCliModule.mockClear();
     registerCapabilityCli.mockClear();
     inferAction.mockClear();
+    registerPluginsCli.mockClear();
+    registerPluginCliCommandsFromValidatedConfig.mockClear();
   });
 
   afterEach(() => {
@@ -157,5 +172,25 @@ describe("registerSubCliCommands", () => {
     await program.parseAsync(["acp"], { from: "user" });
     expect(registerAcpCli).toHaveBeenCalledTimes(1);
     expect(acpAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not preload plugin CLI registrations for builtin plugins update", async () => {
+    process.argv = ["node", "openclaw", "plugins", "update", "lossless-claw"];
+    const program = new Command().name("openclaw");
+
+    await registerSubCliByName(program, "plugins");
+
+    expect(registerPluginsCli).toHaveBeenCalledTimes(1);
+    expect(registerPluginCliCommandsFromValidatedConfig).not.toHaveBeenCalled();
+  });
+
+  it("keeps plugin CLI registrations available for the plugins command root", async () => {
+    process.argv = ["node", "openclaw", "plugins"];
+    const program = new Command().name("openclaw");
+
+    await registerSubCliByName(program, "plugins");
+
+    expect(registerPluginsCli).toHaveBeenCalledTimes(1);
+    expect(registerPluginCliCommandsFromValidatedConfig).toHaveBeenCalledTimes(1);
   });
 });

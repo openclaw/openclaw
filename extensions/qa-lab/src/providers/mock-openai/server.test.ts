@@ -68,12 +68,13 @@ function makeUserInput(text: string) {
 }
 
 const SESSIONS_SPAWN_TOOL = { type: "function", name: "sessions_spawn" } as const;
+const SESSIONS_YIELD_TOOL = { type: "function", name: "sessions_yield" } as const;
 const THREAD_SUBAGENT_CHILD_ERROR_TOKEN = "QA_SUBAGENT_CHILD_ERROR";
 const THREAD_SUBAGENT_TOOL_ERROR =
   "thread=true requested but thread delivery is unavailable in this test harness.";
 
 function threadSubagentTask(token: string) {
-  return `Reply exactly \`${token}\`. This is the marker.`;
+  return `Finish with exactly ${token}.`;
 }
 
 function explicitSessionsSpawnPrompt(token: string) {
@@ -707,7 +708,76 @@ describe("qa mock openai server", () => {
     });
   });
 
-  it("surfaces sessions_spawn tool errors instead of echoing child-task markers", async () => {
+  it("drives yielded-parent subagent fallback QA through sessions_spawn and sessions_yield", async () => {
+    const server = await startMockServer();
+    const prompt =
+      "Subagent direct fallback QA check: spawn one worker and yield until QA-SUBAGENT-DIRECT-FALLBACK-OK is delivered.";
+
+    await expectResponsesText(server, {
+      stream: true,
+      tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
+      input: [makeUserInput(prompt)],
+    });
+
+    await expect(
+      (await fetch(`${server.baseUrl}/debug/last-request`)).json(),
+    ).resolves.toMatchObject({
+      plannedToolName: "sessions_spawn",
+      plannedToolArgs: {
+        label: "qa-direct-fallback-worker",
+        thread: false,
+        mode: "run",
+      },
+    });
+
+    const body = await expectResponsesText(server, {
+      stream: true,
+      tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
+      input: [
+        makeUserInput(prompt),
+        {
+          type: "function_call_output",
+          call_id: "call_mock_sessions_spawn_1",
+          output: JSON.stringify({
+            status: "accepted",
+            childSessionKey: "agent:qa:subagent:child",
+            runId: "run-child-1",
+          }),
+        },
+      ],
+    });
+
+    expect(body).toContain('"name":"sessions_yield"');
+    expect(body).toContain("QA-SUBAGENT-DIRECT-FALLBACK-OK");
+    await expect(
+      (await fetch(`${server.baseUrl}/debug/last-request`)).json(),
+    ).resolves.toMatchObject({
+      plannedToolName: "sessions_yield",
+    });
+  });
+
+  it("returns no visible announce output for the direct fallback QA marker", async () => {
+    const server = await startMockServer();
+
+    const body = await expectResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      input: [
+        makeUserInput(
+          [
+            "[Internal task completion event]",
+            "Task: qa-direct-fallback-worker",
+            "Result: QA-SUBAGENT-DIRECT-FALLBACK-OK",
+          ].join("\n"),
+        ),
+      ],
+    });
+
+    expect(body.output?.[0]?.content?.[0]?.text).toBe("");
+  });
+
+  it("surfaces sessions_spawn tool errors instead of echoing child-task tokens", async () => {
     const server = await startMockServer();
 
     const body = await expectResponsesJson<{
@@ -741,6 +811,61 @@ describe("qa mock openai server", () => {
     const text = body.output?.[0]?.content?.[0]?.text ?? "";
     expect(text).toContain(THREAD_SUBAGENT_TOOL_ERROR);
     expect(text).not.toContain(THREAD_SUBAGENT_CHILD_ERROR_TOKEN);
+  });
+
+  it("does not echo child-task tokens after sessions_spawn accepts the request", async () => {
+    const server = await startMockServer();
+    const childToken = "QA_SUBAGENT_CHILD_ACCEPTED";
+
+    const body = await expectResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      tools: [SESSIONS_SPAWN_TOOL],
+      input: [
+        makeUserInput(explicitSessionsSpawnPrompt(childToken)),
+        {
+          type: "function_call",
+          name: "sessions_spawn",
+          arguments: JSON.stringify({
+            task: threadSubagentTask(childToken),
+            label: "qa-thread-subagent",
+            thread: true,
+            mode: "session",
+            runTimeoutSeconds: 30,
+          }),
+        },
+        {
+          type: "function_call_output",
+          output: JSON.stringify({
+            status: "accepted",
+            threadRootEventId: "$thread-root",
+          }),
+        },
+      ],
+    });
+
+    const text = body.output?.[0]?.content?.[0]?.text ?? "";
+    expect(text).toContain("Protocol note");
+    expect(text).not.toContain(childToken);
+  });
+
+  it("lets child subagent prompts finish with an exact token", async () => {
+    const server = await startMockServer();
+    const childToken = "QA_SUBAGENT_CHILD_DIRECT";
+
+    await expect(
+      expectResponsesJson<{ output?: Array<{ content?: Array<{ text?: string }> }> }>(server, {
+        stream: false,
+        input: [makeUserInput(threadSubagentTask(childToken))],
+      }),
+    ).resolves.toMatchObject({
+      output: [
+        {
+          content: [{ text: childToken }],
+        },
+      ],
+    });
   });
 
   it("plans memory tools and serves mock image generations", async () => {
@@ -834,7 +959,67 @@ describe("qa mock openai server", () => {
       }),
     });
     expect(memory.status).toBe(200);
-    expect(await memory.text()).toContain('"name":"memory_search"');
+    const memoryText = await memory.text();
+    expect(memoryText).toContain('"name":"memory_search"');
+    expect(memoryText).toContain('\\"corpus\\":\\"sessions\\"');
+
+    const threadMemorySearch = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        instructions:
+          "@openclaw Thread memory check: what is the hidden thread codename stored only in memory? Use memory tools first and reply only in this thread.",
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Protocol note: acknowledged. Continue with the QA scenario plan.",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(threadMemorySearch.status).toBe(200);
+    const threadMemorySearchText = await threadMemorySearch.text();
+    expect(threadMemorySearchText).toContain('"name":"memory_search"');
+    expect(threadMemorySearchText).toContain("ORBIT-22");
+
+    const threadMemorySummary = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: false,
+        instructions:
+          "@openclaw Thread memory check: what is the hidden thread codename stored only in memory? Use memory tools first and reply only in this thread.",
+        input: [
+          {
+            type: "function_call_output",
+            output: JSON.stringify({
+              text: "Thread-hidden codename: ORBIT-22.",
+            }),
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Protocol note: acknowledged. Continue with the QA scenario plan.",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(threadMemorySummary.status).toBe(200);
+    expect(JSON.stringify(await threadMemorySummary.json())).toContain("ORBIT-22");
 
     const memoryFollowup = await fetch(`${server.baseUrl}/v1/responses`, {
       method: "POST",
@@ -1441,6 +1626,96 @@ describe("qa mock openai server", () => {
         imageInputCount: 1,
       }),
     ]);
+  });
+
+  it("recognizes OpenAI-compatible image_url parts as image inputs", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: false,
+        model: "mock-openai/gpt-5.4",
+        input: [
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: "Image understanding check: what do you see?" },
+              {
+                type: "image_url",
+                image_url: {
+                  url: `data:image/png;base64,${QA_IMAGE_PNG_BASE64}`,
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+    const payload = (await response.json()) as {
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    };
+    const text = payload.output?.[0]?.content?.[0]?.text ?? "";
+    expect(text.toLowerCase()).toContain("red");
+    expect(text.toLowerCase()).toContain("blue");
+
+    const debug = await fetch(`${server.baseUrl}/debug/last-request`);
+    expect(debug.status).toBe(200);
+    expect(await debug.json()).toMatchObject({
+      imageInputCount: 1,
+    });
+  });
+
+  it("handles deeply nested image input shapes without recursive traversal failure", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    let content: unknown = {
+      type: "input_image",
+      source: {
+        type: "base64",
+        mime_type: "image/png",
+        data: QA_IMAGE_PNG_BASE64,
+      },
+    };
+    for (let index = 0; index < 4_000; index += 1) {
+      content = [{ type: "input_text", text: "nested" }, content];
+    }
+
+    const response = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: false,
+        model: "mock-openai/gpt-5.4",
+        input: [
+          {
+            role: "user",
+            content,
+          },
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+
+    const debug = await fetch(`${server.baseUrl}/debug/last-request`);
+    expect(debug.status).toBe(200);
+    expect(await debug.json()).toMatchObject({
+      imageInputCount: 1,
+    });
   });
 
   it("describes reattached generated images in the roundtrip flow", async () => {

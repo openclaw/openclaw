@@ -35,6 +35,7 @@ agent automation and verification.
 
 ```bash
 openclaw browser --browser-profile openclaw doctor
+openclaw browser --browser-profile openclaw doctor --deep
 openclaw browser --browser-profile openclaw status
 openclaw browser --browser-profile openclaw start
 openclaw browser --browser-profile openclaw open https://example.com
@@ -193,12 +194,15 @@ Browser settings live in `~/.openclaw/openclaw.json`.
 
 - Control service binds to loopback on a port derived from `gateway.port` (default `18791` = gateway + 2). Overriding `gateway.port` or `OPENCLAW_GATEWAY_PORT` shifts the derived ports in the same family.
 - Local `openclaw` profiles auto-assign `cdpPort`/`cdpUrl`; set those only for remote CDP. `cdpUrl` defaults to the managed local CDP port when unset.
-- `remoteCdpTimeoutMs` applies to remote (non-loopback) CDP HTTP reachability checks; `remoteCdpHandshakeTimeoutMs` applies to remote CDP WebSocket handshakes.
+- `remoteCdpTimeoutMs` applies to remote and `attachOnly` CDP HTTP reachability
+  checks and tab-opening HTTP requests; `remoteCdpHandshakeTimeoutMs` applies to
+  their CDP WebSocket handshakes.
 - `localLaunchTimeoutMs` is the budget for a locally launched managed Chrome
   process to expose its CDP HTTP endpoint. `localCdpReadyTimeoutMs` is the
   follow-up budget for CDP websocket readiness after the process is discovered.
   Raise these on Raspberry Pi, low-end VPS, or older hardware where Chromium
-  starts slowly. Values are capped at 120000 ms.
+  starts slowly. Values must be positive integers up to `120000` ms; invalid
+  config values are rejected.
 - `actionTimeoutMs` is the default budget for browser `act` requests when the caller does not pass `timeoutMs`. The client transport adds a small slack window so long waits can finish instead of timing out at the HTTP boundary.
 - `tabCleanup` is best-effort cleanup for tabs opened by primary-agent browser sessions. Subagent, cron, and ACP lifecycle cleanup still closes their explicit tracked tabs at session end; primary sessions keep active tabs reusable, then close idle or excess tracked tabs in the background.
 
@@ -233,12 +237,12 @@ Browser settings live in `~/.openclaw/openclaw.json`.
   current process. `OPENCLAW_BROWSER_HEADLESS=0` forces headed mode for ordinary
   starts and returns an actionable error on Linux hosts without a display server;
   an explicit `start --headless` request still wins for that one launch.
-- `executablePath` can be set globally or per local managed profile. Per-profile values override `browser.executablePath`, so different managed profiles can launch different Chromium-based browsers.
+- `executablePath` can be set globally or per local managed profile. Per-profile values override `browser.executablePath`, so different managed profiles can launch different Chromium-based browsers. Both forms accept `~` for your OS home directory.
 - `color` (top-level and per-profile) tints the browser UI so you can see which profile is active.
 - Default profile is `openclaw` (managed standalone). Use `defaultProfile: "user"` to opt into the signed-in user browser.
 - Auto-detect order: system default browser if Chromium-based; otherwise Chrome → Brave → Edge → Chromium → Chrome Canary.
 - `driver: "existing-session"` uses Chrome DevTools MCP instead of raw CDP. Do not set `cdpUrl` for that driver.
-- Set `browser.profiles.<name>.userDataDir` when an existing-session profile should attach to a non-default Chromium user profile (Brave, Edge, etc.).
+- Set `browser.profiles.<name>.userDataDir` when an existing-session profile should attach to a non-default Chromium user profile (Brave, Edge, etc.). This path also accepts `~` for your OS home directory.
 
 </Accordion>
 
@@ -248,7 +252,8 @@ Browser settings live in `~/.openclaw/openclaw.json`.
 
 If your **system default** browser is Chromium-based (Chrome/Brave/Edge/etc),
 OpenClaw uses it automatically. Set `browser.executablePath` to override
-auto-detection. `~` expands to your OS home directory:
+auto-detection. Top-level and per-profile `executablePath` values accept `~`
+for your OS home directory:
 
 ```bash
 openclaw config set browser.executablePath "/usr/bin/google-chrome"
@@ -530,7 +535,8 @@ Default behavior:
 - The built-in `user` profile uses Chrome MCP auto-connect, which targets the
   default local Google Chrome profile.
 
-Use `userDataDir` for Brave, Edge, Chromium, or a non-default Chrome profile:
+Use `userDataDir` for Brave, Edge, Chromium, or a non-default Chrome profile.
+`~` expands to your OS home directory:
 
 ```json5
 {

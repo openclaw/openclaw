@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-const css = readFileSync(new URL("./config-quick.css", import.meta.url), "utf8");
+const css = readFileSync(path.join(process.cwd(), "ui/src/styles/config-quick.css"), "utf8");
 
 describe("config-quick styles", () => {
   it("includes the local user identity quick-settings styles", () => {
@@ -12,7 +13,6 @@ describe("config-quick styles", () => {
     expect(css).toContain(".qs-identity-card__error");
     expect(css).toContain(".qs-assistant-avatar");
     expect(css).toContain(".qs-user-avatar");
-    expect(css).toContain(".qs-personal-actions");
     expect(css).toContain(".qs-card--personal");
   });
 

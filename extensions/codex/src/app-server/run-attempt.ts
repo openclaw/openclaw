@@ -14,7 +14,7 @@ import {
   formatErrorMessage,
   isActiveHarnessContextEngine,
   isSubagentSessionKey,
-  normalizeProviderToolSchemas,
+  normalizeAgentRuntimeTools,
   resolveAttemptSpawnWorkspaceDir,
   resolveAgentHarnessBeforePromptBuildResult,
   resolveModelAuthMode,
@@ -41,6 +41,7 @@ import {
   defaultCodexAppServerClientFactory,
 } from "./client-factory.js";
 import { isCodexAppServerApprovalRequest, type CodexAppServerClient } from "./client.js";
+import { ensureCodexComputerUse } from "./computer-use.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
@@ -311,6 +312,12 @@ export async function runCodexAppServerAttempt(
       signal: runAbortController.signal,
       operation: async () => {
         const startupClient = await clientFactory(appServer.start, startupAuthProfileId);
+        await ensureCodexComputerUse({
+          client: startupClient,
+          pluginConfig: options.pluginConfig,
+          timeoutMs: appServer.requestTimeoutMs,
+          signal: runAbortController.signal,
+        });
         const startupThread = await startOrResumeThread({
           client: startupClient,
           params,
@@ -906,23 +913,17 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     params.toolsAllow && params.toolsAllow.length > 0
       ? visionFilteredTools.filter((tool) => params.toolsAllow?.includes(tool.name))
       : visionFilteredTools;
-  return (
-    params.runtimePlan?.tools.normalize(filteredTools, {
-      workspaceDir: input.effectiveWorkspace,
-      modelApi: params.model.api,
-      model: params.model,
-    }) ??
-    normalizeProviderToolSchemas({
-      tools: filteredTools,
-      provider: params.provider,
-      config: params.config,
-      workspaceDir: input.effectiveWorkspace,
-      env: process.env,
-      modelId: params.modelId,
-      modelApi: params.model.api,
-      model: params.model,
-    })
-  );
+  return normalizeAgentRuntimeTools({
+    runtimePlan: params.runtimePlan,
+    tools: filteredTools,
+    provider: params.provider,
+    config: params.config,
+    workspaceDir: input.effectiveWorkspace,
+    env: process.env,
+    modelId: params.modelId,
+    modelApi: params.model.api,
+    model: params.model,
+  });
 }
 
 async function withCodexStartupTimeout<T>(params: {

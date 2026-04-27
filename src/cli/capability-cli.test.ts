@@ -73,6 +73,7 @@ const mocks = vi.hoisted(() => ({
     attempts: [],
   })),
   setTtsProvider: vi.fn(),
+  setTtsPersona: vi.fn(),
   resolveExplicitTtsOverrides: vi.fn(
     ({
       provider,
@@ -161,10 +162,17 @@ vi.mock("../agents/memory-search.js", () => ({
     mocks.resolveMemorySearchConfig as typeof import("../agents/memory-search.js").resolveMemorySearchConfig,
 }));
 
-vi.mock("../commands/models.js", () => ({
+vi.mock("../commands/models/auth.js", () => ({
   modelsAuthLoginCommand: vi.fn(),
+}));
+
+vi.mock("../commands/models/list.js", () => ({
   modelsStatusCommand:
-    mocks.modelsStatusCommand as typeof import("../commands/models.js").modelsStatusCommand,
+    mocks.modelsStatusCommand as typeof import("../commands/models/list.js").modelsStatusCommand,
+}));
+vi.mock("../commands/models/list.status-command.js", () => ({
+  modelsStatusCommand:
+    mocks.modelsStatusCommand as typeof import("../commands/models/list.status-command.js").modelsStatusCommand,
 }));
 
 vi.mock("../gateway/call.js", () => ({
@@ -220,11 +228,14 @@ vi.mock("../video-generation/runtime.js", () => ({
 }));
 
 vi.mock("../tts/tts.js", () => ({
+  getTtsPersona: vi.fn(() => undefined),
   getTtsProvider: vi.fn(() => "openai"),
+  listTtsPersonas: vi.fn(() => []),
   listSpeechVoices: vi.fn(async () => []),
   resolveTtsConfig: vi.fn(() => ({})),
   resolveTtsPrefsPath: vi.fn(() => "/tmp/tts.json"),
   setTtsEnabled: vi.fn(),
+  setTtsPersona: mocks.setTtsPersona as typeof import("../tts/tts.js").setTtsPersona,
   setTtsProvider: mocks.setTtsProvider as typeof import("../tts/tts.js").setTtsProvider,
   resolveExplicitTtsOverrides:
     mocks.resolveExplicitTtsOverrides as typeof import("../tts/tts.js").resolveExplicitTtsOverrides,
@@ -360,7 +371,7 @@ describe("capability cli", () => {
     );
   });
 
-  it("cleans up bundled MCP runtimes for local model runs", async () => {
+  it("runs local model probes without chat-agent prompt policy or tools", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
       argv: ["capability", "model", "run", "--prompt", "hello", "--json"],
@@ -369,13 +380,15 @@ describe("capability cli", () => {
     expect(mocks.agentCommand).toHaveBeenCalledWith(
       expect.objectContaining({
         cleanupBundleMcpOnRunEnd: true,
+        modelRun: true,
+        promptMode: "none",
       }),
       expect.anything(),
       expect.anything(),
     );
   });
 
-  it("requests bundled MCP runtime cleanup for gateway model runs", async () => {
+  it("runs gateway model probes without chat-agent prompt policy or tools", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
       argv: ["capability", "model", "run", "--prompt", "hello", "--gateway", "--json"],
@@ -386,6 +399,8 @@ describe("capability cli", () => {
         method: "agent",
         params: expect.objectContaining({
           cleanupBundleMcpOnRunEnd: true,
+          modelRun: true,
+          promptMode: "none",
         }),
       }),
     );
@@ -549,6 +564,255 @@ describe("capability cli", () => {
       expect.objectContaining({
         prompt: "friendly lobster",
         timeoutMs: 180000,
+      }),
+    );
+  });
+
+  it("passes image output format and generic background hints through to generation runtime", async () => {
+    mocks.generateImage.mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-1.5",
+      attempts: [],
+      images: [
+        {
+          buffer: Buffer.from("png-bytes"),
+          mimeType: "image/png",
+          fileName: "transparent.png",
+        },
+      ],
+    });
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "image",
+        "generate",
+        "--prompt",
+        "transparent sticker",
+        "--model",
+        "openai/gpt-image-1.5",
+        "--output-format",
+        "png",
+        "--background",
+        "transparent",
+        "--json",
+      ],
+    });
+
+    expect(mocks.generateImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "transparent sticker",
+        modelOverride: "openai/gpt-image-1.5",
+        outputFormat: "png",
+        background: "transparent",
+        providerOptions: undefined,
+      }),
+    );
+  });
+
+  it("passes image output format and OpenAI background hints through to edit runtime", async () => {
+    mocks.generateImage.mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-1.5",
+      attempts: [],
+      images: [
+        {
+          buffer: Buffer.from("png-bytes"),
+          mimeType: "image/png",
+          fileName: "transparent-edit.png",
+        },
+      ],
+    });
+    const inputPath = path.join(os.tmpdir(), `openclaw-image-edit-${Date.now()}.png`);
+    await fs.writeFile(inputPath, Buffer.from("png-input"));
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "image",
+        "edit",
+        "--file",
+        inputPath,
+        "--prompt",
+        "make background transparent",
+        "--model",
+        "openai/gpt-image-1.5",
+        "--output-format",
+        "png",
+        "--openai-background",
+        "transparent",
+        "--json",
+      ],
+    });
+
+    expect(mocks.generateImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "make background transparent",
+        modelOverride: "openai/gpt-image-1.5",
+        outputFormat: "png",
+        background: undefined,
+        providerOptions: {
+          openai: {
+            background: "transparent",
+          },
+        },
+        inputImages: [
+          expect.objectContaining({
+            fileName: path.basename(inputPath),
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("rejects unsupported image output format and background hints", async () => {
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: [
+          "capability",
+          "image",
+          "generate",
+          "--prompt",
+          "transparent sticker",
+          "--output-format",
+          "gif",
+          "--json",
+        ],
+      }),
+    ).rejects.toThrow("exit 1");
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      "Error: --output-format must be one of png, jpeg, or webp",
+    );
+
+    mocks.runtime.error.mockClear();
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: [
+          "capability",
+          "image",
+          "generate",
+          "--prompt",
+          "transparent sticker",
+          "--openai-background",
+          "clear",
+          "--json",
+        ],
+      }),
+    ).rejects.toThrow("exit 1");
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      "Error: --openai-background must be one of transparent, opaque, or auto",
+    );
+
+    mocks.runtime.error.mockClear();
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: [
+          "capability",
+          "image",
+          "generate",
+          "--prompt",
+          "transparent sticker",
+          "--background",
+          "clear",
+          "--json",
+        ],
+      }),
+    ).rejects.toThrow("exit 1");
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      "Error: --background must be one of transparent, opaque, or auto",
+    );
+  });
+
+  it("forwards size, aspect ratio, and resolution overrides for image edit", async () => {
+    const pngBase64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+yf7kAAAAASUVORK5CYII=";
+    mocks.generateImage.mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-2",
+      attempts: [],
+      images: [
+        {
+          buffer: Buffer.from(pngBase64, "base64"),
+          mimeType: "image/png",
+          fileName: "provider-output.png",
+        },
+      ],
+    });
+
+    const tempInput = path.join(os.tmpdir(), `openclaw-image-edit-input-${Date.now()}.png`);
+    const tempOutput = path.join(os.tmpdir(), `openclaw-image-edit-output-${Date.now()}.png`);
+    await fs.writeFile(tempInput, Buffer.from(pngBase64, "base64"));
+    await fs.rm(tempOutput, { force: true });
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "image",
+        "edit",
+        "--file",
+        tempInput,
+        "--prompt",
+        "remove the background object",
+        "--model",
+        "openai/gpt-image-2",
+        "--size",
+        "2160x3840",
+        "--aspect-ratio",
+        "9:16",
+        "--resolution",
+        "4K",
+        "--output",
+        tempOutput,
+        "--json",
+      ],
+    });
+
+    expect(mocks.generateImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "remove the background object",
+        modelOverride: "openai/gpt-image-2",
+        size: "2160x3840",
+        aspectRatio: "9:16",
+        resolution: "4K",
+        inputImages: [
+          expect.objectContaining({
+            fileName: path.basename(tempInput),
+            mimeType: "image/png",
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("reports the expanded image.edit flags in capability inspect", async () => {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "inspect", "--name", "image.edit", "--json"],
+    });
+
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "image.edit",
+        flags: [
+          "--file",
+          "--prompt",
+          "--model",
+          "--size",
+          "--aspect-ratio",
+          "--resolution",
+          "--output-format",
+          "--background",
+          "--openai-background",
+          "--timeout-ms",
+          "--output",
+          "--json",
+        ],
       }),
     );
   });

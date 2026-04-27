@@ -1,28 +1,31 @@
-import path from "node:path";
 import { z } from "zod";
-import { resolveStateDir } from "../config/paths.js";
+import { saveJsonFile } from "../infra/json-file.js";
 import { readJsonFile, readJsonFileSync, writeJsonAtomic } from "../infra/json-files.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { safeParseWithSchema } from "../utils/zod-parse.js";
 import {
+  resolveInstalledPluginIndexStorePath,
+  type InstalledPluginIndexStoreOptions,
+} from "./installed-plugin-index-store-path.js";
+import {
   diffInstalledPluginIndexInvalidationReasons,
+  extractPluginInstallRecordsFromInstalledPluginIndex,
   INSTALLED_PLUGIN_INDEX_WARNING,
   INSTALLED_PLUGIN_INDEX_VERSION,
   INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
   loadInstalledPluginIndex,
   refreshInstalledPluginIndex,
   type InstalledPluginIndex,
+  type InstalledPluginInstallRecordInfo,
   type InstalledPluginIndexRefreshReason,
   type LoadInstalledPluginIndexParams,
   type RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index.js";
-
-export const INSTALLED_PLUGIN_INDEX_STORE_PATH = path.join("plugins", "installed-index.json");
-
-export type InstalledPluginIndexStoreOptions = {
-  env?: NodeJS.ProcessEnv;
-  stateDir?: string;
-  filePath?: string;
-};
+export {
+  INSTALLED_PLUGIN_INDEX_STORE_PATH,
+  resolveInstalledPluginIndexStorePath,
+  type InstalledPluginIndexStoreOptions,
+} from "./installed-plugin-index-store-path.js";
 
 export type InstalledPluginIndexStoreState = "missing" | "fresh" | "stale";
 
@@ -33,93 +36,111 @@ export type InstalledPluginIndexStoreInspection = {
   current: InstalledPluginIndex;
 };
 
-const ContributionArraySchema = z.array(z.string());
+const StringArraySchema = z.array(z.string());
 
-const InstalledPluginIndexContributionsSchema = z
-  .object({
-    providers: ContributionArraySchema,
-    channels: ContributionArraySchema,
-    channelConfigs: ContributionArraySchema,
-    setupProviders: ContributionArraySchema,
-    cliBackends: ContributionArraySchema,
-    modelCatalogProviders: ContributionArraySchema,
-    commandAliases: ContributionArraySchema,
-    contracts: ContributionArraySchema,
-  })
-  .passthrough();
+const InstalledPluginIndexStartupSchema = z.object({
+  sidecar: z.boolean(),
+  memory: z.boolean(),
+  deferConfiguredChannelFullLoadUntilAfterListen: z.boolean(),
+  agentHarnesses: StringArraySchema,
+});
 
-const InstalledPluginIndexStartupSchema = z
-  .object({
-    sidecar: z.boolean(),
-    memory: z.boolean(),
-    deferConfiguredChannelFullLoadUntilAfterListen: z.boolean(),
-    agentHarnesses: ContributionArraySchema,
-  })
-  .passthrough();
+const InstalledPluginIndexRecordSchema = z.object({
+  pluginId: z.string(),
+  packageName: z.string().optional(),
+  packageVersion: z.string().optional(),
+  installRecord: z.record(z.string(), z.unknown()).optional(),
+  installRecordHash: z.string().optional(),
+  packageInstall: z.unknown().optional(),
+  packageChannel: z.unknown().optional(),
+  manifestPath: z.string(),
+  manifestHash: z.string(),
+  format: z.string().optional(),
+  bundleFormat: z.string().optional(),
+  source: z.string().optional(),
+  setupSource: z.string().optional(),
+  packageJson: z
+    .object({
+      path: z.string(),
+      hash: z.string(),
+    })
+    .optional(),
+  rootDir: z.string(),
+  origin: z.string(),
+  enabled: z.boolean(),
+  enabledByDefault: z.boolean().optional(),
+  syntheticAuthRefs: StringArraySchema.optional(),
+  startup: InstalledPluginIndexStartupSchema,
+  compat: z.array(z.string()),
+});
 
-const InstalledPluginIndexRecordSchema = z
-  .object({
-    pluginId: z.string(),
-    packageName: z.string().optional(),
-    packageVersion: z.string().optional(),
-    installRecord: z.record(z.string(), z.unknown()).optional(),
-    installRecordHash: z.string().optional(),
-    packageInstall: z.unknown().optional(),
-    manifestPath: z.string(),
-    manifestHash: z.string(),
-    packageJson: z
-      .object({
-        path: z.string(),
-        hash: z.string(),
-      })
-      .optional(),
-    rootDir: z.string(),
-    origin: z.string(),
-    enabled: z.boolean(),
-    enabledByDefault: z.boolean().optional(),
-    contributions: InstalledPluginIndexContributionsSchema,
-    startup: InstalledPluginIndexStartupSchema,
-    compat: z.array(z.string()),
-  })
-  .passthrough();
+const InstalledPluginInstallRecordSchema = z.record(z.string(), z.unknown());
 
-const PluginDiagnosticSchema = z
-  .object({
-    level: z.union([z.literal("warn"), z.literal("error")]),
-    message: z.string(),
-    pluginId: z.string().optional(),
-    source: z.string().optional(),
-  })
-  .passthrough();
+const PluginDiagnosticSchema = z.object({
+  level: z.union([z.literal("warn"), z.literal("error")]),
+  message: z.string(),
+  pluginId: z.string().optional(),
+  source: z.string().optional(),
+});
 
-const InstalledPluginIndexSchema = z
-  .object({
-    version: z.literal(INSTALLED_PLUGIN_INDEX_VERSION),
-    warning: z.string().optional(),
-    hostContractVersion: z.string(),
-    compatRegistryVersion: z.string(),
-    migrationVersion: z.literal(INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION),
-    policyHash: z.string(),
-    generatedAtMs: z.number(),
-    refreshReason: z.string().optional(),
-    plugins: z.array(InstalledPluginIndexRecordSchema),
-    diagnostics: z.array(PluginDiagnosticSchema),
-  })
-  .passthrough();
+const InstalledPluginIndexSchema = z.object({
+  version: z.literal(INSTALLED_PLUGIN_INDEX_VERSION),
+  warning: z.string().optional(),
+  hostContractVersion: z.string(),
+  compatRegistryVersion: z.string(),
+  migrationVersion: z.literal(INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION),
+  policyHash: z.string(),
+  generatedAtMs: z.number(),
+  refreshReason: z.string().optional(),
+  installRecords: z.record(z.string(), InstalledPluginInstallRecordSchema).optional(),
+  plugins: z.array(InstalledPluginIndexRecordSchema),
+  diagnostics: z.array(PluginDiagnosticSchema),
+});
 
-function parseInstalledPluginIndex(value: unknown): InstalledPluginIndex | null {
-  return safeParseWithSchema(InstalledPluginIndexSchema, value) as InstalledPluginIndex | null;
+function copySafeInstallRecords(
+  records: Readonly<Record<string, InstalledPluginInstallRecordInfo>> | undefined,
+): Record<string, InstalledPluginInstallRecordInfo> | undefined {
+  if (!records) {
+    return undefined;
+  }
+  const safeRecords: Record<string, InstalledPluginInstallRecordInfo> = {};
+  for (const [pluginId, record] of Object.entries(records)) {
+    if (isBlockedObjectKey(pluginId)) {
+      continue;
+    }
+    safeRecords[pluginId] = record;
+  }
+  return safeRecords;
 }
 
-export function resolveInstalledPluginIndexStorePath(
-  options: InstalledPluginIndexStoreOptions = {},
-): string {
-  if (options.filePath) {
-    return options.filePath;
+function parseInstalledPluginIndex(value: unknown): InstalledPluginIndex | null {
+  const parsed = safeParseWithSchema(InstalledPluginIndexSchema, value) as
+    | (Omit<InstalledPluginIndex, "installRecords"> & {
+        installRecords?: InstalledPluginIndex["installRecords"];
+      })
+    | null;
+  if (!parsed) {
+    return null;
   }
-  const env = options.env ?? process.env;
-  const stateDir = options.stateDir ?? resolveStateDir(env);
-  return path.join(stateDir, INSTALLED_PLUGIN_INDEX_STORE_PATH);
+  const installRecords =
+    copySafeInstallRecords(parsed.installRecords) ??
+    copySafeInstallRecords(
+      extractPluginInstallRecordsFromInstalledPluginIndex(parsed as InstalledPluginIndex),
+    ) ??
+    {};
+  return {
+    version: parsed.version,
+    ...(parsed.warning ? { warning: parsed.warning } : {}),
+    hostContractVersion: parsed.hostContractVersion,
+    compatRegistryVersion: parsed.compatRegistryVersion,
+    migrationVersion: parsed.migrationVersion,
+    policyHash: parsed.policyHash,
+    generatedAtMs: parsed.generatedAtMs,
+    ...(parsed.refreshReason ? { refreshReason: parsed.refreshReason } : {}),
+    installRecords,
+    plugins: parsed.plugins,
+    diagnostics: parsed.diagnostics,
+  };
 }
 
 export async function readPersistedInstalledPluginIndex(
@@ -153,11 +174,24 @@ export async function writePersistedInstalledPluginIndex(
   return filePath;
 }
 
+export function writePersistedInstalledPluginIndexSync(
+  index: InstalledPluginIndex,
+  options: InstalledPluginIndexStoreOptions = {},
+): string {
+  const filePath = resolveInstalledPluginIndexStorePath(options);
+  saveJsonFile(filePath, { ...index, warning: INSTALLED_PLUGIN_INDEX_WARNING });
+  return filePath;
+}
+
 export async function inspectPersistedInstalledPluginIndex(
   params: LoadInstalledPluginIndexParams & InstalledPluginIndexStoreOptions = {},
 ): Promise<InstalledPluginIndexStoreInspection> {
   const persisted = await readPersistedInstalledPluginIndex(params);
-  const current = loadInstalledPluginIndex(params);
+  const current = loadInstalledPluginIndex({
+    ...params,
+    installRecords:
+      params.installRecords ?? extractPluginInstallRecordsFromInstalledPluginIndex(persisted),
+  });
   if (!persisted) {
     return {
       state: "missing",
@@ -179,7 +213,25 @@ export async function inspectPersistedInstalledPluginIndex(
 export async function refreshPersistedInstalledPluginIndex(
   params: RefreshInstalledPluginIndexParams & InstalledPluginIndexStoreOptions,
 ): Promise<InstalledPluginIndex> {
-  const index = refreshInstalledPluginIndex(params);
+  const persisted = params.installRecords ? null : await readPersistedInstalledPluginIndex(params);
+  const index = refreshInstalledPluginIndex({
+    ...params,
+    installRecords:
+      params.installRecords ?? extractPluginInstallRecordsFromInstalledPluginIndex(persisted),
+  });
   await writePersistedInstalledPluginIndex(index, params);
+  return index;
+}
+
+export function refreshPersistedInstalledPluginIndexSync(
+  params: RefreshInstalledPluginIndexParams & InstalledPluginIndexStoreOptions,
+): InstalledPluginIndex {
+  const persisted = params.installRecords ? null : readPersistedInstalledPluginIndexSync(params);
+  const index = refreshInstalledPluginIndex({
+    ...params,
+    installRecords:
+      params.installRecords ?? extractPluginInstallRecordsFromInstalledPluginIndex(persisted),
+  });
+  writePersistedInstalledPluginIndexSync(index, params);
   return index;
 }

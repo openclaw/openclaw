@@ -56,7 +56,11 @@ function sortedValues(values: Iterable<string>): string[] {
 export function resolveInstalledPluginProviderContributionIds(
   params: ResolveInstalledPluginProviderContributionIdsParams = {},
 ): string[] {
-  const index = params.index ?? loadPluginRegistrySnapshot(params);
+  const registryParams =
+    params.candidates && params.preferPersisted === undefined
+      ? { ...params, preferPersisted: false }
+      : params;
+  const index = params.index ?? loadPluginRegistrySnapshot(registryParams);
   return sortedValues(
     listPluginContributionIds({
       index,
@@ -73,12 +77,6 @@ export async function resolveRuntimePluginDiscoveryProviders(
   return (await loadProviderRuntime())
     .resolvePluginDiscoveryProvidersRuntime(params)
     .filter((provider) => resolveProviderCatalogOrderHook(provider));
-}
-
-export async function resolvePluginDiscoveryProviders(
-  params: ResolveRuntimePluginDiscoveryProvidersParams,
-): Promise<ProviderPlugin[]> {
-  return resolveRuntimePluginDiscoveryProviders(params);
 }
 
 export function groupPluginDiscoveryProvidersByOrder(

@@ -23,9 +23,11 @@ const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
   "opencode-go/glm-5",
   "openrouter/ai21/jamba-large-1.7",
   "xai/grok-4-1-fast-non-reasoning",
-  "zai/glm-4.7",
+  "zai/glm-5.1",
   "fireworks/accounts/fireworks/models/kimi-k2p6",
   "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+  "fireworks/accounts/fireworks/models/glm-5",
+  "fireworks/accounts/fireworks/models/glm-5p1",
   "minimax-portal/minimax-m2.7",
 ] as const;
 
@@ -104,6 +106,11 @@ function isOldMiniMaxLiveModelRef(id: string): boolean {
   return modelName === "minimax-m2.1" || modelName.startsWith("minimax-m2.1:");
 }
 
+function isOldGlmLiveModelRef(id: string): boolean {
+  const modelName = normalizeLowercaseStringOrEmpty(id).split("/").pop() ?? "";
+  return /^glm-4(?:$|[.\-p])/.test(modelName);
+}
+
 export function isModernModelRef(ref: ModelRef): boolean {
   const provider = normalizeProviderId(ref.provider ?? "");
   const id = normalizeLowercaseStringOrEmpty(ref.id);
@@ -139,6 +146,9 @@ export function isHighSignalLiveModelRef(ref: ModelRef): boolean {
   if (isOldMiniMaxLiveModelRef(id)) {
     return false;
   }
+  if (isOldGlmLiveModelRef(id)) {
+    return false;
+  }
   return isHighSignalClaudeModelId(id);
 }
 
@@ -149,6 +159,7 @@ export function shouldExcludeProviderFromDefaultHighSignalLiveSweep(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  resolveProviderOwners?: (provider: string) => readonly string[] | undefined;
 }): boolean {
   const provider = normalizeProviderId(params.provider ?? "");
   if (!provider || params.useExplicitModels) {
@@ -163,16 +174,20 @@ export function shouldExcludeProviderFromDefaultHighSignalLiveSweep(params: {
     if (requestedProvider === provider) {
       return false;
     }
-    if (
-      requestedProvider &&
-      liveProvidersShareOwningPlugin(requestedProvider, provider, {
-        config: params.config,
-        workspaceDir: params.workspaceDir,
-        env: params.env,
-        ownerCache,
-      })
-    ) {
-      return false;
+    if (requestedProvider) {
+      const sharesOwner = params.resolveProviderOwners
+        ? (params.resolveProviderOwners(requestedProvider) ?? []).some((owner) =>
+            (params.resolveProviderOwners?.(provider) ?? []).includes(owner),
+          )
+        : liveProvidersShareOwningPlugin(requestedProvider, provider, {
+            config: params.config,
+            workspaceDir: params.workspaceDir,
+            env: params.env,
+            ownerCache,
+          });
+      if (sharesOwner) {
+        return false;
+      }
     }
     if (requestedProvider && DEFAULT_HIGH_SIGNAL_LIVE_EXCLUDED_PROVIDERS.has(requestedProvider)) {
       return false;

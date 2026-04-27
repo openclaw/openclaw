@@ -7,6 +7,18 @@ function getErrorCode(err: unknown): string | undefined {
   return err instanceof Error ? (err as NodeJS.ErrnoException).code : undefined;
 }
 
+export class JsonFileReadError extends Error {
+  readonly filePath: string;
+  readonly reason: "read" | "parse";
+
+  constructor(filePath: string, reason: "read" | "parse", cause: unknown) {
+    super(`Failed to ${reason} JSON file: ${filePath}`, { cause });
+    this.name = "JsonFileReadError";
+    this.filePath = filePath;
+    this.reason = reason;
+  }
+}
+
 async function replaceFileWithWindowsFallback(tempPath: string, filePath: string, mode: number) {
   try {
     await fs.rename(tempPath, filePath);
@@ -16,6 +28,13 @@ async function replaceFileWithWindowsFallback(tempPath: string, filePath: string
     if (process.platform !== "win32" || (code !== "EPERM" && code !== "EEXIST")) {
       throw err;
     }
+  }
+
+  const existing = await fs.lstat(filePath).catch(() => null);
+  if (existing?.isSymbolicLink()) {
+    await fs.rm(filePath, { force: true });
+    await fs.rename(tempPath, filePath);
+    return;
   }
 
   await fs.copyFile(tempPath, filePath);
@@ -33,6 +52,23 @@ export async function readJsonFile<T>(filePath: string): Promise<T | null> {
     return JSON.parse(raw) as T;
   } catch {
     return null;
+  }
+}
+
+export async function readDurableJsonFile<T>(filePath: string): Promise<T | null> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(filePath, "utf8");
+  } catch (err) {
+    if (getErrorCode(err) === "ENOENT") {
+      return null;
+    }
+    throw new JsonFileReadError(filePath, "read", err);
+  }
+  try {
+    return JSON.parse(raw) as T;
+  } catch (err) {
+    throw new JsonFileReadError(filePath, "parse", err);
   }
 }
 

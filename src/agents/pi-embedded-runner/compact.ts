@@ -7,6 +7,7 @@ import {
   estimateTokens,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
+import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -18,7 +19,6 @@ import {
   type CapturedCompactionCheckpointSnapshot,
 } from "../../gateway/session-compaction-checkpoints.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { resolveHeartbeatSummaryForAgent } from "../../infra/heartbeat-summary.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -112,6 +112,11 @@ import {
   compactWithSafetyTimeout,
   resolveCompactionTimeoutMs,
 } from "./compaction-safety-timeout.js";
+import {
+  type CompactionTranscriptRotation,
+  rotateTranscriptAfterCompaction,
+  shouldRotateCompactionTranscript,
+} from "./compaction-successor-transcript.js";
 import { applyFinalEffectiveToolPolicy } from "./effective-tool-policy.js";
 import { buildEmbeddedExtensionFactories } from "./extensions.js";
 import { applyExtraParamsToAgent } from "./extra-params.js";
@@ -125,7 +130,6 @@ import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js
 import { shouldUseOpenAIWebSocketTransport } from "./run/attempt.thread-helpers.js";
 import { buildEmbeddedSandboxInfo } from "./sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
-import { truncateSessionAfterCompaction } from "./session-truncation.js";
 import { resolveEmbeddedRunSkillEntries } from "./skills-runtime.js";
 import {
   resolveEmbeddedAgentApiKey,
@@ -721,7 +725,9 @@ export async function compactEmbeddedPiSessionDirect(
       cwd: effectiveWorkspace,
       moduleUrl: import.meta.url,
     });
-    const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
+    const ttsHint = params.config
+      ? buildTtsSystemPromptHint(params.config, sessionAgentId)
+      : undefined;
     const ownerDisplay = resolveOwnerDisplaySetting(params.config);
     const promptContributionContext: Parameters<
       AgentRuntimePlan["prompt"]["resolveSystemPromptContribution"]
@@ -763,7 +769,10 @@ export async function compactEmbeddedPiSessionDirect(
           sourcePath: openClawReferences.sourcePath ?? undefined,
           ttsHint,
           promptMode,
-          acpEnabled: params.config?.acp?.enabled !== false,
+          acpEnabled: isAcpRuntimeSpawnAvailable({
+            config: params.config,
+            sandboxed: sandboxInfo?.enabled === true,
+          }),
           runtimeInfo,
           reactionGuidance,
           messageToolHints,
@@ -1064,16 +1073,12 @@ export async function compactEmbeddedPiSessionDirect(
               },
             },
           );
-          await runPostCompactionSideEffects({
-            config: params.config,
-            sessionKey: params.sessionKey,
-            sessionFile: params.sessionFile,
-          });
           let effectiveFirstKeptEntryId = result.firstKeptEntryId;
           let postCompactionLeafId =
             typeof sessionManager.getLeafId === "function"
               ? (sessionManager.getLeafId() ?? undefined)
               : undefined;
+          let transcriptRotationSessionManager = sessionManager;
           if (params.trigger === "manual") {
             try {
               const hardenedBoundary = await hardenManualCompactionBoundary({
@@ -1086,6 +1091,7 @@ export async function compactEmbeddedPiSessionDirect(
                   hardenedBoundary.firstKeptEntryId ?? effectiveFirstKeptEntryId;
                 postCompactionLeafId = hardenedBoundary.leafId ?? postCompactionLeafId;
                 session.agent.state.messages = hardenedBoundary.messages;
+                transcriptRotationSessionManager = SessionManager.open(params.sessionFile);
               }
             } catch (err) {
               log.warn("[compaction] failed to harden manual compaction boundary", {
@@ -1102,12 +1108,40 @@ export async function compactEmbeddedPiSessionDirect(
           });
           const messageCountAfter = session.messages.length;
           const compactedCount = Math.max(0, messageCountCompactionInput - messageCountAfter);
+          let transcriptRotation: CompactionTranscriptRotation = { rotated: false };
+          if (shouldRotateCompactionTranscript(params.config)) {
+            try {
+              transcriptRotation = await rotateTranscriptAfterCompaction({
+                sessionManager: transcriptRotationSessionManager,
+                sessionFile: params.sessionFile,
+              });
+            } catch (err) {
+              log.warn("[compaction] post-compaction transcript rotation failed", {
+                errorMessage: formatErrorMessage(err),
+                errorStack: err instanceof Error ? err.stack : undefined,
+              });
+            }
+          }
+          const activeSessionId = transcriptRotation.sessionId ?? params.sessionId;
+          const activeSessionFile = transcriptRotation.sessionFile ?? params.sessionFile;
+          const activePostLeafId = transcriptRotation.leafId ?? postCompactionLeafId;
+          if (transcriptRotation.rotated) {
+            log.info(
+              `[compaction] rotated active transcript after compaction ` +
+                `(sessionKey=${params.sessionKey ?? params.sessionId})`,
+            );
+          }
+          await runPostCompactionSideEffects({
+            config: params.config,
+            sessionKey: params.sessionKey,
+            sessionFile: activeSessionFile,
+          });
           if (params.config && params.sessionKey && checkpointSnapshot) {
             try {
               const storedCheckpoint = await persistSessionCompactionCheckpoint({
                 cfg: params.config,
                 sessionKey: params.sessionKey,
-                sessionId: params.sessionId,
+                sessionId: activeSessionId,
                 reason: resolveSessionCompactionCheckpointReason({
                   trigger: params.trigger,
                 }),
@@ -1116,9 +1150,9 @@ export async function compactEmbeddedPiSessionDirect(
                 firstKeptEntryId: effectiveFirstKeptEntryId,
                 tokensBefore: observedTokenCount ?? result.tokensBefore,
                 tokensAfter,
-                postSessionFile: params.sessionFile,
-                postLeafId: postCompactionLeafId,
-                postEntryId: postCompactionLeafId,
+                postSessionFile: activeSessionFile,
+                postLeafId: activePostLeafId,
+                postEntryId: activePostLeafId,
                 createdAt: compactStartedAt,
               });
               checkpointSnapshotRetained = storedCheckpoint !== null;
@@ -1147,7 +1181,7 @@ export async function compactEmbeddedPiSessionDirect(
           }
           await runAfterCompactionHooks({
             hookRunner,
-            sessionId: params.sessionId,
+            sessionId: activeSessionId,
             sessionAgentId,
             hookSessionKey,
             missingSessionKey,
@@ -1156,36 +1190,11 @@ export async function compactEmbeddedPiSessionDirect(
             messageCountAfter,
             tokensAfter,
             compactedCount,
-            sessionFile: params.sessionFile,
+            sessionFile: activeSessionFile,
             summaryLength: typeof result.summary === "string" ? result.summary.length : undefined,
             tokensBefore: result.tokensBefore,
             firstKeptEntryId: effectiveFirstKeptEntryId,
           });
-          // Truncate session file to remove compacted entries (#39953)
-          if (params.config?.agents?.defaults?.compaction?.truncateAfterCompaction) {
-            try {
-              const heartbeatSummary = resolveHeartbeatSummaryForAgent(
-                params.config,
-                sessionAgentId,
-              );
-              const truncResult = await truncateSessionAfterCompaction({
-                sessionFile: params.sessionFile,
-                ackMaxChars: heartbeatSummary.ackMaxChars,
-                heartbeatPrompt: heartbeatSummary.prompt,
-              });
-              if (truncResult.truncated) {
-                log.info(
-                  `[compaction] post-compaction truncation removed ${truncResult.entriesRemoved} entries ` +
-                    `(sessionKey=${params.sessionKey ?? params.sessionId})`,
-                );
-              }
-            } catch (err) {
-              log.warn("[compaction] post-compaction truncation failed", {
-                errorMessage: formatErrorMessage(err),
-                errorStack: err instanceof Error ? err.stack : undefined,
-              });
-            }
-          }
           return {
             ok: true,
             compacted: true,
@@ -1195,6 +1204,8 @@ export async function compactEmbeddedPiSessionDirect(
               tokensBefore: observedTokenCount ?? result.tokensBefore,
               tokensAfter,
               details: result.details,
+              sessionId: transcriptRotation.sessionId,
+              sessionFile: transcriptRotation.sessionFile,
             },
           };
         } catch (err) {

@@ -119,13 +119,54 @@ describe("opencode-go provider plugin", () => {
       } as never),
     ).toMatchObject({
       id: "deepseek-v4-pro",
-      api: "anthropic-messages",
+      api: "openai-completions",
       provider: "opencode-go",
-      baseUrl: "https://opencode.ai/zen/go",
+      baseUrl: "https://opencode.ai/zen/go/v1",
       reasoning: true,
       contextWindow: 1_000_000,
       maxTokens: 384_000,
+      compat: {
+        supportsUsageInStreaming: true,
+        supportsReasoningEffort: true,
+        maxTokensField: "max_tokens",
+      },
     });
+  });
+
+  it("disables invalid DeepSeek V4 reasoning_effort off payloads on OpenCode Go", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const capturedPayloads: Record<string, unknown>[] = [];
+    const baseStreamFn = (_model: unknown, _context: unknown, options: unknown) => {
+      const payload = {
+        model: "deepseek-v4-flash",
+        reasoning_effort: "off",
+        reasoning: "off",
+      };
+      (options as { onPayload?: (payload: Record<string, unknown>) => void })?.onPayload?.(payload);
+      capturedPayloads.push(payload);
+      return {} as never;
+    };
+
+    const streamFn = provider.wrapStreamFn?.({
+      streamFn: baseStreamFn as never,
+      providerId: "opencode-go",
+      modelId: "deepseek-v4-flash",
+      thinkingLevel: "off",
+    } as never);
+
+    expect(streamFn).toBeTypeOf("function");
+    await streamFn?.(
+      { provider: "opencode-go", id: "deepseek-v4-flash" } as never,
+      {} as never,
+      {},
+    );
+
+    expect(capturedPayloads).toEqual([
+      {
+        model: "deepseek-v4-flash",
+        thinking: { type: "disabled" },
+      },
+    ]);
   });
 
   it("canonicalizes stale OpenCode Go base URLs", async () => {

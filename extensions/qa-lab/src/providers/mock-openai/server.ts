@@ -147,6 +147,9 @@ const QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE = /empty response continuation qa che
 const QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE = /empty response exhaustion qa check/i;
 const QA_QUIET_STREAMING_PROMPT_RE = /quiet streaming qa check/i;
 const QA_BLOCK_STREAMING_PROMPT_RE = /block streaming qa check/i;
+const QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE = /subagent direct fallback qa check/i;
+const QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE = /subagent direct fallback worker/i;
+const QA_SUBAGENT_DIRECT_FALLBACK_MARKER = "QA-SUBAGENT-DIRECT-FALLBACK-OK";
 const QA_REASONING_ONLY_RETRY_NEEDLE =
   "recorded reasoning but did not produce a user-visible answer";
 const QA_EMPTY_RESPONSE_RETRY_NEEDLE =
@@ -338,21 +341,33 @@ function extractAllRequestTexts(input: ResponsesInputItem[], body: Record<string
   return texts.join("\n");
 }
 
-function countImageInputs(input: ResponsesInputItem[]) {
+function countImageInputs(value: unknown): number {
+  const seen = new WeakSet<object>();
+  const stack = [value];
   let count = 0;
-  for (const item of input) {
-    if (!Array.isArray(item.content)) {
+  let visited = 0;
+  while (stack.length > 0 && visited < 50_000) {
+    visited += 1;
+    const current = stack.pop();
+    if (Array.isArray(current)) {
+      for (const entry of current) {
+        stack.push(entry);
+      }
       continue;
     }
-    for (const entry of item.content) {
-      if (
-        entry &&
-        typeof entry === "object" &&
-        (entry as { type?: unknown }).type === "input_image"
-      ) {
-        count += 1;
-      }
+    if (!current || typeof current !== "object") {
+      continue;
     }
+    if (seen.has(current)) {
+      continue;
+    }
+    seen.add(current);
+    const record = current as Record<string, unknown>;
+    const type = typeof record.type === "string" ? record.type : "";
+    if (type === "input_image" || type === "image" || type === "image_url" || type === "media") {
+      count += 1;
+    }
+    stack.push(record.content, record.image_url, record.source);
   }
   return count;
 }
@@ -522,6 +537,14 @@ function extractExactReplyDirective(text: string) {
   return extractLastCapture(text, /reply(?: with)? exactly:\s*([^\n]+)/i);
 }
 
+function extractFinishExactlyDirective(text: string) {
+  const backtickedMatch = extractLastCapture(text, /finish with exactly\s+`([^`]+)`/i);
+  if (backtickedMatch) {
+    return backtickedMatch;
+  }
+  return extractLastCapture(text, /finish with exactly\s+([^\s`.,;:!?]+)/i);
+}
+
 function extractExactMarkerDirective(text: string) {
   const backtickedMatch = extractLastCapture(text, /exact marker:\s*`([^`]+)`/i);
   if (backtickedMatch) {
@@ -648,6 +671,8 @@ function buildAssistantText(
   const mediaPath = /MEDIA:([^\n]+)/.exec(toolOutput)?.[1]?.trim();
   const exactReplyDirective =
     extractExactReplyDirective(prompt) ?? extractExactReplyDirective(allInputText);
+  const finishExactlyDirective =
+    extractFinishExactlyDirective(prompt) ?? extractFinishExactlyDirective(allInputText);
   const exactMarkerDirective =
     extractExactMarkerDirective(prompt) ?? extractExactMarkerDirective(allInputText);
   const imageInputCount = countImageInputs(input);
@@ -722,7 +747,7 @@ function buildAssistantText(
   if (/session memory ranking check/i.test(prompt) && orbitCode) {
     return `Protocol note: I checked memory and the current Project Nebula codename is ${orbitCode}.`;
   }
-  if (/thread memory check/i.test(prompt) && orbitCode) {
+  if (/thread memory check/i.test(allInputText) && orbitCode) {
     return `Protocol note: I checked memory in-thread and the hidden thread codename is ${orbitCode}.`;
   }
   if (/switch(?:ing)? models?/i.test(prompt)) {
@@ -761,6 +786,9 @@ function buildAssistantText(
   }
   if (/fanout worker beta/i.test(prompt)) {
     return "BETA-OK";
+  }
+  if (QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE.test(prompt)) {
+    return QA_SUBAGENT_DIRECT_FALLBACK_MARKER;
   }
   if (/report the visible code/i.test(prompt) && /FORKED-CONTEXT-ALPHA/i.test(allInputText)) {
     return "FORKED-CONTEXT-ALPHA";
@@ -810,6 +838,9 @@ function buildAssistantText(
   if (toolOutput) {
     const snippet = toolOutput.replace(/\s+/g, " ").trim().slice(0, 220);
     return `Protocol note: I reviewed the requested material. Evidence snippet: ${snippet || "no content"}`;
+  }
+  if (finishExactlyDirective) {
+    return finishExactlyDirective;
   }
   if (prompt) {
     return `Protocol note: acknowledged. Continue with the QA scenario plan and report worked, failed, and blocked items.`;
@@ -1128,6 +1159,29 @@ async function buildResponsesPayload(
   const hasReasoningOnlyRetryInstruction = allInputText.includes(QA_REASONING_ONLY_RETRY_NEEDLE);
   const hasEmptyResponseRetryInstruction = allInputText.includes(QA_EMPTY_RESPONSE_RETRY_NEEDLE);
   const canCallSessionsSpawn = hasDeclaredTool(body, "sessions_spawn");
+  const canCallSessionsYield = hasDeclaredTool(body, "sessions_yield");
+  if (
+    allInputText.includes(QA_SUBAGENT_DIRECT_FALLBACK_MARKER) &&
+    /Internal task completion event/i.test(allInputText)
+  ) {
+    return buildAssistantEvents("");
+  }
+  if (QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE.test(allInputText)) {
+    if (!toolOutput && canCallSessionsSpawn) {
+      return buildToolCallEventsWithArgs("sessions_spawn", {
+        task: `Subagent direct fallback worker: finish with exactly ${QA_SUBAGENT_DIRECT_FALLBACK_MARKER}.`,
+        label: "qa-direct-fallback-worker",
+        thread: false,
+        mode: "run",
+        runTimeoutSeconds: 30,
+      });
+    }
+    if (toolOutput && canCallSessionsYield && !/\byielded\b/i.test(toolOutput)) {
+      return buildToolCallEventsWithArgs("sessions_yield", {
+        message: `Waiting for ${QA_SUBAGENT_DIRECT_FALLBACK_MARKER}.`,
+      });
+    }
+  }
   if (/remember this fact/i.test(prompt)) {
     return buildAssistantEvents(buildAssistantText(input, body, scenarioState));
   }
@@ -1373,6 +1427,7 @@ async function buildResponsesPayload(
       return buildToolCallEventsWithArgs("memory_search", {
         query: "current Project Nebula codename ORBIT-10",
         maxResults: 3,
+        corpus: "sessions",
       });
     }
     const results = Array.isArray(toolJson?.results)
@@ -1402,7 +1457,7 @@ async function buildResponsesPayload(
       });
     }
   }
-  if (/thread memory check/i.test(prompt)) {
+  if (/thread memory check/i.test(allInputText)) {
     if (!toolOutput) {
       return buildToolCallEventsWithArgs("memory_search", {
         query: "hidden thread codename ORBIT-22",

@@ -8,6 +8,7 @@ import {
   normalizeOpencodeGoBaseUrl,
   resolveOpencodeGoSupplementalModel,
 } from "./provider-catalog.js";
+import { createOpencodeGoDeepSeekV4Wrapper } from "./stream.js";
 
 const PROVIDER_ID = "opencode-go";
 export default definePluginEntry({
@@ -67,6 +68,7 @@ export default definePluginEntry({
       resolveDynamicModel: ({ modelId }) => resolveOpencodeGoSupplementalModel(modelId),
       augmentModelCatalog: () => listOpencodeGoSupplementalModelCatalogEntries(),
       ...PASSTHROUGH_GEMINI_REPLAY_HOOKS,
+      wrapStreamFn: (ctx) => createOpencodeGoDeepSeekV4Wrapper(ctx.streamFn, ctx.thinkingLevel),
       isModernModelRef: () => true,
     });
     api.registerMediaUnderstandingProvider(opencodeGoMediaUnderstandingProvider);

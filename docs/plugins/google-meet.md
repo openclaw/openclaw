@@ -79,6 +79,8 @@ audio bridge, node pinning, delayed realtime intro, and, when Twilio delegation
 is configured, whether the `voice-call` plugin and Twilio credentials are ready.
 Treat any `ok: false` check as a blocker before asking an agent to join.
 Use `openclaw googlemeet setup --json` for scripts or machine-readable output.
+Use `--transport chrome`, `--transport chrome-node`, or `--transport twilio`
+to preflight a specific transport before an agent tries it.
 
 Join a meeting:
 
@@ -303,11 +305,17 @@ display name, or remote IP.
 
 Common failure checks:
 
+- `Configured Google Meet node ... is not usable: offline`: the pinned node is
+  known to the Gateway but unavailable. Agents should treat that node as
+  diagnostic state, not as a usable Chrome host, and report the setup blocker
+  instead of falling back to another transport unless the user asked for that.
 - `No connected Google Meet-capable node`: start `openclaw node run` in the VM,
   approve pairing, and make sure `openclaw plugins enable google-meet` and
   `openclaw plugins enable browser` were run in the VM. Also confirm the
   Gateway host allows both node commands with
   `gateway.nodes.allowCommands: ["googlemeet.chrome", "browser.proxy"]`.
+- `BlackHole 2ch audio device not found`: install `blackhole-2ch` on the host
+  being checked and reboot before using local Chrome audio.
 - `BlackHole 2ch audio device not found on the node`: install `blackhole-2ch`
   in the VM and reboot the VM.
 - Chrome opens but cannot join: sign in to the browser profile inside the VM, or
@@ -1230,10 +1238,12 @@ openclaw googlemeet recover-tab https://meet.google.com/abc-defg-hij
 ```
 
 The equivalent tool action is `recover_current_tab`. It focuses and inspects an
-existing Meet tab on the configured Chrome node. It does not open a new tab or
-create a new session; it reports the current blocker, such as login, admission,
-permissions, or audio-choice state. The CLI command talks to the configured
-Gateway, so the Gateway must be running and the Chrome node must be connected.
+existing Meet tab for the selected transport. With `chrome`, it uses local
+browser control through the Gateway; with `chrome-node`, it uses the configured
+Chrome node. It does not open a new tab or create a new session; it reports the
+current blocker, such as login, admission, permissions, or audio-choice state.
+The CLI command talks to the configured Gateway, so the Gateway must be running;
+`chrome-node` also requires the Chrome node to be connected.
 
 ### Twilio setup checks fail
 

@@ -25,6 +25,7 @@ export type ResolvedAgentConfig = {
   skills?: AgentEntry["skills"];
   memorySearch?: AgentEntry["memorySearch"];
   humanDelay?: AgentEntry["humanDelay"];
+  tts?: AgentEntry["tts"];
   contextLimits?: AgentContextLimitsConfig;
   heartbeat?: AgentEntry["heartbeat"];
   identity?: AgentEntry["identity"];
@@ -123,6 +124,7 @@ export function resolveAgentConfig(
     skills: Array.isArray(entry.skills) ? entry.skills : undefined,
     memorySearch: entry.memorySearch,
     humanDelay: entry.humanDelay,
+    tts: entry.tts,
     contextLimits:
       typeof entry.contextLimits === "object" && entry.contextLimits
         ? { ...agentDefaults?.contextLimits, ...entry.contextLimits }

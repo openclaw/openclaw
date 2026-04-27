@@ -4,12 +4,18 @@ import type { MessagingToolSend } from "../pi-embedded-messaging.types.js";
 
 export type EmbeddedPiAgentMeta = {
   sessionId: string;
+  sessionFile?: string;
   provider: string;
   model: string;
   contextTokens?: number;
   agentHarnessId?: string;
   cliSessionBinding?: CliSessionBinding;
   compactionCount?: number;
+  /**
+   * Prompt/context snapshot from the latest model request. Prefer this for
+   * context-window utilization because provider usage totals can include cached
+   * and completion tokens that are useful for billing but noisy as live context.
+   */
   promptTokens?: number;
   usage?: {
     input?: number;
@@ -108,6 +114,7 @@ export type EmbeddedPiRunMeta = {
   replayInvalid?: boolean;
   livenessState?: EmbeddedRunLivenessState;
   agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";
+  terminalReplyKind?: "silent-empty";
   error?: {
     kind:
       | "context_overflow"
@@ -168,6 +175,8 @@ export type EmbeddedPiCompactResult = {
     tokensBefore: number;
     tokensAfter?: number;
     details?: unknown;
+    sessionId?: string;
+    sessionFile?: string;
   };
 };
 

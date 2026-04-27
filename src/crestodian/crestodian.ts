@@ -1,4 +1,5 @@
 import { stdin as defaultStdin, stdout as defaultStdout } from "node:process";
+import { withProgress } from "../cli/progress.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import type { CrestodianAssistantPlanner } from "./assistant.js";
 import { resolveCrestodianOperation } from "./dialogue.js";
@@ -19,6 +20,7 @@ export type RunCrestodianOptions = {
   yes?: boolean;
   json?: boolean;
   interactive?: boolean;
+  onReady?: () => void;
   deps?: CrestodianCommandDeps;
   planWithAssistant?: CrestodianAssistantPlanner;
   input?: NodeJS.ReadableStream;
@@ -49,7 +51,15 @@ export async function runCrestodian(
   }
 
   if (opts.message?.trim()) {
-    const overview = await loadCrestodianOverview();
+    const overview = await withProgress(
+      {
+        label: "Loading Crestodian overview…",
+        indeterminate: true,
+        delayMs: 0,
+        fallback: "none",
+      },
+      async () => await loadCrestodianOverview(),
+    );
     runtime.log(formatCrestodianOverview(overview));
     runtime.log("");
     await runOneShot(opts.message, runtime, opts);
@@ -68,5 +78,6 @@ export async function runCrestodian(
 
   const runInteractiveTui =
     opts.runInteractiveTui ?? (await import("./tui-backend.js")).runCrestodianTui;
+  opts.onReady?.();
   await runInteractiveTui(opts, runtime);
 }

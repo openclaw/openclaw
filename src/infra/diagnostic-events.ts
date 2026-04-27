@@ -1,5 +1,9 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { DiagnosticTraceContext } from "./diagnostic-trace-context.js";
+import {
+  formatDiagnosticTraceparent,
+  getActiveDiagnosticTraceContext,
+  type DiagnosticTraceContext,
+} from "./diagnostic-trace-context.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
 
 export type DiagnosticSessionState = "idle" | "processing" | "waiting";
@@ -15,6 +19,7 @@ export type DiagnosticUsageEvent = DiagnosticBaseEvent & {
   sessionKey?: string;
   sessionId?: string;
   channel?: string;
+  agentId?: string;
   provider?: string;
   model?: string;
   usage: {
@@ -252,6 +257,47 @@ export type DiagnosticRunCompletedEvent = DiagnosticRunBaseEvent & {
   errorCategory?: string;
 };
 
+export type DiagnosticHarnessRunPhase = "prepare" | "start" | "send" | "resolve" | "cleanup";
+export type DiagnosticHarnessRunOutcome = "completed" | "aborted" | "timed_out" | "error";
+
+type DiagnosticHarnessRunBaseEvent = DiagnosticBaseEvent & {
+  type: "harness.run.started" | "harness.run.completed" | "harness.run.error";
+  runId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  provider?: string;
+  model?: string;
+  trigger?: string;
+  channel?: string;
+  harnessId: string;
+  pluginId?: string;
+};
+
+export type DiagnosticHarnessRunStartedEvent = DiagnosticHarnessRunBaseEvent & {
+  type: "harness.run.started";
+};
+
+export type DiagnosticHarnessRunCompletedEvent = DiagnosticHarnessRunBaseEvent & {
+  type: "harness.run.completed";
+  durationMs: number;
+  outcome: DiagnosticHarnessRunOutcome;
+  resultClassification?: "empty" | "reasoning-only" | "planning-only";
+  yieldDetected?: boolean;
+  itemLifecycle?: {
+    startedCount: number;
+    completedCount: number;
+    activeCount: number;
+  };
+};
+
+export type DiagnosticHarnessRunErrorEvent = DiagnosticHarnessRunBaseEvent & {
+  type: "harness.run.error";
+  durationMs: number;
+  phase: DiagnosticHarnessRunPhase;
+  errorCategory: string;
+  cleanupFailed?: boolean;
+};
+
 type DiagnosticModelCallBaseEvent = DiagnosticBaseEvent & {
   type: "model.call.started" | "model.call.completed" | "model.call.error";
   runId: string;
@@ -262,6 +308,7 @@ type DiagnosticModelCallBaseEvent = DiagnosticBaseEvent & {
   model: string;
   api?: string;
   transport?: string;
+  upstreamRequestIdHash?: string;
 };
 
 export type DiagnosticModelCallStartedEvent = DiagnosticModelCallBaseEvent & {
@@ -271,12 +318,38 @@ export type DiagnosticModelCallStartedEvent = DiagnosticModelCallBaseEvent & {
 export type DiagnosticModelCallCompletedEvent = DiagnosticModelCallBaseEvent & {
   type: "model.call.completed";
   durationMs: number;
+  requestPayloadBytes?: number;
+  responseStreamBytes?: number;
+  timeToFirstByteMs?: number;
 };
 
 export type DiagnosticModelCallErrorEvent = DiagnosticModelCallBaseEvent & {
   type: "model.call.error";
   durationMs: number;
   errorCategory: string;
+  requestPayloadBytes?: number;
+  responseStreamBytes?: number;
+  timeToFirstByteMs?: number;
+};
+
+export type DiagnosticContextAssembledEvent = DiagnosticBaseEvent & {
+  type: "context.assembled";
+  runId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  provider: string;
+  model: string;
+  channel?: string;
+  trigger?: string;
+  messageCount: number;
+  historyTextChars: number;
+  historyImageBlocks: number;
+  maxMessageTextChars: number;
+  systemPromptChars: number;
+  promptChars: number;
+  promptImages: number;
+  contextTokenBudget?: number;
+  reserveTokens?: number;
 };
 
 export type DiagnosticMemoryUsage = {
@@ -328,6 +401,22 @@ export type DiagnosticLogRecordEvent = DiagnosticBaseEvent & {
   };
 };
 
+export type DiagnosticTelemetryExporterEvent = DiagnosticBaseEvent & {
+  type: "telemetry.exporter";
+  exporter: string;
+  signal: "traces" | "metrics" | "logs";
+  status: "started" | "failure" | "dropped";
+  reason?:
+    | "configured"
+    | "emit_failed"
+    | "handler_failed"
+    | "queue_full"
+    | "shutdown_failed"
+    | "start_failed"
+    | "unsupported_protocol";
+  errorCategory?: string;
+};
+
 export type DiagnosticEventPayload =
   | DiagnosticUsageEvent
   | DiagnosticWebhookReceivedEvent
@@ -351,13 +440,18 @@ export type DiagnosticEventPayload =
   | DiagnosticExecProcessCompletedEvent
   | DiagnosticRunStartedEvent
   | DiagnosticRunCompletedEvent
+  | DiagnosticHarnessRunStartedEvent
+  | DiagnosticHarnessRunCompletedEvent
+  | DiagnosticHarnessRunErrorEvent
   | DiagnosticModelCallStartedEvent
   | DiagnosticModelCallCompletedEvent
   | DiagnosticModelCallErrorEvent
+  | DiagnosticContextAssembledEvent
   | DiagnosticMemorySampleEvent
   | DiagnosticMemoryPressureEvent
   | DiagnosticPayloadLargeEvent
-  | DiagnosticLogRecordEvent;
+  | DiagnosticLogRecordEvent
+  | DiagnosticTelemetryExporterEvent;
 
 export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
   ? Event extends DiagnosticEventPayload
@@ -380,6 +474,7 @@ type QueuedDiagnosticEvent = {
 };
 
 type DiagnosticEventsGlobalState = {
+  marker: symbol;
   enabled: boolean;
   seq: number;
   listeners: Set<DiagnosticEventListener>;
@@ -389,6 +484,8 @@ type DiagnosticEventsGlobalState = {
 };
 
 const MAX_ASYNC_DIAGNOSTIC_EVENTS = 10_000;
+const DIAGNOSTIC_EVENTS_STATE_KEY = Symbol.for("openclaw.diagnosticEvents.state.v1");
+const dispatchedTrustedDiagnosticMetadata = new WeakSet<object>();
 const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "tool.execution.started",
   "tool.execution.completed",
@@ -400,20 +497,55 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "model.call.started",
   "model.call.completed",
   "model.call.error",
+  "harness.run.started",
+  "harness.run.completed",
+  "harness.run.error",
+  "context.assembled",
   "log.record",
 ]);
 
-const diagnosticEventsState: DiagnosticEventsGlobalState = {
-  enabled: true,
-  seq: 0,
-  listeners: new Set<DiagnosticEventListener>(),
-  dispatchDepth: 0,
-  asyncQueue: [],
-  asyncDrainScheduled: false,
-};
+function createDiagnosticEventsState(): DiagnosticEventsGlobalState {
+  return {
+    marker: DIAGNOSTIC_EVENTS_STATE_KEY,
+    enabled: true,
+    seq: 0,
+    listeners: new Set<DiagnosticEventListener>(),
+    dispatchDepth: 0,
+    asyncQueue: [],
+    asyncDrainScheduled: false,
+  };
+}
+
+function isDiagnosticEventsState(value: unknown): value is DiagnosticEventsGlobalState {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const candidate = value as Partial<DiagnosticEventsGlobalState>;
+  return (
+    candidate.marker === DIAGNOSTIC_EVENTS_STATE_KEY &&
+    typeof candidate.enabled === "boolean" &&
+    typeof candidate.seq === "number" &&
+    candidate.listeners instanceof Set &&
+    typeof candidate.dispatchDepth === "number" &&
+    Array.isArray(candidate.asyncQueue) &&
+    typeof candidate.asyncDrainScheduled === "boolean"
+  );
+}
 
 function getDiagnosticEventsState(): DiagnosticEventsGlobalState {
-  return diagnosticEventsState;
+  const globalRecord = globalThis as Record<PropertyKey, unknown>;
+  const existing = globalRecord[DIAGNOSTIC_EVENTS_STATE_KEY];
+  if (isDiagnosticEventsState(existing)) {
+    return existing;
+  }
+  const state = createDiagnosticEventsState();
+  Object.defineProperty(globalThis, DIAGNOSTIC_EVENTS_STATE_KEY, {
+    configurable: true,
+    enumerable: false,
+    value: state,
+    writable: false,
+  });
+  return state;
 }
 
 export function isDiagnosticsEnabled(config?: OpenClawConfig): boolean {
@@ -444,7 +576,10 @@ function dispatchDiagnosticEvent(
   try {
     for (const listener of state.listeners) {
       try {
-        listener(cloneDiagnosticEventForListener(enriched), Object.freeze({ ...metadata }));
+        listener(
+          cloneDiagnosticEventForListener(enriched),
+          createDiagnosticMetadataForListener(metadata),
+        );
       } catch (err) {
         const errorMessage =
           err instanceof Error
@@ -461,6 +596,16 @@ function dispatchDiagnosticEvent(
   } finally {
     state.dispatchDepth -= 1;
   }
+}
+
+function createDiagnosticMetadataForListener(
+  metadata: DiagnosticEventMetadata,
+): DiagnosticEventMetadata {
+  const listenerMetadata = Object.freeze({ ...metadata });
+  if (listenerMetadata.trusted) {
+    dispatchedTrustedDiagnosticMetadata.add(listenerMetadata);
+  }
+  return listenerMetadata;
 }
 
 function cloneDiagnosticEventForListener(event: DiagnosticEventPayload): DiagnosticEventPayload {
@@ -515,6 +660,7 @@ function enrichDiagnosticEvent(
     }
     enriched[key] = value;
   }
+  enriched.trace ??= getActiveDiagnosticTraceContext();
   state.seq += 1;
   enriched.seq = state.seq;
   enriched.ts = Date.now();
@@ -565,6 +711,16 @@ export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => voi
     }
     listener(event);
   });
+}
+
+export function formatDiagnosticTraceparentForPropagation(
+  event: { trace?: DiagnosticTraceContext },
+  metadata: DiagnosticEventMetadata,
+): string | undefined {
+  if (!metadata.trusted || !dispatchedTrustedDiagnosticMetadata.has(metadata)) {
+    return undefined;
+  }
+  return formatDiagnosticTraceparent(event.trace);
 }
 
 export function resetDiagnosticEventsForTest(): void {

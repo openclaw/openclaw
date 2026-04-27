@@ -140,8 +140,8 @@ curl -s http://127.0.0.1:18791/tabs
 On Raspberry Pi, older VPS hosts, or slow storage, raise
 `browser.localLaunchTimeoutMs` when Chrome needs more time to expose its CDP HTTP
 endpoint. Raise `browser.localCdpReadyTimeoutMs` when launch succeeds but
-`openclaw browser start` still reports `not reachable after start`. Values are
-capped at 120000 ms.
+`openclaw browser start` still reports `not reachable after start`. Values must
+be positive integers up to `120000` ms; invalid config values are rejected.
 
 ### Problem: "No Chrome tabs found for profile=\"user\""
 

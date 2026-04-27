@@ -13,6 +13,7 @@ import {
   applyEmbeddedAttemptToolsAllow,
   isPrimaryBootstrapRun,
   mergeOrphanedTrailingUserPrompt,
+  normalizeMessagesForLlmBoundary,
   prependSystemPromptAddition,
   remapInjectedContextFilesToWorkspace,
   resetEmbeddedAgentBaseStreamFnCacheForTest,
@@ -73,6 +74,30 @@ describe("applyEmbeddedAttemptToolsAllow", () => {
   });
 });
 
+describe("normalizeMessagesForLlmBoundary", () => {
+  it("strips tool result details before provider conversion", () => {
+    const input = [
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "exec",
+        content: [{ type: "text", text: "visible output" }],
+        details: { aggregated: "hidden diagnostics" },
+        isError: false,
+        timestamp: 1,
+      },
+    ];
+
+    const output = normalizeMessagesForLlmBoundary(
+      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+    ) as Array<Record<string, unknown>>;
+
+    expect(output[0]).not.toHaveProperty("details");
+    expect(output[0]?.content).toEqual([{ type: "text", text: "visible output" }]);
+    expect(input[0]).toHaveProperty("details");
+  });
+});
+
 describe("shouldCreateBundleMcpRuntimeForAttempt", () => {
   it("skips bundle MCP when tools are disabled or unavailable", () => {
     expect(shouldCreateBundleMcpRuntimeForAttempt({ toolsEnabled: false })).toBe(false);
@@ -92,6 +117,12 @@ describe("shouldCreateBundleMcpRuntimeForAttempt", () => {
         toolsAllow: ["memory_search", "memory_get"],
       }),
     ).toBe(false);
+    expect(
+      shouldCreateBundleMcpRuntimeForAttempt({
+        toolsEnabled: true,
+        toolsAllow: ["bundle-mcp"],
+      }),
+    ).toBe(true);
     expect(
       shouldCreateBundleMcpRuntimeForAttempt({
         toolsEnabled: true,

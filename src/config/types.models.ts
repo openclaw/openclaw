@@ -80,7 +80,7 @@ export type ModelDefinitionConfig = {
   api?: ModelApi;
   baseUrl?: string;
   reasoning: boolean;
-  input: Array<"text" | "image">;
+  input: Array<"text" | "image" | "video" | "audio">;
   cost: {
     input: number;
     output: number;
@@ -107,6 +107,8 @@ export type ModelDefinitionConfig = {
    */
   contextTokens?: number;
   maxTokens: number;
+  /** Provider-specific request/runtime parameters passed through to provider plugins. */
+  params?: Record<string, unknown>;
   headers?: Record<string, string>;
   compat?: ModelCompatConfig;
   metadataSource?: "models-add";

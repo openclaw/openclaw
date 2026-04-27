@@ -369,6 +369,80 @@ describe("resolveModel", () => {
     expect(result.model?.maxTokens).toBe(32768);
   });
 
+  it("merges configured model params with agent defaults for resolved models", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "ollama",
+      modelId: "qwen3:32b",
+      templateModel: {
+        ...makeModel("qwen3:32b"),
+        provider: "ollama",
+        params: { num_ctx: 4096, keep_alive: "1m" },
+      },
+    });
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "OLLAMA/qwen3:32B": {
+              params: { num_ctx: 8192, thinking: "low" },
+            },
+          },
+        },
+      },
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434",
+            models: [
+              {
+                ...makeModel("qwen3:32b"),
+                params: { num_ctx: 16384 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("ollama", "qwen3:32b", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect((result.model as { params?: Record<string, unknown> } | undefined)?.params).toEqual({
+      num_ctx: 16384,
+      keep_alive: "1m",
+      thinking: "low",
+    });
+  });
+
+  it("applies agent default model params without explicit provider config", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "ollama",
+      modelId: "llama3.2",
+      templateModel: {
+        ...makeModel("llama3.2"),
+        provider: "ollama",
+      },
+    });
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "ollama/llama3.2": {
+              params: { num_ctx: 32768 },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("ollama", "llama3.2", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect((result.model as { params?: Record<string, unknown> } | undefined)?.params).toEqual({
+      num_ctx: 32768,
+    });
+  });
+
   it("propagates reasoning from matching configured fallback model", () => {
     const cfg = {
       models: {
@@ -419,6 +493,122 @@ describe("resolveModel", () => {
     const result = resolveModelForTest("custom", "model-b", "/tmp/agent", cfg);
 
     expect(result.model?.input).toEqual(["text", "image"]);
+  });
+
+  it("propagates image input when configured model ids include the provider prefix", () => {
+    const cfg = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "http://localhost:9000",
+            api: "openai-completions",
+            models: [
+              {
+                ...makeModel("custom/vision-model"),
+                input: ["text", "image"],
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("custom", "vision-model", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "custom",
+      id: "custom/vision-model",
+      input: ["text", "image"],
+    });
+  });
+
+  it("matches provider-prefixed configured model ids through provider aliases", () => {
+    const cfg = {
+      models: {
+        providers: {
+          volcengine: {
+            baseUrl: "http://localhost:9000",
+            api: "openai-completions",
+            models: [
+              {
+                ...makeModel("volcengine/vision-model"),
+                input: ["text", "image"],
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("bytedance", "vision-model", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      id: "volcengine/vision-model",
+      input: ["text", "image"],
+    });
+  });
+
+  it("does not treat arbitrary namespaced model ids as provider prefixes", () => {
+    const cfg = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "http://localhost:9000",
+            api: "openai-completions",
+            models: [
+              {
+                ...makeModel("meta/vision-model"),
+                input: ["text", "image"],
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("custom", "vision-model", "/tmp/agent", cfg);
+
+    expect(result.model?.id).toBe("vision-model");
+    expect(result.model?.input).toEqual(["text"]);
+  });
+
+  it("prefers provider-prefixed configured metadata over discovered text-only models", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "custom",
+      modelId: "vision-model",
+      templateModel: {
+        ...makeModel("vision-model"),
+        provider: "custom",
+        input: ["text"],
+      },
+    });
+    const cfg = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "http://localhost:9000",
+            api: "openai-completions",
+            models: [
+              {
+                ...makeModel("custom/vision-model"),
+                input: ["text", "image"],
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("custom", "vision-model", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "custom",
+      id: "custom/vision-model",
+      input: ["text", "image"],
+    });
   });
 
   it("keeps unknown fallback models text-only instead of borrowing image input from another configured model", () => {

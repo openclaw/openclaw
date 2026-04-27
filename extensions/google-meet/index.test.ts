@@ -25,6 +25,7 @@ import { startNodeRealtimeAudioBridge } from "./src/realtime-node.js";
 import { startCommandRealtimeAudioBridge } from "./src/realtime.js";
 import { normalizeMeetUrl } from "./src/runtime.js";
 import { noopLogger, setupGoogleMeetPlugin } from "./src/test-support/plugin-harness.js";
+import { __testing as chromeTransportTesting } from "./src/transports/chrome.js";
 import { buildMeetDtmfSequence, normalizeDialInNumber } from "./src/transports/twilio.js";
 
 const voiceCallMocks = vi.hoisted(() => ({
@@ -224,6 +225,7 @@ describe("google-meet plugin", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    chromeTransportTesting.setDepsForTest(null);
   });
 
   it("defaults to chrome realtime with safe read-only tools", () => {
@@ -858,19 +860,25 @@ describe("google-meet plugin", () => {
   });
 
   it("reports setup status through the tool", async () => {
-    const { tools } = setup({
-      chrome: {
-        audioInputCommand: ["openclaw-audio-bridge", "capture"],
-        audioOutputCommand: ["openclaw-audio-bridge", "play"],
-      },
-    });
-    const tool = tools[0] as {
-      execute: (id: string, params: unknown) => Promise<{ details: { ok?: boolean } }>;
-    };
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    try {
+      const { tools } = setup({
+        chrome: {
+          audioInputCommand: ["openclaw-audio-bridge", "capture"],
+          audioOutputCommand: ["openclaw-audio-bridge", "play"],
+        },
+      });
+      const tool = tools[0] as {
+        execute: (id: string, params: unknown) => Promise<{ details: { ok?: boolean } }>;
+      };
 
-    const result = await tool.execute("id", { action: "setup_status" });
+      const result = await tool.execute("id", { action: "setup_status" });
 
-    expect(result.details.ok).toBe(true);
+      expect(result.details.ok).toBe(true);
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    }
   });
 
   it("reports attendance through the tool", async () => {
@@ -1045,7 +1053,20 @@ describe("google-meet plugin", () => {
         defaultTransport: "chrome-node",
         chromeNode: { node: "parallels-macos" },
       },
-      { nodesListResult: { nodes: [] } },
+      {
+        nodesListResult: {
+          nodes: [
+            {
+              nodeId: "node-1",
+              displayName: "parallels-macos",
+              connected: false,
+              caps: [],
+              commands: [],
+              remoteIp: "192.168.0.25",
+            },
+          ],
+        },
+      },
     );
     const tool = tools[0] as {
       execute: (
@@ -1062,10 +1083,97 @@ describe("google-meet plugin", () => {
         expect.objectContaining({
           id: "chrome-node-connected",
           ok: false,
-          message: expect.stringContaining("No connected Google Meet-capable node"),
+          message: expect.stringContaining("parallels-macos"),
         }),
       ]),
     );
+    const check = result.details.checks?.find(
+      (item) => (item as { id?: unknown }).id === "chrome-node-connected",
+    ) as { message?: string } | undefined;
+    expect(check?.message).toContain("offline");
+    expect(check?.message).toContain("missing googlemeet.chrome");
+    expect(check?.message).toContain("missing browser.proxy/browser capability");
+  });
+
+  it("reports missing local Chrome audio prerequisites in setup status", async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    try {
+      const { tools } = setup(
+        { defaultTransport: "chrome" },
+        {
+          runCommandWithTimeoutHandler: async (argv) => {
+            if (argv[0] === "/usr/sbin/system_profiler") {
+              return { code: 0, stdout: "Built-in Output", stderr: "" };
+            }
+            return { code: 0, stdout: "", stderr: "" };
+          },
+        },
+      );
+      const tool = tools[0] as {
+        execute: (
+          id: string,
+          params: unknown,
+        ) => Promise<{ details: { ok?: boolean; checks?: unknown[] } }>;
+      };
+
+      const result = await tool.execute("id", { action: "setup_status", transport: "chrome" });
+
+      expect(result.details.ok).toBe(false);
+      expect(result.details.checks).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "chrome-local-audio-device",
+            ok: false,
+            message: expect.stringContaining("BlackHole 2ch audio device not found"),
+          }),
+        ]),
+      );
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    }
+  });
+
+  it("reports missing local Chrome audio commands in setup status", async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    try {
+      const { tools } = setup(
+        { defaultTransport: "chrome" },
+        {
+          runCommandWithTimeoutHandler: async (argv) => {
+            if (argv[0] === "/usr/sbin/system_profiler") {
+              return { code: 0, stdout: "BlackHole 2ch", stderr: "" };
+            }
+            if (argv[0] === "/bin/sh" && argv.at(-1) === "play") {
+              return { code: 1, stdout: "", stderr: "" };
+            }
+            return { code: 0, stdout: "", stderr: "" };
+          },
+        },
+      );
+      const tool = tools[0] as {
+        execute: (
+          id: string,
+          params: unknown,
+        ) => Promise<{ details: { ok?: boolean; checks?: unknown[] } }>;
+      };
+
+      const result = await tool.execute("id", { action: "setup_status", transport: "chrome" });
+
+      expect(result.details.ok).toBe(false);
+      expect(result.details.checks).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "chrome-local-audio-commands",
+            ok: false,
+            message: "Chrome audio command missing: play",
+          }),
+        ]),
+      );
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    }
   });
 
   it("reports Twilio delegation readiness when voice-call is enabled", async () => {
@@ -1217,7 +1325,7 @@ describe("google-meet plugin", () => {
     });
 
     expect(respond.mock.calls[0]?.[0]).toBe(true);
-    expect(nodesList).toHaveBeenCalledWith({ connected: true });
+    expect(nodesList.mock.calls[0]).toEqual([]);
     expect(nodesInvoke).toHaveBeenCalledWith(
       expect.objectContaining({
         nodeId: "node-1",
@@ -1499,6 +1607,76 @@ describe("google-meet plugin", () => {
         params: expect.objectContaining({ path: "/tabs/open" }),
       }),
     );
+  });
+
+  it("recovers and inspects an existing local Chrome Meet tab", async () => {
+    const callGatewayFromCli = vi.fn(
+      async (
+        _method: string,
+        _opts: unknown,
+        params?: unknown,
+        _extra?: unknown,
+      ): Promise<Record<string, unknown>> => {
+        const request = params as { path?: string; body?: { targetId?: string } };
+        if (request.path === "/tabs") {
+          return {
+            tabs: [
+              {
+                targetId: "local-meet-tab",
+                title: "Meet",
+                url: "https://meet.google.com/abc-defg-hij?authuser=me@example.com",
+              },
+            ],
+          };
+        }
+        if (request.path === "/tabs/focus") {
+          return { ok: true };
+        }
+        if (request.path === "/act") {
+          return {
+            result: JSON.stringify({
+              inCall: false,
+              manualActionRequired: true,
+              manualActionReason: "meet-admission-required",
+              manualActionMessage: "Admit the OpenClaw browser participant in Google Meet.",
+              title: "Meet",
+              url: "https://meet.google.com/abc-defg-hij?authuser=me@example.com",
+            }),
+          };
+        }
+        throw new Error(`unexpected browser request path ${request.path}`);
+      },
+    );
+    chromeTransportTesting.setDepsForTest({ callGatewayFromCli });
+    const { tools, nodesInvoke } = setup({ defaultTransport: "chrome" });
+    const tool = tools[0] as {
+      execute: (
+        id: string,
+        params: unknown,
+      ) => Promise<{ details: { transport?: string; found?: boolean; browser?: unknown } }>;
+    };
+
+    const result = await tool.execute("id", {
+      action: "recover_current_tab",
+      url: "https://meet.google.com/abc-defg-hij",
+    });
+
+    expect(result.details).toMatchObject({
+      transport: "chrome",
+      found: true,
+      targetId: "local-meet-tab",
+      browser: {
+        manualActionRequired: true,
+        manualActionReason: "meet-admission-required",
+      },
+    });
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "browser.request",
+      expect.any(Object),
+      expect.objectContaining({ method: "POST", path: "/tabs/focus" }),
+      { progress: false },
+    );
+    expect(nodesInvoke).not.toHaveBeenCalled();
   });
 
   it("exposes a test-speech action that joins the requested meeting", async () => {

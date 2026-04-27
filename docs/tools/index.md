@@ -95,6 +95,8 @@ active runtime model label from the latest transcript usage entry.
 
 For partial changes, prefer `config.schema.lookup` then `config.patch`. Use
 `config.apply` only when you intentionally replace the entire config.
+For broader config docs, read [Configuration](/gateway/configuration) and
+[Configuration reference](/gateway/configuration-reference).
 The tool also refuses to change `tools.exec.ask` or `tools.exec.security`;
 legacy `tools.bash.*` aliases normalize to the same protected exec paths.
 

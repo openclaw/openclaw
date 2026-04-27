@@ -30,7 +30,9 @@ const DEFAULT_OPENAI_IMAGE_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_OPENAI_CODEX_IMAGE_BASE_URL = OPENAI_CODEX_RESPONSES_BASE_URL;
 const DEFAULT_OPENAI_CODEX_IMAGE_RESPONSES_MODEL = "gpt-5.5";
 const OPENAI_CODEX_IMAGE_INSTRUCTIONS = "You are an image generation assistant.";
+const OPENAI_TRANSPARENT_BACKGROUND_IMAGE_MODEL = "gpt-image-1.5";
 const DEFAULT_OPENAI_IMAGE_TIMEOUT_MS = 180_000;
+const DEFAULT_AZURE_OPENAI_IMAGE_TIMEOUT_MS = 600_000;
 const DEFAULT_OUTPUT_MIME = "image/png";
 const DEFAULT_OUTPUT_EXTENSION = "png";
 const DEFAULT_SIZE = "1024x1024";
@@ -51,7 +53,14 @@ const MAX_CODEX_IMAGE_BASE64_CHARS = 64 * 1024 * 1024;
 const LOG_VALUE_MAX_CHARS = 256;
 const MOCK_OPENAI_PROVIDER_ID = "mock-openai";
 const OPENAI_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
+const OPENAI_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
 const OPENAI_QUALITIES = ["low", "medium", "high", "auto"] as const;
+const OPENAI_IMAGE_MODELS = [
+  DEFAULT_OPENAI_IMAGE_MODEL,
+  OPENAI_TRANSPARENT_BACKGROUND_IMAGE_MODEL,
+  "gpt-image-1",
+  "gpt-image-1-mini",
+] as const;
 const log = createSubsystemLogger("image-generation/openai");
 
 const AZURE_HOSTNAME_SUFFIXES = [
@@ -83,8 +92,14 @@ function sanitizeLogValue(value: unknown): string {
     : cleaned;
 }
 
-function resolveOpenAIImageTimeoutMs(timeoutMs: number | undefined): number {
-  return timeoutMs ?? DEFAULT_OPENAI_IMAGE_TIMEOUT_MS;
+function resolveOpenAIImageTimeoutMs(
+  timeoutMs: number | undefined,
+  options?: { isAzure?: boolean },
+): number {
+  return (
+    timeoutMs ??
+    (options?.isAzure ? DEFAULT_AZURE_OPENAI_IMAGE_TIMEOUT_MS : DEFAULT_OPENAI_IMAGE_TIMEOUT_MS)
+  );
 }
 
 function resolveOpenAIImageCount(count: number | undefined): number {
@@ -167,10 +182,11 @@ function appendOpenAIImageOptions(
   req: Parameters<ImageGenerationProvider["generateImage"]>[0],
 ): void {
   const openai = req.providerOptions?.openai;
+  const background = openai?.background ?? req.background;
   const entries: Record<string, unknown> = {
     ...(req.quality !== undefined ? { quality: req.quality } : {}),
     ...(req.outputFormat !== undefined ? { output_format: req.outputFormat } : {}),
-    ...(openai?.background !== undefined ? { background: openai.background } : {}),
+    ...(background !== undefined ? { background } : {}),
     ...(openai?.moderation !== undefined ? { moderation: openai.moderation } : {}),
     ...(openai?.outputCompression !== undefined
       ? { output_compression: openai.outputCompression }
@@ -184,6 +200,21 @@ function appendOpenAIImageOptions(
       target[key] = value;
     }
   }
+}
+
+function resolveOpenAIImageRequestModel(
+  req: Parameters<ImageGenerationProvider["generateImage"]>[0],
+  options?: { allowTransparentDefaultReroute?: boolean },
+): string {
+  const model = req.model || DEFAULT_OPENAI_IMAGE_MODEL;
+  if (
+    options?.allowTransparentDefaultReroute === true &&
+    model === DEFAULT_OPENAI_IMAGE_MODEL &&
+    (req.providerOptions?.openai?.background ?? req.background) === "transparent"
+  ) {
+    return OPENAI_TRANSPARENT_BACKGROUND_IMAGE_MODEL;
+  }
+  return model;
 }
 
 function shouldAllowPrivateImageEndpoint(req: {
@@ -468,7 +499,7 @@ function createOpenAIImageGenerationProviderBase(params: {
     id: params.id,
     label: params.label,
     defaultModel: DEFAULT_OPENAI_IMAGE_MODEL,
-    models: [DEFAULT_OPENAI_IMAGE_MODEL],
+    models: [...OPENAI_IMAGE_MODELS],
     isConfigured: params.isConfigured,
     capabilities: {
       generate: {
@@ -491,6 +522,7 @@ function createOpenAIImageGenerationProviderBase(params: {
       output: {
         formats: [...OPENAI_OUTPUT_FORMATS],
         qualities: [...OPENAI_QUALITIES],
+        backgrounds: [...OPENAI_BACKGROUNDS],
       },
     },
     generateImage: params.generateImage,
@@ -517,7 +549,9 @@ function logCodexImageAuthSelected(params: {
   authMode?: unknown;
   timeoutMs: number;
 }) {
-  const model = params.req.model || DEFAULT_OPENAI_IMAGE_MODEL;
+  const model = resolveOpenAIImageRequestModel(params.req, {
+    allowTransparentDefaultReroute: true,
+  });
   log.info(
     `image auth selected: provider=openai-codex mode=${sanitizeLogValue(
       params.authMode,
@@ -549,11 +583,14 @@ async function generateOpenAICodexImage(params: {
       transport: "http",
     });
 
-  const model = req.model || DEFAULT_OPENAI_IMAGE_MODEL;
+  const model = resolveOpenAIImageRequestModel(req, {
+    allowTransparentDefaultReroute: true,
+  });
   const count = resolveOpenAIImageCount(req.count);
   const size = req.size ?? DEFAULT_SIZE;
   const timeoutMs = resolveOpenAIImageTimeoutMs(req.timeoutMs);
   const openai = req.providerOptions?.openai;
+  const background = openai?.background ?? req.background;
   headers.set("Content-Type", "application/json");
   const content: Array<Record<string, unknown>> = [
     { type: "input_text", text: req.prompt },
@@ -584,7 +621,7 @@ async function generateOpenAICodexImage(params: {
             size,
             ...(req.quality !== undefined ? { quality: req.quality } : {}),
             ...(req.outputFormat !== undefined ? { output_format: req.outputFormat } : {}),
-            ...(openai?.background !== undefined ? { background: openai.background } : {}),
+            ...(background !== undefined ? { background } : {}),
             ...(openai?.outputCompression !== undefined
               ? { output_compression: openai.outputCompression }
               : {}),
@@ -711,10 +748,12 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
           transport: "http",
         });
 
-      const model = req.model || DEFAULT_OPENAI_IMAGE_MODEL;
+      const model = resolveOpenAIImageRequestModel(req, {
+        allowTransparentDefaultReroute: publicOpenAIBaseUrl,
+      });
       const count = resolveOpenAIImageCount(req.count);
       const size = req.size ?? DEFAULT_SIZE;
-      const timeoutMs = resolveOpenAIImageTimeoutMs(req.timeoutMs);
+      const timeoutMs = resolveOpenAIImageTimeoutMs(req.timeoutMs, { isAzure });
       const url = isAzure
         ? buildAzureImageUrl(rawBaseUrl, model, isEdit ? "edits" : "generations")
         : `${baseUrl}/images/${isEdit ? "edits" : "generations"}`;

@@ -5,7 +5,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { queueEmbeddedPiMessage } from "../../agents/pi-embedded-runner/runs.js";
-import { hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
+import { deriveContextPromptTokens, hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
 import {
   loadSessionStore,
   resolveSessionPluginStatusLines,
@@ -568,53 +568,6 @@ async function accumulateSessionUsageFromTranscript(params: {
   }
 }
 
-function resolveRequestPromptTokens(params: {
-  lastCallUsage?: {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    total?: number;
-  };
-  promptTokens?: number;
-  usage?: {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    total?: number;
-  };
-}): number | undefined {
-  const lastCall = params.lastCallUsage;
-  if (lastCall) {
-    const input = lastCall.input ?? 0;
-    const cacheRead = lastCall.cacheRead ?? 0;
-    const cacheWrite = lastCall.cacheWrite ?? 0;
-    const sum = input + cacheRead + cacheWrite;
-    if (sum > 0) {
-      return sum;
-    }
-  }
-  if (
-    typeof params.promptTokens === "number" &&
-    Number.isFinite(params.promptTokens) &&
-    params.promptTokens > 0
-  ) {
-    return params.promptTokens;
-  }
-  const usage = params.usage;
-  if (usage) {
-    const input = usage.input ?? 0;
-    const cacheRead = usage.cacheRead ?? 0;
-    const cacheWrite = usage.cacheWrite ?? 0;
-    const sum = input + cacheRead + cacheWrite;
-    if (sum > 0) {
-      return sum;
-    }
-  }
-  return undefined;
-}
-
 function formatRequestContextTraceBlock(params: {
   provider?: string;
   model?: string;
@@ -785,7 +738,7 @@ function buildInlineRawTracePayload(params: {
   if (params.entry?.traceLevel !== "raw") {
     return undefined;
   }
-  const resolvedPromptTokens = resolveRequestPromptTokens({
+  const resolvedPromptTokens = deriveContextPromptTokens({
     lastCallUsage: params.lastCallUsage,
     promptTokens: params.promptTokens,
     usage: params.usage,
@@ -1428,8 +1381,13 @@ export async function runReplyAgent(params: {
       const output = usage.output ?? 0;
       const cacheRead = usage.cacheRead ?? 0;
       const cacheWrite = usage.cacheWrite ?? 0;
-      const promptTokens = input + cacheRead + cacheWrite;
-      const totalTokens = usage.total ?? promptTokens + output;
+      const usagePromptTokens = input + cacheRead + cacheWrite;
+      const totalTokens = usage.total ?? usagePromptTokens + output;
+      const contextUsedTokens = deriveContextPromptTokens({
+        lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
+        promptTokens,
+        usage,
+      });
       const costConfig = resolveModelCostConfig({
         provider: providerUsed,
         model: modelUsed,
@@ -1448,6 +1406,7 @@ export async function runReplyAgent(params: {
         sessionKey,
         sessionId: followupRun.run.sessionId,
         channel: replyToChannel,
+        agentId: followupRun.run.agentId,
         provider: providerUsed,
         model: modelUsed,
         usage: {
@@ -1455,13 +1414,13 @@ export async function runReplyAgent(params: {
           output,
           cacheRead,
           cacheWrite,
-          promptTokens,
+          promptTokens: usagePromptTokens,
           total: totalTokens,
         },
         lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
         context: {
           limit: contextTokensUsed,
-          used: totalTokens,
+          ...(contextUsedTokens !== undefined ? { used: contextUsedTokens } : {}),
         },
         costUsd,
         durationMs: Date.now() - runStartedAt,
@@ -1578,6 +1537,7 @@ export async function runReplyAgent(params: {
         lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
         contextTokensUsed,
         newSessionId: runResult.meta?.agentMeta?.sessionId,
+        newSessionFile: runResult.meta?.agentMeta?.sessionFile,
       });
       const refreshedSessionEntry =
         sessionKey && activeSessionStore ? activeSessionStore[sessionKey] : undefined;
