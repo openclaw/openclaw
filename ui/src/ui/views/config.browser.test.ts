@@ -464,6 +464,204 @@ describe("config view", () => {
     expect(onRawChange).toHaveBeenCalledWith(textarea.value);
   });
 
+  it("opens raw pending changes without sending a fake raw edit", () => {
+    const container = document.createElement("div");
+    const onRawChange = vi.fn();
+    let updateCount = 0;
+    const props: ConfigProps = {
+      ...baseProps(),
+      formMode: "raw",
+      raw: '{\n  gateway: { mode: "remote" }\n}\n',
+      originalRaw: '{\n  gateway: { mode: "local" }\n}\n',
+      formValue: {
+        gateway: {
+          mode: "remote",
+        },
+      },
+      originalValue: {
+        gateway: {
+          mode: "local",
+        },
+      },
+      onRawChange,
+    };
+    const rerender = () =>
+      render(
+        renderConfig({
+          ...props,
+          onRequestUpdate: () => {
+            updateCount += 1;
+            rerender();
+          },
+        }),
+        container,
+      );
+    rerender();
+
+    expect(normalizedText(container)).toContain("View pending changes");
+    expect(normalizedText(container)).not.toContain("gateway.mode");
+
+    const details = container.querySelector<HTMLDetailsElement>(".config-diff");
+    expect(details).not.toBeNull();
+    details!.open = true;
+    details!.dispatchEvent(new Event("toggle"));
+
+    const text = normalizedText(container);
+    expect(updateCount).toBe(1);
+    expect(onRawChange).not.toHaveBeenCalled();
+    expect(text).toContain("gateway.mode");
+    expect(text).toContain('"local"');
+    expect(text).toContain('"remote"');
+  });
+
+  it("redacts sensitive values in raw pending changes until raw values are revealed", () => {
+    const container = document.createElement("div");
+    const props: ConfigProps = {
+      ...baseProps(),
+      formMode: "raw",
+      raw: '{\n  channels: { discord: { token: { id: "TOKEN_AFTER" } } }\n}\n',
+      originalRaw: '{\n  channels: { discord: { token: { id: "TOKEN_BEFORE" } } }\n}\n',
+      uiHints: {
+        "channels.discord.token": { sensitive: true },
+      },
+      formValue: {
+        channels: {
+          discord: {
+            token: {
+              id: "TOKEN_AFTER",
+            },
+          },
+        },
+      },
+      originalValue: {
+        channels: {
+          discord: {
+            token: {
+              id: "TOKEN_BEFORE",
+            },
+          },
+        },
+      },
+    };
+    const rerender = () =>
+      render(
+        renderConfig({
+          ...props,
+          onRequestUpdate: rerender,
+        }),
+        container,
+      );
+    rerender();
+
+    const details = container.querySelector<HTMLDetailsElement>(".config-diff");
+    expect(details).not.toBeNull();
+    details!.open = true;
+    details!.dispatchEvent(new Event("toggle"));
+
+    const text = normalizedText(container);
+    expect(text).toContain("channels.discord.token.id");
+    expect(text).toContain("[redacted - click reveal to view]");
+    expect(text).not.toContain("TOKEN_BEFORE");
+    expect(text).not.toContain("TOKEN_AFTER");
+
+    const revealButton = container.querySelector<HTMLButtonElement>(".config-raw-toggle");
+    expect(revealButton).not.toBeNull();
+    revealButton!.click();
+
+    const revealedText = normalizedText(container);
+    expect(revealedText).toContain("TOKEN_BEFORE");
+    expect(revealedText).toContain("TOKEN_AFTER");
+  });
+
+  it("redacts raw diff values under wildcard sensitive hints when keys contain dots", () => {
+    const container = document.createElement("div");
+    const props: ConfigProps = {
+      ...baseProps(),
+      formMode: "raw",
+      raw: '{\n  integrations: { "foo.bar": { id: "TOKEN_AFTER" } }\n}\n',
+      originalRaw: '{\n  integrations: { "foo.bar": { id: "TOKEN_BEFORE" } }\n}\n',
+      uiHints: {
+        "integrations.*": { sensitive: true },
+      },
+      formValue: {
+        integrations: {
+          "foo.bar": {
+            id: "TOKEN_AFTER",
+          },
+        },
+      },
+      originalValue: {
+        integrations: {
+          "foo.bar": {
+            id: "TOKEN_BEFORE",
+          },
+        },
+      },
+    };
+    const rerender = () =>
+      render(
+        renderConfig({
+          ...props,
+          onRequestUpdate: rerender,
+        }),
+        container,
+      );
+    rerender();
+
+    const details = container.querySelector<HTMLDetailsElement>(".config-diff");
+    expect(details).not.toBeNull();
+    details!.open = true;
+    details!.dispatchEvent(new Event("toggle"));
+
+    const text = normalizedText(container);
+    expect(text).toContain("integrations.foo.bar.id");
+    expect(text).toContain("[redacted - click reveal to view]");
+    expect(text).not.toContain("TOKEN_BEFORE");
+    expect(text).not.toContain("TOKEN_AFTER");
+  });
+
+  it("removes the raw pending changes panel after raw changes clear", () => {
+    const container = document.createElement("div");
+    const props: ConfigProps = {
+      ...baseProps(),
+      formMode: "raw",
+      raw: '{\n  gateway: { mode: "remote" }\n}\n',
+      originalRaw: '{\n  gateway: { mode: "local" }\n}\n',
+      formValue: {
+        gateway: {
+          mode: "remote",
+        },
+      },
+      originalValue: {
+        gateway: {
+          mode: "local",
+        },
+      },
+    };
+    const rerender = () =>
+      render(
+        renderConfig({
+          ...props,
+          onRequestUpdate: rerender,
+        }),
+        container,
+      );
+    rerender();
+
+    const details = container.querySelector<HTMLDetailsElement>(".config-diff");
+    expect(details).not.toBeNull();
+    details!.open = true;
+    details!.dispatchEvent(new Event("toggle"));
+    expect(normalizedText(container)).toContain("gateway.mode");
+
+    props.raw = props.originalRaw;
+    props.formValue = props.originalValue;
+    rerender();
+
+    expect(container.querySelector(".config-diff")).toBeNull();
+    expect(normalizedText(container)).toContain("No changes");
+  });
+
   it("renders structured SecretRef values without stringifying", () => {
     const onFormPatch = vi.fn();
     const secretRefSchema = {

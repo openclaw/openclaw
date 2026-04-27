@@ -1,3 +1,4 @@
+import JSON5 from "json5";
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
 import { icons } from "../icons.ts";
@@ -7,6 +8,7 @@ import type { ThemeMode, ThemeName } from "../theme.ts";
 import type { ConfigUiHints } from "../types.ts";
 import {
   countSensitiveConfigValues,
+  hintForPath,
   humanize,
   isSensitiveConfigPath,
   pathKey,
@@ -529,32 +531,67 @@ function resolveSectionMeta(
   };
 }
 
+const MAX_CONFIG_DIFF_DEPTH = 64;
+const MAX_CONFIG_DIFF_NODES = 20_000;
+const MAX_CONFIG_DIFF_CHANGES = 1_000;
+const MAX_RAW_DIFF_CHARS = 200_000;
+
+type ConfigDiffPath = string[];
+type ConfigDiffEntry = { path: ConfigDiffPath; from: unknown; to: unknown };
+
+let rawDiffCache:
+  | {
+      original: string;
+      current: string;
+      diff: ConfigDiffEntry[];
+    }
+  | undefined;
+
+function formatConfigDiffPath(path: ConfigDiffPath): string {
+  return path.length > 0 ? path.join(".") : "<root>";
+}
+
 function computeDiff(
   original: Record<string, unknown> | null,
   current: Record<string, unknown> | null,
-): Array<{ path: string; from: unknown; to: unknown }> {
+): ConfigDiffEntry[] {
   if (!original || !current) {
     return [];
   }
-  const changes: Array<{ path: string; from: unknown; to: unknown }> = [];
+  const changes: ConfigDiffEntry[] = [];
+  let visited = 0;
 
-  function compare(orig: unknown, curr: unknown, path: string) {
+  function pushChange(path: ConfigDiffPath, from: unknown, to: unknown) {
+    if (changes.length < MAX_CONFIG_DIFF_CHANGES) {
+      changes.push({ path, from, to });
+    }
+  }
+
+  function compare(orig: unknown, curr: unknown, path: ConfigDiffPath, depth: number) {
+    visited += 1;
+    if (
+      visited > MAX_CONFIG_DIFF_NODES ||
+      depth > MAX_CONFIG_DIFF_DEPTH ||
+      changes.length >= MAX_CONFIG_DIFF_CHANGES
+    ) {
+      return;
+    }
     if (orig === curr) {
       return;
     }
     if (typeof orig !== typeof curr) {
-      changes.push({ path, from: orig, to: curr });
+      pushChange(path, orig, curr);
       return;
     }
     if (typeof orig !== "object" || orig === null || curr === null) {
       if (orig !== curr) {
-        changes.push({ path, from: orig, to: curr });
+        pushChange(path, orig, curr);
       }
       return;
     }
     if (Array.isArray(orig) && Array.isArray(curr)) {
       if (JSON.stringify(orig) !== JSON.stringify(curr)) {
-        changes.push({ path, from: orig, to: curr });
+        pushChange(path, orig, curr);
       }
       return;
     }
@@ -562,12 +599,46 @@ function computeDiff(
     const currObj = curr as Record<string, unknown>;
     const allKeys = new Set([...Object.keys(origObj), ...Object.keys(currObj)]);
     for (const key of allKeys) {
-      compare(origObj[key], currObj[key], path ? `${path}.${key}` : key);
+      compare(origObj[key], currObj[key], [...path, key], depth + 1);
     }
   }
 
-  compare(original, current, "");
+  compare(original, current, [], 0);
   return changes;
+}
+
+function computeRawDiff(original: string, current: string): ConfigDiffEntry[] {
+  if (rawDiffCache?.original === original && rawDiffCache.current === current) {
+    return rawDiffCache.diff;
+  }
+  if (original.length > MAX_RAW_DIFF_CHARS || current.length > MAX_RAW_DIFF_CHARS) {
+    rawDiffCache = { original, current, diff: [] };
+    return rawDiffCache.diff;
+  }
+  try {
+    const originalValue = JSON5.parse(original) as unknown;
+    const currentValue = JSON5.parse(current) as unknown;
+    if (
+      !originalValue ||
+      !currentValue ||
+      typeof originalValue !== "object" ||
+      typeof currentValue !== "object" ||
+      Array.isArray(originalValue) ||
+      Array.isArray(currentValue)
+    ) {
+      rawDiffCache = { original, current, diff: [] };
+      return [];
+    }
+    const diff = computeDiff(
+      originalValue as Record<string, unknown>,
+      currentValue as Record<string, unknown>,
+    );
+    rawDiffCache = { original, current, diff };
+    return diff;
+  } catch {
+    rawDiffCache = { original, current, diff: [] };
+    return [];
+  }
 }
 
 function truncateValue(value: unknown, maxLen = 40): string {
@@ -584,8 +655,54 @@ function truncateValue(value: unknown, maxLen = 40): string {
   return str.slice(0, maxLen - 3) + "...";
 }
 
-function renderDiffValue(path: string, value: unknown, _uiHints: ConfigUiHints): string {
-  if (isSensitiveConfigPath(path) && value != null && truncateValue(value).trim() !== "") {
+function renderDiffValue(path: ConfigDiffPath, value: unknown, _uiHints: ConfigUiHints): string {
+  if (
+    isSensitiveConfigPath(formatConfigDiffPath(path)) &&
+    value != null &&
+    truncateValue(value).trim() !== ""
+  ) {
+    return REDACTED_PLACEHOLDER;
+  }
+  return truncateValue(value);
+}
+
+function hintKeyMatchesPathPrefix(hintKey: string, path: ConfigDiffPath): boolean {
+  const hintSegments = hintKey.split(".");
+  if (hintSegments.length !== path.length) {
+    return false;
+  }
+  return hintSegments.every((segment, index) => segment === "*" || segment === path[index]);
+}
+
+function hasSensitiveHintForPathPrefix(path: ConfigDiffPath, uiHints: ConfigUiHints): boolean {
+  return Object.entries(uiHints).some(
+    ([hintKey, hint]) => Boolean(hint.sensitive) && hintKeyMatchesPathPrefix(hintKey, path),
+  );
+}
+
+function isSensitiveDiffPath(path: ConfigDiffPath, uiHints: ConfigUiHints): boolean {
+  for (let index = 1; index <= path.length; index += 1) {
+    const prefix = path.slice(0, index);
+    const key = formatConfigDiffPath(prefix);
+    if (
+      (hintForPath(prefix, uiHints)?.sensitive ?? false) ||
+      hasSensitiveHintForPathPrefix(prefix, uiHints) ||
+      isSensitiveConfigPath(key)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function renderRawDiffValue(
+  path: ConfigDiffPath,
+  value: unknown,
+  uiHints: ConfigUiHints,
+  rawRevealed: boolean,
+): string {
+  const hasSensitiveValue = countSensitiveConfigValues(value, path, uiHints) > 0;
+  if (!rawRevealed && value != null && (isSensitiveDiffPath(path, uiHints) || hasSensitiveValue)) {
     return REDACTED_PLACEHOLDER;
   }
   return truncateValue(value);
@@ -912,6 +1029,7 @@ function renderAppearanceSection(props: ConfigProps) {
 
 interface ConfigEphemeralState {
   rawRevealed: boolean;
+  rawDiffOpen: boolean;
   envRevealed: boolean;
   validityDismissed: boolean;
   revealedSensitivePaths: Set<string>;
@@ -921,6 +1039,7 @@ interface ConfigEphemeralState {
 function createConfigEphemeralState(): ConfigEphemeralState {
   return {
     rawRevealed: false,
+    rawDiffOpen: false,
     envRevealed: false,
     validityDismissed: false,
     revealedSensitivePaths: new Set(),
@@ -949,6 +1068,7 @@ function toggleSensitivePathReveal(path: Array<string | number>) {
 
 export function resetConfigViewStateForTests() {
   Object.assign(cvs, createConfigEphemeralState());
+  rawDiffCache = undefined;
 }
 
 export function renderConfig(props: ConfigProps) {
@@ -966,7 +1086,7 @@ export function renderConfig(props: ConfigProps) {
   const rawAvailable = props.rawAvailable ?? true;
   const formMode = showModeToggle && rawAvailable ? props.formMode : "form";
   const envSensitiveVisible = cvs.envRevealed;
-  const requestUpdate = props.onRequestUpdate ?? (() => props.onRawChange(props.raw));
+  const requestUpdate = props.onRequestUpdate ?? (() => {});
 
   // Build categorised nav from schema - only include sections that exist in the schema
   const schemaProps = analysis.schema?.properties ?? {};
@@ -1128,6 +1248,13 @@ export function renderConfig(props: ConfigProps) {
   // Compute diff for showing changes (works for both form and raw modes)
   const diff = formMode === "form" ? computeDiff(props.originalValue, props.formValue) : [];
   const hasRawChanges = formMode === "raw" && props.raw !== props.originalRaw;
+  if (!hasRawChanges && cvs.rawDiffOpen) {
+    cvs.rawDiffOpen = false;
+  }
+  const rawDiff =
+    formMode === "raw" && hasRawChanges && cvs.rawDiffOpen
+      ? computeRawDiff(props.originalRaw, props.raw)
+      : [];
   const hasChanges = formMode === "form" ? diff.length > 0 : hasRawChanges;
 
   // Save/apply buttons require actual changes to be enabled.
@@ -1332,7 +1459,7 @@ export function renderConfig(props: ConfigProps) {
             `
           : nothing}
 
-        <!-- Diff panel (form mode only - raw mode doesn't have granular diff) -->
+        <!-- Diff panel -->
         ${hasChanges && formMode === "form"
           ? html`
               <details class="config-diff">
@@ -1352,7 +1479,7 @@ export function renderConfig(props: ConfigProps) {
                   ${diff.map(
                     (change) => html`
                       <div class="config-diff__item">
-                        <div class="config-diff__path">${change.path}</div>
+                        <div class="config-diff__path">${formatConfigDiffPath(change.path)}</div>
                         <div class="config-diff__values">
                           <span class="config-diff__from"
                             >${renderDiffValue(change.path, change.from, props.uiHints)}</span
@@ -1365,6 +1492,71 @@ export function renderConfig(props: ConfigProps) {
                       </div>
                     `,
                   )}
+                </div>
+              </details>
+            `
+          : nothing}
+        ${hasRawChanges && formMode === "raw"
+          ? html`
+              <details
+                class="config-diff"
+                ?open=${cvs.rawDiffOpen}
+                @toggle=${(e: Event) => {
+                  const details = e.target as HTMLDetailsElement;
+                  if (cvs.rawDiffOpen === details.open) {
+                    return;
+                  }
+                  cvs.rawDiffOpen = details.open;
+                  requestUpdate();
+                }}
+              >
+                <summary class="config-diff__summary">
+                  <span>View pending changes</span>
+                  <svg
+                    class="config-diff__chevron"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                  >
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                  </svg>
+                </summary>
+                <div class="config-diff__content">
+                  ${rawDiff.length > 0
+                    ? rawDiff.map(
+                        (change) => html`
+                          <div class="config-diff__item">
+                            <div class="config-diff__path">
+                              ${formatConfigDiffPath(change.path)}
+                            </div>
+                            <div class="config-diff__values">
+                              <span class="config-diff__from"
+                                >${renderRawDiffValue(
+                                  change.path,
+                                  change.from,
+                                  props.uiHints,
+                                  cvs.rawRevealed,
+                                )}</span
+                              >
+                              <span class="config-diff__arrow">→</span>
+                              <span class="config-diff__to"
+                                >${renderRawDiffValue(
+                                  change.path,
+                                  change.to,
+                                  props.uiHints,
+                                  cvs.rawRevealed,
+                                )}</span
+                              >
+                            </div>
+                          </div>
+                        `,
+                      )
+                    : html`
+                        <div class="config-diff__item">
+                          Changes detected (JSON diff not available)
+                        </div>
+                      `}
                 </div>
               </details>
             `
