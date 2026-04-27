@@ -1405,7 +1405,9 @@ function renderGroupedMessage(
                       )}
                       ${reasoningMarkdown
                         ? html`<div class="chat-thinking">
-                            ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
+                            ${opts.isStreaming
+                              ? reasoningMarkdown
+                              : unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
                           </div>`
                         : nothing}
                       ${jsonResult
@@ -1468,7 +1470,9 @@ function renderGroupedMessage(
             )}
             ${reasoningMarkdown
               ? html`<div class="chat-thinking">
-                  ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
+                  ${opts.isStreaming
+                    ? reasoningMarkdown
+                    : unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
                 </div>`
               : nothing}
             ${normalizedRole === "assistant" && assistantViewBlocks.length > 0
