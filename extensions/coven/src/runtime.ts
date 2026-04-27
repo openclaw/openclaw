@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import {
   AcpRuntimeError,
@@ -419,9 +420,7 @@ export class CovenAcpRuntime implements AcpRuntime {
         ? await fallback.getStatus(input)
         : { summary: `fallback backend ${input.handle.backend} active` };
     }
-    const sessionId =
-      input.handle.backendSessionId ??
-      this.activeSessionIdsBySessionKey.get(input.handle.sessionKey);
+    const sessionId = this.getTrackedSessionId(input.handle);
     if (!sessionId) {
       return { summary: "coven runtime ready" };
     }
@@ -463,9 +462,7 @@ export class CovenAcpRuntime implements AcpRuntime {
       await this.requireFallbackRuntime(input.handle.backend).cancel(input);
       return;
     }
-    const sessionId =
-      input.handle.backendSessionId ??
-      this.activeSessionIdsBySessionKey.get(input.handle.sessionKey);
+    const sessionId = this.getTrackedSessionId(input.handle);
     if (sessionId) {
       await this.killActiveSession(sessionId);
     }
@@ -476,9 +473,7 @@ export class CovenAcpRuntime implements AcpRuntime {
       await this.requireFallbackRuntime(input.handle.backend).close(input);
       return;
     }
-    const sessionId =
-      input.handle.backendSessionId ??
-      this.activeSessionIdsBySessionKey.get(input.handle.sessionKey);
+    const sessionId = this.getTrackedSessionId(input.handle);
     if (sessionId && input.reason !== "oneshot-complete") {
       await this.killActiveSession(sessionId).catch(() => undefined);
     }
@@ -566,7 +561,31 @@ export class CovenAcpRuntime implements AcpRuntime {
     if (!workspaceReal || !cwdReal || !pathIsInside(workspaceReal, cwdReal)) {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "Coven cwd is outside workspace.");
     }
+    try {
+      if (!fs.statSync(cwdReal).isDirectory()) {
+        throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "Coven cwd must be a directory.");
+      }
+    } catch (error) {
+      if (error instanceof AcpRuntimeError) {
+        throw error;
+      }
+      throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "Coven cwd must be a directory.");
+    }
     return cwdReal;
+  }
+
+  private getTrackedSessionId(handle: AcpRuntimeHandle): string | undefined {
+    const tracked = this.activeSessionIdsBySessionKey.get(handle.sessionKey);
+    if (!tracked) {
+      return undefined;
+    }
+    if (handle.backendSessionId && handle.backendSessionId !== tracked) {
+      throw new AcpRuntimeError(
+        "ACP_INVALID_RUNTIME_OPTION",
+        "Coven session handle does not match this runtime session.",
+      );
+    }
+    return tracked;
   }
 
   private async killActiveSession(sessionId: string, signal?: AbortSignal): Promise<void> {

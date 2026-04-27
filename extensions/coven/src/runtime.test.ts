@@ -576,6 +576,74 @@ describe("CovenAcpRuntime", () => {
     }
   });
 
+  it("rejects Coven cwd paths that are not directories", async () => {
+    const filePath = path.join(workspaceDir, "not-a-directory");
+    await fs.writeFile(filePath, "not a directory");
+    const runtime = new CovenAcpRuntime({ config, client: fakeClient() });
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:test",
+      agent: "codex",
+      mode: "oneshot",
+      cwd: filePath,
+    });
+
+    await expect(
+      collect(
+        runtime.runTurn({
+          handle,
+          text: "Fix tests",
+          mode: "prompt",
+          requestId: "req-1",
+        }),
+      ),
+    ).rejects.toThrow(/cwd must be a directory/);
+  });
+
+  it("does not trust persisted backendSessionId without an active tracked Coven session", async () => {
+    const client = fakeClient();
+    const runtime = new CovenAcpRuntime({ config, client });
+    const handle: AcpRuntimeHandle = {
+      sessionKey: "agent:codex:test",
+      backend: "coven",
+      runtimeSessionName: __testing.encodeRuntimeSessionName({
+        agent: "codex",
+        mode: "prompt",
+      }),
+      cwd: workspaceDir,
+      backendSessionId: "attacker-session",
+    };
+
+    await expect(runtime.getStatus({ handle })).resolves.toEqual({
+      summary: "coven runtime ready",
+    });
+    await expect(runtime.cancel({ handle })).resolves.toBeUndefined();
+    await expect(runtime.close({ handle, reason: "user" })).resolves.toBeUndefined();
+    expect(client.getSession).not.toHaveBeenCalledWith("attacker-session", undefined);
+    expect(client.killSession).not.toHaveBeenCalledWith("attacker-session", undefined);
+  });
+
+  it("rejects backendSessionId values that conflict with the active tracked Coven session", async () => {
+    const client = fakeClient();
+    const runtime = new CovenAcpRuntime({ config, client });
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:test",
+      agent: "codex",
+      mode: "oneshot",
+      cwd: workspaceDir,
+    });
+    const turn = runtime.runTurn({ handle, text: "Fix tests", mode: "prompt", requestId: "req-1" });
+    const iterator = turn[Symbol.asyncIterator]();
+    await iterator.next();
+    handle.backendSessionId = "attacker-session";
+
+    await expect(runtime.getStatus({ handle })).rejects.toThrow(/does not match/);
+    await expect(runtime.cancel({ handle })).rejects.toThrow(/does not match/);
+    await expect(runtime.close({ handle, reason: "user" })).rejects.toThrow(/does not match/);
+    expect(client.getSession).not.toHaveBeenCalledWith("attacker-session", undefined);
+    expect(client.killSession).not.toHaveBeenCalledWith("attacker-session", undefined);
+    await iterator.return?.();
+  });
+
   it("preserves direct fallback when Coven launch fails after detection", async () => {
     const fallback = fallbackRuntime();
     registerAcpRuntimeBackend({ id: "acpx", runtime: fallback });

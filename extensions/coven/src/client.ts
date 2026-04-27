@@ -132,6 +132,10 @@ function validateSocketPathForUse(socketPath: string, socketRoot: string | undef
   if (!pathIsInside(realSocketRoot, realSocketDir)) {
     throw new Error("Coven socketPath must stay inside covenHome");
   }
+  const realSocketPath = realpathExistingPath(socketPath, "Coven socketPath");
+  if (!pathIsInside(realSocketRoot, realSocketPath)) {
+    throw new Error("Coven socketPath must stay inside covenHome");
+  }
 }
 
 function validateSocketOwnerAndMode(stat: fs.Stats, label: string): void {
