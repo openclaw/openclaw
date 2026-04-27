@@ -4817,19 +4817,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 },
                 additionalProperties: false,
               },
-              llm: {
-                type: "object",
-                properties: {
-                  idleTimeoutSeconds: {
-                    description:
-                      "Idle timeout for LLM streaming responses in seconds. If no token is received within this time, the request is aborted. Set to 0 to disable. Default: 120 seconds.",
-                    type: "integer",
-                    minimum: 0,
-                    maximum: 9007199254740991,
-                  },
-                },
-                additionalProperties: false,
-              },
               compaction: {
                 type: "object",
                 properties: {
@@ -20719,7 +20706,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             maximum: 9007199254740991,
             title: "Cron Max Concurrent Runs",
             description:
-              "Limits how many cron jobs can execute at the same time when multiple schedules fire together. Use lower values to protect CPU/memory under heavy automation load, or raise carefully for higher throughput.",
+              "Limits how many cron jobs can execute at the same time when multiple schedules fire together, including isolated agent-turn LLM execution on the dedicated cron-nested lane. Use lower values to protect CPU/memory under heavy automation load, or raise carefully for higher throughput.",
           },
           retry: {
             type: "object",
@@ -27466,7 +27453,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "cron.maxConcurrentRuns": {
       label: "Cron Max Concurrent Runs",
-      help: "Limits how many cron jobs can execute at the same time when multiple schedules fire together. Use lower values to protect CPU/memory under heavy automation load, or raise carefully for higher throughput.",
+      help: "Limits how many cron jobs can execute at the same time when multiple schedules fire together, including isolated agent-turn LLM execution on the dedicated cron-nested lane. Use lower values to protect CPU/memory under heavy automation load, or raise carefully for higher throughput.",
       tags: ["performance", "automation"],
     },
     "cron.retry": {

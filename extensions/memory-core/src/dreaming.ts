@@ -116,6 +116,9 @@ export type ShortTermPromotionDreamingConfig = {
     mode: "inline" | "separate" | "both";
     separateReports: boolean;
   };
+  execution?: {
+    model?: string;
+  };
 };
 
 type ReconcileResult =
@@ -391,6 +394,7 @@ export function resolveShortTermPromotionDreamingConfig(params: {
     ...(typeof resolved.maxAgeDays === "number" ? { maxAgeDays: resolved.maxAgeDays } : {}),
     verboseLogging: resolved.verboseLogging,
     storage: resolved.storage,
+    ...(resolved.execution.model ? { execution: { model: resolved.execution.model } } : {}),
   };
 }
 
@@ -633,6 +637,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
               data,
               nowMs: sweepNowMs,
               timezone: params.config.timezone,
+              model: params.config.execution?.model,
               logger: params.logger,
             }).catch(() => undefined);
           });
@@ -643,6 +648,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
             data,
             nowMs: sweepNowMs,
             timezone: params.config.timezone,
+            model: params.config.execution?.model,
             logger: params.logger,
           });
         }

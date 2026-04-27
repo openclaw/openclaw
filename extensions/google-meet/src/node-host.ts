@@ -103,14 +103,14 @@ function wake(session: NodeBridgeSession) {
 }
 
 function stopSession(session: NodeBridgeSession) {
-  if (session.closed) {
-    return;
-  }
+  const wasClosed = session.closed;
   session.closed = true;
-  session.closedAt = new Date().toISOString();
+  session.closedAt ??= new Date().toISOString();
   terminateChild(session.input);
   terminateChild(session.output);
-  wake(session);
+  if (!wasClosed) {
+    wake(session);
+  }
 }
 
 function attachOutputProcessHandlers(session: NodeBridgeSession, outputProcess: ChildProcess) {

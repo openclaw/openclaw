@@ -45,6 +45,7 @@ import {
   createSessionVisibilityGuard,
   shouldResolveSessionIdInput,
   createAgentToAgentPolicy,
+  resolveCurrentSessionClientAlias,
   resolveEffectiveSessionToolsVisibility,
   resolveInternalSessionKey,
   resolveSessionReference,
@@ -322,6 +323,13 @@ export function createSessionStatusTool(opts?: {
 
       const requestedKeyParam = readStringParam(params, "sessionKey");
       let requestedKeyRaw = requestedKeyParam ?? opts?.agentSessionKey;
+      const currentSessionAlias = resolveCurrentSessionClientAlias({
+        key: requestedKeyRaw ?? "",
+        requesterInternalKey: effectiveRequesterKey,
+      });
+      if (currentSessionAlias) {
+        requestedKeyRaw = currentSessionAlias;
+      }
       const requestedKeyInput = requestedKeyRaw?.trim() ?? "";
       let resolvedViaSessionId = false;
       let resolvedViaImplicitCurrentFallback = false;

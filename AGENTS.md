@@ -50,6 +50,7 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - Prod sweep: `pnpm check`; tests: `pnpm test`, `pnpm test:changed`, `pnpm test:serial`, `pnpm test:coverage`.
 - Extension tests: `pnpm test:extensions`, `pnpm test extensions`, `pnpm test extensions/<id>`.
 - Targeted tests: `pnpm test <path-or-filter> [vitest args...]`; never raw `vitest`.
+- Vitest flags only; no Jest flags like `--runInBand`. For serial runs use `pnpm test:serial` or `OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test ...`.
 - Typecheck: `tsgo` lanes only (`pnpm tsgo*`, `pnpm check:test-types`); do not add `tsc --noEmit`, `typecheck`, `check:types`.
 - Formatting: use `oxfmt`, not Prettier. Prefer `pnpm format:check` / `pnpm format`; for targeted files use `pnpm exec oxfmt --check --threads=1 <files...>` or `pnpm exec oxfmt --write --threads=1 <files...>`.
 - Linting: use repo wrappers (`pnpm lint:*`, `scripts/run-oxlint.mjs`); do not invoke generic JS formatters/lints unless a repo script uses them.

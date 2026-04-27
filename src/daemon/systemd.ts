@@ -22,6 +22,7 @@ import type {
   GatewayServiceControlArgs,
   GatewayServiceEnv,
   GatewayServiceEnvArgs,
+  GatewayServiceEnvironmentValueSource,
   GatewayServiceInstallArgs,
   GatewayServiceManageArgs,
   GatewayServiceRestartResult,
@@ -114,10 +115,10 @@ export async function readSystemdServiceExecStart(
       ...inlineEnvironment,
       ...environmentFromFiles.environment,
     };
-    const mergedEnvironmentSources = {
-      ...buildEnvironmentValueSources(inlineEnvironment, "inline"),
-      ...buildEnvironmentValueSources(environmentFromFiles.environment, "file"),
-    };
+    const mergedEnvironmentSources = mergeEnvironmentValueSources(
+      inlineEnvironment,
+      environmentFromFiles.environment,
+    );
     const programArguments = parseSystemdExecStart(execStart);
     return {
       programArguments,
@@ -136,8 +137,19 @@ export async function readSystemdServiceExecStart(
 function buildEnvironmentValueSources(
   environment: Record<string, string>,
   source: "inline" | "file",
-): Record<string, "inline" | "file"> {
+): Record<string, GatewayServiceEnvironmentValueSource> {
   return Object.fromEntries(Object.keys(environment).map((key) => [key, source]));
+}
+
+function mergeEnvironmentValueSources(
+  inlineEnvironment: Record<string, string>,
+  fileEnvironment: Record<string, string>,
+): Record<string, GatewayServiceEnvironmentValueSource> {
+  const sources = buildEnvironmentValueSources(inlineEnvironment, "inline");
+  for (const key of Object.keys(fileEnvironment)) {
+    sources[key] = Object.hasOwn(inlineEnvironment, key) ? "inline-and-file" : "file";
+  }
+  return sources;
 }
 
 function expandSystemdSpecifier(input: string, env: GatewayServiceEnv): string {
@@ -342,20 +354,54 @@ function resolveSystemctlDirectUserScopeArgs(): string[] {
   return ["--user"];
 }
 
-function resolveSystemctlMachineScopeUser(env: GatewayServiceEnv): string | null {
-  const sudoUser = env.SUDO_USER?.trim();
-  if (sudoUser && sudoUser !== "root") {
-    return sudoUser;
-  }
-  const fromEnv = env.USER?.trim() || env.LOGNAME?.trim();
-  if (fromEnv) {
-    return fromEnv;
-  }
+function readSystemctlEnvUser(env: GatewayServiceEnv): string | null {
+  return env.USER?.trim() || env.LOGNAME?.trim() || null;
+}
+
+function readSystemctlEffectiveUser(): string | null {
   try {
     return os.userInfo().username;
   } catch {
     return null;
   }
+}
+
+function readSystemctlEffectiveUid(): number | null {
+  if (typeof process.geteuid !== "function") {
+    return null;
+  }
+  try {
+    return process.geteuid();
+  } catch {
+    return null;
+  }
+}
+
+function isNonRootUser(user: string | null): user is string {
+  return Boolean(user && user !== "root");
+}
+
+function resolveSystemctlUserScope(env: GatewayServiceEnv): {
+  machineUser: string | null;
+  preferMachineScope: boolean;
+} {
+  const sudoUser = env.SUDO_USER?.trim() || null;
+  const envUser = readSystemctlEnvUser(env);
+  const effectiveUid = readSystemctlEffectiveUid();
+  const effectiveUser = readSystemctlEffectiveUser();
+  const isEffectiveRoot = effectiveUid === null ? effectiveUser === "root" : effectiveUid === 0;
+  const isSudoToRoot = isEffectiveRoot && isNonRootUser(sudoUser);
+  const machineUser = isSudoToRoot
+    ? sudoUser
+    : isNonRootUser(envUser)
+      ? envUser
+      : isNonRootUser(sudoUser)
+        ? sudoUser
+        : effectiveUser || envUser || sudoUser || null;
+  return {
+    machineUser,
+    preferMachineScope: isSudoToRoot,
+  };
 }
 
 function resolveSystemctlMachineUserScopeArgs(user: string): string[] {
@@ -380,11 +426,10 @@ async function execSystemctlUser(
   env: GatewayServiceEnv,
   args: string[],
 ): Promise<{ stdout: string; stderr: string; code: number }> {
-  const machineUser = resolveSystemctlMachineScopeUser(env);
-  const sudoUser = env.SUDO_USER?.trim();
+  const { machineUser, preferMachineScope } = resolveSystemctlUserScope(env);
 
-  // Under sudo, prefer the invoking non-root user's scope directly via machine scope.
-  if (sudoUser && sudoUser !== "root" && machineUser) {
+  // Under sudo-to-root, prefer the invoking non-root user's scope directly via machine scope.
+  if (preferMachineScope && machineUser) {
     const machineScopeArgs = resolveSystemctlMachineUserScopeArgs(machineUser);
     if (machineScopeArgs.length > 0) {
       // Do not fall through to bare --user: under sudo that can target root's user manager.

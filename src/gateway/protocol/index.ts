@@ -93,6 +93,8 @@ import {
   ConfigSchemaResponseSchema,
   type ConfigSetParams,
   ConfigSetParamsSchema,
+  type UpdateStatusParams,
+  UpdateStatusParamsSchema,
   type ConnectParams,
   ConnectParamsSchema,
   type CronAddParams,
@@ -536,6 +538,7 @@ export const validateChatSendParams = ajv.compile(ChatSendParamsSchema);
 export const validateChatAbortParams = ajv.compile<ChatAbortParams>(ChatAbortParamsSchema);
 export const validateChatInjectParams = ajv.compile<ChatInjectParams>(ChatInjectParamsSchema);
 export const validateChatEvent = ajv.compile(ChatEventSchema);
+export const validateUpdateStatusParams = ajv.compile<UpdateStatusParams>(UpdateStatusParamsSchema);
 export const validateUpdateRunParams = ajv.compile<UpdateRunParams>(UpdateRunParamsSchema);
 export const validateWebLoginStartParams =
   ajv.compile<WebLoginStartParams>(WebLoginStartParamsSchema);
@@ -638,6 +641,7 @@ export {
   ConfigSchemaLookupParamsSchema,
   ConfigSchemaResponseSchema,
   ConfigSchemaLookupResultSchema,
+  UpdateStatusParamsSchema,
   WizardStartParamsSchema,
   WizardNextParamsSchema,
   WizardCancelParamsSchema,
@@ -838,6 +842,7 @@ export type {
   WebPushSubscribeParams,
   WebPushUnsubscribeParams,
   WebPushTestParams,
+  UpdateStatusParams,
   UpdateRunParams,
   ChatInjectParams,
 };

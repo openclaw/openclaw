@@ -131,6 +131,18 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
             required: ["query"],
           },
         },
+        {
+          type: "function",
+          name: "openclaw_agent_consult",
+          description: "Ask OpenClaw",
+          parameters: {
+            type: "object",
+            properties: {
+              question: { type: "string" },
+            },
+            required: ["question"],
+          },
+        },
       ],
       onAudio: vi.fn(),
       onClearAudio: vi.fn(),
@@ -174,6 +186,18 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
                   },
                   required: ["query"],
                 },
+              },
+              {
+                name: "openclaw_agent_consult",
+                description: "Ask OpenClaw",
+                parametersJsonSchema: {
+                  type: "object",
+                  properties: {
+                    question: { type: "string" },
+                  },
+                  required: ["question"],
+                },
+                behavior: "NON_BLOCKING",
               },
             ],
           },
@@ -385,6 +409,119 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       functionResponses: [
         {
           id: "call-1",
+          name: "lookup",
+          response: { result: "ok" },
+        },
+      ],
+    });
+  });
+
+  it("keeps Google Live consult calls open after continuing tool responses", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onToolCall: vi.fn(),
+    });
+
+    await bridge.connect();
+    lastConnectParams().callbacks.onmessage({
+      setupComplete: { sessionId: "session-1" },
+      toolCall: {
+        functionCalls: [
+          { id: "consult-call", name: "openclaw_agent_consult", args: { prompt: "hi" } },
+        ],
+      },
+    });
+
+    bridge.submitToolResult(
+      "consult-call",
+      { status: "working", message: "Tell the participant you are checking." },
+      { willContinue: true },
+    );
+    bridge.submitToolResult("consult-call", { text: "The meeting starts at 3." });
+
+    expect(session.sendToolResponse).toHaveBeenNthCalledWith(1, {
+      functionResponses: [
+        {
+          id: "consult-call",
+          name: "openclaw_agent_consult",
+          scheduling: "WHEN_IDLE",
+          willContinue: true,
+          response: { status: "working", message: "Tell the participant you are checking." },
+        },
+      ],
+    });
+    expect(session.sendToolResponse).toHaveBeenNthCalledWith(2, {
+      functionResponses: [
+        {
+          id: "consult-call",
+          name: "openclaw_agent_consult",
+          scheduling: "WHEN_IDLE",
+          response: { text: "The meeting starts at 3." },
+        },
+      ],
+    });
+  });
+
+  it("does not send malformed Live API tool responses without a matching call name", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onError = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onError,
+    });
+
+    await bridge.connect();
+
+    bridge.submitToolResult("missing-call", { result: "ok" });
+
+    expect(session.sendToolResponse).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message:
+          "Google Live function response is missing a matching function call for missing-call",
+      }),
+    );
+  });
+
+  it("reports Google Live tool response send failures without losing the call name", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onError = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onError,
+    });
+
+    await bridge.connect();
+    lastConnectParams().callbacks.onmessage({
+      setupComplete: { sessionId: "session-1" },
+      toolCall: {
+        functionCalls: [{ id: "call-1", name: "lookup", args: { query: "hi" } }],
+      },
+    });
+
+    const sendError = new Error("SDK send failed");
+    session.sendToolResponse.mockImplementationOnce(() => {
+      throw sendError;
+    });
+
+    bridge.submitToolResult("call-1", ["retryable"]);
+
+    expect(onError).toHaveBeenCalledWith(sendError);
+
+    bridge.submitToolResult("call-1", { result: "ok" });
+
+    expect(session.sendToolResponse).toHaveBeenLastCalledWith({
+      functionResponses: [
+        {
+          id: "call-1",
+          name: "lookup",
           response: { result: "ok" },
         },
       ],

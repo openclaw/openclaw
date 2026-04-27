@@ -4487,6 +4487,8 @@ public struct ChatEvent: Codable, Sendable {
     }
 }
 
+public struct UpdateStatusParams: Codable, Sendable {}
+
 public struct UpdateRunParams: Codable, Sendable {
     public let sessionkey: String?
     public let deliverycontext: [String: AnyCodable]?

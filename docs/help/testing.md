@@ -443,7 +443,7 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
 
 - Command: `pnpm test`
 - Config: untargeted runs use the `vitest.full-*.config.ts` shard set and may expand multi-project shards into per-project configs for parallel scheduling
-- Files: core/unit inventories under `src/**/*.test.ts`, `packages/**/*.test.ts`, `test/**/*.test.ts`, and the whitelisted `ui` node tests covered by `vitest.unit.config.ts`
+- Files: core/unit inventories under `src/**/*.test.ts`, `packages/**/*.test.ts`, and `test/**/*.test.ts`; UI unit tests run in the dedicated `unit-ui` shard
 - Scope:
   - Pure unit tests
   - In-process integration tests (gateway auth, routing, tooling, parsing, config)

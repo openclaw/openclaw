@@ -53,6 +53,10 @@
   },
   "redirects": [
     {
+      "source": "/install/migrating-matrix",
+      "destination": "/channels/matrix-migration"
+    },
+    {
       "source": "/help/gpt54-codex-agentic-parity",
       "destination": "/help/gpt55-codex-agentic-parity"
     },
@@ -976,6 +980,22 @@
                 "pages": ["install/index", "install/installer", "install/node"]
               },
               {
+                "group": "Maintenance",
+                "pages": [
+                  "install/updating",
+                  {
+                    "group": "Migrating",
+                    "pages": [
+                      "install/migrating",
+                      "install/migrating-claude",
+                      "install/migrating-hermes"
+                    ]
+                  },
+                  "install/uninstall",
+                  "install/development-channels"
+                ]
+              },
+              {
                 "group": "Containers",
                 "pages": [
                   "install/ansible",
@@ -1008,16 +1028,6 @@
                 ]
               },
               {
-                "group": "Maintenance",
-                "pages": [
-                  "install/updating",
-                  "install/migrating",
-                  "install/migrating-matrix",
-                  "install/uninstall",
-                  "install/development-channels"
-                ]
-              },
-              {
                 "group": "Advanced setup",
                 "pages": ["start/setup", "pi-dev"]
               }
@@ -1043,6 +1053,7 @@
                   "channels/imessage",
                   "channels/bluebubbles",
                   "channels/matrix",
+                  "channels/matrix-migration",
                   "channels/matrix-push-rules"
                 ]
               },
@@ -1545,6 +1556,7 @@
                       "cli/gateway",
                       "cli/health",
                       "cli/logs",
+                      "cli/migrate",
                       "cli/onboard",
                       "cli/reset",
                       "cli/secrets",

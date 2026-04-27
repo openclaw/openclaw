@@ -144,6 +144,29 @@ describe("realtime voice bridge session runtime", () => {
     expect(onToolCall).toHaveBeenCalledWith(event, session);
   });
 
+  it("forwards tool result continuation options to the provider bridge", () => {
+    const bridge = makeBridge();
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "test",
+      label: "Test",
+      isConfigured: () => true,
+      createBridge: () => bridge,
+    };
+    const session = createRealtimeVoiceBridgeSession({
+      provider,
+      providerConfig: {},
+      audioSink: { sendAudio: vi.fn() },
+    });
+
+    session.submitToolResult("call-1", { status: "working" }, { willContinue: true });
+
+    expect(bridge.submitToolResult).toHaveBeenCalledWith(
+      "call-1",
+      { status: "working" },
+      { willContinue: true },
+    );
+  });
+
   it("does not expose session callbacks until the provider returns its bridge", () => {
     let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
     const bridge = makeBridge();

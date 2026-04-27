@@ -317,7 +317,7 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
     Uses the xAI Responses path. `/fast` or `params.fastMode: true` rewrites `grok-3`, `grok-3-mini`, `grok-4`, and `grok-4-0709` to their `*-fast` variants. `tool_stream` defaults on; disable via `agents.defaults.models["xai/<model>"].params.tool_stream=false`.
   </Accordion>
   <Accordion title="Cerebras">
-    GLM models use `zai-glm-4.7` / `zai-glm-4.6`; OpenAI-compatible base URL is `https://api.cerebras.ai/v1`.
+    Ships as the bundled `cerebras` provider plugin. GLM uses `zai-glm-4.7`; OpenAI-compatible base URL is `https://api.cerebras.ai/v1`.
   </Accordion>
 </AccordionGroup>
 
@@ -367,7 +367,7 @@ Kimi K2 model IDs:
 }
 ```
 
-### Kimi Coding
+### Kimi coding
 
 Kimi Coding uses Moonshot AI's Anthropic-compatible endpoint:
 

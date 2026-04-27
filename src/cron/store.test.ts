@@ -138,6 +138,59 @@ describe("cron store", () => {
     });
   });
 
+  it("compares split state identity for flat legacy cron rows", async () => {
+    const { storePath } = await makeStorePath();
+    const statePath = storePath.replace(/\.json$/, "-state.json");
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              id: "legacy-flat-cron",
+              name: "legacy flat cron",
+              enabled: true,
+              kind: "cron",
+              cron: "*/10 * * * *",
+              tz: "UTC",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    await fs.writeFile(
+      statePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: {
+            "legacy-flat-cron": {
+              updatedAtMs: 1,
+              scheduleIdentity: JSON.stringify({
+                version: 1,
+                enabled: true,
+                schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
+              }),
+              state: { nextRunAtMs: 123 },
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const loaded = await loadCronStore(storePath);
+
+    expect(loaded.jobs[0]?.state.nextRunAtMs).toBeUndefined();
+  });
+
   it("does not create a backup file when saving unchanged content", async () => {
     const store = await makeStorePath();
     const payload = makeStore("job-1", true);

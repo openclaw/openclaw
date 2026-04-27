@@ -3,8 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const applyPluginAutoEnable = vi.hoisted(() =>
   vi.fn((params: { config: unknown }) => ({
     config: params.config,
-    changes: [],
-    autoEnabledReasons: {},
+    changes: [] as string[],
+    autoEnabledReasons: {} as Record<string, string[]>,
   })),
 );
 const initSubagentRegistry = vi.hoisted(() => vi.fn());
@@ -20,8 +20,28 @@ const repairBundledRuntimeDepsInstallRootAsync = vi.hoisted(() =>
 const resolveBundledRuntimeDependencyPackageInstallRoot = vi.hoisted(() =>
   vi.fn((_packageRoot: string, _params: unknown) => "/runtime"),
 );
-const resolveConfiguredDeferredChannelPluginIds = vi.hoisted(() => vi.fn((_params: unknown) => []));
-const resolveGatewayStartupPluginIds = vi.hoisted(() => vi.fn((_params: unknown) => ["telegram"]));
+const pluginManifestRegistry = vi.hoisted(() => ({ plugins: [], diagnostics: [] }));
+const pluginLookUpTableMetrics = vi.hoisted(() => ({
+  registrySnapshotMs: 0,
+  manifestRegistryMs: 0,
+  startupPlanMs: 0,
+  ownerMapsMs: 0,
+  totalMs: 0,
+  indexPluginCount: 0,
+  manifestPluginCount: 0,
+  startupPluginCount: 1,
+  deferredChannelPluginCount: 0,
+}));
+const loadPluginLookUpTable = vi.hoisted(() =>
+  vi.fn((_params: unknown) => ({
+    manifestRegistry: pluginManifestRegistry,
+    startup: {
+      configuredDeferredChannelPluginIds: [],
+      pluginIds: ["telegram"],
+    },
+    metrics: pluginLookUpTableMetrics,
+  })),
+);
 const resolveOpenClawPackageRootSync = vi.hoisted(() => vi.fn((_params: unknown) => "/package"));
 const runChannelPluginStartupMaintenance = vi.hoisted(() =>
   vi.fn(async (_params: unknown) => undefined),
@@ -65,10 +85,8 @@ vi.mock("../plugins/bundled-runtime-deps.js", () => ({
   scanBundledPluginRuntimeDeps: (params: unknown) => scanBundledPluginRuntimeDeps(params),
 }));
 
-vi.mock("../plugins/channel-plugin-ids.js", () => ({
-  resolveConfiguredDeferredChannelPluginIds: (params: unknown) =>
-    resolveConfiguredDeferredChannelPluginIds(params),
-  resolveGatewayStartupPluginIds: (params: unknown) => resolveGatewayStartupPluginIds(params),
+vi.mock("../plugins/plugin-lookup-table.js", () => ({
+  loadPluginLookUpTable: (params: unknown) => loadPluginLookUpTable(params),
 }));
 
 vi.mock("../plugins/registry.js", () => ({
@@ -112,8 +130,14 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
     loadGatewayStartupPlugins.mockClear();
     repairBundledRuntimeDepsInstallRootAsync.mockReset().mockResolvedValue({});
     resolveBundledRuntimeDependencyPackageInstallRoot.mockClear();
-    resolveConfiguredDeferredChannelPluginIds.mockClear();
-    resolveGatewayStartupPluginIds.mockClear().mockReturnValue(["telegram"]);
+    loadPluginLookUpTable.mockClear().mockReturnValue({
+      manifestRegistry: pluginManifestRegistry,
+      startup: {
+        configuredDeferredChannelPluginIds: [],
+        pluginIds: ["telegram"],
+      },
+      metrics: pluginLookUpTableMetrics,
+    });
     resolveOpenClawPackageRootSync.mockClear().mockReturnValue("/package");
     runChannelPluginStartupMaintenance.mockClear();
     runStartupSessionMigration.mockClear();
@@ -140,9 +164,20 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
     ).resolves.toMatchObject({
       baseGatewayMethods: ["ping"],
       startupPluginIds: ["telegram"],
+      pluginLookUpTable: expect.objectContaining({
+        manifestRegistry: pluginManifestRegistry,
+      }),
     });
 
     expect(loadGatewayStartupPlugins).toHaveBeenCalledOnce();
+    expect(loadPluginLookUpTable).toHaveBeenCalledOnce();
+    expect(loadGatewayStartupPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginLookUpTable: expect.objectContaining({
+          manifestRegistry: pluginManifestRegistry,
+        }),
+      }),
+    );
     expect(scanBundledPluginRuntimeDeps).toHaveBeenCalledWith(
       expect.objectContaining({
         selectedPluginIds: ["telegram"],
@@ -175,6 +210,9 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
     ).resolves.toMatchObject({
       baseGatewayMethods: ["ping"],
       startupPluginIds: ["telegram"],
+      pluginLookUpTable: expect.objectContaining({
+        manifestRegistry: pluginManifestRegistry,
+      }),
     });
 
     expect(repairBundledRuntimeDepsInstallRootAsync).not.toHaveBeenCalled();

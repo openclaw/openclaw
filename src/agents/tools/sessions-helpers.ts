@@ -20,6 +20,7 @@ export {
   listSpawnedSessionKeys,
   looksLikeSessionId,
   looksLikeSessionKey,
+  resolveCurrentSessionClientAlias,
   resolveDisplaySessionKey,
   resolveInternalSessionKey,
   resolveMainSessionAlias,

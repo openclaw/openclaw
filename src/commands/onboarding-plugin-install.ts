@@ -116,6 +116,18 @@ function addPluginLoadPath(cfg: OpenClawConfig, pluginPath: string): OpenClawCon
   };
 }
 
+function pathsReferToSameDirectory(
+  left: string | null | undefined,
+  right: string | null | undefined,
+): boolean {
+  if (!left || !right) {
+    return false;
+  }
+  const realLeft = resolveRealDirectory(left);
+  const realRight = resolveRealDirectory(right);
+  return Boolean(realLeft && realRight && realLeft === realRight);
+}
+
 function formatPortableLocalPath(localPath: string, workspaceDir?: string): string | undefined {
   const bases = [workspaceDir, process.cwd()].filter((entry): entry is string => Boolean(entry));
   for (const base of bases) {
@@ -478,6 +490,14 @@ export async function ensureOnboardingPluginInstalled(params: {
         status: "failed",
       };
     }
+    if (pathsReferToSameDirectory(localPath, bundledLocalPath)) {
+      return {
+        cfg: enableResult.config,
+        installed: true,
+        pluginId: entry.pluginId,
+        status: "installed",
+      };
+    }
     next = addPluginLoadPath(enableResult.config, localPath);
     next = await recordLocalPluginInstall({ cfg: next, entry, localPath, npmSpec, workspaceDir });
     return {
@@ -593,6 +613,14 @@ export async function ensureOnboardingPluginInstalled(params: {
           installed: false,
           pluginId: entry.pluginId,
           status: "failed",
+        };
+      }
+      if (pathsReferToSameDirectory(localPath, bundledLocalPath)) {
+        return {
+          cfg: enableResult.config,
+          installed: true,
+          pluginId: entry.pluginId,
+          status: "installed",
         };
       }
       next = addPluginLoadPath(enableResult.config, localPath);

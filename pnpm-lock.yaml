@@ -361,6 +361,12 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/cerebras:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/chutes:
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -892,6 +898,28 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
+
+  extensions/migrate-claude:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
+  extensions/migrate-hermes:
+    dependencies:
+      yaml:
+        specifier: ^2.8.3
+        version: 2.8.3
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/minimax:
     devDependencies:
@@ -1509,6 +1537,9 @@ importers:
       dompurify:
         specifier: ^3.4.1
         version: 3.4.1
+      json5:
+        specifier: ^2.2.3
+        version: 2.2.3
       lit:
         specifier: ^3.3.2
         version: 3.3.2

@@ -130,6 +130,14 @@ export function buildPreferredClawHubSpec(raw: string): string | null {
   return `clawhub:${parsed.name}${parsed.selector ? `@${parsed.selector}` : ""}`;
 }
 
+export function parseNpmPrefixSpec(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("npm:")) {
+    return null;
+  }
+  return trimmed.slice("npm:".length).trim();
+}
+
 export const PREFERRED_CLAWHUB_FALLBACK_DECISION = {
   FALLBACK_TO_NPM: "fallback_to_npm",
   STOP: "stop",

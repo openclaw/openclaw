@@ -113,6 +113,7 @@ import type {
   OpenClawPluginReloadRegistration,
   OpenClawPluginSecurityAuditCollector,
   MediaUnderstandingProviderPlugin,
+  MigrationProviderPlugin,
   OpenClawPluginService,
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
@@ -1016,6 +1017,16 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  const registerMigrationProvider = (record: PluginRecord, provider: MigrationProviderPlugin) => {
+    registerUniqueProviderLike({
+      record,
+      provider,
+      kindLabel: "migration provider",
+      registrations: registry.migrationProviders,
+      ownedIds: record.migrationProviderIds,
+    });
+  };
+
   const registerCli = (
     record: PluginRecord,
     registrar: OpenClawPluginCliRegistrar,
@@ -1487,6 +1498,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 registerMusicGenerationProvider(record, provider),
               registerWebFetchProvider: (provider) => registerWebFetchProvider(record, provider),
               registerWebSearchProvider: (provider) => registerWebSearchProvider(record, provider),
+              registerMigrationProvider: (provider) => registerMigrationProvider(record, provider),
               registerGatewayMethod: (method, handler, opts) =>
                 registerGatewayMethod(record, method, handler, opts),
               registerService: (service) => registerService(record, service),
@@ -1764,6 +1776,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerVideoGenerationProvider,
     registerMusicGenerationProvider,
     registerWebSearchProvider,
+    registerMigrationProvider,
     registerGatewayMethod,
     registerCli,
     registerReload,

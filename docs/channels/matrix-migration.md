@@ -361,9 +361,10 @@ openclaw matrix verify status
 
 If the device is still unverified after that, finish verification from your Matrix client by comparing the SAS emoji or decimal codes and confirming that they match.
 
-## Related pages
+## Related
 
-- [Matrix](/channels/matrix)
-- [Doctor](/gateway/doctor)
-- [Migrating](/install/migrating)
-- [Plugins](/tools/plugin)
+- [Matrix](/channels/matrix): channel setup and config.
+- [Matrix push rules](/channels/matrix-push-rules): notification routing.
+- [Doctor](/gateway/doctor): health check and automatic migration trigger.
+- [Migration guide](/install/migrating): all migration paths (machine moves, cross-system imports).
+- [Plugins](/tools/plugin): plugin install and registration.

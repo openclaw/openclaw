@@ -94,7 +94,8 @@ export function isExpectedCodexStatusCommandText(text: string): boolean {
     normalized.includes("session: agent:dev:live-codex-harness") ||
     normalized.includes("session `agent:dev:live-codex-harness`") ||
     normalized.includes("current session is `agent:dev:live-codex-harness`") ||
-    normalized.includes("current session is agent:dev:live-codex-harness");
+    normalized.includes("current session is agent:dev:live-codex-harness") ||
+    (normalized.includes("session context") && normalized.includes("active task: `/codex status`"));
   const mentionsModel =
     normalized.includes("`openai/") ||
     normalized.includes(" openai/") ||

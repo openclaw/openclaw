@@ -168,6 +168,60 @@ Use explicit config when:
 
   </Accordion>
 
+  <Accordion title="Qwen tool calls appear as text">
+    First make sure vLLM was started with the right tool-call parser and chat
+    template for the model. For example, vLLM documents `hermes` for Qwen2.5
+    models and `qwen3_xml` for Qwen3-Coder models.
+
+    Symptoms:
+
+    - skills or tools never run
+    - the assistant prints raw JSON/XML such as `{"name":"read","arguments":...}`
+    - vLLM returns an empty `tool_calls` array when OpenClaw sends
+      `tool_choice: "auto"`
+
+    Some Qwen/vLLM combinations return structured tool calls only when the
+    request uses `tool_choice: "required"`. For those model entries, force the
+    OpenAI-compatible request field with `params.extra_body`:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          models: {
+            "vllm/Qwen-Qwen2.5-Coder-32B-Instruct": {
+              params: {
+                extra_body: {
+                  tool_choice: "required",
+                },
+              },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    Replace `Qwen-Qwen2.5-Coder-32B-Instruct` with the exact id returned by:
+
+    ```bash
+    openclaw models list --provider vllm
+    ```
+
+    You can apply the same override from the CLI:
+
+    ```bash
+    openclaw config set agents.defaults.models '{"vllm/Qwen-Qwen2.5-Coder-32B-Instruct":{"params":{"extra_body":{"tool_choice":"required"}}}}' --strict-json --merge
+    ```
+
+    This is an opt-in compatibility workaround. It makes every model turn with
+    tools require a tool call, so use it only for a dedicated local model entry
+    where that behavior is acceptable. Do not use it as a global default for all
+    vLLM models, and do not use a proxy that blindly converts arbitrary
+    assistant text into executable tool calls.
+
+  </Accordion>
+
   <Accordion title="Custom base URL">
     If your vLLM server runs on a non-default host or port, set `baseUrl` in the explicit provider config:
 
@@ -257,6 +311,18 @@ Use explicit config when:
 
   <Accordion title="No models discovered">
     Auto-discovery requires `VLLM_API_KEY` to be set **and** no explicit `models.providers.vllm` config entry. If you have defined the provider manually, OpenClaw skips discovery and uses only your declared models.
+  </Accordion>
+
+  <Accordion title="Tools render as raw text">
+    If a Qwen model prints JSON/XML tool syntax instead of executing a skill,
+    check the Qwen guidance in Advanced configuration above. The usual fix is:
+
+    - start vLLM with the correct parser/template for that model
+    - confirm the exact model id with `openclaw models list --provider vllm`
+    - add a dedicated per-model `params.extra_body.tool_choice: "required"`
+      override only if `tool_choice: "auto"` still returns empty or text-only
+      tool calls
+
   </Accordion>
 </AccordionGroup>
 

@@ -68,6 +68,9 @@ vi.mock("../daemon/service-audit.js", () => ({
   readEmbeddedGatewayToken: readEmbeddedGatewayTokenForTest,
   SERVICE_AUDIT_CODES: {
     gatewayEntrypointMismatch: testServiceAuditCodes.gatewayEntrypointMismatch,
+    gatewayManagedEnvEmbedded: testServiceAuditCodes.gatewayManagedEnvEmbedded,
+    gatewayProxyEnvEmbedded: testServiceAuditCodes.gatewayProxyEnvEmbedded,
+    gatewayTokenMismatch: testServiceAuditCodes.gatewayTokenMismatch,
   },
 }));
 
@@ -280,6 +283,81 @@ describe("maybeRepairGatewayServiceConfig", () => {
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
     expect(mocks.stage).not.toHaveBeenCalled();
     expect(mocks.install).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes planned managed env keys into service audit for legacy inline secret detection", async () => {
+    mocks.readCommand.mockResolvedValue({
+      programArguments: gatewayProgramArguments,
+      environment: {
+        TAVILY_API_KEY: "old-inline-value",
+      },
+    });
+    mocks.buildGatewayInstallPlan.mockResolvedValue({
+      programArguments: gatewayProgramArguments,
+      workingDirectory: "/tmp",
+      environment: {
+        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "TAVILY_API_KEY",
+      },
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: false,
+      issues: [
+        {
+          code: "gateway-managed-env-embedded",
+          message: "Gateway service embeds managed environment values that should load at runtime.",
+          detail: "inline keys: TAVILY_API_KEY",
+          level: "recommended",
+        },
+      ],
+    });
+    mocks.install.mockResolvedValue(undefined);
+
+    await runRepair({ gateway: {} });
+
+    expect(mocks.auditGatewayServiceConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedManagedServiceEnvKeys: new Set(["TAVILY_API_KEY"]),
+      }),
+    );
+    expect(mocks.install).toHaveBeenCalledTimes(1);
+  });
+
+  it("repairs gateway services with embedded proxy environment values", async () => {
+    mocks.readCommand.mockResolvedValue({
+      programArguments: gatewayProgramArguments,
+      environment: {
+        HTTP_PROXY: "http://proxy.local:7890",
+        HTTPS_PROXY: "https://proxy.local:7890",
+      },
+    });
+    mocks.buildGatewayInstallPlan.mockResolvedValue({
+      programArguments: gatewayProgramArguments,
+      workingDirectory: "/tmp",
+      environment: {},
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: false,
+      issues: [
+        {
+          code: "gateway-proxy-env-embedded",
+          message: "Gateway service embeds proxy environment values that should not be persisted.",
+          detail: "inline keys: HTTP_PROXY, HTTPS_PROXY",
+          level: "recommended",
+        },
+      ],
+    });
+    mocks.install.mockResolvedValue(undefined);
+
+    await runRepair({ gateway: {} });
+
+    expect(mocks.install).toHaveBeenCalledWith(
+      expect.objectContaining({
+        environment: expect.not.objectContaining({
+          HTTP_PROXY: expect.any(String),
+          HTTPS_PROXY: expect.any(String),
+        }),
+      }),
+    );
   });
 
   it("uses OPENCLAW_GATEWAY_TOKEN when config token is missing", async () => {

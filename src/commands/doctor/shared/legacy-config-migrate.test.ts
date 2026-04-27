@@ -98,6 +98,26 @@ describe("legacy migrate mention routing", () => {
 });
 
 describe("legacy migrate sandbox scope aliases", () => {
+  it("removes legacy agents.defaults.llm timeout config", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          llm: {
+            idleTimeoutSeconds: 120,
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Removed agents.defaults.llm; model idle timeout now follows models.providers.<id>.timeoutSeconds.",
+    );
+    expect(res.config?.agents?.defaults).toEqual({
+      model: { primary: "openai/gpt-5.4" },
+    });
+  });
+
   it("moves legacy embeddedHarness runtime policy into agentRuntime", () => {
     const res = migrateLegacyConfigForTest({
       agents: {

@@ -115,7 +115,7 @@ The Control UI can localize itself on first load based on your browser locale. T
   <Accordion title="Debug, logs, update">
     - Debug: status/health/models snapshots + event log + manual RPC calls (`status`, `health`, `models.list`).
     - Logs: live tail of gateway file logs with filter/export (`logs.tail`).
-    - Update: run a package/git update + restart (`update.run`) with a restart report.
+    - Update: run a package/git update + restart (`update.run`) with a restart report, then poll `update.status` after reconnect to verify the running gateway version.
   </Accordion>
   <Accordion title="Cron jobs panel notes">
     - For isolated jobs, delivery defaults to announce summary. You can switch to none if you want internal-only runs.
@@ -321,7 +321,7 @@ Documented exceptions:
 
 See [Tailscale](/gateway/tailscale) for HTTPS setup guidance.
 
-## Content Security Policy
+## Content security policy
 
 The Control UI ships with a tight `img-src` policy: only **same-origin** assets, `data:` URLs, and locally generated `blob:` URLs are allowed. Remote `http(s)` and protocol-relative image URLs are rejected by the browser and do not issue network fetches.
 

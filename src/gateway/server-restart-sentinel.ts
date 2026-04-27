@@ -14,10 +14,12 @@ import { ackDelivery, enqueueDelivery, failDelivery } from "../infra/outbound/de
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import {
+  finalizeUpdateRestartSentinelRunningVersion,
   formatRestartSentinelMessage,
   readRestartSentinel,
   removeRestartSentinelFile,
   type RestartSentinelContinuation,
+  type RestartSentinelPayload,
   resolveRestartSentinelPath,
   summarizeRestartSentinel,
 } from "../infra/restart-sentinel.js";
@@ -45,6 +47,16 @@ import { runStartupTasks, type StartupTask } from "./startup-tasks.js";
 const log = createSubsystemLogger("gateway/restart-sentinel");
 const OUTBOUND_RETRY_DELAY_MS = 1_000;
 const OUTBOUND_MAX_ATTEMPTS = 45;
+let latestUpdateRestartSentinel: RestartSentinelPayload | null = null;
+
+function cloneRestartSentinelPayload(
+  payload: RestartSentinelPayload | null,
+): RestartSentinelPayload | null {
+  if (!payload) {
+    return null;
+  }
+  return JSON.parse(JSON.stringify(payload)) as RestartSentinelPayload;
+}
 
 function hasRoutableDeliveryContext(context?: {
   channel?: string;
@@ -561,4 +573,21 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
 
 export function shouldWakeFromRestartSentinel() {
   return !process.env.VITEST && process.env.NODE_ENV !== "test";
+}
+
+export async function refreshLatestUpdateRestartSentinel(): Promise<RestartSentinelPayload | null> {
+  const finalized = await finalizeUpdateRestartSentinelRunningVersion();
+  const sentinel = finalized ?? (await readRestartSentinel());
+  if (sentinel?.payload.kind === "update") {
+    latestUpdateRestartSentinel = cloneRestartSentinelPayload(sentinel.payload);
+  }
+  return cloneRestartSentinelPayload(latestUpdateRestartSentinel);
+}
+
+export function getLatestUpdateRestartSentinel(): RestartSentinelPayload | null {
+  return cloneRestartSentinelPayload(latestUpdateRestartSentinel);
+}
+
+export function recordLatestUpdateRestartSentinel(payload: RestartSentinelPayload): void {
+  latestUpdateRestartSentinel = cloneRestartSentinelPayload(payload);
 }

@@ -118,6 +118,13 @@ bun add -g openclaw@latest
     ReadWritePaths=/var/lib/openclaw /home/openclaw/.openclaw /tmp
     ```
 
+    `OPENCLAW_PLUGIN_STAGE_DIR` also accepts a path list. OpenClaw resolves bundled plugin runtime dependencies left-to-right across the listed roots, treats earlier roots as read-only preinstalled layers, and installs or repairs only into the final writable root:
+
+    ```ini
+    Environment=OPENCLAW_PLUGIN_STAGE_DIR=/opt/openclaw/plugin-runtime-deps:/var/lib/openclaw/plugin-runtime-deps
+    ReadWritePaths=/var/lib/openclaw /home/openclaw/.openclaw /tmp
+    ```
+
     If `OPENCLAW_PLUGIN_STAGE_DIR` is not set, OpenClaw uses `$STATE_DIRECTORY` when systemd provides it, then falls back to `~/.openclaw/plugin-runtime-deps`. The repair step treats that stage as an OpenClaw-owned local package root and ignores user npm prefix and global settings, so global-install npm config does not redirect bundled plugin dependencies into `~/node_modules` or the global package tree.
 
   </Accordion>
@@ -157,6 +164,7 @@ The auto-updater is off by default. Enable it in `~/.openclaw/openclaw.json`:
 | `dev`    | No automatic apply. Use `openclaw update` manually.                                                           |
 
 The gateway also logs an update hint on startup (disable with `update.checkOnStart: false`).
+For downgrade or incident recovery, set `OPENCLAW_NO_AUTO_UPDATE=1` in the gateway environment to block automatic applies even when `update.auto.enabled` is configured. Startup update hints can still run unless `update.checkOnStart` is also disabled.
 
 ## After updating
 

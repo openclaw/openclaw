@@ -78,6 +78,7 @@ import {
   ConfigSchemaParamsSchema,
   ConfigSchemaResponseSchema,
   ConfigSetParamsSchema,
+  UpdateStatusParamsSchema,
   UpdateRunParamsSchema,
 } from "./config.js";
 import {
@@ -365,6 +366,7 @@ export const ProtocolSchemas = {
   ChatAbortParams: ChatAbortParamsSchema,
   ChatInjectParams: ChatInjectParamsSchema,
   ChatEvent: ChatEventSchema,
+  UpdateStatusParams: UpdateStatusParamsSchema,
   UpdateRunParams: UpdateRunParamsSchema,
   TickEvent: TickEventSchema,
   ShutdownEvent: ShutdownEventSchema,

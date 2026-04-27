@@ -61,6 +61,7 @@ Native OpenClaw plugins must ship `openclaw.plugin.json` with an inline JSON Sch
 ```bash
 openclaw plugins install <package>                      # ClawHub first, then npm
 openclaw plugins install clawhub:<package>              # ClawHub only
+openclaw plugins install npm:<package>                  # npm only
 openclaw plugins install <package> --force              # overwrite existing install
 openclaw plugins install <package> --pin                # pin version
 openclaw plugins install <package> --dangerously-force-unsafe-install
@@ -101,6 +102,8 @@ Bare package names are checked against ClawHub first, then npm. Treat plugin ins
 
     Npm specs are **registry-only** (package name + optional **exact version** or **dist-tag**). Git/URL/file specs and semver ranges are rejected. Dependency installs run project-local with `--ignore-scripts` for safety, even when your shell has global npm install settings.
 
+    Use `npm:<package>` when you want to skip ClawHub lookup and install directly from npm. Bare package specs still prefer ClawHub and only fall back to npm when ClawHub does not have that package or version.
+
     Bare specs and `@latest` stay on the stable track. If npm resolves either of those to a prerelease, OpenClaw stops and asks you to opt in explicitly with a prerelease tag such as `@beta`/`@rc` or an exact prerelease version such as `@1.2.3-beta.4`.
 
     If a bare install spec matches a bundled plugin id (for example `diffs`), OpenClaw installs the bundled plugin directly. To install an npm package with the same name, use an explicit scoped spec (for example `@scope/diffs`).
@@ -127,7 +130,15 @@ OpenClaw now also prefers ClawHub for bare npm-safe plugin specs. It only falls 
 openclaw plugins install openclaw-codex-app-server
 ```
 
+Use `npm:` to force npm-only resolution, for example when ClawHub is unreachable or you know the package exists only on npm:
+
+```bash
+openclaw plugins install npm:openclaw-codex-app-server
+openclaw plugins install npm:@scope/plugin-name@1.0.1
+```
+
 OpenClaw downloads the package archive from ClawHub, checks the advertised plugin API / minimum gateway compatibility, then installs it through the normal archive path. Recorded installs keep their ClawHub source metadata for later updates.
+Unversioned ClawHub installs keep an unversioned recorded spec so `openclaw plugins update` can follow newer ClawHub releases; explicit version or tag selectors such as `clawhub:pkg@1.2.3` and `clawhub:pkg@beta` remain pinned to that selector.
 
 #### Marketplace shorthand
 

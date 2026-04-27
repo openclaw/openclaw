@@ -36,7 +36,7 @@ import {
   ensureBundledPluginRuntimeDeps,
   installBundledRuntimeDeps,
   materializeBundledRuntimeMirrorDistFile,
-  resolveBundledRuntimeDependencyInstallRoot,
+  resolveBundledRuntimeDependencyInstallRootPlan,
   resolveBundledRuntimeDependencyPackageRoot,
   registerBundledRuntimeDependencyNodePath,
   shouldMaterializeBundledRuntimeMirrorDistFile,
@@ -66,6 +66,7 @@ import {
 } from "./config-state.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import { getGlobalHookRunner, initializeGlobalHookRunner } from "./hook-runner-global.js";
+import { toSafeImportPath } from "./import-specifier.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import {
   clearPluginInteractiveHandlers,
@@ -291,6 +292,7 @@ type PluginRegistrySnapshot = {
     musicGenerationProviders: PluginRegistry["musicGenerationProviders"];
     webFetchProviders: PluginRegistry["webFetchProviders"];
     webSearchProviders: PluginRegistry["webSearchProviders"];
+    migrationProviders: PluginRegistry["migrationProviders"];
     codexAppServerExtensionFactories: PluginRegistry["codexAppServerExtensionFactories"];
     agentToolResultMiddlewares: PluginRegistry["agentToolResultMiddlewares"];
     memoryEmbeddingProviders: PluginRegistry["memoryEmbeddingProviders"];
@@ -329,6 +331,7 @@ function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistrySnapsho
       musicGenerationProviders: [...registry.musicGenerationProviders],
       webFetchProviders: [...registry.webFetchProviders],
       webSearchProviders: [...registry.webSearchProviders],
+      migrationProviders: [...registry.migrationProviders],
       codexAppServerExtensionFactories: [...registry.codexAppServerExtensionFactories],
       agentToolResultMiddlewares: [...registry.agentToolResultMiddlewares],
       memoryEmbeddingProviders: [...registry.memoryEmbeddingProviders],
@@ -366,6 +369,7 @@ function restorePluginRegistry(registry: PluginRegistry, snapshot: PluginRegistr
   registry.musicGenerationProviders = snapshot.arrays.musicGenerationProviders;
   registry.webFetchProviders = snapshot.arrays.webFetchProviders;
   registry.webSearchProviders = snapshot.arrays.webSearchProviders;
+  registry.migrationProviders = snapshot.arrays.migrationProviders;
   registry.codexAppServerExtensionFactories = snapshot.arrays.codexAppServerExtensionFactories;
   registry.agentToolResultMiddlewares = snapshot.arrays.agentToolResultMiddlewares;
   registry.memoryEmbeddingProviders = snapshot.arrays.memoryEmbeddingProviders;
@@ -424,32 +428,6 @@ function runPluginRegisterSync(
   } finally {
     guarded.close();
   }
-}
-
-/**
- * On Windows, the Node.js ESM loader requires absolute paths to be expressed
- * as file:// URLs (e.g. file:///C:/Users/...). Raw drive-letter paths like
- * C:\... are rejected with ERR_UNSUPPORTED_ESM_URL_SCHEME because the loader
- * mistakes the drive letter for an unknown URL scheme.
- *
- * This helper converts Windows absolute import specifiers to file:// URLs and
- * leaves everything else unchanged.
- */
-function toSafeImportPath(specifier: string): string {
-  if (process.platform !== "win32") {
-    return specifier;
-  }
-  if (specifier.startsWith("file://")) {
-    return specifier;
-  }
-  if (path.win32.isAbsolute(specifier)) {
-    const normalizedSpecifier = specifier.replaceAll("\\", "/");
-    if (normalizedSpecifier.startsWith("//")) {
-      return new URL(`file:${encodeURI(normalizedSpecifier)}`).href;
-    }
-    return new URL(`file:///${encodeURI(normalizedSpecifier)}`).href;
-  }
-  return specifier;
 }
 
 type RuntimeDependencyPackageJson = {
@@ -1830,6 +1808,7 @@ function createPluginRecord(params: {
     musicGenerationProviderIds: [],
     webFetchProviderIds: [],
     webSearchProviderIds: [],
+    migrationProviderIds: [],
     contextEngineIds: [],
     memoryEmbeddingProviderIds: [],
     agentHarnessIds: [],
@@ -2573,7 +2552,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         let runtimeDepsInstallStartedAt: number | null = null;
         let runtimeDepsInstallSpecs: string[] = [];
         try {
-          const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env });
+          const installRootPlan = resolveBundledRuntimeDependencyInstallRootPlan(pluginRoot, {
+            env,
+          });
+          const installRoot = installRootPlan.installRoot;
           const retainSpecs = bundledRuntimeDepsRetainSpecsByInstallRoot.get(installRoot) ?? [];
           const depsInstallResult = ensureBundledPluginRuntimeDeps({
             pluginId: record.id,
@@ -2626,8 +2608,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
               registerBundledRuntimeDependencyNodePath(packageRoot);
               registerBundledRuntimeDependencyJitiAliases(packageRoot);
             }
-            registerBundledRuntimeDependencyNodePath(installRoot);
-            registerBundledRuntimeDependencyJitiAliases(installRoot);
+            for (const searchRoot of installRootPlan.searchRoots) {
+              registerBundledRuntimeDependencyNodePath(searchRoot);
+              registerBundledRuntimeDependencyJitiAliases(searchRoot);
+            }
             runtimePluginRoot = mirrorBundledPluginRuntimeRoot({
               pluginId: record.id,
               pluginRoot,

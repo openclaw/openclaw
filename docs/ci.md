@@ -29,7 +29,7 @@ optional Telegram lane reuses the
 `package-under-test` artifact in the `NPM Telegram Beta E2E` workflow, with the
 published npm spec path kept for standalone dispatches.
 
-## Package Acceptance
+## Package acceptance
 
 Use `Package Acceptance` when the question is "does this installable OpenClaw
 package work as a product?" It is different from normal CI: normal CI validates
@@ -93,7 +93,9 @@ GitHub-native replacement for most Parallels package/update validation, with
 Telegram proving the same package artifact through the QA live transport.
 Cross-OS release checks still cover OS-specific onboarding, installer, and
 platform behavior; package/update product validation should start with Package
-Acceptance.
+Acceptance. The Windows packaged and installer fresh lanes also verify that an
+installed package can import a browser-control override from a raw absolute
+Windows path.
 
 Package Acceptance has a bounded legacy-compatibility window for already
 published packages through `2026.4.25`, including `2026.4.25-beta.*`. Those
@@ -206,7 +208,7 @@ gh workflow run duplicate-after-merge.yml \
   -f apply=true
 ```
 
-## Job Overview
+## Job overview
 
 | Job                              | Purpose                                                                                      | When it runs                       |
 | -------------------------------- | -------------------------------------------------------------------------------------------- | ---------------------------------- |
@@ -226,7 +228,7 @@ gh workflow run duplicate-after-merge.yml \
 | `checks-node-compat-node22`      | Node 22 compatibility build and smoke lane                                                   | Manual CI dispatch for releases    |
 | `check-docs`                     | Docs formatting, lint, and broken-link checks                                                | Docs changed                       |
 | `skills-python`                  | Ruff + pytest for Python-backed skills                                                       | Python-skill-relevant changes      |
-| `checks-windows`                 | Windows-specific test lanes                                                                  | Windows-relevant changes           |
+| `checks-windows`                 | Windows-specific process/path tests plus shared runtime import specifier regressions         | Windows-relevant changes           |
 | `macos-node`                     | macOS TypeScript test lane using the shared built artifacts                                  | macOS-relevant changes             |
 | `macos-swift`                    | Swift lint, build, and tests for the macOS app                                               | macOS-relevant changes             |
 | `android`                        | Android unit tests for both flavors plus one debug APK build                                 | Android-relevant changes           |
@@ -284,7 +286,7 @@ The automatic CI concurrency key is versioned (`CI-v7-*`) so a GitHub-side zombi
 | `blacksmith-6vcpu-macos-latest`  | `macos-node` on `openclaw/openclaw`; forks fall back to `macos-latest`                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `blacksmith-12vcpu-macos-latest` | `macos-swift` on `openclaw/openclaw`; forks fall back to `macos-latest`                                                                                                                                                                                                                                                                                                                                                                                                 |
 
-## Local Equivalents
+## Local equivalents
 
 ```bash
 pnpm changed:lanes   # inspect the local changed-lane classifier for origin/main...HEAD

@@ -36,9 +36,13 @@ openclaw onboard
 openclaw onboard --modern
 openclaw onboard --flow quickstart
 openclaw onboard --flow manual
+openclaw onboard --flow import
+openclaw onboard --import-from hermes --import-source ~/.hermes
 openclaw onboard --skip-bootstrap
 openclaw onboard --mode remote --remote-url wss://gateway-host:18789
 ```
+
+`--flow import` uses plugin-owned migration providers such as Hermes. It only runs against a fresh OpenClaw setup; if existing config, credentials, sessions, or workspace memory/identity files are present, reset or choose a fresh setup before importing.
 
 `--modern` starts the Crestodian conversational onboarding preview. Without
 `--modern`, `openclaw onboard` keeps the classic onboarding flow.
@@ -176,6 +180,7 @@ openclaw onboard --non-interactive \
   <Accordion title="Flow types">
     - `quickstart`: minimal prompts, auto-generates a gateway token.
     - `manual`: full prompts for port, bind, and auth (alias of `advanced`).
+    - `import`: runs a detected migration provider, previews the plan, then applies after confirmation.
   </Accordion>
   <Accordion title="Provider prefiltering">
     When an auth choice implies a preferred provider, onboarding prefilters the default-model and allowlist pickers to that provider. For Volcengine and BytePlus, this also matches the coding-plan variants (`volcengine-plan/*`, `byteplus-plan/*`).
@@ -194,6 +199,7 @@ openclaw onboard --non-interactive \
     - Local onboarding DM scope behavior: [CLI setup reference](/start/wizard-cli-reference#outputs-and-internals).
     - Fastest first chat: `openclaw dashboard` (Control UI, no channel setup).
     - Custom provider: connect any OpenAI or Anthropic compatible endpoint, including hosted providers not listed. Use Unknown to auto-detect.
+    - If Hermes state is detected, onboarding offers a migration flow. Use [Migrate](/cli/migrate) for dry-run plans, overwrite mode, reports, and exact mappings.
   </Accordion>
 </AccordionGroup>
 

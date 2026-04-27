@@ -37,8 +37,11 @@ import {
   type PluginManifestContracts,
   type PluginManifestMediaUnderstandingProviderMetadata,
   type PluginManifestModelCatalog,
+  type PluginManifestModelIdNormalization,
+  type PluginManifestModelPricing,
   type PluginManifestModelSupport,
   type PluginManifestProviderEndpoint,
+  type PluginManifestProviderRequest,
   type PluginManifestQaRunner,
   type PluginManifestSetup,
 } from "./manifest.js";
@@ -79,7 +82,8 @@ export type PluginManifestContractListKey =
   | "memoryEmbeddingProviders"
   | "webContentExtractors"
   | "webFetchProviders"
-  | "webSearchProviders";
+  | "webSearchProviders"
+  | "migrationProviders";
 
 type SeenIdEntry = {
   candidate: PluginCandidate;
@@ -112,7 +116,10 @@ export type PluginManifestRecord = {
   providerDiscoverySource?: string;
   modelSupport?: PluginManifestModelSupport;
   modelCatalog?: PluginManifestModelCatalog;
+  modelPricing?: PluginManifestModelPricing;
+  modelIdNormalization?: PluginManifestModelIdNormalization;
   providerEndpoints?: PluginManifestProviderEndpoint[];
+  providerRequest?: PluginManifestProviderRequest;
   cliBackends: string[];
   syntheticAuthRefs?: string[];
   nonSecretAuthMarkers?: string[];
@@ -337,7 +344,10 @@ function buildRecord(params: {
       : undefined,
     modelSupport: params.manifest.modelSupport,
     modelCatalog: params.manifest.modelCatalog,
+    modelPricing: params.manifest.modelPricing,
+    modelIdNormalization: params.manifest.modelIdNormalization,
     providerEndpoints: params.manifest.providerEndpoints,
+    providerRequest: params.manifest.providerRequest,
     cliBackends: params.manifest.cliBackends ?? [],
     syntheticAuthRefs: params.manifest.syntheticAuthRefs ?? [],
     nonSecretAuthMarkers: params.manifest.nonSecretAuthMarkers ?? [],

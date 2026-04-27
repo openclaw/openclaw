@@ -4,7 +4,7 @@ import path from "node:path";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { resolveConfigDir } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
-import { cronScheduleIdentity } from "./schedule-identity.js";
+import { tryCronScheduleIdentity } from "./schedule-identity.js";
 import type { CronStoreFile } from "./types.js";
 
 type SerializedStoreCacheEntry = {
@@ -65,7 +65,7 @@ function extractStateFile(store: CronStoreFile): CronStateFile {
   for (const job of store.jobs) {
     jobs[job.id] = {
       updatedAtMs: job.updatedAtMs,
-      scheduleIdentity: cronScheduleIdentity(job),
+      scheduleIdentity: tryCronScheduleIdentity(job as unknown as Record<string, unknown>),
       state: job.state ?? {},
     };
   }
@@ -191,7 +191,7 @@ function mergeStateFileEntry(job: CronStoreFile["jobs"][number], entry: CronStat
   job.state = (entry.state ?? {}) as never;
   if (
     typeof entry.scheduleIdentity === "string" &&
-    entry.scheduleIdentity !== cronScheduleIdentity(job)
+    entry.scheduleIdentity !== tryCronScheduleIdentity(job as unknown as Record<string, unknown>)
   ) {
     ensureJobStateObject(job);
     job.state.nextRunAtMs = undefined;

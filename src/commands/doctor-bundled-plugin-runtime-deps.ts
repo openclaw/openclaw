@@ -3,8 +3,9 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import {
+  createBundledRuntimeDepsWritableInstallSpecs,
   repairBundledRuntimeDepsInstallRoot,
-  resolveBundledRuntimeDependencyPackageInstallRoot,
+  resolveBundledRuntimeDependencyPackageInstallRootPlan,
   scanBundledPluginRuntimeDeps,
   type BundledRuntimeDepsInstallParams,
 } from "../plugins/bundled-runtime-deps.js";
@@ -75,7 +76,14 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
   }
 
   const missingSpecs = missing.map((dep) => `${dep.name}@${dep.version}`);
-  const installSpecs = deps.map((dep) => `${dep.name}@${dep.version}`);
+  const installRootPlan = resolveBundledRuntimeDependencyPackageInstallRootPlan(packageRoot, {
+    env,
+  });
+  const installSpecs = createBundledRuntimeDepsWritableInstallSpecs({
+    deps,
+    searchRoots: installRootPlan.searchRoots,
+    installRoot: installRootPlan.installRoot,
+  });
   note(
     [
       "Bundled plugin runtime deps are missing.",
@@ -97,11 +105,8 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
   }
 
   try {
-    const installRoot = resolveBundledRuntimeDependencyPackageInstallRoot(packageRoot, {
-      env: params.env ?? process.env,
-    });
     const result = repairBundledRuntimeDepsInstallRoot({
-      installRoot,
+      installRoot: installRootPlan.installRoot,
       missingSpecs,
       installSpecs,
       env: params.env ?? process.env,

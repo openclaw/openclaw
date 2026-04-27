@@ -94,6 +94,8 @@
   "testing",
   "temp-path",
   "logging-core",
+  "migration",
+  "migration-runtime",
   "markdown-table-runtime",
   "account-helpers",
   "account-core",

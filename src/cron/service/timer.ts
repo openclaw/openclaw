@@ -97,15 +97,30 @@ export async function executeJobCoreWithTimeout(
 
   const runAbortController = new AbortController();
   let timeoutId: NodeJS.Timeout | undefined;
+  let rejectTimeout: ((reason?: unknown) => void) | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    rejectTimeout = reject;
+  });
+  const startTimeout = () => {
+    if (timeoutId) {
+      return;
+    }
+    timeoutId = setTimeout(() => {
+      runAbortController.abort(timeoutErrorMessage());
+      rejectTimeout?.(new Error(timeoutErrorMessage()));
+    }, jobTimeoutMs);
+  };
+  const deferTimeoutUntilExecutionStart =
+    job.sessionTarget !== "main" && job.payload.kind === "agentTurn";
+  if (!deferTimeoutUntilExecutionStart) {
+    startTimeout();
+  }
   try {
     return await Promise.race([
-      executeJobCore(state, job, runAbortController.signal),
-      new Promise<never>((_, reject) => {
-        timeoutId = setTimeout(() => {
-          runAbortController.abort(timeoutErrorMessage());
-          reject(new Error(timeoutErrorMessage()));
-        }, jobTimeoutMs);
+      executeJobCore(state, job, runAbortController.signal, {
+        onExecutionStarted: deferTimeoutUntilExecutionStart ? startTimeout : undefined,
       }),
+      timeoutPromise,
     ]);
   } finally {
     if (timeoutId) {
@@ -1178,6 +1193,9 @@ export async function executeJobCore(
   state: CronServiceState,
   job: CronJob,
   abortSignal?: AbortSignal,
+  options?: {
+    onExecutionStarted?: () => void;
+  },
 ): Promise<
   CronRunOutcome &
     CronRunTelemetry & {
@@ -1219,7 +1237,7 @@ export async function executeJobCore(
     return await executeMainSessionCronJob(state, job, abortSignal, waitWithAbort);
   }
 
-  return await executeDetachedCronJob(state, job, abortSignal, resolveAbortError);
+  return await executeDetachedCronJob(state, job, abortSignal, resolveAbortError, options);
 }
 
 async function executeMainSessionCronJob(
@@ -1329,6 +1347,9 @@ async function executeDetachedCronJob(
   job: CronJob,
   abortSignal: AbortSignal | undefined,
   resolveAbortError: () => { status: "error"; error: string },
+  options?: {
+    onExecutionStarted?: () => void;
+  },
 ): Promise<
   CronRunOutcome &
     CronRunTelemetry & {
@@ -1348,6 +1369,7 @@ async function executeDetachedCronJob(
     job,
     message: job.payload.message,
     abortSignal,
+    onExecutionStarted: options?.onExecutionStarted,
   });
 
   if (abortSignal?.aborted) {

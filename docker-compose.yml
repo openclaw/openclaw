@@ -34,6 +34,11 @@ services:
       # - /var/run/docker.sock:/var/run/docker.sock
     # group_add:
     #   - "${DOCKER_GID:-999}"
+    # Let bundled local-model providers reach host-side LM Studio/Ollama via
+    # http://host.docker.internal:<port>. Docker Desktop usually provides this
+    # alias; the host-gateway mapping makes it work on Linux Docker Engine too.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
       - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"

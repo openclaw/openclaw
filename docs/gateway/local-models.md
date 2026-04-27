@@ -164,6 +164,50 @@ Compatibility notes for stricter OpenAI-compatible backends:
   structured content-part arrays. Set
   `models.providers.<provider>.models[].compat.requiresStringContent: true` for
   those endpoints.
+- Some local models emit standalone bracketed tool requests as text, such as
+  `[tool_name]` followed by JSON and `[END_TOOL_REQUEST]`. OpenClaw promotes
+  those into real tool calls only when the name exactly matches a registered
+  tool for the turn; otherwise the block is treated as unsupported text and is
+  hidden from user-visible replies.
+- If a model emits JSON, XML, or ReAct-style text that looks like a tool call
+  but the provider did not emit a structured invocation, OpenClaw leaves it as
+  text and logs a warning with the run id, provider/model, detected pattern, and
+  tool name when available. Treat that as provider/model tool-call
+  incompatibility, not a completed tool run.
+- If tools appear as assistant text instead of running, for example raw JSON,
+  XML, ReAct syntax, or an empty `tool_calls` array in the provider response,
+  first verify the server is using a tool-call-capable chat template/parser. For
+  OpenAI-compatible Chat Completions backends whose parser works only when tool
+  use is forced, set a per-model request override instead of relying on text
+  parsing:
+
+  ```json5
+  {
+    agents: {
+      defaults: {
+        models: {
+          "local/my-local-model": {
+            params: {
+              extra_body: {
+                tool_choice: "required",
+              },
+            },
+          },
+        },
+      },
+    },
+  }
+  ```
+
+  Use this only for models/sessions where every normal turn should call a tool.
+  It overrides OpenClaw's default proxy value of `tool_choice: "auto"`.
+  Replace `local/my-local-model` with the exact provider/model ref shown by
+  `openclaw models list`.
+
+  ```bash
+  openclaw config set agents.defaults.models '{"local/my-local-model":{"params":{"extra_body":{"tool_choice":"required"}}}}' --strict-json --merge
+  ```
+
 - Some smaller or stricter local backends are unstable with OpenClaw's full
   agent-runtime prompt shape, especially when tool schemas are included. If the
   backend works for tiny direct `/v1/chat/completions` calls but fails on normal
@@ -181,6 +225,11 @@ Compatibility notes for stricter OpenAI-compatible backends:
 
 - Gateway can reach the proxy? `curl http://127.0.0.1:1234/v1/models`.
 - LM Studio model unloaded? Reload; cold start is a common “hanging” cause.
+- Local server says `terminated`, `ECONNRESET`, or closes the stream mid-turn?
+  OpenClaw records a low-cardinality `model.call.error.failureKind` plus the
+  OpenClaw process RSS/heap snapshot in diagnostics. For LM Studio/Ollama
+  memory pressure, match that timestamp against the server log or macOS crash /
+  jetsam log to confirm whether the model server was killed.
 - OpenClaw warns when the detected context window is below **32k** and blocks below **16k**. If you hit that preflight, raise the server/model context limit or choose a larger model.
 - Context errors? Lower `contextWindow` or raise your server limit.
 - OpenAI-compatible server returns `messages[].content ... expected a string`?
@@ -189,6 +238,12 @@ Compatibility notes for stricter OpenAI-compatible backends:
   fails on Gemma or another local model? Disable tool schemas first with
   `compat.supportsTools: false`, then retest. If the server still crashes only
   on larger OpenClaw prompts, treat it as an upstream server/model limitation.
+- Tool calls show up as raw JSON/XML/ReAct text, or the provider returns an
+  empty `tool_calls` array? Do not add a proxy that blindly converts assistant
+  text into tool execution. Fix the server chat template/parser first. If the
+  model only works when tool use is forced, add the per-model
+  `params.extra_body.tool_choice: "required"` override above and use that model
+  entry only for sessions where a tool call is expected on every turn.
 - Safety: local models skip provider-side filters; keep agents narrow and compaction on to limit prompt injection blast radius.
 
 ## Related
