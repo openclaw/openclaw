@@ -13,7 +13,7 @@ import {
 import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
-  resolvePluginDiscoveryProviders,
+  resolveRuntimePluginDiscoveryProviders,
   runProviderStaticCatalog,
 } from "../../plugins/provider-discovery.js";
 import {
@@ -157,7 +157,7 @@ export async function hasProviderStaticCatalogForFilter(params: {
   if (scopedPluginIds.length === 0) {
     return false;
   }
-  const providers = await resolvePluginDiscoveryProviders({
+  const providers = await resolveRuntimePluginDiscoveryProviders({
     config: params.cfg,
     env,
     onlyPluginIds: scopedPluginIds,
@@ -227,7 +227,7 @@ export async function loadProviderCatalogModelsForList(params: {
   }
 
   const providers = (
-    await resolvePluginDiscoveryProviders({
+    await resolveRuntimePluginDiscoveryProviders({
       config: params.cfg,
       env,
       onlyPluginIds: scopedPluginIds,

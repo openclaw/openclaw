@@ -451,19 +451,27 @@ describe("collectForbiddenPackPaths", () => {
         "dist/index.js",
         "dist/extensions/qa-channel/runtime-api.js",
         "dist/extensions/qa-lab/runtime-api.js",
+        "dist/plugin-sdk/extensions/qa-channel/api.d.ts",
         "dist/plugin-sdk/extensions/qa-lab/cli.d.ts",
+        "dist/plugin-sdk/qa-channel.js",
+        "dist/plugin-sdk/qa-channel-protocol.d.ts",
         "dist/plugin-sdk/qa-lab.js",
         "dist/plugin-sdk/qa-runtime.js",
         "dist/qa-runtime-B9LDtssJ.js",
+        "docs/channels/qa-channel.md",
         "qa/scenarios/index.md",
       ]),
     ).toEqual([
       "dist/extensions/qa-channel/runtime-api.js",
       "dist/extensions/qa-lab/runtime-api.js",
+      "dist/plugin-sdk/extensions/qa-channel/api.d.ts",
       "dist/plugin-sdk/extensions/qa-lab/cli.d.ts",
+      "dist/plugin-sdk/qa-channel-protocol.d.ts",
+      "dist/plugin-sdk/qa-channel.js",
       "dist/plugin-sdk/qa-lab.js",
       "dist/plugin-sdk/qa-runtime.js",
       "dist/qa-runtime-B9LDtssJ.js",
+      "docs/channels/qa-channel.md",
       "qa/scenarios/index.md",
     ]);
   });
@@ -488,7 +496,7 @@ describe("collectForbiddenPackPaths", () => {
     }
   });
 
-  it("allows legacy QA compatibility paths in the generated dist inventory", () => {
+  it("blocks private QA paths in the generated dist inventory", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-release-inventory-"));
 
     try {
@@ -501,7 +509,7 @@ describe("collectForbiddenPackPaths", () => {
 
       expect(
         collectForbiddenPackContentPaths([PACKAGE_DIST_INVENTORY_RELATIVE_PATH], tempRoot),
-      ).toEqual([]);
+      ).toEqual([PACKAGE_DIST_INVENTORY_RELATIVE_PATH]);
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }

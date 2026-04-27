@@ -79,6 +79,12 @@ export async function resolveRuntimePluginDiscoveryProviders(
     .filter((provider) => resolveProviderCatalogOrderHook(provider));
 }
 
+/**
+ * @deprecated Runtime-backed provider discovery must be explicit at call sites.
+ * Use `resolveRuntimePluginDiscoveryProviders(...)` for paths that intentionally
+ * import provider plugin runtime, or `resolveInstalledPluginProviderContributionIds(...)`
+ * for cold installed-index reads.
+ */
 export async function resolvePluginDiscoveryProviders(
   params: ResolveRuntimePluginDiscoveryProvidersParams,
 ): Promise<ProviderPlugin[]> {

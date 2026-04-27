@@ -20,6 +20,7 @@ import {
   resolveNodeSystemdServiceName,
   resolveNodeWindowsTaskName,
 } from "./constants.js";
+import { resolveGatewayStateDir } from "./paths.js";
 
 export { isNodeVersionManagerRuntime, resolveLinuxSystemCaBundle };
 
@@ -360,6 +361,20 @@ function buildCommonServiceEnvironment(
   return serviceEnv;
 }
 
+function resolveServiceTmpDir(
+  env: Record<string, string | undefined>,
+  platform: NodeJS.Platform,
+): string {
+  if (platform === "darwin") {
+    try {
+      return path.join(resolveGatewayStateDir(env), "tmp");
+    } catch {
+      return env.TMPDIR?.trim() || os.tmpdir();
+    }
+  }
+  return env.TMPDIR?.trim() || os.tmpdir();
+}
+
 function resolveSharedServiceEnvironmentFields(
   env: Record<string, string | undefined>,
   platform: NodeJS.Platform,
@@ -368,8 +383,7 @@ function resolveSharedServiceEnvironmentFields(
 ): SharedServiceEnvironmentFields {
   const stateDir = env.OPENCLAW_STATE_DIR;
   const configPath = env.OPENCLAW_CONFIG_PATH;
-  // Keep a usable temp directory for supervised services even when the host env omits TMPDIR.
-  const tmpDir = env.TMPDIR?.trim() || os.tmpdir();
+  const tmpDir = resolveServiceTmpDir(env, platform);
   const proxyEnv = readServiceProxyEnvironment(env);
   // On macOS, launchd services don't inherit the shell environment, so Node's undici/fetch
   // cannot locate the system CA bundle. Default to /etc/ssl/cert.pem so TLS verification
