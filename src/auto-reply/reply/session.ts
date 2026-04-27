@@ -250,10 +250,12 @@ export async function initSessionState(params: {
       ? normalizeOptionalString(ctx.CommandTargetSessionKey)
       : undefined;
   // Sender-scoped session key override: takes priority over thread/conversation
-  // session keys and route-derived keys. Note: lastRoutePolicy is still derived
-  // from the route and controls last-route persistence, which is a separate
-  // concern from the active session key used for this message.
-  const senderSessionKey = normalizeOptionalString(ctx.SenderSessionKey);
+  // session keys and route-derived keys. Guarded by isSystemEvent to prevent
+  // automated system events (heartbeat/cron/exec) from accidentally retargeting
+  // sessions via a stale SenderSessionKey in the context.
+  const senderSessionKey = isSystemEvent
+    ? undefined
+    : normalizeOptionalString(ctx.SenderSessionKey);
   // Native slash/menu commands can arrive on a transport-specific "slash session"
   // while explicitly targeting an existing chat session. Honor that explicit target
   // before any binding lookup so command-side mutations land on the intended session.
