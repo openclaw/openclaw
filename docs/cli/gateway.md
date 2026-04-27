@@ -425,11 +425,13 @@ openclaw gateway uninstall
 <AccordionGroup>
   <Accordion title="Command options">
     - `gateway status`: `--url`, `--token`, `--password`, `--timeout`, `--no-probe`, `--require-rpc`, `--deep`, `--json`
-    - `gateway install`: `--port`, `--runtime <node|bun>`, `--token`, `--force`, `--json`
+    - `gateway install`: `--port`, `--runtime <node|bun>`, `--token`, `--wrapper <path>`, `--force`, `--json`
     - `gateway uninstall|start|stop|restart`: `--json`
   </Accordion>
   <Accordion title="Service install and lifecycle notes">
-    - `gateway install` supports `--port`, `--runtime`, `--token`, `--force`, `--json`.
+    - `gateway install` supports `--port`, `--runtime`, `--token`, `--wrapper`, `--force`, `--json`.
+    - `--wrapper <path>` makes the managed service start through an executable wrapper, writing `ProgramArguments` as `<wrapper> gateway --port ...` and persisting `OPENCLAW_WRAPPER` in the service environment so forced reinstalls, updates, and doctor repairs keep using the same wrapper. `openclaw doctor` also reports the active wrapper. If `--wrapper` is omitted, install honors an existing `OPENCLAW_WRAPPER` from the shell or current service environment.
+    - To remove a persisted wrapper, reinstall with an empty wrapper environment, for example `OPENCLAW_WRAPPER= openclaw gateway install --force`.
     - Use `gateway restart` to restart a managed service. Do not chain `gateway stop` and `gateway start` as a restart substitute; on macOS, `gateway stop` intentionally disables the LaunchAgent before stopping it.
     - When token auth requires a token and `gateway.auth.token` is SecretRef-managed, `gateway install` validates that the SecretRef is resolvable but does not persist the resolved token into service environment metadata.
     - If token auth requires a token and the configured token SecretRef is unresolved, install fails closed instead of persisting fallback plaintext.

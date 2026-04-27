@@ -398,6 +398,18 @@ describe("buildServiceEnvironment", () => {
     }
   });
 
+  it("passes through OPENCLAW_WRAPPER for gateway services", () => {
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        OPENCLAW_WRAPPER: " /usr/local/bin/openclaw-doppler ",
+      },
+      port: 18789,
+    });
+
+    expect(env.OPENCLAW_WRAPPER).toBe("/usr/local/bin/openclaw-doppler");
+  });
+
   it("forwards TMPDIR from the host environment on Linux", () => {
     const env = buildServiceEnvironment({
       env: { HOME: "/home/user", TMPDIR: "/var/folders/xw/abc123/T/" },

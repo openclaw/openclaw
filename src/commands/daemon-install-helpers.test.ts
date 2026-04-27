@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   resolveSystemNodeInfo: vi.fn(),
   renderSystemNodeWarning: vi.fn(),
   buildServiceEnvironment: vi.fn(),
+  resolveOpenClawWrapperPath: vi.fn(),
 }));
 
 vi.mock("./daemon-install-auth-profiles-source.runtime.js", () => ({
@@ -29,7 +30,9 @@ vi.mock("../daemon/runtime-paths.js", () => ({
 }));
 
 vi.mock("../daemon/program-args.js", () => ({
+  OPENCLAW_WRAPPER_ENV_KEY: "OPENCLAW_WRAPPER",
   resolveGatewayProgramArguments: mocks.resolveGatewayProgramArguments,
+  resolveOpenClawWrapperPath: mocks.resolveOpenClawWrapperPath,
 }));
 
 vi.mock("../daemon/service-env.js", () => ({
@@ -75,6 +78,9 @@ function mockNodeGatewayPlanFixture(
     ? params.workingDirectory
     : "/Users/me";
   mocks.resolvePreferredNodePath.mockResolvedValue("/opt/node");
+  mocks.resolveOpenClawWrapperPath.mockImplementation(async (value: string | undefined) =>
+    value?.trim() ? path.resolve(value) : undefined,
+  );
   mocks.resolveGatewayProgramArguments.mockResolvedValue({
     programArguments: ["node", "gateway"],
     workingDirectory,
@@ -203,6 +209,38 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     expect(plan.workingDirectory).toBeUndefined();
+  });
+
+  it("passes OPENCLAW_WRAPPER through program args and managed service env", async () => {
+    const wrapperPath = path.resolve("/usr/local/bin/openclaw-doppler");
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+        OPENCLAW_WRAPPER: wrapperPath,
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: isolatedPlanEnv({
+        OPENCLAW_WRAPPER: wrapperPath,
+      }),
+      port: 3000,
+      runtime: "node",
+    });
+
+    expect(mocks.resolveGatewayProgramArguments).toHaveBeenCalledWith(
+      expect.objectContaining({
+        wrapperPath,
+      }),
+    );
+    expect(mocks.buildServiceEnvironment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: expect.objectContaining({
+          OPENCLAW_WRAPPER: wrapperPath,
+        }),
+      }),
+    );
+    expect(plan.environment.OPENCLAW_WRAPPER).toBe(wrapperPath);
   });
 
   it("merges safe config env while dropping unsafe values and keeping service precedence", async () => {
