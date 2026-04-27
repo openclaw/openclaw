@@ -15,6 +15,7 @@ import {
   resolvePluginConfigObject,
 } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { parseAgentSessionKey, parseThreadSessionSuffix } from "openclaw/plugin-sdk/routing";
 import {
   resolveSessionStoreEntry,
   updateSessionStore,
@@ -959,40 +960,61 @@ function isAllowedChatType(
 }
 
 /**
- * Extract the underlying conversation identifier from a canonical agent
- * session key. Session keys follow the shape
- *   agent:<agentId>:<provider>:<chatType>:<conversationId>
- * for bound channels, and a special shape
- *   agent:<agentId>:<mainKey|main>
- * for the default agent session (webchat / direct entrypoint).
+ * Best-effort extraction of the conversation id (peer id) embedded in an
+ * agent-scoped session key, using shared session-key utilities so we
+ * stay aligned with the canonical key shapes produced by
+ * `buildAgentPeerSessionKey` / `resolveThreadSessionKeys`.
  *
- * Returns the lower-cased conversation id when it can be determined, or
- * undefined when the session key has no chat identifier to match against.
- * This id is what allowedChatIds / deniedChatIds are compared against.
+ * Supported shapes (after stripping the optional `:thread:<id>` suffix):
+ *   - agent:<agentId>:direct:<peerId>                         (dmScope=per-peer)
+ *   - agent:<agentId>:<channel>:direct:<peerId>               (dmScope=per-channel-peer)
+ *   - agent:<agentId>:<channel>:<accountId>:direct:<peerId>   (dmScope=per-account-channel-peer)
+ *   - agent:<agentId>:<channel>:group:<peerId>                (group)
+ *   - agent:<agentId>:<channel>:channel:<peerId>              (channel)
+ *
+ * The legacy `dm` token is also accepted for backwards compatibility.
+ *
+ * Returns undefined for sessions that do not embed a peer id (for
+ * example dmScope=main `agent:<agentId>:<mainKey>` sessions, or any
+ * non-canonical session key shape).
  */
 function resolveConversationId(ctx: {
   sessionKey?: string;
   messageProvider?: string;
 }): string | undefined {
-  const sessionKey = ctx.sessionKey?.trim().toLowerCase();
-  if (!sessionKey) {
+  const rawSessionKey = ctx.sessionKey?.trim();
+  if (!rawSessionKey) {
     return undefined;
   }
-  const parts = sessionKey.split(":");
-  // Expected forms:
-  //   agent:<agentId>:<provider>:<chatType>:<conversationId...>
-  //   agent:<agentId>:<provider>:direct|dm|group|channel:<conversationId...>
-  if (parts.length >= 5 && parts[0] === "agent") {
-    const maybeType = parts[3];
-    if (
-      maybeType === "direct" ||
-      maybeType === "dm" ||
-      maybeType === "group" ||
-      maybeType === "channel"
-    ) {
-      // Join remaining segments in case the conversation id itself contains
-      // colons (safety net; current providers do not).
-      const tail = parts.slice(4).join(":").trim();
+  // Strip generic `:thread:<id>` suffix first so threaded sessions match
+  // the same conversation id as their non-threaded parent. Provider-
+  // specific topic ids (e.g. Telegram/Feishu) that are baked into the
+  // peer id by the channel adapter are preserved.
+  const { baseSessionKey } = parseThreadSessionSuffix(rawSessionKey);
+  const baseKey = (baseSessionKey ?? rawSessionKey).trim();
+  if (!baseKey) {
+    return undefined;
+  }
+  const parsed = parseAgentSessionKey(baseKey);
+  if (!parsed) {
+    return undefined;
+  }
+  const restParts = parsed.rest.split(":").filter(Boolean);
+  if (restParts.length < 2) {
+    // `agent:<agentId>:<mainKey>` (dmScope=main) lands here — there is
+    // no embedded peer id to filter against.
+    return undefined;
+  }
+  // Walk left-to-right until we hit the first chat-type marker. Every
+  // canonical peer key terminates with `<chatType>:<peerId...>`, so the
+  // tail after the first marker is the conversation id we want.
+  for (let index = 0; index < restParts.length - 1; index += 1) {
+    const token = restParts[index];
+    if (token === "direct" || token === "dm" || token === "group" || token === "channel") {
+      const tail = restParts
+        .slice(index + 1)
+        .join(":")
+        .trim();
       return tail || undefined;
     }
   }

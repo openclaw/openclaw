@@ -554,7 +554,7 @@ describe("active-memory plugin", () => {
       allowedChatTypes: ["direct", "group"],
       allowedChatIds: ["oc_allowed_group"],
     };
-    await plugin.register(api as unknown as OpenClawPluginApi);
+    plugin.register(api as unknown as OpenClawPluginApi);
 
     const result = await hooks.before_prompt_build(
       { prompt: "hi", messages: [] },
@@ -577,7 +577,7 @@ describe("active-memory plugin", () => {
       allowedChatTypes: ["direct", "group"],
       allowedChatIds: ["oc_allowed_group", "OC_OTHER"],
     };
-    await plugin.register(api as unknown as OpenClawPluginApi);
+    plugin.register(api as unknown as OpenClawPluginApi);
 
     const result = await hooks.before_prompt_build(
       { prompt: "hi", messages: [] },
@@ -604,7 +604,7 @@ describe("active-memory plugin", () => {
       allowedChatTypes: ["group"],
       allowedChatIds: ["OC_MIXED_Case"],
     };
-    await plugin.register(api as unknown as OpenClawPluginApi);
+    plugin.register(api as unknown as OpenClawPluginApi);
 
     const result = await hooks.before_prompt_build(
       { prompt: "hi", messages: [] },
@@ -627,7 +627,7 @@ describe("active-memory plugin", () => {
       allowedChatTypes: ["direct", "group"],
       deniedChatIds: ["oc_blocked_group"],
     };
-    await plugin.register(api as unknown as OpenClawPluginApi);
+    plugin.register(api as unknown as OpenClawPluginApi);
 
     const result = await hooks.before_prompt_build(
       { prompt: "hi", messages: [] },
@@ -650,7 +650,7 @@ describe("active-memory plugin", () => {
       allowedChatTypes: ["direct"],
       allowedChatIds: ["oc_some_group"],
     };
-    await plugin.register(api as unknown as OpenClawPluginApi);
+    plugin.register(api as unknown as OpenClawPluginApi);
 
     // The default main session key (agent:main:main) exposes no chat id; the
     // allowlist must not accidentally match it.
@@ -679,7 +679,7 @@ describe("active-memory plugin", () => {
       allowedChatTypes: ["direct", "group"],
       allowedChatIds: ["oc_allowed_group"],
     };
-    await plugin.register(api as unknown as OpenClawPluginApi);
+    plugin.register(api as unknown as OpenClawPluginApi);
 
     const result = await hooks.before_prompt_build(
       { prompt: "hi", messages: [] },
@@ -706,7 +706,7 @@ describe("active-memory plugin", () => {
       allowedChatTypes: ["direct", "group"],
       allowedChatIds: ["oc_allowed_group", "ou_allowed_direct_user"],
     };
-    await plugin.register(api as unknown as OpenClawPluginApi);
+    plugin.register(api as unknown as OpenClawPluginApi);
 
     const result = await hooks.before_prompt_build(
       { prompt: "hi", messages: [] },
@@ -721,6 +721,107 @@ describe("active-memory plugin", () => {
 
     expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
     expect(result).toBeDefined();
+  });
+
+  it("matches per-peer direct session keys (agent:<id>:direct:<peer>)", async () => {
+    // Covers dmScope="per-peer" sessions that omit the channel segment.
+    api.pluginConfig = {
+      agents: ["main"],
+      allowedChatTypes: ["direct"],
+      allowedChatIds: ["ou_per_peer_user"],
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "hi", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:direct:ou_per_peer_user",
+        messageProvider: "feishu",
+        channelId: "feishu",
+      },
+    );
+
+    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
+    expect(result).toBeDefined();
+  });
+
+  it("matches per-account-channel-peer direct session keys (agent:<id>:<channel>:<account>:direct:<peer>)", async () => {
+    // Covers dmScope="per-account-channel-peer" sessions that include
+    // an extra accountId segment between the channel and chat type.
+    api.pluginConfig = {
+      agents: ["main"],
+      allowedChatTypes: ["direct"],
+      allowedChatIds: ["ou_per_account_user"],
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "hi", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:feishu:acct123:direct:ou_per_account_user",
+        messageProvider: "feishu",
+        channelId: "feishu",
+      },
+    );
+
+    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
+    expect(result).toBeDefined();
+  });
+
+  it("strips :thread:<id> suffix before matching allowedChatIds (group)", async () => {
+    // Threaded sessions append `:thread:<id>` to the canonical session
+    // key. Without the suffix-stripping step the conversation id would
+    // be parsed as `oc_threaded_group:thread:topic42` and silently
+    // bypass the allowlist.
+    api.pluginConfig = {
+      agents: ["main"],
+      allowedChatTypes: ["group"],
+      allowedChatIds: ["oc_threaded_group"],
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "hi", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:feishu:group:oc_threaded_group:thread:topic42",
+        messageProvider: "feishu",
+        channelId: "feishu",
+      },
+    );
+
+    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
+    expect(result).toBeDefined();
+  });
+
+  it("strips :thread:<id> suffix before matching deniedChatIds (direct)", async () => {
+    // Symmetrical guard for the denylist: threaded direct sessions
+    // should still hit the deny rule despite the trailing `:thread:<id>`.
+    api.pluginConfig = {
+      agents: ["main"],
+      allowedChatTypes: ["direct"],
+      deniedChatIds: ["ou_threaded_blocked_user"],
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "hi", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:feishu:direct:ou_threaded_blocked_user:thread:topic7",
+        messageProvider: "feishu",
+        channelId: "feishu",
+      },
+    );
+
+    expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    expect(result).toBeUndefined();
   });
 
   it("injects system context on a successful recall hit", async () => {
