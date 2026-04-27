@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyPluginAutoEnable,
@@ -499,6 +500,22 @@ describe("applyPluginAutoEnable core", () => {
       },
     });
     expect(result.changes).toEqual([]);
+  });
+
+  it("does not auto-enable channels from persisted auth state alone", () => {
+    const env = makeIsolatedEnv();
+    const authDir = path.join(env.OPENCLAW_STATE_DIR!, "credentials", "whatsapp", "default");
+    fs.mkdirSync(authDir, { recursive: true });
+    fs.writeFileSync(path.join(authDir, "creds.json"), "{}", "utf-8");
+
+    const result = applyPluginAutoEnable({
+      config: {},
+      env,
+    });
+
+    expect(result.config).toEqual({});
+    expect(result.changes).toEqual([]);
+    expect(result.autoEnabledReasons).toEqual({});
   });
 
   it("ignores channels.modelByChannel for plugin auto-enable", () => {

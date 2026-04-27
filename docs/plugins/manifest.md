@@ -1020,8 +1020,10 @@ module:
 }
 ```
 
-Use it when setup, doctor, or configured-state flows need a cheap yes/no auth
-probe before the full channel plugin loads. The target export should be a small
+Use it when setup, doctor, or status-style reporting flows need a cheap yes/no
+auth probe before the full channel plugin loads. Persisted auth state is not
+treated as channel configuration by itself and must not auto-enable a channel or
+force full runtime dependency loading. The target export should be a small
 function that reads persisted state only; do not route it through the full
 channel runtime barrel.
 
