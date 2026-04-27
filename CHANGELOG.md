@@ -101,6 +101,7 @@ Docs: https://docs.openclaw.ai
 - Plugins: share package entrypoint resolution between install and discovery, reject mismatched `runtimeExtensions`, and cache bundled runtime-dependency manifest reads during scans. Thanks @vincentkoc.
 - WhatsApp/Web: keep quiet but healthy linked-device sessions connected by basing the watchdog on WhatsApp Web transport activity, while retaining a longer app-silence cap so frame activity cannot mask a stuck session forever. Fixes #70678; carries forward the focused #71466 approach and keeps #63939 as related configurable-timeout follow-up. Thanks @vincentkoc and @oromeis.
 - Discord/gateway: count failed health-monitor restart attempts toward cooldown and hourly caps, and evict stale account lifecycle state during channel reloads so repeated Discord gateway recovery cannot loop on old status. Fixes #38596. (#40413) Thanks @jellyAI-dev and @vashquez.
+- Plugin SDK: add generic host hooks for session state, next-turn context, trusted tool policy, UI descriptors, events, scheduler cleanup, and run-scoped plugin context. (#72287) Thanks @100yenadmin.
 
 ### Fixes
 
@@ -400,7 +401,6 @@ Docs: https://docs.openclaw.ai
 - Docker/update smoke: keep the package-derived update-channel fixture on package-shipped files and make its UI build stub create the asset the updater verifies. Thanks @vincentkoc.
 - Gateway/models: repair legacy `models.providers.*.api = "openai"` config values to `openai-completions`, and skip providers with future stale API enum values during startup instead of bricking the gateway. Fixes #72477. (#72542) Thanks @JooyoungChoi14 and @obviyus.
 - Gateway/skills: redact `apiKey` and secret-named `env` values from the `skills.update` RPC response to prevent leaking credentials into WebSocket traffic, client logs, or session transcripts. Config is still written to disk in full; only the response payload is redacted. (#69998) Thanks @Ziy1-Tan.
-- Plugin SDK: add generic host hooks for session state, next-turn context, trusted tool policy, UI descriptors, events, scheduler cleanup, and run-scoped plugin context. (#72287) Thanks @100yenadmin.
 
 - Plugins/CLI: let flag-driven `openclaw channels add` install the selected channel plugin from its default source without opening an interactive prompt, fixing published npm Telegram setup in stdin-closed automation.
 - Onboarding/setup: keep first-run config reads, plugin compatibility notices, and post-model sanity checks on cold metadata paths unless the user chooses to browse all models, avoiding full plugin/runtime catalog work between prompts. Thanks @shakkernerd.
