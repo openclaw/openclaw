@@ -16,6 +16,7 @@ Docs: https://docs.openclaw.ai
 
 - Gateway/models: move local-provider pricing opt-outs, OpenRouter/LiteLLM aliases, and proxy passthrough pricing lookup into plugin manifest metadata so core no longer carries extension-specific pricing tables. Thanks @codex.
 - CLI/plugins: accept ClawHub plugin API wildcard ranges such as `*` without rejecting compatible plugin installs, while still requiring a valid runtime API version. Fixes #56446; supersedes #56466. Thanks @darconada and @claygeo.
+- CLI/plugins: let config-gated bundled plugins install without persisting invalid placeholder config entries, so install/uninstall sweeps can cover plugins such as memory-lancedb before the user configures credentials. Thanks @vincentkoc.
 - Agents/sessions: acquire the session write lock only after cold bootstrap, plugin, and tool setup so fallback runs are not blocked by stalled pre-model startup work. Thanks @codex.
 - Browser/plugins: auto-start the bundled browser plugin when root `browser` config is present, including restrictive plugin allowlists, and ignore stale persisted plugin registries whose package paths no longer exist. Thanks @codex.
 - Gateway/models: skip external OpenRouter and LiteLLM pricing refreshes for local/self-hosted model endpoints so startup does not wait on remote pricing catalogs for local-only Ollama, vLLM, and compatible providers. Thanks @codex.
