@@ -71,7 +71,7 @@ describe("normalizeLegacyProviderApi", () => {
     expect(changes).toHaveLength(0);
   });
 
-  it("migrates multiple providers with stale api values", () => {
+  it("migrates stale provider while leaving valid providers untouched", () => {
     const cfg = {
       models: {
         providers: {

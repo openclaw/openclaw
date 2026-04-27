@@ -9,7 +9,7 @@ import { isRecord } from "./legacy-config-record-shared.js";
  * configs retaining old values would cause a fatal validation error on startup.
  * This mapping allows `doctor --fix` to migrate them automatically.
  */
-const STALE_PROVIDER_API_MIGRATIONS: Record<string, string> = {
+const STALE_PROVIDER_API_MIGRATIONS: Record<string, string | undefined> = {
   openai: "openai-completions",
 };
 
