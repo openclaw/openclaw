@@ -135,6 +135,31 @@ function formatPortableLocalPath(localPath: string, workspaceDir?: string): stri
   return undefined;
 }
 
+async function applyLocalPluginInstall(params: {
+  cfg: OpenClawConfig;
+  entry: OnboardingPluginInstallEntry;
+  localPath: string;
+  bundledLocalPath: string | null;
+  npmSpec: string | null;
+  workspaceDir?: string;
+}): Promise<OpenClawConfig> {
+  // Bundled plugins are discovered automatically from the runtime's manifest
+  // scan; persisting them as user `plugins.load.paths` entries plus
+  // `source: "path"` install records produces the redundant state the loader
+  // rejects with a "remove this redundant path" warning on every config read.
+  if (params.localPath === params.bundledLocalPath) {
+    return params.cfg;
+  }
+  const withPath = addPluginLoadPath(params.cfg, params.localPath);
+  return await recordLocalPluginInstall({
+    cfg: withPath,
+    entry: params.entry,
+    localPath: params.localPath,
+    npmSpec: params.npmSpec,
+    workspaceDir: params.workspaceDir,
+  });
+}
+
 async function recordLocalPluginInstall(params: {
   cfg: OpenClawConfig;
   entry: OnboardingPluginInstallEntry;
@@ -478,8 +503,14 @@ export async function ensureOnboardingPluginInstalled(params: {
         status: "failed",
       };
     }
-    next = addPluginLoadPath(enableResult.config, localPath);
-    next = await recordLocalPluginInstall({ cfg: next, entry, localPath, npmSpec, workspaceDir });
+    next = await applyLocalPluginInstall({
+      cfg: enableResult.config,
+      entry,
+      localPath,
+      bundledLocalPath,
+      npmSpec,
+      workspaceDir,
+    });
     return {
       cfg: next,
       installed: true,
@@ -595,8 +626,14 @@ export async function ensureOnboardingPluginInstalled(params: {
           status: "failed",
         };
       }
-      next = addPluginLoadPath(enableResult.config, localPath);
-      next = await recordLocalPluginInstall({ cfg: next, entry, localPath, npmSpec, workspaceDir });
+      next = await applyLocalPluginInstall({
+        cfg: enableResult.config,
+        entry,
+        localPath,
+        bundledLocalPath,
+        npmSpec,
+        workspaceDir,
+      });
       return {
         cfg: next,
         installed: true,

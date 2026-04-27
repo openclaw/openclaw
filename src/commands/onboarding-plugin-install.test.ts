@@ -629,6 +629,41 @@ describe("ensureOnboardingPluginInstalled", () => {
     });
   });
 
+  it("does not register a bundled plugin as a user path-install or load-paths entry", async () => {
+    await withTempDir({ prefix: "openclaw-onboarding-install-bundled-channel-" }, async (temp) => {
+      const workspaceDir = path.join(temp, "workspace");
+      const bundledPluginDir = path.join(temp, "bundled", "discord");
+      await fs.mkdir(path.join(workspaceDir, ".git"), { recursive: true });
+      await fs.mkdir(bundledPluginDir, { recursive: true });
+      const realBundledDir = await fs.realpath(bundledPluginDir);
+
+      findBundledPluginSourceInMap.mockReturnValueOnce({
+        pluginId: "discord",
+        localPath: realBundledDir,
+      } as never);
+
+      const result = await ensureOnboardingPluginInstalled({
+        cfg: {},
+        entry: {
+          pluginId: "discord",
+          label: "Discord",
+          install: {},
+        },
+        prompter: {
+          select: vi.fn(async () => "local"),
+        } as never,
+        runtime: {} as never,
+        workspaceDir,
+      });
+
+      expect(recordPluginInstall).not.toHaveBeenCalled();
+      expect(result.installed).toBe(true);
+      expect(result.status).toBe("installed");
+      expect(result.cfg.plugins?.load?.paths).toBeUndefined();
+      expect(result.cfg.plugins?.installs).toBeUndefined();
+    });
+  });
+
   it("rejects local install paths outside the trusted workspace roots", async () => {
     await withTempDir({ prefix: "openclaw-onboarding-install-outside-root-" }, async (temp) => {
       const workspaceDir = path.join(temp, "workspace");
