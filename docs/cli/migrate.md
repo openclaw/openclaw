@@ -39,9 +39,13 @@ The bundled Hermes provider detects Hermes state at `~/.hermes` by default. Use 
 The Hermes migration can import:
 
 - default model configuration from `config.yaml`
+- configured model providers and custom OpenAI-compatible endpoints from `providers` and `custom_providers`
+- MCP server definitions from `mcp_servers` or `mcp.servers`
 - `SOUL.md` and `AGENTS.md` into the OpenClaw agent workspace
 - `memories/MEMORY.md` and `memories/USER.md` by appending them to workspace memory files
+- memory config defaults for OpenClaw file memory, plus archive/manual-review items for external memory providers such as Honcho
 - skills with a `SKILL.md` file from `skills/<name>/`
+- per-skill config values from `skills.config`
 - supported API keys from `.env`, only with `--include-secrets`
 
 Archive-only Hermes state is copied into the migration report for manual review, but it is not loaded into live OpenClaw config or credentials. This preserves opaque or unsafe state such as `plugins/`, `sessions/`, `logs/`, `cron/`, `mcp-tokens/`, `auth.json`, and `state.db` without pretending OpenClaw can execute or trust it automatically.
@@ -68,4 +72,4 @@ Migration sources are plugins. A plugin declares its provider ids in `openclaw.p
 
 At runtime the plugin calls `api.registerMigrationProvider(...)`. The provider implements `detect`, `plan`, and `apply`; core owns CLI orchestration, backup policy, prompts, JSON output, and conflict preflight. Core passes the reviewed plan into `apply(ctx, plan)`, and providers may rebuild the plan only when that argument is absent for compatibility. Provider plugins can use `openclaw/plugin-sdk/migration` for item construction and summary counts, plus `openclaw/plugin-sdk/migration-runtime` for conflict-aware file copies, archive-only report copies, and migration reports.
 
-Onboarding can also offer migration when a provider detects a known source. `openclaw onboard --flow import` and `openclaw setup --wizard --import-from hermes` use the same plugin migration provider and still show a preview before applying.
+Onboarding can also offer migration when a provider detects a known source. `openclaw onboard --flow import` and `openclaw setup --wizard --import-from hermes` use the same plugin migration provider and still show a preview before applying. Onboarding imports require a fresh OpenClaw setup; reset config, credentials, sessions, and the workspace first if you already have local state. Backup plus overwrite or merge imports are feature-gated for existing setups.

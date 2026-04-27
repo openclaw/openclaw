@@ -47,7 +47,7 @@ Notes:
 
 - Plain `openclaw setup` initializes config + workspace without the full onboarding flow.
 - Onboarding auto-runs when any onboarding flags are present (`--wizard`, `--non-interactive`, `--mode`, `--import-from`, `--import-source`, `--import-secrets`, `--remote-url`, `--remote-token`).
-- If Hermes state is detected, interactive onboarding can offer migration automatically. Use [Migrate](/cli/migrate) for dry-run plans and overwrite mode.
+- If Hermes state is detected, interactive onboarding can offer migration automatically. Import onboarding requires a fresh setup; use [Migrate](/cli/migrate) for dry-run plans, backups, and overwrite mode outside onboarding.
 
 ## Related
 
