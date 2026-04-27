@@ -93,6 +93,36 @@ function makeDeps(overrides: Partial<InboundPipelineDeps> = {}): InboundPipeline
     log: { info: vi.fn(), error: vi.fn(), debug: vi.fn() },
     runtime: makeRuntime(),
     startTyping: vi.fn(async () => ({ keepAlive: null })),
+    adapters: {
+      history: {
+        recordPendingHistoryEntry: vi.fn(() => []),
+        buildPendingHistoryContext: vi.fn(() => ""),
+        clearPendingHistory: vi.fn(),
+      },
+      mentionGate: {
+        resolveInboundMentionDecision: vi.fn(() => ({
+          effectiveWasMentioned: false,
+          shouldSkip: false,
+          shouldBypassMention: false,
+          implicitMention: false,
+        })),
+      },
+      audioConvert: {
+        convertSilkToWav: vi.fn(async () => null),
+        isVoiceAttachment: vi.fn(() => false),
+        formatDuration: vi.fn(() => "0s"),
+      },
+      outboundAudio: {
+        audioFileToSilkBase64: vi.fn(async () => undefined),
+        isAudioFile: vi.fn(() => false),
+        shouldTranscodeVoice: vi.fn(() => false),
+        waitForFile: vi.fn(async () => 0),
+      },
+      commands: {
+        pluginVersion: "0.0.0-test",
+        resolveVersion: vi.fn(() => "0.0.0"),
+      },
+    },
     ...overrides,
   };
 }

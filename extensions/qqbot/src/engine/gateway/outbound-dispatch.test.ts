@@ -86,6 +86,7 @@ function makeInbound(overrides: Partial<InboundContext> = {}): InboundContext {
     voiceTranscriptSources: [],
     commandAuthorized: false,
     blocked: false,
+    skipped: false,
     typing: { keepAlive: null },
     ...overrides,
   };
