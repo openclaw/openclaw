@@ -359,10 +359,12 @@ export async function executeCronRun(params: {
     const interimPayloads = runResult.payloads ?? [];
     const {
       deliveryPayloadHasStructuredContent: interimPayloadHasStructuredContent,
+      hasFatalErrorPayload: interimHasFatalErrorPayload,
       outputText: interimOutputText,
     } = resolveCronPayloadOutcome({
       payloads: interimPayloads,
       runLevelError: runResult.meta?.error,
+      failureSignal: runResult.meta?.failureSignal,
       finalAssistantVisibleText: runResult.meta?.finalAssistantVisibleText,
       preferFinalAssistantVisibleText: (
         await resolveCronChannelOutputPolicy(params.resolvedDelivery.channel)
@@ -371,6 +373,7 @@ export async function executeCronRun(params: {
     const interimText = interimOutputText?.trim() ?? "";
     const shouldRetryInterimAck =
       !runResult.meta?.error &&
+      !interimHasFatalErrorPayload &&
       !runResult.didSendViaMessagingTool &&
       !interimPayloadHasStructuredContent &&
       !interimPayloads.some((payload) => payload?.isError === true) &&

@@ -59,6 +59,14 @@ export type MatrixQaScenarioId =
   | "matrix-e2ee-bootstrap-success"
   | "matrix-e2ee-recovery-key-lifecycle"
   | "matrix-e2ee-recovery-owner-verification-required"
+  | "matrix-e2ee-cli-account-add-enable-e2ee"
+  | "matrix-e2ee-cli-encryption-setup"
+  | "matrix-e2ee-cli-encryption-setup-idempotent"
+  | "matrix-e2ee-cli-encryption-setup-bootstrap-failure"
+  | "matrix-e2ee-cli-recovery-key-setup"
+  | "matrix-e2ee-cli-recovery-key-invalid"
+  | "matrix-e2ee-cli-encryption-setup-multi-account"
+  | "matrix-e2ee-cli-setup-then-gateway-reply"
   | "matrix-e2ee-cli-self-verification"
   | "matrix-e2ee-state-loss-external-recovery-key"
   | "matrix-e2ee-state-loss-stored-recovery-key"
@@ -68,6 +76,7 @@ export type MatrixQaScenarioId =
   | "matrix-e2ee-server-backup-deleted-local-reupload-restores"
   | "matrix-e2ee-corrupt-crypto-idb-snapshot"
   | "matrix-e2ee-server-device-deleted-local-state-intact"
+  | "matrix-e2ee-server-device-deleted-relogin-recovers"
   | "matrix-e2ee-sync-state-loss-crypto-intact"
   | "matrix-e2ee-wrong-account-recovery-key"
   | "matrix-e2ee-history-exists-backup-empty"
@@ -235,6 +244,11 @@ const MATRIX_QA_E2EE_VERIFICATION_DM_TOPOLOGY: MatrixQaTopologySpec = {
 
 const MATRIX_QA_E2EE_CONFIG = {
   encryption: true,
+  startupVerification: "off",
+} satisfies MatrixQaConfigOverrides;
+
+const MATRIX_QA_E2EE_CLI_SETUP_CONFIG = {
+  encryption: false,
   startupVerification: "off",
 } satisfies MatrixQaConfigOverrides;
 
@@ -591,6 +605,86 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     configOverrides: MATRIX_QA_E2EE_CONFIG,
   },
   {
+    id: "matrix-e2ee-cli-account-add-enable-e2ee",
+    timeoutMs: 120_000,
+    title: "Matrix E2EE CLI account add enables encryption and bootstraps verification",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-cli-account-add-enable-e2ee",
+      name: "Matrix QA E2EE CLI Account Add Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-cli-encryption-setup",
+    timeoutMs: 120_000,
+    title: "Matrix E2EE CLI encryption setup upgrades an existing account",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-cli-encryption-setup",
+      name: "Matrix QA E2EE CLI Encryption Setup Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-cli-encryption-setup-idempotent",
+    timeoutMs: 120_000,
+    title: "Matrix E2EE CLI encryption setup is idempotent on encrypted accounts",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-cli-encryption-setup-idempotent",
+      name: "Matrix QA E2EE CLI Encryption Setup Idempotent Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-cli-encryption-setup-bootstrap-failure",
+    timeoutMs: 120_000,
+    title: "Matrix E2EE CLI encryption setup reports bootstrap failures",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-cli-encryption-setup-bootstrap-failure",
+      name: "Matrix QA E2EE CLI Encryption Setup Failure Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-cli-recovery-key-setup",
+    timeoutMs: 120_000,
+    title: "Matrix E2EE CLI encryption setup accepts a recovery key on a second device",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-cli-recovery-key-setup",
+      name: "Matrix QA E2EE CLI Recovery Key Setup Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-cli-recovery-key-invalid",
+    timeoutMs: 120_000,
+    title: "Matrix E2EE CLI encryption setup rejects an invalid recovery key",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-cli-recovery-key-invalid",
+      name: "Matrix QA E2EE CLI Invalid Recovery Key Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-cli-encryption-setup-multi-account",
+    timeoutMs: 120_000,
+    title: "Matrix E2EE CLI encryption setup targets one account in a multi-account config",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-cli-encryption-setup-multi-account",
+      name: "Matrix QA E2EE CLI Multi Account Setup Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-cli-setup-then-gateway-reply",
+    timeoutMs: 180_000,
+    title: "Matrix E2EE CLI setup leaves the gateway able to reply in encrypted rooms",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-cli-setup-then-gateway-reply",
+      name: "Matrix QA E2EE CLI Setup Gateway Reply Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CLI_SETUP_CONFIG,
+  },
+  {
     id: "matrix-e2ee-cli-self-verification",
     timeoutMs: 180_000,
     title: "Matrix E2EE CLI interactive self-verification establishes identity trust",
@@ -598,7 +692,6 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
       scenarioId: "matrix-e2ee-cli-self-verification",
       name: "Matrix QA E2EE CLI Self Verification Room",
     }),
-    configOverrides: MATRIX_QA_E2EE_CONFIG,
   },
   {
     id: "matrix-e2ee-state-loss-external-recovery-key",
@@ -677,6 +770,16 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     topology: buildMatrixQaE2eeScenarioTopology({
       scenarioId: "matrix-e2ee-server-device-deleted-local-state-intact",
       name: "Matrix QA E2EE Server Device Deleted Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-server-device-deleted-relogin-recovers",
+    timeoutMs: 180_000,
+    title: "Matrix E2EE server-side device deletion recovers through re-login and backup restore",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-server-device-deleted-relogin-recovers",
+      name: "Matrix QA E2EE Server Device Relogin Recovery Room",
     }),
     configOverrides: MATRIX_QA_E2EE_CONFIG,
   },

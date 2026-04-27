@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Installs a published OpenClaw npm package in Docker, performs Telegram
+# Installs an OpenClaw package candidate in Docker, performs Telegram
 # onboarding/doctor recovery, then runs the Telegram QA live harness.
 set -euo pipefail
 
@@ -9,6 +9,8 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-npm-telegram-live-e2e" OPENCLAW_NPM_TELEGRAM_LIVE_E2E_IMAGE)"
 DOCKER_TARGET="${OPENCLAW_NPM_TELEGRAM_DOCKER_TARGET:-build}"
 PACKAGE_SPEC="${OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC:-openclaw@beta}"
+PACKAGE_TGZ="${OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ:-${OPENCLAW_CURRENT_PACKAGE_TGZ:-}}"
+PACKAGE_LABEL="${OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL:-}"
 OUTPUT_DIR="${OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR:-.artifacts/qa-e2e/npm-telegram-live}"
 
 resolve_credential_source() {
@@ -46,7 +48,45 @@ validate_openclaw_package_spec() {
   exit 1
 }
 
-validate_openclaw_package_spec "$PACKAGE_SPEC"
+resolve_package_tgz() {
+  local candidate="$1"
+  if [ -z "$candidate" ]; then
+    return 0
+  fi
+  if [ ! -f "$candidate" ]; then
+    echo "OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ must point to an existing .tgz file; got: $candidate" >&2
+    exit 1
+  fi
+  case "$candidate" in
+    *.tgz) ;;
+    *)
+      echo "OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ must point to a .tgz file; got: $candidate" >&2
+      exit 1
+      ;;
+  esac
+  local dir
+  local base
+  dir="$(cd "$(dirname "$candidate")" && pwd)"
+  base="$(basename "$candidate")"
+  printf "%s/%s" "$dir" "$base"
+}
+
+package_mount_args=()
+package_install_source="$PACKAGE_SPEC"
+resolved_package_tgz="$(resolve_package_tgz "$PACKAGE_TGZ")"
+if [ -n "$resolved_package_tgz" ]; then
+  package_install_source="/package-under-test/$(basename "$resolved_package_tgz")"
+  package_mount_args=(-v "$resolved_package_tgz:$package_install_source:ro")
+else
+  validate_openclaw_package_spec "$PACKAGE_SPEC"
+fi
+if [ -z "$PACKAGE_LABEL" ]; then
+  if [ -n "$resolved_package_tgz" ]; then
+    PACKAGE_LABEL="$(basename "$resolved_package_tgz")"
+  else
+    PACKAGE_LABEL="$PACKAGE_SPEC"
+  fi
+fi
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" npm-telegram-live "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "$DOCKER_TARGET"
 docker_e2e_harness_mount_args
@@ -64,6 +104,7 @@ fi
 docker_env=(
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0
   -e OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC="$PACKAGE_SPEC"
+  -e OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL="$PACKAGE_LABEL"
   -e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR"
   -e OPENCLAW_NPM_TELEGRAM_FAST="${OPENCLAW_NPM_TELEGRAM_FAST:-1}"
 )
@@ -124,10 +165,12 @@ run_logged() {
   >"$run_log"
 }
 
-echo "Running published npm Telegram live Docker E2E ($PACKAGE_SPEC)..."
+echo "Running package Telegram live Docker E2E ($PACKAGE_LABEL)..."
 run_logged docker run --rm \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
-  -e OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC="$PACKAGE_SPEC" \
+  -e OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE="$package_install_source" \
+  -e OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL="$PACKAGE_LABEL" \
+  "${package_mount_args[@]}" \
   -v "$npm_prefix_host:/npm-global" \
   -i "$IMAGE_NAME" bash -s <<'EOF'
 set -euo pipefail
@@ -136,15 +179,16 @@ export HOME="$(mktemp -d "/tmp/openclaw-npm-telegram-install.XXXXXX")"
 export NPM_CONFIG_PREFIX="/npm-global"
 export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
 
-package_spec="${OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC:?missing OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC}"
-echo "Installing ${package_spec}..."
-npm install -g "$package_spec" --no-fund --no-audit
+install_source="${OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE:?missing OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE}"
+package_label="${OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL:-$install_source}"
+echo "Installing ${package_label} from ${install_source}..."
+npm install -g "$install_source" --no-fund --no-audit
 
 command -v openclaw
 openclaw --version
 EOF
 
-# Mount only test harness/plugin QA sources; the SUT itself is the npm install.
+# Mount only test harness/plugin QA sources; the SUT itself is the installed package candidate.
 run_logged docker run --rm \
   "${docker_env[@]}" \
   -v "$ROOT_DIR/.artifacts:/app/.artifacts" \
@@ -161,7 +205,7 @@ export OPENCLAW_NPM_TELEGRAM_REPO_ROOT="/app"
 
 dump_hotpath_logs() {
   local status="$1"
-  echo "installed npm onboarding recovery hot path failed with exit code $status" >&2
+  echo "installed-package onboarding recovery hot path failed with exit code $status" >&2
   for file in \
     /tmp/openclaw-npm-telegram-onboard.json \
     /tmp/openclaw-npm-telegram-channel-add.log \
@@ -178,11 +222,11 @@ trap 'status=$?; dump_hotpath_logs "$status"; exit "$status"' ERR
 command -v openclaw
 openclaw --version
 # The mounted QA harness imports openclaw/plugin-sdk; point that package import
-# at the installed npm package without copying source into the test image.
+# at the installed package without copying source into the test image.
 mkdir -p /app/node_modules
 ln -sfn /npm-global/lib/node_modules/openclaw /app/node_modules/openclaw
 
-echo "Running installed npm onboarding recovery hot path..."
+echo "Running installed-package onboarding recovery hot path..."
 OPENAI_API_KEY="${OPENAI_API_KEY:-sk-openclaw-npm-telegram-hotpath}" openclaw onboard --non-interactive --accept-risk \
   --mode local \
   --auth-choice openai-api-key \
@@ -210,4 +254,4 @@ trap - ERR
 tsx scripts/e2e/npm-telegram-live-runner.ts
 EOF
 
-echo "published npm Telegram live Docker E2E passed ($PACKAGE_SPEC)"
+echo "package Telegram live Docker E2E passed ($PACKAGE_LABEL)"

@@ -190,6 +190,51 @@ describe("resolveCronPayloadOutcome", () => {
     );
   });
 
+  it("prefers typed failure signals over denial-token fallback", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "On it, retrying now." }],
+      failureSignal: {
+        kind: "execution_denied",
+        source: "tool",
+        toolName: "exec",
+        code: "SYSTEM_RUN_DENIED",
+        message: "SYSTEM_RUN_DENIED: approval required",
+        fatalForCron: true,
+      },
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.embeddedRunError).toBe(
+      "cron classifier: execution_denied failure from exec (SYSTEM_RUN_DENIED): SYSTEM_RUN_DENIED: approval required",
+    );
+    expect(result.summary).toBe("SYSTEM_RUN_DENIED: approval required");
+    expect(result.outputText).toBe("SYSTEM_RUN_DENIED: approval required");
+    expect(result.synthesizedText).toBe("SYSTEM_RUN_DENIED: approval required");
+    expect(result.deliveryPayload).toEqual({
+      text: "SYSTEM_RUN_DENIED: approval required",
+      isError: true,
+    });
+    expect(result.deliveryPayloads).toEqual([
+      { text: "SYSTEM_RUN_DENIED: approval required", isError: true },
+    ]);
+    expect(result.deliveryPayloadHasStructuredContent).toBe(false);
+  });
+
+  it("ignores non-fatal failure signal metadata", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "ordinary success" }],
+      failureSignal: {
+        kind: "execution_denied",
+        source: "tool",
+        message: "SYSTEM_RUN_DENIED: approval required",
+        fatalForCron: false,
+      },
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(false);
+    expect(result.embeddedRunError).toBeUndefined();
+  });
+
   it("keeps structured error payload reasons ahead of denial-token reasons", () => {
     const result = resolveCronPayloadOutcome({
       payloads: [

@@ -414,6 +414,35 @@ describe("resolveModel", () => {
     });
   });
 
+  it("resolves provider request timeout metadata for configured provider models", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "ollama",
+      modelId: "qwen3:32b",
+      templateModel: {
+        ...makeModel("qwen3:32b"),
+        provider: "ollama",
+      },
+    });
+    const cfg = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434",
+            timeoutSeconds: 300,
+            models: [makeModel("qwen3:32b")],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("ollama", "qwen3:32b", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect((result.model as { requestTimeoutMs?: number } | undefined)?.requestTimeoutMs).toBe(
+      300_000,
+    );
+  });
+
   it("applies agent default model params without explicit provider config", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "ollama",

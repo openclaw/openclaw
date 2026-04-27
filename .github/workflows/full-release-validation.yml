@@ -96,7 +96,7 @@ jobs:
             echo "- Target SHA: \`${TARGET_SHA}\`"
             echo "- Child workflow ref: \`${WORKFLOW_REF}\`"
             echo "- Normal CI: \`CI\` with \`target_ref=${TARGET_REF}\`"
-            echo "- Release/live/Docker/QA: \`OpenClaw Release Checks\`"
+            echo "- Release/live/Docker/package/QA: \`OpenClaw Release Checks\`"
             if [[ -n "${NPM_TELEGRAM_PACKAGE_SPEC// }" ]]; then
               echo "- Post-publish Telegram E2E: \`${NPM_TELEGRAM_PACKAGE_SPEC}\`"
             else

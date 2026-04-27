@@ -260,6 +260,17 @@ function resolveProviderTransport(params: {
   };
 }
 
+function resolveProviderRequestTimeoutMs(timeoutSeconds: unknown): number | undefined {
+  if (
+    typeof timeoutSeconds !== "number" ||
+    !Number.isFinite(timeoutSeconds) ||
+    timeoutSeconds <= 0
+  ) {
+    return undefined;
+  }
+  return Math.floor(timeoutSeconds) * 1000;
+}
+
 function matchesProviderScopedModelId(params: {
   candidateId?: string;
   provider: string;
@@ -430,6 +441,7 @@ function applyConfiguredProviderOverrides(params: {
   preferDiscoveredModelMetadata?: boolean;
 }): ProviderRuntimeModel {
   const { discoveredModel, providerConfig, modelId } = params;
+  const requestTimeoutMs = resolveProviderRequestTimeoutMs(providerConfig?.timeoutSeconds);
   const defaultModelParams = findConfiguredAgentModelParams({
     cfg: params.cfg,
     provider: params.provider,
@@ -471,6 +483,7 @@ function applyConfiguredProviderOverrides(params: {
     !configuredModel &&
     !providerConfig.baseUrl &&
     !providerConfig.api &&
+    requestTimeoutMs === undefined &&
     !providerHeaders &&
     !providerRequest
   ) {
@@ -481,6 +494,7 @@ function applyConfiguredProviderOverrides(params: {
     return {
       ...discoveredModel,
       ...(resolvedParams ? { params: resolvedParams } : {}),
+      ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
       headers: discoveredHeaders,
     };
   }
@@ -531,6 +545,7 @@ function applyConfiguredProviderOverrides(params: {
       contextTokens: metadataOverrideModel?.contextTokens ?? discoveredModel.contextTokens,
       maxTokens: metadataOverrideModel?.maxTokens ?? discoveredModel.maxTokens,
       ...(resolvedParams ? { params: resolvedParams } : {}),
+      ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
       headers: requestConfig.headers,
       compat: metadataOverrideModel?.compat ?? discoveredModel.compat,
     },
@@ -547,6 +562,7 @@ function resolveExplicitModelWithRegistry(params: {
 }): { kind: "resolved"; model: Model<Api> } | { kind: "suppressed" } | undefined {
   const { provider, modelId, modelRegistry, cfg, agentDir, runtimeHooks } = params;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
+  const requestTimeoutMs = resolveProviderRequestTimeoutMs(providerConfig?.timeoutSeconds);
   if (
     shouldSuppressBuiltInModel({
       provider,
@@ -578,6 +594,7 @@ function resolveExplicitModelWithRegistry(params: {
         model: {
           ...inlineMatch,
           ...(resolvedParams ? { params: resolvedParams } : {}),
+          ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
         } as Model<Api>,
         runtimeHooks,
       }),
@@ -627,6 +644,7 @@ function resolveExplicitModelWithRegistry(params: {
         model: {
           ...fallbackInlineMatch,
           ...(resolvedParams ? { params: resolvedParams } : {}),
+          ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
         } as Model<Api>,
         runtimeHooks,
       }),
@@ -699,6 +717,7 @@ function resolveConfiguredFallbackModel(params: {
 }): Model<Api> | undefined {
   const { provider, modelId, cfg, agentDir, runtimeHooks } = params;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
+  const requestTimeoutMs = resolveProviderRequestTimeoutMs(providerConfig?.timeoutSeconds);
   const configuredModel = findConfiguredProviderModel(providerConfig, provider, modelId);
   const providerHeaders = sanitizeModelHeaders(providerConfig?.headers, {
     stripSecretRefMarkers: true,
@@ -763,6 +782,7 @@ function resolveConfiguredFallbackModel(params: {
           providerConfig?.models?.[0]?.maxTokens ??
           DEFAULT_CONTEXT_TOKENS,
         ...(resolvedParams ? { params: resolvedParams } : {}),
+        ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
         headers: requestConfig.headers,
       } as Model<Api>,
       providerRequest,

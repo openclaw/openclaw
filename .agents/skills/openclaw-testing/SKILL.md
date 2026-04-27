@@ -96,6 +96,94 @@ gh run view <run-id> --job <job-id> --log
 - For cancelled same-branch runs, confirm whether a newer run superseded it.
 - Fetch full logs only for failed or relevant jobs.
 
+## GitHub Release Workflows
+
+Use the smallest workflow that proves the current risk. The full umbrella is
+available, but it is usually the last step after narrower proof, not the first
+rerun after a focused patch.
+
+### Full Release Validation
+
+`Full Release Validation` (`.github/workflows/full-release-validation.yml`) is
+the manual "everything before release" umbrella. It resolves a target ref, then
+dispatches:
+
+- manual `CI` for the full normal CI graph
+- `OpenClaw Release Checks` for install smoke, cross-OS release checks, live and
+  E2E checks, Docker release-path suites, OpenWebUI, QA Lab, Matrix, and
+  Telegram release lanes
+- optional post-publish Telegram E2E when a package spec is supplied
+
+Run it only when validating an actual release candidate, after broad shared CI
+or release orchestration changes, or when explicitly asked:
+
+```bash
+gh workflow run full-release-validation.yml \
+  --repo openclaw/openclaw \
+  --ref main \
+  -f ref=<branch-or-sha> \
+  -f workflow_ref=main \
+  -f provider=openai \
+  -f mode=both
+```
+
+If a full run is already active on a newer `origin/main`, prefer watching that
+run over dispatching a duplicate. If you accidentally dispatch a stale duplicate,
+cancel it and monitor the current run.
+
+### Release Checks
+
+`OpenClaw Release Checks` (`openclaw-release-checks.yml`) is the release child
+workflow. It is broader than normal CI but narrower than the umbrella because it
+does not dispatch the separate full normal CI child. It runs Package Acceptance
+with `telegram_mode=mock-openai`, so the release package tarball also goes
+through Telegram package QA. Use it when release-path validation is needed
+without rerunning the entire umbrella.
+
+```bash
+gh workflow run openclaw-release-checks.yml \
+  --repo openclaw/openclaw \
+  --ref main \
+  -f ref=<branch-or-sha> \
+  -f provider=openai \
+  -f mode=both
+```
+
+### Reusable Live/E2E Checks
+
+`OpenClaw Live And E2E Checks (Reusable)`
+(`openclaw-live-and-e2e-checks-reusable.yml`) is the preferred entry point for
+targeted live, Docker, model, and E2E proof. Inputs let you turn off unrelated
+lanes:
+
+```bash
+gh workflow run openclaw-live-and-e2e-checks-reusable.yml \
+  --repo openclaw/openclaw \
+  --ref main \
+  -f ref=<sha> \
+  -f include_repo_e2e=false \
+  -f include_release_path_suites=false \
+  -f include_openwebui=false \
+  -f include_live_suites=true \
+  -f live_models_only=true \
+  -f live_model_providers=fireworks
+```
+
+Useful knobs:
+
+- `docker_lanes='<lane[,lane]>'`: run selected Docker scheduler lanes against
+  prepared artifacts instead of the three release chunks.
+- `include_live_suites=false`: skip live/provider suites when testing Docker
+  scheduler or release packaging only.
+- `live_models_only=true`: run only Docker live model coverage.
+- `live_model_providers=fireworks` (or comma/space separated providers): run one
+  targeted Docker live model job instead of the full provider matrix.
+- blank `live_model_providers`: run the full live-model provider matrix.
+
+For model-list or provider-selection fixes, use `live_models_only=true` plus the
+specific `live_model_providers` allowlist. Confirm logs show the expected
+`OPENCLAW_LIVE_PROVIDERS` and selected model ids before declaring proof.
+
 ## Docker
 
 Docker is expensive. First inspect the scheduler without running Docker:
@@ -141,6 +229,105 @@ image. Release-path normal mode remains max three Docker chunk jobs:
 - `core`
 - `package-update`
 - `plugins-integrations`
+
+## Package Acceptance
+
+Use the manual `Package Acceptance` workflow when the question is "does this
+installable package work as a product?" rather than "does this source diff pass
+Vitest?"
+
+In release validation, treat Package Acceptance as the package-candidate shard
+inside the larger release umbrella, not as a competing full-test path. Full
+Release Validation and private release gauntlets should call Package Acceptance
+for tarball resolution, Docker product/package proof, and optional Telegram QA
+against the same resolved `package-under-test` artifact; keep orchestration,
+secret policy, blocking/advisory status, and evidence rollup in the caller.
+
+Good defaults:
+
+```bash
+gh workflow run package-acceptance.yml --ref main \
+  -f source=npm \
+  -f workflow_ref=main \
+  -f package_spec=openclaw@beta \
+  -f suite_profile=product \
+  -f telegram_mode=mock-openai
+```
+
+Npm candidate selection:
+
+- Resolve the registry immediately before dispatch:
+  `npm view openclaw dist-tags --json --prefer-online --cache /tmp/openclaw-npm-cache-verify-$$`
+  and `npm view openclaw@beta version dist.tarball dist.integrity --json --prefer-online --cache /tmp/openclaw-npm-cache-verify-$$`.
+- If Peter asks for "latest beta", use `source=npm` with
+  `package_spec=openclaw@beta`, then record the resolved version from `npm view`
+  or the workflow summary.
+- For reruns, release proof, or comparing one known package, prefer the exact
+  immutable spec: `package_spec=openclaw@YYYY.M.D-beta.N` or
+  `package_spec=openclaw@YYYY.M.D`.
+- For stable package proof, use `package_spec=openclaw@latest` only when the
+  question is explicitly the current stable dist-tag; otherwise pin the exact
+  version.
+- `source=npm` only accepts registry specs for `openclaw@beta`,
+  `openclaw@latest`, or exact OpenClaw release versions. Do not pass semver
+  ranges, git refs, file paths, tarball URLs, or plugin package names there.
+- If the candidate is a tarball URL, use `source=url` with `package_sha256`. If
+  it is an Actions tarball artifact, use `source=artifact`. If it is an
+  unpublished source candidate, use `source=ref` with a trusted ref or SHA.
+- Package acceptance tests exactly the selected package candidate. Do not apply
+  `openclaw update --channel beta` fallback semantics here; if `beta` is absent,
+  stale, older than `latest`, or points at a broken tarball, report that tag
+  state instead of silently testing `latest`.
+
+Profiles:
+
+- `smoke`: quick confidence that the tarball installs, can onboard a channel,
+  can run an agent turn, and basic gateway/config lanes work.
+- `package`: release-package contract. Adds installer/update, doctor install
+  switching, bundled plugin runtime deps, plugin install/update, and package
+  repair lanes. This is the default native replacement for most Parallels
+  package/update coverage.
+- `product`: package profile plus broader product surfaces: MCP channels,
+  cron/subagent cleanup, OpenAI web search, and OpenWebUI.
+- `full`: Docker release-path chunks with OpenWebUI.
+- `custom`: exact `docker_lanes` list for a focused rerun.
+
+Candidate sources:
+
+- `source=npm`: `openclaw@beta`, `openclaw@latest`, or an exact release version.
+- `source=ref`: pack `package_ref` using the trusted `workflow_ref` harness.
+  This intentionally separates old package commits from new workflow/test code.
+- `source=url`: HTTPS `.tgz` plus required `package_sha256`.
+- `source=artifact`: download one `.tgz` from `artifact_run_id`/`artifact_name`.
+
+Ref model:
+
+- `gh workflow run ... --ref <workflow-ref>` selects the workflow file revision
+  GitHub executes.
+- `workflow_ref` is the trusted harness/script ref passed to reusable Docker
+  E2E.
+- `package_ref` is the source ref to build when `source=ref`. It can be an
+  older branch/tag/SHA as long as it is reachable from an OpenClaw branch or
+  release tag.
+
+Example: run latest package acceptance harness against an older trusted commit:
+
+```bash
+gh workflow run package-acceptance.yml --ref main \
+  -f workflow_ref=main \
+  -f source=ref \
+  -f package_ref=<branch-or-sha> \
+  -f suite_profile=package \
+  -f telegram_mode=mock-openai
+```
+
+Use `telegram_mode=mock-openai` or `telegram_mode=live-frontier` when the same
+resolved `package-under-test` tarball should also run through the Telegram QA
+workflow in the `qa-live-shared` environment. The standalone Telegram workflow
+still accepts a published npm spec for post-publish checks, but Package
+Acceptance passes the resolved artifact for `source=npm`, `ref`, `url`, and
+`artifact`. Use `telegram_mode=none` only when intentionally skipping Telegram
+credentialed package proof for a focused rerun.
 
 Docker E2E images never copy repo sources as the app under test: the bare image
 is a Node/Git runner, and the functional image installs the same prebuilt npm

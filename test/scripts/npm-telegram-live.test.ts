@@ -7,7 +7,7 @@ import { __testing } from "../../scripts/e2e/npm-telegram-live-runner.ts";
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DOCKER_SCRIPT_PATH = path.resolve(TEST_DIR, "../../scripts/e2e/npm-telegram-live-docker.sh");
 
-describe("npm Telegram live Docker E2E", () => {
+describe("package Telegram live Docker E2E", () => {
   it("supports npm-specific Convex credential aliases", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
 
@@ -28,16 +28,31 @@ describe("npm Telegram live Docker E2E", () => {
     expect(script).toContain('printf "convex"');
   });
 
-  it("installs the npm package before forwarding runtime secrets", () => {
+  it("installs the package candidate before forwarding runtime secrets", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
-    const installRunStart = script.indexOf('echo "Running published npm Telegram live Docker E2E');
+    const installRunStart = script.indexOf('echo "Running package Telegram live Docker E2E');
     const installRunEnd = script.indexOf('run_logged docker run --rm \\\n  "${docker_env[@]}"');
     const installRun = script.slice(installRunStart, installRunEnd);
 
-    expect(installRun).toContain('npm install -g "$package_spec" --no-fund --no-audit');
+    expect(installRun).toContain('npm install -g "$install_source" --no-fund --no-audit');
+    expect(installRun).toContain('"${package_mount_args[@]}"');
     expect(installRun).not.toContain('"${docker_env[@]}"');
     expect(script).toContain('if [ -z "$credential_role" ] && [ -n "${CI:-}" ]');
     expect(script).toContain('credential_role="ci"');
+  });
+
+  it("can install a resolved package tarball instead of a registry spec", () => {
+    const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ");
+    expect(script).toContain("OPENCLAW_CURRENT_PACKAGE_TGZ");
+    expect(script).toContain(
+      'package_mount_args=(-v "$resolved_package_tgz:$package_install_source:ro")',
+    );
+    expect(script).toContain('validate_openclaw_package_spec "$PACKAGE_SPEC"');
+    expect(script.indexOf('if [ -n "$resolved_package_tgz" ]; then')).toBeLessThan(
+      script.indexOf('validate_openclaw_package_spec "$PACKAGE_SPEC"'),
+    );
   });
 
   it("lets npm-specific credential aliases override shared QA env", () => {

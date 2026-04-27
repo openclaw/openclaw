@@ -198,13 +198,13 @@ export default definePluginEntry({
       matchesContextOverflowError: ({ errorMessage }) =>
         /\bollama\b.*(?:context length|too many tokens|context window)/i.test(errorMessage) ||
         /\btruncating input\b.*\btoo long\b/i.test(errorMessage),
-      resolveSyntheticAuth: ({ providerConfig }) => {
+      resolveSyntheticAuth: ({ provider, providerConfig }) => {
         if (!shouldUseSyntheticOllamaAuth(providerConfig)) {
           return undefined;
         }
         return {
           apiKey: OLLAMA_DEFAULT_API_KEY,
-          source: "models.providers.ollama (synthetic local key)",
+          source: `models.providers.${provider ?? OLLAMA_PROVIDER_ID} (synthetic local key)`,
           mode: "api-key",
         };
       },

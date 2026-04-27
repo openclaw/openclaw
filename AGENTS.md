@@ -54,7 +54,9 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - Formatting: use `oxfmt`, not Prettier. Prefer `pnpm format:check` / `pnpm format`; for targeted files use `pnpm exec oxfmt --check --threads=1 <files...>` or `pnpm exec oxfmt --write --threads=1 <files...>`.
 - Linting: use repo wrappers (`pnpm lint:*`, `scripts/run-oxlint.mjs`); do not invoke generic JS formatters/lints unless a repo script uses them.
 - Heavy checks: `OPENCLAW_LOCAL_CHECK=1`, mode `OPENCLAW_LOCAL_CHECK_MODE=throttled|full`; CI/shared use `OPENCLAW_LOCAL_CHECK=0`.
-- Local first. Use repo `pnpm` lanes before Blacksmith/Testbox. Remote only for parity-only failures, secrets/services, or explicit ask.
+- Maintainer Testbox mode: if `OPENCLAW_TESTBOX=1` is present in env or standing user rules, use Blacksmith Testbox for `pnpm` gates, e2e, broad suites, and long/heavy validation. This is maintainers-only and requires Blacksmith access.
+- Testbox escape hatch: if `OPENCLAW_TESTBOX=1` is set but `OPENCLAW_LOCAL_CHECK_MODE=throttled|full` is explicitly set for the task/command, use the local repo `pnpm` lane instead.
+- Testbox warmup: start from repo root, save/reuse the returned ID for every run in the same task. Use `ci-check-testbox.yml` for normal checks; use `ci-build-artifacts-testbox.yml` when build artifacts, e2e, or package-like proof benefits from seeded `dist/`/`dist-runtime/` caches.
 
 ## GitHub / CI
 
@@ -70,7 +72,6 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - PR review answer must explicitly cover: what bug/behavior we are trying to fix; PR/issue URL(s) and affected endpoint/surface; whether this is the best possible fix, with high-certainty evidence from code, tests, CI, and shipped/current behavior.
 - CI polling: exact SHA, needed fields only. Example: `gh api repos/<owner>/<repo>/actions/runs/<id> --jq '{status,conclusion,head_sha,updated_at,name,path}'`.
 - Post-land wait: minimal. Exact landed SHA only. If superseded on `main`, same-branch `cancel-in-progress` cancellations are expected; stop once local touched-surface proof exists. Never wait for newer unrelated `main` unless asked.
-- Test reruns: after a narrow fix, prefer the smallest affected test subset, shard, workflow job, lane, provider, or model allowlist that proves the changed behavior. Rerun a full suite only when the change touches shared orchestration, broad contracts, or the prior evidence no longer covers the risk.
 - Wait matrix:
   - never: `Auto response`, `Labeler`, `Docs Sync Publish Repo`, `Docs Agent`, `Test Performance Agent`, `Stale`.
   - conditional: `CI` exact SHA only; `Docs` only docs task/no local docs proof; `Workflow Sanity` only workflow/composite/CI-policy edits; `Plugin NPM Release` only plugin package/release metadata.

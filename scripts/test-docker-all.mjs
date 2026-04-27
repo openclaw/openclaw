@@ -36,10 +36,15 @@ const DEFAULT_STATUS_INTERVAL_MS = 30_000;
 const DEFAULT_PREFLIGHT_RUN_TIMEOUT_MS = 60_000;
 const DEFAULT_TIMINGS_FILE = path.join(ROOT_DIR, ".artifacts/docker-tests/lane-timings.json");
 const DEFAULT_GITHUB_WORKFLOW = "openclaw-live-and-e2e-checks-reusable.yml";
-const cliArgs = new Set(process.argv.slice(2));
-for (const arg of cliArgs) {
-  if (arg !== "--plan-json") {
-    throw new Error(`unknown argument: ${arg}`);
+const IS_MAIN = process.argv[1]
+  ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+  : false;
+const cliArgs = new Set(IS_MAIN ? process.argv.slice(2) : []);
+if (IS_MAIN) {
+  for (const arg of cliArgs) {
+    if (arg !== "--plan-json") {
+      throw new Error(`unknown argument: ${arg}`);
+    }
   }
 }
 
@@ -82,6 +87,12 @@ function resourceLimitEnvName(resource) {
   return `OPENCLAW_DOCKER_ALL_${resource.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_LIMIT`;
 }
 
+export function describeDockerSchedulerLimits(parallelism, options) {
+  return `parallelism=${parallelism} weightLimit=${options.weightLimit} resources=${resourceLimitsSummary(
+    options.resourceLimits,
+  )}`;
+}
+
 function parseResourceLimit(env, resource, parallelism, fallback) {
   const envName = resourceLimitEnvName(resource);
   return parsePositiveInt(env[envName], Math.min(parallelism, fallback), envName);
@@ -101,6 +112,26 @@ function parseSchedulerOptions(env, parallelism) {
     resourceLimits,
     weightLimit,
   };
+}
+
+export function canStartSchedulerLane(candidate, active, parallelism, options) {
+  const weight = laneWeight(candidate);
+  if (active.count >= parallelism) {
+    return false;
+  }
+
+  const exceedsWeightLimit = active.weight + weight > options.weightLimit;
+  const exceedsResourceLimit = laneResources(candidate).some((resource) => {
+    const limit = options.resourceLimits[resource] ?? options.weightLimit;
+    const current = active.resources.get(resource) ?? 0;
+    return current + weight > limit;
+  });
+
+  if (!exceedsWeightLimit && !exceedsResourceLimit) {
+    return true;
+  }
+
+  return active.count === 0;
 }
 
 function timingSeconds(timingStore, poolLane) {
@@ -746,18 +777,7 @@ async function runLanePool(poolLanes, baseEnv, logDir, parallelism, options) {
   }
 
   function canStartLane(candidate) {
-    const weight = laneWeight(candidate);
-    if (active.count >= parallelism || active.weight + weight > options.weightLimit) {
-      return false;
-    }
-    for (const resource of laneResources(candidate)) {
-      const limit = options.resourceLimits[resource] ?? options.weightLimit;
-      const current = active.resources.get(resource) ?? 0;
-      if (current + weight > limit) {
-        return false;
-      }
-    }
-    return true;
+    return canStartSchedulerLane(candidate, active, parallelism, options);
   }
 
   function reserve(candidate) {
@@ -818,7 +838,12 @@ async function runLanePool(poolLanes, baseEnv, logDir, parallelism, options) {
       }
       if (running.size === 0) {
         const blocked = pending.map(laneSummary).join(", ");
-        throw new Error(`No Docker lanes fit scheduler limits: ${blocked}`);
+        throw new Error(
+          `No Docker lanes fit scheduler limits (${describeDockerSchedulerLimits(
+            parallelism,
+            options,
+          )}): ${blocked}. Tune OPENCLAW_DOCKER_ALL_PARALLELISM, OPENCLAW_DOCKER_ALL_WEIGHT_LIMIT, or OPENCLAW_DOCKER_ALL_<RESOURCE>_LIMIT.`,
+        );
       }
 
       const { promise, result } = await Promise.race(running);
@@ -1217,7 +1242,9 @@ async function main() {
   console.log("==> Docker test suite passed");
 }
 
-await main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
-});
+if (IS_MAIN) {
+  await main().catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  });
+}

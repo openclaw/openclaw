@@ -28,6 +28,11 @@ on:
         required: false
         default: ""
         type: string
+      package_artifact_name:
+        description: Existing workflow artifact containing openclaw-current.tgz; blank packs the selected ref
+        required: false
+        default: ""
+        type: string
       include_live_suites:
         description: Whether to run live-provider coverage
         required: false
@@ -66,6 +71,11 @@ on:
         type: boolean
       docker_lanes:
         description: Comma/space separated Docker scheduler lane names to run against the prepared image
+        required: false
+        default: ""
+        type: string
+      package_artifact_name:
+        description: Existing workflow artifact containing openclaw-current.tgz; blank packs the selected ref
         required: false
         default: ""
         type: string
@@ -477,6 +487,7 @@ jobs:
           mode: chunk
           chunk: ${{ matrix.chunk_id }}
           include-openwebui: ${{ inputs.include_openwebui }}
+          package-artifact-name: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
 
       - name: Run Docker E2E chunk
         shell: bash
@@ -603,6 +614,7 @@ jobs:
           mode: targeted
           lanes: ${{ inputs.docker_lanes }}
           include-openwebui: ${{ inputs.include_openwebui }}
+          package-artifact-name: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
 
       - name: Run targeted Docker E2E lanes
         shell: bash
@@ -713,23 +725,6 @@ jobs:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
-      - name: Resolve shared Docker E2E image tags
-        id: image
-        shell: bash
-        env:
-          SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
-        run: |
-          set -euo pipefail
-          repository="${GITHUB_REPOSITORY,,}"
-          bare_image="ghcr.io/${repository}-docker-e2e-bare:${SELECTED_SHA}"
-          functional_image="ghcr.io/${repository}-docker-e2e-functional:${SELECTED_SHA}"
-          image="$functional_image"
-          echo "image=$image" >> "$GITHUB_OUTPUT"
-          echo "bare_image=$bare_image" >> "$GITHUB_OUTPUT"
-          echo "functional_image=$functional_image" >> "$GITHUB_OUTPUT"
-          echo "Shared Docker E2E bare image: \`$bare_image\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "Shared Docker E2E functional image: \`$functional_image\`" >> "$GITHUB_STEP_SUMMARY"
-
       - name: Plan Docker E2E images
         id: plan
         uses: ./.github/actions/docker-e2e-plan
@@ -741,15 +736,22 @@ jobs:
           hydrate-artifacts: "false"
 
       - name: Setup Node environment
-        if: steps.plan.outputs.needs_package == '1'
+        if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_name == ''
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
           pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
+      - name: Download provided OpenClaw Docker E2E package
+        if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_name != ''
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.package_artifact_name }}
+          path: .artifacts/docker-e2e-package
+
       - name: Pack OpenClaw package for Docker E2E
-        if: steps.plan.outputs.needs_package == '1'
+        if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_name == ''
         shell: bash
         run: |
           set -euo pipefail
@@ -758,13 +760,59 @@ jobs:
             --output-dir .artifacts/docker-e2e-package \
             --output-name openclaw-current.tgz
 
-      - name: Upload OpenClaw Docker E2E package
+      - name: Validate OpenClaw Docker E2E package
+        id: package
         if: steps.plan.outputs.needs_package == '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .artifacts/docker-e2e-package
+          target=".artifacts/docker-e2e-package/openclaw-current.tgz"
+          if [[ ! -f "$target" ]]; then
+            mapfile -t tgzs < <(find .artifacts/docker-e2e-package -type f -name '*.tgz' | sort)
+            if [[ "${#tgzs[@]}" -ne 1 ]]; then
+              echo "Expected exactly one package tarball in .artifacts/docker-e2e-package; found ${#tgzs[@]}." >&2
+              printf '%s\n' "${tgzs[@]}" >&2
+              exit 1
+            fi
+            cp "${tgzs[0]}" "$target"
+          fi
+          node scripts/check-openclaw-package-tarball.mjs "$target"
+          digest="$(sha256sum "$target" | awk '{print $1}')"
+          tag="pkg-${digest:0:32}"
+          echo "sha256=$digest" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          {
+            echo "Docker E2E package: \`$target\`"
+            echo "Docker E2E package SHA-256: \`$digest\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload OpenClaw Docker E2E package
+        if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_name == ''
         uses: actions/upload-artifact@v7
         with:
           name: docker-e2e-package
           path: .artifacts/docker-e2e-package/openclaw-current.tgz
           if-no-files-found: error
+
+      - name: Resolve shared Docker E2E image tags
+        id: image
+        shell: bash
+        env:
+          PACKAGE_TAG: ${{ steps.package.outputs.tag }}
+          SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+        run: |
+          set -euo pipefail
+          repository="${GITHUB_REPOSITORY,,}"
+          image_tag="${PACKAGE_TAG:-$SELECTED_SHA}"
+          bare_image="ghcr.io/${repository}-docker-e2e-bare:${image_tag}"
+          functional_image="ghcr.io/${repository}-docker-e2e-functional:${image_tag}"
+          image="$functional_image"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "bare_image=$bare_image" >> "$GITHUB_OUTPUT"
+          echo "functional_image=$functional_image" >> "$GITHUB_OUTPUT"
+          echo "Shared Docker E2E bare image: \`$bare_image\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Shared Docker E2E functional image: \`$functional_image\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Log in to GHCR
         if: steps.plan.outputs.needs_e2e_image == '1'

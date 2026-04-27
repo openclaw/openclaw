@@ -817,6 +817,15 @@ function resolveOllamaModelHeaders(model: {
   return model.headers as Record<string, string>;
 }
 
+function resolveOllamaRequestTimeoutMs(
+  model: object,
+  options: { requestTimeoutMs?: unknown } | undefined,
+): number | undefined {
+  const raw =
+    options?.requestTimeoutMs ?? (model as { requestTimeoutMs?: unknown }).requestTimeoutMs;
+  return typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : undefined;
+}
+
 export function createOllamaStreamFn(
   baseUrl: string,
   defaultHeaders?: Record<string, string>,
@@ -874,6 +883,10 @@ export function createOllamaStreamFn(
             signal: options?.signal,
           },
           policy: ssrfPolicy,
+          timeoutMs: resolveOllamaRequestTimeoutMs(
+            model,
+            options as { requestTimeoutMs?: unknown } | undefined,
+          ),
           auditContext: "ollama-stream.chat",
         });
 

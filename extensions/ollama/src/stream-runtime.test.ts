@@ -23,6 +23,7 @@ type GuardedFetchCall = {
   url: string;
   init?: RequestInit;
   policy?: unknown;
+  timeoutMs?: number;
   auditContext?: string;
 };
 
@@ -260,6 +261,25 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
         expect(requestBody.think).toBe("low");
         expect(requestBody.options?.think).toBeUndefined();
         expect(requestBody.options?.num_ctx).toBe(131072);
+      },
+    );
+  });
+
+  it("passes resolved provider request timeouts to native Ollama chat fetches", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+          model: { requestTimeoutMs: 450_000 },
+        });
+
+        await collectStreamEvents(stream);
+
+        expect(getGuardedFetchCall(fetchMock).timeoutMs).toBe(450_000);
       },
     );
   });
