@@ -8,6 +8,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createHookRunnerWithRegistry } from "./hooks.test-helpers.js";
 import type {
+  PluginHookCronChangedEvent,
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
@@ -53,12 +54,32 @@ describe("gateway hook runner methods", () => {
     await expectGatewayHookCall({ hookName, event, gatewayCtx });
   });
 
+  it("runCronChanged invokes registered cron_changed hooks", async () => {
+    const handler = vi.fn();
+    const { runner } = createHookRunnerWithRegistry([{ hookName: "cron_changed", handler }]);
+    const event: PluginHookCronChangedEvent = {
+      action: "updated",
+      jobId: "job-1",
+      nextRunAtMs: 123,
+      job: {
+        id: "job-1",
+        state: { nextRunAtMs: 123 },
+      },
+    };
+
+    await runner.runCronChanged(event, gatewayCtx);
+
+    expect(handler).toHaveBeenCalledWith(event, gatewayCtx);
+  });
+
   it("hasHooks returns true for registered gateway hooks", () => {
     const { runner } = createHookRunnerWithRegistry([
       { hookName: "gateway_start", handler: vi.fn() },
+      { hookName: "cron_changed", handler: vi.fn() },
     ]);
 
     expect(runner.hasHooks("gateway_start")).toBe(true);
+    expect(runner.hasHooks("cron_changed")).toBe(true);
     expect(runner.hasHooks("gateway_stop")).toBe(false);
   });
 });

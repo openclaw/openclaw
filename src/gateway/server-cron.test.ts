@@ -14,6 +14,8 @@ const {
   fetchWithSsrFGuardMock,
   runCronIsolatedAgentTurnMock,
   cleanupBrowserSessionsForLifecycleEndMock,
+  getGlobalHookRunnerMock,
+  runCronChangedMock,
 } = vi.hoisted(() => ({
   enqueueSystemEventMock: vi.fn(),
   requestHeartbeatNowMock: vi.fn(),
@@ -24,6 +26,11 @@ const {
   fetchWithSsrFGuardMock: vi.fn(),
   runCronIsolatedAgentTurnMock: vi.fn(async () => ({ status: "ok" as const, summary: "ok" })),
   cleanupBrowserSessionsForLifecycleEndMock: vi.fn(async () => {}),
+  runCronChangedMock: vi.fn(async () => {}),
+  getGlobalHookRunnerMock: vi.fn(() => ({
+    hasHooks: (hookName: string) => hookName === "cron_changed",
+    runCronChanged: runCronChangedMock,
+  })),
 }));
 
 function enqueueSystemEvent(...args: unknown[]) {
@@ -77,6 +84,10 @@ vi.mock("../browser-lifecycle-cleanup.js", () => ({
   cleanupBrowserSessionsForLifecycleEnd: cleanupBrowserSessionsForLifecycleEndMock,
 }));
 
+vi.mock("../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: getGlobalHookRunnerMock,
+}));
+
 import { buildGatewayCronService } from "./server-cron.js";
 
 function createCronConfig(name: string): OpenClawConfig {
@@ -100,6 +111,50 @@ describe("buildGatewayCronService", () => {
     fetchWithSsrFGuardMock.mockClear();
     runCronIsolatedAgentTurnMock.mockClear();
     cleanupBrowserSessionsForLifecycleEndMock.mockClear();
+    runCronChangedMock.mockClear();
+    getGlobalHookRunnerMock.mockClear();
+    getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: (hookName: string) => hookName === "cron_changed",
+      runCronChanged: runCronChangedMock,
+    });
+  });
+
+  it("emits cron_changed hooks with computed next run state", async () => {
+    const cfg = createCronConfig("server-cron-hook");
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "scheduler-hook",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: 1_000 },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "sync external wake" },
+      });
+
+      expect(runCronChangedMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: "added",
+          jobId: job.id,
+          job: expect.objectContaining({
+            id: job.id,
+            state: expect.objectContaining({ nextRunAtMs: job.state.nextRunAtMs }),
+          }),
+        }),
+        expect.objectContaining({
+          config: cfg,
+          getCron: expect.any(Function),
+        }),
+      );
+    } finally {
+      state.cron.stop();
+    }
   });
 
   it("routes main-target jobs to the scoped session for enqueue + wake", async () => {
