@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   resolveOutboundSessionRoute: vi.fn(),
   ensureOutboundSessionEntry: vi.fn(async () => undefined),
   resolveMessageChannelSelection: vi.fn(),
+  dispatchChannelMessageAction: vi.fn(),
   sendPoll: vi.fn<
     () => Promise<{
       messageId: string;
@@ -42,6 +43,10 @@ vi.mock("../../channels/plugins/index.js", () => ({
   getLoadedChannelPlugin: mocks.getChannelPlugin,
   getChannelPlugin: mocks.getChannelPlugin,
   normalizeChannelId: (value: string) => (value === "webchat" ? null : value),
+}));
+
+vi.mock("../../channels/plugins/message-action-dispatch.js", () => ({
+  dispatchChannelMessageAction: mocks.dispatchChannelMessageAction,
 }));
 
 const TEST_AGENT_WORKSPACE = "/tmp/openclaw-test-workspace";
@@ -236,8 +241,70 @@ describe("gateway send mirroring", () => {
       channel: "slack",
       configured: ["slack"],
     });
+    mocks.dispatchChannelMessageAction.mockResolvedValue({
+      details: { action: "handled" },
+    });
     mocks.sendPoll.mockResolvedValue({ messageId: "poll-1" });
-    mocks.getChannelPlugin.mockReturnValue({ outbound: { sendPoll: mocks.sendPoll } });
+    mocks.getChannelPlugin.mockReturnValue({
+      actions: { handleAction: true },
+      outbound: { sendPoll: mocks.sendPoll },
+    });
+  });
+
+  it("dedupes concurrent message.action requests while inflight", async () => {
+    const context = makeContext();
+    const firstRespond = vi.fn();
+    const secondRespond = vi.fn();
+    const actionDeferred = createDeferred<{ details: { action: string } }>();
+    mocks.dispatchChannelMessageAction.mockReturnValueOnce(actionDeferred.promise);
+
+    const firstRequest = sendHandlers["message.action"]({
+      params: {
+        channel: "slack",
+        action: "poll",
+        params: { question: "Q?" },
+        idempotencyKey: "idem-action-concurrent",
+      } as never,
+      respond: firstRespond,
+      context,
+      req: { type: "req", id: "1", method: "message.action" },
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+
+    const secondRequest = sendHandlers["message.action"]({
+      params: {
+        channel: "slack",
+        action: "poll",
+        params: { question: "Q?" },
+        idempotencyKey: "idem-action-concurrent",
+      } as never,
+      respond: secondRespond,
+      context,
+      req: { type: "req", id: "2", method: "message.action" },
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+
+    await Promise.resolve();
+    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(1);
+
+    actionDeferred.resolve({ details: { action: "handled" } });
+    await Promise.all([firstRequest, secondRequest]);
+
+    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(1);
+    expect(firstRespond).toHaveBeenCalledWith(
+      true,
+      { action: "handled" },
+      undefined,
+      expect.objectContaining({ channel: "slack" }),
+    );
+    expect(secondRespond).toHaveBeenCalledWith(
+      true,
+      { action: "handled" },
+      undefined,
+      expect.objectContaining({ channel: "slack", cached: true }),
+    );
   });
 
   it("accepts media-only sends without message", async () => {

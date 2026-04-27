@@ -8,12 +8,12 @@ import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resol
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import {
-  ensureOutboundSessionEntry,
-  resolveOutboundSessionRoute,
+    ensureOutboundSessionEntry,
+    resolveOutboundSessionRoute,
 } from "../../infra/outbound/outbound-session.js";
 import {
-  createOutboundPayloadPlan,
-  projectOutboundPayloadPlanForMirror,
+    createOutboundPayloadPlan,
+    projectOutboundPayloadPlanForMirror,
 } from "../../infra/outbound/payloads.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
@@ -22,18 +22,18 @@ import { extractToolPayload } from "../../infra/outbound/tool-payload.js";
 import { normalizePollInput } from "../../polls.js";
 import { parseThreadSessionSuffix } from "../../sessions/session-key-utils.js";
 import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-  readStringValue,
+    normalizeOptionalLowercaseString,
+    normalizeOptionalString,
+    readStringValue,
 } from "../../shared/string-coerce.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
-  validateMessageActionParams,
-  validatePollParams,
-  validateSendParams,
+    ErrorCodes,
+    errorShape,
+    formatValidationErrors,
+    validateMessageActionParams,
+    validatePollParams,
+    validateSendParams,
 } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
@@ -320,6 +320,14 @@ export const sendHandlers: GatewayRequestHandlers = {
       });
       return;
     }
+    if (inflight.kind === "inflight") {
+      const result = await inflight.inflight;
+      const meta = result.meta ? { ...result.meta, cached: true } : { cached: true };
+      respond(result.ok, result.payload, result.error, meta);
+      return;
+    }
+    if (inflight.kind !== "ready") return;
+    const inflightMap = inflight.inflightMap;
     const resolvedChannel = await resolveRequestedChannel({
       requestChannel: request.channel,
       unsupportedMessage: (input) => `unsupported channel: ${input}`,
@@ -330,11 +338,11 @@ export const sendHandlers: GatewayRequestHandlers = {
       respond(false, undefined, resolvedChannel.error);
       return;
     }
-    const inflightMap = inflight.inflightMap;
     const work = (async (): Promise<InflightResult> => {
       const resolvedChannel = await resolveRequestedChannel({
         requestChannel: request.channel,
         unsupportedMessage: (input) => `unsupported channel: ${input}`,
+        context,
         rejectWebchatAsInternalOnly: true,
       });
       if ("error" in resolvedChannel) {
@@ -453,7 +461,6 @@ export const sendHandlers: GatewayRequestHandlers = {
       respond(false, undefined, resolvedChannel.error);
       return;
     }
-    const { cfg, channel } = resolvedChannel;
     const accountId = normalizeOptionalString(request.accountId);
     const replyToId = normalizeOptionalString(request.replyToId);
     const threadId = normalizeOptionalString(request.threadId);
@@ -462,6 +469,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       const resolvedChannel = await resolveRequestedChannel({
         requestChannel: request.channel,
         unsupportedMessage: (input) => `unsupported channel: ${input}`,
+        context,
         rejectWebchatAsInternalOnly: true,
       });
       if ("error" in resolvedChannel) {
@@ -632,7 +640,14 @@ export const sendHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    const to = request.to.trim();
+    if (inflight.kind === "inflight") {
+      const result = await inflight.inflight;
+      const meta = result.meta ? { ...result.meta, cached: true } : { cached: true };
+      respond(result.ok, result.payload, result.error, meta);
+      return;
+    }
+    if (inflight.kind !== "ready") return;
+    const inflightMap = inflight.inflightMap;
     const resolvedChannel = await resolveRequestedChannel({
       requestChannel: request.channel,
       unsupportedMessage: (input) => `unsupported poll channel: ${input}`,
@@ -642,8 +657,10 @@ export const sendHandlers: GatewayRequestHandlers = {
       respond(false, undefined, resolvedChannel.error);
       return;
     }
-    const { cfg, channel } = resolvedChannel;
-    const plugin = resolveOutboundChannelPlugin({ channel, cfg });
+    const plugin = resolveOutboundChannelPlugin({
+      channel: resolvedChannel.channel,
+      cfg: resolvedChannel.cfg,
+    });
     const outbound = plugin?.outbound;
     if (
       typeof request.durationSeconds === "number" &&
@@ -667,11 +684,11 @@ export const sendHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const inflightMap = inflight.inflightMap;
     const work = (async (): Promise<InflightResult> => {
       const resolvedChannel = await resolveRequestedChannel({
         requestChannel: request.channel,
         unsupportedMessage: (input) => `unsupported poll channel: ${input}`,
+        context,
       });
       if ("error" in resolvedChannel) {
         return { ok: false, error: resolvedChannel.error };
