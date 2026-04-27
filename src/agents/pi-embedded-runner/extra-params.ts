@@ -130,6 +130,28 @@ function hasExplicitTransportSetting(settings: { transport?: unknown }): boolean
   return Object.hasOwn(settings, "transport");
 }
 
+function resolveThinkingBudgetsParam(
+  value: unknown,
+): SimpleStreamOptions["thinkingBudgets"] | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
+    const summary = typeof value === "string" ? value : typeof value;
+    log.warn(`ignoring invalid thinkingBudgets param: ${summary}`);
+    return undefined;
+  }
+
+  const budgets = Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).filter(
+      ([, budget]) => typeof budget === "number" && Number.isFinite(budget),
+    ),
+  );
+  return Object.keys(budgets).length > 0
+    ? (budgets as NonNullable<SimpleStreamOptions["thinkingBudgets"]>)
+    : undefined;
+}
+
 export function resolvePreparedExtraParams(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
@@ -293,6 +315,10 @@ function createStreamFnWithExtraParams(
   }
   if (typeof extraParams.maxTokens === "number") {
     streamParams.maxTokens = extraParams.maxTokens;
+  }
+  const thinkingBudgets = resolveThinkingBudgetsParam(extraParams.thinkingBudgets);
+  if (thinkingBudgets) {
+    streamParams.thinkingBudgets = thinkingBudgets;
   }
   const transport = resolveSupportedTransport(extraParams.transport);
   if (transport) {

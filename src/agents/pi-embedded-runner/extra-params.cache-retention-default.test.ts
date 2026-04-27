@@ -40,6 +40,7 @@ vi.mock("./logger.js", () => ({
 vi.mock("@mariozechner/pi-ai", () => createPiAiStreamSimpleMock());
 
 beforeEach(() => {
+  vi.clearAllMocks();
   extraParamsTesting.setProviderRuntimeDepsForTest({
     prepareProviderExtraParams: () => undefined,
     resolveProviderExtraParamsForTransport: () => undefined,
@@ -154,6 +155,66 @@ describe("cacheRetention default behavior", () => {
       },
       modelId: "claude-3-sonnet",
       provider: "anthropic",
+    });
+  });
+
+  it("passes configured thinkingBudgets through to pi-ai stream options", async () => {
+    const { streamSimple } = await import("@mariozechner/pi-ai");
+    const agent: { streamFn?: StreamFn } = {};
+    applyExtraParamsToAgent(
+      agent,
+      {
+        agents: {
+          defaults: {
+            models: {
+              "minimax/MiniMax-M2.7": {
+                params: {
+                  maxTokens: 53248,
+                  thinking: "high",
+                  thinkingBudgets: {
+                    high: 49152,
+                    xhigh: 49152,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      "minimax",
+      "MiniMax-M2.7",
+      undefined,
+      "high",
+      undefined,
+      undefined,
+      {
+        api: "anthropic-messages",
+        id: "MiniMax-M2.7",
+        maxTokens: 131072,
+        provider: "minimax",
+        reasoning: true,
+      } as Parameters<typeof applyExtraParamsToAgent>[8],
+    );
+
+    expect(agent.streamFn).toBeDefined();
+    void agent.streamFn?.(
+      {
+        api: "anthropic-messages",
+        id: "MiniMax-M2.7",
+        maxTokens: 131072,
+        provider: "minimax",
+        reasoning: true,
+      } as never,
+      { messages: [] } as never,
+      {},
+    );
+
+    expect(vi.mocked(streamSimple).mock.calls[0]?.[2]).toMatchObject({
+      maxTokens: 53248,
+      thinkingBudgets: {
+        high: 49152,
+        xhigh: 49152,
+      },
     });
   });
 
