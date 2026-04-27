@@ -64,15 +64,19 @@ function isValidTokenEntry(entry: unknown): entry is SessionShareToken {
   if (!entry || typeof entry !== "object") {
     return false;
   }
-  const e = entry as Record<string, unknown>;
   return (
-    typeof e.token === "string" &&
-    e.token.length > 0 &&
-    typeof e.sessionKey === "string" &&
-    e.sessionKey.length > 0 &&
-    typeof e.expiresAtMs === "number" &&
-    typeof e.createdAtMs === "number" &&
-    typeof e.createdByDeviceId === "string"
+    "token" in entry &&
+    typeof entry.token === "string" &&
+    entry.token.length > 0 &&
+    "sessionKey" in entry &&
+    typeof entry.sessionKey === "string" &&
+    entry.sessionKey.length > 0 &&
+    "expiresAtMs" in entry &&
+    typeof entry.expiresAtMs === "number" &&
+    "createdAtMs" in entry &&
+    typeof entry.createdAtMs === "number" &&
+    "createdByDeviceId" in entry &&
+    typeof entry.createdByDeviceId === "string"
   );
 }
 
