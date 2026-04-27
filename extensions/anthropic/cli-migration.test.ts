@@ -96,6 +96,33 @@ describe("anthropic cli migration", () => {
     expect(readClaudeCliCredentialsForSetupNonInteractive).toHaveBeenCalledTimes(1);
   });
 
+  it("migrates a 4.23-carry-over config (legacy embeddedHarness.runtime) without conflicting with the canonical agentRuntime.id", () => {
+    // Regression coverage for openclaw#72434: configs carried over from
+    // 2026.4.23 ship with `agents.defaults.embeddedHarness.runtime:
+    // "claude-cli"`, which was an unregistered harness id in 2026.4.24 and
+    // broke channel startup for every gateway. The fix in
+    // 5b9be2cdb1 ("fix: migrate agent runtime config") introduced the
+    // canonical `agentRuntime.id` key. Pin that buildAnthropicCliMigrationResult
+    // emits the canonical key when given a legacy-shape input, so the
+    // migration path stays green even if a future refactor stops wiring
+    // it through.
+    const result = buildAnthropicCliMigrationResult({
+      agents: {
+        defaults: {
+          model: "anthropic/claude-opus-4-7",
+          embeddedHarness: { runtime: "claude-cli" },
+          models: {
+            "anthropic/claude-opus-4-7": { alias: "Opus" },
+          },
+        },
+      },
+    } as never);
+
+    expect(result.configPatch?.agents?.defaults?.agentRuntime).toEqual({
+      id: "claude-cli",
+    });
+  });
+
   it("keeps anthropic defaults and selects the claude-cli runtime", () => {
     const result = buildAnthropicCliMigrationResult({
       agents: {
