@@ -523,7 +523,7 @@ describe("connectGateway", () => {
     expect(host.lastError).toBe("disconnected (1006): no reason");
   });
 
-  it("refreshes bootstrap config after hello", () => {
+  it("refreshes bootstrap config and assistant identity after hello", () => {
     const host = createHost();
 
     connectGateway(host);
@@ -534,6 +534,7 @@ describe("connectGateway", () => {
 
     expect(loadControlUiBootstrapConfigMock).toHaveBeenCalledTimes(1);
     expect(loadControlUiBootstrapConfigMock).toHaveBeenCalledWith(host);
+    expect(client.request).toHaveBeenCalledWith("agent.identity.get", { sessionKey: "main" });
   });
 
   it("sends queued chat aborts after reconnect before clearing pending state", async () => {

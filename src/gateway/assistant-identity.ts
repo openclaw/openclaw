@@ -87,24 +87,41 @@ export function resolveAssistantIdentity(params: {
   workspaceDir?: string | null;
 }): AssistantIdentity {
   const agentId = normalizeAgentId(params.agentId ?? resolveDefaultAgentId(params.cfg));
+  const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(params.cfg));
+  const isDefaultAgent = agentId === defaultAgentId;
   const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, agentId);
   const configAssistant = params.cfg.ui?.assistant;
   const agentIdentity = resolveAgentIdentity(params.cfg, agentId);
   const fileIdentity = workspaceDir ? loadAgentIdentity(workspaceDir) : null;
 
-  const name =
-    coerceIdentityValue(configAssistant?.name, MAX_ASSISTANT_NAME) ??
-    coerceIdentityValue(agentIdentity?.name, MAX_ASSISTANT_NAME) ??
-    coerceIdentityValue(fileIdentity?.name, MAX_ASSISTANT_NAME) ??
-    DEFAULT_ASSISTANT_IDENTITY.name;
+  const nameCandidates = isDefaultAgent
+    ? [
+        coerceIdentityValue(configAssistant?.name, MAX_ASSISTANT_NAME),
+        coerceIdentityValue(agentIdentity?.name, MAX_ASSISTANT_NAME),
+        coerceIdentityValue(fileIdentity?.name, MAX_ASSISTANT_NAME),
+      ]
+    : [
+        coerceIdentityValue(agentIdentity?.name, MAX_ASSISTANT_NAME),
+        coerceIdentityValue(fileIdentity?.name, MAX_ASSISTANT_NAME),
+        coerceIdentityValue(configAssistant?.name, MAX_ASSISTANT_NAME),
+      ];
+  const name = nameCandidates.find(Boolean) ?? DEFAULT_ASSISTANT_IDENTITY.name;
 
-  const avatarCandidates = [
-    coerceIdentityValue(configAssistant?.avatar, MAX_ASSISTANT_AVATAR),
-    coerceIdentityValue(agentIdentity?.avatar, MAX_ASSISTANT_AVATAR),
-    coerceIdentityValue(agentIdentity?.emoji, MAX_ASSISTANT_AVATAR),
-    coerceIdentityValue(fileIdentity?.avatar, MAX_ASSISTANT_AVATAR),
-    coerceIdentityValue(fileIdentity?.emoji, MAX_ASSISTANT_AVATAR),
-  ];
+  const avatarCandidates = isDefaultAgent
+    ? [
+        coerceIdentityValue(configAssistant?.avatar, MAX_ASSISTANT_AVATAR),
+        coerceIdentityValue(agentIdentity?.avatar, MAX_ASSISTANT_AVATAR),
+        coerceIdentityValue(agentIdentity?.emoji, MAX_ASSISTANT_AVATAR),
+        coerceIdentityValue(fileIdentity?.avatar, MAX_ASSISTANT_AVATAR),
+        coerceIdentityValue(fileIdentity?.emoji, MAX_ASSISTANT_AVATAR),
+      ]
+    : [
+        coerceIdentityValue(agentIdentity?.avatar, MAX_ASSISTANT_AVATAR),
+        coerceIdentityValue(agentIdentity?.emoji, MAX_ASSISTANT_AVATAR),
+        coerceIdentityValue(fileIdentity?.avatar, MAX_ASSISTANT_AVATAR),
+        coerceIdentityValue(fileIdentity?.emoji, MAX_ASSISTANT_AVATAR),
+        coerceIdentityValue(configAssistant?.avatar, MAX_ASSISTANT_AVATAR),
+      ];
   const avatar =
     avatarCandidates.map((candidate) => normalizeAvatarValue(candidate)).find(Boolean) ??
     DEFAULT_ASSISTANT_IDENTITY.avatar;

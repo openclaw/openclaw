@@ -6,10 +6,12 @@ import {
 import { normalizeAssistantIdentity } from "../assistant-identity.ts";
 import { resolveControlUiAuthCandidates } from "../control-ui-auth.ts";
 import { normalizeBasePath } from "../navigation.ts";
+import { DEFAULT_AGENT_ID, normalizeAgentId, parseAgentSessionKey } from "../session-key.ts";
 import { loadLocalAssistantIdentity } from "../storage.ts";
 
 export type ControlUiBootstrapState = {
   basePath: string;
+  sessionKey?: string;
   assistantName: string;
   assistantAvatar: string | null;
   assistantAvatarSource?: string | null;
@@ -74,19 +76,27 @@ export async function loadControlUiBootstrapConfig(state: ControlUiBootstrapStat
       avatarStatus: parsed.assistantAvatarStatus ?? null,
       avatarReason: parsed.assistantAvatarReason ?? null,
     });
-    state.assistantName = normalized.name;
-    state.assistantAvatar = normalized.avatar;
-    state.assistantAvatarSource = normalized.avatarSource ?? null;
-    state.assistantAvatarStatus = normalized.avatarStatus ?? null;
-    state.assistantAvatarReason = normalized.avatarReason ?? null;
-    state.assistantAgentId = normalized.agentId ?? null;
-    // Local override always wins — same pattern as the user avatar.
-    const localAvatar = loadLocalAssistantIdentity().avatar;
-    if (localAvatar) {
-      state.assistantAvatar = localAvatar;
-      state.assistantAvatarSource = localAvatar;
-      state.assistantAvatarStatus = "data";
-      state.assistantAvatarReason = null;
+    const activeAgentId = parseAgentSessionKey(state.sessionKey)?.agentId;
+    const bootstrapAgentId = normalizeAgentId(normalized.agentId);
+    const shouldApplyIdentity =
+      !activeAgentId ||
+      activeAgentId === DEFAULT_AGENT_ID ||
+      normalizeAgentId(activeAgentId) === bootstrapAgentId;
+    if (shouldApplyIdentity) {
+      state.assistantName = normalized.name;
+      state.assistantAvatar = normalized.avatar;
+      state.assistantAvatarSource = normalized.avatarSource ?? null;
+      state.assistantAvatarStatus = normalized.avatarStatus ?? null;
+      state.assistantAvatarReason = normalized.avatarReason ?? null;
+      state.assistantAgentId = normalized.agentId ?? null;
+      // Local override always wins — same pattern as the user avatar.
+      const localAvatar = loadLocalAssistantIdentity().avatar;
+      if (localAvatar) {
+        state.assistantAvatar = localAvatar;
+        state.assistantAvatarSource = localAvatar;
+        state.assistantAvatarStatus = "data";
+        state.assistantAvatarReason = null;
+      }
     }
     state.serverVersion = parsed.serverVersion ?? null;
     state.localMediaPreviewRoots = Array.isArray(parsed.localMediaPreviewRoots)

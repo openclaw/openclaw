@@ -35,6 +35,9 @@ export async function loadAssistantIdentity(
     if (!res) {
       return;
     }
+    if (!opts?.sessionKey && state.sessionKey.trim() !== sessionKey) {
+      return;
+    }
     const normalized = normalizeAssistantIdentity(res);
     state.assistantName = normalized.name;
     state.assistantAvatar = normalized.avatar;

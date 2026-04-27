@@ -54,3 +54,92 @@ describe("resolveAssistantIdentity avatar normalization", () => {
     expect(resolveAssistantIdentity({ cfg, workspaceDir: "" }).avatar).toBe(dataUrl);
   });
 });
+
+describe("resolveAssistantIdentity agent identity precedence", () => {
+  it("keeps global ui assistant identity first for the default agent", () => {
+    const cfg: OpenClawConfig = {
+      ui: {
+        assistant: {
+          name: "Default UI",
+          avatar: "DU",
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            identity: {
+              name: "Main Agent",
+              avatar: "MA",
+            },
+          },
+        ],
+      },
+    };
+
+    expect(resolveAssistantIdentity({ cfg, agentId: "main", workspaceDir: "" })).toMatchObject({
+      agentId: "main",
+      name: "Default UI",
+      avatar: "DU",
+    });
+  });
+
+  it("prefers per-agent name over global ui assistant name for non-default agents", () => {
+    const cfg: OpenClawConfig = {
+      ui: {
+        assistant: {
+          name: "Default UI",
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            default: true,
+          },
+          {
+            id: "lottery",
+            identity: {
+              name: "Lottery",
+            },
+          },
+        ],
+      },
+    };
+
+    expect(resolveAssistantIdentity({ cfg, agentId: "lottery", workspaceDir: "" })).toMatchObject({
+      agentId: "lottery",
+      name: "Lottery",
+    });
+  });
+
+  it("prefers per-agent avatar over global ui assistant avatar for non-default agents", () => {
+    const cfg: OpenClawConfig = {
+      ui: {
+        assistant: {
+          avatar: "DU",
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            default: true,
+          },
+          {
+            id: "lottery",
+            identity: {
+              emoji: "🐕",
+            },
+          },
+        ],
+      },
+    };
+
+    expect(resolveAssistantIdentity({ cfg, agentId: "lottery", workspaceDir: "" })).toMatchObject({
+      agentId: "lottery",
+      avatar: "🐕",
+      emoji: "🐕",
+    });
+  });
+});

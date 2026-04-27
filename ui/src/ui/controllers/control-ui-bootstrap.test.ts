@@ -58,6 +58,93 @@ describe("loadControlUiBootstrapConfig", () => {
     vi.unstubAllGlobals();
   });
 
+  it("does not overwrite non-default active session identity with default bootstrap identity", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        basePath: "",
+        assistantName: "Default",
+        assistantAvatar: "D",
+        assistantAvatarSource: "avatars/default.png",
+        assistantAvatarStatus: "local",
+        assistantAvatarReason: null,
+        assistantAgentId: "main",
+        serverVersion: "2026.4.27",
+        localMediaPreviewRoots: ["/tmp/openclaw/lottery"],
+        embedSandbox: "strict",
+        allowExternalEmbedUrls: true,
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const state = {
+      basePath: "",
+      sessionKey: "agent:lottery:main",
+      assistantName: "Lottery",
+      assistantAvatar: "L",
+      assistantAvatarSource: "avatars/lottery.png",
+      assistantAvatarStatus: "local" as const,
+      assistantAvatarReason: null,
+      assistantAgentId: "lottery",
+      localMediaPreviewRoots: [],
+      embedSandboxMode: "scripts" as const,
+      allowExternalEmbedUrls: false,
+      serverVersion: null,
+    };
+
+    await loadControlUiBootstrapConfig(state);
+
+    expect(state.assistantName).toBe("Lottery");
+    expect(state.assistantAvatar).toBe("L");
+    expect(state.assistantAvatarSource).toBe("avatars/lottery.png");
+    expect(state.assistantAvatarStatus).toBe("local");
+    expect(state.assistantAvatarReason).toBeNull();
+    expect(state.assistantAgentId).toBe("lottery");
+    expect(state.serverVersion).toBe("2026.4.27");
+    expect(state.localMediaPreviewRoots).toEqual(["/tmp/openclaw/lottery"]);
+    expect(state.embedSandboxMode).toBe("strict");
+    expect(state.allowExternalEmbedUrls).toBe(true);
+
+    vi.unstubAllGlobals();
+  });
+
+  it("still applies bootstrap identity for the default active session", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        basePath: "",
+        assistantName: "Default",
+        assistantAvatar: "D",
+        assistantAgentId: "main",
+        serverVersion: "2026.4.27",
+        localMediaPreviewRoots: [],
+        embedSandbox: "scripts",
+        allowExternalEmbedUrls: false,
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const state = {
+      basePath: "",
+      sessionKey: "agent:main:main",
+      assistantName: "Assistant",
+      assistantAvatar: null,
+      assistantAgentId: null,
+      localMediaPreviewRoots: [],
+      embedSandboxMode: "scripts" as const,
+      allowExternalEmbedUrls: false,
+      serverVersion: null,
+    };
+
+    await loadControlUiBootstrapConfig(state);
+
+    expect(state.assistantName).toBe("Default");
+    expect(state.assistantAvatar).toBe("D");
+    expect(state.assistantAgentId).toBe("main");
+
+    vi.unstubAllGlobals();
+  });
+
   it("ignores failures", async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: false });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);

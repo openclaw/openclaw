@@ -2177,6 +2177,47 @@ describe("gateway agent handler", () => {
     );
   });
 
+  it("returns the selected non-default agent identity for agent.identity.get session keys", async () => {
+    mocks.loadConfigReturn = {
+      ui: {
+        assistant: {
+          name: "Default UI",
+          avatar: "DU",
+        },
+      },
+      agents: {
+        list: [
+          { id: "main", default: true },
+          {
+            id: "lottery",
+            identity: {
+              name: "Lottery",
+              emoji: "🐕",
+            },
+          },
+        ],
+      },
+    };
+
+    const respond = await invokeAgentIdentityGet(
+      {
+        sessionKey: "agent:lottery:main",
+      },
+      { reqId: "5-lottery-identity" },
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        agentId: "lottery",
+        name: "Lottery",
+        avatar: "🐕",
+        emoji: "🐕",
+      }),
+      undefined,
+    );
+  });
+
   it("redacts unsafe avatar sources in agent.identity.get", async () => {
     mocks.loadConfigReturn = {
       agents: {
