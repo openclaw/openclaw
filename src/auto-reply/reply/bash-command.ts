@@ -80,19 +80,32 @@ function formatBashExitLabel(finished: {
     : `code ${String(finished.exitCode ?? 0)}`;
 }
 
+function isBashTimeoutExitReason(reason: unknown) {
+  return reason === "overall-timeout" || reason === "no-output-timeout";
+}
+
 function formatBashFinishedOutput(finished: {
   aggregated?: string;
   tail?: string;
   failureReason?: string;
   exitReason?: string;
 }) {
-  if (
-    (finished.exitReason === "overall-timeout" || finished.exitReason === "no-output-timeout") &&
-    finished.failureReason?.trim()
-  ) {
-    return finished.failureReason;
+  const output = finished.aggregated || finished.tail || "";
+  const failureReason = (finished.failureReason || "").trim();
+  if (isBashTimeoutExitReason(finished.exitReason) && failureReason) {
+    const trimmedOutput = output.trim();
+    if (!trimmedOutput) {
+      return failureReason;
+    }
+    if (failureReason.includes(trimmedOutput)) {
+      return failureReason;
+    }
+    if (trimmedOutput.includes(failureReason)) {
+      return trimmedOutput;
+    }
+    return `${trimmedOutput}\n\n${failureReason}`;
   }
-  return finished.aggregated || finished.tail;
+  return output;
 }
 
 function parseBashTimeoutOption(rest: string): { command: string; timeoutSec?: number } {

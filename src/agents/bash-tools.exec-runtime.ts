@@ -308,6 +308,22 @@ function formatExecSessionExitLabel(
   }
 }
 
+function isExecTimeoutExitReason(reason: unknown) {
+  return reason === "overall-timeout" || reason === "no-output-timeout";
+}
+
+function formatExecNotifyOutput(session: ProcessSession) {
+  const failureReason = (session.failureReason || "").trim();
+  const outputTail = tail(
+    session.tail || session.aggregated || "",
+    DEFAULT_NOTIFY_TAIL_CHARS,
+  ).trim();
+  if (isExecTimeoutExitReason(session.exitReason) && failureReason && outputTail) {
+    return `${outputTail}\n\n${failureReason}`;
+  }
+  return failureReason || outputTail;
+}
+
 export function applyShellPath(env: Record<string, string>, shellPath?: string | null) {
   if (!shellPath) {
     return;
@@ -336,12 +352,7 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   }
   session.exitNotified = true;
   const exitLabel = formatExecSessionExitLabel(session);
-  const output = compactNotifyOutput(
-    tail(
-      session.failureReason || session.tail || session.aggregated || "",
-      DEFAULT_NOTIFY_TAIL_CHARS,
-    ),
-  );
+  const output = compactNotifyOutput(formatExecNotifyOutput(session));
   if (status === "failed" && session.exitReason === "manual-cancel" && !output) {
     return;
   }

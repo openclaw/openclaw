@@ -407,6 +407,8 @@ describe("exec notifyOnExit suppression", () => {
     expect(outcome.reason).toContain("partial output");
     expect(session.failureReason).toContain("Command timed out");
     expect(session.failureReason).not.toContain("partial output");
+    expect(enqueueSystemEventMock.mock.calls[0]?.[0]).toContain("partial output");
+    expect(enqueueSystemEventMock.mock.calls[0]?.[0]).toContain("Command timed out");
   });
 });
 

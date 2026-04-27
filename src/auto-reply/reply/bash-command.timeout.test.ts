@@ -134,4 +134,30 @@ describe("handleBashChatCommand timeout handling", () => {
     expect(result.text).toContain("Command timed out after 30 seconds.");
     expect(result.text).not.toContain("Exit: code 0");
   });
+
+  it("keeps captured output visible when polling timed-out chat bash jobs", async () => {
+    getSessionMock.mockReturnValue(undefined);
+    getFinishedSessionMock.mockReturnValue({
+      id: "bash-session-2",
+      scopeKey: "chat:bash",
+      status: "failed",
+      exitCode: null,
+      exitSignal: null,
+      exitReason: "overall-timeout",
+      failureReason: "Command timed out after 30 seconds.",
+      aggregated: "server started\nlast log line",
+      tail: "last log line",
+      truncated: false,
+      startedAt: 123,
+      endedAt: 456,
+      totalOutputChars: 28,
+      command: "npm run dev",
+    });
+
+    const result = await handleBashChatCommand(buildParams("/bash poll bash-session-2"));
+
+    expect(result.text).toContain("server started");
+    expect(result.text).toContain("last log line");
+    expect(result.text).toContain("Command timed out after 30 seconds.");
+  });
 });
