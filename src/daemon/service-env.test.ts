@@ -270,6 +270,7 @@ describe("getMinimalServicePathParts - Nix Home Manager", () => {
     const result = getMinimalServicePathParts({
       platform: "linux",
       home: "/home/testuser",
+      existsSync: () => true,
     });
 
     expect(result).toContain("/home/testuser/.nix-profile/bin");
@@ -279,6 +280,7 @@ describe("getMinimalServicePathParts - Nix Home Manager", () => {
     const result = getMinimalServicePathParts({
       platform: "darwin",
       home: "/Users/testuser",
+      existsSync: () => true,
     });
 
     expect(result).toContain("/Users/testuser/.nix-profile/bin");
@@ -291,6 +293,7 @@ describe("getMinimalServicePathParts - Nix Home Manager", () => {
         HOME: "/home/testuser",
         NIX_PROFILES: "/nix/var/nix/profiles/default /home/testuser/.nix-profile",
       },
+      existsSync: () => true,
     });
 
     const userIdx = result.indexOf("/home/testuser/.nix-profile/bin");
@@ -307,6 +310,7 @@ describe("getMinimalServicePathParts - Nix Home Manager", () => {
         HOME: "/Users/testuser",
         NIX_PROFILES: "/nix/var/nix/profiles/default /Users/testuser/.nix-profile",
       },
+      existsSync: () => true,
     });
 
     const userIdx = result.indexOf("/Users/testuser/.nix-profile/bin");
@@ -323,6 +327,7 @@ describe("getMinimalServicePathParts - Nix Home Manager", () => {
         HOME: "/home/testuser",
         NIX_PROFILES: "/nix/var/nix/profiles/per-user/testuser/profile",
       },
+      existsSync: () => true,
     });
 
     expect(result).toContain("/nix/var/nix/profiles/per-user/testuser/profile/bin");
@@ -335,6 +340,7 @@ describe("getMinimalServicePathParts - Nix Home Manager", () => {
         HOME: "/Users/testuser",
         NIX_PROFILES: "/nix/var/nix/profiles/per-user/testuser/profile",
       },
+      existsSync: () => true,
     });
 
     expect(result).toContain("/nix/var/nix/profiles/per-user/testuser/profile/bin");
@@ -348,6 +354,7 @@ describe("getMinimalServicePathParts - Nix Home Manager", () => {
         NIX_PROFILES:
           "/nix/var/nix/profiles/default /nix/var/nix/profiles/per-user/testuser/custom /home/testuser/.nix-profile",
       },
+      existsSync: () => true,
     });
 
     const userIdx = result.indexOf("/home/testuser/.nix-profile/bin");
@@ -421,6 +428,7 @@ describe("buildMinimalServicePath", () => {
     const result = buildMinimalServicePath({
       platform: "linux",
       env: { HOME: "/home/bob" },
+      existsSync: () => true,
     });
     const parts = splitPath(result, "linux");
 
