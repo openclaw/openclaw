@@ -38,11 +38,11 @@ jobs:
       matrix:
         include:
           - language: javascript-typescript
-            runs_on: ubuntu-24.04
+            runs_on: blacksmith-8vcpu-ubuntu-2404
             timeout_minutes: 25
             config_file: ./.github/codeql/codeql-javascript-typescript-critical-security.yml
           - language: actions
-            runs_on: ubuntu-24.04
+            runs_on: blacksmith-8vcpu-ubuntu-2404
             timeout_minutes: 10
             config_file: ./.github/codeql/codeql-actions-critical-security.yml
     steps:
@@ -65,7 +65,7 @@ jobs:
   critical-quality:
     name: Critical Quality (javascript-typescript)
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'quality' }}
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
       - name: Checkout
