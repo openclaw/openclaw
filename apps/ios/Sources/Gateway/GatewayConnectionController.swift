@@ -246,12 +246,17 @@ final class GatewayConnectionController {
 
         self.refreshRegistrationGeneration &+= 1
         let generation = self.refreshRegistrationGeneration
+        // Snapshot the connect generation so we can detect a startAutoConnect
+        // that ran during our await — its freshly-computed nodeOptions must
+        // not be overwritten by our older snapshot.
+        let connectGenerationAtStart = self.autoConnectGeneration
 
         Task { [weak self, weak appModel] in
             guard let self, let appModel else { return }
             let connectOptions = await self.makeConnectOptions(stableID: cfg.stableID)
 
             guard generation == self.refreshRegistrationGeneration,
+                  connectGenerationAtStart == self.autoConnectGeneration,
                   appModel.gatewayAutoReconnectEnabled,
                   let latestConfig = appModel.activeGatewayConnectConfig,
                   latestConfig.effectiveStableID == cfg.effectiveStableID,
