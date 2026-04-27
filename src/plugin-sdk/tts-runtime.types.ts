@@ -22,7 +22,8 @@ export type TtsAttemptReasonCode =
   | "timeout"
   | "provider_error"
   | "empty_speech_text"
-  | "speech_text_too_short";
+  | "speech_text_too_short"
+  | "speech_text_too_long";
 
 export type TtsProviderAttempt = {
   provider: string;
