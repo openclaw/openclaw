@@ -578,7 +578,7 @@ export default definePluginEntry({
     const sendError = (
       respond: GatewayRequestHandlerOptions["respond"],
       err: unknown,
-      code = ErrorCodes.UNAVAILABLE,
+      code: Parameters<typeof errorShape>[0] = ErrorCodes.UNAVAILABLE,
     ) => {
       const payload = formatGatewayError(err);
       respond(
