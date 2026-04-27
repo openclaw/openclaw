@@ -6,7 +6,6 @@ import {
 } from "../../agents/agent-scope.js";
 import { listAgentIds } from "../../agents/agent-scope.js";
 import { listConfiguredBindings } from "../../config/bindings.js";
-import { loadConfig } from "../../config/config.js";
 import { normalizeConfiguredMcpServers } from "../../config/mcp-config.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import { loadCombinedSessionStoreForGateway } from "../../config/sessions.js";
@@ -19,10 +18,13 @@ import {
   validateAgentCapabilitiesParams,
 } from "../protocol/index.js";
 import { buildToolsCatalogResult } from "./tools-catalog.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import type { GatewayRequestHandlers, RespondFn, GatewayRequestContext } from "./types.js";
 
-function resolveAgentIdOrRespondError(rawAgentId: unknown, respond: RespondFn) {
-  const cfg = loadConfig();
+function resolveAgentIdOrRespondError(
+  rawAgentId: unknown,
+  respond: RespondFn,
+  cfg: ReturnType<GatewayRequestContext["getRuntimeConfig"]>,
+) {
   const knownAgents = listAgentIds(cfg);
   const requestedAgentId = normalizeOptionalString(rawAgentId) ?? "";
   const agentId = requestedAgentId || resolveDefaultAgentId(cfg);
@@ -38,7 +40,7 @@ function resolveAgentIdOrRespondError(rawAgentId: unknown, respond: RespondFn) {
 }
 
 export const agentCapabilitiesHandlers: GatewayRequestHandlers = {
-  "agent.capabilities": ({ params, respond }) => {
+  "agent.capabilities": ({ params, respond, context }) => {
     if (!validateAgentCapabilitiesParams(params)) {
       respond(
         false,
@@ -51,7 +53,11 @@ export const agentCapabilitiesHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const resolved = resolveAgentIdOrRespondError(params.agentId, respond);
+    const resolved = resolveAgentIdOrRespondError(
+      params.agentId,
+      respond,
+      context.getRuntimeConfig(),
+    );
     if (!resolved) {
       return;
     }
