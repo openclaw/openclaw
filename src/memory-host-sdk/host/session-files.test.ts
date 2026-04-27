@@ -598,6 +598,24 @@ describe("buildSessionEntry", () => {
         content: "User: Actual user text",
         lineMap: [3],
       },
+      {
+        name: "inter-session user provenance",
+        fileName: "inter-session-session.jsonl",
+        records: [
+          {
+            type: "message",
+            message: {
+              role: "user",
+              content: "A background task completed. Internal relay text.",
+              provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+            },
+          },
+          { type: "message", message: { role: "assistant", content: "User-facing summary." } },
+          { type: "message", message: { role: "user", content: "Actual user follow-up." } },
+        ],
+        content: "Assistant: User-facing summary.\nUser: Actual user follow-up.",
+        lineMap: [2, 3],
+      },
     ] as const;
 
     for (const testCase of cases) {
@@ -643,7 +661,10 @@ describe("buildSessionEntry", () => {
 
   it("skips deleted and checkpoint transcripts for dreaming ingestion", async () => {
     const deletedPath = path.join(tmpDir, "ordinary.jsonl.deleted.2026-02-16T22-27-33.000Z");
-    const checkpointPath = path.join(tmpDir, "ordinary.checkpoint.abc123.jsonl");
+    const checkpointPath = path.join(
+      tmpDir,
+      "ordinary.checkpoint.11111111-1111-4111-8111-111111111111.jsonl",
+    );
     const content = JSON.stringify({
       type: "message",
       message: { role: "user", content: "This should never reach the dreaming corpus." },

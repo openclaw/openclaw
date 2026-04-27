@@ -1,15 +1,23 @@
 import { Type, type TSchema } from "typebox";
-import { loadConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import type { CronDelivery, CronMessageChannel } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
-import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import {
+  parseAgentSessionKey,
+  parseThreadSessionSuffix,
+} from "../../sessions/session-key-utils.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
+  normalizeOptionalString,
 } from "../../shared/string-coerce.js";
 import { isRecord, truncateUtf16Safe } from "../../utils.js";
+import {
+  normalizeDeliveryContext,
+  type DeliveryContext,
+} from "../../utils/delivery-context.shared.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { CRON_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
@@ -206,6 +214,9 @@ const CronFailureAlertSchema = Type.Optional(
       channel: Type.Optional(Type.String({ description: "Alert channel" })),
       to: Type.Optional(Type.String({ description: "Alert target" })),
       cooldownMs: Type.Optional(Type.Number({ description: "Cooldown between alerts in ms" })),
+      includeSkipped: Type.Optional(
+        Type.Boolean({ description: "Count consecutive skipped runs toward alerting" }),
+      ),
       mode: optionalStringEnum(["announce", "webhook"] as const),
       accountId: Type.Optional(Type.String()),
     },
@@ -287,6 +298,7 @@ export const CronToolSchema = Type.Object(
 
 type CronToolOptions = {
   agentSessionKey?: string;
+  currentDeliveryContext?: DeliveryContext;
 };
 
 type GatewayToolCaller = typeof callGatewayTool;
@@ -342,7 +354,7 @@ async function buildReminderContextLines(params: {
   if (!sessionKey) {
     return [];
   }
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const { mainKey, alias } = resolveMainSessionAlias(cfg);
   const resolvedKey = resolveInternalSessionKey({ key: sessionKey, alias, mainKey });
   try {
@@ -390,12 +402,37 @@ function stripThreadSuffixFromSessionKey(sessionKey: string): string {
   return parent ? parent : sessionKey;
 }
 
+function resolveTelegramDirectThreadId(params: {
+  peerId: string;
+  threadId?: string;
+}): string | undefined {
+  const threadId = normalizeOptionalString(params.threadId);
+  if (!threadId) {
+    return undefined;
+  }
+  const peerId = normalizeOptionalString(params.peerId);
+  if (!peerId) {
+    return undefined;
+  }
+  const [threadChatId, ...threadIdParts] = threadId.split(":");
+  if (threadIdParts.length === 0) {
+    return threadId;
+  }
+  if (normalizeOptionalLowercaseString(threadChatId) !== peerId) {
+    return undefined;
+  }
+  return normalizeOptionalString(threadIdParts.join(":"));
+}
+
 function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | null {
   const rawSessionKey = agentSessionKey?.trim();
   if (!rawSessionKey) {
     return null;
   }
-  const parsed = parseAgentSessionKey(stripThreadSuffixFromSessionKey(rawSessionKey));
+  const threadSuffix = parseThreadSessionSuffix(rawSessionKey);
+  const parsed = parseAgentSessionKey(
+    threadSuffix.baseSessionKey ?? stripThreadSuffixFromSessionKey(rawSessionKey),
+  );
   if (!parsed || !parsed.rest) {
     return null;
   }
@@ -436,9 +473,46 @@ function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | n
     channel = normalizeOptionalLowercaseString(parts[0]) as CronMessageChannel | undefined;
   }
 
+  const marker = parts[markerIndex];
   const delivery: CronDelivery = { mode: "announce", to: peerId };
   if (channel) {
     delivery.channel = channel;
+  }
+  if (channel === "telegram" && markerIndex === 2) {
+    const accountId = normalizeOptionalString(parts[1]);
+    if (accountId) {
+      delivery.accountId = accountId;
+    }
+  }
+  if (channel === "telegram" && (marker === "direct" || marker === "dm")) {
+    const threadId = resolveTelegramDirectThreadId({
+      peerId,
+      threadId: threadSuffix.threadId,
+    });
+    if (threadId) {
+      delivery.threadId = threadId;
+    }
+  }
+  return delivery;
+}
+
+function inferDeliveryFromContext(context?: DeliveryContext): CronDelivery | null {
+  const normalized = normalizeDeliveryContext(context);
+  if (!normalized?.to) {
+    return null;
+  }
+  const delivery: CronDelivery = {
+    mode: "announce",
+    to: normalized.to,
+  };
+  if (normalized.channel) {
+    delivery.channel = normalized.channel as CronMessageChannel;
+  }
+  if (normalized.accountId) {
+    delivery.accountId = normalized.accountId;
+  }
+  if (normalized.threadId != null) {
+    delivery.threadId = normalized.threadId;
   }
   return delivery;
 }
@@ -564,7 +638,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               sessionContext: { sessionKey: opts?.agentSessionKey },
             }) ?? params.job;
           if (job && typeof job === "object") {
-            const cfg = loadConfig();
+            const cfg = getRuntimeConfig();
             const { mainKey, alias } = resolveMainSessionAlias(cfg);
             const resolvedSessionKey = opts?.agentSessionKey
               ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias, mainKey })
@@ -583,7 +657,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           }
 
           if (
-            opts?.agentSessionKey &&
+            (opts?.agentSessionKey || opts?.currentDeliveryContext) &&
             job &&
             typeof job === "object" &&
             "payload" in job &&
@@ -613,11 +687,13 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               (mode === "" || mode === "announce") &&
               !hasTarget;
             if (shouldInfer) {
-              const inferred = inferDeliveryFromSessionKey(opts.agentSessionKey);
+              const inferred =
+                inferDeliveryFromContext(opts.currentDeliveryContext) ??
+                inferDeliveryFromSessionKey(opts.agentSessionKey);
               if (inferred) {
                 (job as { delivery?: unknown }).delivery = {
-                  ...delivery,
                   ...inferred,
+                  ...delivery,
                 } satisfies CronDelivery;
               }
             }

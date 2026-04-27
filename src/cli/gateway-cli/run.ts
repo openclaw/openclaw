@@ -17,10 +17,18 @@ import {
   resolveStateDir,
   resolveGatewayPort,
 } from "../../config/config.js";
+import {
+  formatFutureConfigActionBlock,
+  resolveFutureConfigActionBlock,
+} from "../../config/future-version-guard.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
-import { defaultGatewayBindMode, isContainerEnvironment } from "../../gateway/net.js";
+import {
+  defaultGatewayBindMode,
+  isContainerEnvironment,
+  resolveGatewayBindHost,
+} from "../../gateway/net.js";
 import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
@@ -424,6 +432,26 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     defaultRuntime.error("Invalid port");
     defaultRuntime.exit(1);
   }
+  const futureStartupBlock = resolveFutureConfigActionBlock({
+    action: "start the gateway service",
+    snapshot,
+  });
+  if (futureStartupBlock && process.env.OPENCLAW_SERVICE_MARKER?.trim()) {
+    defaultRuntime.error(formatFutureConfigActionBlock(futureStartupBlock));
+    defaultRuntime.exit(78);
+    return;
+  }
+  const futureForceBlock = opts.force
+    ? resolveFutureConfigActionBlock({
+        action: "force-kill gateway port listeners",
+        snapshot,
+      })
+    : null;
+  if (futureForceBlock) {
+    defaultRuntime.error(formatFutureConfigActionBlock(futureForceBlock));
+    defaultRuntime.exit(1);
+    return;
+  }
   // Only capture the *explicit* bind value here.  The container-aware
   // default is deferred until after Tailscale mode is known (see below)
   // so that Tailscale's loopback constraint is respected.
@@ -656,6 +684,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     await runGatewayLoop({
       runtime: defaultRuntime,
       lockPort: port,
+      healthHost: await resolveGatewayBindHost(bind, cfg.gateway?.customBindHost),
       start: async ({ startupStartedAt } = {}) =>
         await startGatewayServer(port, {
           bind,

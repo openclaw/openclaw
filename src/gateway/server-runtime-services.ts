@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
+import type { PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
 import { startGatewayModelPricingRefresh } from "./model-pricing-cache.js";
@@ -93,6 +94,7 @@ export function startGatewayRuntimeServices(params: {
   cfgAtStart: OpenClawConfig;
   channelManager: GatewayChannelManager;
   log: GatewayRuntimeServiceLogger;
+  pluginLookUpTable?: Pick<PluginLookUpTable, "index" | "manifestRegistry">;
 }): {
   heartbeatRunner: HeartbeatRunner;
   channelHealthMonitor: ChannelHealthMonitor | null;
@@ -108,7 +110,10 @@ export function startGatewayRuntimeServices(params: {
     channelHealthMonitor,
     stopModelPricingRefresh:
       !params.minimalTestGateway && !isVitestRuntimeEnv()
-        ? startGatewayModelPricingRefresh({ config: params.cfgAtStart })
+        ? startGatewayModelPricingRefresh({
+            config: params.cfgAtStart,
+            ...(params.pluginLookUpTable ? { pluginLookUpTable: params.pluginLookUpTable } : {}),
+          })
         : () => {},
   };
 }

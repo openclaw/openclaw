@@ -870,7 +870,7 @@ describe("plugin sdk alias helpers", () => {
     }
   });
 
-  it("prefers native Jiti loads on Windows for built JavaScript entries", () => {
+  it("disables native Jiti loads on Windows for built JavaScript entries", () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, "platform", {
       configurable: true,
@@ -878,9 +878,9 @@ describe("plugin sdk alias helpers", () => {
     });
 
     try {
-      expect(shouldPreferNativeJiti("/repo/dist/plugins/runtime/index.js")).toBe(true);
+      expect(shouldPreferNativeJiti("/repo/dist/plugins/runtime/index.js")).toBe(false);
       expect(shouldPreferNativeJiti(`/repo/${bundledDistPluginFile("browser", "index.js")}`)).toBe(
-        true,
+        false,
       );
     } finally {
       Object.defineProperty(process, "platform", {
@@ -890,7 +890,7 @@ describe("plugin sdk alias helpers", () => {
     }
   });
 
-  it("keeps plugin loader dist shortcuts native on Windows", () => {
+  it("keeps plugin loader dist shortcuts on transpiled Jiti on Windows", () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, "platform", {
       configurable: true,
@@ -902,7 +902,7 @@ describe("plugin sdk alias helpers", () => {
         resolvePluginLoaderJitiTryNative(`/repo/${bundledDistPluginFile("browser", "index.js")}`, {
           preferBuiltDist: true,
         }),
-      ).toBe(true);
+      ).toBe(false);
       expect(
         resolvePluginLoaderJitiTryNative(`/repo/${bundledDistPluginFile("browser", "helper.ts")}`, {
           preferBuiltDist: true,

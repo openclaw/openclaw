@@ -610,8 +610,33 @@ const closeRunNodeOutputTee = async (deps, exitCode) => {
   return exitCode;
 };
 
+const readBuildLockOwnerPid = (deps, lockDir) => {
+  try {
+    const raw = deps.fs.readFileSync(path.join(lockDir, "owner.json"), "utf8");
+    const parsed = JSON.parse(raw);
+    const pid = Number(parsed?.pid);
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+};
+
+const isBuildLockOwnerDead = (deps, pid) => {
+  try {
+    deps.process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    return error?.code === "ESRCH";
+  }
+};
+
 const removeStaleBuildLock = (deps, lockDir, staleMs) => {
   try {
+    const ownerPid = readBuildLockOwnerPid(deps, lockDir);
+    if (ownerPid !== null && isBuildLockOwnerDead(deps, ownerPid)) {
+      deps.fs.rmSync(lockDir, { recursive: true, force: true });
+      return true;
+    }
     const stats = deps.fs.statSync(lockDir);
     if (Date.now() - stats.mtimeMs < staleMs) {
       return false;

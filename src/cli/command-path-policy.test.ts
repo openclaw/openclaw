@@ -41,6 +41,31 @@ describe("command-path-policy", () => {
       hideBanner: false,
       ensureCliPath: true,
     });
+    expect(resolveCliCommandPathPolicy(["channels", "logs"])).toEqual({
+      bypassConfigGuard: false,
+      routeConfigGuard: "never",
+      loadPlugins: "never",
+      hideBanner: false,
+      ensureCliPath: true,
+    });
+  });
+
+  it("keeps config-only agent commands on config-only startup", () => {
+    for (const commandPath of [
+      ["agents", "bind"],
+      ["agents", "bindings"],
+      ["agents", "unbind"],
+      ["agents", "set-identity"],
+      ["agents", "delete"],
+    ]) {
+      expect(resolveCliCommandPathPolicy(commandPath)).toEqual({
+        bypassConfigGuard: false,
+        routeConfigGuard: "never",
+        loadPlugins: "never",
+        hideBanner: false,
+        ensureCliPath: true,
+      });
+    }
   });
 
   it("resolves mixed startup-only rules", () => {
@@ -72,6 +97,21 @@ describe("command-path-policy", () => {
       hideBanner: true,
       ensureCliPath: true,
     });
+    for (const commandPath of [
+      ["plugins", "install"],
+      ["plugins", "list"],
+      ["plugins", "inspect"],
+      ["plugins", "registry"],
+      ["plugins", "doctor"],
+    ]) {
+      expect(resolveCliCommandPathPolicy(commandPath)).toEqual({
+        bypassConfigGuard: false,
+        routeConfigGuard: "never",
+        loadPlugins: "never",
+        hideBanner: false,
+        ensureCliPath: true,
+      });
+    }
     expect(resolveCliCommandPathPolicy(["cron", "list"])).toEqual({
       bypassConfigGuard: true,
       routeConfigGuard: "never",

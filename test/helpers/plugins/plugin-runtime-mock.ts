@@ -1,6 +1,8 @@
 import { vi } from "vitest";
 import {
+  createAckReactionHandle,
   removeAckReactionAfterReply,
+  removeAckReactionHandleAfterReply,
   shouldAckReaction,
 } from "../../../src/channels/ack-reactions.js";
 import {
@@ -61,6 +63,12 @@ function createTaskFlowSessionMock() {
   };
 }
 
+function createDeprecatedRuntimeConfigError(name: "loadConfig" | "writeConfigFile"): Error {
+  return new Error(
+    `Plugin runtime config.${name}() is deprecated in tests; pass cfg/current() or use mutateConfigFile()/replaceConfigFile().`,
+  );
+}
+
 export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = {}): PluginRuntime {
   const taskFlow = {
     bindSession: vi.fn(
@@ -73,8 +81,30 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
   const base: PluginRuntime = {
     version: "1.0.0-test",
     config: {
-      loadConfig: vi.fn(() => ({})) as unknown as PluginRuntime["config"]["loadConfig"],
-      writeConfigFile: vi.fn() as unknown as PluginRuntime["config"]["writeConfigFile"],
+      current: vi.fn(() => ({})) as unknown as PluginRuntime["config"]["current"],
+      mutateConfigFile: vi.fn(async () => ({
+        path: "/tmp/openclaw.json",
+        previousHash: null,
+        snapshot: {} as never,
+        nextConfig: {},
+        afterWrite: { mode: "auto" },
+        followUp: { mode: "auto", requiresRestart: false },
+        result: undefined,
+      })) as unknown as PluginRuntime["config"]["mutateConfigFile"],
+      replaceConfigFile: vi.fn(async ({ nextConfig }) => ({
+        path: "/tmp/openclaw.json",
+        previousHash: null,
+        snapshot: {} as never,
+        nextConfig,
+        afterWrite: { mode: "auto" },
+        followUp: { mode: "auto", requiresRestart: false },
+      })) as unknown as PluginRuntime["config"]["replaceConfigFile"],
+      loadConfig: vi.fn(() => {
+        throw createDeprecatedRuntimeConfigError("loadConfig");
+      }) as unknown as PluginRuntime["config"]["loadConfig"],
+      writeConfigFile: vi.fn(async () => {
+        throw createDeprecatedRuntimeConfigError("writeConfigFile");
+      }) as unknown as PluginRuntime["config"]["writeConfigFile"],
     },
     agent: {
       defaults: {
@@ -93,6 +123,18 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       resolveThinkingDefault: vi.fn(
         () => "off",
       ) as unknown as PluginRuntime["agent"]["resolveThinkingDefault"],
+      normalizeThinkingLevel: vi.fn(
+        (raw?: string | null) => raw,
+      ) as unknown as PluginRuntime["agent"]["normalizeThinkingLevel"],
+      resolveThinkingPolicy: vi.fn(() => ({
+        levels: [
+          { id: "off", label: "off" },
+          { id: "minimal", label: "minimal" },
+          { id: "low", label: "low" },
+          { id: "medium", label: "medium" },
+          { id: "high", label: "high" },
+        ],
+      })) as unknown as PluginRuntime["agent"]["resolveThinkingPolicy"],
       runEmbeddedPiAgent: vi.fn().mockResolvedValue({
         payloads: [],
         meta: {},
@@ -305,8 +347,10 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         resolveInboundMentionDecision,
       },
       reactions: {
+        createAckReactionHandle,
         shouldAckReaction,
         removeAckReactionAfterReply,
+        removeAckReactionHandleAfterReply,
       },
       groups: {
         resolveGroupPolicy: vi.fn(

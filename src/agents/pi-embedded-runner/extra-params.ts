@@ -442,6 +442,49 @@ function resolveExtraBodyParam(rawExtraBody: unknown): Record<string, unknown> |
   return Object.keys(extraBody).length > 0 ? extraBody : undefined;
 }
 
+function resolveChatTemplateKwargsParam(
+  rawChatTemplateKwargs: unknown,
+): Record<string, unknown> | undefined {
+  if (rawChatTemplateKwargs === undefined || rawChatTemplateKwargs === null) {
+    return undefined;
+  }
+  if (typeof rawChatTemplateKwargs !== "object" || Array.isArray(rawChatTemplateKwargs)) {
+    const summary =
+      typeof rawChatTemplateKwargs === "string"
+        ? rawChatTemplateKwargs
+        : typeof rawChatTemplateKwargs;
+    log.warn(`ignoring invalid chat_template_kwargs param: ${summary}`);
+    return undefined;
+  }
+  const chatTemplateKwargs = sanitizeExtraBodyRecord(
+    rawChatTemplateKwargs as Record<string, unknown>,
+  );
+  return Object.keys(chatTemplateKwargs).length > 0 ? chatTemplateKwargs : undefined;
+}
+
+function createOpenAICompletionsChatTemplateKwargsWrapper(params: {
+  baseStreamFn: StreamFn | undefined;
+  configured: Record<string, unknown>;
+}): StreamFn {
+  const underlying = params.baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (model.api !== "openai-completions") {
+      return underlying(model, context, options);
+    }
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      const existing = payloadObj.chat_template_kwargs;
+      if (existing && typeof existing === "object" && !Array.isArray(existing)) {
+        payloadObj.chat_template_kwargs = {
+          ...(existing as Record<string, unknown>),
+          ...params.configured,
+        };
+        return;
+      }
+      payloadObj.chat_template_kwargs = params.configured;
+    });
+  };
+}
+
 function createOpenAICompletionsExtraBodyWrapper(
   baseStreamFn: StreamFn | undefined,
   extraBody: Record<string, unknown>,
@@ -526,6 +569,19 @@ function applyPostPluginStreamWrappers(
   // visible reply path because it does not emit native Anthropic thinking
   // blocks. Disable thinking unless an earlier wrapper already set it.
   ctx.agent.streamFn = createMinimaxThinkingDisabledWrapper(ctx.agent.streamFn);
+
+  const rawChatTemplateKwargs = resolveAliasedParamValue(
+    [ctx.effectiveExtraParams, ctx.override],
+    "chat_template_kwargs",
+    "chatTemplateKwargs",
+  );
+  const configuredChatTemplateKwargs = resolveChatTemplateKwargsParam(rawChatTemplateKwargs);
+  if (configuredChatTemplateKwargs) {
+    ctx.agent.streamFn = createOpenAICompletionsChatTemplateKwargsWrapper({
+      baseStreamFn: ctx.agent.streamFn,
+      configured: configuredChatTemplateKwargs,
+    });
+  }
 
   const rawExtraBody = resolveAliasedParamValue(
     [ctx.effectiveExtraParams, ctx.override],

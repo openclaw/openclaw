@@ -1,0 +1,188 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import readline from "node:readline";
+import { isSilentReplyPrefixText, isSilentReplyText, SILENT_REPLY_TOKEN, startsWithSilentToken, stripLeadingSilentToken, } from "../../auto-reply/tokens.js";
+/** Maximum number of JSONL records to inspect before giving up. */
+const SESSION_FILE_MAX_RECORDS = 500;
+const CLAUDE_PROJECTS_RELATIVE_DIR = path.join(".claude", "projects");
+function normalizeClaudeCliSessionId(sessionId) {
+    const trimmed = sessionId?.trim();
+    if (!trimmed || trimmed.includes("\0") || trimmed.includes("/") || trimmed.includes("\\")) {
+        return undefined;
+    }
+    return trimmed;
+}
+async function jsonlFileHasAssistantMessage(filePath) {
+    if (!filePath) {
+        return false;
+    }
+    try {
+        const stat = await fs.lstat(filePath);
+        if (stat.isSymbolicLink() || !stat.isFile()) {
+            return false;
+        }
+        const fh = await fs.open(filePath, "r");
+        try {
+            const rl = readline.createInterface({ input: fh.createReadStream({ encoding: "utf-8" }) });
+            let recordCount = 0;
+            for await (const line of rl) {
+                if (!line.trim()) {
+                    continue;
+                }
+                recordCount++;
+                if (recordCount > SESSION_FILE_MAX_RECORDS) {
+                    break;
+                }
+                let obj;
+                try {
+                    obj = JSON.parse(line);
+                }
+                catch {
+                    continue;
+                }
+                const rec = obj;
+                if (rec?.message?.role === "assistant") {
+                    return true;
+                }
+            }
+            return false;
+        }
+        finally {
+            await fh.close();
+        }
+    }
+    catch {
+        return false;
+    }
+}
+/**
+ * Check whether a session transcript file exists and contains at least one
+ * assistant message, indicating that the SessionManager has flushed the
+ * initial user+assistant exchange to disk.
+ */
+export async function sessionFileHasContent(sessionFile) {
+    return await jsonlFileHasAssistantMessage(sessionFile);
+}
+export async function claudeCliSessionTranscriptHasContent(params) {
+    const sessionId = normalizeClaudeCliSessionId(params.sessionId);
+    if (!sessionId) {
+        return false;
+    }
+    const homeDir = params.homeDir?.trim() || process.env.HOME || os.homedir();
+    const projectsDir = path.join(homeDir, CLAUDE_PROJECTS_RELATIVE_DIR);
+    let projectEntries;
+    try {
+        projectEntries = await fs.readdir(projectsDir, { withFileTypes: true });
+    }
+    catch {
+        return false;
+    }
+    for (const entry of projectEntries) {
+        if (!entry.isDirectory()) {
+            continue;
+        }
+        const candidate = path.join(projectsDir, entry.name, `${sessionId}.jsonl`);
+        if (await jsonlFileHasAssistantMessage(candidate)) {
+            return true;
+        }
+    }
+    return false;
+}
+export function resolveFallbackRetryPrompt(params) {
+    if (!params.isFallbackRetry) {
+        return params.body;
+    }
+    if (!params.sessionHasHistory) {
+        return params.body;
+    }
+    // Even with persisted session history, fully replacing the body with a
+    // generic "continue where you left off" message strips the original task
+    // from the fallback model's view. Agents then have to reconstruct the
+    // instruction from history alone, which is fragile and sometimes
+    // impossible. Prepend the retry context to the original body instead so
+    // the fallback model has both the recovery signal AND the task. (#65760)
+    return `[Retry after the previous model attempt failed or timed out]\n\n${params.body}`;
+}
+export function createAcpVisibleTextAccumulator() {
+    let pendingSilentPrefix = "";
+    let visibleText = "";
+    let rawVisibleText = "";
+    const startsWithWordChar = (chunk) => /^[\p{L}\p{N}]/u.test(chunk);
+    const resolveNextCandidate = (base, chunk) => {
+        if (!base) {
+            return chunk;
+        }
+        if (isSilentReplyText(base, SILENT_REPLY_TOKEN) &&
+            !chunk.startsWith(base) &&
+            startsWithWordChar(chunk)) {
+            return chunk;
+        }
+        if (chunk.startsWith(base) && chunk.length > base.length) {
+            return chunk;
+        }
+        return `${base}${chunk}`;
+    };
+    const mergeVisibleChunk = (base, chunk) => {
+        if (!base) {
+            return { rawText: chunk, delta: chunk };
+        }
+        if (chunk.startsWith(base) && chunk.length > base.length) {
+            const delta = chunk.slice(base.length);
+            return { rawText: chunk, delta };
+        }
+        return {
+            rawText: `${base}${chunk}`,
+            delta: chunk,
+        };
+    };
+    return {
+        consume(chunk) {
+            if (!chunk) {
+                return null;
+            }
+            if (!visibleText) {
+                const leadCandidate = resolveNextCandidate(pendingSilentPrefix, chunk);
+                const trimmedLeadCandidate = leadCandidate.trim();
+                if (isSilentReplyText(trimmedLeadCandidate, SILENT_REPLY_TOKEN) ||
+                    isSilentReplyPrefixText(trimmedLeadCandidate, SILENT_REPLY_TOKEN)) {
+                    pendingSilentPrefix = leadCandidate;
+                    return null;
+                }
+                if (startsWithSilentToken(trimmedLeadCandidate, SILENT_REPLY_TOKEN)) {
+                    const stripped = stripLeadingSilentToken(leadCandidate, SILENT_REPLY_TOKEN);
+                    if (stripped) {
+                        pendingSilentPrefix = "";
+                        rawVisibleText = leadCandidate;
+                        visibleText = stripped;
+                        return { text: stripped, delta: stripped };
+                    }
+                    pendingSilentPrefix = leadCandidate;
+                    return null;
+                }
+                if (pendingSilentPrefix) {
+                    pendingSilentPrefix = "";
+                    rawVisibleText = leadCandidate;
+                    visibleText = leadCandidate;
+                    return {
+                        text: visibleText,
+                        delta: leadCandidate,
+                    };
+                }
+            }
+            const nextVisible = mergeVisibleChunk(rawVisibleText, chunk);
+            rawVisibleText = nextVisible.rawText;
+            if (!nextVisible.delta) {
+                return null;
+            }
+            visibleText = `${visibleText}${nextVisible.delta}`;
+            return { text: visibleText, delta: nextVisible.delta };
+        },
+        finalize() {
+            return visibleText.trim();
+        },
+        finalizeRaw() {
+            return visibleText;
+        },
+    };
+}

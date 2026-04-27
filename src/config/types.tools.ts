@@ -382,6 +382,12 @@ export type MemorySearchConfig = {
   fallback?: string;
   /** Embedding model id (remote) or alias (local). */
   model?: string;
+  /** Optional provider-specific embedding input_type for query and document requests. */
+  inputType?: string;
+  /** Optional provider-specific embedding input_type for query-time memory search. */
+  queryInputType?: string;
+  /** Optional provider-specific embedding input_type for document/index embeddings. */
+  documentInputType?: string;
   /**
    * Gemini embedding-2 models only: output vector dimensions.
    * Supported values today are 768, 1536, and 3072.
@@ -433,6 +439,11 @@ export type MemorySearchConfig = {
     watch?: boolean;
     watchDebounceMs?: number;
     intervalMinutes?: number;
+    /**
+     * Timeout in seconds for inline embedding batches during memory indexing.
+     * Unset uses provider defaults: 600s for local/self-hosted providers, 120s for hosted providers.
+     */
+    embeddingBatchTimeoutSeconds?: number;
     sessions?: {
       /** Minimum appended bytes before session transcripts are reindexed. */
       deltaBytes?: number;

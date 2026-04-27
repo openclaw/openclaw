@@ -1,0 +1,67 @@
+import { formatCliCommand } from "../cli/command-format.js";
+import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { repairBundledRuntimeDepsInstallRoot, resolveBundledRuntimeDependencyPackageInstallRoot, scanBundledPluginRuntimeDeps, } from "../plugins/bundled-runtime-deps.js";
+import { note } from "../terminal/note.js";
+export async function maybeRepairBundledPluginRuntimeDeps(params) {
+    const packageRoot = params.packageRoot ??
+        resolveOpenClawPackageRootSync({
+            argv1: process.argv[1],
+            cwd: process.cwd(),
+            moduleUrl: import.meta.url,
+        });
+    if (!packageRoot) {
+        return;
+    }
+    const { deps, missing, conflicts } = scanBundledPluginRuntimeDeps({
+        packageRoot,
+        config: params.config,
+        includeConfiguredChannels: params.includeConfiguredChannels,
+        env: params.env ?? process.env,
+    });
+    if (conflicts.length > 0) {
+        const conflictLines = conflicts.flatMap((conflict) => [`- ${conflict.name}: ${conflict.versions.join(", ")}`].concat(conflict.versions.flatMap((version) => {
+            const pluginIds = conflict.pluginIdsByVersion.get(version) ?? [];
+            return pluginIds.length > 0 ? [`  - ${version}: ${pluginIds.join(", ")}`] : [];
+        })));
+        note([
+            "Bundled plugin runtime deps use conflicting versions.",
+            ...conflictLines,
+            `Update bundled plugins and rerun ${formatCliCommand("openclaw doctor")}.`,
+        ].join("\n"), "Bundled plugins");
+    }
+    if (missing.length === 0) {
+        return;
+    }
+    const missingSpecs = missing.map((dep) => `${dep.name}@${dep.version}`);
+    const installSpecs = deps.map((dep) => `${dep.name}@${dep.version}`);
+    note([
+        "Bundled plugin runtime deps are missing.",
+        ...missing.map((dep) => `- ${dep.name}@${dep.version} (used by ${dep.pluginIds.join(", ")})`),
+        `Fix: run ${formatCliCommand("openclaw doctor --fix")} to install them.`,
+    ].join("\n"), "Bundled plugins");
+    const shouldRepair = params.prompter.shouldRepair ||
+        params.prompter.repairMode.nonInteractive ||
+        (await params.prompter.confirmAutoFix({
+            message: "Install missing bundled plugin runtime deps now?",
+            initialValue: true,
+        }));
+    if (!shouldRepair) {
+        return;
+    }
+    try {
+        const installRoot = resolveBundledRuntimeDependencyPackageInstallRoot(packageRoot, {
+            env: params.env ?? process.env,
+        });
+        const result = repairBundledRuntimeDepsInstallRoot({
+            installRoot,
+            missingSpecs,
+            installSpecs,
+            env: params.env ?? process.env,
+            installDeps: params.installDeps,
+        });
+        note(`Installed bundled plugin deps: ${result.installSpecs.join(", ")}`, "Bundled plugins");
+    }
+    catch (error) {
+        params.runtime.error(`Failed to install bundled plugin runtime deps: ${String(error)}`);
+    }
+}

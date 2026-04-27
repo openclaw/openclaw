@@ -53,6 +53,10 @@
   },
   "redirects": [
     {
+      "source": "/install/migrating-matrix",
+      "destination": "/channels/matrix-migration"
+    },
+    {
       "source": "/help/gpt54-codex-agentic-parity",
       "destination": "/help/gpt55-codex-agentic-parity"
     },
@@ -339,6 +343,14 @@
     {
       "source": "/bonjour",
       "destination": "/gateway/bonjour"
+    },
+    {
+      "source": "/gateway/config-tts",
+      "destination": "/tools/tts"
+    },
+    {
+      "source": "/gateway/observability",
+      "destination": "/gateway/opentelemetry"
     },
     {
       "source": "/browser",
@@ -976,6 +988,22 @@
                 "pages": ["install/index", "install/installer", "install/node"]
               },
               {
+                "group": "Maintenance",
+                "pages": [
+                  "install/updating",
+                  {
+                    "group": "Migrating",
+                    "pages": [
+                      "install/migrating",
+                      "install/migrating-claude",
+                      "install/migrating-hermes"
+                    ]
+                  },
+                  "install/uninstall",
+                  "install/development-channels"
+                ]
+              },
+              {
                 "group": "Containers",
                 "pages": [
                   "install/ansible",
@@ -1008,16 +1036,6 @@
                 ]
               },
               {
-                "group": "Maintenance",
-                "pages": [
-                  "install/updating",
-                  "install/migrating",
-                  "install/migrating-matrix",
-                  "install/uninstall",
-                  "install/development-channels"
-                ]
-              },
-              {
                 "group": "Advanced setup",
                 "pages": ["start/setup", "pi-dev"]
               }
@@ -1043,6 +1061,7 @@
                   "channels/imessage",
                   "channels/bluebubbles",
                   "channels/matrix",
+                  "channels/matrix-migration",
                   "channels/matrix-push-rules"
                 ]
               },
@@ -1238,6 +1257,7 @@
                   "tools/tokenjuice",
                   "tools/loop-detection",
                   "tools/trajectory",
+                  "tools/tts",
                   "tools/video-generation",
                   {
                     "group": "Web browser",
@@ -1301,6 +1321,7 @@
                   "providers/bedrock-mantle",
                   "providers/anthropic",
                   "providers/arcee",
+                  "providers/azure-speech",
                   "providers/chutes",
                   "providers/claude-max-api-proxy",
                   "providers/cloudflare-ai-gateway",
@@ -1317,6 +1338,7 @@
                   "providers/groq",
                   "providers/huggingface",
                   "providers/inferrs",
+                  "providers/inworld",
                   "providers/kilocode",
                   "providers/litellm",
                   "providers/lmstudio",
@@ -1435,11 +1457,13 @@
                     "group": "Health and diagnostics",
                     "pages": [
                       "gateway/health",
-                      "gateway/diagnostics",
                       "gateway/heartbeat",
                       "gateway/doctor",
-                      "gateway/logging",
                       "logging",
+                      "gateway/opentelemetry",
+                      "gateway/prometheus",
+                      "gateway/logging",
+                      "gateway/diagnostics",
                       "gateway/troubleshooting"
                     ]
                   },
@@ -1540,6 +1564,7 @@
                       "cli/gateway",
                       "cli/health",
                       "cli/logs",
+                      "cli/migrate",
                       "cli/onboard",
                       "cli/reset",
                       "cli/secrets",

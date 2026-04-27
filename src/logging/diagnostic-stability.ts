@@ -31,6 +31,9 @@ export type DiagnosticStabilityEventRecord = {
   provider?: string;
   model?: string;
   durationMs?: number;
+  requestBytes?: number;
+  responseBytes?: number;
+  timeToFirstByteMs?: number;
   resultCount?: number;
   commandLength?: number;
   exitCode?: number;
@@ -46,6 +49,7 @@ export type DiagnosticStabilityEventRecord = {
   queueDepth?: number;
   queueSize?: number;
   waitMs?: number;
+  failureKind?: string;
   active?: number;
   waiting?: number;
   queued?: number;
@@ -290,6 +294,7 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.commandLength = event.commandLength;
       record.exitCode = event.exitCode;
       record.timedOut = event.timedOut;
+      record.failureKind = event.failureKind;
       assignReasonCode(record, event.failureKind);
       break;
     case "run.started":
@@ -305,6 +310,34 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.outcome = event.outcome;
       assignReasonCode(record, event.errorCategory);
       break;
+    case "harness.run.started":
+      record.source = event.harnessId;
+      record.pluginId = event.pluginId;
+      record.provider = event.provider;
+      record.model = event.model;
+      record.channel = event.channel;
+      break;
+    case "harness.run.completed":
+      record.source = event.harnessId;
+      record.pluginId = event.pluginId;
+      record.provider = event.provider;
+      record.model = event.model;
+      record.channel = event.channel;
+      record.durationMs = event.durationMs;
+      record.outcome = event.outcome;
+      record.count = event.itemLifecycle?.completedCount;
+      break;
+    case "harness.run.error":
+      record.source = event.harnessId;
+      record.pluginId = event.pluginId;
+      record.provider = event.provider;
+      record.model = event.model;
+      record.channel = event.channel;
+      record.durationMs = event.durationMs;
+      record.outcome = "error";
+      record.action = event.phase;
+      assignReasonCode(record, event.errorCategory);
+      break;
     case "model.call.started":
       record.provider = event.provider;
       record.model = event.model;
@@ -313,11 +346,19 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.provider = event.provider;
       record.model = event.model;
       record.durationMs = event.durationMs;
+      record.requestBytes = event.requestPayloadBytes;
+      record.responseBytes = event.responseStreamBytes;
+      record.timeToFirstByteMs = event.timeToFirstByteMs;
       break;
     case "model.call.error":
       record.provider = event.provider;
       record.model = event.model;
       record.durationMs = event.durationMs;
+      record.requestBytes = event.requestPayloadBytes;
+      record.responseBytes = event.responseStreamBytes;
+      record.timeToFirstByteMs = event.timeToFirstByteMs;
+      record.failureKind = event.failureKind;
+      record.memory = event.memory ? copyMemory(event.memory) : undefined;
       assignReasonCode(record, event.errorCategory);
       break;
     case "log.record":
@@ -344,6 +385,12 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.channel = event.channel;
       record.pluginId = event.pluginId;
       assignReasonCode(record, event.reason);
+      break;
+    case "telemetry.exporter":
+      record.source = event.exporter;
+      record.target = event.signal;
+      record.outcome = event.status;
+      assignReasonCode(record, event.reason ?? event.errorCategory);
       break;
   }
 

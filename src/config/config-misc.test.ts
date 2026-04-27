@@ -214,7 +214,23 @@ describe("gateway.controlUi.allowExternalEmbedUrls", () => {
 });
 
 describe("plugins.entries.*.hooks", () => {
-  it("accepts boolean values", () => {
+  it.each([true, false])("accepts allowConversationAccess=%s", (allowConversationAccess) => {
+    const result = OpenClawSchema.safeParse({
+      plugins: {
+        entries: {
+          "voice-call": {
+            hooks: {
+              allowPromptInjection: false,
+              allowConversationAccess,
+            },
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts allowPromptInjection=false alongside allowConversationAccess=true", () => {
     const result = OpenClawSchema.safeParse({
       plugins: {
         entries: {
@@ -626,7 +642,7 @@ describe("model compat config schema", () => {
                   supportsUsageInStreaming: true,
                   supportsStrictMode: false,
                   requiresStringContent: true,
-                  thinkingFormat: "qwen",
+                  thinkingFormat: "zai",
                   requiresToolResultName: true,
                   requiresAssistantAfterToolResult: false,
                   requiresThinkingAsText: false,

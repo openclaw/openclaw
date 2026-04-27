@@ -118,7 +118,7 @@ function createHarness(
 }
 
 function createMockNarrativeSubagent(response = "The archive hummed softly.") {
-  const run = vi.fn(async (_params: { sessionKey: string; message: string }) => ({
+  const run = vi.fn(async (_params: { sessionKey: string; message: string; model?: string }) => ({
     runId: "dream-run-1",
   }));
   const waitForRun = vi.fn(async () => ({ status: "ok" }));
@@ -249,12 +249,11 @@ describe("memory-core dreaming phases", () => {
       nowMs,
     });
 
-    expect(subagent.deleteSession).toHaveBeenCalledTimes(2);
-    expect(subagent.deleteSession).toHaveBeenNthCalledWith(1, { sessionKey: expectedSessionKey });
-    expect(subagent.deleteSession).toHaveBeenNthCalledWith(2, { sessionKey: expectedSessionKey });
+    expect(subagent.deleteSession).toHaveBeenCalledOnce();
+    expect(subagent.deleteSession).toHaveBeenCalledWith({ sessionKey: expectedSessionKey });
   });
 
-  it("swallows synchronous request-scoped cleanup failures after narrative fallback", async () => {
+  it("skips session cleanup after request-scoped narrative fallback", async () => {
     const workspaceDir = await createDreamingWorkspace();
     await writeDailyNote(workspaceDir, [
       `# ${DREAMING_TEST_DAY}`,
@@ -320,6 +319,12 @@ describe("memory-core dreaming phases", () => {
     const dreams = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
     expect(dreams).toContain("Move backups to S3 Glacier.");
     expect(logger.error).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("request-scoped"));
+    expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining("request-scoped"));
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("narrative session cleanup failed"),
+    );
+    expect(subagent.deleteSession).not.toHaveBeenCalled();
   });
 
   it("does not re-ingest managed light dreaming blocks from daily notes", async () => {
@@ -1215,7 +1220,7 @@ describe("memory-core dreaming phases", () => {
       "utf-8",
     );
     await fs.writeFile(
-      path.join(sessionsDir, "ordinary.checkpoint.abc123.jsonl"),
+      path.join(sessionsDir, "ordinary.checkpoint.11111111-1111-4111-8111-111111111111.jsonl"),
       JSON.stringify({
         type: "message",
         message: {
@@ -2118,6 +2123,11 @@ describe("memory-core dreaming phases", () => {
   it("records light/rem signals that reinforce deep promotion ranking", async () => {
     const workspaceDir = await createDreamingWorkspace();
     const nowMs = Date.parse("2026-04-05T10:00:00.000Z");
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-03.md"),
+      "Move backups to S3 Glacier.\n",
+      "utf-8",
+    );
     await recordShortTermRecalls({
       workspaceDir,
       query: "glacier backup",
@@ -2126,7 +2136,7 @@ describe("memory-core dreaming phases", () => {
         {
           path: "memory/2026-04-03.md",
           startLine: 1,
-          endLine: 2,
+          endLine: 1,
           score: 0.92,
           snippet: "Move backups to S3 Glacier.",
           source: "memory",
@@ -2141,7 +2151,7 @@ describe("memory-core dreaming phases", () => {
         {
           path: "memory/2026-04-03.md",
           startLine: 1,
-          endLine: 2,
+          endLine: 1,
           score: 0.9,
           snippet: "Move backups to S3 Glacier.",
           source: "memory",
@@ -2221,10 +2231,123 @@ describe("memory-core dreaming phases", () => {
     });
   });
 
+  it("skips REM short-term candidates whose source file disappeared", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-03.md"),
+      "Move backups to S3 Glacier.\n",
+      "utf-8",
+    );
+    const nowMs = DREAMING_TEST_BASE_TIME.getTime();
+    await recordShortTermRecalls({
+      workspaceDir,
+      query: "live backup",
+      nowMs,
+      results: [
+        {
+          path: "memory/2026-04-03.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.91,
+          snippet: "Move backups to S3 Glacier.",
+          source: "memory",
+        },
+      ],
+    });
+    await recordShortTermRecalls({
+      workspaceDir,
+      query: "stale provider setup",
+      nowMs,
+      results: [
+        {
+          path: "memory/.dreams/session-corpus/2026-04-16.txt",
+          startLine: 2,
+          endLine: 2,
+          score: 0.88,
+          snippet: "Assistant: Documented Ollama provider setup.",
+          source: "memory",
+        },
+      ],
+    });
+    const baseline = await rankShortTermPromotionCandidates({
+      workspaceDir,
+      minScore: 0,
+      minRecallCount: 0,
+      minUniqueQueries: 0,
+      nowMs,
+    });
+    const liveKey = baseline.find((candidate) => candidate.path === "memory/2026-04-03.md")?.key;
+    const staleKey = baseline.find((candidate) =>
+      candidate.path.includes("session-corpus/2026-04-16.txt"),
+    )?.key;
+    expect(liveKey).toBeDefined();
+    expect(staleKey).toBeDefined();
+
+    await withDreamingTestClock(async () => {
+      setDreamingTestTime();
+      await __testing.runPhaseIfTriggered({
+        cleanedBody: __testing.constants.REM_SLEEP_EVENT_TEXT,
+        trigger: "heartbeat",
+        workspaceDir,
+        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        phase: "rem",
+        eventText: __testing.constants.REM_SLEEP_EVENT_TEXT,
+        config: {
+          enabled: true,
+          lookbackDays: 7,
+          limit: 10,
+          minPatternStrength: 0,
+          timezone: "UTC",
+          storage: { mode: "inline", separateReports: false },
+        },
+      });
+    });
+
+    const phaseSignalPath = resolveShortTermPhaseSignalStorePath(workspaceDir);
+    const phaseSignalStore = JSON.parse(await fs.readFile(phaseSignalPath, "utf-8")) as {
+      entries: Record<string, { remHits: number }>;
+    };
+    expect(phaseSignalStore.entries[liveKey!]).toMatchObject({ remHits: 1 });
+    expect(phaseSignalStore.entries[staleKey!]).toBeUndefined();
+
+    const remOutput = await fs.readFile(
+      path.join(workspaceDir, "memory", `${DREAMING_TEST_DAY}.md`),
+      "utf-8",
+    );
+    expect(remOutput).toContain("Move backups to S3 Glacier.");
+    expect(remOutput).not.toContain("Documented Ollama provider setup");
+  });
+
   it("passes staged light-dreaming snippets into the narrative pipeline", async () => {
     const workspaceDir = await createDreamingWorkspace();
     const subagent = createMockNarrativeSubagent("The backup plan glowed like cold storage.");
-    const { beforeAgentReply } = createHarness(LIGHT_DREAMING_TEST_CONFIG, workspaceDir, subagent);
+    const { beforeAgentReply } = createHarness(
+      {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  timezone: "UTC",
+                  model: "anthropic/claude-sonnet-4-6",
+                  storage: { mode: "inline", separateReports: false },
+                  phases: {
+                    light: {
+                      enabled: true,
+                      limit: 20,
+                      lookbackDays: 2,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      workspaceDir,
+      subagent,
+    );
 
     await withDreamingTestClock(async () => {
       await writeDailyNote(workspaceDir, [
@@ -2241,6 +2364,7 @@ describe("memory-core dreaming phases", () => {
     const firstRun = subagent.run.mock.calls[0]?.[0];
     expect(firstRun?.message).toContain("Move backups to S3 Glacier.");
     expect(firstRun?.message).toContain("Keep retention at 365 days.");
+    expect(firstRun?.model).toBe("anthropic/claude-sonnet-4-6");
     await expect(fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).resolves.toContain(
       "The backup plan glowed like cold storage.",
     );
@@ -2257,12 +2381,20 @@ describe("memory-core dreaming phases", () => {
               config: {
                 dreaming: {
                   enabled: true,
+                  execution: {
+                    defaults: {
+                      model: "openai/gpt-5.4",
+                    },
+                  },
                   phases: {
                     rem: {
                       enabled: true,
                       limit: 10,
                       lookbackDays: 7,
                       minPatternStrength: 0,
+                      execution: {
+                        model: "xai/grok-4.1-fast",
+                      },
                     },
                   },
                 },
@@ -2295,6 +2427,7 @@ describe("memory-core dreaming phases", () => {
     const firstRun = subagent.run.mock.calls[0]?.[0];
     expect(firstRun?.message).toContain("Move backups to S3 Glacier.");
     expect(firstRun?.message).toContain("Keep retention at 365 days.");
+    expect(firstRun?.model).toBe("xai/grok-4.1-fast");
     await expect(fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).resolves.toContain(
       "The traces braided themselves into a map.",
     );

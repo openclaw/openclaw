@@ -5,9 +5,16 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginEnableResult } from "../plugins/enable.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 
-const resolveBundledInstallPlanForCatalogEntry = vi.hoisted(() => vi.fn(() => undefined));
+const resolveBundledInstallPlanForCatalogEntry = vi.hoisted(() =>
+  vi.fn<(...args: unknown[]) => unknown>(() => undefined),
+);
 vi.mock("../cli/plugin-install-plan.js", () => ({
   resolveBundledInstallPlanForCatalogEntry,
+}));
+
+const refreshPluginRegistryAfterConfigMutation = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock("../cli/plugins-registry-refresh.js", () => ({
+  refreshPluginRegistryAfterConfigMutation,
 }));
 
 const resolveBundledPluginSources = vi.hoisted(() => vi.fn(() => new Map()));
@@ -61,6 +68,7 @@ describe("ensureOnboardingPluginInstalled", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     withTimeout.mockImplementation(async <T>(promise: Promise<T>) => await promise);
+    refreshPluginRegistryAfterConfigMutation.mockResolvedValue(undefined);
   });
 
   it("passes npm specs and optional expected integrity to npm installs with progress", async () => {
@@ -134,7 +142,14 @@ describe("ensureOnboardingPluginInstalled", () => {
     );
     expect(result.installed).toBe(true);
     expect(result.status).toBe("installed");
-    expect(result.cfg.plugins?.installs).toBeUndefined();
+    expect(result.cfg.plugins?.installs).toEqual({
+      "demo-plugin": expect.objectContaining({
+        pluginId: "demo-plugin",
+        source: "npm",
+        spec: "@wecom/wecom-openclaw-plugin@1.2.3",
+      }),
+    });
+    expect(refreshPluginRegistryAfterConfigMutation).not.toHaveBeenCalled();
   });
 
   it("returns a timed out status and notes the retry path when npm install hangs", async () => {
@@ -455,7 +470,59 @@ describe("ensureOnboardingPluginInstalled", () => {
       );
       expect(result.installed).toBe(true);
       expect(result.status).toBe("installed");
+      expect(result.cfg.plugins?.installs).toEqual({
+        "demo-plugin": {
+          pluginId: "demo-plugin",
+          source: "path",
+          sourcePath: "./plugins/demo",
+          spec: "@demo/plugin@1.2.3",
+        },
+      });
+    });
+  });
+
+  it("enables bundled plugins without adding their bundled directory as a local install", async () => {
+    await withTempDir({ prefix: "openclaw-onboarding-install-bundled-record-" }, async (temp) => {
+      const bundledDir = path.join(temp, "dist", "extensions", "discord");
+      await fs.mkdir(bundledDir, { recursive: true });
+      const realBundledDir = await fs.realpath(bundledDir);
+      resolveBundledInstallPlanForCatalogEntry.mockReturnValueOnce({
+        bundledSource: {
+          localPath: realBundledDir,
+        },
+      });
+      enablePluginInConfig.mockReturnValueOnce({
+        config: {
+          plugins: {
+            entries: {
+              discord: { enabled: true },
+            },
+          },
+        },
+        enabled: true,
+      });
+
+      const result = await ensureOnboardingPluginInstalled({
+        cfg: {},
+        entry: {
+          pluginId: "discord",
+          label: "Discord",
+          install: {
+            npmSpec: "@openclaw/discord",
+          },
+        },
+        prompter: {
+          select: vi.fn(async () => "local"),
+        } as never,
+        runtime: {} as never,
+        promptInstall: false,
+      });
+
+      expect(result.installed).toBe(true);
+      expect(result.cfg.plugins?.entries?.discord?.enabled).toBe(true);
+      expect(result.cfg.plugins?.load?.paths).toBeUndefined();
       expect(result.cfg.plugins?.installs).toBeUndefined();
+      expect(recordPluginInstall).not.toHaveBeenCalled();
     });
   });
 
@@ -515,7 +582,14 @@ describe("ensureOnboardingPluginInstalled", () => {
         );
         expect(result.installed).toBe(true);
         expect(result.status).toBe("installed");
-        expect(result.cfg.plugins?.installs).toBeUndefined();
+        expect(result.cfg.plugins?.installs).toEqual({
+          "demo-plugin": {
+            pluginId: "demo-plugin",
+            source: "path",
+            sourcePath: "./plugins/demo",
+            spec: "@demo/plugin@1.2.3",
+          },
+        });
       },
     );
   });

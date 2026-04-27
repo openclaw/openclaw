@@ -1,0 +1,213 @@
+import { resolveAgentModelFallbackValues, resolveAgentModelPrimaryValue, toAgentModelListLike, } from "../config/model-input.js";
+import { resolveAgentConfig, resolveAgentEffectiveModelPrimary, resolveAgentModelFallbacksOverride, } from "./agent-scope.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+export { resolveThinkingDefault } from "./model-thinking-default.js";
+import { findNormalizedProviderKey, findNormalizedProviderValue, legacyModelKey, modelKey, normalizeModelRef, normalizeProviderId, normalizeProviderIdForAuth, parseModelRef, } from "./model-selection-normalize.js";
+import { buildAllowedModelSetWithFallbacks, buildConfiguredAllowlistKeys, buildConfiguredModelCatalog, buildModelAliasIndex, getModelRefStatusWithFallbackModels, inferUniqueProviderFromCatalog, inferUniqueProviderFromConfiguredModels, normalizeModelSelection, resolveBareModelDefaultProvider, resolveAllowedModelRefFromAliasIndex, resolveAllowlistModelKey as resolveAllowlistModelKeyFromShared, resolveConfiguredModelRef, resolveConfiguredOpenRouterCompatAlias, resolveHooksGmailModel, resolveModelRefFromString, } from "./model-selection-shared.js";
+export { buildConfiguredAllowlistKeys, buildConfiguredModelCatalog, buildModelAliasIndex, findNormalizedProviderKey, findNormalizedProviderValue, inferUniqueProviderFromConfiguredModels, inferUniqueProviderFromCatalog, legacyModelKey, modelKey, normalizeModelRef, normalizeModelSelection, normalizeProviderId, normalizeProviderIdForAuth, parseModelRef, resolveBareModelDefaultProvider, resolveConfiguredModelRef, resolveHooksGmailModel, resolveModelRefFromString, };
+export { isCliProvider } from "./model-selection-cli.js";
+export function resolvePersistedOverrideModelRef(params) {
+    const defaultProvider = params.defaultProvider.trim();
+    const overrideProvider = params.overrideProvider?.trim();
+    const overrideModel = params.overrideModel?.trim();
+    if (!overrideModel) {
+        return null;
+    }
+    const encodedOverride = overrideProvider ? `${overrideProvider}/${overrideModel}` : overrideModel;
+    return (parseModelRef(encodedOverride, defaultProvider, {
+        allowPluginNormalization: params.allowPluginNormalization,
+    }) ?? {
+        provider: overrideProvider || defaultProvider,
+        model: overrideModel,
+    });
+}
+/**
+ * Runtime-first resolver for persisted model metadata.
+ * Use this when callers intentionally want the last executed model identity.
+ */
+export function resolvePersistedModelRef(params) {
+    const defaultProvider = params.defaultProvider.trim();
+    const runtimeProvider = params.runtimeProvider?.trim();
+    const runtimeModel = params.runtimeModel?.trim();
+    if (runtimeModel) {
+        if (runtimeProvider) {
+            return { provider: runtimeProvider, model: runtimeModel };
+        }
+        return (parseModelRef(runtimeModel, defaultProvider, {
+            allowPluginNormalization: params.allowPluginNormalization,
+        }) ?? {
+            provider: defaultProvider,
+            model: runtimeModel,
+        });
+    }
+    return resolvePersistedOverrideModelRef({
+        defaultProvider,
+        overrideProvider: params.overrideProvider,
+        overrideModel: params.overrideModel,
+        allowPluginNormalization: params.allowPluginNormalization,
+    });
+}
+/**
+ * Selected-model resolver for persisted model metadata.
+ * Use this for control/status/UI surfaces that should honor explicit session
+ * overrides before falling back to runtime identity.
+ */
+export function resolvePersistedSelectedModelRef(params) {
+    const override = resolvePersistedOverrideModelRef({
+        defaultProvider: params.defaultProvider,
+        overrideProvider: params.overrideProvider,
+        overrideModel: params.overrideModel,
+        allowPluginNormalization: params.allowPluginNormalization,
+    });
+    if (override) {
+        return override;
+    }
+    return resolvePersistedModelRef({
+        defaultProvider: params.defaultProvider,
+        runtimeProvider: params.runtimeProvider,
+        runtimeModel: params.runtimeModel,
+        allowPluginNormalization: params.allowPluginNormalization,
+    });
+}
+export function normalizeStoredOverrideModel(params) {
+    const providerOverride = params.providerOverride?.trim();
+    const modelOverride = params.modelOverride?.trim();
+    if (!providerOverride || !modelOverride) {
+        return {
+            providerOverride,
+            modelOverride,
+        };
+    }
+    const providerPrefix = `${providerOverride.toLowerCase()}/`;
+    return {
+        providerOverride,
+        modelOverride: modelOverride.toLowerCase().startsWith(providerPrefix)
+            ? modelOverride.slice(providerOverride.length + 1).trim() || modelOverride
+            : modelOverride,
+    };
+}
+export function resolveAllowlistModelKey(raw, defaultProvider, cfg) {
+    return resolveAllowlistModelKeyFromShared({ cfg, raw, defaultProvider });
+}
+export function resolveDefaultModelForAgent(params) {
+    const agentModelOverride = params.agentId
+        ? resolveAgentEffectiveModelPrimary(params.cfg, params.agentId)
+        : undefined;
+    const cfg = agentModelOverride && agentModelOverride.length > 0
+        ? {
+            ...params.cfg,
+            agents: {
+                ...params.cfg.agents,
+                defaults: {
+                    ...params.cfg.agents?.defaults,
+                    model: {
+                        ...toAgentModelListLike(params.cfg.agents?.defaults?.model),
+                        primary: agentModelOverride,
+                    },
+                },
+            },
+        }
+        : params.cfg;
+    return resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: DEFAULT_PROVIDER,
+        defaultModel: DEFAULT_MODEL,
+    });
+}
+function resolveAllowedFallbacks(params) {
+    if (params.agentId) {
+        const override = resolveAgentModelFallbacksOverride(params.cfg, params.agentId);
+        if (override !== undefined) {
+            return override;
+        }
+    }
+    return resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
+}
+export function resolveSubagentConfiguredModelSelection(params) {
+    const agentConfig = resolveAgentConfig(params.cfg, params.agentId);
+    return (normalizeModelSelection(agentConfig?.subagents?.model) ??
+        normalizeModelSelection(agentConfig?.model) ??
+        normalizeModelSelection(params.cfg.agents?.defaults?.subagents?.model));
+}
+export function resolveSubagentSpawnModelSelection(params) {
+    const runtimeDefault = resolveDefaultModelForAgent({
+        cfg: params.cfg,
+        agentId: params.agentId,
+    });
+    return (normalizeModelSelection(params.modelOverride) ??
+        resolveSubagentConfiguredModelSelection({
+            cfg: params.cfg,
+            agentId: params.agentId,
+        }) ??
+        normalizeModelSelection(resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model)) ??
+        `${runtimeDefault.provider}/${runtimeDefault.model}`);
+}
+export function buildAllowedModelSet(params) {
+    return buildAllowedModelSetWithFallbacks({
+        cfg: params.cfg,
+        catalog: params.catalog,
+        defaultProvider: params.defaultProvider,
+        defaultModel: params.defaultModel,
+        fallbackModels: resolveAllowedFallbacks({
+            cfg: params.cfg,
+            agentId: params.agentId,
+        }),
+    });
+}
+export function getModelRefStatus(params) {
+    return getModelRefStatusWithFallbackModels({
+        cfg: params.cfg,
+        catalog: params.catalog,
+        ref: params.ref,
+        defaultProvider: params.defaultProvider,
+        defaultModel: params.defaultModel,
+        fallbackModels: resolveAllowedFallbacks({
+            cfg: params.cfg,
+        }),
+    });
+}
+function getModelRefStatusForResolve(params, ref) {
+    return getModelRefStatus({
+        cfg: params.cfg,
+        catalog: params.catalog,
+        ref,
+        defaultProvider: params.defaultProvider,
+        defaultModel: params.defaultModel,
+    });
+}
+export function resolveAllowedModelRef(params) {
+    const trimmed = params.raw.trim();
+    if (!trimmed) {
+        return { error: "invalid model: empty" };
+    }
+    const aliasIndex = buildModelAliasIndex({
+        cfg: params.cfg,
+        defaultProvider: params.defaultProvider,
+    });
+    const openrouterCompatRef = resolveConfiguredOpenRouterCompatAlias({
+        cfg: params.cfg,
+        raw: trimmed,
+        defaultProvider: params.defaultProvider,
+    });
+    if (openrouterCompatRef) {
+        const status = getModelRefStatusForResolve(params, openrouterCompatRef);
+        if (!status.allowed) {
+            return { error: `model not allowed: ${status.key}` };
+        }
+        return { ref: openrouterCompatRef, key: status.key };
+    }
+    return resolveAllowedModelRefFromAliasIndex({
+        cfg: params.cfg,
+        raw: params.raw,
+        defaultProvider: params.defaultProvider,
+        aliasIndex,
+        getStatus: (ref) => getModelRefStatusForResolve(params, ref),
+    });
+}
+/** Default reasoning level when session/directive do not set it: "on" if model supports reasoning, else "off". */
+export function resolveReasoningDefault(params) {
+    const key = modelKey(params.provider, params.model);
+    const candidate = params.catalog?.find((entry) => (entry.provider === params.provider && entry.id === params.model) ||
+        (entry.provider === key && entry.id === params.model));
+    return candidate?.reasoning === true ? "on" : "off";
+}

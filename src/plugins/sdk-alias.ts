@@ -695,7 +695,7 @@ export function buildPluginLoaderJitiOptions(aliasMap: Record<string, string>) {
 
 function supportsNativeJitiRuntime(): boolean {
   const versions = process.versions as { bun?: string };
-  return typeof versions.bun !== "string";
+  return typeof versions.bun !== "string" && process.platform !== "win32";
 }
 
 function isBundledPluginDistModulePath(modulePath: string): boolean {

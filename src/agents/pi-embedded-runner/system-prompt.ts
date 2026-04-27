@@ -32,6 +32,10 @@ export function buildEmbeddedSystemPrompt(params: {
   promptMode?: PromptMode;
   /** Whether ACP-specific routing guidance should be included. Defaults to true. */
   acpEnabled?: boolean;
+  /** Registered runtime slash/native command names such as `codex`. */
+  nativeCommandNames?: string[];
+  /** Plugin-owned prompt guidance for registered native slash commands. */
+  nativeCommandGuidanceLines?: string[];
   runtimeInfo: {
     agentId?: string;
     host: string;
@@ -76,6 +80,8 @@ export function buildEmbeddedSystemPrompt(params: {
     reactionGuidance: params.reactionGuidance,
     promptMode: params.promptMode,
     acpEnabled: params.acpEnabled,
+    nativeCommandNames: params.nativeCommandNames,
+    nativeCommandGuidanceLines: params.nativeCommandGuidanceLines,
     runtimeInfo: params.runtimeInfo,
     messageToolHints: params.messageToolHints,
     sandboxInfo: params.sandboxInfo,

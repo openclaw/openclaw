@@ -54,20 +54,37 @@ If you prefer chat-native control, enable `commands.plugins: true` and use:
 ```
 
 The install path uses the same resolver as the CLI: local path/archive, explicit
-`clawhub:<pkg>`, or bare package spec (ClawHub first, then npm fallback).
+`clawhub:<pkg>`, explicit `npm:<pkg>`, or bare package spec (ClawHub first, then
+npm fallback).
 
 If config is invalid, install normally fails closed and points you at
 `openclaw doctor --fix`. The only recovery exception is a narrow bundled-plugin
 reinstall path for plugins that opt into
 `openclaw.install.allowInvalidConfigRecovery`.
+During Gateway startup, invalid config for one plugin is isolated to that plugin:
+startup logs the `plugins.entries.<id>.config` issue, skips that plugin during
+load, and keeps other plugins and channels online. Run `openclaw doctor --fix`
+to quarantine the bad plugin config by disabling that plugin entry and removing
+its invalid config payload; the normal config backup keeps the previous values.
+When a channel config references a plugin that is no longer discoverable but the
+same stale plugin id remains in plugin config or install records, Gateway startup
+logs warnings and skips that channel instead of blocking every other channel.
+Run `openclaw doctor --fix` to remove the stale channel/plugin entries; unknown
+channel keys without stale-plugin evidence still fail validation so typos stay
+visible.
 
 Packaged OpenClaw installs do not eagerly install every bundled plugin's
 runtime dependency tree. When a bundled OpenClaw-owned plugin is active from
 plugin config, legacy channel config, or a default-enabled manifest, startup
 repairs only that plugin's declared runtime dependencies before importing it.
+Persisted channel auth state alone does not activate a bundled channel for
+Gateway startup runtime-dependency repair.
 Explicit disablement still wins: `plugins.entries.<id>.enabled: false`,
 `plugins.deny`, `plugins.enabled: false`, and `channels.<id>.enabled: false`
 prevent automatic bundled runtime-dependency repair for that plugin/channel.
+A non-empty `plugins.allow` also bounds default-enabled bundled runtime-dependency
+repair; explicit bundled channel enablement (`channels.<id>.enabled: true`) can
+still repair that channel's plugin dependencies.
 External plugins and custom load paths must still be installed through
 `openclaw plugins install`.
 
@@ -84,6 +101,28 @@ Both show up under `openclaw plugins list`. See [Plugin Bundles](/plugins/bundle
 
 If you are writing a native plugin, start with [Building Plugins](/plugins/building-plugins)
 and the [Plugin SDK Overview](/plugins/sdk-overview).
+
+## Package entrypoints
+
+Native plugin npm packages must declare `openclaw.extensions` in `package.json`.
+Each entry must stay inside the package directory and resolve to a readable
+runtime file, or to a TypeScript source file with an inferred built JavaScript
+peer such as `src/index.ts` to `dist/index.js`.
+
+Use `openclaw.runtimeExtensions` when published runtime files do not live at the
+same paths as the source entries. When present, `runtimeExtensions` must contain
+exactly one entry for every `extensions` entry. Mismatched lists fail install and
+plugin discovery rather than silently falling back to source paths.
+
+```json
+{
+  "name": "@acme/openclaw-plugin",
+  "openclaw": {
+    "extensions": ["./src/index.ts"],
+    "runtimeExtensions": ["./dist/index.js"]
+  }
+}
+```
 
 ## Official plugins
 
@@ -169,7 +208,7 @@ or use `openclaw gateway restart` against the running Gateway.
 <Accordion title="Plugin states: disabled vs missing vs invalid">
   - **Disabled**: plugin exists but enablement rules turned it off. Config is preserved.
   - **Missing**: config references a plugin id that discovery did not find.
-  - **Invalid**: plugin exists but its config does not match the declared schema.
+  - **Invalid**: plugin exists but its config does not match the declared schema. Gateway startup skips only that plugin; `openclaw doctor --fix` can quarantine the invalid entry by disabling it and removing its config payload.
 </Accordion>
 
 ## Discovery and precedence
@@ -178,7 +217,9 @@ OpenClaw scans for plugins in this order (first match wins):
 
 <Steps>
   <Step title="Config paths">
-    `plugins.load.paths` — explicit file or directory paths.
+    `plugins.load.paths` — explicit file or directory paths. Paths that point
+    back at OpenClaw's own packaged bundled plugin directories are ignored;
+    run `openclaw doctor --fix` to remove those stale aliases.
   </Step>
 
   <Step title="Workspace plugins">
@@ -195,6 +236,16 @@ OpenClaw scans for plugins in this order (first match wins):
   </Step>
 </Steps>
 
+Packaged installs and Docker images normally resolve bundled plugins from the
+compiled `dist/extensions` tree. If a bundled plugin source directory is
+bind-mounted over the matching packaged source path, for example
+`/app/extensions/synology-chat`, OpenClaw treats that mounted source directory
+as a bundled source overlay and discovers it before the packaged
+`/app/dist/extensions/synology-chat` bundle. This keeps maintainer container
+loops working without switching every bundled plugin back to TypeScript source.
+Set `OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS=1` to force packaged dist bundles
+even when source overlay mounts are present.
+
 ### Enablement rules
 
 - `plugins.enabled: false` disables all plugins
@@ -208,7 +259,7 @@ OpenClaw scans for plugins in this order (first match wins):
   runtime
 - OpenAI-family Codex routes keep separate plugin boundaries:
   `openai-codex/*` belongs to the OpenAI plugin, while the bundled Codex
-  app-server plugin is selected by `embeddedHarness.runtime: "codex"` or legacy
+  app-server plugin is selected by `agentRuntime.id: "codex"` or legacy
   `codex/*` model refs
 
 ## Troubleshooting runtime hooks
@@ -223,7 +274,7 @@ do not run in live chat traffic, check these first:
   `openclaw gateway run` process.
 - Use `openclaw plugins inspect <id> --json` to confirm hook registrations and
   diagnostics. Non-bundled conversation hooks such as `llm_input`,
-  `llm_output`, and `agent_end` need
+  `llm_output`, `before_agent_finalize`, and `agent_end` need
   `plugins.entries.<id>.hooks.allowConversationAccess=true`.
 - For model switching, prefer `before_model_resolve`. It runs before model
   resolution for agent turns; `llm_output` only runs after a model attempt
@@ -231,6 +282,40 @@ do not run in live chat traffic, check these first:
 - For proof of the effective session model, use `openclaw sessions` or the
   Gateway session/status surfaces and, when debugging provider payloads, start
   the Gateway with `--raw-stream --raw-stream-path <path>`.
+
+### Duplicate channel or tool ownership
+
+Symptoms:
+
+- `channel already registered: <channel-id> (<plugin-id>)`
+- `channel setup already registered: <channel-id> (<plugin-id>)`
+- `plugin tool name conflict (<plugin-id>): <tool-name>`
+
+These mean more than one enabled plugin is trying to own the same channel,
+setup flow, or tool name. The most common cause is an external channel plugin
+installed beside a bundled plugin that now provides the same channel id.
+
+Debug steps:
+
+- Run `openclaw plugins list --enabled --verbose` to see every enabled plugin
+  and origin.
+- Run `openclaw plugins inspect <id> --json` for each suspected plugin and
+  compare `channels`, `channelConfigs`, `tools`, and diagnostics.
+- Run `openclaw plugins registry --refresh` after installing or removing
+  plugin packages so persisted metadata reflects the current install.
+- Restart the Gateway after install, registry, or config changes.
+
+Fix options:
+
+- If one plugin intentionally replaces another for the same channel id, the
+  preferred plugin should declare `channelConfigs.<channel-id>.preferOver` with
+  the lower-priority plugin id. See [/plugins/manifest#replacing-another-channel-plugin](/plugins/manifest#replacing-another-channel-plugin).
+- If the duplicate is accidental, disable one side with
+  `plugins.entries.<plugin-id>.enabled: false` or remove the stale plugin
+  install.
+- If you explicitly enabled both plugins, OpenClaw keeps that request and
+  reports the conflict. Pick one owner for the channel or rename plugin-owned
+  tools so the runtime surface is unambiguous.
 
 ## Plugin slots (exclusive categories)
 
@@ -266,10 +351,11 @@ openclaw plugins info <id>                 # inspect alias
 openclaw plugins doctor                    # diagnostics
 openclaw plugins registry                  # inspect persisted registry state
 openclaw plugins registry --refresh        # rebuild persisted registry
-openclaw doctor --fix                      # repair registry/ledger migration state
+openclaw doctor --fix                      # repair plugin registry state
 
 openclaw plugins install <package>         # install (ClawHub first, then npm)
 openclaw plugins install clawhub:<pkg>     # install from ClawHub only
+openclaw plugins install npm:<pkg>         # install from npm only
 openclaw plugins install <spec> --force    # overwrite existing install
 openclaw plugins install <path>            # install from local path
 openclaw plugins install -l <path>         # link (no copy) for dev
@@ -280,7 +366,7 @@ openclaw plugins install <spec> --dangerously-force-unsafe-install
 openclaw plugins update <id-or-npm-spec> # update one plugin
 openclaw plugins update <id-or-npm-spec> --dangerously-force-unsafe-install
 openclaw plugins update --all            # update all
-openclaw plugins uninstall <id>          # remove config and install ledger records
+openclaw plugins uninstall <id>          # remove config and plugin index records
 openclaw plugins uninstall <id> --keep-files
 openclaw plugins marketplace list <source>
 openclaw plugins marketplace list <source> --json
@@ -299,19 +385,18 @@ plugins. It is not supported with `--link`, which reuses the source path instead
 of copying over a managed install target.
 
 When `plugins.allow` is already set, `openclaw plugins install` adds the
-installed plugin id to that allowlist before enabling it, so installs are
-immediately loadable after restart.
+installed plugin id to that allowlist before enabling it. If the same plugin id
+is present in `plugins.deny`, install removes that stale deny entry so the
+explicit install is immediately loadable after restart.
 
 OpenClaw keeps a persisted local plugin registry as the cold read model for
 plugin inventory, contribution ownership, and startup planning. Install, update,
 uninstall, enable, and disable flows refresh that registry after changing plugin
-state. If the registry is missing, stale, or invalid, `openclaw plugins registry
---refresh` rebuilds it from the durable install ledger, config policy, and
+state. The same `plugins/installs.json` file keeps durable install metadata in
+top-level `installRecords` and rebuildable manifest metadata in `plugins`. If
+the registry is missing, stale, or invalid, `openclaw plugins registry
+--refresh` rebuilds its manifest view from install records, config policy, and
 manifest/package metadata without loading plugin runtime modules.
-If a machine still has legacy `plugins.installs` records in config, run
-`openclaw doctor --fix` to move them into the managed
-`plugins/installs.json` ledger and remove the config copy.
-
 `openclaw plugins update <id-or-npm-spec>` applies to tracked installs. Passing
 an npm package spec with a dist-tag or exact version resolves the package name
 back to the tracked plugin record and records the new spec for future updates.
@@ -327,6 +412,10 @@ marketplace installs persist marketplace source metadata instead of an npm spec.
 positives from the built-in dangerous-code scanner. It allows plugin installs
 and plugin updates to continue past built-in `critical` findings, but it still
 does not bypass plugin `before_install` policy blocks or scan-failure blocking.
+Install scans ignore common test files and directories such as `tests/`,
+`__tests__/`, `*.test.*`, and `*.spec.*` to avoid blocking packaged test mocks;
+declared plugin runtime entrypoints are still scanned even if they use one of
+those names.
 
 This CLI flag applies to plugin install/update flows only. Gateway-backed skill
 dependency installs use the matching `dangerouslyForceUnsafeInstall` request

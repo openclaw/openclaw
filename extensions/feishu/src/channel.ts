@@ -588,6 +588,12 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
         polls: false,
         threads: true,
         media: true,
+        tts: {
+          voice: {
+            synthesisTarget: "voice-note",
+            transcodesAudio: true,
+          },
+        },
         reactions: true,
         edit: true,
         reply: true,
@@ -1134,11 +1140,14 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       auth: {
         login: async ({ cfg }) => {
           const { createClackPrompter } = await import("openclaw/plugin-sdk/setup-runtime");
-          const { writeConfigFile } = await import("openclaw/plugin-sdk/config-runtime");
+          const { replaceConfigFile } = await import("openclaw/plugin-sdk/config-mutation");
           const prompter = createClackPrompter();
           const nextCfg = await runFeishuLogin({ cfg, prompter });
           if (nextCfg !== cfg) {
-            await writeConfigFile(nextCfg);
+            await replaceConfigFile({
+              nextConfig: nextCfg,
+              afterWrite: { mode: "auto" },
+            });
           }
         },
       },

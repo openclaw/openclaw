@@ -73,6 +73,7 @@ const mocks = vi.hoisted(() => ({
     attempts: [],
   })),
   setTtsProvider: vi.fn(),
+  setTtsPersona: vi.fn(),
   resolveExplicitTtsOverrides: vi.fn(
     ({
       provider,
@@ -126,6 +127,7 @@ vi.mock("../runtime.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: mocks.loadConfig as typeof import("../config/config.js").getRuntimeConfig,
   loadConfig: mocks.loadConfig as typeof import("../config/config.js").loadConfig,
 }));
 
@@ -161,10 +163,17 @@ vi.mock("../agents/memory-search.js", () => ({
     mocks.resolveMemorySearchConfig as typeof import("../agents/memory-search.js").resolveMemorySearchConfig,
 }));
 
-vi.mock("../commands/models.js", () => ({
+vi.mock("../commands/models/auth.js", () => ({
   modelsAuthLoginCommand: vi.fn(),
+}));
+
+vi.mock("../commands/models/list.js", () => ({
   modelsStatusCommand:
-    mocks.modelsStatusCommand as typeof import("../commands/models.js").modelsStatusCommand,
+    mocks.modelsStatusCommand as typeof import("../commands/models/list.js").modelsStatusCommand,
+}));
+vi.mock("../commands/models/list.status-command.js", () => ({
+  modelsStatusCommand:
+    mocks.modelsStatusCommand as typeof import("../commands/models/list.status-command.js").modelsStatusCommand,
 }));
 
 vi.mock("../gateway/call.js", () => ({
@@ -220,11 +229,14 @@ vi.mock("../video-generation/runtime.js", () => ({
 }));
 
 vi.mock("../tts/tts.js", () => ({
+  getTtsPersona: vi.fn(() => undefined),
   getTtsProvider: vi.fn(() => "openai"),
+  listTtsPersonas: vi.fn(() => []),
   listSpeechVoices: vi.fn(async () => []),
   resolveTtsConfig: vi.fn(() => ({})),
   resolveTtsPrefsPath: vi.fn(() => "/tmp/tts.json"),
   setTtsEnabled: vi.fn(),
+  setTtsPersona: mocks.setTtsPersona as typeof import("../tts/tts.js").setTtsPersona,
   setTtsProvider: mocks.setTtsProvider as typeof import("../tts/tts.js").setTtsProvider,
   resolveExplicitTtsOverrides:
     mocks.resolveExplicitTtsOverrides as typeof import("../tts/tts.js").resolveExplicitTtsOverrides,
@@ -360,7 +372,7 @@ describe("capability cli", () => {
     );
   });
 
-  it("cleans up bundled MCP runtimes for local model runs", async () => {
+  it("runs local model probes without chat-agent prompt policy or tools", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
       argv: ["capability", "model", "run", "--prompt", "hello", "--json"],
@@ -369,13 +381,15 @@ describe("capability cli", () => {
     expect(mocks.agentCommand).toHaveBeenCalledWith(
       expect.objectContaining({
         cleanupBundleMcpOnRunEnd: true,
+        modelRun: true,
+        promptMode: "none",
       }),
       expect.anything(),
       expect.anything(),
     );
   });
 
-  it("requests bundled MCP runtime cleanup for gateway model runs", async () => {
+  it("runs gateway model probes without chat-agent prompt policy or tools", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
       argv: ["capability", "model", "run", "--prompt", "hello", "--gateway", "--json"],
@@ -386,6 +400,8 @@ describe("capability cli", () => {
         method: "agent",
         params: expect.objectContaining({
           cleanupBundleMcpOnRunEnd: true,
+          modelRun: true,
+          promptMode: "none",
         }),
       }),
     );
@@ -710,6 +726,95 @@ describe("capability cli", () => {
     ).rejects.toThrow("exit 1");
     expect(mocks.runtime.error).toHaveBeenCalledWith(
       "Error: --background must be one of transparent, opaque, or auto",
+    );
+  });
+
+  it("forwards size, aspect ratio, and resolution overrides for image edit", async () => {
+    const pngBase64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+yf7kAAAAASUVORK5CYII=";
+    mocks.generateImage.mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-2",
+      attempts: [],
+      images: [
+        {
+          buffer: Buffer.from(pngBase64, "base64"),
+          mimeType: "image/png",
+          fileName: "provider-output.png",
+        },
+      ],
+    });
+
+    const tempInput = path.join(os.tmpdir(), `openclaw-image-edit-input-${Date.now()}.png`);
+    const tempOutput = path.join(os.tmpdir(), `openclaw-image-edit-output-${Date.now()}.png`);
+    await fs.writeFile(tempInput, Buffer.from(pngBase64, "base64"));
+    await fs.rm(tempOutput, { force: true });
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "image",
+        "edit",
+        "--file",
+        tempInput,
+        "--prompt",
+        "remove the background object",
+        "--model",
+        "openai/gpt-image-2",
+        "--size",
+        "2160x3840",
+        "--aspect-ratio",
+        "9:16",
+        "--resolution",
+        "4K",
+        "--output",
+        tempOutput,
+        "--json",
+      ],
+    });
+
+    expect(mocks.generateImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "remove the background object",
+        modelOverride: "openai/gpt-image-2",
+        size: "2160x3840",
+        aspectRatio: "9:16",
+        resolution: "4K",
+        inputImages: [
+          expect.objectContaining({
+            fileName: path.basename(tempInput),
+            mimeType: "image/png",
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("reports the expanded image.edit flags in capability inspect", async () => {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "inspect", "--name", "image.edit", "--json"],
+    });
+
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "image.edit",
+        flags: [
+          "--file",
+          "--prompt",
+          "--model",
+          "--size",
+          "--aspect-ratio",
+          "--resolution",
+          "--output-format",
+          "--background",
+          "--openai-background",
+          "--timeout-ms",
+          "--output",
+          "--json",
+        ],
+      }),
     );
   });
 

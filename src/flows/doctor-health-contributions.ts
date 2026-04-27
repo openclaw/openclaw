@@ -253,6 +253,11 @@ async function runSessionLocksHealth(ctx: DoctorHealthFlowContext): Promise<void
   await noteSessionLockHealth({ shouldRepair: ctx.prompter.shouldRepair });
 }
 
+async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteSessionTranscriptHealth } = await import("../commands/doctor-session-transcripts.js");
+  await noteSessionTranscriptHealth({ shouldRepair: ctx.prompter.shouldRepair });
+}
+
 async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairLegacyCronStore } = await import("../commands/doctor-cron.js");
   await maybeRepairLegacyCronStore({
@@ -467,7 +472,7 @@ async function runGatewayDaemonHealth(ctx: DoctorHealthFlowContext): Promise<voi
 async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { formatCliCommand } = await import("../cli/command-format.js");
   const { applyWizardMetadata } = await import("../commands/onboard-helpers.js");
-  const { CONFIG_PATH, writeConfigFile } = await import("../config/config.js");
+  const { CONFIG_PATH, replaceConfigFile } = await import("../config/config.js");
   const { logConfigUpdated } = await import("../config/logging.js");
   const { shortenHomePath } = await import("../utils.js");
   const shouldWriteConfig =
@@ -478,7 +483,10 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
       command: "doctor",
       mode: resolveDoctorMode(ctx.cfg),
     });
-    await writeConfigFile(ctx.cfg);
+    await replaceConfigFile({
+      nextConfig: ctx.cfg,
+      afterWrite: { mode: "auto" },
+    });
     logConfigUpdated(ctx.runtime);
     const backupPath = `${CONFIG_PATH}.bak`;
     if (fs.existsSync(backupPath)) {
@@ -571,6 +579,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:session-locks",
       label: "Session locks",
       run: runSessionLocksHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:session-transcripts",
+      label: "Session transcripts",
+      run: runSessionTranscriptsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:legacy-cron",

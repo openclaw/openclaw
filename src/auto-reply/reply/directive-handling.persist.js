@@ -1,0 +1,247 @@
+import { resolveAgentDir, resolveDefaultAgentId, resolveSessionAgentId, } from "../../agents/agent-scope.js";
+import { resolveContextTokensForModel } from "../../agents/context.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { listLegacyRuntimeModelProviderAliases } from "../../agents/model-runtime-aliases.js";
+import { normalizeProviderId } from "../../agents/model-selection.js";
+import { updateSessionStore } from "../../config/sessions/store.js";
+import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { applyTraceOverride, applyVerboseOverride } from "../../sessions/level-overrides.js";
+import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import { isThinkingLevelSupported, resolveSupportedThinkingLevel } from "../thinking.js";
+import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
+import { canPersistInternalExecDirective, canPersistInternalVerboseDirective, enqueueModeSwitchEvents, } from "./directive-handling.shared.js";
+const MODEL_RUNTIME_CLEAR_VALUES = new Set(["auto", "default"]);
+function resolveModelRuntimeOverride(params) {
+    const rawRuntime = params.rawRuntime?.trim();
+    if (!rawRuntime) {
+        return undefined;
+    }
+    const runtime = normalizeProviderId(rawRuntime);
+    if (MODEL_RUNTIME_CLEAR_VALUES.has(runtime)) {
+        return { kind: "clear" };
+    }
+    if (runtime === "pi") {
+        return { kind: "set", runtime: "pi" };
+    }
+    const provider = normalizeProviderId(params.provider);
+    for (const alias of listLegacyRuntimeModelProviderAliases()) {
+        if (normalizeProviderId(alias.provider) !== provider) {
+            continue;
+        }
+        const aliasRuntime = normalizeProviderId(alias.runtime);
+        if (runtime === aliasRuntime || (aliasRuntime === "codex" && runtime === "codex-app-server")) {
+            return { kind: "set", runtime: alias.runtime };
+        }
+    }
+    return { kind: "invalid", runtime: rawRuntime };
+}
+export async function persistInlineDirectives(params) {
+    const { directives, cfg, sessionEntry, sessionStore, sessionKey, storePath, elevatedEnabled, elevatedAllowed, defaultProvider, defaultModel, aliasIndex, allowedModelKeys, initialModelLabel, formatModelSwitchEvent, agentCfg, } = params;
+    let { provider, model } = params;
+    let thinkingRemap;
+    const allowInternalExecPersistence = canPersistInternalExecDirective({
+        messageProvider: params.messageProvider,
+        surface: params.surface,
+        gatewayClientScopes: params.gatewayClientScopes,
+    });
+    const allowInternalVerbosePersistence = canPersistInternalVerboseDirective({
+        messageProvider: params.messageProvider,
+        surface: params.surface,
+        gatewayClientScopes: params.gatewayClientScopes,
+    });
+    const delegatedTraceAllowed = (params.gatewayClientScopes ?? []).includes("operator.admin");
+    const activeAgentId = sessionKey
+        ? resolveSessionAgentId({ sessionKey, config: cfg })
+        : resolveDefaultAgentId(cfg);
+    const agentDir = resolveAgentDir(cfg, activeAgentId) ?? params.agentDir;
+    if (sessionEntry && sessionStore && sessionKey) {
+        const prevElevatedLevel = sessionEntry.elevatedLevel ??
+            agentCfg?.elevatedDefault ??
+            (elevatedAllowed ? "on" : "off");
+        const prevReasoningLevel = sessionEntry.reasoningLevel ?? "off";
+        let elevatedChanged = directives.hasElevatedDirective &&
+            directives.elevatedLevel !== undefined &&
+            elevatedEnabled &&
+            elevatedAllowed;
+        let reasoningChanged = directives.hasReasoningDirective && directives.reasoningLevel !== undefined;
+        let updated = false;
+        if (directives.hasThinkDirective && directives.thinkLevel) {
+            sessionEntry.thinkingLevel = directives.thinkLevel;
+            updated = true;
+        }
+        if (directives.hasVerboseDirective &&
+            directives.verboseLevel &&
+            allowInternalVerbosePersistence) {
+            applyVerboseOverride(sessionEntry, directives.verboseLevel);
+            updated = true;
+        }
+        if (directives.hasTraceDirective &&
+            directives.traceLevel &&
+            (params.senderIsOwner || delegatedTraceAllowed)) {
+            applyTraceOverride(sessionEntry, directives.traceLevel);
+            updated = true;
+        }
+        if (directives.hasReasoningDirective && directives.reasoningLevel) {
+            if (directives.reasoningLevel === "off") {
+                // Persist explicit off so it overrides model-capability defaults.
+                sessionEntry.reasoningLevel = "off";
+            }
+            else {
+                sessionEntry.reasoningLevel = directives.reasoningLevel;
+            }
+            reasoningChanged =
+                reasoningChanged ||
+                    (directives.reasoningLevel !== prevReasoningLevel &&
+                        directives.reasoningLevel !== undefined);
+            updated = true;
+        }
+        if (directives.hasElevatedDirective &&
+            directives.elevatedLevel &&
+            elevatedEnabled &&
+            elevatedAllowed) {
+            // Persist "off" explicitly so inline `/elevated off` overrides defaults.
+            sessionEntry.elevatedLevel = directives.elevatedLevel;
+            elevatedChanged =
+                elevatedChanged ||
+                    (directives.elevatedLevel !== prevElevatedLevel && directives.elevatedLevel !== undefined);
+            updated = true;
+        }
+        if (directives.hasExecDirective && directives.hasExecOptions && allowInternalExecPersistence) {
+            if (directives.execHost) {
+                sessionEntry.execHost = directives.execHost;
+                updated = true;
+            }
+            if (directives.execSecurity) {
+                sessionEntry.execSecurity = directives.execSecurity;
+                updated = true;
+            }
+            if (directives.execAsk) {
+                sessionEntry.execAsk = directives.execAsk;
+                updated = true;
+            }
+            if (directives.execNode) {
+                sessionEntry.execNode = directives.execNode;
+                updated = true;
+            }
+        }
+        const modelDirective = directives.hasModelDirective && params.effectiveModelDirective
+            ? params.effectiveModelDirective
+            : undefined;
+        if (modelDirective) {
+            const modelResolution = resolveModelSelectionFromDirective({
+                directives: {
+                    ...directives,
+                    hasModelDirective: true,
+                    rawModelDirective: modelDirective,
+                },
+                cfg,
+                agentDir,
+                defaultProvider,
+                defaultModel,
+                aliasIndex,
+                allowedModelKeys,
+                allowedModelCatalog: [],
+                provider,
+            });
+            if (modelResolution.modelSelection) {
+                const { updated: modelUpdated } = applyModelOverrideToSessionEntry({
+                    entry: sessionEntry,
+                    selection: modelResolution.modelSelection,
+                    profileOverride: modelResolution.profileOverride,
+                    markLiveSwitchPending: params.markLiveSwitchPending,
+                });
+                const runtimeOverride = resolveModelRuntimeOverride({
+                    rawRuntime: directives.rawModelRuntime,
+                    provider: modelResolution.modelSelection.provider,
+                });
+                if (runtimeOverride?.kind === "clear") {
+                    if (sessionEntry.agentRuntimeOverride) {
+                        delete sessionEntry.agentRuntimeOverride;
+                        updated = true;
+                    }
+                }
+                else if (runtimeOverride?.kind === "set") {
+                    if (sessionEntry.agentRuntimeOverride !== runtimeOverride.runtime) {
+                        sessionEntry.agentRuntimeOverride = runtimeOverride.runtime;
+                        updated = true;
+                    }
+                }
+                else if (runtimeOverride?.kind === "invalid") {
+                    enqueueSystemEvent(`Ignored unsupported runtime ${runtimeOverride.runtime} for ${modelResolution.modelSelection.provider}.`, {
+                        sessionKey,
+                        contextKey: `model-runtime:${modelResolution.modelSelection.provider}:${runtimeOverride.runtime}`,
+                    });
+                }
+                provider = modelResolution.modelSelection.provider;
+                model = modelResolution.modelSelection.model;
+                const currentThinkingLevel = sessionEntry.thinkingLevel;
+                if (currentThinkingLevel &&
+                    !directives.hasThinkDirective &&
+                    !isThinkingLevelSupported({
+                        provider,
+                        model,
+                        level: currentThinkingLevel,
+                    })) {
+                    const remappedThinkingLevel = resolveSupportedThinkingLevel({
+                        provider,
+                        model,
+                        level: currentThinkingLevel,
+                    });
+                    if (remappedThinkingLevel !== currentThinkingLevel) {
+                        sessionEntry.thinkingLevel = remappedThinkingLevel;
+                        thinkingRemap = {
+                            from: currentThinkingLevel,
+                            to: remappedThinkingLevel,
+                            provider,
+                            model,
+                        };
+                        updated = true;
+                    }
+                }
+                const nextLabel = `${provider}/${model}`;
+                if (nextLabel !== initialModelLabel) {
+                    enqueueSystemEvent(formatModelSwitchEvent(nextLabel, modelResolution.modelSelection.alias), {
+                        sessionKey,
+                        contextKey: `model:${nextLabel}`,
+                    });
+                }
+                updated = updated || modelUpdated;
+            }
+        }
+        if (directives.hasQueueDirective && directives.queueReset) {
+            delete sessionEntry.queueMode;
+            delete sessionEntry.queueDebounceMs;
+            delete sessionEntry.queueCap;
+            delete sessionEntry.queueDrop;
+            updated = true;
+        }
+        if (updated) {
+            sessionEntry.updatedAt = Date.now();
+            sessionStore[sessionKey] = sessionEntry;
+            if (storePath) {
+                await updateSessionStore(storePath, (store) => {
+                    store[sessionKey] = sessionEntry;
+                });
+            }
+            enqueueModeSwitchEvents({
+                enqueueSystemEvent,
+                sessionEntry,
+                sessionKey,
+                elevatedChanged,
+                reasoningChanged,
+            });
+        }
+    }
+    return {
+        provider,
+        model,
+        thinkingRemap,
+        contextTokens: resolveContextTokensForModel({
+            cfg,
+            provider,
+            model,
+            contextTokensOverride: agentCfg?.contextTokens,
+            allowAsyncLoad: false,
+        }) ?? DEFAULT_CONTEXT_TOKENS,
+    };
+}

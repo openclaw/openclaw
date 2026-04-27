@@ -12,6 +12,14 @@
     "target": "OpenAI provider"
   },
   {
+    "source": "Azure Speech",
+    "target": "Azure Speech"
+  },
+  {
+    "source": "Azure Speech provider",
+    "target": "Azure Speech provider"
+  },
+  {
     "source": "Status",
     "target": "Status"
   },
@@ -110,6 +118,10 @@
   {
     "source": "BytePlus (International)",
     "target": "BytePlus（国际版）"
+  },
+  {
+    "source": "Volcengine TTS HTTP API",
+    "target": "Volcengine TTS HTTP API"
   },
   {
     "source": "Amazon Bedrock Mantle",
@@ -368,6 +380,10 @@
     "target": "插件 SDK"
   },
   {
+    "source": "Plugins",
+    "target": "插件"
+  },
+  {
     "source": "Building plugins",
     "target": "构建插件"
   },
@@ -422,6 +438,38 @@
   {
     "source": "Setup",
     "target": "设置"
+  },
+  {
+    "source": "Migrate",
+    "target": "迁移"
+  },
+  {
+    "source": "Migrating",
+    "target": "迁移"
+  },
+  {
+    "source": "Migrating from Hermes",
+    "target": "从 Hermes 迁移"
+  },
+  {
+    "source": "Migrating from Claude",
+    "target": "从 Claude 迁移"
+  },
+  {
+    "source": "Agent workspace",
+    "target": "Agent 工作区"
+  },
+  {
+    "source": "Migration",
+    "target": "迁移"
+  },
+  {
+    "source": "Hermes",
+    "target": "Hermes"
+  },
+  {
+    "source": "Archive-only",
+    "target": "仅归档"
   },
   {
     "source": "Channel Plugin SDK",

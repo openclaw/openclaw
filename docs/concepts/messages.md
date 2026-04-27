@@ -7,8 +7,7 @@ read_when:
 title: "Messages"
 ---
 
-This page ties together how OpenClaw handles inbound messages, sessions, queueing,
-streaming, and reasoning visibility.
+OpenClaw handles inbound messages through a pipeline of session resolution, queueing, streaming, tool execution, and reasoning visibility. This page maps the path from inbound message to reply.
 
 ## Message flow (high level)
 
@@ -175,6 +174,11 @@ OpenClaw resolves that behavior by conversation type:
   reply to a short visible fallback.
 - Groups/channels allow silence by default.
 - Internal orchestration allows silence by default.
+
+OpenClaw also uses silent replies for internal runner failures that happen
+before any assistant reply in non-direct chats, so groups/channels do not see
+gateway error boilerplate. Direct chats show compact failure copy by default;
+raw runner details are shown only when `/verbose` is `on` or `full`.
 
 Defaults live under `agents.defaults.silentReply` and
 `agents.defaults.silentReplyRewrite`; `surfaces.<id>.silentReply` and

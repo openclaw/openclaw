@@ -15,7 +15,7 @@ const killControlledSubagentRunMock = vi.fn();
 const killSubagentRunAdminMock = vi.fn();
 
 vi.mock("../config/config.js", () => ({
-  loadConfig: () => cfg,
+  getRuntimeConfig: () => cfg,
 }));
 
 vi.mock("./auth.js", () => ({

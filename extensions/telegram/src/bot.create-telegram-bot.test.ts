@@ -4,7 +4,8 @@ import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/env
 import type { TelegramBotOptions } from "./bot.types.js";
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
 const conversationRuntime = await import("openclaw/plugin-sdk/conversation-runtime");
-const configRuntime = await import("openclaw/plugin-sdk/config-runtime");
+const configMutation = await import("openclaw/plugin-sdk/config-mutation");
+const sessionStoreRuntime = await import("openclaw/plugin-sdk/session-store-runtime");
 const EYES_EMOJI = "\u{1F440}";
 const {
   answerCallbackQuerySpy,
@@ -121,7 +122,7 @@ function installPerKeySequentializer(): void {
 }
 
 function mockTelegramConfigWrites() {
-  return vi.spyOn(configRuntime, "writeConfigFile").mockResolvedValue(undefined);
+  return vi.spyOn(configMutation, "replaceConfigFile").mockResolvedValue({} as never);
 }
 
 async function withEnvAsync(env: Record<string, string | undefined>, fn: () => Promise<void>) {
@@ -2688,8 +2689,10 @@ describe("createTelegramBot", () => {
 
       expect(sendMessageSpy.mock.calls.length).toBeGreaterThan(1);
       for (const [index, call] of sendMessageSpy.mock.calls.entries()) {
-        const actual = (call[2] as { reply_to_message_id?: number } | undefined)
-          ?.reply_to_message_id;
+        const params = call[2] as
+          | { reply_to_message_id?: number; reply_parameters?: { message_id?: number } }
+          | undefined;
+        const actual = params?.reply_parameters?.message_id ?? params?.reply_to_message_id;
         if (mode === "all" || index === 0) {
           expect(actual).toBe(messageId);
         } else {
@@ -3367,9 +3370,9 @@ describe("createTelegramBot", () => {
 
   it("retries command pagination callbacks after a bubbled preflight failure", async () => {
     const listSkillCommandsMock = listSkillCommandsForAgents as unknown as ReturnType<typeof vi.fn>;
-    listSkillCommandsMock.mockClear();
 
     createTelegramBot({ token: "tok" });
+    listSkillCommandsMock.mockClear();
     const callbackHandler = getOnHandler("callback_query");
     const middlewares = middlewareUseSpy.mock.calls
       .map((call) => call[0])
@@ -3636,7 +3639,7 @@ describe("createTelegramBot", () => {
       await dispatch(0);
     };
 
-    const updateSessionStoreSpy = vi.spyOn(configRuntime, "updateSessionStore");
+    const updateSessionStoreSpy = vi.spyOn(sessionStoreRuntime, "updateSessionStore");
     updateSessionStoreSpy.mockRejectedValueOnce(new Error("session store boom"));
 
     const ctx = {

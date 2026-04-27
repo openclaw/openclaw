@@ -1,0 +1,6 @@
+import { primeConfiguredBindingRegistry as primeConfiguredBindingRegistryRaw, resolveConfiguredBinding as resolveConfiguredBindingRaw, resolveConfiguredBindingRecord as resolveConfiguredBindingRecordRaw, resolveConfiguredBindingRecordBySessionKey as resolveConfiguredBindingRecordBySessionKeyRaw, resolveConfiguredBindingRecordForConversation as resolveConfiguredBindingRecordForConversationRaw } from "./configured-binding-registry.js";
+export declare function primeConfiguredBindingRegistry(...args: Parameters<typeof primeConfiguredBindingRegistryRaw>): ReturnType<typeof primeConfiguredBindingRegistryRaw>;
+export declare function resolveConfiguredBindingRecord(...args: Parameters<typeof resolveConfiguredBindingRecordRaw>): ReturnType<typeof resolveConfiguredBindingRecordRaw>;
+export declare function resolveConfiguredBindingRecordForConversation(...args: Parameters<typeof resolveConfiguredBindingRecordForConversationRaw>): ReturnType<typeof resolveConfiguredBindingRecordForConversationRaw>;
+export declare function resolveConfiguredBinding(...args: Parameters<typeof resolveConfiguredBindingRaw>): ReturnType<typeof resolveConfiguredBindingRaw>;
+export declare function resolveConfiguredBindingRecordBySessionKey(...args: Parameters<typeof resolveConfiguredBindingRecordBySessionKeyRaw>): ReturnType<typeof resolveConfiguredBindingRecordBySessionKeyRaw>;

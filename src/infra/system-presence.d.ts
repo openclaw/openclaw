@@ -1,0 +1,45 @@
+export type SystemPresence = {
+    host?: string;
+    ip?: string;
+    version?: string;
+    platform?: string;
+    deviceFamily?: string;
+    modelIdentifier?: string;
+    lastInputSeconds?: number;
+    mode?: string;
+    reason?: string;
+    deviceId?: string;
+    roles?: string[];
+    scopes?: string[];
+    instanceId?: string;
+    text: string;
+    ts: number;
+};
+export type SystemPresenceUpdate = {
+    key: string;
+    previous?: SystemPresence;
+    next: SystemPresence;
+    changes: Partial<SystemPresence>;
+    changedKeys: (keyof SystemPresence)[];
+};
+type SystemPresencePayload = {
+    text: string;
+    deviceId?: string;
+    instanceId?: string;
+    host?: string;
+    ip?: string;
+    version?: string;
+    platform?: string;
+    deviceFamily?: string;
+    modelIdentifier?: string;
+    lastInputSeconds?: number;
+    mode?: string;
+    reason?: string;
+    roles?: string[];
+    scopes?: string[];
+    tags?: string[];
+};
+export declare function updateSystemPresence(payload: SystemPresencePayload): SystemPresenceUpdate;
+export declare function upsertPresence(key: string, presence: Partial<SystemPresence>): void;
+export declare function listSystemPresence(): SystemPresence[];
+export {};

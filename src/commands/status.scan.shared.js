@@ -1,0 +1,127 @@
+import { existsSync } from "node:fs";
+import { buildGatewayConnectionDetailsWithResolvers } from "../gateway/connection-details.js";
+import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
+import { resolveGatewayProbeTarget } from "../gateway/probe-target.js";
+import { defaultSlotIdForKey } from "../plugins/slots.js";
+import { normalizeOptionalLowercaseString, normalizeOptionalString, } from "../shared/string-coerce.js";
+import { pickGatewaySelfPresence } from "./gateway-presence.js";
+export { pickGatewaySelfPresence } from "./gateway-presence.js";
+let gatewayProbeModulePromise;
+let probeGatewayModulePromise;
+function loadGatewayProbeModule() {
+    gatewayProbeModulePromise ??= import("./status.gateway-probe.js");
+    return gatewayProbeModulePromise;
+}
+function loadProbeGatewayModule() {
+    probeGatewayModulePromise ??= import("../gateway/probe.js");
+    return probeGatewayModulePromise;
+}
+export function hasExplicitMemorySearchConfig(cfg, agentId) {
+    if (cfg.agents?.defaults &&
+        Object.prototype.hasOwnProperty.call(cfg.agents.defaults, "memorySearch")) {
+        return true;
+    }
+    const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+    return agents.some((agent) => agent?.id === agentId && Object.prototype.hasOwnProperty.call(agent, "memorySearch"));
+}
+export function resolveMemoryPluginStatus(cfg) {
+    const pluginsEnabled = cfg.plugins?.enabled !== false;
+    if (!pluginsEnabled) {
+        return { enabled: false, slot: null, reason: "plugins disabled" };
+    }
+    const raw = normalizeOptionalString(cfg.plugins?.slots?.memory) ?? "";
+    if (normalizeOptionalLowercaseString(raw) === "none") {
+        return { enabled: false, slot: null, reason: 'plugins.slots.memory="none"' };
+    }
+    return { enabled: true, slot: raw || defaultSlotIdForKey("memory") };
+}
+export async function resolveGatewayProbeSnapshot(params) {
+    const gatewayConnection = buildGatewayConnectionDetailsWithResolvers({ config: params.cfg });
+    const { gatewayMode, remoteUrlMissing } = resolveGatewayProbeTarget(params.cfg);
+    const shouldResolveAuth = params.opts.skipProbe !== true &&
+        (!remoteUrlMissing || params.opts.resolveAuthWhenRemoteUrlMissing === true);
+    const shouldProbe = params.opts.skipProbe !== true &&
+        (!remoteUrlMissing || params.opts.probeWhenRemoteUrlMissing === true);
+    const gatewayProbeAuthResolution = shouldResolveAuth
+        ? await loadGatewayProbeModule().then(({ resolveGatewayProbeAuthResolution }) => resolveGatewayProbeAuthResolution(params.cfg))
+        : { auth: {}, warning: undefined };
+    let gatewayProbeAuthWarning = gatewayProbeAuthResolution.warning;
+    const gatewayProbe = shouldProbe
+        ? await loadProbeGatewayModule()
+            .then(({ probeGateway }) => probeGateway({
+            url: gatewayConnection.url,
+            auth: gatewayProbeAuthResolution.auth,
+            timeoutMs: Math.min(params.opts.all ? 5000 : 2500, params.opts.timeoutMs ?? 10_000),
+            detailLevel: params.opts.detailLevel ?? "presence",
+        }))
+            .catch(() => null)
+        : null;
+    if ((params.opts.mergeAuthWarningIntoProbeError ?? true) &&
+        gatewayProbeAuthWarning &&
+        gatewayProbe?.ok === false) {
+        gatewayProbe.error = gatewayProbe.error
+            ? `${gatewayProbe.error}; ${gatewayProbeAuthWarning}`
+            : gatewayProbeAuthWarning;
+        gatewayProbeAuthWarning = undefined;
+    }
+    const gatewayReachable = gatewayProbe?.ok === true;
+    const gatewaySelf = gatewayProbe?.presence
+        ? pickGatewaySelfPresence(gatewayProbe.presence)
+        : null;
+    return {
+        gatewayConnection,
+        remoteUrlMissing,
+        gatewayMode,
+        gatewayProbeAuth: gatewayProbeAuthResolution.auth,
+        gatewayProbeAuthWarning,
+        gatewayProbe,
+        gatewayReachable,
+        gatewaySelf,
+        ...(remoteUrlMissing
+            ? {
+                gatewayCallOverrides: {
+                    url: gatewayConnection.url,
+                    token: gatewayProbeAuthResolution.auth.token,
+                    password: gatewayProbeAuthResolution.auth.password,
+                },
+            }
+            : {}),
+    };
+}
+export function buildTailscaleHttpsUrl(params) {
+    return params.tailscaleMode !== "off" && params.tailscaleDns
+        ? `https://${params.tailscaleDns}${normalizeControlUiBasePath(params.controlUiBasePath)}`
+        : null;
+}
+export async function resolveSharedMemoryStatusSnapshot(params) {
+    const { cfg, agentStatus, memoryPlugin } = params;
+    if (!memoryPlugin.enabled || !memoryPlugin.slot) {
+        return null;
+    }
+    const agentId = agentStatus.defaultId ?? "main";
+    const defaultStorePath = params.requireDefaultStore?.(agentId);
+    if (defaultStorePath &&
+        !hasExplicitMemorySearchConfig(cfg, agentId) &&
+        !existsSync(defaultStorePath)) {
+        return null;
+    }
+    const resolvedMemory = params.resolveMemoryConfig(cfg, agentId);
+    if (!resolvedMemory) {
+        return null;
+    }
+    const shouldInspectStore = hasExplicitMemorySearchConfig(cfg, agentId) || existsSync(resolvedMemory.store.path);
+    if (!shouldInspectStore) {
+        return null;
+    }
+    const { manager } = await params.getMemorySearchManager({ cfg, agentId, purpose: "status" });
+    if (!manager) {
+        return null;
+    }
+    try {
+        await manager.probeVectorAvailability();
+    }
+    catch { }
+    const status = manager.status();
+    await manager.close?.().catch(() => { });
+    return { agentId, ...status };
+}

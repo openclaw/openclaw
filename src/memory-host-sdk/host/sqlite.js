@@ -1,0 +1,16 @@
+import { createRequire } from "node:module";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { installProcessWarningFilter } from "../../infra/warning-filter.js";
+const require = createRequire(import.meta.url);
+export function requireNodeSqlite() {
+    installProcessWarningFilter();
+    try {
+        return require("node:sqlite");
+    }
+    catch (err) {
+        const message = formatErrorMessage(err);
+        // Node distributions can ship without the experimental builtin SQLite module.
+        // Surface an actionable error instead of the generic "unknown builtin module".
+        throw new Error(`SQLite support is unavailable in this Node runtime (missing node:sqlite). ${message}`, { cause: err });
+    }
+}

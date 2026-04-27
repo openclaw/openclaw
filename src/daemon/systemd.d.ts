@@ -1,0 +1,36 @@
+import type { GatewayServiceRuntime } from "./service-runtime.js";
+import type { GatewayServiceCommandConfig, GatewayServiceControlArgs, GatewayServiceEnv, GatewayServiceEnvArgs, GatewayServiceInstallArgs, GatewayServiceManageArgs, GatewayServiceRestartResult } from "./service-types.js";
+import { enableSystemdUserLinger, readSystemdUserLingerStatus, type SystemdUserLingerStatus } from "./systemd-linger.js";
+export declare function resolveSystemdUserUnitPath(env: GatewayServiceEnv): string;
+export { enableSystemdUserLinger, readSystemdUserLingerStatus };
+export type { SystemdUserLingerStatus };
+export declare function readSystemdServiceExecStart(env: GatewayServiceEnv): Promise<GatewayServiceCommandConfig | null>;
+export type SystemdServiceInfo = {
+    activeState?: string;
+    subState?: string;
+    mainPid?: number;
+    execMainStatus?: number;
+    execMainCode?: string;
+};
+export declare function parseSystemdShow(output: string): SystemdServiceInfo;
+export declare function isNonFatalSystemdInstallProbeError(error: unknown): boolean;
+export declare function isSystemdUserServiceAvailable(env?: GatewayServiceEnv): Promise<boolean>;
+export declare function stageSystemdService({ stdout, ...args }: GatewayServiceInstallArgs): Promise<{
+    unitPath: string;
+}>;
+export declare function installSystemdService(args: GatewayServiceInstallArgs): Promise<{
+    unitPath: string;
+}>;
+export declare function uninstallSystemdService({ env, stdout, }: GatewayServiceManageArgs): Promise<void>;
+export declare function stopSystemdService({ stdout, env, }: GatewayServiceControlArgs): Promise<void>;
+export declare function restartSystemdService({ stdout, env, }: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult>;
+export declare function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Promise<boolean>;
+export declare function readSystemdServiceRuntime(env?: GatewayServiceEnv): Promise<GatewayServiceRuntime>;
+export type LegacySystemdUnit = {
+    name: string;
+    unitPath: string;
+    enabled: boolean;
+    exists: boolean;
+};
+export declare function findLegacySystemdUnits(env: GatewayServiceEnv): Promise<LegacySystemdUnit[]>;
+export declare function uninstallLegacySystemdUnits({ env, stdout, }: GatewayServiceManageArgs): Promise<LegacySystemdUnit[]>;

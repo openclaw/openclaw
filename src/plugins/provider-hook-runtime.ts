@@ -1,6 +1,8 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizePluginIdScope, serializePluginIdScope } from "./plugin-scope.js";
+import { resolveProviderConfigApiOwnerHint } from "./provider-config-owner.js";
 import { isPluginProvidersLoadInFlight, resolvePluginProviders } from "./providers.runtime.js";
 import { resolvePluginCacheInputs } from "./roots.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
@@ -25,6 +27,11 @@ function matchesProviderId(provider: ProviderPlugin, providerId: string): boolea
   return [...(provider.aliases ?? []), ...(provider.hookAliases ?? [])].some(
     (alias) => normalizeProviderId(alias) === normalized,
   );
+}
+
+function matchesProviderLiteralId(provider: ProviderPlugin, providerId: string): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(providerId);
+  return !!normalized && normalizeLowercaseStringOrEmpty(provider.id) === normalized;
 }
 
 let cachedHookProvidersWithoutConfig = new WeakMap<
@@ -102,6 +109,10 @@ export function resolveProviderPluginsForHooks(params: {
   env?: NodeJS.ProcessEnv;
   onlyPluginIds?: string[];
   providerRefs?: string[];
+  applyAutoEnable?: boolean;
+  bundledProviderAllowlistCompat?: boolean;
+  bundledProviderVitestCompat?: boolean;
+  installBundledRuntimeDeps?: boolean;
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
@@ -127,8 +138,10 @@ export function resolveProviderPluginsForHooks(params: {
       env,
       activate: false,
       cache: false,
-      bundledProviderAllowlistCompat: true,
-      bundledProviderVitestCompat: true,
+      applyAutoEnable: params.applyAutoEnable,
+      bundledProviderAllowlistCompat: params.bundledProviderAllowlistCompat ?? true,
+      bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? true,
+      installBundledRuntimeDeps: params.installBundledRuntimeDeps,
     })
   ) {
     return [];
@@ -139,8 +152,10 @@ export function resolveProviderPluginsForHooks(params: {
     env,
     activate: false,
     cache: false,
-    bundledProviderAllowlistCompat: true,
-    bundledProviderVitestCompat: true,
+    applyAutoEnable: params.applyAutoEnable,
+    bundledProviderAllowlistCompat: params.bundledProviderAllowlistCompat ?? true,
+    bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? true,
+    installBundledRuntimeDeps: params.installBundledRuntimeDeps,
   });
   cacheBucket.set(cacheKey, resolved);
   return resolved;
@@ -151,13 +166,32 @@ export function resolveProviderRuntimePlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  applyAutoEnable?: boolean;
+  bundledProviderAllowlistCompat?: boolean;
+  bundledProviderVitestCompat?: boolean;
+  installBundledRuntimeDeps?: boolean;
 }): ProviderPlugin | undefined {
+  const apiOwnerHint = resolveProviderConfigApiOwnerHint({
+    provider: params.provider,
+    config: params.config,
+  });
   return resolveProviderPluginsForHooks({
     config: params.config,
     workspaceDir: params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState(),
     env: params.env,
-    providerRefs: [params.provider],
-  }).find((plugin) => matchesProviderId(plugin, params.provider));
+    providerRefs: apiOwnerHint ? [params.provider, apiOwnerHint] : [params.provider],
+    applyAutoEnable: params.applyAutoEnable,
+    bundledProviderAllowlistCompat: params.bundledProviderAllowlistCompat,
+    bundledProviderVitestCompat: params.bundledProviderVitestCompat,
+    installBundledRuntimeDeps: params.installBundledRuntimeDeps,
+  }).find((plugin) => {
+    if (apiOwnerHint) {
+      return (
+        matchesProviderLiteralId(plugin, params.provider) || matchesProviderId(plugin, apiOwnerHint)
+      );
+    }
+    return matchesProviderId(plugin, params.provider);
+  });
 }
 
 export function resolveProviderHookPlugin(params: {

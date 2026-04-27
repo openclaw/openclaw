@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
@@ -11,6 +11,7 @@ import {
   assertBlackHole2chAvailable,
   launchChromeMeet,
   launchChromeMeetOnNode,
+  recoverCurrentMeetTab,
   recoverCurrentMeetTabOnNode,
 } from "./transports/chrome.js";
 import { buildMeetDtmfSequence, normalizeDialInNumber } from "./transports/twilio.js";
@@ -181,11 +182,22 @@ export class GoogleMeetRuntime {
     });
   }
 
-  async recoverCurrentTab(request: { url?: string } = {}) {
-    return recoverCurrentMeetTabOnNode({
-      runtime: this.params.runtime,
+  async recoverCurrentTab(request: { url?: string; transport?: GoogleMeetTransport } = {}) {
+    const transport = resolveTransport(request.transport, this.params.config);
+    if (transport === "twilio") {
+      throw new Error("recover_current_tab only supports chrome or chrome-node transports");
+    }
+    const url = request.url ? normalizeMeetUrl(request.url) : undefined;
+    if (transport === "chrome-node") {
+      return recoverCurrentMeetTabOnNode({
+        runtime: this.params.runtime,
+        config: this.params.config,
+        url,
+      });
+    }
+    return recoverCurrentMeetTab({
       config: this.params.config,
-      url: request.url ? normalizeMeetUrl(request.url) : undefined,
+      url,
     });
   }
 
@@ -200,16 +212,18 @@ export class GoogleMeetRuntime {
         session.transport === transport &&
         session.mode === mode,
     );
+    const speechInstructions = request.message ?? this.params.config.realtime.introMessage;
     if (reusable) {
       reusable.notes = [
         ...reusable.notes.filter((note) => note !== "Reused existing active Meet session."),
         "Reused existing active Meet session.",
       ];
       reusable.updatedAt = nowIso();
-      if (request.message || this.params.config.realtime.introMessage) {
-        this.speak(reusable.id, request.message);
-      }
-      return { session: reusable };
+      const spoken =
+        mode === "realtime" && speechInstructions
+          ? this.speak(reusable.id, speechInstructions).spoken
+          : false;
+      return { session: reusable, spoken };
     }
     const createdAt = nowIso();
 
@@ -335,10 +349,11 @@ export class GoogleMeetRuntime {
     }
 
     this.#sessions.set(session.id, session);
-    if (mode === "realtime" && this.params.config.realtime.introMessage) {
-      this.speak(session.id, request.message);
-    }
-    return { session };
+    const spoken =
+      mode === "realtime" && speechInstructions
+        ? this.speak(session.id, speechInstructions).spoken
+        : false;
+    return { session, spoken };
   }
 
   async leave(sessionId: string): Promise<{ found: boolean; session?: GoogleMeetSession }> {
@@ -386,11 +401,10 @@ export class GoogleMeetRuntime {
     session: GoogleMeetSession;
   }> {
     const before = new Set(this.list().map((session) => session.id));
-    const result = await this.join(request);
-    const spoken = this.speak(
-      result.session.id,
-      request.message ?? "Say exactly: Google Meet speech test complete.",
-    ).spoken;
+    const result = await this.join({
+      ...request,
+      message: request.message ?? "Say exactly: Google Meet speech test complete.",
+    });
     const health = result.session.chrome?.health;
     return {
       createdSession: !before.has(result.session.id),
@@ -398,7 +412,7 @@ export class GoogleMeetRuntime {
       manualActionRequired: health?.manualActionRequired,
       manualActionReason: health?.manualActionReason,
       manualActionMessage: health?.manualActionMessage,
-      spoken,
+      spoken: result.spoken ?? false,
       session: result.session,
     };
   }

@@ -1,0 +1,20 @@
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { ALLOWED_LOG_LEVELS, tryParseLogLevel } from "./levels.js";
+import { loggingState } from "./state.js";
+export function resolveEnvLogLevelOverride() {
+    const trimmed = normalizeOptionalString(process.env.OPENCLAW_LOG_LEVEL) ?? "";
+    if (!trimmed) {
+        loggingState.invalidEnvLogLevelValue = null;
+        return undefined;
+    }
+    const parsed = tryParseLogLevel(trimmed);
+    if (parsed) {
+        loggingState.invalidEnvLogLevelValue = null;
+        return parsed;
+    }
+    if (loggingState.invalidEnvLogLevelValue !== trimmed) {
+        loggingState.invalidEnvLogLevelValue = trimmed;
+        process.stderr.write(`[openclaw] Ignoring invalid OPENCLAW_LOG_LEVEL="${trimmed}" (allowed: ${ALLOWED_LOG_LEVELS.join("|")}).\n`);
+    }
+    return undefined;
+}

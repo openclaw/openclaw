@@ -20,6 +20,8 @@ const hoisted = vi.hoisted(() => {
   const scheduleSubagentOrphanRecovery = vi.fn();
   const shouldWakeFromRestartSentinel = vi.fn(() => false);
   const scheduleRestartSentinelWake = vi.fn();
+  const refreshLatestUpdateRestartSentinel = vi.fn(async () => null);
+  const getAcpRuntimeBackend = vi.fn<(id?: string) => unknown>(() => null);
   const reconcilePendingSessionIdentities = vi.fn(async () => ({
     checked: 0,
     resolved: 0,
@@ -41,6 +43,8 @@ const hoisted = vi.hoisted(() => {
     scheduleSubagentOrphanRecovery,
     shouldWakeFromRestartSentinel,
     scheduleRestartSentinelWake,
+    refreshLatestUpdateRestartSentinel,
+    getAcpRuntimeBackend,
     reconcilePendingSessionIdentities,
   };
 });
@@ -97,7 +101,12 @@ vi.mock("../acp/control-plane/manager.js", () => ({
   })),
 }));
 
+vi.mock("../acp/runtime/registry.js", () => ({
+  getAcpRuntimeBackend: hoisted.getAcpRuntimeBackend,
+}));
+
 vi.mock("./server-restart-sentinel.js", () => ({
+  refreshLatestUpdateRestartSentinel: hoisted.refreshLatestUpdateRestartSentinel,
   scheduleRestartSentinelWake: hoisted.scheduleRestartSentinelWake,
   shouldWakeFromRestartSentinel: hoisted.shouldWakeFromRestartSentinel,
 }));
@@ -143,15 +152,19 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.scheduleSubagentOrphanRecovery.mockClear();
     hoisted.shouldWakeFromRestartSentinel.mockReturnValue(false);
     hoisted.scheduleRestartSentinelWake.mockClear();
+    hoisted.getAcpRuntimeBackend.mockReset();
+    hoisted.getAcpRuntimeBackend.mockReturnValue(null);
     hoisted.reconcilePendingSessionIdentities.mockClear();
   });
 
   it("re-enables startup-gated methods after post-attach sidecars start", async () => {
     const unavailableGatewayMethods = new Set<string>(["chat.history", "models.list"]);
     const onSidecarsReady = vi.fn();
+    const log = { info: vi.fn(), warn: vi.fn() };
 
     await startGatewayPostAttachRuntime({
       ...createPostAttachParams(),
+      log,
       unavailableGatewayMethods,
       onSidecarsReady,
     });
@@ -166,6 +179,7 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(hoisted.logGatewayStartup).toHaveBeenCalledWith(
       expect.objectContaining({ loadedPluginIds: ["beta", "alpha"] }),
     );
+    expect(log.info).toHaveBeenCalledWith("gateway ready");
     expect(hoisted.startGatewayMemoryBackend).not.toHaveBeenCalled();
   });
 
@@ -294,6 +308,46 @@ describe("startGatewayPostAttachRuntime", () => {
     }
   });
 
+  it("waits for a healthy ACP runtime backend before startup identity reconcile", async () => {
+    let healthy = false;
+    hoisted.getAcpRuntimeBackend.mockImplementation((id?: string) => ({
+      id: id ?? "acpx",
+      runtime: {},
+      healthy: () => healthy,
+    }));
+
+    await startGatewaySidecars({
+      cfg: {
+        hooks: { internal: { enabled: false } },
+        acp: { enabled: true, backend: "acpx" },
+      } as never,
+      pluginRegistry: createPostAttachParams().pluginRegistry,
+      defaultWorkspaceDir: "/tmp/openclaw-workspace",
+      deps: {} as never,
+      startChannels: vi.fn(async () => undefined),
+      log: { warn: vi.fn() },
+      logHooks: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+      logChannels: {
+        info: vi.fn(),
+        error: vi.fn(),
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(hoisted.getAcpRuntimeBackend).toHaveBeenCalledWith("acpx");
+    });
+    expect(hoisted.reconcilePendingSessionIdentities).not.toHaveBeenCalled();
+
+    healthy = true;
+    await vi.waitFor(() => {
+      expect(hoisted.reconcilePendingSessionIdentities).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("passes typed gateway_start context with config, workspace dir, and a live cron getter", async () => {
     const runGatewayStart = vi.fn<
       (event: PluginHookGatewayStartEvent, ctx: PluginHookGatewayContext) => Promise<void>
@@ -352,6 +406,7 @@ function createPostAttachRuntimeDeps(
   return {
     getGlobalHookRunner: vi.fn(() => null),
     logGatewayStartup: hoisted.logGatewayStartup,
+    refreshLatestUpdateRestartSentinel: hoisted.refreshLatestUpdateRestartSentinel,
     scheduleGatewayUpdateCheck: hoisted.scheduleGatewayUpdateCheck,
     startGatewaySidecars: vi.fn(async () => ({ pluginServices: null })),
     startGatewayTailscaleExposure: hoisted.startGatewayTailscaleExposure,

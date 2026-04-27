@@ -1350,5 +1350,37 @@ describe("run-node script", () => {
         expect(fakeProcess.listenerCount("exit")).toBe(0);
       });
     });
+
+    it("removes a lock left by a dead wrapper process without waiting for age-out", async () => {
+      await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+        const lockDir = path.join(tmp, ".artifacts", "run-node-build.lock");
+        await fs.mkdir(lockDir, { recursive: true });
+        await fs.writeFile(
+          path.join(lockDir, "owner.json"),
+          JSON.stringify({ pid: 987654, args: ["gateway"] }),
+          "utf-8",
+        );
+
+        const fakeProcess = Object.assign(createFakeProcess(), {
+          kill: vi.fn((pid: number, signal?: NodeJS.Signals | number) => {
+            if (pid === 987654 && signal === 0) {
+              const err = new Error("missing process") as Error & { code: string };
+              err.code = "ESRCH";
+              throw err;
+            }
+            return true;
+          }),
+        }) as unknown as NodeJS.Process;
+
+        const release = await acquireRunNodeBuildLock(lockDeps(tmp, fakeProcess));
+        expect(fakeProcess.kill).toHaveBeenCalledWith(987654, 0);
+        expect(JSON.parse(await fs.readFile(path.join(lockDir, "owner.json"), "utf-8")).pid).toBe(
+          4242,
+        );
+
+        release();
+        expect(fsSync.existsSync(lockDir)).toBe(false);
+      });
+    });
   });
 });

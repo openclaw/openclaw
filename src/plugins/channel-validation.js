@@ -1,0 +1,68 @@
+import { listChatChannels } from "../channels/chat-meta.js";
+import { normalizeChannelMeta } from "../channels/plugins/meta-normalization.js";
+import { normalizeOptionalString, normalizeStringifiedOptionalString, } from "../shared/string-coerce.js";
+import { pushPluginValidationDiagnostic } from "./validation-diagnostics.js";
+function resolveBundledChannelMeta(id) {
+    return listChatChannels().find((meta) => meta.id === id);
+}
+function collectMissingChannelMetaFields(meta) {
+    const missing = [];
+    if (!normalizeOptionalString(meta?.label)) {
+        missing.push("label");
+    }
+    if (!normalizeOptionalString(meta?.selectionLabel)) {
+        missing.push("selectionLabel");
+    }
+    if (!normalizeOptionalString(meta?.docsPath)) {
+        missing.push("docsPath");
+    }
+    if (typeof meta?.blurb !== "string") {
+        missing.push("blurb");
+    }
+    return missing;
+}
+export function normalizeRegisteredChannelPlugin(params) {
+    const id = normalizeOptionalString(params.plugin?.id) ??
+        normalizeStringifiedOptionalString(params.plugin?.id) ??
+        "";
+    if (!id) {
+        pushPluginValidationDiagnostic({
+            level: "error",
+            pluginId: params.pluginId,
+            source: params.source,
+            message: "channel registration missing id",
+            pushDiagnostic: params.pushDiagnostic,
+        });
+        return null;
+    }
+    const rawMeta = params.plugin.meta;
+    const rawMetaId = normalizeOptionalString(rawMeta?.id);
+    if (rawMetaId && rawMetaId !== id) {
+        pushPluginValidationDiagnostic({
+            level: "warn",
+            pluginId: params.pluginId,
+            source: params.source,
+            message: `channel "${id}" meta.id mismatch ("${rawMetaId}"); using registered channel id`,
+            pushDiagnostic: params.pushDiagnostic,
+        });
+    }
+    const missingFields = collectMissingChannelMetaFields(rawMeta);
+    if (missingFields.length > 0) {
+        pushPluginValidationDiagnostic({
+            level: "warn",
+            pluginId: params.pluginId,
+            source: params.source,
+            message: `channel "${id}" registered incomplete metadata; filled missing ${missingFields.join(", ")}`,
+            pushDiagnostic: params.pushDiagnostic,
+        });
+    }
+    return {
+        ...params.plugin,
+        id,
+        meta: normalizeChannelMeta({
+            id,
+            meta: rawMeta,
+            existing: resolveBundledChannelMeta(id),
+        }),
+    };
+}

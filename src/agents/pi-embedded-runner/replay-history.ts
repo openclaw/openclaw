@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
+import { stripInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
@@ -41,7 +42,12 @@ import {
   type AssistantUsageSnapshot,
   type UsageLike,
 } from "../usage.js";
-import { dropThinkingBlocks, stripInvalidThinkingSignatures } from "./thinking.js";
+import { isZeroUsageEmptyStopAssistantTurn } from "./empty-assistant-turn.js";
+import {
+  dropReasoningFromHistory,
+  dropThinkingBlocks,
+  stripInvalidThinkingSignatures,
+} from "./thinking.js";
 
 const INTER_SESSION_PREFIX_BASE = "[Inter-session message]";
 const MODEL_SNAPSHOT_CUSTOM_TYPE = "model-snapshot";
@@ -236,6 +242,40 @@ function stripStaleAssistantUsageBeforeLatestCompaction(messages: AgentMessage[]
 // content and, on Bedrock or strict OpenAI-compatible providers, can also
 // trigger turn-ordering rejections.
 const TRANSCRIPT_ONLY_OPENCLAW_MODELS = new Set<string>(["delivery-mirror", "gateway-injected"]);
+const OMITTED_INBOUND_METADATA_TEXT = "[assistant copied inbound metadata omitted]";
+
+function sanitizeUserReplayContent(message: AgentMessage): AgentMessage | null {
+  if (!message || message.role !== "user") {
+    return message;
+  }
+  const replayContent = (message as { content?: unknown }).content;
+  if (typeof replayContent === "string") {
+    return replayContent.trim() ? message : null;
+  }
+  if (!Array.isArray(replayContent)) {
+    return message;
+  }
+
+  let touched = false;
+  const sanitizedContent = replayContent.filter((block) => {
+    if (!block || typeof block !== "object") {
+      return true;
+    }
+    if ((block as { type?: unknown }).type !== "text") {
+      return true;
+    }
+    const text = (block as { text?: unknown }).text;
+    if (typeof text !== "string" || text.trim().length > 0) {
+      return true;
+    }
+    touched = true;
+    return false;
+  });
+  if (sanitizedContent.length === 0) {
+    return null;
+  }
+  return touched ? ({ ...message, content: sanitizedContent } as AgentMessage) : message;
+}
 
 function isTranscriptOnlyOpenclawAssistant(message: AgentMessage): boolean {
   if (!message || message.role !== "assistant") {
@@ -254,6 +294,16 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
   let touched = false;
   const out: AgentMessage[] = [];
   for (const message of messages) {
+    if (message?.role === "user") {
+      const sanitizedUserMessage = sanitizeUserReplayContent(message);
+      if (sanitizedUserMessage) {
+        out.push(sanitizedUserMessage);
+      }
+      if (sanitizedUserMessage !== message) {
+        touched = true;
+      }
+      continue;
+    }
     if (!message || message.role !== "assistant") {
       out.push(message);
       continue;
@@ -266,12 +316,47 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
     }
     const replayContent = (message as { content?: unknown }).content;
     if (typeof replayContent === "string") {
+      const strippedText = stripInboundMetadata(replayContent);
       out.push({
         ...message,
-        content: [{ type: "text", text: replayContent }],
+        content: [
+          {
+            type: "text",
+            text: strippedText.trim() ? strippedText : OMITTED_INBOUND_METADATA_TEXT,
+          },
+        ],
       });
       touched = true;
       continue;
+    }
+    if (Array.isArray(replayContent)) {
+      let contentTouched = false;
+      const sanitizedContent = replayContent.map((block) => {
+        if (!block || typeof block !== "object") {
+          return block;
+        }
+        const text = (block as { text?: unknown }).text;
+        if (typeof text !== "string") {
+          return block;
+        }
+        const strippedText = stripInboundMetadata(text);
+        if (strippedText === text) {
+          return block;
+        }
+        contentTouched = true;
+        return {
+          ...block,
+          text: strippedText.trim() ? strippedText : OMITTED_INBOUND_METADATA_TEXT,
+        };
+      });
+      if (contentTouched) {
+        out.push({
+          ...message,
+          content: sanitizedContent,
+        });
+        touched = true;
+        continue;
+      }
     }
     if (Array.isArray(replayContent) && replayContent.length === 0) {
       // An assistant turn can legitimately end with `content: []` — for
@@ -282,14 +367,16 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
       // failure statement in the next provider request and change model
       // behavior even when no failure occurred.
       //
-      // Only `stopReason: "error"` turns are the Bedrock-Converse replay
-      // poison this fix is scoped to: the provider rejects assistant
-      // messages with no ContentBlock, and the persisted error turn was
-      // never going to render anything useful to the model anyway. Leaving
-      // non-error empty-content turns untouched preserves silent-reply
-      // semantics on every other code path.
+      // `stopReason: "error"` turns are Bedrock-Converse replay poison:
+      // the provider rejects assistant messages with no ContentBlock, and
+      // the persisted error turn was never going to render anything useful
+      // to the model anyway. A zero-token `stop` turn is the same shape from
+      // the next run's perspective: the provider produced no billable prompt
+      // or completion and no content. Leaving other non-error empty-content
+      // turns untouched preserves silent-reply semantics on every other code
+      // path.
       const stopReason = (message as { stopReason?: unknown }).stopReason;
-      if (stopReason === "error") {
+      if (stopReason === "error" || isZeroUsageEmptyStopAssistantTurn(message)) {
         out.push({
           ...message,
           content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
@@ -547,9 +634,12 @@ export async function sanitizeSessionHistory(params: {
   const validatedThinkingSignatures = policy.preserveSignatures
     ? stripInvalidThinkingSignatures(sanitizedImages)
     : sanitizedImages;
-  const droppedThinking = policy.dropThinkingBlocks
-    ? dropThinkingBlocks(validatedThinkingSignatures)
+  const droppedReasoning = policy.dropReasoningFromHistory
+    ? dropReasoningFromHistory(validatedThinkingSignatures)
     : validatedThinkingSignatures;
+  const droppedThinking = policy.dropThinkingBlocks
+    ? dropThinkingBlocks(droppedReasoning)
+    : droppedReasoning;
   const sanitizedToolCalls = sanitizeToolCallInputs(droppedThinking, {
     allowedToolNames: params.allowedToolNames,
     allowProviderOwnedThinkingReplay,

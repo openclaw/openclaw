@@ -1,7 +1,7 @@
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
-import type { WebSocket } from "ws";
-import { loadConfig } from "../../../config/config.js";
+import type { RawData, WebSocket } from "ws";
+import { getRuntimeConfig } from "../../../config/config.js";
 import {
   getBoundDeviceBootstrapProfile,
   getDeviceBootstrapTokenProfile,
@@ -27,12 +27,17 @@ import {
   verifyDeviceToken,
 } from "../../../infra/device-pairing.js";
 import {
+  createDiagnosticTraceContext,
+  runWithDiagnosticTraceContext,
+} from "../../../infra/diagnostic-trace-context.js";
+import {
   getPairedNode,
   requestNodePairing,
   updatePairedNodeMetadata,
 } from "../../../infra/node-pairing.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../infra/skills-remote.js";
 import { upsertPresence } from "../../../infra/system-presence.js";
+import { loadVoiceWakeRoutingConfig } from "../../../infra/voicewake-routing.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { rawDataToString } from "../../../infra/ws.js";
 import { logRejectedLargePayload } from "../../../logging/diagnostic-payload.js";
@@ -50,8 +55,7 @@ import {
 } from "../../../utils/message-channel.js";
 import { resolveRuntimeServiceVersion } from "../../../version.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "../../auth.js";
-import type { GatewayAuthResult } from "../../auth.js";
+import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
 import { hasForwardedRequestHeaders, isLocalDirectRequest } from "../../auth.js";
 import {
   buildCanvasScopedHostUrl,
@@ -99,7 +103,6 @@ import {
   MAX_PREAUTH_PAYLOAD_BYTES,
   TICK_INTERVAL_MS,
 } from "../../server-constants.js";
-import { handleGatewayRequest } from "../../server-methods.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
 import { formatError } from "../../server-utils.js";
 import { formatForLog, logWs } from "../../ws-log.js";
@@ -198,7 +201,7 @@ export function attachGatewayWsMessageHandler(params: {
   isClosed: () => boolean;
   clearHandshakeTimer: () => void;
   getClient: () => GatewayWsClient | null;
-  setClient: (next: GatewayWsClient) => void;
+  setClient: (next: GatewayWsClient) => boolean;
   setHandshakeState: (state: "pending" | "connected" | "failed") => void;
   setCloseCause: (cause: string, meta?: Record<string, unknown>) => void;
   setLastFrameMeta: (meta: { type?: string; method?: string; id?: string }) => void;
@@ -257,7 +260,7 @@ export function attachGatewayWsMessageHandler(params: {
       });
     });
 
-  const configSnapshot = loadConfig();
+  const configSnapshot = getRuntimeConfig();
   const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
   const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
   const clientIp = resolveClientIp({
@@ -321,7 +324,7 @@ export function attachGatewayWsMessageHandler(params: {
     authRateLimiter,
   } = browserSecurity;
 
-  socket.on("message", async (data) => {
+  const handleMessage = async (data: RawData) => {
     if (isClosed()) {
       return;
     }
@@ -844,6 +847,7 @@ export function attachGatewayWsMessageHandler(params: {
           role,
           trustedProxyAuthOk,
           resolvedAuth.mode,
+          authMethod,
         );
         if (device && devicePublicKey) {
           const formatAuditList = (items: string[] | undefined): string => {
@@ -1242,7 +1246,7 @@ export function attachGatewayWsMessageHandler(params: {
 
         if (role === "node") {
           const reconciliation = await reconcileNodePairingOnConnect({
-            cfg: loadConfig(),
+            cfg: getRuntimeConfig(),
             connectParams,
             pairedNode: await getPairedNode(connectParams.device?.id ?? connectParams.client.id),
             reportedClientIp,
@@ -1262,6 +1266,49 @@ export function attachGatewayWsMessageHandler(params: {
         const instanceId = connectParams.client.instanceId;
         const presenceKey = shouldTrackPresence ? (device?.id ?? instanceId ?? connId) : undefined;
 
+        if (isClosed()) {
+          setCloseCause("connect-aborted-before-register", {
+            ...clientMeta,
+            auth: authMethod,
+          });
+          return;
+        }
+
+        const canvasCapability = canvasHostUrl ? mintCanvasCapabilityToken() : undefined;
+        const canvasCapabilityExpiresAtMs = canvasCapability
+          ? Date.now() + CANVAS_CAPABILITY_TTL_MS
+          : undefined;
+        const usesSharedGatewayAuth = authMethod === "token" || authMethod === "password";
+        const sharedGatewaySessionGeneration = usesSharedGatewayAuth
+          ? resolveSharedGatewaySessionGeneration(resolvedAuth)
+          : undefined;
+        const scopedCanvasHostUrl =
+          canvasHostUrl && canvasCapability
+            ? (buildCanvasScopedHostUrl(canvasHostUrl, canvasCapability) ?? canvasHostUrl)
+            : canvasHostUrl;
+        clearHandshakeTimer();
+        const nextClient: GatewayWsClient = {
+          socket,
+          connect: connectParams,
+          connId,
+          isDeviceTokenAuth: authMethod === "device-token",
+          usesSharedGatewayAuth,
+          sharedGatewaySessionGeneration,
+          presenceKey,
+          clientIp: reportedClientIp,
+          canvasHostUrl,
+          canvasCapability,
+          canvasCapabilityExpiresAtMs,
+        };
+        setSocketMaxPayload(socket, MAX_PAYLOAD_BYTES);
+        if (!setClient(nextClient)) {
+          setCloseCause("connect-aborted-before-register", {
+            ...clientMeta,
+            auth: authMethod,
+          });
+          return;
+        }
+        setHandshakeState("connected");
         logWs("in", "connect", {
           connId,
           client: connectParams.client.id,
@@ -1296,75 +1343,6 @@ export function attachGatewayWsMessageHandler(params: {
           });
           incrementPresenceVersion();
         }
-
-        const snapshot = buildGatewaySnapshot({
-          includeSensitive: scopes.includes(ADMIN_SCOPE),
-        });
-        const cachedHealth = getHealthCache();
-        if (cachedHealth) {
-          snapshot.health = cachedHealth;
-          snapshot.stateVersion.health = getHealthVersion();
-        }
-        const canvasCapability = canvasHostUrl ? mintCanvasCapabilityToken() : undefined;
-        const canvasCapabilityExpiresAtMs = canvasCapability
-          ? Date.now() + CANVAS_CAPABILITY_TTL_MS
-          : undefined;
-        const usesSharedGatewayAuth = authMethod === "token" || authMethod === "password";
-        const sharedGatewaySessionGeneration = usesSharedGatewayAuth
-          ? resolveSharedGatewaySessionGeneration(resolvedAuth)
-          : undefined;
-        const scopedCanvasHostUrl =
-          canvasHostUrl && canvasCapability
-            ? (buildCanvasScopedHostUrl(canvasHostUrl, canvasCapability) ?? canvasHostUrl)
-            : canvasHostUrl;
-        const helloOkAuthScopes = deviceToken ? deviceToken.scopes : scopes;
-        const helloOk = {
-          type: "hello-ok",
-          protocol: PROTOCOL_VERSION,
-          server: {
-            version: resolveRuntimeServiceVersion(process.env),
-            connId,
-          },
-          features: { methods: gatewayMethods, events },
-          snapshot,
-          canvasHostUrl: scopedCanvasHostUrl,
-          auth: {
-            role,
-            scopes: helloOkAuthScopes,
-            ...(deviceToken
-              ? {
-                  deviceToken: deviceToken.token,
-                  issuedAtMs: deviceToken.rotatedAtMs ?? deviceToken.createdAtMs,
-                  ...(bootstrapDeviceTokens.length > 1
-                    ? { deviceTokens: bootstrapDeviceTokens.slice(1) }
-                    : {}),
-                }
-              : {}),
-          },
-          policy: {
-            maxPayload: MAX_PAYLOAD_BYTES,
-            maxBufferedBytes: MAX_BUFFERED_BYTES,
-            tickIntervalMs: TICK_INTERVAL_MS,
-          },
-        };
-
-        clearHandshakeTimer();
-        const nextClient: GatewayWsClient = {
-          socket,
-          connect: connectParams,
-          connId,
-          isDeviceTokenAuth: authMethod === "device-token",
-          usesSharedGatewayAuth,
-          sharedGatewaySessionGeneration,
-          presenceKey,
-          clientIp: reportedClientIp,
-          canvasHostUrl,
-          canvasCapability,
-          canvasCapabilityExpiresAtMs,
-        };
-        setSocketMaxPayload(socket, MAX_PAYLOAD_BYTES);
-        setClient(nextClient);
-        setHandshakeState("connected");
         if (role === "node") {
           const context = buildRequestContext();
           const nodeSession = context.nodeRegistry.register(nextClient, {
@@ -1396,7 +1374,7 @@ export function attachGatewayWsMessageHandler(params: {
             platform: nodeSession.platform,
             deviceFamily: nodeSession.deviceFamily,
             commands: nodeSession.commands,
-            cfg: loadConfig(),
+            cfg: getRuntimeConfig(),
           }).catch((err) =>
             logGateway.warn(
               `remote bin probe failed for ${nodeSession.nodeId}: ${formatForLog(err)}`,
@@ -1413,7 +1391,57 @@ export function attachGatewayWsMessageHandler(params: {
                 `voicewake snapshot failed for ${nodeSession.nodeId}: ${formatForLog(err)}`,
               ),
             );
+          void loadVoiceWakeRoutingConfig()
+            .then((routing) => {
+              context.nodeRegistry.sendEvent(nodeSession.nodeId, "voicewake.routing.changed", {
+                config: routing,
+              });
+            })
+            .catch((err) =>
+              logGateway.warn(
+                `voicewake routing snapshot failed for ${nodeSession.nodeId}: ${formatForLog(err)}`,
+              ),
+            );
         }
+
+        const snapshot = buildGatewaySnapshot({
+          includeSensitive: scopes.includes(ADMIN_SCOPE),
+        });
+        const cachedHealth = getHealthCache();
+        if (cachedHealth) {
+          snapshot.health = cachedHealth;
+          snapshot.stateVersion.health = getHealthVersion();
+        }
+        const helloOkAuthScopes = deviceToken ? deviceToken.scopes : scopes;
+        const helloOk = {
+          type: "hello-ok",
+          protocol: PROTOCOL_VERSION,
+          server: {
+            version: resolveRuntimeServiceVersion(process.env),
+            connId,
+          },
+          features: { methods: gatewayMethods, events },
+          snapshot,
+          canvasHostUrl: scopedCanvasHostUrl,
+          auth: {
+            role,
+            scopes: helloOkAuthScopes,
+            ...(deviceToken
+              ? {
+                  deviceToken: deviceToken.token,
+                  issuedAtMs: deviceToken.rotatedAtMs ?? deviceToken.createdAtMs,
+                  ...(bootstrapDeviceTokens.length > 1
+                    ? { deviceTokens: bootstrapDeviceTokens.slice(1) }
+                    : {}),
+                }
+              : {}),
+          },
+          policy: {
+            maxPayload: MAX_PAYLOAD_BYTES,
+            maxBufferedBytes: MAX_BUFFERED_BYTES,
+            tickIntervalMs: TICK_INTERVAL_MS,
+          },
+        };
 
         try {
           await sendFrame({ type: "res", id: frame.id, ok: true, payload: helloOk });
@@ -1545,6 +1573,7 @@ export function attachGatewayWsMessageHandler(params: {
       };
 
       void (async () => {
+        const { handleGatewayRequest } = await import("../../server-methods.js");
         await handleGatewayRequest({
           req,
           respond,
@@ -1564,6 +1593,10 @@ export function attachGatewayWsMessageHandler(params: {
         close();
       }
     }
+  };
+
+  socket.on("message", (data) => {
+    void runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () => handleMessage(data));
   });
 }
 

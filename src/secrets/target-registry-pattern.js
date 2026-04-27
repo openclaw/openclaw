@@ -1,0 +1,166 @@
+import { isRecord, parseDotPath } from "./shared.js";
+function countDynamicPatternTokens(tokens) {
+    return tokens.filter((token) => token.kind === "wildcard" || token.kind === "array").length;
+}
+export function parsePathPattern(pathPattern) {
+    const segments = parseDotPath(pathPattern);
+    return segments.map((segment) => {
+        if (segment === "*") {
+            return { kind: "wildcard" };
+        }
+        if (segment.endsWith("[]")) {
+            const field = segment.slice(0, -2).trim();
+            if (!field) {
+                throw new Error(`Invalid target path pattern: ${pathPattern}`);
+            }
+            return { kind: "array", field };
+        }
+        return { kind: "literal", value: segment };
+    });
+}
+export function compileTargetRegistryEntry(entry) {
+    const pathTokens = parsePathPattern(entry.pathPattern);
+    const pathDynamicTokenCount = countDynamicPatternTokens(pathTokens);
+    const refPathTokens = entry.refPathPattern ? parsePathPattern(entry.refPathPattern) : undefined;
+    const refPathDynamicTokenCount = refPathTokens ? countDynamicPatternTokens(refPathTokens) : 0;
+    const requiresSiblingRefPath = entry.secretShape === "sibling_ref"; // pragma: allowlist secret
+    if (requiresSiblingRefPath && !refPathTokens) {
+        throw new Error(`Missing refPathPattern for sibling_ref target: ${entry.id}`);
+    }
+    if (refPathTokens && refPathDynamicTokenCount !== pathDynamicTokenCount) {
+        throw new Error(`Mismatched wildcard shape for target ref path: ${entry.id}`);
+    }
+    return {
+        ...entry,
+        pathTokens,
+        pathDynamicTokenCount,
+        refPathTokens,
+        refPathDynamicTokenCount,
+    };
+}
+export function matchPathTokens(segments, tokens) {
+    const captures = [];
+    let index = 0;
+    for (const token of tokens) {
+        if (token.kind === "literal") {
+            if (segments[index] !== token.value) {
+                return null;
+            }
+            index += 1;
+            continue;
+        }
+        if (token.kind === "wildcard") {
+            const value = segments[index];
+            if (!value) {
+                return null;
+            }
+            captures.push(value);
+            index += 1;
+            continue;
+        }
+        if (segments[index] !== token.field) {
+            return null;
+        }
+        const next = segments[index + 1];
+        if (!next || !/^\d+$/.test(next)) {
+            return null;
+        }
+        captures.push(next);
+        index += 2;
+    }
+    return index === segments.length ? { captures } : null;
+}
+export function materializePathTokens(tokens, captures) {
+    const out = [];
+    let captureIndex = 0;
+    for (const token of tokens) {
+        if (token.kind === "literal") {
+            out.push(token.value);
+            continue;
+        }
+        if (token.kind === "wildcard") {
+            const value = captures[captureIndex];
+            if (!value) {
+                return null;
+            }
+            out.push(value);
+            captureIndex += 1;
+            continue;
+        }
+        const arrayIndex = captures[captureIndex];
+        if (!arrayIndex || !/^\d+$/.test(arrayIndex)) {
+            return null;
+        }
+        out.push(token.field, arrayIndex);
+        captureIndex += 1;
+    }
+    return captureIndex === captures.length ? out : null;
+}
+export function expandPathTokens(root, tokens) {
+    const out = [];
+    const walk = (node, tokenIndex, segments, captures) => {
+        const token = tokens[tokenIndex];
+        if (!token) {
+            out.push({ segments, captures, value: node });
+            return;
+        }
+        const isLeaf = tokenIndex === tokens.length - 1;
+        if (token.kind === "literal") {
+            if (!isRecord(node)) {
+                return;
+            }
+            if (isLeaf) {
+                out.push({
+                    segments: [...segments, token.value],
+                    captures,
+                    value: node[token.value],
+                });
+                return;
+            }
+            if (!Object.prototype.hasOwnProperty.call(node, token.value)) {
+                return;
+            }
+            walk(node[token.value], tokenIndex + 1, [...segments, token.value], captures);
+            return;
+        }
+        if (token.kind === "wildcard") {
+            if (!isRecord(node)) {
+                return;
+            }
+            for (const [key, value] of Object.entries(node)) {
+                if (isLeaf) {
+                    out.push({
+                        segments: [...segments, key],
+                        captures: [...captures, key],
+                        value,
+                    });
+                    continue;
+                }
+                walk(value, tokenIndex + 1, [...segments, key], [...captures, key]);
+            }
+            return;
+        }
+        if (!isRecord(node)) {
+            return;
+        }
+        const items = node[token.field];
+        if (!Array.isArray(items)) {
+            return;
+        }
+        for (let index = 0; index < items.length; index += 1) {
+            const item = items[index];
+            const indexString = String(index);
+            if (isLeaf) {
+                out.push({
+                    segments: [...segments, token.field, indexString],
+                    captures: [...captures, indexString],
+                    value: item,
+                });
+                continue;
+            }
+            walk(item, tokenIndex + 1, [...segments, token.field, indexString], [...captures, indexString]);
+        }
+    };
+    walk(root, 0, [], []);
+    return out;
+}

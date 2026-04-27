@@ -1,0 +1,11 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ProviderPlugin } from "./types.js";
+export declare function resolvePluginDiscoveryProvidersRuntime(params: {
+    config?: OpenClawConfig;
+    workspaceDir?: string;
+    env?: NodeJS.ProcessEnv;
+    onlyPluginIds?: string[];
+    includeUntrustedWorkspacePlugins?: boolean;
+    requireCompleteDiscoveryEntryCoverage?: boolean;
+    discoveryEntriesOnly?: boolean;
+}): ProviderPlugin[];

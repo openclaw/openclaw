@@ -268,8 +268,16 @@ function preserveOptimisticTailMessages(
   historyMessages: unknown[],
   previousMessages: unknown[],
 ): unknown[] {
-  if (historyMessages.length === 0 || previousMessages.length === 0) {
+  if (previousMessages.length === 0) {
     return historyMessages;
+  }
+  if (historyMessages.length === 0) {
+    const optimisticMessages = previousMessages.filter(
+      (message) => isLocallyOptimisticHistoryMessage(message) && !shouldHideHistoryMessage(message),
+    );
+    return optimisticMessages.length === previousMessages.length
+      ? previousMessages
+      : historyMessages;
   }
   const historySignatures = new Set(
     historyMessages
@@ -340,6 +348,7 @@ export type ChatState = {
   chatStream: string | null;
   chatStreamStartedAt: number | null;
   lastError: string | null;
+  resetChatInputHistoryNavigation?: () => void;
 };
 
 export type ChatEventPayload = {
@@ -370,6 +379,8 @@ export async function loadChatHistory(state: ChatState) {
   const requestVersion = beginChatHistoryRequest(state);
   const startedAt = Date.now();
   const previousMessages = state.chatMessages;
+  // Any pending input-history snapshot becomes invalid once we start reloading transcript state.
+  state.resetChatInputHistoryNavigation?.();
   state.chatLoading = true;
   state.lastError = null;
   try {
@@ -448,8 +459,9 @@ function buildApiAttachments(attachments?: ChatAttachment[]) {
             return null;
           }
           return {
-            type: "image",
+            type: parsed.mimeType.startsWith("image/") ? "image" : "file",
             mimeType: parsed.mimeType,
+            fileName: att.fileName,
             content: parsed.content,
           };
         })
@@ -536,16 +548,38 @@ export async function sendChatMessage(
   const now = Date.now();
 
   // Build user message content blocks
-  const contentBlocks: Array<{ type: string; text?: string; source?: unknown }> = [];
+  const contentBlocks: Array<{
+    type: string;
+    text?: string;
+    source?: unknown;
+    attachment?: {
+      url: string;
+      kind: "audio" | "document";
+      label: string;
+      mimeType?: string;
+    };
+  }> = [];
   if (msg) {
     contentBlocks.push({ type: "text", text: msg });
   }
   // Add image previews to the message for display
   if (hasAttachments) {
     for (const att of attachments) {
+      if (att.mimeType.startsWith("image/")) {
+        contentBlocks.push({
+          type: "image",
+          source: { type: "base64", media_type: att.mimeType, data: att.dataUrl },
+        });
+        continue;
+      }
       contentBlocks.push({
-        type: "image",
-        source: { type: "base64", media_type: att.mimeType, data: att.dataUrl },
+        type: "attachment",
+        attachment: {
+          url: att.dataUrl,
+          kind: att.mimeType.startsWith("audio/") ? "audio" : "document",
+          label: att.fileName?.trim() || "Attached file",
+          mimeType: att.mimeType,
+        },
       });
     }
   }

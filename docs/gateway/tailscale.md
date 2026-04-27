@@ -16,6 +16,10 @@ Tailscale provides HTTPS, routing, and (for Serve) identity headers.
 - `funnel`: Public HTTPS via `tailscale funnel`. OpenClaw requires a shared password.
 - `off`: Default (no Tailscale automation).
 
+Status and audit output use **Tailscale exposure** for this OpenClaw Serve/Funnel
+mode. `off` means OpenClaw is not managing Serve or Funnel; it does not mean the
+local Tailscale daemon is stopped or logged out.
+
 ## Auth
 
 Set `gateway.auth.mode` to control the handshake:
@@ -33,6 +37,11 @@ daemon (`tailscale whois`) and matching it to the header before accepting it.
 OpenClaw only treats a request as Serve when it arrives from loopback with
 Tailscale’s `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host`
 headers.
+For Control UI operator sessions that include browser device identity, this
+verified Serve path also skips the device-pairing round trip. It does not bypass
+browser device identity: device-less clients are still rejected, and node-role
+or non-Control UI WebSocket connections still follow the normal pairing and
+auth checks.
 HTTP API endpoints (for example `/v1/*`, `/tools/invoke`, and `/api/channels/*`)
 do **not** use Tailscale identity-header auth. They still follow the gateway's
 normal HTTP auth mode: shared-secret auth by default, or an intentionally
@@ -76,7 +85,9 @@ Connect from another Tailnet device:
 - Control UI: `http://<tailscale-ip>:18789/`
 - WebSocket: `ws://<tailscale-ip>:18789`
 
-Note: loopback (`http://127.0.0.1:18789`) will **not** work in this mode.
+<Note>
+Loopback (`http://127.0.0.1:18789`) will **not** work in this mode.
+</Note>
 
 ### Public internet (Funnel + shared password)
 

@@ -1,0 +1,343 @@
+import { formatErrorMessage } from "../infra/errors.js";
+import { estimateBase64DecodedBytes } from "../media/base64.js";
+import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
+import { deleteMediaBuffer, saveMediaBuffer } from "../media/store.js";
+import { normalizeLowercaseStringOrEmpty, normalizeOptionalLowercaseString, } from "../shared/string-coerce.js";
+const OFFLOAD_THRESHOLD_BYTES = 2_000_000;
+const TEXT_ONLY_OFFLOAD_LIMIT = 10;
+const MIME_TO_EXT = {
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+    "image/heic": ".heic",
+    "image/heif": ".heif",
+    // bmp/tiff excluded from SUPPORTED_OFFLOAD_MIMES to avoid extension-loss
+    // bug in store.ts; entries kept here for future extension support
+    "image/bmp": ".bmp",
+    "image/tiff": ".tiff",
+};
+// Module-level Set for O(1) lookup — not rebuilt on every attachment iteration.
+//
+// heic/heif are included only if store.ts's extensionForMime maps them to an
+// extension. If it does not (same extension-loss risk as bmp/tiff), remove
+// them from this set.
+const SUPPORTED_OFFLOAD_MIMES = new Set([
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "image/webp",
+    "image/gif",
+    "image/heic",
+    "image/heif",
+]);
+/**
+ * Raised when the Gateway cannot persist an attachment to the media store.
+ *
+ * Distinct from ordinary input-validation errors so that Gateway handlers can
+ * map it to a server-side 5xx status rather than a client 4xx.
+ *
+ * Example causes: ENOSPC, EPERM, unexpected saveMediaBuffer return shape.
+ */
+export class MediaOffloadError extends Error {
+    cause;
+    constructor(message, options) {
+        super(message, options);
+        this.name = "MediaOffloadError";
+        this.cause = options?.cause;
+    }
+}
+function normalizeMime(mime) {
+    if (!mime) {
+        return undefined;
+    }
+    const cleaned = normalizeOptionalLowercaseString(mime.split(";")[0]);
+    return cleaned || undefined;
+}
+function isImageMime(mime) {
+    return typeof mime === "string" && mime.startsWith("image/");
+}
+function isValidBase64(value) {
+    if (value.length === 0 || value.length % 4 !== 0) {
+        return false;
+    }
+    // A full O(n) regex scan is safe: no overlapping quantifiers, fails linearly.
+    // Prevents adversarial payloads padded with megabytes of whitespace from
+    // bypassing length thresholds.
+    return /^[A-Za-z0-9+/]+={0,2}$/.test(value);
+}
+/**
+ * Confirms that the decoded buffer produced by Buffer.from(b64, 'base64')
+ * matches the pre-decode size estimate.
+ *
+ * Node's Buffer.from silently drops invalid base64 characters rather than
+ * throwing. A material size discrepancy means the source string contained
+ * embedded garbage that was silently stripped, which would produce a corrupted
+ * file on disk. ±3 bytes of leeway accounts for base64 padding rounding.
+ *
+ * IMPORTANT: this is an input-validation check (4xx client error).
+ * It MUST be called OUTSIDE the MediaOffloadError try/catch so that
+ * corrupt-input errors are not misclassified as 5xx server errors.
+ */
+function verifyDecodedSize(buffer, estimatedBytes, label) {
+    if (Math.abs(buffer.byteLength - estimatedBytes) > 3) {
+        throw new Error(`attachment ${label}: base64 contains invalid characters ` +
+            `(expected ~${estimatedBytes} bytes decoded, got ${buffer.byteLength})`);
+    }
+}
+function ensureExtension(label, mime) {
+    if (/\.[a-zA-Z0-9]+$/.test(label)) {
+        return label;
+    }
+    const ext = MIME_TO_EXT[normalizeLowercaseStringOrEmpty(mime)] ?? "";
+    return ext ? `${label}${ext}` : label;
+}
+/**
+ * Type guard for the return value of saveMediaBuffer.
+ *
+ * Also validates that the returned ID:
+ * - is a non-empty string
+ * - contains no path separators (/ or \) or null bytes
+ *
+ * Catching a bad shape here produces a cleaner error than a cryptic failure
+ * deeper in the stack, and is treated as a 5xx infrastructure error.
+ */
+function assertSavedMedia(value, label) {
+    if (value !== null &&
+        typeof value === "object" &&
+        "id" in value &&
+        typeof value.id === "string") {
+        const id = value.id;
+        if (id.length === 0) {
+            throw new Error(`attachment ${label}: saveMediaBuffer returned an empty media ID`);
+        }
+        if (id.includes("/") || id.includes("\\") || id.includes("\0")) {
+            throw new Error(`attachment ${label}: saveMediaBuffer returned an unsafe media ID ` +
+                `(contains path separator or null byte)`);
+        }
+        return value;
+    }
+    throw new Error(`attachment ${label}: saveMediaBuffer returned an unexpected shape`);
+}
+function normalizeAttachment(att, idx, opts) {
+    const mime = att.mimeType ?? "";
+    const content = att.content;
+    const label = att.fileName || att.type || `attachment-${idx + 1}`;
+    if (typeof content !== "string") {
+        throw new Error(`attachment ${label}: content must be base64 string`);
+    }
+    if (opts.requireImageMime && !mime.startsWith("image/")) {
+        throw new Error(`attachment ${label}: only image/* supported`);
+    }
+    let base64 = content.trim();
+    if (opts.stripDataUrlPrefix) {
+        const dataUrlMatch = /^data:[^;]+;base64,(.*)$/.exec(base64);
+        if (dataUrlMatch) {
+            base64 = dataUrlMatch[1];
+        }
+    }
+    return { label, mime, base64 };
+}
+function validateAttachmentBase64OrThrow(normalized, opts) {
+    if (!isValidBase64(normalized.base64)) {
+        throw new Error(`attachment ${normalized.label}: invalid base64 content`);
+    }
+    const sizeBytes = estimateBase64DecodedBytes(normalized.base64);
+    if (sizeBytes <= 0 || sizeBytes > opts.maxBytes) {
+        throw new Error(`attachment ${normalized.label}: exceeds size limit (${sizeBytes} > ${opts.maxBytes} bytes)`);
+    }
+    return sizeBytes;
+}
+/**
+ * Parse attachments and extract images as structured content blocks.
+ * Returns the message text, inline image blocks, and offloaded media refs.
+ *
+ * ## Offload behaviour
+ * Attachments whose decoded size exceeds OFFLOAD_THRESHOLD_BYTES are saved to
+ * disk via saveMediaBuffer and replaced with an opaque `media://inbound/<id>`
+ * URI appended to the message. The agent resolves these URIs via
+ * resolveMediaBufferPath before passing them to the model.
+ *
+ * ## Transcript metadata
+ * Callers MUST use `result.offloadedRefs` to persist structured media metadata
+ * for transcripts. These refs are intentionally excluded from `result.images`
+ * because they are not passed inline to the model.
+ *
+ * ## Text-only model runs
+ * Pass `supportsImages: false` for text-only model runs so images are offloaded
+ * as `media://inbound/<id>` refs instead of being sent as inline image blocks.
+ * The agent runner can then resolve the refs through the normal media path.
+ *
+ * ## Cleanup on failure
+ * On any parse failure after files have already been offloaded, best-effort
+ * cleanup is performed before rethrowing so that malformed requests do not
+ * accumulate orphaned files on disk ahead of the periodic TTL sweep.
+ *
+ * ## Known ordering limitation
+ * In mixed large/small batches, the model receives images in a different order
+ * than the original attachment list because detectAndLoadPromptImages
+ * initialises from existingImages first, then appends prompt-detected refs.
+ * A future refactor should unify all image references into a single ordered list.
+ *
+ * @throws {MediaOffloadError} Infrastructure failure saving to media store → 5xx.
+ * @throws {Error} Input validation failure → 4xx.
+ */
+export async function parseMessageWithAttachments(message, attachments, opts) {
+    const maxBytes = opts?.maxBytes ?? 5_000_000;
+    const log = opts?.log;
+    if (!attachments || attachments.length === 0) {
+        return { message, images: [], imageOrder: [], offloadedRefs: [] };
+    }
+    const images = [];
+    const imageOrder = [];
+    const offloadedRefs = [];
+    let updatedMessage = message;
+    const shouldForceOffload = opts?.supportsImages === false;
+    // Track IDs of files saved during this request for cleanup if a later
+    // attachment fails validation and the entire parse is aborted.
+    const savedMediaIds = [];
+    try {
+        for (const [idx, att] of attachments.entries()) {
+            if (!att) {
+                continue;
+            }
+            const normalized = normalizeAttachment(att, idx, {
+                stripDataUrlPrefix: true,
+                requireImageMime: false,
+            });
+            const { base64: b64, label, mime } = normalized;
+            if (!isValidBase64(b64)) {
+                throw new Error(`attachment ${label}: invalid base64 content`);
+            }
+            const sizeBytes = estimateBase64DecodedBytes(b64);
+            if (sizeBytes <= 0) {
+                log?.warn(`attachment ${label}: estimated size is zero, dropping`);
+                continue;
+            }
+            if (sizeBytes > maxBytes) {
+                throw new Error(`attachment ${label}: exceeds size limit (${sizeBytes} > ${maxBytes} bytes)`);
+            }
+            const providedMime = normalizeMime(mime);
+            const sniffedMime = normalizeMime(await sniffMimeFromBase64(b64));
+            if (sniffedMime && !isImageMime(sniffedMime)) {
+                log?.warn(`attachment ${label}: detected non-image (${sniffedMime}), dropping`);
+                continue;
+            }
+            if (!sniffedMime && !isImageMime(providedMime)) {
+                log?.warn(`attachment ${label}: unable to detect image mime type, dropping`);
+                continue;
+            }
+            if (sniffedMime && providedMime && sniffedMime !== providedMime) {
+                log?.warn(`attachment ${label}: mime mismatch (${providedMime} -> ${sniffedMime}), using sniffed`);
+            }
+            // Third fallback normalises `mime` so a raw un-normalised string (e.g.
+            // "IMAGE/JPEG") does not silently bypass the SUPPORTED_OFFLOAD_MIMES check.
+            const finalMime = sniffedMime ?? providedMime ?? normalizeMime(mime) ?? mime;
+            let isOffloaded = false;
+            if (shouldForceOffload && offloadedRefs.length >= TEXT_ONLY_OFFLOAD_LIMIT) {
+                log?.warn(`attachment ${label}: dropping image because text-only offload limit ` +
+                    `${TEXT_ONLY_OFFLOAD_LIMIT} was reached`);
+                updatedMessage += "\n[image attachment omitted: text-only attachment limit reached]";
+                continue;
+            }
+            if (shouldForceOffload || sizeBytes > OFFLOAD_THRESHOLD_BYTES) {
+                const isSupportedForOffload = SUPPORTED_OFFLOAD_MIMES.has(finalMime);
+                if (!isSupportedForOffload) {
+                    if (shouldForceOffload) {
+                        log?.warn(`attachment ${label}: format ${finalMime} cannot be offloaded for ` +
+                            "text-only model, dropping");
+                        continue;
+                    }
+                    // Passing this inline would reintroduce the OOM risk this PR prevents.
+                    throw new Error(`attachment ${label}: format ${finalMime} is too large to pass inline ` +
+                        `(${sizeBytes} > ${OFFLOAD_THRESHOLD_BYTES} bytes) and cannot be offloaded. ` +
+                        `Please convert to JPEG, PNG, WEBP, GIF, HEIC, or HEIF.`);
+                }
+                // Decode and run input-validation BEFORE the MediaOffloadError try/catch.
+                // verifyDecodedSize is a 4xx client error and must not be wrapped as a
+                // 5xx MediaOffloadError.
+                const buffer = Buffer.from(b64, "base64");
+                verifyDecodedSize(buffer, sizeBytes, label);
+                // Only the storage operation is wrapped so callers can distinguish
+                // infrastructure failures (5xx) from input errors (4xx).
+                try {
+                    const labelWithExt = ensureExtension(label, finalMime);
+                    const rawResult = await saveMediaBuffer(buffer, finalMime, "inbound", maxBytes, labelWithExt);
+                    const savedMedia = assertSavedMedia(rawResult, label);
+                    // Track for cleanup if a subsequent attachment fails.
+                    savedMediaIds.push(savedMedia.id);
+                    // Opaque URI — compatible with workspaceOnly sandboxes and decouples
+                    // the Gateway from the agent's filesystem layout.
+                    const mediaRef = `media://inbound/${savedMedia.id}`;
+                    updatedMessage += `\n[media attached: ${mediaRef}]`;
+                    log?.info?.(shouldForceOffload
+                        ? `[Gateway] Offloaded image for text-only model. Saved: ${mediaRef}`
+                        : `[Gateway] Intercepted large image payload. Saved: ${mediaRef}`);
+                    // Record for transcript metadata — separate from `images` because
+                    // these are not passed inline to the model.
+                    offloadedRefs.push({
+                        mediaRef,
+                        id: savedMedia.id,
+                        path: savedMedia.path ?? "",
+                        mimeType: finalMime,
+                        label,
+                    });
+                    imageOrder.push("offloaded");
+                    isOffloaded = true;
+                }
+                catch (err) {
+                    const errorMessage = formatErrorMessage(err);
+                    throw new MediaOffloadError(`[Gateway Error] Failed to save intercepted media to disk: ${errorMessage}`, { cause: err });
+                }
+            }
+            if (isOffloaded) {
+                continue;
+            }
+            images.push({ type: "image", data: b64, mimeType: finalMime });
+            imageOrder.push("inline");
+        }
+    }
+    catch (err) {
+        // Best-effort cleanup before rethrowing.
+        if (savedMediaIds.length > 0) {
+            await Promise.allSettled(savedMediaIds.map((id) => deleteMediaBuffer(id, "inbound")));
+        }
+        throw err;
+    }
+    return {
+        message: updatedMessage !== message ? updatedMessage.trimEnd() : message,
+        images,
+        imageOrder,
+        offloadedRefs,
+    };
+}
+/**
+ * @deprecated Use parseMessageWithAttachments instead.
+ * This function converts images to markdown data URLs which Claude API cannot process as images.
+ */
+export function buildMessageWithAttachments(message, attachments, opts) {
+    const maxBytes = opts?.maxBytes ?? 2_000_000;
+    if (!attachments || attachments.length === 0) {
+        return message;
+    }
+    const blocks = [];
+    for (const [idx, att] of attachments.entries()) {
+        if (!att) {
+            continue;
+        }
+        const normalized = normalizeAttachment(att, idx, {
+            stripDataUrlPrefix: false,
+            requireImageMime: true,
+        });
+        validateAttachmentBase64OrThrow(normalized, { maxBytes });
+        const { base64, label, mime } = normalized;
+        const safeLabel = label.replace(/\s+/g, "_");
+        blocks.push(`![${safeLabel}](data:${mime};base64,${base64})`);
+    }
+    if (blocks.length === 0) {
+        return message;
+    }
+    const separator = message.trim().length > 0 ? "\n\n" : "";
+    return `${message}${separator}${blocks.join("\n\n")}`;
+}

@@ -1,0 +1,404 @@
+import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
+import { loadModelCatalog } from "../../agents/model-catalog.js";
+import { isModelPickerVisibleProvider } from "../../agents/model-picker-visibility.js";
+import { listLegacyRuntimeModelProviderAliases } from "../../agents/model-runtime-aliases.js";
+import { buildAllowedModelSet, buildModelAliasIndex, normalizeProviderId, resolveBareModelDefaultProvider, resolveDefaultModelForAgent, resolveModelRefFromString, } from "../../agents/model-selection.js";
+import { getChannelPlugin } from "../../channels/plugins/index.js";
+import { normalizeLowercaseStringOrEmpty, normalizeOptionalString, } from "../../shared/string-coerce.js";
+import { rejectUnauthorizedCommand } from "./command-gates.js";
+const PAGE_SIZE_DEFAULT = 20;
+const PAGE_SIZE_MAX = 100;
+const MODELS_ADD_DEPRECATED_TEXT = "⚠️ /models add is deprecated. Use /models to browse providers and /model to switch models.";
+export async function buildModelsProviderData(cfg, agentId) {
+    const resolvedDefault = resolveDefaultModelForAgent({
+        cfg,
+        agentId,
+    });
+    const catalog = await loadModelCatalog({ config: cfg });
+    const allowed = buildAllowedModelSet({
+        cfg,
+        catalog,
+        defaultProvider: resolvedDefault.provider,
+        defaultModel: resolvedDefault.model,
+        agentId,
+    });
+    const aliasIndex = buildModelAliasIndex({
+        cfg,
+        defaultProvider: resolvedDefault.provider,
+    });
+    const byProvider = new Map();
+    const add = (p, m) => {
+        const key = normalizeProviderId(p);
+        if (!isModelPickerVisibleProvider(key)) {
+            return;
+        }
+        const set = byProvider.get(key) ?? new Set();
+        set.add(m);
+        byProvider.set(key, set);
+    };
+    const addRawModelRef = (raw) => {
+        const trimmed = normalizeOptionalString(raw);
+        if (!trimmed) {
+            return;
+        }
+        const defaultProvider = !trimmed.includes("/")
+            ? resolveBareModelDefaultProvider({
+                cfg,
+                catalog,
+                model: trimmed,
+                defaultProvider: resolvedDefault.provider,
+            })
+            : resolvedDefault.provider;
+        const resolved = resolveModelRefFromString({
+            raw: trimmed,
+            defaultProvider,
+            aliasIndex,
+        });
+        if (!resolved) {
+            return;
+        }
+        add(resolved.ref.provider, resolved.ref.model);
+    };
+    const addModelConfigEntries = () => {
+        const modelConfig = cfg.agents?.defaults?.model;
+        if (typeof modelConfig === "string") {
+            addRawModelRef(modelConfig);
+        }
+        else if (modelConfig && typeof modelConfig === "object") {
+            addRawModelRef(modelConfig.primary);
+            for (const fallback of modelConfig.fallbacks ?? []) {
+                addRawModelRef(fallback);
+            }
+        }
+        const imageConfig = cfg.agents?.defaults?.imageModel;
+        if (typeof imageConfig === "string") {
+            addRawModelRef(imageConfig);
+        }
+        else if (imageConfig && typeof imageConfig === "object") {
+            addRawModelRef(imageConfig.primary);
+            for (const fallback of imageConfig.fallbacks ?? []) {
+                addRawModelRef(fallback);
+            }
+        }
+    };
+    for (const entry of allowed.allowedCatalog) {
+        add(entry.provider, entry.id);
+    }
+    for (const raw of Object.keys(cfg.agents?.defaults?.models ?? {})) {
+        addRawModelRef(raw);
+    }
+    add(resolvedDefault.provider, resolvedDefault.model);
+    addModelConfigEntries();
+    const providers = [...byProvider.keys()].toSorted();
+    const modelNames = new Map();
+    for (const entry of catalog) {
+        if (entry.name && entry.name !== entry.id) {
+            modelNames.set(`${normalizeProviderId(entry.provider)}/${entry.id}`, entry.name);
+        }
+    }
+    const runtimeChoicesByProvider = new Map();
+    for (const alias of listLegacyRuntimeModelProviderAliases()) {
+        const provider = normalizeProviderId(alias.provider);
+        const choices = runtimeChoicesByProvider.get(provider) ?? [
+            {
+                id: "pi",
+                label: "OpenClaw Pi Default",
+                description: "Use the built-in OpenClaw Pi runtime.",
+            },
+        ];
+        choices.push({
+            id: alias.runtime,
+            label: alias.runtime,
+            description: alias.cli
+                ? `Run ${provider} models through ${alias.runtime}.`
+                : `Run ${provider} models through the ${alias.runtime} harness.`,
+        });
+        runtimeChoicesByProvider.set(provider, choices);
+    }
+    return { byProvider, providers, resolvedDefault, modelNames, runtimeChoicesByProvider };
+}
+function formatProviderLine(params) {
+    return `- ${params.provider} (${params.count})`;
+}
+function parseListArgs(tokens) {
+    const provider = normalizeOptionalString(tokens[0]);
+    let page = 1;
+    let all = false;
+    for (const token of tokens.slice(1)) {
+        const lower = normalizeLowercaseStringOrEmpty(token);
+        if (lower === "all" || lower === "--all") {
+            all = true;
+            continue;
+        }
+        if (lower.startsWith("page=")) {
+            const value = Number.parseInt(lower.slice("page=".length), 10);
+            if (Number.isFinite(value) && value > 0) {
+                page = value;
+            }
+            continue;
+        }
+        if (/^[0-9]+$/.test(lower)) {
+            const value = Number.parseInt(lower, 10);
+            if (Number.isFinite(value) && value > 0) {
+                page = value;
+            }
+        }
+    }
+    let pageSize = PAGE_SIZE_DEFAULT;
+    for (const token of tokens) {
+        const lower = normalizeLowercaseStringOrEmpty(token);
+        if (lower.startsWith("limit=") || lower.startsWith("size=")) {
+            const rawValue = lower.slice(lower.indexOf("=") + 1);
+            const value = Number.parseInt(rawValue, 10);
+            if (Number.isFinite(value) && value > 0) {
+                pageSize = Math.min(PAGE_SIZE_MAX, value);
+            }
+        }
+    }
+    return {
+        action: "list",
+        provider: provider ? normalizeProviderId(provider) : undefined,
+        page,
+        pageSize,
+        all,
+    };
+}
+function parseModelsArgs(raw) {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+        return { action: "providers" };
+    }
+    const tokens = trimmed.split(/\s+/g).filter(Boolean);
+    const first = normalizeLowercaseStringOrEmpty(tokens[0]);
+    switch (first) {
+        case "providers":
+            return { action: "providers" };
+        case "list":
+            return parseListArgs(tokens.slice(1));
+        case "add":
+            return {
+                action: "add",
+                provider: normalizeOptionalString(tokens[1]),
+                modelId: normalizeOptionalString(tokens.slice(2).join(" ")),
+            };
+        default:
+            return parseListArgs(tokens);
+    }
+}
+function resolveProviderLabel(params) {
+    const authLabel = resolveModelAuthLabel({
+        provider: params.provider,
+        cfg: params.cfg,
+        sessionEntry: params.sessionEntry,
+        agentDir: params.agentDir,
+    });
+    if (!authLabel || authLabel === "unknown") {
+        return params.provider;
+    }
+    return `${params.provider} · 🔑 ${authLabel}`;
+}
+export function formatModelsAvailableHeader(params) {
+    const providerLabel = resolveProviderLabel({
+        provider: params.provider,
+        cfg: params.cfg,
+        agentDir: params.agentDir,
+        sessionEntry: params.sessionEntry,
+    });
+    return `Models (${providerLabel}) — ${params.total} available`;
+}
+function buildModelsMenuText(params) {
+    return [
+        "Providers:",
+        ...params.providers.map((provider) => formatProviderLine({
+            provider,
+            count: params.byProvider.get(provider)?.size ?? 0,
+        })),
+        "",
+        "Use: /models <provider>",
+        "Switch: /model <provider/model>",
+    ].join("\n");
+}
+function buildProviderInfos(params) {
+    return params.providers.map((provider) => ({
+        id: provider,
+        count: params.byProvider.get(provider)?.size ?? 0,
+    }));
+}
+export async function resolveModelsCommandReply(params) {
+    const body = params.commandBodyNormalized.trim();
+    if (!body.startsWith("/models")) {
+        return null;
+    }
+    const argText = body.replace(/^\/models\b/i, "").trim();
+    const parsed = parseModelsArgs(argText);
+    const { byProvider, providers, modelNames } = await buildModelsProviderData(params.cfg, params.agentId);
+    const commandPlugin = params.surface ? getChannelPlugin(params.surface) : null;
+    const providerInfos = buildProviderInfos({ providers, byProvider });
+    if (parsed.action === "providers") {
+        const channelData = commandPlugin?.commands?.buildModelsMenuChannelData?.({
+            providers: providerInfos,
+        }) ??
+            commandPlugin?.commands?.buildModelsProviderChannelData?.({
+                providers: providerInfos,
+            });
+        if (channelData) {
+            return {
+                text: "Select a provider:",
+                channelData,
+            };
+        }
+        return {
+            text: buildModelsMenuText({ providers, byProvider }),
+        };
+    }
+    if (parsed.action === "add") {
+        return { text: MODELS_ADD_DEPRECATED_TEXT };
+    }
+    const { provider, page, pageSize, all } = parsed;
+    if (!provider) {
+        const channelData = commandPlugin?.commands?.buildModelsProviderChannelData?.({
+            providers: providerInfos,
+        });
+        if (channelData) {
+            return {
+                text: "Select a provider:",
+                channelData,
+            };
+        }
+        return {
+            text: buildModelsMenuText({ providers, byProvider }),
+        };
+    }
+    if (!byProvider.has(provider)) {
+        return {
+            text: [
+                `Unknown provider: ${provider}`,
+                "",
+                "Available providers:",
+                ...providers.map((entry) => `- ${entry}`),
+                "",
+                "Use: /models <provider>",
+            ].join("\n"),
+        };
+    }
+    const models = [...(byProvider.get(provider) ?? new Set())].toSorted();
+    const total = models.length;
+    if (total === 0) {
+        const emptyProviderLabel = resolveProviderLabel({
+            provider,
+            cfg: params.cfg,
+            agentDir: params.agentDir,
+            sessionEntry: params.sessionEntry,
+        });
+        return {
+            text: [
+                `Models (${emptyProviderLabel}) — none`,
+                "",
+                "Browse: /models",
+                "Switch: /model <provider/model>",
+            ].join("\n"),
+        };
+    }
+    const interactivePageSize = 8;
+    const interactiveTotalPages = Math.max(1, Math.ceil(total / interactivePageSize));
+    const interactivePage = Math.max(1, Math.min(page, interactiveTotalPages));
+    const interactiveChannelData = commandPlugin?.commands?.buildModelsListChannelData?.({
+        provider,
+        models,
+        currentModel: params.currentModel,
+        currentPage: interactivePage,
+        totalPages: interactiveTotalPages,
+        pageSize: interactivePageSize,
+        modelNames,
+    });
+    if (interactiveChannelData) {
+        return {
+            text: formatModelsAvailableHeader({
+                provider,
+                total,
+                cfg: params.cfg,
+                agentDir: params.agentDir,
+                sessionEntry: params.sessionEntry,
+            }),
+            channelData: interactiveChannelData,
+        };
+    }
+    const effectivePageSize = all ? total : pageSize;
+    const pageCount = effectivePageSize > 0 ? Math.ceil(total / effectivePageSize) : 1;
+    const safePage = all ? 1 : Math.max(1, Math.min(page, pageCount));
+    if (!all && page !== safePage) {
+        return {
+            text: [
+                `Page out of range: ${page} (valid: 1-${pageCount})`,
+                "",
+                `Try: /models list ${provider} ${safePage}`,
+                `All: /models list ${provider} all`,
+            ].join("\n"),
+        };
+    }
+    const startIndex = (safePage - 1) * effectivePageSize;
+    const endIndexExclusive = Math.min(total, startIndex + effectivePageSize);
+    const pageModels = models.slice(startIndex, endIndexExclusive);
+    const providerLabel = resolveProviderLabel({
+        provider,
+        cfg: params.cfg,
+        agentDir: params.agentDir,
+        sessionEntry: params.sessionEntry,
+    });
+    const lines = [
+        `Models (${providerLabel}) — showing ${startIndex + 1}-${endIndexExclusive} of ${total} (page ${safePage}/${pageCount})`,
+    ];
+    for (const id of pageModels) {
+        lines.push(`- ${provider}/${id}`);
+    }
+    lines.push("", "Switch: /model <provider/model>");
+    if (!all && safePage < pageCount) {
+        lines.push(`More: /models list ${provider} ${safePage + 1}`);
+    }
+    if (!all) {
+        lines.push(`All: /models list ${provider} all`);
+    }
+    return { text: lines.join("\n") };
+}
+export const handleModelsCommand = async (params, allowTextCommands) => {
+    if (!allowTextCommands) {
+        return null;
+    }
+    const commandBodyNormalized = params.command.commandBodyNormalized.trim();
+    if (!commandBodyNormalized.startsWith("/models")) {
+        return null;
+    }
+    const parsed = parseModelsArgs(commandBodyNormalized.replace(/^\/models\b/i, "").trim());
+    const unauthorized = rejectUnauthorizedCommand(params, "/models");
+    if (unauthorized) {
+        return unauthorized;
+    }
+    if (parsed.action === "add") {
+        return { shouldContinue: false, reply: { text: MODELS_ADD_DEPRECATED_TEXT } };
+    }
+    const modelsAgentId = params.sessionKey
+        ? resolveSessionAgentId({
+            sessionKey: params.sessionKey,
+            config: params.cfg,
+        })
+        : (params.agentId ?? "main");
+    const currentAgentId = params.agentId ?? "main";
+    const modelsAgentDir = modelsAgentId === currentAgentId && params.agentDir
+        ? params.agentDir
+        : resolveAgentDir(params.cfg, modelsAgentId);
+    const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+    const reply = await resolveModelsCommandReply({
+        cfg: params.cfg,
+        commandBodyNormalized,
+        surface: params.ctx.Surface,
+        currentModel: params.model ? `${params.provider}/${params.model}` : undefined,
+        agentId: modelsAgentId,
+        agentDir: modelsAgentDir,
+        sessionEntry: targetSessionEntry,
+    });
+    if (!reply) {
+        return null;
+    }
+    return { reply, shouldContinue: false };
+};

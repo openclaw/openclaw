@@ -67,6 +67,28 @@ describe("legacy migrate audio transcription", () => {
     expect(res.config?.audio).toBeUndefined();
     expect(res.config?.tools?.media?.audio).toBeUndefined();
   });
+
+  it("rewrites legacy audio {input} placeholders to media templates", () => {
+    const res = migrateLegacyConfigForTest({
+      audio: {
+        transcription: {
+          command: ["whisper-cli", "--model", "small", "{input}", "--input={input}"],
+          timeoutSeconds: 30,
+        },
+      },
+    });
+
+    expect(res.changes).toContain("Moved audio.transcription → tools.media.audio.models.");
+    expect(res.config?.audio).toBeUndefined();
+    expect(res.config?.tools?.media?.audio?.models).toEqual([
+      {
+        type: "cli",
+        command: "whisper-cli",
+        args: ["--model", "small", "{{MediaPath}}", "--input={{MediaPath}}"],
+        timeoutSeconds: 30,
+      },
+    ]);
+  });
 });
 
 describe("legacy migrate mention routing", () => {
@@ -98,6 +120,69 @@ describe("legacy migrate mention routing", () => {
 });
 
 describe("legacy migrate sandbox scope aliases", () => {
+  it("removes legacy agents.defaults.llm timeout config", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          llm: {
+            idleTimeoutSeconds: 120,
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Removed agents.defaults.llm; model idle timeout now follows models.providers.<id>.timeoutSeconds.",
+    );
+    expect(res.config?.agents?.defaults).toEqual({
+      model: { primary: "openai/gpt-5.4" },
+    });
+  });
+
+  it("moves legacy embeddedHarness runtime policy into agentRuntime", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          embeddedHarness: {
+            runtime: "claude-cli",
+            fallback: "none",
+          },
+        },
+        list: [
+          {
+            id: "reviewer",
+            agentRuntime: { fallback: "pi" },
+            embeddedHarness: {
+              runtime: "codex",
+              fallback: "none",
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.changes).toEqual(
+      expect.arrayContaining([
+        "Moved agents.defaults.embeddedHarness → agents.defaults.agentRuntime.",
+        "Moved agents.list.0.embeddedHarness → agents.list.0.agentRuntime.",
+      ]),
+    );
+    expect(res.config?.agents?.defaults).toEqual({
+      agentRuntime: {
+        id: "claude-cli",
+        fallback: "none",
+      },
+    });
+    expect(res.config?.agents?.list?.[0]).toEqual({
+      id: "reviewer",
+      agentRuntime: {
+        id: "codex",
+        fallback: "pi",
+      },
+    });
+  });
+
   it("moves agents.defaults.sandbox.perSession into scope", () => {
     const res = migrateLegacyConfigForTest({
       agents: {
@@ -174,6 +259,58 @@ describe("legacy migrate sandbox scope aliases", () => {
 
     expect(res.changes).toEqual([]);
     expect(res.config).toBeNull();
+  });
+});
+
+describe("legacy migrate MCP server type aliases", () => {
+  it("moves CLI-native http type to OpenClaw streamable HTTP transport", () => {
+    const res = migrateLegacyConfigForTest({
+      mcp: {
+        servers: {
+          silo: {
+            type: "http",
+            url: "https://example.com/mcp",
+          },
+          legacySse: {
+            type: "sse",
+            url: "https://example.com/sse",
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      'Moved mcp.servers.silo.type "http" → transport "streamable-http".',
+    );
+    expect(res.changes).toContain('Moved mcp.servers.legacySse.type "sse" → transport "sse".');
+    expect(res.config?.mcp?.servers?.silo).toEqual({
+      url: "https://example.com/mcp",
+      transport: "streamable-http",
+    });
+    expect(res.config?.mcp?.servers?.legacySse).toEqual({
+      url: "https://example.com/sse",
+      transport: "sse",
+    });
+  });
+
+  it("removes CLI-native type when canonical transport is already set", () => {
+    const res = migrateLegacyConfigForTest({
+      mcp: {
+        servers: {
+          mixed: {
+            type: "http",
+            transport: "sse",
+            url: "https://example.com/mcp",
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain('Removed mcp.servers.mixed.type (transport "sse" already set).');
+    expect(res.config?.mcp?.servers?.mixed).toEqual({
+      url: "https://example.com/mcp",
+      transport: "sse",
+    });
   });
 });
 

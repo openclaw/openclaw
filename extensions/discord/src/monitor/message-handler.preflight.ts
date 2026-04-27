@@ -11,8 +11,8 @@ import {
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth-native";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
-import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
 import type { SessionBindingRecord } from "openclaw/plugin-sdk/conversation-binding-runtime";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { enqueueSystemEvent, recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
 import {
   recordPendingHistoryEntryIfEnabled,
@@ -1112,6 +1112,7 @@ export async function preflightDiscordMessage(
     commandAuthorized,
     baseText,
     messageText,
+    ...(preflightTranscript !== undefined ? { preflightAudioTranscript: preflightTranscript } : {}),
     wasMentioned,
     route: effectiveRoute,
     threadBinding,

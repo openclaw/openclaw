@@ -1,0 +1,74 @@
+import { resolveAgentModelFallbackValues, resolveAgentModelPrimaryValue, resolveAgentModelTimeoutMsValue, } from "../../config/model-input.js";
+import { ensureAuthProfileStore, hasAnyAuthProfileStoreSource, listProfilesForProvider, } from "../auth-profiles.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
+import { resolveEnvApiKey } from "../model-auth.js";
+import { resolveConfiguredModelRef } from "../model-selection.js";
+export function hasToolModelConfig(model) {
+    return Boolean(model?.primary?.trim() || (model?.fallbacks ?? []).some((entry) => entry.trim().length > 0));
+}
+export function resolveDefaultModelRef(cfg) {
+    if (cfg) {
+        const resolved = resolveConfiguredModelRef({
+            cfg,
+            defaultProvider: DEFAULT_PROVIDER,
+            defaultModel: DEFAULT_MODEL,
+        });
+        return { provider: resolved.provider, model: resolved.model };
+    }
+    return { provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL };
+}
+export function hasAuthForProvider(params) {
+    if (resolveEnvApiKey(params.provider)?.apiKey) {
+        return true;
+    }
+    const agentDir = params.agentDir?.trim();
+    if (!agentDir) {
+        return false;
+    }
+    if (!hasAnyAuthProfileStoreSource(agentDir)) {
+        return false;
+    }
+    const store = ensureAuthProfileStore(agentDir, {
+        allowKeychainPrompt: false,
+    });
+    return listProfilesForProvider(store, params.provider).length > 0;
+}
+export function coerceToolModelConfig(model) {
+    const primary = resolveAgentModelPrimaryValue(model);
+    const fallbacks = resolveAgentModelFallbackValues(model);
+    const timeoutMs = resolveAgentModelTimeoutMsValue(model);
+    return {
+        ...(primary?.trim() ? { primary: primary.trim() } : {}),
+        ...(fallbacks.length > 0 ? { fallbacks } : {}),
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    };
+}
+export function buildToolModelConfigFromCandidates(params) {
+    if (hasToolModelConfig(params.explicit)) {
+        return params.explicit;
+    }
+    const deduped = [];
+    for (const candidate of params.candidates) {
+        const trimmed = candidate?.trim();
+        if (!trimmed || !trimmed.includes("/")) {
+            continue;
+        }
+        const provider = trimmed.slice(0, trimmed.indexOf("/")).trim();
+        const providerConfigured = params.isProviderConfigured?.(provider) ??
+            hasAuthForProvider({ provider, agentDir: params.agentDir });
+        if (!provider || !providerConfigured) {
+            continue;
+        }
+        if (!deduped.includes(trimmed)) {
+            deduped.push(trimmed);
+        }
+    }
+    if (deduped.length === 0) {
+        return null;
+    }
+    return {
+        primary: deduped[0],
+        ...(deduped.length > 1 ? { fallbacks: deduped.slice(1) } : {}),
+        ...(params.explicit.timeoutMs !== undefined ? { timeoutMs: params.explicit.timeoutMs } : {}),
+    };
+}

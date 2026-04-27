@@ -1,0 +1,65 @@
+import { runWithModelFallback } from "../../agents/model-fallback.js";
+import { type SessionEntry, updateSessionStoreEntry } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { registerAgentRunContext } from "../../infra/agent-events.js";
+import type { TemplateContext } from "../templating.js";
+import type { VerboseLevel } from "../thinking.js";
+import type { GetReplyOptions } from "../types.js";
+import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
+import type { ReplyOperation } from "./reply-run-registry.js";
+import { incrementCompactionCount } from "./session-updates.js";
+declare function compactEmbeddedPiSessionDefault(...args: Parameters<typeof import("../../agents/pi-embedded.js").compactEmbeddedPiSession>): Promise<Awaited<ReturnType<typeof import("../../agents/pi-embedded.js").compactEmbeddedPiSession>>>;
+declare function runEmbeddedPiAgentDefault(...args: Parameters<typeof import("../../agents/pi-embedded.js").runEmbeddedPiAgent>): Promise<Awaited<ReturnType<typeof import("../../agents/pi-embedded.js").runEmbeddedPiAgent>>>;
+declare const memoryDeps: {
+    compactEmbeddedPiSession: typeof compactEmbeddedPiSessionDefault;
+    runWithModelFallback: typeof runWithModelFallback;
+    runEmbeddedPiAgent: typeof runEmbeddedPiAgentDefault;
+    registerAgentRunContext: typeof registerAgentRunContext;
+    refreshQueuedFollowupSession: typeof refreshQueuedFollowupSession;
+    incrementCompactionCount: typeof incrementCompactionCount;
+    updateSessionStoreEntry: typeof updateSessionStoreEntry;
+    randomUUID: () => `${string}-${string}-${string}-${string}-${string}`;
+    now: () => number;
+};
+export declare function setAgentRunnerMemoryTestDeps(overrides?: Partial<typeof memoryDeps>): void;
+export declare function estimatePromptTokensForMemoryFlush(prompt?: string): number | undefined;
+export declare function resolveEffectivePromptTokens(basePromptTokens?: number, lastOutputTokens?: number, promptTokenEstimate?: number): number;
+export type SessionTranscriptUsageSnapshot = {
+    promptTokens?: number;
+    outputTokens?: number;
+};
+export declare function readPromptTokensFromSessionLog(sessionId?: string, sessionEntry?: SessionEntry, sessionKey?: string, opts?: {
+    storePath?: string;
+}): Promise<SessionTranscriptUsageSnapshot | undefined>;
+export declare function runPreflightCompactionIfNeeded(params: {
+    cfg: OpenClawConfig;
+    followupRun: FollowupRun;
+    promptForEstimate?: string;
+    defaultModel: string;
+    agentCfgContextTokens?: number;
+    sessionEntry?: SessionEntry;
+    sessionStore?: Record<string, SessionEntry>;
+    sessionKey?: string;
+    runtimePolicySessionKey?: string;
+    storePath?: string;
+    isHeartbeat: boolean;
+    replyOperation: ReplyOperation;
+}): Promise<SessionEntry | undefined>;
+export declare function runMemoryFlushIfNeeded(params: {
+    cfg: OpenClawConfig;
+    followupRun: FollowupRun;
+    promptForEstimate?: string;
+    sessionCtx: TemplateContext;
+    opts?: GetReplyOptions;
+    defaultModel: string;
+    agentCfgContextTokens?: number;
+    resolvedVerboseLevel: VerboseLevel;
+    sessionEntry?: SessionEntry;
+    sessionStore?: Record<string, SessionEntry>;
+    sessionKey?: string;
+    runtimePolicySessionKey?: string;
+    storePath?: string;
+    isHeartbeat: boolean;
+    replyOperation: ReplyOperation;
+}): Promise<SessionEntry | undefined>;
+export {};

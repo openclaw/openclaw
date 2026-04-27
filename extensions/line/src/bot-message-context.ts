@@ -5,7 +5,7 @@ import {
   resolveInboundSessionEnvelopeContext,
   toLocationContext,
 } from "openclaw/plugin-sdk/channel-inbound";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   ensureConfiguredBindingRouteReady,
   recordInboundSession,

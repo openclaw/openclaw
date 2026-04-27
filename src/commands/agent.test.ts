@@ -27,6 +27,7 @@ const configIoMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: configIoMocks.loadConfig,
   loadConfig: configIoMocks.loadConfig,
   readConfigFileSnapshotForWrite: configIoMocks.readConfigFileSnapshotForWrite,
 }));
@@ -118,6 +119,9 @@ vi.mock("../agents/command/attempt-execution.runtime.js", () => {
         agentDir: params.agentDir,
         allowTransientCooldownProbe: params.allowTransientCooldownProbe,
         cleanupBundleMcpOnRunEnd: opts.cleanupBundleMcpOnRunEnd,
+        modelRun: opts.modelRun,
+        promptMode: opts.promptMode,
+        disableTools: opts.modelRun === true,
         onAgentEvent: params.onAgentEvent,
       } as never);
     }),
@@ -377,6 +381,61 @@ describe("agentCommand", () => {
       expect(parsed.payloads[0].text).toBe("json-reply");
       expect(parsed.payloads[0].mediaUrl).toBe("http://x.test/a.jpg");
       expect(parsed.meta.durationMs).toBe(42);
+    });
+  });
+
+  it("does not load the full model catalog for trusted explicit overrides without an allowlist", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store, { models: {} });
+
+      await agentCommand(
+        {
+          message: "ping",
+          to: "+1222",
+          model: "openrouter/auto",
+        },
+        runtime,
+      );
+
+      expect(loadModelCatalog).not.toHaveBeenCalled();
+      expectLastRunProviderModel("openrouter", "openrouter/auto");
+      expect(modelSelectionModule.resolveThinkingDefault).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "openrouter",
+          model: "auto",
+          catalog: undefined,
+        }),
+      );
+    });
+  });
+
+  it("uses no-tools plain prompt mode for one-shot model runs", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store, { models: {} });
+
+      await agentCommand(
+        {
+          message: "Reply with exactly OPENCLAW-MODEL-OK",
+          agentId: "main",
+          model: "openrouter/auto",
+          modelRun: true,
+          promptMode: "none",
+        },
+        runtime,
+      );
+
+      const callArgs = getLastEmbeddedCall();
+      expect(callArgs).toEqual(
+        expect.objectContaining({
+          provider: "openrouter",
+          model: "openrouter/auto",
+          modelRun: true,
+          promptMode: "none",
+          disableTools: true,
+        }),
+      );
     });
   });
 

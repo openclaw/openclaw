@@ -4,9 +4,10 @@
   "description": "OpenClaw ACP runtime backend",
   "type": "module",
   "dependencies": {
-    "acpx": "0.6.0"
+    "acpx": "0.6.1"
   },
   "devDependencies": {
+    "@agentclientprotocol/claude-agent-acp": "0.31.0",
     "@openclaw/plugin-sdk": "workspace:*"
   },
   "openclaw": {

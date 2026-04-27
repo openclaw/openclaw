@@ -390,6 +390,66 @@ describe("openai image generation provider", () => {
     expect(result.images).toHaveLength(1);
   });
 
+  it("normalizes legacy gpt-image-1 sizes before native OpenAI generation", async () => {
+    mockGeneratedPngResponse();
+
+    const provider = buildOpenAIImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-1",
+      prompt: "Create a wide Matrix QA image",
+      cfg: {},
+      size: "2048x1152",
+    });
+
+    expect(postJsonRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://api.openai.com/v1/images/generations",
+        body: expect.objectContaining({
+          model: "gpt-image-1",
+          size: "1536x1024",
+        }),
+      }),
+    );
+    expect(result.metadata).toEqual({
+      requestedSize: "2048x1152",
+      normalizedSize: "1536x1024",
+    });
+  });
+
+  it("does not normalize model-specific sizes for custom OpenAI-compatible endpoints", async () => {
+    mockGeneratedPngResponse();
+
+    const provider = buildOpenAIImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-1",
+      prompt: "Create a wide local-provider image",
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://openai-compatible.example.com/v1",
+              models: [],
+            },
+          },
+        },
+      },
+      size: "2048x1152",
+    });
+
+    expect(postJsonRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://openai-compatible.example.com/v1/images/generations",
+        body: expect.objectContaining({
+          model: "gpt-image-1",
+          size: "2048x1152",
+        }),
+      }),
+    );
+    expect(result.metadata).toBeUndefined();
+  });
+
   it("forwards output and OpenAI-only options on direct generations", async () => {
     mockGeneratedPngResponse();
 
@@ -1316,6 +1376,35 @@ describe("openai image generation provider", () => {
             n: 1,
             size: "1024x1024",
           },
+          timeoutMs: 600_000,
+        }),
+      );
+    });
+
+    it("lets explicit timeoutMs override the Azure image default", async () => {
+      mockGeneratedPngResponse();
+
+      const provider = buildOpenAIImageGenerationProvider();
+      await provider.generateImage({
+        provider: "openai",
+        model: "gpt-image-2-1",
+        prompt: "Azure cat",
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://myresource.openai.azure.com/openai/v1",
+                models: [],
+              },
+            },
+          },
+        },
+        timeoutMs: 123_456,
+      });
+
+      expect(postJsonRequestMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          timeoutMs: 123_456,
         }),
       );
     });

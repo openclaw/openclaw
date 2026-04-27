@@ -7,6 +7,7 @@ const FALLBACK_TEXT = "[assistant turn failed before producing content]";
 function bedrockAssistant(
   content: unknown,
   stopReason: "error" | "stop" | "toolUse" | "length" = "error",
+  usageOverrides: Record<string, number> = {},
 ): AgentMessage {
   return {
     role: "assistant",
@@ -21,6 +22,7 @@ function bedrockAssistant(
       cacheWrite: 0,
       totalTokens: 0,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      ...usageOverrides,
     },
     stopReason,
     timestamp: 0,
@@ -60,17 +62,55 @@ describe("normalizeAssistantReplayContent", () => {
     expect(repaired.content).toEqual([{ type: "text", text: FALLBACK_TEXT }]);
   });
 
-  it("preserves silent-reply turns (stopReason=stop, content=[]) untouched", () => {
+  it("drops blank user text messages from replay", () => {
+    const messages = [
+      userMessage("before"),
+      {
+        role: "user",
+        content: [{ type: "text", text: "" }],
+        timestamp: 0,
+      } as unknown as AgentMessage,
+      userMessage("after"),
+    ];
+    const out = normalizeAssistantReplayContent(messages);
+    expect(out).not.toBe(messages);
+    expect(out).toEqual([messages[0], messages[2]]);
+  });
+
+  it("removes blank user text blocks while preserving non-text content", () => {
+    const imageBlock = { type: "image", data: "AA==", mimeType: "image/png" };
+    const messages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "   " }, imageBlock],
+        timestamp: 0,
+      } as unknown as AgentMessage,
+    ];
+    const out = normalizeAssistantReplayContent(messages);
+    expect(out).not.toBe(messages);
+    expect((out[0] as { content: unknown[] }).content).toEqual([imageBlock]);
+  });
+
+  it("preserves nonzero-usage silent-reply turns (stopReason=stop, content=[]) untouched", () => {
     // run.empty-error-retry.test.ts treats `stopReason:"stop"` + `content:[]`
     // as a legitimate NO_REPLY / silent-reply, NOT a crash. Substituting the
     // failure sentinel here would inject a fabricated "[assistant turn failed
     // before producing content]" into the next provider request and change
     // model behavior even though no failure occurred.
-    const silentStop = bedrockAssistant([], "stop");
+    const silentStop = bedrockAssistant([], "stop", { input: 100, totalTokens: 100 });
     const messages = [userMessage("hello"), silentStop];
     const out = normalizeAssistantReplayContent(messages);
     expect(out).toBe(messages);
     expect(out[1]).toBe(silentStop);
+  });
+
+  it("converts zero-usage empty stop turns to a replay sentinel", () => {
+    const falseSuccessStop = bedrockAssistant([], "stop");
+    const messages = [userMessage("hello"), falseSuccessStop];
+    const out = normalizeAssistantReplayContent(messages);
+    expect(out).not.toBe(messages);
+    const repaired = out[1] as AgentMessage & { content: { type: string; text: string }[] };
+    expect(repaired.content).toEqual([{ type: "text", text: FALLBACK_TEXT }]);
   });
 
   it("preserves empty content with non-error stopReasons (toolUse, length) untouched", () => {

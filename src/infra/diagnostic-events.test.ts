@@ -9,7 +9,11 @@ import {
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
 } from "./diagnostic-events.js";
-import { createDiagnosticTraceContext } from "./diagnostic-trace-context.js";
+import {
+  createDiagnosticTraceContext,
+  resetDiagnosticTraceContextForTest,
+  runWithDiagnosticTraceContext,
+} from "./diagnostic-trace-context.js";
 
 describe("diagnostic-events", () => {
   beforeEach(() => {
@@ -18,6 +22,7 @@ describe("diagnostic-events", () => {
 
   afterEach(() => {
     resetDiagnosticEventsForTest();
+    resetDiagnosticTraceContextForTest();
     vi.restoreAllMocks();
   });
 
@@ -117,6 +122,39 @@ describe("diagnostic-events", () => {
     expect(events).toEqual([{ trace, type: "message.queued" }]);
   });
 
+  it("uses active request trace context when events omit explicit trace", () => {
+    const trace = createDiagnosticTraceContext({
+      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+      spanId: "00f067aa0ba902b7",
+    });
+    const explicitTrace = createDiagnosticTraceContext({
+      traceId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      spanId: "bbbbbbbbbbbbbbbb",
+    });
+    const events: Array<{ trace: typeof trace | undefined; type: string }> = [];
+    const stop = onDiagnosticEvent((event) => {
+      events.push({ trace: event.trace, type: event.type });
+    });
+
+    runWithDiagnosticTraceContext(trace, () => {
+      emitDiagnosticEvent({
+        type: "message.queued",
+        source: "telegram",
+      });
+      emitDiagnosticEvent({
+        type: "message.queued",
+        source: "telegram",
+        trace: explicitTrace,
+      });
+    });
+    stop();
+
+    expect(events).toEqual([
+      { trace, type: "message.queued" },
+      { trace: explicitTrace, type: "message.queued" },
+    ]);
+  });
+
   it("marks only internal trusted diagnostic emissions as trusted", async () => {
     const events: Array<{
       metadataTrusted: boolean;
@@ -181,8 +219,9 @@ describe("diagnostic-events", () => {
     });
 
     vi.resetModules();
-    const specifier = "./diagnostic-events.js";
-    const duplicateModule = (await import(specifier)) as typeof import("./diagnostic-events.js");
+    const duplicateModule = (await import(
+      /* @vite-ignore */ new URL("./diagnostic-events.ts?duplicate", import.meta.url).href
+    )) as typeof import("./diagnostic-events.js");
     duplicateModule.emitDiagnosticEvent({
       type: "message.queued",
       source: "plugin",

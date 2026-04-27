@@ -24,6 +24,7 @@ import {
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
 import type { AnyAgentTool, OpenClawPluginApi, PluginCommandContext } from "../plugins/types.js";
+import { toSafeImportPath } from "../shared/import-specifier.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 export type { AnyAgentTool, OpenClawPluginApi, PluginCommandContext };
@@ -370,12 +371,12 @@ function loadBundledEntryModuleSync(
     } catch {
       const jiti = getJiti(modulePath);
       getJitiEndMs = profile ? performance.now() : 0;
-      loaded = jiti(modulePath);
+      loaded = jiti(toSafeImportPath(modulePath));
     }
   } else {
     const jiti = getJiti(modulePath);
     getJitiEndMs = profile ? performance.now() : 0;
-    loaded = jiti(modulePath);
+    loaded = jiti(toSafeImportPath(modulePath));
   }
   if (profile) {
     const endMs = performance.now();
@@ -487,11 +488,11 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
       profile("bundled-register:registerChannel", () =>
         api.registerChannel({ plugin: channelPlugin as ChannelPlugin }),
       );
+      profile("bundled-register:setChannelRuntime", () => setChannelRuntime?.(api.runtime));
       if (api.registrationMode === "discovery") {
         profile("bundled-register:registerCliMetadata", () => registerCliMetadata?.(api));
         return;
       }
-      profile("bundled-register:setChannelRuntime", () => setChannelRuntime?.(api.runtime));
       if (api.registrationMode !== "full") {
         return;
       }

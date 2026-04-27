@@ -72,8 +72,8 @@ or fallback behavior without changing runtime loading semantics.
 Setup discovery now prefers descriptor-owned ids such as `setup.providers` and
 `setup.cliBackends` to narrow candidate plugins before it falls back to
 `setup-api` for plugins that still need setup-time runtime hooks. Provider
-setup flow uses manifest `providerAuthChoices` first, then falls back to
-runtime wizard choices and install-catalog choices for compatibility. Explicit
+setup lists use manifest `providerAuthChoices`, descriptor-derived setup
+choices, and install-catalog metadata without loading provider runtime. Explicit
 `setup.requiresRuntime: false` is a descriptor-only cutoff; omitted
 `requiresRuntime` keeps the legacy setup-api fallback for compatibility. If more
 than one discovered plugin claims the same normalized setup provider or CLI
@@ -93,10 +93,22 @@ OpenClaw keeps short in-process caches for:
 These caches reduce bursty startup and repeated command overhead. They are safe
 to think of as short-lived performance caches, not persistence.
 
+Gateway startup hot paths should prefer the current `PluginMetadataSnapshot`,
+the derived `PluginLookUpTable`, or an explicit manifest registry passed through
+the call chain. Config validation, startup auto-enable, and plugin bootstrap use
+the same snapshot when available. For callers that still rebuild manifest
+metadata from the persisted installed plugin index, OpenClaw also keeps a small
+bounded fallback cache keyed by the installed index, request shape, config
+policy, runtime roots, and manifest/package file signatures. That cache is only a
+fallback for repeated installed-index reconstruction; it is not a mutable runtime
+plugin registry.
+
 Performance note:
 
 - Set `OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE=1` or
   `OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE=1` to disable these caches.
+- Set `OPENCLAW_DISABLE_INSTALLED_PLUGIN_MANIFEST_REGISTRY_CACHE=1` to disable
+  only the installed-index manifest-registry fallback cache.
 - Tune cache windows with `OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS` and
   `OPENCLAW_PLUGIN_MANIFEST_CACHE_MS`.
 
@@ -491,6 +503,7 @@ Notes:
 - For plugin-owned fallback runs, operators must opt in with `plugins.entries.<id>.subagent.allowModelOverride: true`.
 - Use `plugins.entries.<id>.subagent.allowedModels` to restrict trusted plugins to specific canonical `provider/model` targets, or `"*"` to allow any target explicitly.
 - Untrusted plugin subagent runs still work, but override requests are rejected instead of silently falling back.
+- Plugin-created subagent sessions are tagged with the creating plugin id. Fallback `api.runtime.subagent.deleteSession(...)` may delete those owned sessions only; arbitrary session deletion still requires an admin-scoped Gateway request.
 
 For web search, plugins can consume the shared runtime helper instead of
 reaching into the agent tool wiring:
@@ -771,9 +784,11 @@ Security guardrail: every `openclaw.extensions` entry must stay inside the plugi
 directory after symlink resolution. Entries that escape the package directory are
 rejected.
 
-Security note: `openclaw plugins install` installs plugin dependencies with
-`npm install --omit=dev --ignore-scripts` (no lifecycle scripts, no dev dependencies at runtime). Keep plugin dependency
-trees "pure JS/TS" and avoid packages that require `postinstall` builds.
+Security note: `openclaw plugins install` installs plugin dependencies with a
+project-local `npm install --omit=dev --ignore-scripts` (no lifecycle scripts,
+no dev dependencies at runtime), ignoring inherited global npm install settings.
+Keep plugin dependency trees "pure JS/TS" and avoid packages that require
+`postinstall` builds.
 
 Optional: `openclaw.setupEntry` can point at a lightweight setup-only module.
 When OpenClaw needs setup surfaces for a disabled channel plugin, or
@@ -903,7 +918,7 @@ normalized facts warn if the parsed npm package name drifts from that identity.
 They also warn when `defaultChoice` is invalid or points at a source that is
 not available, and when npm integrity metadata is present without a valid npm
 source. Consumers should treat `installSource` as an additive optional field so
-older hand-built entries and compatibility shims do not have to synthesize it.
+hand-built entries and catalog shims do not have to synthesize it.
 This lets onboarding and diagnostics explain source-plane state without
 importing plugin runtime.
 
@@ -912,17 +927,15 @@ Official external npm entries should prefer an exact `npmSpec` plus
 compatibility, but they surface source-plane warnings so the catalog can move
 toward pinned, integrity-checked installs without breaking existing plugins.
 When onboarding installs from a local catalog path, it records a managed plugin
-install ledger entry with `source: "path"` and a workspace-relative
+plugin index entry with `source: "path"` and a workspace-relative
 `sourcePath` when possible. The absolute operational load path stays in
 `plugins.load.paths`; the install record avoids duplicating local workstation
 paths into long-lived config. This keeps local development installs visible to
 source-plane diagnostics without adding a second raw filesystem-path disclosure
-surface. Legacy `plugins.installs` config entries are still read as a
-compatibility fallback while the state-managed `plugins/installs.json` ledger
-becomes the install source of truth.
-`openclaw doctor --fix` migrates those legacy config entries into the managed
-ledger and refreshes the cold registry index without loading plugin runtime
-modules.
+surface. The persisted `plugins/installs.json` plugin index is the install
+source of truth and can be refreshed without loading plugin runtime modules.
+Its `installRecords` map is durable even when a plugin manifest is missing or
+invalid; its `plugins` array is a rebuildable manifest/cache view.
 
 ## Context engine plugins
 

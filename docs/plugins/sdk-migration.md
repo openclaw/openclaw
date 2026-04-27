@@ -56,14 +56,11 @@ The old approach caused problems:
 The modern plugin SDK fixes this: each import path (`openclaw/plugin-sdk/\<subpath\>`)
 is a small, self-contained module with a clear purpose and documented contract.
 
-Legacy provider convenience seams for bundled channels are also gone. Imports
-such as `openclaw/plugin-sdk/slack`, `openclaw/plugin-sdk/discord`,
-`openclaw/plugin-sdk/signal`, `openclaw/plugin-sdk/whatsapp`,
-channel-branded helper seams, and
-`openclaw/plugin-sdk/telegram-core` were private mono-repo shortcuts, not
-stable plugin contracts. Use narrow generic SDK subpaths instead. Inside the
-bundled plugin workspace, keep provider-owned helpers in that plugin's own
-`api.ts` or `runtime-api.ts`.
+Legacy provider convenience seams for bundled channels are also gone.
+Channel-branded helper seams were private mono-repo shortcuts, not stable
+plugin contracts. Use narrow generic SDK subpaths instead. Inside the bundled
+plugin workspace, keep provider-owned helpers in that plugin's own `api.ts` or
+`runtime-api.ts`.
 
 Current bundled provider examples:
 
@@ -93,6 +90,68 @@ releases.
 ## How to migrate
 
 <Steps>
+  <Step title="Migrate runtime config load/write helpers">
+    Bundled plugins should stop calling
+    `api.runtime.config.loadConfig()` and
+    `api.runtime.config.writeConfigFile(...)` directly. Prefer config that was
+    already passed into the active call path. Long-lived handlers that need the
+    current process snapshot can use `api.runtime.config.current()`. Long-lived
+    agent tools should use the tool context's `ctx.getRuntimeConfig()` inside
+    `execute` so a tool created before a config write still sees the refreshed
+    runtime config.
+
+    Config writes must go through the transactional helpers and choose an
+    after-write policy:
+
+    ```typescript
+    await api.runtime.config.mutateConfigFile({
+      afterWrite: { mode: "auto" },
+      mutate(draft) {
+        draft.plugins ??= {};
+      },
+    });
+    ```
+
+    Use `afterWrite: { mode: "restart", reason: "..." }` when the caller knows
+    the change requires a clean gateway restart, and
+    `afterWrite: { mode: "none", reason: "..." }` only when the caller owns the
+    follow-up and deliberately wants to suppress the reload planner.
+    Mutation results include a typed `followUp` summary for tests and logging;
+    the gateway remains responsible for applying or scheduling the restart.
+    `loadConfig` and `writeConfigFile` remain as deprecated compatibility
+    helpers for external plugins during the migration window and warn once with
+    the `runtime-config-load-write` compatibility code. Bundled plugins and repo
+    runtime code are protected by scanner guardrails in
+    `pnpm check:deprecated-internal-config-api` and
+    `pnpm check:no-runtime-action-load-config`: new production plugin usage
+    fails outright, direct config writes fail, gateway server methods must use
+    the request runtime snapshot, runtime channel send/action/client helpers
+    must receive config from their boundary, and long-lived runtime modules have
+    zero allowed ambient `loadConfig()` calls.
+
+    New plugin code should also avoid importing the broad
+    `openclaw/plugin-sdk/config-runtime` compatibility barrel. Use the narrow
+    SDK subpath that matches the job:
+
+    | Need | Import |
+    | --- | --- |
+    | Config types such as `OpenClawConfig` | `openclaw/plugin-sdk/config-types` |
+    | Already-loaded config assertions and plugin-entry config lookup | `openclaw/plugin-sdk/plugin-config-runtime` |
+    | Current runtime snapshot reads | `openclaw/plugin-sdk/runtime-config-snapshot` |
+    | Config writes | `openclaw/plugin-sdk/config-mutation` |
+    | Session store helpers | `openclaw/plugin-sdk/session-store-runtime` |
+    | Markdown table config | `openclaw/plugin-sdk/markdown-table-runtime` |
+    | Group policy runtime helpers | `openclaw/plugin-sdk/runtime-group-policy` |
+    | Secret input resolution | `openclaw/plugin-sdk/secret-input-runtime` |
+    | Model/session overrides | `openclaw/plugin-sdk/model-session-runtime` |
+
+    Bundled plugins and their tests are scanner-guarded against the broad
+    barrel so imports and mocks stay local to the behavior they need. The broad
+    barrel still exists for external compatibility, but new code should not
+    depend on it.
+
+  </Step>
+
   <Step title="Migrate Pi tool-result extensions to middleware">
     Bundled plugins must replace Pi-only
     `api.registerEmbeddedExtensionFactory(...)` tool-result handlers with
@@ -176,6 +235,7 @@ releases.
 
     ```bash
     grep -r "plugin-sdk/compat" my-plugin/
+    grep -r "plugin-sdk/config-runtime" my-plugin/
     grep -r "openclaw/extension-api" my-plugin/
     ```
 
@@ -254,7 +314,8 @@ releases.
   | `plugin-sdk/channel-pairing` | DM pairing primitives | `createChannelPairingController` |
   | `plugin-sdk/channel-reply-pipeline` | Reply prefix + typing wiring | `createChannelReplyPipeline` |
   | `plugin-sdk/channel-config-helpers` | Config adapter factories | `createHybridChannelConfigAdapter` |
-  | `plugin-sdk/channel-config-schema` | Config schema builders | Shared channel config schema primitives; bundled-channel-named schema exports are legacy compatibility only |
+  | `plugin-sdk/channel-config-schema` | Config schema builders | Shared channel config schema primitives and the generic builder only |
+  | `plugin-sdk/channel-config-schema-legacy` | Deprecated bundled config schemas | Bundled compatibility only; new plugins must define plugin-local schemas |
   | `plugin-sdk/telegram-command-config` | Telegram command config helpers | Command-name normalization, description trimming, duplicate/conflict validation |
   | `plugin-sdk/channel-policy` | Group/DM policy resolution | `resolveChannelGroupRequireMention` |
   | `plugin-sdk/channel-lifecycle` | Account status and draft stream lifecycle helpers | `createAccountStatusSink`, draft preview finalization helpers |
@@ -262,6 +323,7 @@ releases.
   | `plugin-sdk/inbound-reply-dispatch` | Inbound reply helpers | Shared record-and-dispatch helpers |
   | `plugin-sdk/messaging-targets` | Messaging target parsing | Target parsing/matching helpers |
   | `plugin-sdk/outbound-media` | Outbound media helpers | Shared outbound media loading |
+  | `plugin-sdk/outbound-send-deps` | Outbound send dependency helpers | Lightweight `resolveOutboundSendDep` lookup without importing the full outbound runtime |
   | `plugin-sdk/outbound-runtime` | Outbound runtime helpers | Outbound delivery, identity/send delegate, session, formatting, and payload planning helpers |
   | `plugin-sdk/thread-bindings-runtime` | Thread-binding helpers | Thread-binding lifecycle and adapter helpers |
   | `plugin-sdk/agent-media-payload` | Legacy media payload helpers | Agent media payload builder for legacy field layouts |
@@ -419,8 +481,9 @@ The same rule applies to other bundled-helper families such as:
   `plugin-sdk/nextcloud-talk`, `plugin-sdk/nostr`, `plugin-sdk/tlon`,
   `plugin-sdk/twitch`,
   `plugin-sdk/github-copilot-login`, `plugin-sdk/github-copilot-token`,
-  `plugin-sdk/diagnostics-otel`, `plugin-sdk/diffs`, `plugin-sdk/llm-task`,
-  `plugin-sdk/thread-ownership`, and `plugin-sdk/voice-call`
+  `plugin-sdk/diagnostics-otel`, `plugin-sdk/diagnostics-prometheus`,
+  `plugin-sdk/diffs`, `plugin-sdk/llm-task`, `plugin-sdk/thread-ownership`,
+  and `plugin-sdk/voice-call`
 
 `plugin-sdk/github-copilot-token` currently exposes the narrow token-helper
 surface `DEFAULT_COPILOT_API_BASE_URL`,

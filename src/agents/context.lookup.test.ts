@@ -17,7 +17,7 @@ const contextTestState = vi.hoisted(() => {
 });
 
 vi.mock("../config/config.js", () => ({
-  loadConfig: () => contextTestState.loadConfigImpl(),
+  getRuntimeConfig: () => contextTestState.loadConfigImpl(),
 }));
 
 vi.mock("./models-config.runtime.js", () => ({
@@ -34,17 +34,17 @@ vi.mock("./pi-model-discovery-runtime.js", () => ({
 }));
 
 function mockContextDeps(params: {
-  loadConfig: () => unknown;
+  getRuntimeConfig: () => unknown;
   discoveredModels?: DiscoveredModel[];
 }) {
-  contextTestState.loadConfigImpl = params.loadConfig;
+  contextTestState.loadConfigImpl = params.getRuntimeConfig;
   contextTestState.discoveredModels = params.discoveredModels ?? [];
   contextTestState.ensureOpenClawModelsJson.mockClear();
   return { ensureOpenClawModelsJson: contextTestState.ensureOpenClawModelsJson };
 }
 
 function mockContextModuleDeps(loadConfigImpl: () => unknown) {
-  return mockContextDeps({ loadConfig: loadConfigImpl });
+  return mockContextDeps({ getRuntimeConfig: loadConfigImpl });
 }
 
 // Shared mock setup used by multiple tests.
@@ -53,7 +53,7 @@ function mockDiscoveryDeps(
   configModels?: Record<string, { models: Array<{ id: string; contextWindow: number }> }>,
 ) {
   mockContextDeps({
-    loadConfig: () => ({ models: configModels ? { providers: configModels } : {} }),
+    getRuntimeConfig: () => ({ models: configModels ? { providers: configModels } : {} }),
     discoveredModels: models,
   });
 }
@@ -201,6 +201,14 @@ describe("lookupContextTokens", () => {
     const { shouldEagerWarmContextWindowCache } = await importContextModule();
 
     expect(shouldEagerWarmContextWindowCache(["node", "openclaw", "chat"])).toBe(true);
+    expect(shouldEagerWarmContextWindowCache(["node", "openclaw", "chat", "--help"])).toBe(false);
+    expect(
+      shouldEagerWarmContextWindowCache(["node", "openclaw", "matrix", "encryption", "help"]),
+    ).toBe(false);
+    expect(shouldEagerWarmContextWindowCache(["node", "openclaw", "help", "matrix"])).toBe(false);
+    expect(
+      shouldEagerWarmContextWindowCache(["node", "openclaw", "browser", "status", "--help"]),
+    ).toBe(false);
     expect(
       shouldEagerWarmContextWindowCache([
         "node",
@@ -215,6 +223,9 @@ describe("lookupContextTokens", () => {
       false,
     );
     expect(shouldEagerWarmContextWindowCache(["node", "openclaw", "status", "--json"])).toBe(false);
+    expect(shouldEagerWarmContextWindowCache(["node", "openclaw", "sessions", "--json"])).toBe(
+      false,
+    );
     expect(
       shouldEagerWarmContextWindowCache(["node", "scripts/test-built-plugin-singleton.mjs"]),
     ).toBe(false);

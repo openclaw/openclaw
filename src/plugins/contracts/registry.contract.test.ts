@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { uniqueSortedStrings } from "../../../test/helpers/plugins/contracts-testkit.js";
-import {
-  loadPluginManifestRegistry,
-  resolveManifestContractPluginIds,
-} from "../manifest-registry.js";
+import { loadPluginManifestRegistry } from "../manifest-registry.js";
+import { resolveManifestContractPluginIds } from "../plugin-registry.js";
 import {
   pluginRegistrationContractRegistry,
   providerContractLoadError,
@@ -24,6 +22,7 @@ describe("plugin contract registry", () => {
         speechProviders?: unknown[];
         realtimeTranscriptionProviders?: unknown[];
         realtimeVoiceProviders?: unknown[];
+        migrationProviders?: unknown[];
       };
     }) => boolean;
   }) {
@@ -40,6 +39,7 @@ describe("plugin contract registry", () => {
         speechProviders?: unknown[];
         realtimeTranscriptionProviders?: unknown[];
         realtimeVoiceProviders?: unknown[];
+        migrationProviders?: unknown[];
       };
     }) => boolean,
   ) {
@@ -66,6 +66,10 @@ describe("plugin contract registry", () => {
     {
       name: "does not duplicate bundled web search provider ids",
       ids: () => pluginRegistrationContractRegistry.flatMap((entry) => entry.webSearchProviderIds),
+    },
+    {
+      name: "does not duplicate bundled migration provider ids",
+      ids: () => pluginRegistrationContractRegistry.flatMap((entry) => entry.migrationProviderIds),
     },
     {
       name: "does not duplicate bundled media provider ids",
@@ -102,6 +106,44 @@ describe("plugin contract registry", () => {
       actualPluginIds: providerContractPluginIds,
       predicate: (plugin) => plugin.origin === "bundled" && plugin.providers.length > 0,
     });
+  });
+
+  it("keeps video-only provider auth choices out of text onboarding", () => {
+    const registry = loadPluginManifestRegistry({});
+
+    for (const pluginId of ["alibaba", "runway"]) {
+      const plugin = registry.plugins.find(
+        (entry) => entry.origin === "bundled" && entry.id === pluginId,
+      );
+      expect(plugin?.providerAuthChoices).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            provider: pluginId,
+            onboardingScopes: ["image-generation"],
+          }),
+        ]),
+      );
+    }
+  });
+
+  it("exposes the GitHub Copilot non-interactive onboarding token flag from manifest metadata", () => {
+    const registry = loadPluginManifestRegistry({});
+    const plugin = registry.plugins.find(
+      (entry) => entry.origin === "bundled" && entry.id === "github-copilot",
+    );
+
+    expect(plugin?.providerAuthChoices).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          provider: "github-copilot",
+          method: "device",
+          choiceId: "github-copilot",
+          optionKey: "githubCopilotToken",
+          cliFlag: "--github-copilot-token",
+          cliOption: "--github-copilot-token <token>",
+        }),
+      ]),
+    );
   });
 
   it("covers every bundled speech plugin discovered from manifests", () => {
@@ -163,5 +205,15 @@ describe("plugin contract registry", () => {
           .map((entry) => entry.pluginId),
       ),
     ).toEqual(bundledWebSearchPluginIds);
+  });
+
+  it("covers every bundled migration provider plugin discovered from manifests", () => {
+    expectRegistryPluginIds({
+      actualPluginIds: pluginRegistrationContractRegistry
+        .filter((entry) => entry.migrationProviderIds.length > 0)
+        .map((entry) => entry.pluginId),
+      predicate: (plugin) =>
+        plugin.origin === "bundled" && (plugin.contracts?.migrationProviders?.length ?? 0) > 0,
+    });
   });
 });

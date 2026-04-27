@@ -40,7 +40,7 @@ describe("live-agent-probes", () => {
         attempt: 1,
         exactReply: spec.name,
       }),
-    ).toContain("openclaw-tools/cron");
+    ).toContain("Preserve job.sessionTarget and job.sessionKey exactly as provided.");
     expect(
       buildLiveCronProbeMessage({
         agent: "future-agent",

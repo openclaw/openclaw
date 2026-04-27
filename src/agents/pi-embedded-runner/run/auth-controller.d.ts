@@ -1,0 +1,52 @@
+import type { Api, Model } from "@mariozechner/pi-ai";
+import type { ThinkLevel } from "../../../auto-reply/thinking.js";
+import { type AuthProfileStore } from "../../auth-profiles.js";
+import { type ResolvedProviderAuth } from "../../model-auth.js";
+import { type RuntimeAuthState } from "./helpers.js";
+import type { RunEmbeddedPiAgentParams } from "./params.js";
+type ApiKeyInfo = ResolvedProviderAuth;
+type RuntimeApiKeySink = {
+    setRuntimeApiKey(provider: string, apiKey: string): void;
+};
+type LogLike = {
+    debug(message: string): void;
+    info(message: string): void;
+    warn(message: string): void;
+};
+export declare function createEmbeddedRunAuthController(params: {
+    config: RunEmbeddedPiAgentParams["config"];
+    agentDir: string;
+    workspaceDir: string;
+    authStore: AuthProfileStore;
+    authStorage: RuntimeApiKeySink;
+    profileCandidates: Array<string | undefined>;
+    lockedProfileId?: string;
+    initialThinkLevel: ThinkLevel;
+    attemptedThinking: Set<ThinkLevel>;
+    fallbackConfigured: boolean;
+    allowTransientCooldownProbe: boolean;
+    getProvider(): string;
+    getModelId(): string;
+    getRuntimeModel(): Model<Api>;
+    setRuntimeModel(next: Model<Api>): void;
+    getEffectiveModel(): Model<Api>;
+    setEffectiveModel(next: Model<Api>): void;
+    getApiKeyInfo(): ApiKeyInfo | null;
+    setApiKeyInfo(next: ApiKeyInfo | null): void;
+    getLastProfileId(): string | undefined;
+    setLastProfileId(next: string | undefined): void;
+    getRuntimeAuthState(): RuntimeAuthState | null;
+    setRuntimeAuthState(next: RuntimeAuthState | null): void;
+    getRuntimeAuthRefreshCancelled(): boolean;
+    setRuntimeAuthRefreshCancelled(next: boolean): void;
+    getProfileIndex(): number;
+    setProfileIndex(next: number): void;
+    setThinkLevel(next: ThinkLevel): void;
+    log: LogLike;
+}): {
+    advanceAuthProfile: () => Promise<boolean>;
+    initializeAuthProfile: () => Promise<void>;
+    maybeRefreshRuntimeAuthForAuthError: (errorText: string, retried: boolean) => Promise<boolean>;
+    stopRuntimeAuthRefreshTimer: () => void;
+};
+export {};

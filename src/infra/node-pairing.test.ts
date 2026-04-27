@@ -1,12 +1,15 @@
+import fs from "node:fs/promises";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
   approveNodePairing,
   getPairedNode,
   listNodePairing,
+  removePairedNode,
   requestNodePairing,
   verifyNodeToken,
 } from "./node-pairing.js";
+import { resolvePairingPaths } from "./pairing-files.js";
 
 async function setupPairedNode(baseDir: string): Promise<string> {
   const request = await requestNodePairing(
@@ -150,6 +153,32 @@ describe("node pairing tokens", () => {
     });
   });
 
+  test("removes paired nodes without disturbing pending requests", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      await setupPairedNode(baseDir);
+      const pending = await requestNodePairing(
+        {
+          nodeId: "node-2",
+          platform: "darwin",
+        },
+        baseDir,
+      );
+
+      await expect(removePairedNode("node-1", baseDir)).resolves.toEqual({ nodeId: "node-1" });
+      await expect(removePairedNode("node-1", baseDir)).resolves.toBeNull();
+      await expect(getPairedNode("node-1", baseDir)).resolves.toBeNull();
+      await expect(listNodePairing(baseDir)).resolves.toEqual({
+        pending: [
+          expect.objectContaining({
+            requestId: pending.request.requestId,
+            nodeId: "node-2",
+          }),
+        ],
+        paired: [],
+      });
+    });
+  });
+
   test("requires the right scopes to approve node requests", async () => {
     await withNodePairingDir(async (baseDir) => {
       const systemRunRequest = await requestNodePairing(
@@ -200,6 +229,25 @@ describe("node pairing tokens", () => {
           commands: undefined,
         }),
       });
+    });
+  });
+
+  test("refuses to overwrite corrupt paired node state when requesting pairing", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      const { dir, pairedPath } = resolvePairingPaths(baseDir, "nodes");
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(pairedPath, "{not-json}", "utf8");
+
+      await expect(
+        requestNodePairing(
+          {
+            nodeId: "node-1",
+            platform: "darwin",
+          },
+          baseDir,
+        ),
+      ).rejects.toThrow(/paired\.json/);
+      await expect(fs.readFile(pairedPath, "utf8")).resolves.toBe("{not-json}");
     });
   });
 });

@@ -1,5 +1,5 @@
-import { resolvePluginConfigObject } from "openclaw/plugin-sdk/config-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/core";
+import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
   normalizeModelCompat,
@@ -211,7 +211,11 @@ function isKnownXHighCodexModel(modelId: string): boolean {
   );
 }
 
-function isModernCodexModel(modelId: string): boolean {
+// Exported so adapter request paths (thread-lifecycle.resolveReasoningEffort)
+// can branch on model-family enum support: modern Codex models use the
+// none/low/medium/high/xhigh effort enum and reject "minimal", which is the
+// CLI default. (#71946)
+export function isModernCodexModel(modelId: string): boolean {
   const lower = modelId.trim().toLowerCase();
   return (
     lower === "gpt-5.5" || lower === "gpt-5.4" || lower === "gpt-5.4-mini" || lower === "gpt-5.2"

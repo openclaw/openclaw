@@ -1,0 +1,14 @@
+import { CHAT_CHANNEL_ALIASES, listChatChannelAliases, normalizeChatChannelId, type ChatChannelId } from "./ids.js";
+import type { ChannelId } from "./plugins/channel-id.types.js";
+import type { ChannelMeta } from "./plugins/types.core.js";
+export { getChatChannelMeta, listChatChannels } from "./chat-meta.js";
+export { CHANNEL_IDS, CHAT_CHANNEL_ORDER } from "./ids.js";
+export type { ChatChannelId } from "./ids.js";
+export { CHAT_CHANNEL_ALIASES, listChatChannelAliases, normalizeChatChannelId };
+export declare function normalizeChannelId(raw?: string | null): ChatChannelId | null;
+export declare function normalizeAnyChannelId(raw?: string | null): ChannelId | null;
+export declare function listRegisteredChannelPluginIds(): ChannelId[];
+export declare function listRegisteredChannelPluginAliases(): string[];
+export declare function getRegisteredChannelPluginMeta(id: string): Pick<ChannelMeta, "aliases" | "markdownCapable"> | null;
+export declare function formatChannelPrimerLine(meta: ChannelMeta): string;
+export declare function formatChannelSelectionLine(meta: ChannelMeta, docsLink: (path: string, label?: string) => string): string;

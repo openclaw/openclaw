@@ -26,9 +26,9 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
-    "openclaw/plugin-sdk/config-runtime",
+vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/session-store-runtime")>(
+    "openclaw/plugin-sdk/session-store-runtime",
   );
   return {
     ...actual,
@@ -90,7 +90,13 @@ describe("active-memory plugin", () => {
         resolveStateDir: () => stateDir,
       },
       config: {
+        current: () => configFile,
         loadConfig: () => configFile,
+        replaceConfigFile: vi.fn(
+          async ({ nextConfig }: { nextConfig: Record<string, unknown> }) => {
+            configFile = nextConfig;
+          },
+        ),
         writeConfigFile: vi.fn(async (nextConfig: Record<string, unknown>) => {
           configFile = nextConfig;
         }),
@@ -275,7 +281,7 @@ describe("active-memory plugin", () => {
     });
 
     expect(offResult.text).toBe("Active Memory: off globally.");
-    expect(api.runtime.config.writeConfigFile).toHaveBeenCalledTimes(1);
+    expect(api.runtime.config.replaceConfigFile).toHaveBeenCalledTimes(1);
     expect(configFile).toMatchObject({
       plugins: {
         entries: {
@@ -1290,6 +1296,44 @@ describe("active-memory plugin", () => {
           line.includes("activeModel=gpt-5.4-mini"),
       ),
     ).toBe(true);
+  });
+
+  it("returns timeout within a hard deadline even when the subagent never checks the abort signal", async () => {
+    const CONFIGURED_TIMEOUT_MS = 200;
+    const MARGIN_MS = 500;
+    __testing.setMinimumTimeoutMsForTests(1);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: CONFIGURED_TIMEOUT_MS,
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    // Simulate a subagent that never cooperatively checks the abort signal --
+    // it just blocks for a long time.
+    runEmbeddedPiAgent.mockImplementationOnce(
+      () => new Promise((resolve) => setTimeout(() => resolve({ payloads: [] }), 30_000)),
+    );
+
+    const startedAt = Date.now();
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order? hard deadline test", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:hard-deadline",
+        messageProvider: "webchat",
+      },
+    );
+    const wallClockMs = Date.now() - startedAt;
+
+    // The hook returns undefined for timeout results (summary is null).
+    expect(result).toBeUndefined();
+    const infoLines = vi
+      .mocked(api.logger.info)
+      .mock.calls.map((call: unknown[]) => String(call[0]));
+    expect(infoLines.some((line: string) => line.includes("status=timeout"))).toBe(true);
+    // Hard deadline: wall-clock time must be near timeoutMs, not 30s.
+    expect(wallClockMs).toBeLessThan(CONFIGURED_TIMEOUT_MS + MARGIN_MS);
   });
 
   it("returns undefined instead of throwing when an unexpected error escapes prompt building", async () => {

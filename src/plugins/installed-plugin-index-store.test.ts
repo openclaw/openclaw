@@ -27,9 +27,10 @@ function createIndex(overrides: Partial<InstalledPluginIndex> = {}): InstalledPl
     version: 1,
     hostContractVersion: "2026.4.25",
     compatRegistryVersion: "compat-v1",
-    migrationVersion: 2,
+    migrationVersion: 1,
     policyHash: "policy-v1",
     generatedAtMs: 1777118400000,
+    installRecords: {},
     plugins: [
       {
         pluginId: "demo",
@@ -38,16 +39,7 @@ function createIndex(overrides: Partial<InstalledPluginIndex> = {}): InstalledPl
         rootDir: "/plugins/demo",
         origin: "global",
         enabled: true,
-        contributions: {
-          providers: ["demo"],
-          channels: ["demo-chat"],
-          channelConfigs: ["demo-chat"],
-          setupProviders: [],
-          cliBackends: [],
-          modelCatalogProviders: [],
-          commandAliases: [],
-          contracts: [],
-        },
+        syntheticAuthRefs: ["demo"],
         startup: {
           sidecar: false,
           memory: false,
@@ -91,7 +83,7 @@ describe("installed plugin index persistence", () => {
     const stateDir = makeTempDir();
 
     expect(resolveInstalledPluginIndexStorePath({ stateDir })).toBe(
-      path.join(stateDir, "plugins", "installed-index.json"),
+      path.join(stateDir, "plugins", "installs.json"),
     );
   });
 
@@ -109,6 +101,43 @@ describe("installed plugin index persistence", () => {
       expect(fs.statSync(filePath).mode & 0o777).toBe(0o600);
     }
     await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toMatchObject(index);
+  });
+
+  it("does not preserve prototype poison keys from persisted index JSON", async () => {
+    const stateDir = makeTempDir();
+    const filePath = resolveInstalledPluginIndexStorePath({ stateDir });
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    const index = createIndex({
+      installRecords: {
+        demo: {
+          source: "npm",
+          spec: "demo@1.0.0",
+        },
+      },
+    });
+    Object.defineProperty(index, "__proto__", {
+      enumerable: true,
+      value: { polluted: true },
+    });
+    Object.defineProperty(index.installRecords, "__proto__", {
+      enumerable: true,
+      value: { polluted: true },
+    });
+    fs.writeFileSync(filePath, JSON.stringify(index), "utf8");
+
+    const persisted = await readPersistedInstalledPluginIndex({ stateDir });
+
+    expect(persisted).toMatchObject({
+      plugins: [expect.objectContaining({ pluginId: "demo" })],
+      installRecords: {
+        demo: expect.objectContaining({ source: "npm" }),
+      },
+    });
+    expect(Object.prototype.hasOwnProperty.call(persisted as object, "__proto__")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(persisted?.installRecords ?? {}, "__proto__")).toBe(
+      false,
+    );
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 
   it("returns null for missing or invalid persisted indexes", async () => {
@@ -220,7 +249,6 @@ describe("installed plugin index persistence", () => {
         plugins: [
           expect.objectContaining({
             pluginId: "demo",
-            contributions: expect.objectContaining({ providers: ["demo", "demo-next"] }),
           }),
         ],
       },
@@ -251,6 +279,57 @@ describe("installed plugin index persistence", () => {
     await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toMatchObject({
       refreshReason: "manual",
       plugins: [expect.objectContaining({ pluginId: "demo" })],
+    });
+  });
+
+  it("preserves existing install records when refreshing the manifest cache", async () => {
+    const stateDir = makeTempDir();
+    await writePersistedInstalledPluginIndex(
+      createIndex({
+        installRecords: {
+          missing: {
+            source: "npm",
+            spec: "missing-plugin@1.0.0",
+            installPath: path.join(stateDir, "plugins", "missing"),
+          },
+        },
+        plugins: [],
+      }),
+      { stateDir },
+    );
+
+    const index = await refreshPersistedInstalledPluginIndex({
+      reason: "manual",
+      stateDir,
+      candidates: [],
+      env: {
+        OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+        OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
+        OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      },
+    });
+
+    expect(index).toMatchObject({
+      installRecords: {
+        missing: {
+          source: "npm",
+          spec: "missing-plugin@1.0.0",
+          installPath: path.join(stateDir, "plugins", "missing"),
+        },
+      },
+      plugins: [],
+    });
+    await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toMatchObject({
+      installRecords: {
+        missing: {
+          source: "npm",
+          spec: "missing-plugin@1.0.0",
+          installPath: path.join(stateDir, "plugins", "missing"),
+        },
+      },
+      plugins: [],
     });
   });
 });

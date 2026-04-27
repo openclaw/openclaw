@@ -2,18 +2,19 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, Usage } from "@mariozechner/pi-ai";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
+  classifyAgentHarnessTerminalOutcome,
   embeddedAgentLog,
   emitAgentEvent as emitGlobalAgentEvent,
   formatErrorMessage,
+  formatToolAggregate,
   formatToolProgressOutput,
   inferToolMetaFromArgs,
   normalizeUsage,
   runAgentHarnessAfterCompactionHook,
   runAgentHarnessBeforeCompactionHook,
+  TOOL_PROGRESS_OUTPUT_MAX_CHARS,
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptResult,
-  TOOL_PROGRESS_OUTPUT_MAX_CHARS,
-  formatToolAggregate,
   type MessagingToolSend,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readCodexTurn } from "./protocol-validators.js";
@@ -35,10 +36,6 @@ export type CodexAppServerToolTelemetry = {
   toolAudioAsVoice?: boolean;
   successfulCronAdds?: number;
 };
-
-type AgentHarnessResultClassification = NonNullable<
-  EmbeddedRunAttemptResult["agentHarnessResultClassification"]
->;
 
 const ZERO_USAGE: Usage = {
   input: 0,
@@ -64,26 +61,14 @@ const CURRENT_TOKEN_USAGE_KEYS = [
   "last_token_usage",
 ] as const;
 
-const MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM = 20;
+const CODEX_PROMPT_TOTAL_INPUT_KEYS = [
+  "inputTokens",
+  "input_tokens",
+  "promptTokens",
+  "prompt_tokens",
+] as const;
 
-function classifyTerminalResult(params: {
-  assistantTexts: string[];
-  reasoningText: string;
-  planText: string;
-  promptError: unknown;
-  turnCompleted: boolean;
-}): AgentHarnessResultClassification | undefined {
-  if (!params.turnCompleted || params.promptError || params.assistantTexts.length > 0) {
-    return undefined;
-  }
-  if (params.planText.trim()) {
-    return "planning-only";
-  }
-  if (params.reasoningText.trim()) {
-    return "reasoning-only";
-  }
-  return "empty";
-}
+const MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM = 20;
 
 export class CodexAppServerEventProjector {
   private readonly assistantTextByItem = new Map<string, string>();
@@ -175,7 +160,10 @@ export class CodexAppServerEventProjector {
         this.handleRawResponseItemCompleted(params);
         break;
       case "error":
-        this.promptError = readString(params, "message") ?? "codex app-server error";
+        if (readBooleanAlias(params, ["willRetry", "will_retry"]) === true) {
+          break;
+        }
+        this.promptError = readCodexErrorNotificationMessage(params) ?? "codex app-server error";
         this.promptErrorSource = "prompt";
         break;
       default:
@@ -217,7 +205,7 @@ export class CodexAppServerEventProjector {
     const promptError =
       this.promptError ??
       (turnFailed ? (this.completedTurn?.error?.message ?? "codex app-server turn failed") : null);
-    const agentHarnessResultClassification = classifyTerminalResult({
+    const agentHarnessResultClassification = classifyAgentHarnessTerminalOutcome({
       assistantTexts,
       reasoningText,
       planText,
@@ -866,6 +854,29 @@ function readNumber(record: JsonObject, key: string): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function readBoolean(record: JsonObject, key: string): boolean | undefined {
+  const value = record[key];
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function readBooleanAlias(record: JsonObject, keys: readonly string[]): boolean | undefined {
+  for (const key of keys) {
+    const value = readBoolean(record, key);
+    if (value !== undefined) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function readCodexErrorNotificationMessage(record: JsonObject): string | undefined {
+  const error = record.error;
+  if (isJsonObject(error)) {
+    return readString(error, "message") ?? readString(error, "error");
+  }
+  return readString(record, "message");
+}
+
 function readHookOutputEntries(
   value: JsonValue | undefined,
 ): Array<{ kind?: string; text: string }> {
@@ -906,17 +917,24 @@ function readNumberAlias(record: JsonObject, keys: readonly string[]): number | 
 }
 
 function normalizeCodexTokenUsage(record: JsonObject): ReturnType<typeof normalizeUsage> {
+  const promptTotalInput = readNumberAlias(record, CODEX_PROMPT_TOTAL_INPUT_KEYS);
+  const cacheRead = readNumberAlias(record, [
+    "cachedInputTokens",
+    "cached_input_tokens",
+    "cacheRead",
+    "cache_read",
+    "cache_read_input_tokens",
+    "cached_tokens",
+  ]);
+  const input =
+    promptTotalInput !== undefined && cacheRead !== undefined
+      ? Math.max(0, promptTotalInput - cacheRead)
+      : (promptTotalInput ?? readNumber(record, "input"));
+
   return normalizeUsage({
-    input: readNumberAlias(record, ["inputTokens", "input_tokens", "input", "promptTokens"]),
+    input,
     output: readNumberAlias(record, ["outputTokens", "output_tokens", "output"]),
-    cacheRead: readNumberAlias(record, [
-      "cachedInputTokens",
-      "cached_input_tokens",
-      "cacheRead",
-      "cache_read",
-      "cache_read_input_tokens",
-      "cached_tokens",
-    ]),
+    cacheRead,
     cacheWrite: readNumberAlias(record, [
       "cacheWrite",
       "cache_write",

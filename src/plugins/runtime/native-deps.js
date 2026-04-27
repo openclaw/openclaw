@@ -1,0 +1,16 @@
+export function formatNativeDependencyHint(params) {
+    const manager = params.manager ?? "pnpm";
+    const rebuildCommand = params.rebuildCommand ??
+        (manager === "npm"
+            ? `npm rebuild ${params.packageName}`
+            : manager === "yarn"
+                ? `yarn rebuild ${params.packageName}`
+                : `pnpm rebuild ${params.packageName}`);
+    const approveBuildsCommand = params.approveBuildsCommand ??
+        (manager === "pnpm" ? `pnpm approve-builds (select ${params.packageName})` : undefined);
+    const steps = [approveBuildsCommand, rebuildCommand, params.downloadCommand].filter((step) => Boolean(step));
+    if (steps.length === 0) {
+        return `Install ${params.packageName} and rebuild its native module.`;
+    }
+    return `Install ${params.packageName} and rebuild its native module (${steps.join("; ")}).`;
+}

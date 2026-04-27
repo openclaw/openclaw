@@ -1406,6 +1406,7 @@ export async function runReplyAgent(params: {
         sessionKey,
         sessionId: followupRun.run.sessionId,
         channel: replyToChannel,
+        agentId: followupRun.run.agentId,
         provider: providerUsed,
         model: modelUsed,
         usage: {
@@ -1533,9 +1534,11 @@ export async function runReplyAgent(params: {
         sessionKey,
         storePath,
         amount: autoCompactionCount,
+        compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
         lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
         contextTokensUsed,
         newSessionId: runResult.meta?.agentMeta?.sessionId,
+        newSessionFile: runResult.meta?.agentMeta?.sessionFile,
       });
       const refreshedSessionEntry =
         sessionKey && activeSessionStore ? activeSessionStore[sessionKey] : undefined;

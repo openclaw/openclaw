@@ -11,9 +11,7 @@ import {
   pruneBundledPluginSourceNodeModules,
   runBundledPluginPostinstall,
   runPluginRegistryPostinstallMigration,
-  restoreLegacyUpdaterCompatSidecars,
 } from "../../scripts/postinstall-bundled-plugins.mjs";
-import { NPM_UPDATE_COMPAT_SIDECARS } from "../../src/infra/npm-update-compat-sidecars.ts";
 import { writePackageDistInventory } from "../../src/infra/package-dist-inventory.ts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
@@ -81,6 +79,7 @@ describe("bundled plugin postinstall", () => {
       },
       shell: false,
       stdio: "pipe",
+      windowsHide: true,
       windowsVerbatimArguments: undefined,
     });
   }
@@ -349,6 +348,33 @@ describe("bundled plugin postinstall", () => {
     expect(importModule).not.toHaveBeenCalled();
   });
 
+  it("does not disable plugin registry migration for falsey env flag strings", async () => {
+    const migratePluginRegistryForInstall = vi.fn(async () => ({
+      status: "skip-existing",
+      migrated: false,
+      preflight: {},
+    }));
+    const importModule = vi.fn(async () => ({ migratePluginRegistryForInstall }));
+
+    await expect(
+      runPluginRegistryPostinstallMigration({
+        packageRoot: "/pkg",
+        env: { OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION: "0" },
+        existsSync: vi.fn(() => true),
+        importModule,
+        log: { log: vi.fn(), warn: vi.fn() },
+      }),
+    ).resolves.toMatchObject({
+      status: "skip-existing",
+      migrated: false,
+    });
+    expect(importModule).toHaveBeenCalledOnce();
+    expect(migratePluginRegistryForInstall).toHaveBeenCalledWith({
+      env: { OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION: "0" },
+      packageRoot: "/pkg",
+    });
+  });
+
   it("prunes stale dist files from packaged installs", async () => {
     const packageRoot = await createTempDirAsync("openclaw-packaged-install-");
     const currentFile = path.join(packageRoot, "dist", "channel-BOa4MfoC.js");
@@ -369,7 +395,7 @@ describe("bundled plugin postinstall", () => {
     await expect(fs.stat(staleFile)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("restores only postinstall-generated QA compat sidecars after pruning old installs", async () => {
+  it("prunes stale private QA files without restoring compat sidecars", async () => {
     const packageRoot = await createTempDirAsync("openclaw-packaged-install-qa-compat-");
     const currentFile = path.join(packageRoot, "dist", "entry.js");
     const stalePackage = path.join(packageRoot, "dist", "extensions", "qa-lab", "package.json");
@@ -395,10 +421,8 @@ describe("bundled plugin postinstall", () => {
     await expect(fs.stat(stalePackage)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.stat(staleManifest)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(
-      fs.readFile(path.join(packageRoot, "dist", "extensions", "qa-channel", "runtime-api.js"), {
-        encoding: "utf8",
-      }),
-    ).resolves.toBe("export {};\n");
+      fs.stat(path.join(packageRoot, "dist", "extensions", "qa-channel", "runtime-api.js")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
     await expect(
       fs.stat(path.join(packageRoot, "dist", "extensions", "qa-channel", "package.json")),
     ).rejects.toMatchObject({ code: "ENOENT" });
@@ -406,26 +430,8 @@ describe("bundled plugin postinstall", () => {
       fs.stat(path.join(packageRoot, "dist", "extensions", "qa-channel", "openclaw.plugin.json")),
     ).rejects.toMatchObject({ code: "ENOENT" });
     await expect(
-      fs.readFile(path.join(packageRoot, "dist", "extensions", "qa-lab", "runtime-api.js"), {
-        encoding: "utf8",
-      }),
-    ).resolves.toBe("export {};\n");
-  });
-
-  it("keeps postinstall QA compat sidecars aligned with update verification metadata", async () => {
-    const packageRoot = await createTempDirAsync("openclaw-packaged-install-qa-compat-");
-
-    const restored = restoreLegacyUpdaterCompatSidecars({
-      packageRoot,
-      log: { log: vi.fn(), warn: vi.fn() },
-    });
-
-    expect(restored).toEqual(NPM_UPDATE_COMPAT_SIDECARS.map((sidecar) => sidecar.path));
-    for (const sidecar of NPM_UPDATE_COMPAT_SIDECARS) {
-      await expect(fs.readFile(path.join(packageRoot, sidecar.path), "utf8")).resolves.toBe(
-        sidecar.content,
-      );
-    }
+      fs.stat(path.join(packageRoot, "dist", "extensions", "qa-lab", "runtime-api.js")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("keeps packaged postinstall non-fatal when the dist inventory is missing", async () => {
@@ -523,11 +529,39 @@ describe("bundled plugin postinstall", () => {
     const staleFile = path.join(packageRoot, "dist", "stale-runtime.js");
     const packageJson = path.join(packageRoot, "dist", "extensions", "slack", "package.json");
     const binDir = path.join(packageRoot, "dist", "extensions", "slack", "node_modules", ".bin");
+    const installStageFile = path.join(
+      packageRoot,
+      "dist",
+      "extensions",
+      "slack",
+      ".openclaw-install-stage",
+      "node_modules",
+      "typebox",
+      "build",
+      "compile",
+      "code.mjs",
+    );
+    const retryInstallStageFile = path.join(
+      packageRoot,
+      "dist",
+      "extensions",
+      "slack",
+      ".openclaw-install-stage-retry",
+      "node_modules",
+      "typebox",
+      "build",
+      "compile",
+      "code.mjs",
+    );
     await fs.mkdir(path.dirname(staleFile), { recursive: true });
     await fs.mkdir(path.dirname(packageJson), { recursive: true });
     await fs.mkdir(binDir, { recursive: true });
+    await fs.mkdir(path.dirname(installStageFile), { recursive: true });
+    await fs.mkdir(path.dirname(retryInstallStageFile), { recursive: true });
     await fs.writeFile(staleFile, "export {};\n");
     await fs.writeFile(packageJson, "{}\n");
+    await fs.writeFile(installStageFile, "export {};\n");
+    await fs.writeFile(retryInstallStageFile, "export {};\n");
     await fs.symlink("../fxparser/bin.js", path.join(binDir, "fxparser"));
 
     expect(
@@ -537,6 +571,8 @@ describe("bundled plugin postinstall", () => {
         log: { log: vi.fn(), warn: vi.fn() },
       }),
     ).toEqual(["dist/stale-runtime.js"]);
+    await expect(fs.stat(installStageFile)).resolves.toBeDefined();
+    await expect(fs.stat(retryInstallStageFile)).resolves.toBeDefined();
   });
 
   it("unlinks stale files instead of recursive pruning them", () => {

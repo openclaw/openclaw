@@ -13,8 +13,7 @@ import {
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
-import { modelsAuthLoginCommand, modelsStatusCommand } from "../commands/models.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
@@ -56,11 +55,14 @@ import { theme } from "../terminal/theme.js";
 import { canonicalizeSpeechProviderId, listSpeechProviders } from "../tts/provider-registry.js";
 import {
   getTtsProvider,
+  getTtsPersona,
+  listTtsPersonas,
   listSpeechVoices,
   resolveExplicitTtsOverrides,
   resolveTtsConfig,
   resolveTtsPrefsPath,
   setTtsEnabled,
+  setTtsPersona,
   setTtsProvider,
   textToSpeech,
 } from "../tts/tts.js";
@@ -175,7 +177,20 @@ const CAPABILITY_METADATA: CapabilityMetadata[] = [
     id: "image.edit",
     description: "Generate edited images from one or more input files.",
     transports: ["local"],
-    flags: ["--file", "--prompt", "--model", "--output", "--json"],
+    flags: [
+      "--file",
+      "--prompt",
+      "--model",
+      "--size",
+      "--aspect-ratio",
+      "--resolution",
+      "--output-format",
+      "--background",
+      "--openai-background",
+      "--timeout-ms",
+      "--output",
+      "--json",
+    ],
     resultShape: "saved image files plus attempts",
   },
   {
@@ -244,6 +259,13 @@ const CAPABILITY_METADATA: CapabilityMetadata[] = [
     resultShape: "provider ids, configured state, models, voices",
   },
   {
+    id: "tts.personas",
+    description: "List TTS personas.",
+    transports: ["local", "gateway"],
+    flags: ["--local", "--gateway", "--json"],
+    resultShape: "persona ids, labels, providers, active persona",
+  },
+  {
     id: "tts.status",
     description: "Show gateway-managed TTS state.",
     transports: ["gateway"],
@@ -270,6 +292,13 @@ const CAPABILITY_METADATA: CapabilityMetadata[] = [
     transports: ["local", "gateway"],
     flags: ["--provider", "--local", "--gateway", "--json"],
     resultShape: "selected provider",
+  },
+  {
+    id: "tts.set-persona",
+    description: "Set the active TTS persona.",
+    transports: ["local", "gateway"],
+    flags: ["--persona", "--off", "--local", "--gateway", "--json"],
+    resultShape: "selected persona",
   },
   {
     id: "video.generate",
@@ -544,7 +573,7 @@ async function runModelRun(params: {
   model?: string;
   transport: CapabilityTransport;
 }) {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const agentId = resolveDefaultAgentId(cfg);
   if (params.transport === "local") {
     const result = await agentCommand(
@@ -553,6 +582,8 @@ async function runModelRun(params: {
         agentId,
         model: params.model,
         json: false,
+        modelRun: true,
+        promptMode: "none",
         cleanupBundleMcpOnRunEnd: true,
       },
       {
@@ -589,6 +620,8 @@ async function runModelRun(params: {
       message: params.prompt,
       provider,
       model,
+      modelRun: true,
+      promptMode: "none",
       cleanupBundleMcpOnRunEnd: true,
       idempotencyKey: randomIdempotencyKey(),
     },
@@ -613,7 +646,7 @@ async function runModelRun(params: {
 }
 
 async function buildModelProviders() {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const catalog = await loadModelCatalog({ config: cfg });
   const selectedProvider = resolveSelectedProviderFromModelRef(
     resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model),
@@ -649,6 +682,7 @@ async function buildModelProviders() {
 
 async function runModelAuthStatus() {
   const captured: string[] = [];
+  const { modelsStatusCommand } = await import("../commands/models/list.status-command.js");
   await modelsStatusCommand(
     { json: true },
     {
@@ -666,7 +700,7 @@ async function runModelAuthStatus() {
 }
 
 async function runModelAuthLogout(provider: string) {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
   const store = loadAuthProfileStoreForRuntime(agentDir);
   const profileIds = listProfilesForProvider(store, provider);
@@ -719,7 +753,7 @@ async function runImageGenerate(params: {
   output?: string;
   timeoutMs?: number;
 }) {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
   const inputImages =
     params.file && params.file.length > 0
@@ -786,7 +820,7 @@ async function runImageDescribe(params: {
   files: string[];
   model?: string;
 }) {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
   const activeModel = requireProviderModelOverride(params.model);
   const outputs = await Promise.all(
@@ -835,7 +869,7 @@ async function runAudioTranscribe(params: {
   model?: string;
   prompt?: string;
 }) {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const activeModel = requireProviderModelOverride(params.model);
   const result = await transcribeAudioFile({
     filePath: path.resolve(params.file),
@@ -925,7 +959,7 @@ async function runVideoGenerate(params: {
   watermark?: boolean;
   timeoutMs?: number;
 }) {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
   const result = await generateVideo({
     cfg,
@@ -1000,7 +1034,7 @@ async function runVideoGenerate(params: {
 }
 
 async function runVideoDescribe(params: { file: string; model?: string }) {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const activeModel = requireProviderModelOverride(params.model);
   const result = await describeVideoFile({
     filePath: path.resolve(params.file),
@@ -1031,7 +1065,9 @@ async function runTtsConvert(params: {
   transport: CapabilityTransport;
 }) {
   if (params.transport === "gateway") {
-    const gatewayConnection = buildGatewayConnectionDetailsWithResolvers({ config: loadConfig() });
+    const gatewayConnection = buildGatewayConnectionDetailsWithResolvers({
+      config: getRuntimeConfig(),
+    });
     const result: {
       audioPath?: string;
       provider?: string;
@@ -1077,7 +1113,7 @@ async function runTtsConvert(params: {
     } satisfies CapabilityEnvelope;
   }
 
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const overrides = resolveExplicitTtsOverrides({
     cfg,
     provider: params.provider,
@@ -1123,7 +1159,7 @@ async function runTtsConvert(params: {
 }
 
 async function runTtsProviders(transport: CapabilityTransport) {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   if (transport === "gateway") {
     const payload: {
       providers?: Array<Record<string, unknown>>;
@@ -1168,8 +1204,32 @@ async function runTtsProviders(transport: CapabilityTransport) {
   };
 }
 
+async function runTtsPersonas(transport: CapabilityTransport) {
+  if (transport === "gateway") {
+    return await callGateway({
+      method: "tts.personas",
+      timeoutMs: 30_000,
+    });
+  }
+  const cfg = getRuntimeConfig();
+  const config = resolveTtsConfig(cfg);
+  const prefsPath = resolveTtsPrefsPath(config);
+  const active = getTtsPersona(config, prefsPath);
+  return {
+    active: active?.id ?? null,
+    personas: listTtsPersonas(config).map((persona) => ({
+      id: persona.id,
+      label: persona.label,
+      description: persona.description,
+      provider: persona.provider,
+      fallbackPolicy: persona.fallbackPolicy,
+      providers: Object.keys(persona.providers ?? {}),
+    })),
+  };
+}
+
 async function runTtsVoices(providerRaw?: string) {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const config = resolveTtsConfig(cfg);
   const prefsPath = resolveTtsPrefsPath(config);
   const provider = normalizeOptionalString(providerRaw) || getTtsProvider(config, prefsPath);
@@ -1181,9 +1241,10 @@ async function runTtsVoices(providerRaw?: string) {
 }
 
 async function runTtsStateMutation(params: {
-  capability: "tts.enable" | "tts.disable" | "tts.set-provider";
+  capability: "tts.enable" | "tts.disable" | "tts.set-provider" | "tts.set-persona";
   transport: CapabilityTransport;
   provider?: string;
+  persona?: string | null;
 }) {
   if (params.transport === "gateway") {
     const method =
@@ -1191,16 +1252,23 @@ async function runTtsStateMutation(params: {
         ? "tts.enable"
         : params.capability === "tts.disable"
           ? "tts.disable"
-          : "tts.setProvider";
+          : params.capability === "tts.set-provider"
+            ? "tts.setProvider"
+            : "tts.setPersona";
     const payload = await callGateway({
       method,
-      params: params.provider ? { provider: params.provider } : undefined,
+      params:
+        params.capability === "tts.set-provider"
+          ? { provider: params.provider }
+          : params.capability === "tts.set-persona"
+            ? { persona: params.persona ?? "off" }
+            : undefined,
       timeoutMs: 30_000,
     });
     return payload;
   }
 
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const config = resolveTtsConfig(cfg);
   const prefsPath = resolveTtsPrefsPath(config);
   if (params.capability === "tts.enable") {
@@ -1210,6 +1278,20 @@ async function runTtsStateMutation(params: {
   if (params.capability === "tts.disable") {
     setTtsEnabled(prefsPath, false);
     return { enabled: false };
+  }
+  if (params.capability === "tts.set-persona") {
+    if (!params.persona) {
+      setTtsPersona(prefsPath, null);
+      return { persona: null };
+    }
+    const persona = listTtsPersonas(config).find(
+      (entry) => entry.id === normalizeLowercaseStringOrEmpty(params.persona ?? ""),
+    );
+    if (!persona) {
+      throw new Error(`Unknown TTS persona: ${params.persona}`);
+    }
+    setTtsPersona(prefsPath, persona.id);
+    return { persona: persona.id };
   }
   if (!params.provider) {
     throw new Error("--provider is required");
@@ -1223,7 +1305,7 @@ async function runTtsStateMutation(params: {
 }
 
 async function runWebSearchCommand(params: { query: string; provider?: string; limit?: number }) {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const result = await runWebSearch({
     config: cfg,
     providerId: params.provider,
@@ -1244,7 +1326,7 @@ async function runWebSearchCommand(params: { query: string; provider?: string; l
 }
 
 async function runWebFetchCommand(params: { url: string; provider?: string; format?: string }) {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const resolved = resolveWebFetchDefinition({
     config: cfg,
     providerId: params.provider,
@@ -1272,7 +1354,7 @@ async function runMemoryEmbeddingCreate(params: {
   model?: string;
 }) {
   ensureMemoryEmbeddingProvidersRegistered();
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const modelRef = resolveModelRefOverride(params.model);
   const requestedProvider = normalizeOptionalString(params.provider) || modelRef.provider || "auto";
   const result = await createEmbeddingProvider({
@@ -1397,7 +1479,7 @@ export function registerCapabilityCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const result = await loadModelCatalog({ config: loadConfig() });
+        const result = await loadModelCatalog({ config: getRuntimeConfig() });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, providerSummaryText);
       });
     });
@@ -1410,7 +1492,7 @@ export function registerCapabilityCli(program: Command) {
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const target = normalizeStringifiedOptionalString(opts.model) ?? "";
-        const catalog = await loadModelCatalog({ config: loadConfig() });
+        const catalog = await loadModelCatalog({ config: getRuntimeConfig() });
         const entry =
           catalog.find((candidate) => `${candidate.provider}/${candidate.id}` === target) ??
           catalog.find((candidate) => candidate.id === target);
@@ -1442,6 +1524,7 @@ export function registerCapabilityCli(program: Command) {
     .requiredOption("--provider <id>", "Provider id")
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const { modelsAuthLoginCommand } = await import("../commands/models/auth.js");
         await modelsAuthLoginCommand({ provider: String(opts.provider) }, defaultRuntime);
       });
     });
@@ -1519,6 +1602,9 @@ export function registerCapabilityCli(program: Command) {
     .requiredOption("--file <path>", "Input file", collectOption, [])
     .requiredOption("--prompt <text>", "Prompt text")
     .option("--model <provider/model>", "Model override")
+    .option("--size <size>", "Size hint like 1024x1024")
+    .option("--aspect-ratio <ratio>", "Aspect ratio hint like 16:9")
+    .option("--resolution <value>", "Resolution hint: 1K, 2K, or 4K")
     .option("--output-format <format>", "Output format hint: png, jpeg, or webp")
     .option("--background <value>", "Background hint: transparent, opaque, or auto")
     .option("--openai-background <value>", "OpenAI background hint: transparent, opaque, or auto")
@@ -1532,6 +1618,9 @@ export function registerCapabilityCli(program: Command) {
           capability: "image.edit",
           prompt: String(opts.prompt),
           model: opts.model as string | undefined,
+          size: opts.size as string | undefined,
+          aspectRatio: opts.aspectRatio as string | undefined,
+          resolution: opts.resolution as "1K" | "2K" | "4K" | undefined,
           file: files,
           outputFormat: normalizeImageOutputFormat(opts.outputFormat as string | undefined),
           background: normalizeImageBackground(opts.background as string | undefined),
@@ -1586,7 +1675,7 @@ export function registerCapabilityCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const cfg = loadConfig();
+        const cfg = getRuntimeConfig();
         const selectedProvider = resolveSelectedProviderFromModelRef(
           resolveAgentModelPrimaryValue(cfg.agents?.defaults?.imageGenerationModel),
         );
@@ -1634,7 +1723,7 @@ export function registerCapabilityCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const cfg = loadConfig();
+        const cfg = getRuntimeConfig();
         const providers = [...buildMediaUnderstandingRegistry(undefined, cfg).values()]
           .filter((provider) => provider.capabilities?.includes("audio"))
           .map((provider) => ({
@@ -1728,6 +1817,27 @@ export function registerCapabilityCli(program: Command) {
     });
 
   tts
+    .command("personas")
+    .description("List TTS personas")
+    .option("--local", "Force local execution", false)
+    .option("--gateway", "Force gateway execution", false)
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const transport = resolveTransport({
+          local: Boolean(opts.local),
+          gateway: Boolean(opts.gateway),
+          supported: ["local", "gateway"],
+          defaultTransport: "local",
+        });
+        const result = await runTtsPersonas(transport);
+        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, (value) =>
+          JSON.stringify(value, null, 2),
+        );
+      });
+    });
+
+  tts
     .command("status")
     .description("Show TTS status")
     .option("--gateway", "Force gateway execution", false)
@@ -1804,6 +1914,36 @@ export function registerCapabilityCli(program: Command) {
       });
     });
 
+  tts
+    .command("set-persona")
+    .description("Set the active TTS persona")
+    .option("--persona <id>", "TTS persona id")
+    .option("--off", "Disable the active TTS persona", false)
+    .option("--local", "Force local execution", false)
+    .option("--gateway", "Force gateway execution", false)
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const transport = resolveTransport({
+          local: Boolean(opts.local),
+          gateway: Boolean(opts.gateway),
+          supported: ["local", "gateway"],
+          defaultTransport: "gateway",
+        });
+        if (!opts.off && !opts.persona) {
+          throw new Error("--persona is required unless --off is set");
+        }
+        const result = await runTtsStateMutation({
+          capability: "tts.set-persona",
+          persona: opts.off ? null : String(opts.persona),
+          transport,
+        });
+        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, (value) =>
+          JSON.stringify(value, null, 2),
+        );
+      });
+    });
+
   const video = capability.command("video").description("Video generation and description");
 
   video
@@ -1860,7 +2000,7 @@ export function registerCapabilityCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const cfg = loadConfig();
+        const cfg = getRuntimeConfig();
         const selectedGenerationProvider = resolveSelectedProviderFromModelRef(
           resolveAgentModelPrimaryValue(cfg.agents?.defaults?.videoGenerationModel),
         );
@@ -1938,7 +2078,7 @@ export function registerCapabilityCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const cfg = loadConfig();
+        const cfg = getRuntimeConfig();
         const selectedSearchProvider =
           typeof cfg.tools?.web?.search?.provider === "string"
             ? normalizeLowercaseStringOrEmpty(cfg.tools.web.search.provider)
@@ -1996,7 +2136,7 @@ export function registerCapabilityCli(program: Command) {
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         ensureMemoryEmbeddingProvidersRegistered();
-        const cfg = loadConfig();
+        const cfg = getRuntimeConfig();
         const agentId = resolveDefaultAgentId(cfg);
         const resolvedMemory = resolveMemorySearchConfig(cfg, agentId);
         const selectedProvider =

@@ -123,7 +123,7 @@ export async function collectDoctorPreviewWarnings(params: {
     }
   }
 
-  if (hasPluginConfig) {
+  if (hasPluginConfig || hasChannelConfig) {
     const {
       collectStalePluginConfigWarnings,
       isStalePluginAutoRepairBlocked,
@@ -139,6 +139,11 @@ export async function collectDoctorPreviewWarnings(params: {
         }).join("\n"),
       );
     }
+  }
+
+  if (hasPluginConfig) {
+    const { collectCodexRouteWarnings } = await import("./codex-route-warnings.js");
+    warnings.push(...collectCodexRouteWarnings({ cfg: params.cfg, env }));
   }
 
   if (hasPluginLoadPaths(params.cfg)) {

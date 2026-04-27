@@ -116,12 +116,9 @@ heartbeats are disabled for the default agent or
 files concise — especially `MEMORY.md`, which can grow over time and lead to
 unexpectedly high context usage and more frequent compaction.
 
-> **Note:** `memory/*.md` daily files are **not** part of the normal bootstrap
-> Project Context. On ordinary turns they are accessed on demand via the
-> `memory_search` and `memory_get` tools, so they do not count against the
-> context window unless the model explicitly reads them. Bare `/new` and
-> `/reset` turns are the exception: the runtime can prepend recent daily memory
-> as a one-shot startup-context block for that first turn.
+<Note>
+`memory/*.md` daily files are **not** part of the normal bootstrap Project Context. On ordinary turns they are accessed on demand via the `memory_search` and `memory_get` tools, so they do not count against the context window unless the model explicitly reads them. Bare `/new` and `/reset` turns are the exception: the runtime can prepend recent daily memory as a one-shot startup-context block for that first turn.
+</Note>
 
 Large files are truncated with a marker. The max per-file size is controlled by
 `agents.defaults.bootstrapMaxChars` (default: 12000). Total injected bootstrap
@@ -214,6 +211,10 @@ stale. The prompt also notes the public docs mirror, community Discord, and Claw
 ([https://clawhub.ai](https://clawhub.ai)) for skills discovery. It tells the model to
 consult docs first for OpenClaw behavior, commands, configuration, or architecture, and to
 run `openclaw status` itself when possible (asking the user only when it lacks access).
+For configuration specifically, it points agents to the `gateway` tool action
+`config.schema.lookup` for exact field-level docs and constraints, then to
+`docs/gateway/configuration.md` and `docs/gateway/configuration-reference.md`
+for broader guidance.
 
 ## Related
 

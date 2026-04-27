@@ -2,11 +2,9 @@ import {
   type ChannelOutboundAdapter,
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import {
-  resolveOutboundSendDep,
-  type OutboundIdentity,
-} from "openclaw/plugin-sdk/outbound-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OutboundIdentity } from "openclaw/plugin-sdk/outbound-runtime";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-send-deps";
 import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,

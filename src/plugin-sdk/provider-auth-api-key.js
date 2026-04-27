@@ -1,0 +1,6 @@
+// Public API-key onboarding helpers for provider plugins.
+export { upsertAuthProfile } from "../agents/auth-profiles/profiles.js";
+export { formatApiKeyPreview, normalizeApiKeyInput, validateApiKeyInput, ensureApiKeyFromOptionEnvOrPrompt, normalizeSecretInputModeInput, promptSecretRefForSetup, resolveSecretInputModeForEnvSelection, } from "../plugins/provider-auth-input.js";
+export { applyAuthProfileConfig, buildApiKeyCredential, upsertApiKeyProfile, } from "../plugins/provider-auth-helpers.js";
+export { createProviderApiKeyAuthMethod } from "../plugins/provider-api-key-auth.js";
+export { normalizeOptionalSecretInput, normalizeSecretInput, } from "../utils/normalize-secret-input.js";

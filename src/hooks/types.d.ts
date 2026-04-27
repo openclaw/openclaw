@@ -1,0 +1,62 @@
+export type HookInstallSpec = {
+    id?: string;
+    kind: "bundled" | "npm" | "git";
+    label?: string;
+    package?: string;
+    repository?: string;
+    bins?: string[];
+};
+export type OpenClawHookMetadata = {
+    always?: boolean;
+    hookKey?: string;
+    emoji?: string;
+    homepage?: string;
+    /** Events this hook handles (e.g., ["command:new", "session:start"]) */
+    events: string[];
+    /** Optional export name (default: "default") */
+    export?: string;
+    os?: string[];
+    requires?: {
+        bins?: string[];
+        anyBins?: string[];
+        env?: string[];
+        config?: string[];
+    };
+    install?: HookInstallSpec[];
+};
+export type HookInvocationPolicy = {
+    enabled: boolean;
+};
+export type ParsedHookFrontmatter = Record<string, string>;
+export type Hook = {
+    name: string;
+    description: string;
+    source: "openclaw-bundled" | "openclaw-managed" | "openclaw-workspace" | "openclaw-plugin";
+    pluginId?: string;
+    filePath: string;
+    baseDir: string;
+    handlerPath: string;
+};
+export type HookSource = Hook["source"];
+export type HookEntry = {
+    hook: Hook;
+    frontmatter: ParsedHookFrontmatter;
+    metadata?: OpenClawHookMetadata;
+    invocation?: HookInvocationPolicy;
+};
+export type HookEligibilityContext = {
+    remote?: {
+        platforms: string[];
+        hasBin: (bin: string) => boolean;
+        hasAnyBin: (bins: string[]) => boolean;
+        note?: string;
+    };
+};
+export type HookSnapshot = {
+    hooks: Array<{
+        name: string;
+        events: string[];
+    }>;
+    resolvedHooks?: Hook[];
+    version?: number;
+};

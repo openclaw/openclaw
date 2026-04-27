@@ -1,0 +1,27 @@
+export function buildStatusScanResult(params) {
+    return {
+        cfg: params.cfg,
+        sourceConfig: params.sourceConfig,
+        secretDiagnostics: params.secretDiagnostics,
+        osSummary: params.osSummary,
+        tailscaleMode: params.tailscaleMode,
+        tailscaleDns: params.tailscaleDns,
+        tailscaleHttpsUrl: params.tailscaleHttpsUrl,
+        update: params.update,
+        gatewayConnection: params.gatewaySnapshot.gatewayConnection,
+        remoteUrlMissing: params.gatewaySnapshot.remoteUrlMissing,
+        gatewayMode: params.gatewaySnapshot.gatewayMode,
+        gatewayProbeAuth: params.gatewaySnapshot.gatewayProbeAuth,
+        gatewayProbeAuthWarning: params.gatewaySnapshot.gatewayProbeAuthWarning,
+        gatewayProbe: params.gatewaySnapshot.gatewayProbe,
+        gatewayReachable: params.gatewaySnapshot.gatewayReachable,
+        gatewaySelf: params.gatewaySnapshot.gatewaySelf,
+        channelIssues: params.channelIssues,
+        agentStatus: params.agentStatus,
+        channels: params.channels,
+        summary: params.summary,
+        memory: params.memory,
+        memoryPlugin: params.memoryPlugin,
+        pluginCompatibility: params.pluginCompatibility,
+    };
+}

@@ -3,6 +3,12 @@
       - any-glob-to-any-file:
           - "extensions/bluebubbles/**"
           - "docs/channels/bluebubbles.md"
+"plugin: azure-speech":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/azure-speech/**"
+          - "docs/providers/azure-speech.md"
+          - "docs/tools/tts.md"
 "channel: discord":
   - changed-files:
       - any-glob-to-any-file:
@@ -29,6 +35,17 @@
       - any-glob-to-any-file:
           - "extensions/google-meet/**"
           - "docs/plugins/google-meet.md"
+"plugin: migrate-hermes":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/migrate-hermes/**"
+          - "docs/cli/migrate.md"
+"plugin: migrate-claude":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/migrate-claude/**"
+          - "docs/cli/migrate.md"
+          - "docs/install/migrating-claude.md"
 "plugin: bonjour":
   - changed-files:
       - any-glob-to-any-file:
@@ -95,6 +112,11 @@
       - any-glob-to-any-file:
           - "extensions/slack/**"
           - "docs/channels/slack.md"
+"channel: synology-chat":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/synology-chat/**"
+          - "docs/channels/synology-chat.md"
 "channel: telegram":
   - changed-files:
       - any-glob-to-any-file:
@@ -227,6 +249,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/diagnostics-otel/**"
+"extensions: diagnostics-prometheus":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/diagnostics-prometheus/**"
 "extensions: llm-task":
   - changed-files:
       - any-glob-to-any-file:
@@ -279,6 +305,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/byteplus/**"
+"extensions: cerebras":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/cerebras/**"
+          - "docs/providers/cerebras.md"
 "extensions: deepseek":
   - changed-files:
       - any-glob-to-any-file:
@@ -307,6 +338,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/huggingface/**"
+"extensions: inworld":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/inworld/**"
+          - "docs/providers/inworld.md"
 "extensions: kilocode":
   - changed-files:
       - any-glob-to-any-file:
