@@ -782,7 +782,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- Mattermost: refresh current native slash command registrations during callback validation so stale tokens from deleted or regenerated commands stop being accepted without a gateway restart while lookup volume stays bounded. Thanks @feynman-hou.
+- Mattermost: require generated callback URL secrets and refresh current native slash command registrations during callback validation so stale tokens from deleted or regenerated commands stop being accepted without a gateway restart while lookup volume stays bounded. Thanks @feynman-hou.
 
 ## 2026.4.26
 

@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import {
   fetchMattermostUserTeams,
@@ -12,6 +13,7 @@ import {
 } from "./runtime-api.js";
 import {
   DEFAULT_COMMAND_SPECS,
+  appendSlashCallbackSecret,
   isSlashCommandsEnabled,
   registerSlashCommands,
   resolveCallbackUrl,
@@ -77,6 +79,10 @@ function buildTriggerMap(commands: MattermostCommandSpec[]): Map<string, string>
     }
   }
   return triggerMap;
+}
+
+function createSlashCallbackSecret(): string {
+  return randomBytes(24).toString("base64url");
 }
 
 function warnOnSuspiciousCallbackUrl(params: {
@@ -159,6 +165,10 @@ export async function registerMattermostMonitorSlashCommands(params: {
       gatewayPort: slashGatewayPort,
       gatewayHost: params.cfg.gateway?.customBindHost ?? undefined,
     });
+    const slashRegistrationCallbackUrl = appendSlashCallbackSecret(
+      slashCallbackUrl,
+      createSlashCallbackSecret(),
+    );
 
     warnOnSuspiciousCallbackUrl({
       runtime: params.runtime,
@@ -177,7 +187,7 @@ export async function registerMattermostMonitorSlashCommands(params: {
       client: params.client,
       teams,
       botUserId: params.botUserId,
-      callbackUrl: slashCallbackUrl,
+      callbackUrl: slashRegistrationCallbackUrl,
       commands: dedupedCommands,
       runtime: params.runtime,
     });

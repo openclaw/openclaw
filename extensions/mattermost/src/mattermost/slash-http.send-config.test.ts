@@ -44,7 +44,7 @@ const mockState = vi.hoisted(() => ({
     team_id: "team-1",
     trigger: "oc_models",
     method: "P",
-    url: "https://gateway.example.com/slash",
+    url: "https://gateway.example.com/slash?openclaw_slash=test-secret",
     delete_at: 0,
   })),
   listMattermostCommands: vi.fn(async () => []),
@@ -130,6 +130,7 @@ vi.mock("./send.js", () => ({
 }));
 
 vi.mock("./slash-commands.js", () => ({
+  MATTERMOST_SLASH_CALLBACK_SECRET_PARAM: "openclaw_slash",
   MATTERMOST_SLASH_POST_METHOD: "P",
   getMattermostCommand: mockState.getMattermostCommand,
   listMattermostCommands: mockState.listMattermostCommands,
@@ -139,11 +140,16 @@ vi.mock("./slash-commands.js", () => ({
 }));
 
 let createSlashCommandHttpHandler: typeof import("./slash-http.js").createSlashCommandHttpHandler;
+const callbackUrlFixture = "https://gateway.example.com/slash?openclaw_slash=test-secret";
 
-function createRequest(body = "token=valid-token"): IncomingMessage {
+function createRequest(
+  body = "token=valid-token",
+  url = "/slash?openclaw_slash=test-secret",
+): IncomingMessage {
   const req = new PassThrough();
   const incoming = req as PassThrough & IncomingMessage;
   incoming.method = "POST";
+  incoming.url = url;
   incoming.headers = {
     "content-type": "application/x-www-form-urlencoded",
   };
@@ -243,7 +249,7 @@ describe("slash-http cfg threading", () => {
           teamId: "team-1",
           trigger: "oc_models",
           token: "valid-token",
-          url: "https://gateway.example.com/slash",
+          url: callbackUrlFixture,
           managed: false,
         },
       ],
@@ -285,7 +291,7 @@ describe("slash-http cfg threading", () => {
           teamId: "team-1",
           trigger: "oc_models",
           token: "valid-token",
-          url: "https://gateway.example.com/slash",
+          url: callbackUrlFixture,
           managed: false,
         },
       ],
@@ -297,6 +303,34 @@ describe("slash-http cfg threading", () => {
     expect(response.res.statusCode).toBe(200);
     expect(response.getBody()).toContain("Processing");
     expect(hasSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects callbacks with a missing callback URL secret before Mattermost lookup", async () => {
+    const handler = createSlashCommandHttpHandler({
+      account: accountFixture,
+      cfg: {} as OpenClawConfig,
+      runtime: {} as RuntimeEnv,
+      commandTokens: new Set(["valid-token"]),
+      registeredCommands: [
+        {
+          id: "cmd-1",
+          teamId: "team-1",
+          trigger: "oc_models",
+          token: "valid-token",
+          url: callbackUrlFixture,
+          managed: false,
+        },
+      ],
+    });
+    const response = createResponse();
+
+    await handler(createRequest("token=valid-token", "/slash?openclaw_slash=wrong"), response.res);
+
+    expect(response.res.statusCode).toBe(401);
+    expect(response.getBody()).toContain("Unauthorized: invalid command token.");
+    expect(mockState.getMattermostCommand).not.toHaveBeenCalled();
+    expect(mockState.fetchMattermostChannel).not.toHaveBeenCalled();
+    expect(mockState.sendMessageMattermost).not.toHaveBeenCalled();
   });
 
   it("rejects a callback when Mattermost reports a different current command token", async () => {
@@ -315,7 +349,7 @@ describe("slash-http cfg threading", () => {
       team_id: "team-1",
       trigger: "oc_models",
       method: "P",
-      url: "https://gateway.example.com/slash",
+      url: callbackUrlFixture,
       delete_at: 0,
     });
 
@@ -330,7 +364,7 @@ describe("slash-http cfg threading", () => {
           teamId: "team-1",
           trigger: "oc_models",
           token: "old-token",
-          url: "https://gateway.example.com/slash",
+          url: callbackUrlFixture,
           managed: false,
         },
       ],
@@ -361,7 +395,7 @@ describe("slash-http cfg threading", () => {
       team_id: "team-1",
       trigger: "oc_models",
       method: "P",
-      url: "https://gateway.example.com/slash",
+      url: callbackUrlFixture,
       delete_at: 0,
     });
     const commandTokens = new Set(["old-token"]);
@@ -377,7 +411,7 @@ describe("slash-http cfg threading", () => {
           teamId: "team-1",
           trigger: "oc_models",
           token: "old-token",
-          url: "https://gateway.example.com/slash",
+          url: callbackUrlFixture,
           managed: false,
         },
       ],

@@ -8,6 +8,9 @@ const isSlashCommandsEnabled = vi.hoisted(() => vi.fn());
 const registerSlashCommands = vi.hoisted(() => vi.fn());
 const resolveCallbackUrl = vi.hoisted(() => vi.fn());
 const resolveSlashCommandConfig = vi.hoisted(() => vi.fn());
+const appendSlashCallbackSecret = vi.hoisted(() =>
+  vi.fn((callbackUrl: string) => `${callbackUrl}?openclaw_slash=test-secret`),
+);
 const activateSlashCommands = vi.hoisted(() => vi.fn());
 
 vi.mock("./runtime-api.js", () => ({
@@ -29,6 +32,7 @@ vi.mock("./slash-commands.js", () => ({
     { trigger: "ping", description: "ping" },
     { trigger: "ping", description: "duplicate" },
   ],
+  appendSlashCallbackSecret,
   isSlashCommandsEnabled,
   registerSlashCommands,
   resolveCallbackUrl,
@@ -55,6 +59,7 @@ describe("mattermost monitor slash", () => {
     registerSlashCommands.mockReset();
     resolveCallbackUrl.mockReset();
     resolveSlashCommandConfig.mockReset();
+    appendSlashCallbackSecret.mockClear();
     activateSlashCommands.mockReset();
   });
 
@@ -112,8 +117,12 @@ describe("mattermost monitor slash", () => {
     expect(registerSlashCommands.mock.calls[0]?.[0]).toMatchObject({
       teamId: "team-1",
       creatorUserId: "bot-user",
-      callbackUrl: "https://openclaw.test/slash",
+      callbackUrl: "https://openclaw.test/slash?openclaw_slash=test-secret",
     });
+    expect(appendSlashCallbackSecret).toHaveBeenCalledWith(
+      "https://openclaw.test/slash",
+      expect.any(String),
+    );
     expect(registerSlashCommands.mock.calls[0]?.[0].commands).toEqual([
       { trigger: "ping", description: "ping" },
       {

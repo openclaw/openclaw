@@ -40,6 +40,7 @@ import {
 } from "./runtime-api.js";
 import { sendMessageMattermost } from "./send.js";
 import {
+  MATTERMOST_SLASH_CALLBACK_SECRET_PARAM,
   MATTERMOST_SLASH_POST_METHOD,
   getMattermostCommand,
   listMattermostCommands,
@@ -135,6 +136,32 @@ function sanitizeCommandLookupError(error: unknown): string {
 
 function sanitizeMattermostLogValue(value: string): string {
   return value.replace(/[\r\n\t]/gu, " ").slice(0, 200);
+}
+
+function matchesRegisteredCallbackSecret(params: {
+  requestUrl?: string;
+  registeredUrl: string;
+}): boolean {
+  let expected: string | null = null;
+  try {
+    expected = new URL(params.registeredUrl).searchParams.get(
+      MATTERMOST_SLASH_CALLBACK_SECRET_PARAM,
+    );
+  } catch {
+    return false;
+  }
+  if (!expected) {
+    return false;
+  }
+
+  try {
+    const actual = new URL(params.requestUrl ?? "", params.registeredUrl).searchParams.get(
+      MATTERMOST_SLASH_CALLBACK_SECRET_PARAM,
+    );
+    return !!actual && safeEqualSecret(actual, expected);
+  } catch {
+    return false;
+  }
 }
 
 async function withCommandLookupTimeout<T>(task: (signal: AbortSignal) => Promise<T>): Promise<T> {
@@ -454,6 +481,18 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
     // Validate token — fail closed: reject when no commands are registered
     // (e.g. registration failed or startup was partial).
     if (registeredCommands.length === 0 || !registeredCommand) {
+      sendJsonResponse(res, 401, {
+        response_type: "ephemeral",
+        text: "Unauthorized: invalid command token.",
+      });
+      return;
+    }
+    if (
+      !matchesRegisteredCallbackSecret({
+        requestUrl: req.url,
+        registeredUrl: registeredCommand.url,
+      })
+    ) {
       sendJsonResponse(res, 401, {
         response_type: "ephemeral",
         text: "Unauthorized: invalid command token.",
