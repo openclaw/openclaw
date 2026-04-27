@@ -135,6 +135,21 @@ describe("POST /sessions/:sessionKey/kill", () => {
     expect(killSubagentRunAdminMock).not.toHaveBeenCalled();
   });
 
+  it("rejects malformed encoded session keys without falling through", async () => {
+    const response = await post("/sessions/%zz/kill");
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: {
+        message: "invalid session key",
+        type: "invalid_request_error",
+      },
+    });
+    expect(authMock).not.toHaveBeenCalled();
+    expect(loadSessionEntryMock).not.toHaveBeenCalled();
+    expect(killSubagentRunAdminMock).not.toHaveBeenCalled();
+    expect(killControlledSubagentRunMock).not.toHaveBeenCalled();
+  });
+
   it("kills a matching session via the admin kill helper using the canonical key", async () => {
     authMock.mockResolvedValueOnce({ ok: true, method: "trusted-proxy" });
     loadSessionEntryMock.mockReturnValue({
