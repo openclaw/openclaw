@@ -56,6 +56,7 @@ function hasOnlyModelDirective(directives: InlineDirectives): boolean {
     !directives.hasThinkDirective &&
     !directives.hasFastDirective &&
     !directives.hasVerboseDirective &&
+    !directives.hasEmotionsDirective &&
     !directives.hasTraceDirective &&
     !directives.hasReasoningDirective &&
     !directives.hasElevatedDirective &&
