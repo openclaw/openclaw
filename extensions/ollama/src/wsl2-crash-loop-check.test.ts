@@ -49,7 +49,7 @@ describe("isWsl2", () => {
   beforeEach(() => vi.clearAllMocks());
   afterEach(() => vi.clearAllMocks());
 
-  it("returns true when /proc/version contains microsoft and WSL2", async () => {
+  it("returns true when /proc/version contains wsl2 or microsoft-standard", async () => {
     readFileMock.mockResolvedValue(
       "Linux version 5.15.90.1-microsoft-standard-WSL2 (gcc ...)" as never,
     );
@@ -61,9 +61,14 @@ describe("isWsl2", () => {
     expect(await isWsl2()).toBe(false);
   });
 
-  it("returns false on WSL1 (microsoft present but no WSL2)", async () => {
-    readFileMock.mockResolvedValue("Linux version 4.4.0-microsoft-standard (gcc ...)" as never);
+  it("returns false on WSL1 (microsoft present but no WSL2 or microsoft-standard)", async () => {
+    readFileMock.mockResolvedValue("Linux version 4.4.0-microsoft (gcc ...)" as never);
     expect(await isWsl2()).toBe(false);
+  });
+
+  it("returns true when osrelease contains microsoft-standard (no WSL2 suffix)", async () => {
+    readFileMock.mockResolvedValue("Linux version 5.15.0-microsoft-standard (gcc ...)" as never);
+    expect(await isWsl2()).toBe(true);
   });
 
   it("returns false when /proc/version is unreadable", async () => {

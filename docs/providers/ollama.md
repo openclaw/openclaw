@@ -401,7 +401,7 @@ See: [ollama/ollama#11317](https://github.com/ollama/ollama/issues/11317)
 2. Disable Hyper-V dynamic memory reclaim. Add the following to `%USERPROFILE%\.wslconfig` on the **Windows** side:
 
    ```ini
-   [wsl2]
+   [experimental]
    autoMemoryReclaim=disabled
    ```
 

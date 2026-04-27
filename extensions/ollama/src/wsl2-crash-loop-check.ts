@@ -24,7 +24,7 @@ const execFileAsync = promisify(execFile);
 export async function isWsl2(): Promise<boolean> {
   try {
     const content = await readFile("/proc/version", "utf8");
-    return /microsoft/i.test(content) && /WSL2/i.test(content);
+    return /wsl2/i.test(content) || /microsoft-standard/i.test(content);
   } catch {
     return false;
   }
