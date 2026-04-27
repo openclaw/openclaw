@@ -161,6 +161,89 @@ describe("promptAuthConfig", () => {
     );
   });
 
+  it("preserves existing model entries outside provider-scoped allowlist updates", async () => {
+    mocks.promptAuthChoiceGrouped.mockResolvedValue("token");
+    mocks.applyAuthChoice.mockResolvedValue({
+      config: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.5": { alias: "GPT" },
+              "anthropic/claude-opus-4-6": { alias: "Opus" },
+            },
+          },
+        },
+      },
+    });
+    mocks.promptModelAllowlist.mockResolvedValue({
+      models: ["anthropic/claude-sonnet-4-6"],
+      scopeKeys: ["anthropic/claude-opus-4-6", "anthropic/claude-sonnet-4-6"],
+    });
+    mocks.resolveProviderPluginChoice.mockReturnValue({
+      provider: { id: "anthropic", label: "Anthropic", auth: [] },
+      method: { id: "setup-token", label: "setup-token", kind: "token" },
+      wizard: {
+        modelAllowlist: {
+          allowedKeys: ["anthropic/claude-opus-4-6", "anthropic/claude-sonnet-4-6"],
+          initialSelections: ["anthropic/claude-sonnet-4-6"],
+        },
+      },
+    });
+
+    const result = await promptAuthConfig({}, makeRuntime(), noopPrompter);
+
+    expect(result.agents?.defaults?.models).toEqual({
+      "openai/gpt-5.5": { alias: "GPT" },
+      "anthropic/claude-sonnet-4-6": {},
+    });
+  });
+
+  it("resolves fallback aliases before scoped allowlist pruning", async () => {
+    vi.clearAllMocks();
+    mocks.promptAuthChoiceGrouped.mockResolvedValue("token");
+    mocks.applyAuthChoice.mockResolvedValue({
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-5.5",
+              fallbacks: ["mini"],
+            },
+            models: {
+              "openai/gpt-5.5": { alias: "GPT" },
+              "openai/gpt-5.4-mini": { alias: "mini" },
+              "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
+            },
+          },
+        },
+      },
+    });
+    mocks.promptModelAllowlist.mockResolvedValue({
+      models: ["openai/gpt-5.5"],
+      scopeKeys: ["openai/gpt-5.5", "openai/gpt-5.4-mini"],
+    });
+    mocks.resolveProviderPluginChoice.mockReturnValue({
+      provider: { id: "openai", label: "OpenAI", auth: [] },
+      method: { id: "setup-token", label: "setup-token", kind: "token" },
+      wizard: {
+        modelAllowlist: {
+          allowedKeys: ["openai/gpt-5.5", "openai/gpt-5.4-mini"],
+          initialSelections: ["openai/gpt-5.5"],
+        },
+      },
+    });
+
+    const result = await promptAuthConfig({}, makeRuntime(), noopPrompter);
+
+    expect(result.agents?.defaults?.model).toEqual({
+      primary: "openai/gpt-5.5",
+    });
+    expect(result.agents?.defaults?.models).toEqual({
+      "openai/gpt-5.5": { alias: "GPT" },
+      "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
+    });
+  });
+
   it("scopes the allowlist picker to the selected provider when available", async () => {
     mocks.promptAuthChoiceGrouped.mockResolvedValue("openai-api-key");
     mocks.resolvePreferredProviderForAuthChoice.mockResolvedValue("openai");
@@ -174,5 +257,27 @@ describe("promptAuthConfig", () => {
         preferredProvider: "openai",
       }),
     );
+  });
+
+  it("returns to auth selection when plugin install onboarding asks for a retry", async () => {
+    vi.clearAllMocks();
+    mocks.promptAuthChoiceGrouped
+      .mockResolvedValueOnce("provider-plugin:wecom:default")
+      .mockResolvedValueOnce("kilocode-api-key");
+    mocks.applyAuthChoice
+      .mockResolvedValueOnce({ config: {}, retrySelection: true })
+      .mockResolvedValueOnce(createApplyAuthChoiceConfig());
+    mocks.promptModelAllowlist.mockResolvedValue({ models: undefined });
+    mocks.resolvePreferredProviderForAuthChoice
+      .mockResolvedValueOnce("wecom")
+      .mockResolvedValueOnce("kilocode");
+    mocks.resolvePluginProviders.mockReturnValue([]);
+    mocks.resolveProviderPluginChoice.mockReturnValue(null);
+
+    await promptAuthConfig({}, makeRuntime(), noopPrompter);
+
+    expect(mocks.promptAuthChoiceGrouped).toHaveBeenCalledTimes(2);
+    expect(mocks.applyAuthChoice).toHaveBeenCalledTimes(2);
+    expect(mocks.promptModelAllowlist).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,17 +1,34 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { VoiceCallConfigSchema } from "../config.js";
 import type { VoiceCallProvider } from "../providers/base.js";
-import type { HangupCallInput, NormalizedEvent } from "../types.js";
+import type { AnswerCallInput, HangupCallInput, NormalizedEvent } from "../types.js";
 import type { CallManagerContext } from "./context.js";
 import { processEvent } from "./events.js";
+import { flushPendingCallRecordWritesForTest } from "./store.js";
+
+const contexts: CallManagerContext[] = [];
+
+afterEach(async () => {
+  for (const ctx of contexts.splice(0)) {
+    for (const timer of ctx.maxDurationTimers.values()) {
+      clearTimeout(timer);
+    }
+    ctx.maxDurationTimers.clear();
+    for (const waiter of ctx.transcriptWaiters.values()) {
+      clearTimeout(waiter.timeout);
+    }
+    ctx.transcriptWaiters.clear();
+    await flushPendingCallRecordWritesForTest();
+    fs.rmSync(ctx.storePath, { recursive: true, force: true });
+  }
+});
 
 function createContext(overrides: Partial<CallManagerContext> = {}): CallManagerContext {
-  const storePath = path.join(os.tmpdir(), `openclaw-voice-call-events-test-${Date.now()}`);
-  fs.mkdirSync(storePath, { recursive: true });
-  return {
+  const storePath = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-voice-call-events-test-"));
+  const ctx: CallManagerContext = {
     activeCalls: new Map(),
     providerCallIdMap: new Map(),
     processedEventIds: new Set(),
@@ -30,6 +47,8 @@ function createContext(overrides: Partial<CallManagerContext> = {}): CallManager
     initialMessageInFlight: new Set(),
     ...overrides,
   };
+  contexts.push(ctx);
+  return ctx;
 }
 
 function createProvider(overrides: Partial<VoiceCallProvider> = {}): VoiceCallProvider {
@@ -161,6 +180,44 @@ describe("processEvent (functional)", () => {
         providerCallId: "prov-dup",
         reason: "hangup-bot",
       }),
+    ]);
+  });
+
+  it("answers accepted inbound calls when the provider requires an answer command", () => {
+    const answerCalls: AnswerCallInput[] = [];
+    const provider = createProvider({
+      answerCall: async (input: AnswerCallInput): Promise<void> => {
+        answerCalls.push(input);
+      },
+    });
+    const ctx = createContext({
+      config: VoiceCallConfigSchema.parse({
+        enabled: true,
+        provider: "telnyx",
+        fromNumber: "+15550000000",
+        inboundPolicy: "open",
+        telnyx: {
+          apiKey: "KEY123",
+          connectionId: "CONN456",
+        },
+        skipSignatureVerification: true,
+      }),
+      provider,
+    });
+    const event = createInboundInitiatedEvent({
+      id: "evt-answer",
+      providerCallId: "call-control-1",
+      from: "+15552222222",
+    });
+
+    processEvent(ctx, event);
+
+    const call = requireFirstActiveCall(ctx);
+    expect(answerCalls).toEqual([
+      {
+        callId: call.callId,
+        providerCallId: "call-control-1",
+      },
     ]);
   });
 

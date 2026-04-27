@@ -4,14 +4,12 @@ read_when:
   - You want to use Ollama for web_search
   - You want a key-free web_search provider
   - You need Ollama Web Search setup guidance
-title: "Ollama Web Search"
+title: "Ollama web search"
 ---
 
-# Ollama Web Search
-
-OpenClaw supports **Ollama Web Search** as a bundled `web_search` provider.
-It uses Ollama's experimental web-search API and returns structured results
-with titles, URLs, and snippets.
+OpenClaw supports **Ollama Web Search** as a bundled `web_search` provider. It
+uses Ollama's web-search API and returns structured results with titles, URLs,
+and snippets.
 
 Unlike the Ollama model provider, this setup does not need an API key by
 default. It does require:
@@ -80,19 +78,24 @@ If no explicit Ollama base URL is set, OpenClaw uses `http://127.0.0.1:11434`.
 
 If your Ollama host expects bearer auth, OpenClaw reuses
 `models.providers.ollama.apiKey` (or the matching env-backed provider auth)
-for web-search requests too.
+for requests to that configured host.
 
 ## Notes
 
 - No web-search-specific API key field is required for this provider.
 - If the Ollama host is auth-protected, OpenClaw reuses the normal Ollama
   provider API key when present.
+- If the configured host does not expose web search and `OLLAMA_API_KEY` is set,
+  OpenClaw can fall back to `https://ollama.com/api/web_search` without sending
+  that env key to the local host.
 - OpenClaw warns during setup if Ollama is unreachable or not signed in, but
   it does not block selection.
 - Runtime auto-detect can fall back to Ollama Web Search when no higher-priority
   credentialed provider is configured.
-- The provider uses Ollama's experimental `/api/experimental/web_search`
-  endpoint.
+- Local Ollama daemon hosts use the local proxy endpoint
+  `/api/experimental/web_search`, which signs and forwards to Ollama Cloud.
+- `https://ollama.com` hosts use the public hosted endpoint
+  `/api/web_search` directly with bearer API-key auth.
 
 ## Related
 

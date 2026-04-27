@@ -20,6 +20,21 @@ export function isLocalCheckEnabled(env) {
   return raw !== "0" && raw !== "false";
 }
 
+export function isCiLikeEnv(env = process.env) {
+  return env.CI === "true" || env.GITHUB_ACTIONS === "true";
+}
+
+export function resolveLocalHeavyCheckEnv(env = process.env) {
+  if (isCiLikeEnv(env) || isLocalCheckEnabled(env)) {
+    return env;
+  }
+
+  return {
+    ...env,
+    OPENCLAW_LOCAL_CHECK: "1",
+  };
+}
+
 export function hasFlag(args, name) {
   return args.some((arg) => arg === name || arg.startsWith(`${name}=`));
 }
@@ -46,7 +61,7 @@ export function applyLocalTsgoPolicy(args, env, hostResources) {
     );
   }
 
-  if (shouldThrottleLocalHeavyChecks(nextEnv, hostResources)) {
+  if (shouldThrottleLocalHeavyChecks(nextEnv, hostResources, "auto")) {
     insertBeforeSeparator(nextArgs, "--singleThreaded");
     insertBeforeSeparator(nextArgs, "--checkers", "1");
 
@@ -77,7 +92,7 @@ export function applyLocalOxlintPolicy(args, env, hostResources) {
     insertBeforeSeparator(nextArgs, "--report-unused-disable-directives-severity", "error");
   }
 
-  if (shouldThrottleLocalHeavyChecks(nextEnv, hostResources)) {
+  if (shouldThrottleLocalHeavyChecks(nextEnv, hostResources) && !hasFlag(nextArgs, "--threads")) {
     insertBeforeSeparator(nextArgs, "--threads=1");
   }
 
@@ -145,12 +160,12 @@ export function shouldAcquireLocalHeavyCheckLockForTsgo(args, env = process.env)
   );
 }
 
-export function shouldThrottleLocalHeavyChecks(env, hostResources) {
+export function shouldThrottleLocalHeavyChecks(env, hostResources, defaultMode = "throttled") {
   if (!isLocalCheckEnabled(env)) {
     return false;
   }
 
-  const mode = readLocalCheckMode(env);
+  const mode = readLocalCheckMode(env, defaultMode);
   if (mode === "throttled") {
     return true;
   }
@@ -298,7 +313,7 @@ function insertBeforeSeparator(args, ...items) {
   args.splice(insertIndex, 0, ...items);
 }
 
-function readLocalCheckMode(env) {
+function readLocalCheckMode(env, defaultMode) {
   const raw = env.OPENCLAW_LOCAL_CHECK_MODE?.trim().toLowerCase();
   if (raw === "throttled" || raw === "low-memory") {
     return "throttled";
@@ -306,9 +321,7 @@ function readLocalCheckMode(env) {
   if (raw === "full" || raw === "fast") {
     return "full";
   }
-  // Keep local heavy checks conservative by default. Developers can still opt
-  // into full-speed runs explicitly with OPENCLAW_LOCAL_CHECK_MODE=full.
-  return "throttled";
+  return defaultMode;
 }
 
 function resolveHostResources(hostResources) {

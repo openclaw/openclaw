@@ -96,12 +96,16 @@ export type VideoGenerationMode = "generate" | "imageToVideo" | "videoToVideo";
  */
 export type VideoGenerationProviderOptionType = "number" | "boolean" | "string";
 
+/* jscpd:ignore-start -- Core mirrors public SDK capability shape; assignability checks guard drift. */
 export type VideoGenerationModeCapabilities = {
   maxVideos?: number;
   maxInputImages?: number;
+  maxInputImagesByModel?: Readonly<Record<string, number>>;
   maxInputVideos?: number;
+  maxInputVideosByModel?: Readonly<Record<string, number>>;
   /** Max number of reference audio assets the provider accepts (e.g. background music, voice reference). */
   maxInputAudios?: number;
+  maxInputAudiosByModel?: Readonly<Record<string, number>>;
   maxDurationSeconds?: number;
   supportedDurationSeconds?: readonly number[];
   supportedDurationSecondsByModel?: Readonly<Record<string, readonly number[]>>;
@@ -123,6 +127,7 @@ export type VideoGenerationModeCapabilities = {
    */
   providerOptions?: Readonly<Record<string, VideoGenerationProviderOptionType>>;
 };
+/* jscpd:ignore-end */
 
 export type VideoGenerationTransformCapabilities = VideoGenerationModeCapabilities & {
   enabled: boolean;

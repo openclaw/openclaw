@@ -19,6 +19,7 @@ vi.mock("@mariozechner/pi-ai/oauth", () => ({
 }));
 
 vi.mock("../cli-credentials.js", () => ({
+  readClaudeCliCredentialsCached: () => null,
   readCodexCliCredentialsCached: () => null,
   readMiniMaxCliCredentialsCached: () => null,
   resetCliCredentialCachesForTest: () => undefined,
@@ -249,7 +250,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
         profileId,
         access: "secondary-stale",
         refresh: "secondary-refresh",
-        expires: NaN,
+        expires: Number.NaN,
       }),
     );
 
