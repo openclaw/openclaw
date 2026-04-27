@@ -2,6 +2,8 @@ import { randomBytes } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveFailoverReasonFromError } from "../agents/failover-error.js";
+import type { FailoverReason } from "../agents/pi-embedded-helpers/types.js";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import type { CronConfig } from "../config/types.cron.js";
 import {
@@ -22,6 +24,7 @@ export type CronRunLogEntry = {
   action: "finished";
   status?: CronRunStatus;
   error?: string;
+  errorReason?: FailoverReason;
   summary?: string;
   delivered?: boolean;
   deliveryStatus?: CronDeliveryStatus;
@@ -62,6 +65,25 @@ type ReadCronRunLogAllPageOptions = Omit<ReadCronRunLogPageOptions, "jobId"> & {
   storePath: string;
   jobNameById?: Record<string, string>;
 };
+
+const CRON_FAILOVER_REASONS = new Set<FailoverReason>([
+  "auth",
+  "auth_permanent",
+  "format",
+  "rate_limit",
+  "overloaded",
+  "billing",
+  "timeout",
+  "model_not_found",
+  "session_expired",
+  "unknown",
+]);
+
+function normalizeCronRunLogErrorReason(value: unknown): FailoverReason | undefined {
+  return typeof value === "string" && CRON_FAILOVER_REASONS.has(value as FailoverReason)
+    ? (value as FailoverReason)
+    : undefined;
+}
 
 function assertSafeCronRunLogJobId(jobId: string): string {
   const trimmed = jobId.trim();
@@ -303,12 +325,18 @@ function parseAllRunLogEntries(raw: string, opts?: { jobId?: string }): CronRunL
         obj.usage && typeof obj.usage === "object"
           ? (obj.usage as Record<string, unknown>)
           : undefined;
+      const normalizedError = typeof obj.error === "string" ? obj.error : undefined;
+      const normalizedErrorReason =
+        normalizeCronRunLogErrorReason(obj.errorReason) ??
+        resolveFailoverReasonFromError(normalizedError) ??
+        undefined;
       const entry: CronRunLogEntry = {
         ts: obj.ts,
         jobId: obj.jobId,
         action: "finished",
         status: obj.status,
-        error: obj.error,
+        error: normalizedError,
+        errorReason: normalizedErrorReason,
         summary: obj.summary,
         runAtMs: obj.runAtMs,
         durationMs: obj.durationMs,
@@ -406,6 +434,7 @@ export async function readCronRunLogEntriesPage(
       [
         entry.summary ?? "",
         entry.error ?? "",
+        entry.errorReason ?? "",
         entry.jobId,
         entry.delivery?.intended?.channel ?? "",
         entry.delivery?.resolved?.channel ?? "",
@@ -470,6 +499,7 @@ export async function readCronRunLogEntriesPageAll(
       return [
         entry.summary ?? "",
         entry.error ?? "",
+        entry.errorReason ?? "",
         entry.jobId,
         jobName,
         entry.delivery?.intended?.channel ?? "",

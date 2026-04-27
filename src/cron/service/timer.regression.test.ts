@@ -1223,4 +1223,39 @@ describe("cron service timer regressions", () => {
     expect(job.state.lastRunAtMs).toBe(startedAt);
     expect(job.state.nextRunAtMs).toBe(expectedNextMs);
   });
+
+  it("failure alerts surface timeout cause before raw error text", async () => {
+    const sendCronFailureAlert = vi.fn().mockResolvedValue(undefined);
+    const startedAt = Date.parse("2026-02-06T10:00:00.000Z");
+    const endedAt = startedAt + 30_000;
+    const job = createIsolatedRegressionJob({
+      id: "timeout-cause-alert",
+      name: "timeout-cause-alert",
+      scheduledAt: startedAt,
+      schedule: { kind: "cron", expr: "* * * * *" },
+      payload: { kind: "agentTurn", message: "ping" },
+      state: { nextRunAtMs: startedAt - 1_000, runningAtMs: startedAt - 500 },
+    });
+    job.delivery = { mode: "announce", channel: "slack", to: "channel:C0AJQHV2GMN" };
+    job.failureAlert = { after: 1 };
+    const state = createRunningCronServiceState({
+      storePath: "/tmp/cron-timeout-cause-alert.json",
+      log: noopLogger,
+      nowMs: () => endedAt,
+      jobs: [job],
+      sendCronFailureAlert,
+    });
+
+    applyJobResult(state, job, {
+      status: "error",
+      error: "cron: job execution timed out",
+      startedAt,
+      endedAt,
+    });
+
+    expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+    const payload = sendCronFailureAlert.mock.calls[0]?.[0];
+    expect(payload?.text).toContain("Cause: timeout");
+    expect(payload?.text).toContain("Last error: cron: job execution timed out");
+  });
 });

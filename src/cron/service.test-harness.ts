@@ -186,6 +186,7 @@ export function createRunningCronServiceState(params: {
   log: ReturnType<typeof createNoopLogger>;
   nowMs: () => number;
   jobs: CronJob[];
+  sendCronFailureAlert?: CronServiceState["deps"]["sendCronFailureAlert"];
 }) {
   const state = createCronServiceState({
     cronEnabled: true,
@@ -195,6 +196,7 @@ export function createRunningCronServiceState(params: {
     enqueueSystemEvent: vi.fn(),
     requestHeartbeatNow: vi.fn(),
     runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
+    ...(params.sendCronFailureAlert ? { sendCronFailureAlert: params.sendCronFailureAlert } : {}),
   });
   state.running = true;
   state.store = {
