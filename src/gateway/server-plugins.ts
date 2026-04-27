@@ -16,7 +16,6 @@ import { ADMIN_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import type { ErrorShape } from "./protocol/index.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
-import { handleGatewayRequest } from "./server-methods.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandler,
@@ -266,6 +265,7 @@ async function dispatchGatewayMethod<T>(
   }
 
   let result: { ok: boolean; payload?: unknown; error?: ErrorShape } | undefined;
+  const { handleGatewayRequest } = await import("./server-methods.js");
   await handleGatewayRequest({
     req: {
       type: "req",
@@ -442,7 +442,8 @@ export function loadGatewayPlugins(params: {
     error: (msg: string) => void;
     debug: (msg: string) => void;
   };
-  coreGatewayHandlers: Record<string, GatewayRequestHandler>;
+  coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
+  coreGatewayMethodNames?: readonly string[];
   baseMethods: string[];
   pluginIds?: string[];
   preferSetupRuntimeForChannelPlugins?: boolean;
@@ -499,7 +500,12 @@ export function loadGatewayPlugins(params: {
     logger: createGatewayPluginRegistrationLogger({
       suppressInfoLogs: params.suppressPluginInfoLogs,
     }),
-    coreGatewayHandlers: params.coreGatewayHandlers,
+    ...(params.coreGatewayHandlers !== undefined && {
+      coreGatewayHandlers: params.coreGatewayHandlers,
+    }),
+    ...(params.coreGatewayMethodNames !== undefined && {
+      coreGatewayMethodNames: params.coreGatewayMethodNames,
+    }),
     runtimeOptions: {
       allowGatewaySubagentBinding: true,
     },

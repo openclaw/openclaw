@@ -215,6 +215,14 @@ export const mainLanes = [
     resources: ["npm", "service"],
     weight: 6,
   }),
+  lane(
+    "plugins-offline",
+    "OPENCLAW_PLUGINS_E2E_CLAWHUB=0 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugins",
+    {
+      resources: ["npm", "service"],
+      weight: 6,
+    },
+  ),
   npmLane("plugin-update", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugin-update"),
   serviceLane("config-reload", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:config-reload"),
   ...bundledScenarioLanes,

@@ -355,6 +355,7 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
+          OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS: "3000"
         run: |
           set -euo pipefail
 
@@ -367,7 +368,9 @@ jobs:
             --provider-mode live-frontier \
             --model "${OPENCLAW_CI_OPENAI_MODEL}" \
             --alt-model "${OPENCLAW_CI_OPENAI_MODEL}" \
-            --fast
+            --profile fast \
+            --fast \
+            --fail-fast
 
       - name: Upload Matrix QA artifacts
         if: always()

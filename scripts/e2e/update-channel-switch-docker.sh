@@ -45,11 +45,33 @@ tar -xzf "$package_tgz" -C "$git_root" --strip-components=1
 # absent from the trimmed tarball install; that should not block update preflight.
 node - <<'"'"'NODE'"'"'
 const fs = require("node:fs");
+const path = require("node:path");
 const packageJsonPath = "/tmp/openclaw-git/package.json";
 const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
 const fixtureUiBuildSource = `const fs=require("node:fs");fs.mkdirSync("dist/control-ui",{recursive:true});fs.writeFileSync("dist/control-ui/index.html","<!doctype html><title>fixture</title>\\n")`;
 const fixtureUiBuildCommand = `node -e ${JSON.stringify(fixtureUiBuildSource)}`;
-packageJson.pnpm = { ...packageJson.pnpm, allowUnusedPatches: true };
+const nextPnpm = { ...packageJson.pnpm, allowUnusedPatches: true };
+const patchedDependencies = nextPnpm.patchedDependencies;
+if (
+  patchedDependencies &&
+  typeof patchedDependencies === "object" &&
+  !Array.isArray(patchedDependencies)
+) {
+  const keptPatches = Object.fromEntries(
+    Object.entries(patchedDependencies).filter(([, patchFile]) => {
+      return (
+        typeof patchFile === "string" &&
+        fs.existsSync(path.resolve(path.dirname(packageJsonPath), patchFile))
+      );
+    }),
+  );
+  if (Object.keys(keptPatches).length > 0) {
+    nextPnpm.patchedDependencies = keptPatches;
+  } else {
+    delete nextPnpm.patchedDependencies;
+  }
+}
+packageJson.pnpm = nextPnpm;
 packageJson.scripts = {
   ...packageJson.scripts,
   build: "node -e \"console.log(\\\"fixture build skipped\\\")\"",

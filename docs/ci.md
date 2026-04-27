@@ -23,7 +23,9 @@ published npm spec, a trusted `package_ref` built with the selected
 from another GitHub Actions run, uploads it as `package-under-test`, then reuses
 the Docker release/E2E scheduler with that tarball instead of repacking the
 workflow checkout. Profiles cover smoke, package, product, full, and custom
-Docker lane selections. The optional Telegram lane reuses the
+Docker lane selections. The `package` profile uses offline plugin coverage so
+published-package validation is not gated on live ClawHub availability. The
+optional Telegram lane reuses the
 `package-under-test` artifact in the `NPM Telegram Beta E2E` workflow, with the
 published npm spec path kept for standalone dispatches.
 
@@ -77,7 +79,8 @@ Profiles map to Docker coverage:
 
 - `smoke`: `npm-onboard-channel-agent`, `gateway-network`, `config-reload`
 - `package`: `install-e2e`, `npm-onboard-channel-agent`, `doctor-switch`,
-  `update-channel-switch`, `bundled-channel-deps`, `plugins`, `plugin-update`
+  `update-channel-switch`, `bundled-channel-deps`, `plugins-offline`,
+  `plugin-update`
 - `product`: `package` plus `mcp-channels`, `cron-mcp-cleanup`,
   `openai-web-search-minimal`, `openwebui`
 - `full`: full Docker release-path chunks with OpenWebUI
@@ -145,9 +148,13 @@ QA Lab has dedicated CI lanes outside the main smart-scoped workflow. The
 builds the private QA runtime and compares the mock GPT-5.5 and Opus 4.6
 agentic packs. The `QA-Lab - All Lanes` workflow runs nightly on `main` and on
 manual dispatch; it fans out the mock parity gate, live Matrix lane, and live
-Telegram lane as parallel jobs. The live jobs use the `qa-live-shared`
-environment, and the Telegram lane uses Convex leases. `OpenClaw Release
-Checks` also runs the same QA Lab lanes before release approval.
+Telegram and Discord lanes as parallel jobs. The live jobs use the
+`qa-live-shared` environment, and Telegram/Discord use Convex leases. Matrix
+uses `--profile fast --fail-fast` for scheduled and release gates while the CLI
+default and manual workflow input remain `all`; manual all-lanes dispatch can
+shard full Matrix coverage into `transport`, `media`, `e2ee-smoke`,
+`e2ee-deep`, and `e2ee-cli` jobs. `OpenClaw Release Checks` also runs the
+release-critical QA Lab lanes before release approval.
 
 The `Duplicate PRs After Merge` workflow is a manual maintainer workflow for
 post-land duplicate cleanup. It defaults to dry-run and only closes explicitly

@@ -108,6 +108,26 @@ function formatCronFailureSignal(signal: NormalizedCronFailureSignal): string {
   }: ${signal.message}`;
 }
 
+function formatCronRunLevelError(error: unknown): string | undefined {
+  const direct = normalizeOptionalString(error);
+  if (direct) {
+    return `cron isolated run failed: ${direct}`;
+  }
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+  const record = error as { message?: unknown; kind?: unknown };
+  const message = normalizeOptionalString(record.message);
+  if (message) {
+    return `cron isolated run failed: ${message}`;
+  }
+  const kind = normalizeOptionalString(record.kind);
+  if (kind) {
+    return `cron isolated run failed: ${kind}`;
+  }
+  return "cron isolated run failed";
+}
+
 export function pickSummaryFromOutput(text: string | undefined) {
   const clean = (text ?? "").trim();
   if (!clean) {
@@ -289,33 +309,43 @@ export function resolveCronPayloadOutcome(params: {
     })),
   ]);
   const failureSignal = normalizeCronFailureSignal(params.failureSignal);
+  const runLevelError = formatCronRunLevelError(params.runLevelError);
   const hasFatalErrorPayload =
-    hasFatalStructuredErrorPayload || failureSignal !== undefined || denialSignal !== undefined;
-  const shouldUseFailureSignalPayload =
-    failureSignal !== undefined && !hasFatalStructuredErrorPayload;
-  const failureSignalDeliveryPayload = shouldUseFailureSignalPayload
-    ? ({ text: failureSignal.message, isError: true } satisfies DeliveryPayload)
+    hasFatalStructuredErrorPayload ||
+    failureSignal !== undefined ||
+    denialSignal !== undefined ||
+    runLevelError !== undefined;
+  const structuredErrorText = hasFatalStructuredErrorPayload
+    ? (lastErrorPayloadText ?? "cron isolated run returned an error payload")
+    : undefined;
+  const shouldUseRunLevelErrorPayload =
+    runLevelError !== undefined &&
+    structuredErrorText === undefined &&
+    failureSignal === undefined &&
+    denialSignal === undefined;
+  const fatalDeliveryText =
+    structuredErrorText ??
+    failureSignal?.message ??
+    (shouldUseRunLevelErrorPayload ? runLevelError : undefined);
+  const fatalDeliveryPayload = fatalDeliveryText
+    ? ({ text: fatalDeliveryText, isError: true } satisfies DeliveryPayload)
     : undefined;
   return {
-    summary: shouldUseFailureSignalPayload
-      ? (pickSummaryFromOutput(failureSignal.message) ?? summary)
-      : summary,
-    outputText: shouldUseFailureSignalPayload ? failureSignal.message : outputText,
-    synthesizedText: shouldUseFailureSignalPayload ? failureSignal.message : synthesizedText,
-    deliveryPayload: failureSignalDeliveryPayload ?? deliveryPayload,
-    deliveryPayloads: failureSignalDeliveryPayload
-      ? [failureSignalDeliveryPayload]
-      : resolvedDeliveryPayloads,
-    deliveryPayloadHasStructuredContent: failureSignalDeliveryPayload
+    summary: fatalDeliveryText ? (pickSummaryFromOutput(fatalDeliveryText) ?? summary) : summary,
+    outputText: fatalDeliveryText ?? outputText,
+    synthesizedText: fatalDeliveryText ?? synthesizedText,
+    deliveryPayload: fatalDeliveryPayload ?? deliveryPayload,
+    deliveryPayloads: fatalDeliveryPayload ? [fatalDeliveryPayload] : resolvedDeliveryPayloads,
+    deliveryPayloadHasStructuredContent: fatalDeliveryPayload
       ? false
       : deliveryPayloadHasStructuredContent,
     hasFatalErrorPayload,
-    embeddedRunError: hasFatalStructuredErrorPayload
-      ? (lastErrorPayloadText ?? "cron isolated run returned an error payload")
+    embeddedRunError: structuredErrorText
+      ? structuredErrorText
       : failureSignal
         ? formatCronFailureSignal(failureSignal)
         : denialSignal
           ? formatCronDenialSignal(denialSignal)
-          : undefined,
+          : runLevelError,
   };
 }

@@ -63,6 +63,10 @@ Failure notifications resolve in this order:
 Main-session jobs may only use `delivery.failureDestination` when primary delivery mode is `webhook`. Isolated jobs accept it in all modes.
 </Note>
 
+Note: isolated cron runs treat run-level agent failures as job errors even when
+no reply payload is produced, so model/provider failures still increment error
+counters and trigger failure notifications.
+
 ## Scheduling
 
 ### One-shot jobs

@@ -92,9 +92,13 @@ These commands sit beside the main test suites when you need QA-lab realism:
 
 CI runs QA Lab in dedicated workflows. `Parity gate` runs on matching PRs and
 from manual dispatch with mock providers. `QA-Lab - All Lanes` runs nightly on
-`main` and from manual dispatch with the mock parity gate, live Matrix lane, and
-Convex-managed live Telegram lane as parallel jobs. `OpenClaw Release Checks`
-runs the same lanes before release approval.
+`main` and from manual dispatch with the mock parity gate, live Matrix lane,
+Convex-managed live Telegram lane, and Convex-managed live Discord lane as
+parallel jobs. Scheduled QA and release checks pass Matrix `--profile fast`
+explicitly, while the Matrix CLI and manual workflow input default remain
+`all`; manual dispatch can shard `all` into `transport`, `media`, `e2ee-smoke`,
+`e2ee-deep`, and `e2ee-cli` jobs. `OpenClaw Release Checks` runs parity plus
+the fast Matrix and Telegram lanes before release approval.
 
 - `pnpm openclaw qa suite`
   - Runs repo-backed QA scenarios directly on the host.
@@ -248,10 +252,11 @@ gh workflow run package-acceptance.yml --ref main \
   - Repo checkouts load the bundled runner directly; no separate plugin install
     step is needed.
   - Provisions three temporary Matrix users (`driver`, `sut`, `observer`) plus one private room, then starts a QA gateway child with the real Matrix plugin as the SUT transport.
+  - Defaults to `--profile all`. Use `--profile fast --fail-fast` for release-critical transport proof, or `--profile transport|media|e2ee-smoke|e2ee-deep|e2ee-cli` when sharding the full catalog.
   - Uses the pinned stable Tuwunel image `ghcr.io/matrix-construct/tuwunel:v1.5.1` by default. Override with `OPENCLAW_QA_MATRIX_TUWUNEL_IMAGE` when you need to test a different image.
   - Matrix does not expose shared credential-source flags because the lane provisions disposable users locally.
   - Writes a Matrix QA report, summary, observed-events artifact, and combined stdout/stderr output log under `.artifacts/qa-e2e/...`.
-  - Emits progress by default and enforces a hard run timeout with `OPENCLAW_QA_MATRIX_TIMEOUT_MS` (default 30 minutes). Cleanup is bounded by `OPENCLAW_QA_MATRIX_CLEANUP_TIMEOUT_MS` and failures include the recovery `docker compose ... down --remove-orphans` command.
+  - Emits progress by default and enforces a hard run timeout with `OPENCLAW_QA_MATRIX_TIMEOUT_MS` (default 30 minutes). `OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS` tunes negative no-reply quiet windows, and cleanup is bounded by `OPENCLAW_QA_MATRIX_CLEANUP_TIMEOUT_MS` with failures including the recovery `docker compose ... down --remove-orphans` command.
 - `pnpm openclaw qa telegram`
   - Runs the Telegram live QA lane against a real private group using the driver and SUT bot tokens from env.
   - Requires `OPENCLAW_QA_TELEGRAM_GROUP_ID`, `OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN`, and `OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN`. The group id must be the numeric Telegram chat id.
@@ -267,10 +272,11 @@ Live transport lanes share one standard contract so new transports do not drift:
 `qa-channel` remains the broad synthetic QA suite and is not part of the live
 transport coverage matrix.
 
-| Lane     | Canary | Mention gating | Allowlist block | Top-level reply | Restart resume | Thread follow-up | Thread isolation | Reaction observation | Help command |
-| -------- | ------ | -------------- | --------------- | --------------- | -------------- | ---------------- | ---------------- | -------------------- | ------------ |
-| Matrix   | x      | x              | x               | x               | x              | x                | x                | x                    |              |
-| Telegram | x      |                |                 |                 |                |                  |                  |                      | x            |
+| Lane     | Canary | Mention gating | Allowlist block | Top-level reply | Restart resume | Thread follow-up | Thread isolation | Reaction observation | Help command | Native command registration |
+| -------- | ------ | -------------- | --------------- | --------------- | -------------- | ---------------- | ---------------- | -------------------- | ------------ | --------------------------- |
+| Matrix   | x      | x              | x               | x               | x              | x                | x                | x                    |              |                             |
+| Telegram | x      | x              |                 |                 |                |                  |                  |                      | x            |                             |
+| Discord  | x      | x              |                 |                 |                |                  |                  |                      |              | x                           |
 
 ### Shared Telegram credentials via Convex (v1)
 

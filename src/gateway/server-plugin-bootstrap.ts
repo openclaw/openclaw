@@ -27,7 +27,8 @@ type GatewayPluginBootstrapParams = {
   activationSourceConfig?: OpenClawConfig;
   workspaceDir: string;
   log: GatewayPluginBootstrapLog;
-  coreGatewayHandlers: Record<string, GatewayRequestHandler>;
+  coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
+  coreGatewayMethodNames?: readonly string[];
   baseMethods: string[];
   pluginIds?: string[];
   preferSetupRuntimeForChannelPlugins?: boolean;
@@ -78,7 +79,12 @@ export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
     autoEnabledReasons: autoEnabled.autoEnabledReasons,
     workspaceDir: params.workspaceDir,
     log: params.log,
-    coreGatewayHandlers: params.coreGatewayHandlers,
+    ...(params.coreGatewayHandlers !== undefined && {
+      coreGatewayHandlers: params.coreGatewayHandlers,
+    }),
+    ...(params.coreGatewayMethodNames !== undefined && {
+      coreGatewayMethodNames: params.coreGatewayMethodNames,
+    }),
     baseMethods: params.baseMethods,
     pluginIds: params.pluginIds,
     preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,

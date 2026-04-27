@@ -96,6 +96,15 @@ export type MatrixQaScenarioDefinition = LiveTransportScenarioDefinition<MatrixQ
   topology?: MatrixQaTopologySpec;
 };
 
+export type MatrixQaProfile =
+  | "all"
+  | "e2ee-cli"
+  | "e2ee-deep"
+  | "e2ee-smoke"
+  | "fast"
+  | "media"
+  | "transport";
+
 export const MATRIX_QA_BLOCK_ROOM_KEY = "block";
 export const MATRIX_QA_DRIVER_DM_ROOM_KEY = "driver-dm";
 export const MATRIX_QA_DRIVER_DM_SHARED_ROOM_KEY = "driver-dm-shared";
@@ -907,13 +916,116 @@ export const MATRIX_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScena
   scenarios: MATRIX_QA_SCENARIOS,
 });
 
-export function findMatrixQaScenarios(ids?: string[]) {
+export const MATRIX_QA_PROFILE_NAMES: readonly MatrixQaProfile[] = [
+  "all",
+  "fast",
+  "transport",
+  "media",
+  "e2ee-smoke",
+  "e2ee-deep",
+  "e2ee-cli",
+] as const;
+
+const MATRIX_QA_FAST_PROFILE_SCENARIO_IDS = [
+  "matrix-thread-follow-up",
+  "matrix-thread-isolation",
+  "matrix-top-level-reply-shape",
+  "matrix-reaction-notification",
+  "matrix-restart-resume",
+  "matrix-mention-gating",
+  "matrix-allowlist-block",
+  "matrix-e2ee-basic-reply",
+] satisfies MatrixQaScenarioId[];
+
+const MATRIX_QA_MEDIA_PROFILE_SCENARIO_IDS = [
+  "matrix-room-image-understanding-attachment",
+  "matrix-room-generated-image-delivery",
+  "matrix-media-type-coverage",
+  "matrix-attachment-only-ignored",
+  "matrix-unsupported-media-safe",
+  "matrix-e2ee-media-image",
+] satisfies MatrixQaScenarioId[];
+
+const MATRIX_QA_E2EE_SMOKE_PROFILE_SCENARIO_IDS = [
+  "matrix-e2ee-basic-reply",
+  "matrix-e2ee-thread-follow-up",
+  "matrix-e2ee-bootstrap-success",
+  "matrix-e2ee-recovery-key-lifecycle",
+  "matrix-e2ee-recovery-owner-verification-required",
+  "matrix-e2ee-restart-resume",
+  "matrix-e2ee-artifact-redaction",
+  "matrix-e2ee-key-bootstrap-failure",
+] satisfies MatrixQaScenarioId[];
+
+function isMatrixQaE2eeScenarioId(id: MatrixQaScenarioId): id is MatrixQaE2eeScenarioId {
+  return id.startsWith("matrix-e2ee-");
+}
+
+function isMatrixQaCliE2eeScenarioId(id: MatrixQaScenarioId) {
+  return id.startsWith("matrix-e2ee-cli-");
+}
+
+function buildMatrixQaScenarioIdSet(ids: readonly MatrixQaScenarioId[]) {
+  return new Set<MatrixQaScenarioId>(ids);
+}
+
+function normalizeMatrixQaProfile(profile?: string): MatrixQaProfile {
+  const normalized = profile?.trim().toLowerCase() || "all";
+  if (MATRIX_QA_PROFILE_NAMES.includes(normalized as MatrixQaProfile)) {
+    return normalized as MatrixQaProfile;
+  }
+  throw new Error(
+    `unknown Matrix QA profile "${profile}"; expected one of: ${MATRIX_QA_PROFILE_NAMES.join(", ")}`,
+  );
+}
+
+function getMatrixQaProfileScenarioIds(profile: MatrixQaProfile): MatrixQaScenarioId[] {
+  const allIds = MATRIX_QA_SCENARIOS.map((scenario) => scenario.id);
+  const mediaIds = buildMatrixQaScenarioIdSet(MATRIX_QA_MEDIA_PROFILE_SCENARIO_IDS);
+  const smokeIds = buildMatrixQaScenarioIdSet(MATRIX_QA_E2EE_SMOKE_PROFILE_SCENARIO_IDS);
+  switch (profile) {
+    case "all":
+      return allIds;
+    case "fast":
+      return [...MATRIX_QA_FAST_PROFILE_SCENARIO_IDS];
+    case "transport":
+      return allIds.filter((id) => !isMatrixQaE2eeScenarioId(id) && !mediaIds.has(id));
+    case "media":
+      return [...MATRIX_QA_MEDIA_PROFILE_SCENARIO_IDS];
+    case "e2ee-smoke":
+      return [...MATRIX_QA_E2EE_SMOKE_PROFILE_SCENARIO_IDS];
+    case "e2ee-cli":
+      return allIds.filter(isMatrixQaCliE2eeScenarioId);
+    case "e2ee-deep":
+      return allIds.filter(
+        (id) =>
+          isMatrixQaE2eeScenarioId(id) &&
+          !isMatrixQaCliE2eeScenarioId(id) &&
+          !mediaIds.has(id) &&
+          !smokeIds.has(id),
+      );
+    default: {
+      const exhaustiveProfile: never = profile;
+      return exhaustiveProfile;
+    }
+  }
+}
+
+export function findMatrixQaScenarios(ids?: string[], profile?: string) {
+  const normalizedProfile = normalizeMatrixQaProfile(profile);
+  const selectedIds =
+    ids && ids.length > 0 ? ids : getMatrixQaProfileScenarioIds(normalizedProfile);
   return selectLiveTransportScenarios({
-    ids,
+    ids: selectedIds,
     laneLabel: "Matrix",
     scenarios: MATRIX_QA_SCENARIOS,
   });
 }
+
+export const __matrixQaProfileTesting = {
+  getMatrixQaProfileScenarioIds,
+  normalizeMatrixQaProfile,
+};
 
 export function buildMatrixQaTopologyForScenarios(params: {
   defaultRoomName: string;

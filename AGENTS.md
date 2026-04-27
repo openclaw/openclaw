@@ -54,9 +54,7 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - Formatting: use `oxfmt`, not Prettier. Prefer `pnpm format:check` / `pnpm format`; for targeted files use `pnpm exec oxfmt --check --threads=1 <files...>` or `pnpm exec oxfmt --write --threads=1 <files...>`.
 - Linting: use repo wrappers (`pnpm lint:*`, `scripts/run-oxlint.mjs`); do not invoke generic JS formatters/lints unless a repo script uses them.
 - Heavy checks: `OPENCLAW_LOCAL_CHECK=1`, mode `OPENCLAW_LOCAL_CHECK_MODE=throttled|full`; CI/shared use `OPENCLAW_LOCAL_CHECK=0`.
-- Maintainer Testbox mode: if `OPENCLAW_TESTBOX=1` is present in env or standing user rules, use Blacksmith Testbox for `pnpm` gates, e2e, broad suites, and long/heavy validation. This is maintainers-only and requires Blacksmith access.
-- Testbox escape hatch: if `OPENCLAW_TESTBOX=1` is set but `OPENCLAW_LOCAL_CHECK_MODE=throttled|full` is explicitly set for the task/command, use the local repo `pnpm` lane instead.
-- Testbox warmup: start from repo root, save/reuse the returned ID for every run in the same task. Use `ci-check-testbox.yml` for normal checks; use `ci-build-artifacts-testbox.yml` when build artifacts, e2e, or package-like proof benefits from seeded `dist/`/`dist-runtime/` caches.
+- Local first. Use repo `pnpm` lanes before Blacksmith/Testbox. Remote only for parity-only failures, secrets/services, or explicit ask.
 
 ## GitHub / CI
 

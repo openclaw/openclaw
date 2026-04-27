@@ -15,7 +15,7 @@ OpenClaw integrates with Ollama's native API (`/api/chat`) for hosted cloud mode
 
 Ollama provider config uses `baseUrl` as the canonical key. OpenClaw also accepts `baseURL` for compatibility with OpenAI SDK-style examples, but new config should prefer `baseUrl`.
 
-### Auth rules
+## Auth rules
 
 <AccordionGroup>
   <Accordion title="Local and LAN hosts">
@@ -33,6 +33,7 @@ Ollama provider config uses `baseUrl` as the canonical key. OpenClaw also accept
     - A provider-level key is sent only to that provider's Ollama host.
     - `agents.*.memorySearch.remote.apiKey` is sent only to its remote embedding host.
     - A pure `OLLAMA_API_KEY` env value is treated as the Ollama Cloud convention, not sent to local or self-hosted hosts by default.
+
   </Accordion>
 </AccordionGroup>
 

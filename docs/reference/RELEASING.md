@@ -118,7 +118,7 @@ the maintainer-only release runbook.
   Example: `gh workflow run package-acceptance.yml --ref main -f workflow_ref=main -f source=npm -f package_spec=openclaw@beta -f suite_profile=product -f telegram_mode=mock-openai`
   Common profiles:
   - `smoke`: install/channel/agent, gateway network, and config reload lanes
-  - `package`: package/update/plugin lanes without OpenWebUI
+  - `package`: package/update/plugin lanes without OpenWebUI or live ClawHub
   - `product`: package profile plus MCP channels, cron/subagent cleanup,
     OpenAI web search, and OpenWebUI
   - `full`: Docker release-path chunks with OpenWebUI
@@ -137,9 +137,12 @@ the maintainer-only release runbook.
 - Run `pnpm release:check` before every tagged release
 - Release checks now run in a separate manual workflow:
   `OpenClaw Release Checks`
-- `OpenClaw Release Checks` also runs the QA Lab mock parity gate plus the live
-  Matrix and Telegram QA lanes before release approval. The live lanes use the
-  `qa-live-shared` environment; Telegram also uses Convex CI credential leases.
+- `OpenClaw Release Checks` also runs the QA Lab mock parity gate plus the fast
+  live Matrix profile and Telegram QA lane before release approval. The live
+  lanes use the `qa-live-shared` environment; Telegram also uses Convex CI
+  credential leases. Run the manual `QA-Lab - All Lanes` workflow with
+  `matrix_profile=all` and `matrix_shards=true` when you want full Matrix
+  transport, media, and E2EE inventory in parallel.
 - Cross-OS install and upgrade runtime validation is dispatched from the
   private caller workflow
   `openclaw/releases-private/.github/workflows/openclaw-cross-os-release-checks.yml`,
@@ -338,13 +341,14 @@ Release QA Lab coverage includes:
 
 - mock parity gate comparing the OpenAI candidate lane against the Opus 4.6
   baseline using the agentic parity pack
-- live Matrix QA lane using the `qa-live-shared` environment
+- fast live Matrix QA profile using the `qa-live-shared` environment
 - live Telegram QA lane using Convex CI credential leases
 - `pnpm qa:otel:smoke` when release telemetry needs explicit local proof
 
 Use this box to answer "does the release behave correctly in QA scenarios and
 live channel flows?" Keep the artifact URLs for parity, Matrix, and Telegram
-lanes when approving the release.
+lanes when approving the release. Full Matrix coverage remains available as a
+manual sharded QA-Lab run rather than the default release-critical lane.
 
 ### Package
 
@@ -367,11 +371,12 @@ Supported candidate sources:
 `OpenClaw Release Checks` runs Package Acceptance with `source=ref`,
 `package_ref=<release-ref>`, `suite_profile=package`, and
 `telegram_mode=mock-openai`. That profile covers install, update, plugin
-package contracts, and Telegram package QA against the same resolved tarball,
-and is the GitHub-native replacement for most of the package/update coverage
-that previously required Parallels. Cross-OS release checks still matter for
-OS-specific onboarding, installer, and platform behavior, but package/update
-product validation should prefer Package Acceptance.
+package contracts through offline plugin fixtures, and Telegram package QA
+against the same resolved tarball. It is the GitHub-native replacement for most
+of the package/update coverage that previously required Parallels. Cross-OS
+release checks still matter for OS-specific onboarding, installer, and platform
+behavior, but package/update product validation should prefer Package
+Acceptance.
 
 Use broader Package Acceptance profiles when the release question is about an
 actual installable package:
@@ -389,7 +394,7 @@ Common package profiles:
 
 - `smoke`: quick package install/channel/agent, gateway network, and config
   reload lanes
-- `package`: install/update/plugin package contracts; this is the release-check
+- `package`: install/update/plugin package contracts without live ClawHub; this is the release-check
   default
 - `product`: `package` plus MCP channels, cron/subagent cleanup, OpenAI web
   search, and OpenWebUI

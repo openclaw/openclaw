@@ -221,10 +221,34 @@ trap 'status=$?; dump_hotpath_logs "$status"; exit "$status"' ERR
 
 command -v openclaw
 openclaw --version
-# The mounted QA harness imports openclaw/plugin-sdk; point that package import
-# at the installed package without copying source into the test image.
 mkdir -p /app/node_modules
-ln -sfn /npm-global/lib/node_modules/openclaw /app/node_modules/openclaw
+openclaw_package_dir="/npm-global/lib/node_modules/openclaw"
+# The mounted QA harness imports openclaw/plugin-sdk and package dependencies;
+# point those imports at the installed package without copying source into the test image.
+ln -sfn "$openclaw_package_dir" /app/node_modules/openclaw
+for deps_dir in "$openclaw_package_dir/node_modules" /npm-global/lib/node_modules; do
+  [ -d "$deps_dir" ] || continue
+  for dependency_dir in "$deps_dir"/*; do
+    [ -e "$dependency_dir" ] || continue
+    dependency_name="$(basename "$dependency_dir")"
+    case "$dependency_name" in
+      .bin | openclaw)
+        continue
+        ;;
+      @*)
+        [ -d "$dependency_dir" ] || continue
+        mkdir -p "/app/node_modules/$dependency_name"
+        for scoped_dependency_dir in "$dependency_dir"/*; do
+          [ -e "$scoped_dependency_dir" ] || continue
+          ln -sfn "$scoped_dependency_dir" "/app/node_modules/$dependency_name/$(basename "$scoped_dependency_dir")"
+        done
+        ;;
+      *)
+        ln -sfn "$dependency_dir" "/app/node_modules/$dependency_name"
+        ;;
+    esac
+  done
+done
 
 echo "Running installed-package onboarding recovery hot path..."
 OPENAI_API_KEY="${OPENAI_API_KEY:-sk-openclaw-npm-telegram-hotpath}" openclaw onboard --non-interactive --accept-risk \

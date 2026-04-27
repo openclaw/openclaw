@@ -31,7 +31,8 @@ import type { VoiceWakeRoutingConfig } from "../infra/voicewake-routing.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import { runGlobalGatewayStopSafely } from "../plugins/hook-runner-global.js";
-import { createPluginRuntime } from "../plugins/runtime/index.js";
+import { createRuntimeChannel } from "../plugins/runtime/runtime-channel.js";
+import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
@@ -54,7 +55,6 @@ import { buildGatewayCronService } from "./server-cron.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayServerLiveState, type GatewayServerLiveState } from "./server-live-state.js";
 import { GATEWAY_EVENTS } from "./server-methods-list.js";
-import { coreGatewayHandlers } from "./server-methods.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
 import { bootstrapGatewayNetworkRuntime } from "./server-network-runtime.js";
 import { createGatewayNodeSessionRuntime } from "./server-node-session-runtime.js";
@@ -118,10 +118,10 @@ const logDiscovery = log.child("discovery");
 const logTailscale = log.child("tailscale");
 const logChannels = log.child("channels");
 
-let cachedChannelRuntime: ReturnType<typeof createPluginRuntime>["channel"] | null = null;
+let cachedChannelRuntime: PluginRuntime["channel"] | null = null;
 
 function getChannelRuntime() {
-  cachedChannelRuntime ??= createPluginRuntime().channel;
+  cachedChannelRuntime ??= createRuntimeChannel();
   return cachedChannelRuntime;
 }
 
@@ -788,7 +788,7 @@ export async function startGatewayServer(
           cfg: gatewayPluginConfigAtStart,
           workspaceDir: defaultWorkspaceDir,
           log,
-          coreGatewayHandlers,
+          coreGatewayMethodNames: baseMethods,
           baseMethods,
           pluginIds: startupPluginIds,
           logDiagnostics: false,

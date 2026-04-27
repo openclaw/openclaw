@@ -312,5 +312,9 @@ WRAPPER
     assert_entrypoint "$unit_path" "$npm_entry"
   }
 
-  run_wrapper_flow
+  if "$npm_bin" gateway install --help 2>&1 | grep -q -- "--wrapper"; then
+    run_wrapper_flow
+  else
+    echo "Skipping wrapper persistence; package gateway install does not support --wrapper."
+  fi
 '

@@ -6,6 +6,7 @@ const DOCKER_ALL_SCHEDULER_PATH = "scripts/test-docker-all.mjs";
 const DOCKER_E2E_SCENARIOS_PATH = "scripts/lib/docker-e2e-scenarios.mjs";
 const INSTALL_E2E_RUNNER_PATH = "scripts/docker/install-sh-e2e/run.sh";
 const OPENAI_WEB_SEARCH_MINIMAL_E2E_PATH = "scripts/e2e/openai-web-search-minimal-docker.sh";
+const PLUGINS_DOCKER_E2E_PATH = "scripts/e2e/plugins-docker.sh";
 const CENTRALIZED_BUILD_SCRIPTS = [
   "scripts/docker/setup.sh",
   "scripts/e2e/browser-cdp-snapshot-docker.sh",
@@ -59,6 +60,13 @@ describe("docker build helper", () => {
     );
   });
 
+  it("keeps package acceptance plugin coverage offline-capable", () => {
+    const scenarios = readFileSync(DOCKER_E2E_SCENARIOS_PATH, "utf8");
+
+    expect(scenarios).toContain('"plugins-offline"');
+    expect(scenarios).toContain("OPENCLAW_PLUGINS_E2E_CLAWHUB=0");
+  });
+
   it("passes installer tag env to bash, not curl", () => {
     const runner = readFileSync(INSTALL_E2E_RUNNER_PATH, "utf8");
 
@@ -94,5 +102,14 @@ describe("docker build helper", () => {
     expect(runner).toContain('"--expect-final"');
     expect(runner).toContain('[...gatewayArgs, "agent", "--params"');
     expect(runner).not.toContain('"agent.wait"');
+  });
+
+  it("keeps ClawHub plugin Docker smoke hermetic by default", () => {
+    const runner = readFileSync(PLUGINS_DOCKER_E2E_PATH, "utf8");
+
+    expect(runner).toContain("start_clawhub_fixture_server()");
+    expect(runner).toContain('OPENCLAW_CLAWHUB_URL="http://127.0.0.1:');
+    expect(runner).toContain("live ClawHub can rate-limit CI");
+    expect(runner).toContain('[[ -z "${OPENCLAW_CLAWHUB_URL:-}" && -z "${CLAWHUB_URL:-}" ]]');
   });
 });

@@ -110,7 +110,7 @@ dispatches:
 
 - manual `CI` for the full normal CI graph
 - `OpenClaw Release Checks` for install smoke, cross-OS release checks, live and
-  E2E checks, Docker release-path suites, OpenWebUI, QA Lab, Matrix, and
+  E2E checks, Docker release-path suites, OpenWebUI, QA Lab, fast Matrix, and
   Telegram release lanes
 - optional post-publish Telegram E2E when a package spec is supplied
 
@@ -131,6 +131,32 @@ If a full run is already active on a newer `origin/main`, prefer watching that
 run over dispatching a duplicate. If you accidentally dispatch a stale duplicate,
 cancel it and monitor the current run.
 
+### Release Evidence
+
+After release-candidate validation or before a release decision, record the
+important run ids in the private `openclaw/releases-private` evidence ledger.
+Use the manual `OpenClaw Release Evidence`
+(`openclaw-release-evidence.yml`) workflow there. It writes durable summaries
+under `evidence/<release-id>/` and commits:
+
+- `release-evidence.md`
+- `release-evidence.json`
+- `index.json`
+- `runs/<label>.json`
+
+Use one run per line:
+
+```text
+full-release-validation openclaw/openclaw <run-id> blocking
+package-acceptance openclaw/openclaw <run-id> blocking
+private-cross-os openclaw/releases-private <run-id> advisory
+```
+
+Store summaries, run URLs, artifact metadata, timings, pass/fail state, and
+short release-manager notes there. Do not store raw logs, provider
+prompts/responses, channel transcripts, signing material, or secret-bearing
+config in git; raw logs stay in Actions artifacts.
+
 ### Release Checks
 
 `OpenClaw Release Checks` (`openclaw-release-checks.yml`) is the release child
@@ -148,6 +174,23 @@ gh workflow run openclaw-release-checks.yml \
   -f provider=openai \
   -f mode=both
 ```
+
+### QA Lab Matrix Profiles
+
+`pnpm openclaw qa matrix` defaults to `--profile all`. Do not assume the CLI
+default is the fast release path. Use explicit profiles:
+
+- `--profile fast --fail-fast`: release-critical Matrix transport contract
+- `--profile transport|media|e2ee-smoke|e2ee-deep|e2ee-cli`: sharded full
+  Matrix proof
+- `OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000`: CI-friendly no-reply quiet
+  window when paired with fast or sharded gates
+
+`QA-Lab - All Lanes` uses explicit fast Matrix on scheduled runs; manual
+dispatch keeps `matrix_profile=all` as the default and can shard full Matrix
+with `matrix_profile=all` and `matrix_shards=true`. `OpenClaw Release Checks`
+uses explicit fast Matrix; run the sharded all-lanes workflow when release
+investigation needs full Matrix media/E2EE inventory.
 
 ### Reusable Live/E2E Checks
 

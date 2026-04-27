@@ -338,7 +338,7 @@ jobs:
               docker_lanes="npm-onboard-channel-agent gateway-network config-reload"
               ;;
             package)
-              docker_lanes="install-e2e npm-onboard-channel-agent doctor-switch update-channel-switch bundled-channel-deps plugins plugin-update"
+              docker_lanes="install-e2e npm-onboard-channel-agent doctor-switch update-channel-switch bundled-channel-deps plugins-offline plugin-update"
               ;;
             product)
               docker_lanes="install-e2e npm-onboard-channel-agent doctor-switch update-channel-switch bundled-channel-deps plugins plugin-update mcp-channels cron-mcp-cleanup openai-web-search-minimal openwebui"

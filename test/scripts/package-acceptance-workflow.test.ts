@@ -40,6 +40,7 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain("suite_profile:");
     expect(workflow).toContain("npm-onboard-channel-agent gateway-network config-reload");
     expect(workflow).toContain("install-e2e npm-onboard-channel-agent doctor-switch");
+    expect(workflow).toContain("plugins-offline plugin-update");
     expect(workflow).toContain("include_release_path_suites=true");
     expect(workflow).not.toContain("telegram_mode requires source=npm");
     expect(workflow).toContain("uses: ./.github/workflows/npm-telegram-beta-e2e.yml");
