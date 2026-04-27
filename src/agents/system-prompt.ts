@@ -52,6 +52,7 @@ const CONTEXT_FILE_ORDER = new Map<string, number>([
 ]);
 
 const DYNAMIC_CONTEXT_FILE_BASENAMES = new Set(["heartbeat.md"]);
+const INLINE_BUTTON_CAPABILITY_IDS = new Set(["inlinebuttons", "interactivereplies"]);
 const DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK =
   "Default heartbeat prompt:\n`Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`";
 function normalizeContextFilePath(pathValue: string): string {
@@ -651,7 +652,9 @@ export function buildAgentSystemPrompt(params: {
   const runtimeCapabilitiesLower = new Set(
     runtimeCapabilities.map((cap) => normalizeLowercaseStringOrEmpty(cap)).filter(Boolean),
   );
-  const inlineButtonsEnabled = runtimeCapabilitiesLower.has("inlinebuttons");
+  const inlineButtonsEnabled = [...runtimeCapabilitiesLower].some((capability) =>
+    INLINE_BUTTON_CAPABILITY_IDS.has(capability),
+  );
   const messageChannelOptions = listDeliverableMessageChannels().join("|");
   const promptMode = params.promptMode ?? "full";
   const isMinimal = promptMode === "minimal" || promptMode === "none";

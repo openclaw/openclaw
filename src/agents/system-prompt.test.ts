@@ -744,6 +744,21 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("`style` can be `primary`, `success`, or `danger`");
   });
 
+  it("includes inline button style guidance for Slack interactive replies", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message"],
+      runtimeInfo: {
+        channel: "slack",
+        capabilities: ["interactiveReplies"],
+      },
+    });
+
+    expect(prompt).toContain("buttons=[[{text,callback_data,style?}]]");
+    expect(prompt).toContain("`style` can be `primary`, `success`, or `danger`");
+    expect(prompt).not.toContain("Inline buttons not enabled for slack");
+  });
+
   it("suppresses plain chat approval commands when inline approval UI is available", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
