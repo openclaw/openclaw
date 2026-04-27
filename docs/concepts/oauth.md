@@ -134,6 +134,9 @@ At runtime:
   Codex CLI bootstrap is intentionally narrower: it seeds an empty
   `openai-codex:default` profile, then OpenClaw-owned refreshes keep the local
   profile canonical.
+- the native Codex app-server harness uses a profile-scoped `CODEX_HOME` for
+  the selected `openai-codex:*` profile, then syncs Codex-rotated OAuth tokens
+  back into that OpenClaw profile before later app-server logins or refreshes.
 
 The refresh flow is automatic; you generally don't need to manage tokens manually.
 

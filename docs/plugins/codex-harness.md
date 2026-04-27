@@ -179,15 +179,21 @@ Codex after changing config.
 - Codex app-server `0.125.0` or newer. The bundled plugin manages a compatible
   Codex app-server binary by default, so local `codex` commands on `PATH` do
   not affect normal harness startup.
-- Codex auth available to the app-server process.
+- A usable OpenAI Codex auth profile when running subscription/OAuth-backed
+  Codex models.
 
 The plugin blocks older or unversioned app-server handshakes. That keeps
 OpenClaw on the protocol surface it has been tested against.
 
-For live and Docker smoke tests, auth usually comes from `OPENAI_API_KEY`, plus
-optional Codex CLI files such as `~/.codex/auth.json` and
-`~/.codex/config.toml`. Use the same auth material your local Codex app-server
-uses.
+For OAuth-backed harness runs, OpenClaw starts the stdio app-server with an
+isolated, profile-scoped `CODEX_HOME` and clears ambient OpenAI API-key
+environment variables before spawning Codex. Codex may rotate tokens inside
+that home; OpenClaw syncs the rotated OAuth material back into the selected
+`openai-codex:*` auth profile before later logins and refreshes.
+
+For direct API-key smoke tests, provide auth explicitly through OpenClaw's
+selected auth profile. Do not rely on a process-wide `OPENAI_API_KEY` or
+`~/.codex/auth.json` fallback for native harness turns.
 
 ## Minimal config
 
