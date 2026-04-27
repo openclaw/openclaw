@@ -443,11 +443,32 @@ function joinExecFailureOutput(aggregated: string, reason: string) {
   return aggregated ? `${aggregated}\n\n${reason}` : reason;
 }
 
-function persistBackgroundFailureReason(session: ProcessSession, outcome: ExecProcessOutcome) {
+function formatBackgroundTimeoutFailureReason(
+  outcome: Extract<ExecProcessOutcome, { status: "failed" }>,
+  timeoutSec: number | null | undefined,
+) {
+  switch (outcome.failureKind) {
+    case "overall-timeout":
+    case "no-output-timeout":
+      return formatExecFailureReason({
+        failureKind: outcome.failureKind,
+        exitSignal: outcome.exitSignal,
+        timeoutSec,
+      });
+    default:
+      return outcome.reason.trim();
+  }
+}
+
+function persistBackgroundFailureReason(
+  session: ProcessSession,
+  outcome: ExecProcessOutcome,
+  timeoutSec: number | null | undefined,
+) {
   if (!session.backgrounded || outcome.status !== "failed" || !outcome.timedOut) {
     return;
   }
-  const reason = outcome.reason.trim();
+  const reason = formatBackgroundTimeoutFailureReason(outcome, timeoutSec).trim();
   if (!reason) {
     return;
   }
@@ -871,7 +892,7 @@ export async function runExecProcess(opts: {
         timeoutSec: opts.timeoutSec,
       });
 
-      persistBackgroundFailureReason(session, outcome);
+      persistBackgroundFailureReason(session, outcome, opts.timeoutSec);
       markExited(session, exit.exitCode, exit.exitSignal, outcome.status, exit.reason);
       maybeNotifyOnExit(session, outcome.status);
       if (!session.child && session.stdin) {
@@ -901,7 +922,7 @@ export async function runExecProcess(opts: {
         aggregated: session.aggregated.trim(),
         durationMs: Date.now() - startedAt,
       });
-      persistBackgroundFailureReason(session, outcome);
+      persistBackgroundFailureReason(session, outcome, opts.timeoutSec);
       markExited(session, null, null, "failed");
       maybeNotifyOnExit(session, "failed");
       emitExecProcessCompleted({

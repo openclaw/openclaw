@@ -393,6 +393,21 @@ describe("exec notifyOnExit suppression", () => {
     expect(enqueueSystemEventMock.mock.calls[0]?.[0]).not.toContain("signal SIGKILL");
     expect(requestHeartbeatNowMock).toHaveBeenCalled();
   });
+
+  it("keeps timeout failure reasons separate from captured output", async () => {
+    const { outcome, session } = await runBackgroundedExit({
+      reason: "overall-timeout",
+      stdout: "partial output\n",
+    });
+
+    if (outcome.status !== "failed") {
+      throw new Error(`Expected timeout to fail, got ${outcome.status}`);
+    }
+    expect(outcome.aggregated).toContain("partial output");
+    expect(outcome.reason).toContain("partial output");
+    expect(session.failureReason).toContain("Command timed out");
+    expect(session.failureReason).not.toContain("partial output");
+  });
 });
 
 describe("emitExecSystemEvent", () => {

@@ -24,7 +24,7 @@ const MAX_FOREGROUND_MS = 30_000;
 
 type BashRequest =
   | { action: "help" }
-  | { action: "run"; command: string }
+  | { action: "run"; command: string; timeoutSec?: number }
   | { action: "poll"; sessionId?: string }
   | { action: "stop"; sessionId?: string };
 
@@ -95,6 +95,22 @@ function formatBashFinishedOutput(finished: {
   return finished.aggregated || finished.tail;
 }
 
+function parseBashTimeoutOption(rest: string): { command: string; timeoutSec?: number } {
+  const trimmed = rest.trimStart();
+  const match =
+    trimmed.match(/^timeout=(\d+(?:\.\d+)?)\s+([\s\S]+)$/) ??
+    trimmed.match(/^--timeout=(\d+(?:\.\d+)?)\s+([\s\S]+)$/) ??
+    trimmed.match(/^--timeout\s+(\d+(?:\.\d+)?)\s+([\s\S]+)$/);
+  if (!match) {
+    return { command: rest };
+  }
+  const timeoutSec = Number(match[1]);
+  if (!Number.isFinite(timeoutSec) || timeoutSec < 0) {
+    return { command: rest };
+  }
+  return { command: match[2] ?? "", timeoutSec };
+}
+
 function parseBashRequest(raw: string): BashRequest | null {
   const trimmed = raw.trimStart();
   let restSource = "";
@@ -130,7 +146,7 @@ function parseBashRequest(raw: string): BashRequest | null {
   if (lowered === "help") {
     return { action: "help" };
   }
-  return { action: "run", command: rest };
+  return { action: "run", ...parseBashTimeoutOption(rest) };
 }
 
 function resolveRawCommandBody(params: {
@@ -205,6 +221,7 @@ function buildUsageReply(): ReplyPayload {
     text: [
       "⚙️ Usage:",
       "- ! <command>",
+      "- ! timeout=<seconds> <command> (use timeout=0 for long-running jobs)",
       "- !poll | ! poll",
       "- !stop | ! stop",
       "- /bash ... (alias; same subcommands as !)",
@@ -373,7 +390,7 @@ export async function handleBashChatCommand(params: {
   try {
     const foregroundMs = resolveForegroundMs(params.cfg);
     const shouldBackgroundImmediately = foregroundMs <= 0;
-    const timeoutSec = params.cfg.tools?.exec?.timeoutSec;
+    const timeoutSec = request.timeoutSec ?? params.cfg.tools?.exec?.timeoutSec;
     const notifyOnExit = params.cfg.tools?.exec?.notifyOnExit;
     const notifyOnExitEmptySuccess = params.cfg.tools?.exec?.notifyOnExitEmptySuccess;
     const execTool = createExecTool({

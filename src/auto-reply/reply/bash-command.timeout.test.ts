@@ -88,6 +88,27 @@ describe("handleBashChatCommand timeout handling", () => {
     expect(executeMock).toHaveBeenCalledWith("chat-bash", expect.objectContaining({ timeout: 45 }));
   });
 
+  it("allows chat bash jobs to disable the exec timeout", async () => {
+    await handleBashChatCommand(buildParams("/bash timeout=0 tail -f app.log"));
+
+    expect(executeMock).toHaveBeenCalledWith("chat-bash", {
+      command: "tail -f app.log",
+      background: false,
+      yieldMs: 2000,
+      timeout: 0,
+      elevated: true,
+    });
+  });
+
+  it("allows chat bash jobs to override the exec timeout with a flag", async () => {
+    await handleBashChatCommand(buildParams("/bash --timeout 90 npm test"));
+
+    expect(executeMock).toHaveBeenCalledWith(
+      "chat-bash",
+      expect.objectContaining({ command: "npm test", timeout: 90 }),
+    );
+  });
+
   it("shows timeout exit reasons when polling finished chat bash jobs", async () => {
     getSessionMock.mockReturnValue(undefined);
     getFinishedSessionMock.mockReturnValue({
