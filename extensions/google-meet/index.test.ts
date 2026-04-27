@@ -2052,10 +2052,13 @@ describe("google-meet plugin", () => {
       expect.objectContaining({
         messageProvider: "google-meet",
         agentId: "jay",
+        sessionKey: "agent:jay:google-meet:meet-1",
+        sandboxSessionKey: "agent:jay:google-meet:meet-1",
         thinkLevel: "high",
         toolsAllow: ["read", "web_search", "web_fetch", "x_search", "memory_search", "memory_get"],
       }),
     );
+    expect(sessionStore).toHaveProperty("agent:jay:google-meet:meet-1");
 
     await handle.stop();
     expect(bridge.close).toHaveBeenCalled();
