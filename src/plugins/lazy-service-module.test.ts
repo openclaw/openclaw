@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { startLazyPluginServiceModule } from "./lazy-service-module.js";
+import {
+  defaultLoadOverrideModule,
+  startLazyPluginServiceModule,
+} from "./lazy-service-module.js";
 
 function createAsyncHookMock() {
   return vi.fn(async () => {});
@@ -117,5 +120,55 @@ describe("startLazyPluginServiceModule", () => {
         startExportNames: ["startDefault"],
       }),
     ).rejects.toThrow("blocked override");
+  });
+});
+
+describe("defaultLoadOverrideModule", () => {
+  it("passes the specifier through unchanged on non-win32 platforms", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    try {
+      const importer = vi.fn(async () => ({ startDefault: async () => {} }));
+      await defaultLoadOverrideModule("/home/alice/plugin/index.mjs", importer);
+      expect(importer).toHaveBeenCalledWith("/home/alice/plugin/index.mjs");
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("normalizes a Windows drive-letter path to a file:// URL before importing", async () => {
+    // Regression test for openclaw/openclaw#72573: on Windows, dynamic
+    // import() of a bare "C:\\..." specifier throws
+    // ERR_UNSUPPORTED_ESM_URL_SCHEME because the loader treats the drive
+    // letter as an unknown URL scheme. The default loader must convert such
+    // paths through toSafeImportPath before handing them to import().
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    try {
+      const importer = vi.fn(async () => ({ startDefault: async () => {} }));
+      await defaultLoadOverrideModule(
+        "C:\\Users\\alice\\plugin\\index.mjs",
+        importer,
+      );
+      expect(importer).toHaveBeenCalledWith(
+        "file:///C:/Users/alice/plugin/index.mjs",
+      );
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("leaves an existing file:// URL untouched on win32", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    try {
+      const importer = vi.fn(async () => ({ startDefault: async () => {} }));
+      await defaultLoadOverrideModule(
+        "file:///C:/Users/alice/plugin/index.mjs",
+        importer,
+      );
+      expect(importer).toHaveBeenCalledWith(
+        "file:///C:/Users/alice/plugin/index.mjs",
+      );
+    } finally {
+      platformSpy.mockRestore();
+    }
   });
 });
