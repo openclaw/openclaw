@@ -1058,19 +1058,26 @@ export async function resolveGatewayModelSupportsImages(params: {
   try {
     const catalog = await params.loadGatewayModelCatalog();
     // Use case-insensitive, provider-normalized lookup when a provider is
-    // available.  Fall back to a model-only case-insensitive search when no
-    // provider is specified (e.g. user-configured models from
+    // available.  Fall back to a model-only case-insensitive search only when
+    // no provider is specified (e.g. user-configured models from
     // `providers.*.models`), because the catalog may contain models whose
     // provider field is missing or differs in casing.
+    // When an explicit provider is given but finds no match, fail closed.
     let modelEntry: ModelCatalogEntry | undefined;
-    if (params.provider) {
+    const hasExplicitProvider = typeof params.provider === "string" && params.provider.trim() !== "";
+    if (hasExplicitProvider) {
       modelEntry = findModelInCatalog(catalog, params.provider, params.model);
+      // Explicit provider: fail closed if not found — do not fall back to
+      // model-only search which could match a same-id model from another provider.
     }
-    if (!modelEntry) {
+    if (!modelEntry && !hasExplicitProvider) {
       const normalizedModelId = params.model.toLowerCase().trim();
       modelEntry = catalog.find((entry) => entry.id.toLowerCase().trim() === normalizedModelId);
     }
-    const normalizedProvider = params.provider?.trim().toLowerCase();
+    // Derive effective provider for legacy shims: prefer explicit params.provider,
+    // then fall back to the discovered model entry's provider.
+    const normalizedProvider =
+      params.provider?.trim().toLowerCase() ?? modelEntry?.provider?.trim().toLowerCase();
     const normalizedCandidates = [
       params.model.trim().toLowerCase(),
       typeof modelEntry?.name === "string" ? modelEntry.name.trim().toLowerCase() : "",

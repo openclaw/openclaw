@@ -1023,4 +1023,23 @@ describe("resolveGatewayModelSupportsImages", () => {
       }),
     ).resolves.toBe(false);
   });
+
+  test("fails closed when explicit provider is given but model not found in that provider", async () => {
+    // Even if a matching model-id exists under a different provider,
+    // the explicit-provider lookup must not fall back to model-only search.
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "gpt-4",
+        provider: "openai",
+        loadGatewayModelCatalog: async () => [
+          {
+            id: "other/gpt-4",
+            name: "GPT-4",
+            provider: "other",
+            input: ["text", "image"],
+          },
+        ],
+      }),
+    ).resolves.toBe(false);
+  });
 });
