@@ -426,7 +426,7 @@ describe("createLaneTextDeliverer", () => {
     );
   });
 
-  it("materializes native draft tool-progress preview before final-only text", async () => {
+  it("does not materialize native draft tool-progress preview before final-only text", async () => {
     const answerStream = createTestDraftStream({ previewMode: "draft" });
     answerStream.materialize.mockResolvedValue(321);
     const harness = createHarness({
@@ -442,10 +442,12 @@ describe("createLaneTextDeliverer", () => {
       infoKind: "final",
     });
 
-    expect(expectPreviewFinalized(result)).toEqual({ content: "Final only", messageId: 321 });
-    expect(answerStream.update).toHaveBeenCalledWith("Final only");
-    expect(answerStream.materialize).toHaveBeenCalledTimes(1);
-    expect(harness.sendPayload).not.toHaveBeenCalled();
+    expect(result.kind).toBe("sent");
+    expect(answerStream.update).not.toHaveBeenCalledWith("Final only");
+    expect(answerStream.materialize).not.toHaveBeenCalled();
+    expect(harness.sendPayload).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Final only" }),
+    );
   });
 
   it("materializes DM draft streaming final when revision changes", async () => {

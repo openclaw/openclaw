@@ -151,6 +151,9 @@ describe("createTelegramDraftStream", () => {
     expect(api.editMessageText).not.toHaveBeenCalled();
     await stream.clear();
 
+    expect(api.sendMessageDraft).toHaveBeenLastCalledWith(123, expect.any(Number), "", {
+      message_thread_id: 42,
+    });
     expect(api.deleteMessage).not.toHaveBeenCalled();
   });
 

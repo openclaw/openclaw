@@ -740,7 +740,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
-  it("materializes native draft tool progress before final-only text", async () => {
+  it("does not materialize native draft tool progress before final-only text", async () => {
     const draftStream = createTestDraftStream({ previewMode: "draft" });
     draftStream.materialize.mockResolvedValue(321);
     createTelegramDraftStream.mockReturnValue(draftStream);
@@ -755,9 +755,14 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
     expect(draftStream.update).toHaveBeenCalledWith("Working…\n• `tool: exec`");
-    expect(draftStream.update).toHaveBeenCalledWith("Done");
-    expect(draftStream.materialize).toHaveBeenCalledTimes(1);
-    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(draftStream.update).not.toHaveBeenCalledWith("Done");
+    expect(draftStream.materialize).not.toHaveBeenCalled();
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "Done" })],
+      }),
+    );
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
   it("suppresses Telegram tool progress when explicitly disabled", async () => {
