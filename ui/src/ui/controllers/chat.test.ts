@@ -304,6 +304,53 @@ describe("handleChatEvent", () => {
     expect(state.chatStreamStartedAt).toBe(null);
   });
 
+  it("clears chatStream before appending final message to prevent duplicate-render race (#71992, #72227)", () => {
+    // Lit batches reactive updates: if chatMessages is mutated while chatStream
+    // still holds the streaming text, the next render pass shows BOTH the stream
+    // bubble AND the committed assistant message. The invariant is: chatStream must
+    // be null at the moment chatMessages gets the new entry.
+    const observations: Array<{ stream: string | null; messageCount: number }> = [];
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Streaming text...",
+      chatStreamStartedAt: 50,
+    });
+    const baseMessages = state.chatMessages;
+    Object.defineProperty(state, "chatMessages", {
+      configurable: true,
+      get() {
+        return baseMessages;
+      },
+      set(next: typeof baseMessages) {
+        observations.push({ stream: state.chatStream, messageCount: next.length });
+        Object.defineProperty(state, "chatMessages", {
+          configurable: true,
+          writable: true,
+          value: next,
+        });
+      },
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Final reply" }],
+        timestamp: 60,
+      },
+    };
+    handleChatEvent(state, payload);
+    // Exactly one chatMessages mutation at the final step, observed with chatStream already null
+    expect(observations.length).toBe(1);
+    expect(observations[0].stream).toBe(null);
+    expect(observations[0].messageCount).toBe(1);
+    // Final state sanity checks
+    expect(state.chatStream).toBe(null);
+    expect(state.chatMessages).toHaveLength(1);
+  });
+
   it("processes aborted from own run and keeps partial assistant message", () => {
     const existingMessage = {
       role: "user",

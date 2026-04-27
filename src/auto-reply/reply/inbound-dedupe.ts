@@ -1,4 +1,4 @@
-import { logVerbose, shouldLogVerbose } from "../../globals.js";
+import { createHash } from "node:crypto"; import { logVerbose, shouldLogVerbose } from "../../globals.js";
 import { resolveGlobalDedupeCache, type DedupeCache } from "../../infra/dedupe.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -59,9 +59,6 @@ export function buildInboundDedupeKey(ctx: MsgContext): string | null {
   const provider =
     normalizeOptionalLowercaseString(ctx.OriginatingChannel ?? ctx.Provider ?? ctx.Surface) || "";
   const messageId = normalizeOptionalString(ctx.MessageSid);
-  if (!provider || !messageId) {
-    return null;
-  }
   const peerId = resolveInboundPeerId(ctx);
   if (!peerId) {
     return null;
@@ -72,7 +69,34 @@ export function buildInboundDedupeKey(ctx: MsgContext): string | null {
     ctx.MessageThreadId !== undefined && ctx.MessageThreadId !== null
       ? String(ctx.MessageThreadId)
       : "";
-  return [provider, accountId, sessionScope, peerId, threadId, messageId].filter(Boolean).join("|");
+
+  // If we have a stable messageId (from channel retry logic), use it as primary key.
+  // This is the fast path that works for message-oriented channel integrations.
+  if (messageId) {
+    return [provider, accountId, sessionScope, peerId, threadId, messageId].filter(Boolean).join("|");
+  }
+
+  // Fallback: some channel retries generate a new idempotency key per attempt,
+  // bypassing the primary dedupe key. Without a stable MessageSid, use a content
+  // hash (Body|Timestamp|peerId) to catch duplicate retries.
+  //
+  // Note: This is a heuristic. If the channel emits coarse or variable timestamps
+  // across retries, the hash will not match and duplicate processing can occur.
+  // Likewise, distinct messages with the same body from the same peer will be
+  // suppressed (unlikely for user chat, more likely for system events).
+  if (!provider) {
+    return null;
+  }
+  const contentHash = createHash("sha256")
+    .update(
+      `${ctx.Body ?? ""}|${ctx.Timestamp ?? ""}|${peerId}`,
+      "utf8",
+    )
+    .digest("hex")
+    .substring(0, 16);
+  return [provider, accountId, sessionScope, peerId, threadId, `content:${contentHash}`]
+    .filter(Boolean)
+    .join("|");
 }
 
 export function shouldSkipDuplicateInbound(

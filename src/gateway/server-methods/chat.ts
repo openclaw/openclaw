@@ -756,12 +756,14 @@ function buildChatSendTranscriptMessage(params: {
   message: string;
   savedImages: SavedMedia[];
   timestamp: number;
+  idempotencyKey?: string;
 }) {
   const mediaFields = resolveChatSendTranscriptMediaFields(params.savedImages);
   return {
     role: "user" as const,
     content: params.message,
     timestamp: params.timestamp,
+    idempotencyKey: params.idempotencyKey,
     ...mediaFields,
   };
 }
@@ -1984,6 +1986,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               message: parsedMessage,
               savedImages: persistedImages,
               timestamp: now,
+              idempotencyKey: clientRunId,
             }),
           });
         })();
