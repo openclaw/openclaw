@@ -3,6 +3,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 
 export type ParsedAgentSessionKey = {
   agentId: string;
@@ -45,6 +46,58 @@ export function parseAgentSessionKey(
     return null;
   }
   return { agentId, rest };
+}
+
+const DIRECT_SESSION_MARKERS = new Set(["direct", "dm"]);
+const THREAD_SESSION_MARKERS = new Set(["thread", "topic"]);
+
+export function isMainSessionKey(sessionKey: string | undefined | null): boolean {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed) {
+    return normalizeLowercaseStringOrEmpty(sessionKey) === "main";
+  }
+  return normalizeLowercaseStringOrEmpty(parsed.rest) === "main";
+}
+
+function hasStrictDirectSessionTail(parts: string[], markerIndex: number): boolean {
+  const peerId = normalizeOptionalString(parts[markerIndex + 1]);
+  if (!peerId) {
+    return false;
+  }
+  const tail = parts.slice(markerIndex + 2);
+  if (tail.length === 0) {
+    return true;
+  }
+  return (
+    tail.length === 2 &&
+    THREAD_SESSION_MARKERS.has(parts[markerIndex + 2] ?? "") &&
+    Boolean(normalizeOptionalString(parts[markerIndex + 3]))
+  );
+}
+
+export function isDirectSessionKey(sessionKey: string | undefined | null): boolean {
+  const raw = normalizeLowercaseStringOrEmpty(sessionKey);
+  if (!raw) {
+    return false;
+  }
+  const scoped = parseAgentSessionKey(raw)?.rest ?? raw;
+  const parts = scoped.split(":").filter(Boolean);
+  if (parts.length < 2) {
+    return false;
+  }
+  if (DIRECT_SESSION_MARKERS.has(parts[0] ?? "")) {
+    return hasStrictDirectSessionTail(parts, 0);
+  }
+  const channel = normalizeMessageChannel(parts[0]);
+  if (!channel || !isDeliverableMessageChannel(channel)) {
+    return false;
+  }
+  if (DIRECT_SESSION_MARKERS.has(parts[1] ?? "")) {
+    return hasStrictDirectSessionTail(parts, 1);
+  }
+  return Boolean(normalizeOptionalString(parts[1])) && DIRECT_SESSION_MARKERS.has(parts[2] ?? "")
+    ? hasStrictDirectSessionTail(parts, 2)
+    : false;
 }
 
 export function isCronRunSessionKey(sessionKey: string | undefined | null): boolean {
