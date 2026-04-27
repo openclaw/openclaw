@@ -20,6 +20,14 @@ vi.mock("../config/config.js", async () => {
   };
 });
 
+vi.mock("../config/mutate.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/mutate.js")>("../config/mutate.js");
+  return {
+    ...actual,
+    replaceConfigFile: mocks.replaceConfigFile,
+  };
+});
+
 describe("ensureGatewayStartupAuth", () => {
   async function expectEphemeralGeneratedTokenWhenOverridden(cfg: OpenClawConfig) {
     const result = await ensureGatewayStartupAuth({

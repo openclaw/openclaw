@@ -605,12 +605,16 @@ Channel plugins pick from a family of narrow seams — `channel-setup`,
 on one `approvalCapability` contract rather than mixing across unrelated
 plugin fields. See [Channel plugins](/plugins/sdk-channel-plugins).
 
-Runtime and config helpers live under matching `*-runtime` subpaths
-(`approval-runtime`, `config-runtime`, `infra-runtime`, `agent-runtime`,
-`lazy-runtime`, `directory-runtime`, `text-runtime`, `runtime-store`, etc.).
+Runtime and config helpers live under matching focused `*-runtime` subpaths
+(`approval-runtime`, `agent-runtime`, `lazy-runtime`, `directory-runtime`,
+`text-runtime`, `runtime-store`, `system-event-runtime`, `heartbeat-runtime`,
+`channel-activity-runtime`, etc.). Prefer `config-types`,
+`plugin-config-runtime`, `runtime-config-snapshot`, and `config-mutation`
+instead of the broad `config-runtime` compatibility barrel.
 
 <Info>
-`openclaw/plugin-sdk/channel-runtime` is deprecated — a compatibility shim for
+`openclaw/plugin-sdk/channel-runtime`, `openclaw/plugin-sdk/config-runtime`,
+and `openclaw/plugin-sdk/infra-runtime` are deprecated compatibility shims for
 older plugins. New code should import narrower generic primitives instead.
 </Info>
 
