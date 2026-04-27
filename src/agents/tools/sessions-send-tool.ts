@@ -272,14 +272,17 @@ export function createSessionsSendTool(opts?: {
         requesterChannel: opts?.agentChannel,
         targetSessionKey: displayKey,
       });
+      const agentMessage = [agentMessageContext, message]
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .join("\n\n");
       const sendParams = {
-        message,
+        message: agentMessage,
         sessionKey: resolvedKey,
         idempotencyKey,
         deliver: false,
         channel: INTERNAL_MESSAGE_CHANNEL,
         lane: resolveNestedAgentLaneForSession(resolvedKey),
-        extraSystemPrompt: agentMessageContext,
         inputProvenance: {
           kind: "inter_session",
           sourceSessionKey: opts?.agentSessionKey,

@@ -20,13 +20,6 @@ export type GatewayClient = {
   connect: ConnectParams;
   connId?: string;
   clientIp?: string;
-  usesSharedGatewayAuth?: boolean;
-  pairingLocality?:
-    | "direct_local"
-    | "cli_container_local"
-    | "browser_container_local"
-    | "shared_secret_loopback_local"
-    | "remote";
   canvasHostUrl?: string;
   canvasCapability?: string;
   canvasCapabilityExpiresAtMs?: number;

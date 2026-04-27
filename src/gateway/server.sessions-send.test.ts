@@ -46,6 +46,7 @@ async function emitLifecycleAssistantReply(params: {
   const commandParams = params.opts as {
     sessionId?: string;
     runId?: string;
+    message?: string;
     extraSystemPrompt?: string;
   };
   const sessionId = commandParams.sessionId ?? params.defaultSessionId;
@@ -60,7 +61,9 @@ async function emitLifecycleAssistantReply(params: {
     data: { phase: "start", startedAt },
   });
 
-  const text = params.resolveText(commandParams.extraSystemPrompt);
+  const text = params.resolveText(
+    [commandParams.extraSystemPrompt, commandParams.message].filter(Boolean).join("\n"),
+  );
   const message = {
     role: "assistant",
     content: [{ type: "text", text }],

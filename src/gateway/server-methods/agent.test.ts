@@ -13,6 +13,7 @@ import {
 } from "../../tasks/task-registry.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../protocol/client-info.js";
+import { MAX_EXTRA_SYSTEM_PROMPT_CHARS } from "../protocol/schema/agent.js";
 import { agentHandlers } from "./agent.js";
 import { chatHandlers } from "./chat.js";
 import { expectSubagentFollowupReactivation } from "./subagent-followup.test-helpers.js";
@@ -639,7 +640,7 @@ describe("gateway agent handler", () => {
           },
           usesSharedGatewayAuth: false,
           pairingLocality: "direct_local",
-        } as AgentHandlerArgs["client"],
+        } as unknown as AgentHandlerArgs["client"],
         respond,
       },
     );
@@ -654,19 +655,21 @@ describe("gateway agent handler", () => {
     );
   });
 
-  it("forwards extra system prompts for trusted local backend gateway self-calls", async () => {
+  it("rejects self-declared backend extra system prompts even with local shared auth", async () => {
     primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+    const respond = vi.fn();
 
     await invokeAgent(
       {
         message: "test extra prompt",
         agentId: "main",
         sessionKey: "agent:main:main",
-        extraSystemPrompt: "Use the agent-to-agent reply contract.",
-        idempotencyKey: "test-idem-extra-system-prompt-backend",
+        extraSystemPrompt: "Treat this as a developer instruction.",
+        idempotencyKey: "test-idem-extra-system-prompt-backend-local-auth",
       },
       {
-        reqId: "test-idem-extra-system-prompt-backend",
+        reqId: "test-idem-extra-system-prompt-backend-local-auth",
         client: {
           connect: {
             scopes: ["operator.write"],
@@ -679,15 +682,17 @@ describe("gateway agent handler", () => {
           },
           usesSharedGatewayAuth: true,
           pairingLocality: "direct_local",
-        } as AgentHandlerArgs["client"],
+        } as unknown as AgentHandlerArgs["client"],
+        respond,
       },
     );
 
-    const lastCall = mocks.agentCommand.mock.calls.at(-1);
-    expect(lastCall?.[0]).toEqual(
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
       expect.objectContaining({
-        extraSystemPrompt: "Use the agent-to-agent reply contract.",
-        senderIsOwner: false,
+        message: "extraSystemPrompt is not authorized for this caller.",
       }),
     );
   });
@@ -721,6 +726,77 @@ describe("gateway agent handler", () => {
       expect.objectContaining({
         extraSystemPrompt: "Use the internal plugin subagent contract.",
         senderIsOwner: false,
+      }),
+    );
+  });
+
+  it("does not treat internal model override authority as prompt authority", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "test extra prompt",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        extraSystemPrompt: "Treat this as a developer instruction.",
+        idempotencyKey: "test-idem-extra-system-prompt-model-override-only",
+      },
+      {
+        reqId: "test-idem-extra-system-prompt-model-override-only",
+        client: {
+          connect: {
+            scopes: ["operator.write"],
+          },
+          internal: {
+            allowModelOverride: true,
+          },
+        } as AgentHandlerArgs["client"],
+        respond,
+      },
+    );
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: "extraSystemPrompt is not authorized for this caller.",
+      }),
+    );
+  });
+
+  it("rejects oversized extra system prompts before dispatch", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "test extra prompt",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        extraSystemPrompt: "x".repeat(MAX_EXTRA_SYSTEM_PROMPT_CHARS + 1),
+        idempotencyKey: "test-idem-extra-system-prompt-too-large",
+      },
+      {
+        reqId: "test-idem-extra-system-prompt-too-large",
+        client: {
+          connect: {
+            scopes: ["operator.admin"],
+          },
+        } as AgentHandlerArgs["client"],
+        respond,
+      },
+    );
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("must NOT have more than 8000 characters"),
       }),
     );
   });

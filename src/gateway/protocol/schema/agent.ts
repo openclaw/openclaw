@@ -6,6 +6,8 @@ import {
 } from "../../../agents/internal-event-contract.js";
 import { InputProvenanceSchema, NonEmptyString, SessionLabelString } from "./primitives.js";
 
+export const MAX_EXTRA_SYSTEM_PROMPT_CHARS = 8_000;
+
 export const AgentInternalEventSchema = Type.Object(
   {
     type: Type.Literal(AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION),
@@ -157,7 +159,7 @@ export const AgentParamsSchema = Type.Object(
     promptMode: Type.Optional(
       Type.Union([Type.Literal("full"), Type.Literal("minimal"), Type.Literal("none")]),
     ),
-    extraSystemPrompt: Type.Optional(Type.String()),
+    extraSystemPrompt: Type.Optional(Type.String({ maxLength: MAX_EXTRA_SYSTEM_PROMPT_CHARS })),
     bootstrapContextMode: Type.Optional(
       Type.Union([Type.Literal("full"), Type.Literal("lightweight")]),
     ),

@@ -82,12 +82,7 @@ import { registerChatAbortController, resolveAgentRunExpiresAtMs } from "../chat
 import { MediaOffloadError, parseMessageWithAttachments } from "../chat-attachments.js";
 import { resolveAssistantAvatarUrl } from "../control-ui-shared.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
-import {
-  GATEWAY_CLIENT_CAPS,
-  GATEWAY_CLIENT_IDS,
-  GATEWAY_CLIENT_MODES,
-  hasGatewayClientCap,
-} from "../protocol/client-info.js";
+import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "../protocol/client-info.js";
 import {
   ErrorCodes,
   errorShape,
@@ -96,6 +91,7 @@ import {
   validateAgentParams,
   validateAgentWaitParams,
 } from "../protocol/index.js";
+import { MAX_EXTRA_SYSTEM_PROMPT_CHARS } from "../protocol/schema/agent.js";
 import { performGatewaySessionReset } from "../session-reset-service.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
@@ -131,26 +127,11 @@ function resolveAllowModelOverrideFromClient(
   return resolveSenderIsOwnerFromClient(client) || client?.internal?.allowModelOverride === true;
 }
 
-function resolveIsTrustedLocalBackendGatewayClient(
-  client: GatewayRequestHandlerOptions["client"],
-): boolean {
-  const info = client?.connect?.client;
-  return (
-    client?.usesSharedGatewayAuth === true &&
-    client?.pairingLocality === "direct_local" &&
-    info?.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
-    info?.mode === GATEWAY_CLIENT_MODES.BACKEND
-  );
-}
-
 function resolveAllowExtraSystemPromptFromClient(
   client: GatewayRequestHandlerOptions["client"],
 ): boolean {
   return (
-    resolveSenderIsOwnerFromClient(client) ||
-    client?.internal?.allowExtraSystemPrompt === true ||
-    client?.internal?.allowModelOverride === true ||
-    resolveIsTrustedLocalBackendGatewayClient(client)
+    resolveSenderIsOwnerFromClient(client) || client?.internal?.allowExtraSystemPrompt === true
   );
 }
 
@@ -483,8 +464,21 @@ export const agentHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const rawExtraSystemPrompt =
+      typeof request.extraSystemPrompt === "string" ? request.extraSystemPrompt : undefined;
+    if (
+      rawExtraSystemPrompt !== undefined &&
+      rawExtraSystemPrompt.length > MAX_EXTRA_SYSTEM_PROMPT_CHARS
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "extraSystemPrompt is too large."),
+      );
+      return;
+    }
     const requestedExtraSystemPrompt =
-      typeof request.extraSystemPrompt === "string" && request.extraSystemPrompt.trim().length > 0;
+      rawExtraSystemPrompt !== undefined && rawExtraSystemPrompt.trim().length > 0;
     if (requestedExtraSystemPrompt && !allowExtraSystemPrompt) {
       respond(
         false,

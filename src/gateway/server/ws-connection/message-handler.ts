@@ -1294,7 +1294,6 @@ export function attachGatewayWsMessageHandler(params: {
           connId,
           isDeviceTokenAuth: authMethod === "device-token",
           usesSharedGatewayAuth,
-          pairingLocality,
           sharedGatewaySessionGeneration,
           presenceKey,
           clientIp: reportedClientIp,

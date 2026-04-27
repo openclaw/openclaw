@@ -830,27 +830,21 @@ describe("loadGatewayPlugins", () => {
     });
   });
 
-  test("marks runtime extra system prompts as internal gateway input", async () => {
+  test("rejects fallback runtime extra system prompts without prompt authority", async () => {
     const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins);
-    serverPlugins.setFallbackGatewayContext(createTestContext("extra-system-prompt-forward"));
+    serverPlugins.setFallbackGatewayContext(createTestContext("extra-system-prompt-reject"));
 
-    await runtime.run({
-      sessionKey: "s-extra-system-prompt",
-      message: "hello",
-      extraSystemPrompt: "Use the plugin subagent contract.",
-      deliver: false,
-    });
+    await expect(
+      runtime.run({
+        sessionKey: "s-extra-system-prompt",
+        message: "hello",
+        extraSystemPrompt: "Use the plugin subagent contract.",
+        deliver: false,
+      }),
+    ).rejects.toThrow("extraSystemPrompt is not authorized for this plugin subagent run.");
 
-    expect(getLastDispatchedParams()).toMatchObject({
-      sessionKey: "s-extra-system-prompt",
-      message: "hello",
-      extraSystemPrompt: "Use the plugin subagent contract.",
-      deliver: false,
-    });
-    expect(getLastDispatchedClientInternal()).toMatchObject({
-      allowExtraSystemPrompt: true,
-    });
+    expect(handleGatewayRequest).not.toHaveBeenCalled();
   });
 
   test("rejects request-scoped runtime extra system prompts without prompt authority", async () => {

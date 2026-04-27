@@ -160,9 +160,8 @@ async function startNarrativeRunOrFallback(params: {
     const run = await params.subagent.run({
       idempotencyKey: params.sessionKey,
       sessionKey: params.sessionKey,
-      message: params.message,
+      message: [NARRATIVE_SYSTEM_PROMPT, params.message].join("\n\n"),
       ...(params.model ? { model: params.model } : {}),
-      extraSystemPrompt: NARRATIVE_SYSTEM_PROMPT,
       lane: `dreaming-narrative:${params.sessionKey}`,
       lightContext: true,
       deliver: false,

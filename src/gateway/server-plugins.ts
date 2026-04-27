@@ -257,11 +257,7 @@ function canClientUseModelOverride(client: GatewayRequestOptions["client"]): boo
 }
 
 function canClientUseExtraSystemPrompt(client: GatewayRequestOptions["client"]): boolean {
-  return (
-    hasAdminScope(client) ||
-    client?.internal?.allowExtraSystemPrompt === true ||
-    client?.internal?.allowModelOverride === true
-  );
+  return hasAdminScope(client) || client?.internal?.allowExtraSystemPrompt === true;
 }
 
 function mergeGatewayClientInternal(
@@ -370,7 +366,8 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       let allowOverride = hasRequestScopeClient && canClientUseModelOverride(scope?.client ?? null);
       const allowExtraSystemPrompt =
         extraSystemPromptRequested &&
-        (hasRequestScopeClient ? canClientUseExtraSystemPrompt(scope?.client ?? null) : true);
+        hasRequestScopeClient &&
+        canClientUseExtraSystemPrompt(scope?.client ?? null);
       let allowSyntheticModelOverride = false;
       if (overrideRequested && !allowOverride && !hasRequestScopeClient) {
         const fallbackAuth = authorizeFallbackModelOverride({
