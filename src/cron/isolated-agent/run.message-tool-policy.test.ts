@@ -17,6 +17,7 @@ import {
   resolveCliRuntimeExecutionProviderMock,
   resolveCronDeliveryPlanMock,
   resolveDeliveryTargetMock,
+  resolveSessionAuthProfileOverrideMock,
   runCliAgentMock,
   restoreFastTestEnv,
   runEmbeddedPiAgentMock,
@@ -477,6 +478,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   it("uses the configured CLI runtime for canonical cron providers", async () => {
     mockRunCronFallbackPassthrough();
     resolveCliRuntimeExecutionProviderMock.mockReturnValue("claude-cli");
+    resolveSessionAuthProfileOverrideMock.mockResolvedValue("anthropic:work");
     isCliProviderMock.mockImplementation((provider: string) => provider === "claude-cli");
     getCliSessionBindingMock.mockReturnValue({
       sessionId: "existing-cli-session",
@@ -528,10 +530,16 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       expect.objectContaining({
         provider: "claude-cli",
         model: "claude-sonnet-4-6",
-        authProfileId: undefined,
+        authProfileId: "anthropic:work",
         agentAccountId: "ops",
         abortSignal: expect.any(AbortSignal),
         senderIsOwner: false,
+      }),
+    );
+    expect(resolveSessionAuthProfileOverrideMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "claude-cli",
+        isNewSession: false,
       }),
     );
     expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();

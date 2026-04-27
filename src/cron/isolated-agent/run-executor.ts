@@ -1,4 +1,3 @@
-import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import { clearCliSession, setCliSessionBinding } from "../../agents/cli-session.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import type { SkillSnapshot } from "../../agents/skills.js";
@@ -12,6 +11,7 @@ import {
   resolveCurrentChannelTarget,
 } from "./channel-output-policy.js";
 import { resolveCronPayloadOutcome } from "./helpers.js";
+import { resolveSessionAuthProfileOverride } from "./run-auth-profile.runtime.js";
 import {
   getCliSessionId,
   getCliSessionBinding,
@@ -165,7 +165,8 @@ export function createCronPromptExecutor(params: {
                   sessionEntry: params.cronSession.sessionEntry,
                   sessionStore: params.cronSession.store,
                   sessionKey: params.agentSessionKey,
-                  isNewSession: params.cronSession.isNewSession,
+                  isNewSession:
+                    params.cronSession.isNewSession && params.job.sessionTarget !== "isolated",
                 });
           const cliParams: Parameters<typeof runCliAgent>[0] = {
             sessionId: params.cronSession.sessionEntry.sessionId,

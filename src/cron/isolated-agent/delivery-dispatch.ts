@@ -46,10 +46,25 @@ function targetLooksLikeThreadedDelivery(params: {
     return false;
   }
   const suffix = params.target.slice(params.base.length);
-  return (
-    suffix.includes(params.threadId) &&
-    (/^[:#]/.test(suffix) || params.base.endsWith(params.threadId))
-  );
+  return isDelimitedThreadSuffix(suffix, params.threadId);
+}
+
+function isDelimitedThreadSuffix(suffix: string, threadId: string): boolean {
+  if (!suffix) {
+    return false;
+  }
+  return suffix === `#${threadId}` || suffix === `:${threadId}` || suffix === `:topic:${threadId}`;
+}
+
+function targetIncludesThreadSuffix(params: {
+  target: string;
+  base: string;
+  threadId: string;
+}): boolean {
+  if (!params.target.startsWith(params.base)) {
+    return false;
+  }
+  return isDelimitedThreadSuffix(params.target.slice(params.base.length), params.threadId);
 }
 
 type NormalizedSilentReplyText = {
@@ -121,7 +136,13 @@ export function matchesMessagingToolDeliveryTarget(
     );
   }
   return (
-    !deliveryThreadId || Boolean(targetThreadId) || target.to.includes(String(delivery.threadId))
+    !deliveryThreadId ||
+    Boolean(targetThreadId) ||
+    targetIncludesThreadSuffix({
+      target: target.to.trim(),
+      base: delivery.to.trim(),
+      threadId: deliveryThreadId,
+    })
   );
 }
 

@@ -88,6 +88,24 @@ describe("matchesMessagingToolDeliveryTarget", () => {
     ).toBe(true);
   });
 
+  it("does not match thread ids by substring inside the target", () => {
+    expect(
+      matchesMessagingToolDeliveryTarget(
+        { provider: "topicchat", to: "room123" },
+        { channel: "topicchat", to: "room123", threadId: 12 },
+      ),
+    ).toBe(false);
+  });
+
+  it("matches topic suffixes only when the thread id is delimiter-bound", () => {
+    expect(
+      matchesMessagingToolDeliveryTarget(
+        { provider: "telegram", to: "-1003597428309:topic:462" },
+        { channel: "telegram", to: "-1003597428309", threadId: 462 },
+      ),
+    ).toBe(true);
+  });
+
   it("matches when provider is 'message' (generic)", () => {
     expect(
       matchesMessagingToolDeliveryTarget(
