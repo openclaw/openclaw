@@ -147,6 +147,32 @@ async function canonicalizeViaAncestor(absPath: string): Promise<string> {
 const MAX_SESSION_FILE_TAIL_BYTES = 8 * 1024 * 1024;
 
 /**
+ * Hard cap on the bytes we will snapshot from a pre-existing redirect or
+ * memory file before our inline write overwrites it. The snapshot exists so
+ * a late blockSessionSave can RESTORE the original instead of losing the
+ * prior session's content. If a hook points sessionSaveRedirectPath at a
+ * pathologically large file (multi-GB log, oversized session JSONL), the
+ * snapshot read becomes a real OOM / DoS surface (gpt-5.5 deep-review P1-1
+ * on PR #38162). 4 MiB matches the upper bound of a typical memory file
+ * (with the 32-bit suffix collision protection) and is well under the
+ * 8 MiB cap we already enforce on session-file tails. When the
+ * pre-existing file is larger than this cap, we skip the snapshot and
+ * fall back to unlink-on-retraction — better than crashing the gateway.
+ */
+const MAX_PRE_EXISTING_SNAPSHOT_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Replace the user's home directory in a logged path with `~` so we don't
+ * leak workspace structure into aggregated log streams (gpt-5.5
+ * deep-review P2-1). Cheap, idempotent, safe on non-string inputs.
+ */
+function sanitizePathForLog(p: string | undefined): string {
+  if (typeof p !== "string") return "";
+  const home = os.homedir();
+  return home && home !== "/" ? p.split(home).join("~") : p;
+}
+
+/**
  * Read recent messages from session file for slug generation. Bounded
  * by MAX_SESSION_FILE_TAIL_BYTES so that pathologically large session
  * files cannot OOM the gateway.
@@ -427,8 +453,25 @@ const saveSessionToMemory: HookHandler = async (event) => {
     // or sending it to a model provider when saving is explicitly blocked.
     const blockPreSet = context.blockSessionSave === true;
 
+    // sessionSaveRedirectPath is evaluated EAGERLY here — unlike
+    // blockSessionSave and sessionSaveContent (both of which support
+    // late-set via postHookActions), the redirect path is read once and
+    // never re-checked in the post-hook drain. This is by design:
+    // redirect resolution requires workspace canonicalization,
+    // realpath-following, and containment validation that all assume
+    // the file has not been written yet, and supporting late-set would
+    // require re-resolving the entire write target in post-hook with
+    // its own race window. Hooks that need to redirect must either
+    // (a) register before the bundled session-memory hook (FIFO
+    // ordering for command:new/command:reset) or
+    // (b) use a typed plugin hook with priority < 0 so they fire ahead
+    // of bundled hooks. (gpt-5.5 deep-review P2-3 on PR #38162.)
+    //
+    // The trim() check rejects whitespace-only strings (e.g. "   ") that
+    // would otherwise get treated as a relative path “   ” that no
+    // sensible filesystem supports (gpt-5.5 P3-5).
     const redirectPath = context.sessionSaveRedirectPath;
-    const isRedirected = typeof redirectPath === "string" && redirectPath.length > 0;
+    const isRedirected = typeof redirectPath === "string" && redirectPath.trim().length > 0;
 
     // Known limitation: if an earlier hook pre-sets sessionSaveContent and
     // a later hook *clears* it (expecting a revert to the default
@@ -551,9 +594,9 @@ const saveSessionToMemory: HookHandler = async (event) => {
         looksLikeUNC)
     ) {
       log.warn("Redirect path resolves outside workspace, rejecting", {
-        redirectPath,
+        redirectPath: sanitizePathForLog(redirectPath as string),
         resolvedRelative: writeRelativePath,
-        workspace: canonicalWorkspace,
+        workspace: sanitizePathForLog(canonicalWorkspace),
         windowsTraversal: looksLikeWindowsTraversal,
         unc: looksLikeUNC,
       });
@@ -617,9 +660,35 @@ const saveSessionToMemory: HookHandler = async (event) => {
     // sets blockSessionSave, we restore this content instead of unlinking —
     // preventing data loss when the target file already existed (e.g. fixed
     // redirect quarantine paths or slug collisions on non-redirected writes).
+    // Snapshot via lstat first so we (1) don't follow a symlink (which
+    // would let a hook deliberately point the redirect at a large
+    // external file we then read into memory), (2) skip non-regular
+    // files (directories, sockets, devices), and (3) refuse files larger
+    // than MAX_PRE_EXISTING_SNAPSHOT_BYTES to bound memory. When the
+    // file is too large to snapshot, we fall back to unlink-on-retraction
+    // — a small loss-of-restore semantic vs. a real DoS, the right trade
+    // (gpt-5.5 deep-review P1-1 + P2-2 on PR #38162).
     let preExistingContent: string | null = null;
     try {
-      preExistingContent = await fs.readFile(writtenFilePath, "utf-8");
+      const preStat = await fs.lstat(writtenFilePath);
+      if (
+        preStat.isFile() &&
+        !preStat.isSymbolicLink() &&
+        preStat.size <= MAX_PRE_EXISTING_SNAPSHOT_BYTES
+      ) {
+        preExistingContent = await fs.readFile(writtenFilePath, "utf-8");
+      } else if (preStat.isFile() && preStat.size > MAX_PRE_EXISTING_SNAPSHOT_BYTES) {
+        log.debug("Pre-existing file too large to snapshot for retraction; will unlink instead", {
+          size: preStat.size,
+          cap: MAX_PRE_EXISTING_SNAPSHOT_BYTES,
+          path: sanitizePathForLog(writtenFilePath),
+        });
+      } else if (preStat.isSymbolicLink()) {
+        log.debug(
+          "Pre-existing target is a symlink — skipping content snapshot to avoid following the link for an unbounded read",
+          { path: sanitizePathForLog(writtenFilePath) },
+        );
+      }
     } catch {
       // File doesn't exist yet — no prior content to preserve.
     }
@@ -647,7 +716,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
       } catch (err) {
         if (err instanceof SafeOpenError) {
           log.warn("Redirect path rejected — failing closed (no fallback)", {
-            redirectPath,
+            redirectPath: sanitizePathForLog(redirectPath as string),
             reason: err.message,
           });
           return;
@@ -727,11 +796,13 @@ const saveSessionToMemory: HookHandler = async (event) => {
         if (!hasCustomContent && sessionContent) {
           log.warn(
             `PRIVACY: blockSessionSave was set by a late hook — memory file ` +
-              `will be retracted from ${writtenFilePath.replace(os.homedir(), "~")}, ` +
+              `will be retracted from ${sanitizePathForLog(writtenFilePath)}, ` +
               `BUT transcript content (${sessionContent.length} chars) was ` +
               `already sent to the configured slug-generation LLM and cannot be ` +
               `un-sent. To prevent egress entirely, set blockSessionSave BEFORE ` +
-              `the session-memory handler runs.`,
+              `the session-memory handler runs (e.g. register a typed plugin ` +
+              `hook with priority < 0 so it fires ahead of bundled hooks, or ` +
+              `add an internal hook earlier in the FIFO order).`,
           );
         }
         try {
