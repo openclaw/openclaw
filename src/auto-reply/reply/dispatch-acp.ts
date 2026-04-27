@@ -191,12 +191,17 @@ async function finalizeAcpTurnOutput(params: {
   inboundAudio: boolean;
   sessionTtsAuto?: TtsAutoMode;
   ttsChannel?: string;
+  ttsAccountId?: string;
   shouldEmitResolvedIdentityNotice: boolean;
 }): Promise<boolean> {
   await params.delivery.settleVisibleText();
   let queuedFinal =
     params.delivery.hasDeliveredVisibleText() && !params.delivery.hasFailedVisibleTextDelivery();
-  const ttsMode = resolveConfiguredTtsMode(params.cfg, params.agentId);
+  const ttsMode = resolveConfiguredTtsMode(params.cfg, {
+    agentId: params.agentId,
+    channelId: params.ttsChannel,
+    accountId: params.ttsAccountId,
+  });
   const accumulatedVisibleBlockText = params.delivery.getAccumulatedVisibleBlockText();
   const accumulatedBlockTtsText = params.delivery.getAccumulatedBlockTtsText();
   const hasAccumulatedBlockText = accumulatedBlockTtsText.trim().length > 0;
@@ -204,6 +209,8 @@ async function finalizeAcpTurnOutput(params: {
     cfg: params.cfg,
     sessionAuto: params.sessionTtsAuto,
     agentId: params.agentId,
+    channelId: params.ttsChannel,
+    accountId: params.ttsAccountId,
   });
   const canAttemptFinalTts =
     ttsStatus != null && !(ttsStatus.autoMode === "inbound" && !params.inboundAudio);
@@ -220,6 +227,7 @@ async function finalizeAcpTurnOutput(params: {
         inboundAudio: params.inboundAudio,
         ttsAuto: params.sessionTtsAuto,
         agentId: params.agentId,
+        accountId: params.ttsAccountId,
       });
       if (ttsSyntheticReply.mediaUrl) {
         const delivered = await params.delivery.deliver("final", {
@@ -487,6 +495,7 @@ export async function tryDispatchAcpReply(params: {
         inboundAudio: params.inboundAudio,
         sessionTtsAuto: params.sessionTtsAuto,
         ttsChannel: params.ttsChannel,
+        ttsAccountId: effectiveDispatchAccountId,
         shouldEmitResolvedIdentityNotice,
       })) || queuedFinal;
 

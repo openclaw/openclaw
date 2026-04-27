@@ -65,6 +65,8 @@ import type {
   SpeechProviderResolveTalkConfigContext,
   SpeechProviderResolveTalkOverridesContext,
   SpeechListVoicesRequest,
+  SpeechProviderPrepareSynthesisContext,
+  SpeechProviderPreparedSynthesis,
   SpeechProviderId,
   SpeechSynthesisRequest,
   SpeechSynthesisResult,
@@ -1724,6 +1726,12 @@ export type SpeechProviderPlugin = {
   resolveTalkOverrides?: (
     ctx: SpeechProviderResolveTalkOverridesContext,
   ) => SpeechProviderConfig | undefined;
+  prepareSynthesis?: (
+    ctx: SpeechProviderPrepareSynthesisContext,
+  ) =>
+    | SpeechProviderPreparedSynthesis
+    | undefined
+    | Promise<SpeechProviderPreparedSynthesis | undefined>;
   isConfigured: (ctx: SpeechProviderConfiguredContext) => boolean;
   synthesize: (req: SpeechSynthesisRequest) => Promise<SpeechSynthesisResult>;
   synthesizeTelephony?: (

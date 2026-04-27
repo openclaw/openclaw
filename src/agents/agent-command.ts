@@ -73,6 +73,7 @@ type AcpRuntimeErrorsRuntime = typeof import("../acp/runtime/errors.js");
 type AcpSessionIdentifiersRuntime = typeof import("../acp/runtime/session-identifiers.js");
 type DeliveryRuntime = typeof import("./command/delivery.runtime.js");
 type SessionStoreRuntime = typeof import("./command/session-store.runtime.js");
+type CliCompactionRuntime = typeof import("./command/cli-compaction.js");
 type TranscriptResolveRuntime = typeof import("../config/sessions/transcript-resolve.runtime.js");
 type CliDepsRuntime = typeof import("../cli/deps.js");
 type ExecDefaultsRuntime = typeof import("./exec-defaults.js");
@@ -88,6 +89,7 @@ let acpRuntimeErrorsRuntimePromise: Promise<AcpRuntimeErrorsRuntime> | undefined
 let acpSessionIdentifiersRuntimePromise: Promise<AcpSessionIdentifiersRuntime> | undefined;
 let deliveryRuntimePromise: Promise<DeliveryRuntime> | undefined;
 let sessionStoreRuntimePromise: Promise<SessionStoreRuntime> | undefined;
+let cliCompactionRuntimePromise: Promise<CliCompactionRuntime> | undefined;
 let transcriptResolveRuntimePromise: Promise<TranscriptResolveRuntime> | undefined;
 let cliDepsRuntimePromise: Promise<CliDepsRuntime> | undefined;
 let execDefaultsRuntimePromise: Promise<ExecDefaultsRuntime> | undefined;
@@ -129,6 +131,11 @@ function loadDeliveryRuntime(): Promise<DeliveryRuntime> {
 function loadSessionStoreRuntime(): Promise<SessionStoreRuntime> {
   sessionStoreRuntimePromise ??= import("./command/session-store.runtime.js");
   return sessionStoreRuntimePromise;
+}
+
+function loadCliCompactionRuntime(): Promise<CliCompactionRuntime> {
+  cliCompactionRuntimePromise ??= import("./command/cli-compaction.js");
+  return cliCompactionRuntimePromise;
 }
 
 function loadTranscriptResolveRuntime(): Promise<TranscriptResolveRuntime> {
@@ -695,11 +702,11 @@ async function agentCommandInternal(
     if (hasExplicitRunOverride && opts.allowModelOverride !== true) {
       throw new Error("Model override is not authorized for this caller.");
     }
-    const needsModelCatalog = hasAllowlist || hasStoredOverride || hasExplicitRunOverride;
+    const needsModelCatalog = Boolean(hasAllowlist);
     let allowedModelKeys = new Set<string>();
     let allowedModelCatalog: Awaited<ReturnType<typeof loadModelCatalog>> = [];
     let modelCatalog: Awaited<ReturnType<typeof loadModelCatalog>> | null = null;
-    let allowAnyModel = false;
+    let allowAnyModel = !hasAllowlist;
 
     if (needsModelCatalog) {
       modelCatalog = await loadModelCatalog({ config: cfg });
@@ -798,29 +805,35 @@ async function agentCommandInternal(
     }
 
     if (!resolvedThinkLevel) {
-      let catalogForThinking = modelCatalog ?? allowedModelCatalog;
-      if (!catalogForThinking || catalogForThinking.length === 0) {
-        modelCatalog = await loadModelCatalog({ config: cfg });
-        catalogForThinking = modelCatalog;
-      }
+      const catalogForThinking = modelCatalog ?? allowedModelCatalog;
       resolvedThinkLevel = resolveThinkingDefault({
         cfg,
         provider,
         model,
-        catalog: catalogForThinking,
+        catalog: catalogForThinking.length > 0 ? catalogForThinking : undefined,
       });
     }
-    if (!isThinkingLevelSupported({ provider, model, level: resolvedThinkLevel })) {
+    const catalogForThinking = modelCatalog ?? allowedModelCatalog;
+    const thinkingCatalog = catalogForThinking.length > 0 ? catalogForThinking : undefined;
+    if (
+      !isThinkingLevelSupported({
+        provider,
+        model,
+        level: resolvedThinkLevel,
+        catalog: thinkingCatalog,
+      })
+    ) {
       const explicitThink = Boolean(thinkOnce || thinkOverride);
       if (explicitThink) {
         throw new Error(
-          `Thinking level "${resolvedThinkLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model)}.`,
+          `Thinking level "${resolvedThinkLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model, ", ", thinkingCatalog)}.`,
         );
       }
       const fallbackThinkLevel = resolveSupportedThinkingLevel({
         provider,
         model,
         level: resolvedThinkLevel,
+        catalog: thinkingCatalog,
       });
       if (fallbackThinkLevel !== resolvedThinkLevel) {
         const previousThinkLevel = resolvedThinkLevel;
@@ -874,6 +887,11 @@ async function agentCommandInternal(
     const startedAt = Date.now();
     let lifecycleEnded = false;
     const attemptExecutionRuntime = await loadAttemptExecutionRuntime();
+    const runContext = resolveAgentRunContext(opts);
+    const messageChannel = resolveMessageChannel(
+      runContext.messageChannel,
+      opts.replyChannel ?? opts.channel,
+    );
 
     let result: Awaited<ReturnType<AttemptExecutionRuntime["runAgentAttempt"]>>;
     let fallbackProvider = provider;
@@ -882,11 +900,6 @@ async function agentCommandInternal(
     let liveSwitchRetries = 0;
     for (;;) {
       try {
-        const runContext = resolveAgentRunContext(opts);
-        const messageChannel = resolveMessageChannel(
-          runContext.messageChannel,
-          opts.replyChannel ?? opts.channel,
-        );
         const spawnedBy = normalizedSpawned.spawnedBy ?? sessionEntry?.spawnedBy;
         const effectiveFallbacksOverride = resolveEffectiveModelFallbacks({
           cfg,
@@ -1102,6 +1115,27 @@ async function agentCommandInternal(
           sessionAgentId,
           threadId: opts.threadId,
           sessionCwd: workspaceDir,
+        });
+        sessionEntry = await (
+          await loadCliCompactionRuntime()
+        ).runCliTurnCompactionLifecycle({
+          cfg,
+          sessionId,
+          sessionKey: sessionKey ?? sessionId,
+          sessionEntry,
+          sessionStore,
+          storePath,
+          sessionAgentId,
+          workspaceDir,
+          agentDir,
+          provider: result.meta.agentMeta?.provider ?? provider,
+          model: result.meta.agentMeta?.model ?? model,
+          skillsSnapshot,
+          messageChannel,
+          agentAccountId: runContext.accountId,
+          senderIsOwner: opts.senderIsOwner,
+          thinkLevel: resolvedThinkLevel,
+          extraSystemPrompt: opts.extraSystemPrompt,
         });
       } catch (error) {
         log.warn(

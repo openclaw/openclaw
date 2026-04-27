@@ -4,6 +4,7 @@ import type { MessagingToolSend } from "../pi-embedded-messaging.types.js";
 
 export type EmbeddedPiAgentMeta = {
   sessionId: string;
+  sessionFile?: string;
   provider: string;
   model: string;
   contextTokens?: number;
@@ -113,6 +114,7 @@ export type EmbeddedPiRunMeta = {
   replayInvalid?: boolean;
   livenessState?: EmbeddedRunLivenessState;
   agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";
+  terminalReplyKind?: "silent-empty";
   error?: {
     kind:
       | "context_overflow"
@@ -173,6 +175,8 @@ export type EmbeddedPiCompactResult = {
     tokensBefore: number;
     tokensAfter?: number;
     details?: unknown;
+    sessionId?: string;
+    sessionFile?: string;
   };
 };
 

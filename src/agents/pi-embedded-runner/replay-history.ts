@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
+import { stripInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
@@ -237,6 +238,7 @@ function stripStaleAssistantUsageBeforeLatestCompaction(messages: AgentMessage[]
 // content and, on Bedrock or strict OpenAI-compatible providers, can also
 // trigger turn-ordering rejections.
 const TRANSCRIPT_ONLY_OPENCLAW_MODELS = new Set<string>(["delivery-mirror", "gateway-injected"]);
+const OMITTED_INBOUND_METADATA_TEXT = "[assistant copied inbound metadata omitted]";
 
 function isTranscriptOnlyOpenclawAssistant(message: AgentMessage): boolean {
   if (!message || message.role !== "assistant") {
@@ -267,12 +269,47 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
     }
     const replayContent = (message as { content?: unknown }).content;
     if (typeof replayContent === "string") {
+      const strippedText = stripInboundMetadata(replayContent);
       out.push({
         ...message,
-        content: [{ type: "text", text: replayContent }],
+        content: [
+          {
+            type: "text",
+            text: strippedText.trim() ? strippedText : OMITTED_INBOUND_METADATA_TEXT,
+          },
+        ],
       });
       touched = true;
       continue;
+    }
+    if (Array.isArray(replayContent)) {
+      let contentTouched = false;
+      const sanitizedContent = replayContent.map((block) => {
+        if (!block || typeof block !== "object") {
+          return block;
+        }
+        const text = (block as { text?: unknown }).text;
+        if (typeof text !== "string") {
+          return block;
+        }
+        const strippedText = stripInboundMetadata(text);
+        if (strippedText === text) {
+          return block;
+        }
+        contentTouched = true;
+        return {
+          ...block,
+          text: strippedText.trim() ? strippedText : OMITTED_INBOUND_METADATA_TEXT,
+        };
+      });
+      if (contentTouched) {
+        out.push({
+          ...message,
+          content: sanitizedContent,
+        });
+        touched = true;
+        continue;
+      }
     }
     if (Array.isArray(replayContent) && replayContent.length === 0) {
       // An assistant turn can legitimately end with `content: []` — for

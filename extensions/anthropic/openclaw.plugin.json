@@ -2,6 +2,7 @@
   "id": "anthropic",
   "enabledByDefault": true,
   "providers": ["anthropic"],
+  "providerDiscoveryEntry": "./provider-discovery.ts",
   "modelSupport": {
     "modelPrefixes": ["claude-"]
   },

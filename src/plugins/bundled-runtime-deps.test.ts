@@ -14,6 +14,7 @@ import {
   isWritableDirectory,
   resolveBundledRuntimeDependencyInstallRoot,
   resolveBundledRuntimeDepsNpmRunner,
+  scanBundledPluginRuntimeDeps,
   type BundledRuntimeDepsInstallParams,
 } from "./bundled-runtime-deps.js";
 
@@ -29,6 +30,56 @@ function makeTempDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-runtime-deps-test-"));
   tempDirs.push(dir);
   return dir;
+}
+
+function writeInstalledPackage(rootDir: string, packageName: string, version: string): void {
+  const packageDir = path.join(rootDir, "node_modules", ...packageName.split("/"));
+  fs.mkdirSync(packageDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(packageDir, "package.json"),
+    JSON.stringify({ name: packageName, version }),
+    "utf8",
+  );
+}
+
+function writeBundledPluginPackage(params: {
+  packageRoot: string;
+  pluginId: string;
+  deps: Record<string, string>;
+  enabledByDefault?: boolean;
+  channels?: string[];
+}): string {
+  const pluginRoot = path.join(params.packageRoot, "dist", "extensions", params.pluginId);
+  fs.mkdirSync(pluginRoot, { recursive: true });
+  fs.writeFileSync(
+    path.join(pluginRoot, "package.json"),
+    JSON.stringify({ dependencies: params.deps }),
+  );
+  fs.writeFileSync(
+    path.join(pluginRoot, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: params.pluginId,
+      enabledByDefault: params.enabledByDefault === true,
+      ...(params.channels ? { channels: params.channels } : {}),
+    }),
+  );
+  return pluginRoot;
+}
+
+function statfsFixture(params: {
+  bavail: number;
+  bsize?: number;
+  blocks?: number;
+}): ReturnType<typeof fs.statfsSync> {
+  return {
+    type: 0,
+    bsize: params.bsize ?? 1024,
+    blocks: params.blocks ?? 2_000_000,
+    bfree: params.bavail,
+    bavail: params.bavail,
+    files: 0,
+    ffree: 0,
+  };
 }
 
 afterEach(() => {
@@ -182,13 +233,16 @@ describe("installBundledRuntimeDeps", () => {
     vi.spyOn(fs, "existsSync").mockImplementation(
       (candidate) => candidate === "C:\\node\\node_modules\\npm\\bin\\npm-cli.js",
     );
-    spawnSyncMock.mockReturnValue({
-      pid: 123,
-      output: [],
-      stdout: "",
-      stderr: "",
-      signal: null,
-      status: 0,
+    spawnSyncMock.mockImplementation((_command, _args, options) => {
+      writeInstalledPackage(String(options?.cwd ?? ""), "acpx", "0.5.3");
+      return {
+        pid: 123,
+        output: [],
+        stdout: "",
+        stderr: "",
+        signal: null,
+        status: 0,
+      };
     });
 
     installBundledRuntimeDeps({
@@ -235,6 +289,7 @@ describe("installBundledRuntimeDeps", () => {
         name: "openclaw-runtime-deps-install",
         private: true,
       });
+      writeInstalledPackage(cwd, "@grammyjs/runner", "2.0.3");
       return {
         pid: 123,
         output: [],
@@ -259,6 +314,41 @@ describe("installBundledRuntimeDeps", () => {
       expect.objectContaining({
         cwd: installRoot,
       }),
+    );
+  });
+
+  it("warns but still installs bundled runtime deps when disk space looks low", () => {
+    const installRoot = makeTempDir();
+    const warn = vi.fn();
+    vi.spyOn(fs, "statfsSync").mockReturnValue(
+      statfsFixture({
+        bavail: 256,
+        bsize: 1024 * 1024,
+      }),
+    );
+    spawnSyncMock.mockImplementation((_command, _args, options) => {
+      writeInstalledPackage(String(options?.cwd ?? ""), "acpx", "0.5.3");
+      return {
+        pid: 123,
+        output: [],
+        stdout: "",
+        stderr: "",
+        signal: null,
+        status: 0,
+      };
+    });
+
+    installBundledRuntimeDeps({
+      installRoot,
+      missingSpecs: ["acpx@0.5.3"],
+      env: {},
+      warn,
+    });
+
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("Low disk space near"));
+    expect(spawnSyncMock).toHaveBeenCalled();
+    expect(fs.existsSync(path.join(installRoot, "node_modules", "acpx", "package.json"))).toBe(
+      true,
     );
   });
 
@@ -317,13 +407,16 @@ describe("installBundledRuntimeDeps", () => {
 
   it("uses an OpenClaw-owned npm cache for runtime dependency installs", () => {
     const installRoot = makeTempDir();
-    spawnSyncMock.mockReturnValue({
-      pid: 123,
-      output: [],
-      stdout: "",
-      stderr: "",
-      signal: null,
-      status: 0,
+    spawnSyncMock.mockImplementation((_command, _args, options) => {
+      writeInstalledPackage(String(options?.cwd ?? ""), "tokenjuice", "0.6.1");
+      return {
+        pid: 123,
+        output: [],
+        stdout: "",
+        stderr: "",
+        signal: null,
+        status: 0,
+      };
     });
 
     installBundledRuntimeDeps({
@@ -372,6 +465,26 @@ describe("installBundledRuntimeDeps", () => {
         }),
       }),
     );
+  });
+
+  it("fails when npm exits cleanly without installing requested packages", () => {
+    const installRoot = makeTempDir();
+    spawnSyncMock.mockReturnValue({
+      pid: 123,
+      output: [],
+      stdout: "",
+      stderr: "",
+      signal: null,
+      status: 0,
+    });
+
+    expect(() =>
+      installBundledRuntimeDeps({
+        installRoot,
+        missingSpecs: ["tokenjuice@0.6.1"],
+        env: {},
+      }),
+    ).toThrow(`npm install did not place bundled runtime deps in ${installRoot}: tokenjuice@0.6.1`);
   });
 
   it("cleans an owned isolated execution root after copying node_modules back", () => {
@@ -496,6 +609,116 @@ describe("installBundledRuntimeDeps", () => {
         env: {},
       }),
     ).toThrow("spawn npm ENOENT");
+  });
+});
+
+describe("scanBundledPluginRuntimeDeps config policy", () => {
+  function setupPolicyPackageRoot(): string {
+    const packageRoot = makeTempDir();
+    writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "alpha",
+      deps: { "alpha-runtime": "1.0.0" },
+      enabledByDefault: true,
+    });
+    writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "telegram",
+      deps: { "telegram-runtime": "2.0.0" },
+      channels: ["telegram"],
+    });
+    return packageRoot;
+  }
+
+  it.each([
+    {
+      name: "includes default-enabled bundled plugins",
+      config: {},
+      includeConfiguredChannels: false,
+      expectedDeps: ["alpha-runtime@1.0.0"],
+    },
+    {
+      name: "keeps default-enabled bundled plugins behind restrictive allowlists",
+      config: { plugins: { allow: ["browser"] } },
+      includeConfiguredChannels: false,
+      expectedDeps: [],
+    },
+    {
+      name: "does not let explicit plugin entries bypass restrictive allowlists",
+      config: { plugins: { allow: ["browser"], entries: { alpha: { enabled: true } } } },
+      includeConfiguredChannels: false,
+      expectedDeps: [],
+    },
+    {
+      name: "lets deny override default-enabled bundled plugins",
+      config: { plugins: { deny: ["alpha"] } },
+      includeConfiguredChannels: false,
+      expectedDeps: [],
+    },
+    {
+      name: "lets disabled entries override default-enabled bundled plugins",
+      config: { plugins: { entries: { alpha: { enabled: false } } } },
+      includeConfiguredChannels: false,
+      expectedDeps: [],
+    },
+    {
+      name: "lets explicit bundled channel enablement bypass restrictive allowlists",
+      config: {
+        plugins: { allow: ["browser"] },
+        channels: { telegram: { enabled: true } },
+      },
+      includeConfiguredChannels: false,
+      expectedDeps: ["telegram-runtime@2.0.0"],
+    },
+    {
+      name: "keeps channel recovery behind restrictive allowlists",
+      config: {
+        plugins: { allow: ["browser"] },
+        channels: { telegram: { botToken: "123:abc" } },
+      },
+      includeConfiguredChannels: true,
+      expectedDeps: [],
+    },
+    {
+      name: "includes configured channels during recovery without restrictive allowlists",
+      config: { channels: { telegram: { botToken: "123:abc" } } },
+      includeConfiguredChannels: true,
+      expectedDeps: ["alpha-runtime@1.0.0", "telegram-runtime@2.0.0"],
+    },
+    {
+      name: "lets explicit channel disable override recovery",
+      config: { channels: { telegram: { botToken: "123:abc", enabled: false } } },
+      includeConfiguredChannels: true,
+      expectedDeps: ["alpha-runtime@1.0.0"],
+    },
+  ])("$name", ({ config, includeConfiguredChannels, expectedDeps }) => {
+    const result = scanBundledPluginRuntimeDeps({
+      packageRoot: setupPolicyPackageRoot(),
+      config,
+      includeConfiguredChannels,
+    });
+
+    expect(result.deps.map((dep) => `${dep.name}@${dep.version}`)).toEqual(expectedDeps);
+    expect(result.conflicts).toEqual([]);
+  });
+
+  it("reads each bundled plugin manifest once per runtime-deps scan", () => {
+    const packageRoot = makeTempDir();
+    const pluginRoot = writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "alpha",
+      deps: { "alpha-runtime": "1.0.0" },
+      enabledByDefault: true,
+      channels: ["alpha"],
+    });
+    const manifestPath = path.join(pluginRoot, "openclaw.plugin.json");
+    const readFileSyncSpy = vi.spyOn(fs, "readFileSync");
+
+    scanBundledPluginRuntimeDeps({ packageRoot, config: {} });
+
+    expect(
+      readFileSyncSpy.mock.calls.filter((call) => path.resolve(String(call[0])) === manifestPath),
+    ).toHaveLength(1);
   });
 });
 

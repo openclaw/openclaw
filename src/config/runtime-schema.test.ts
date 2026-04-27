@@ -27,6 +27,11 @@ vi.mock("../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistry: (...args: unknown[]) => mockLoadPluginManifestRegistry(...args),
 }));
 
+vi.mock("../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: (...args: unknown[]) =>
+    mockLoadPluginManifestRegistry(...args),
+}));
+
 function makeSnapshot(params: { valid: boolean; config?: OpenClawConfig }): ConfigFileSnapshot {
   return {
     path: "/tmp/openclaw.json",
@@ -238,7 +243,7 @@ describe("loadGatewayRuntimeConfigSchema", () => {
     loadGatewayRuntimeConfigSchema();
     loadGatewayRuntimeConfigSchema();
 
-    expect(mockLoadPluginManifestRegistry).toHaveBeenCalledTimes(6);
+    expect(mockLoadPluginManifestRegistry).toHaveBeenCalledTimes(3);
     for (const call of mockLoadPluginManifestRegistry.mock.calls) {
       expect(call[0]).toMatchObject({ cache: false });
     }

@@ -150,6 +150,107 @@ const replyMediaPathMocks = vi.hoisted(() => ({
 const runtimePluginMocks = vi.hoisted(() => ({
   ensureRuntimePluginsLoaded: vi.fn(),
 }));
+const conversationBindingMocks = vi.hoisted(() => {
+  type BindingMsgContext = {
+    OriginatingChannel?: string | null;
+    Surface?: string | null;
+    Provider?: string | null;
+    AccountId?: string | null;
+    MessageThreadId?: string | number | null;
+    ThreadParentId?: string | null;
+    SenderId?: string | null;
+    SessionKey?: string | null;
+    ParentSessionKey?: string | null;
+    OriginatingTo?: string | null;
+    To?: string | null;
+    From?: string | null;
+    NativeChannelId?: string | null;
+  };
+  type BindingConfig = {
+    channels?: Record<string, { defaultAccount?: string | null } | undefined>;
+  };
+
+  const normalizeText = (value: string | number | null | undefined) =>
+    typeof value === "number" ? `${value}` : (value ?? "").trim();
+  const normalizeChannel = (value: string | null | undefined) => normalizeText(value).toLowerCase();
+  const resolveChannel = (ctx: BindingMsgContext, commandChannel?: string | null) =>
+    normalizeChannel(ctx.OriginatingChannel ?? commandChannel ?? ctx.Surface ?? ctx.Provider);
+  const resolveAccountId = (ctx: BindingMsgContext, cfg: BindingConfig, channel: string) =>
+    normalizeText(ctx.AccountId) ||
+    normalizeText(cfg.channels?.[channel]?.defaultAccount) ||
+    "default";
+  const resolveTarget = (channel: string, value: string | null | undefined) => {
+    const target = normalizeText(value);
+    if (!target) {
+      return undefined;
+    }
+    const channelPrefix = `${channel}:`;
+    return target.toLowerCase().startsWith(channelPrefix)
+      ? target.slice(channelPrefix.length)
+      : target;
+  };
+  const resolveThreadId = (ctx: BindingMsgContext) =>
+    normalizeText(ctx.MessageThreadId) || undefined;
+
+  const resolveConversationBindingContextFromMessage = vi.fn(
+    (params: { cfg: BindingConfig; ctx: BindingMsgContext }) => {
+      const channel = resolveChannel(params.ctx);
+      if (!channel) {
+        return null;
+      }
+      const threadId = resolveThreadId(params.ctx);
+      const baseConversationId =
+        resolveTarget(channel, params.ctx.OriginatingTo) ?? resolveTarget(channel, params.ctx.To);
+      const conversationId = threadId ?? baseConversationId;
+      if (!conversationId) {
+        return null;
+      }
+      const parentConversationId =
+        threadId && baseConversationId && baseConversationId !== threadId
+          ? baseConversationId
+          : resolveTarget(channel, params.ctx.ThreadParentId);
+      return {
+        channel,
+        accountId: resolveAccountId(params.ctx, params.cfg, channel),
+        conversationId,
+        ...(parentConversationId ? { parentConversationId } : {}),
+        ...(threadId ? { threadId } : {}),
+      };
+    },
+  );
+
+  return {
+    resolveConversationBindingAccountIdFromMessage: (params: {
+      ctx: BindingMsgContext;
+      cfg: BindingConfig;
+      commandChannel?: string | null;
+    }) =>
+      resolveAccountId(params.ctx, params.cfg, resolveChannel(params.ctx, params.commandChannel)),
+    resolveConversationBindingChannelFromMessage: (
+      ctx: BindingMsgContext,
+      commandChannel?: string | null,
+    ) => resolveChannel(ctx, commandChannel),
+    resolveConversationBindingContextFromAcpCommand: (params: {
+      cfg: BindingConfig;
+      ctx: BindingMsgContext;
+      command?: { to?: string | null; senderId?: string | null };
+      sessionKey?: string | null;
+      parentSessionKey?: string | null;
+    }) =>
+      resolveConversationBindingContextFromMessage({
+        cfg: params.cfg,
+        ctx: {
+          ...params.ctx,
+          SenderId: params.command?.senderId ?? params.ctx.SenderId,
+          SessionKey: params.sessionKey ?? params.ctx.SessionKey,
+          ParentSessionKey: params.parentSessionKey ?? params.ctx.ParentSessionKey,
+          To: params.command?.to ?? params.ctx.To,
+        },
+      }),
+    resolveConversationBindingContextFromMessage,
+    resolveConversationBindingThreadIdFromMessage: (ctx: BindingMsgContext) => resolveThreadId(ctx),
+  };
+});
 const threadInfoMocks = vi.hoisted(() => ({
   parseSessionThreadInfo: vi.fn<
     (sessionKey: string | undefined) => {
@@ -344,6 +445,18 @@ vi.mock("./reply-media-paths.runtime.js", () => ({
 }));
 vi.mock("../../agents/runtime-plugins.js", () => ({
   ensureRuntimePluginsLoaded: runtimePluginMocks.ensureRuntimePluginsLoaded,
+}));
+vi.mock("./conversation-binding-input.js", () => ({
+  resolveConversationBindingAccountIdFromMessage:
+    conversationBindingMocks.resolveConversationBindingAccountIdFromMessage,
+  resolveConversationBindingChannelFromMessage:
+    conversationBindingMocks.resolveConversationBindingChannelFromMessage,
+  resolveConversationBindingContextFromAcpCommand:
+    conversationBindingMocks.resolveConversationBindingContextFromAcpCommand,
+  resolveConversationBindingContextFromMessage:
+    conversationBindingMocks.resolveConversationBindingContextFromMessage,
+  resolveConversationBindingThreadIdFromMessage:
+    conversationBindingMocks.resolveConversationBindingThreadIdFromMessage,
 }));
 vi.mock("../../tts/status-config.js", () => ({
   resolveStatusTtsSnapshot: () => ({
@@ -771,7 +884,8 @@ describe("dispatchReplyFromConfig", () => {
       OriginatingTo: undefined,
     });
 
-    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    const replyResolver = async () =>
+      ({ text: "hi", mediaUrl: "https://example.test/reply.png" }) satisfies ReplyPayload;
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
@@ -2352,6 +2466,47 @@ describe("dispatchReplyFromConfig", () => {
     expect(finalPayload?.text).toBeUndefined();
   });
 
+  it("normalizes accumulated block TTS-only media before final delivery", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    replyMediaPathMocks.createReplyMediaPathNormalizer.mockReturnValue(
+      async (payload: ReplyPayload) => ({
+        ...payload,
+        mediaUrl: "/tmp/openclaw-media/normalized-tts.ogg",
+        mediaUrls: ["/tmp/openclaw-media/normalized-tts.ogg"],
+      }),
+    );
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "feishu",
+      Surface: "feishu",
+      SessionKey: "agent:main:feishu:ou_user",
+    });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload | undefined> => {
+      await opts?.onBlockReply?.({ text: "Hello from block streaming." });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(replyMediaPathMocks.createReplyMediaPathNormalizer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageProvider: "feishu",
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaUrl: "/tmp/openclaw-media/normalized-tts.ogg",
+        mediaUrls: ["/tmp/openclaw-media/normalized-tts.ogg"],
+        audioAsVoice: true,
+        spokenText: "Hello from block streaming.",
+      }),
+    );
+  });
+
   it("closes oneshot ACP sessions after the turn completes", async () => {
     setNoAbort();
     const runtime = createAcpRuntime([{ type: "done" }]);
@@ -3235,6 +3390,95 @@ describe("dispatchReplyFromConfig", () => {
         error: "Error: dispatch failed",
       }),
     );
+  });
+
+  it("poisons inbound dedupe when dispatch fails after a block reply", async () => {
+    setNoAbort();
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      OriginatingChannel: "whatsapp",
+      OriginatingTo: "whatsapp:+15555550125",
+      To: "whatsapp:+15555550125",
+      AccountId: "default",
+      MessageSid: "msg-dup-block-error",
+      SessionKey: "agent:main:whatsapp:direct:+15555550125",
+      CommandBody: "hello",
+      RawBody: "hello",
+      Body: "hello",
+    });
+    const firstDispatcher = createDispatcher();
+    const replyResolver = vi.fn(
+      async (_ctx: MsgContext, opts?: GetReplyOptions): Promise<ReplyPayload | undefined> => {
+        await opts?.onBlockReply?.({ text: "partial answer" });
+        throw new Error("provider failed after block");
+      },
+    );
+
+    await expect(
+      dispatchReplyFromConfig({
+        ctx,
+        cfg: emptyConfig,
+        dispatcher: firstDispatcher,
+        replyResolver,
+      }),
+    ).rejects.toThrow("provider failed after block");
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+      replyResolver,
+    });
+
+    expect(firstDispatcher.sendBlockReply).toHaveBeenCalledWith({ text: "partial answer" });
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+  });
+
+  it("poisons inbound dedupe when dispatch fails after a suppressed tool result", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "deny",
+    };
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      OriginatingChannel: "whatsapp",
+      OriginatingTo: "whatsapp:+15555550126",
+      To: "whatsapp:+15555550126",
+      AccountId: "default",
+      MessageSid: "msg-dup-tool-error",
+      SessionKey: "agent:main:whatsapp:direct:+15555550126",
+      CommandBody: "hello",
+      RawBody: "hello",
+      Body: "hello",
+    });
+    const firstDispatcher = createDispatcher();
+    const replyResolver = vi.fn(
+      async (_ctx: MsgContext, opts?: GetReplyOptions): Promise<ReplyPayload | undefined> => {
+        await opts?.onToolResult?.({ text: "tool touched external state" });
+        throw new Error("provider failed after tool");
+      },
+    );
+
+    await expect(
+      dispatchReplyFromConfig({
+        ctx,
+        cfg: emptyConfig,
+        dispatcher: firstDispatcher,
+        replyResolver,
+      }),
+    ).rejects.toThrow("provider failed after tool");
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+      replyResolver,
+    });
+
+    expect(firstDispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(replyResolver).toHaveBeenCalledTimes(1);
   });
 
   it("passes configOverride to replyResolver when provided", async () => {

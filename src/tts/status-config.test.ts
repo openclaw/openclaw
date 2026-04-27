@@ -138,6 +138,44 @@ describe("resolveStatusTtsSnapshot", () => {
     });
   });
 
+  it("reports per-agent persona provider over global persona", async () => {
+    await withStatusTempHome(async () => {
+      expect(
+        resolveStatusTtsSnapshot({
+          cfg: {
+            messages: {
+              tts: {
+                auto: "always",
+                persona: "alfred",
+                personas: {
+                  alfred: { provider: "google" },
+                  jarvis: { provider: "edge" },
+                },
+              },
+            },
+            agents: {
+              list: [
+                {
+                  id: "reader",
+                  tts: {
+                    persona: "jarvis",
+                  },
+                },
+              ],
+            },
+          } as OpenClawConfig,
+          agentId: "reader",
+        }),
+      ).toEqual({
+        autoMode: "always",
+        provider: "microsoft",
+        persona: "jarvis",
+        maxLength: 1500,
+        summarize: true,
+      });
+    });
+  });
+
   it("reports configured OpenAI TTS model, voice, and sanitized custom endpoint", async () => {
     await withStatusTempHome(async () => {
       expect(

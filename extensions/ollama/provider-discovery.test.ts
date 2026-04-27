@@ -210,10 +210,10 @@ describe("Ollama provider", () => {
       vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
 
       const provider = await runOllamaCatalog({
-        env: { VITEST: "", NODE_ENV: "development" },
+        env: { OLLAMA_API_KEY: OLLAMA_LOCAL_AUTH_MARKER, VITEST: "", NODE_ENV: "development" },
       });
 
-      expect(provider?.apiKey).toBe(OLLAMA_LOCAL_AUTH_MARKER);
+      expect(provider?.apiKey).toBe("OLLAMA_API_KEY");
       expect(provider?.api).toBe("ollama");
       expect(provider?.baseUrl).toBe("http://127.0.0.1:11434");
       expect(provider?.models).toHaveLength(2);

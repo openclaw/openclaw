@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveBundledInstallPlanForCatalogEntry } from "../cli/plugin-install-plan.js";
-import { refreshPluginRegistryAfterConfigMutation } from "../cli/plugins-registry-refresh.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import {
@@ -134,23 +133,6 @@ function formatPortableLocalPath(localPath: string, workspaceDir?: string): stri
     }
   }
   return undefined;
-}
-
-async function refreshRegistryAfterOnboardingPluginInstall(params: {
-  cfg: OpenClawConfig;
-  refreshRegistry?: boolean;
-  runtime: RuntimeEnv;
-  workspaceDir?: string;
-}) {
-  if (params.refreshRegistry === false) {
-    return;
-  }
-  await refreshPluginRegistryAfterConfigMutation({
-    config: params.cfg,
-    reason: "source-changed",
-    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    logger: { warn: (message) => params.runtime.log(message) },
-  });
 }
 
 async function recordLocalPluginInstall(params: {
@@ -438,9 +420,9 @@ export async function ensureOnboardingPluginInstalled(params: {
   cfg: OpenClawConfig;
   entry: OnboardingPluginInstallEntry;
   prompter: WizardPrompter;
-  refreshRegistry?: boolean;
   runtime: RuntimeEnv;
   workspaceDir?: string;
+  promptInstall?: boolean;
 }): Promise<OnboardingPluginInstallResult> {
   const { entry, prompter, runtime, workspaceDir } = params;
   let next = params.cfg;
@@ -461,12 +443,15 @@ export async function ensureOnboardingPluginInstalled(params: {
     bundledLocalPath,
     hasNpmSpec: Boolean(npmSpec),
   });
-  const choice = await promptInstallChoice({
-    entry,
-    localPath,
-    defaultChoice,
-    prompter,
-  });
+  const choice =
+    params.promptInstall === false
+      ? defaultChoice
+      : await promptInstallChoice({
+          entry,
+          localPath,
+          defaultChoice,
+          prompter,
+        });
 
   if (choice === "skip") {
     return {
@@ -495,12 +480,6 @@ export async function ensureOnboardingPluginInstalled(params: {
     }
     next = addPluginLoadPath(enableResult.config, localPath);
     next = await recordLocalPluginInstall({ cfg: next, entry, localPath, npmSpec, workspaceDir });
-    await refreshRegistryAfterOnboardingPluginInstall({
-      cfg: next,
-      refreshRegistry: params.refreshRegistry,
-      runtime,
-      workspaceDir,
-    });
     return {
       cfg: next,
       installed: true,
@@ -579,12 +558,6 @@ export async function ensureOnboardingPluginInstalled(params: {
       ...buildNpmResolutionInstallFields(result.npmResolution),
     } as const;
     next = recordPluginInstall(next, install);
-    await refreshRegistryAfterOnboardingPluginInstall({
-      cfg: next,
-      refreshRegistry: params.refreshRegistry,
-      runtime,
-      workspaceDir,
-    });
     return {
       cfg: next,
       installed: true,
@@ -624,12 +597,6 @@ export async function ensureOnboardingPluginInstalled(params: {
       }
       next = addPluginLoadPath(enableResult.config, localPath);
       next = await recordLocalPluginInstall({ cfg: next, entry, localPath, npmSpec, workspaceDir });
-      await refreshRegistryAfterOnboardingPluginInstall({
-        cfg: next,
-        refreshRegistry: params.refreshRegistry,
-        runtime,
-        workspaceDir,
-      });
       return {
         cfg: next,
         installed: true,

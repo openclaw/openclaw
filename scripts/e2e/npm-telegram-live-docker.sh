@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Installs a published OpenClaw npm package in Docker, performs Telegram
+# onboarding/doctor recovery, then runs the Telegram QA live harness.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -47,6 +49,7 @@ validate_openclaw_package_spec() {
 validate_openclaw_package_spec "$PACKAGE_SPEC"
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" npm-telegram-live "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "$DOCKER_TARGET"
+docker_e2e_harness_mount_args
 
 mkdir -p "$ROOT_DIR/.artifacts/qa-e2e"
 run_log="$(mktemp "${TMPDIR:-/tmp}/openclaw-npm-telegram-live.XXXXXX")"
@@ -141,9 +144,12 @@ command -v openclaw
 openclaw --version
 EOF
 
+# Mount only test harness/plugin QA sources; the SUT itself is the npm install.
 run_logged docker run --rm \
   "${docker_env[@]}" \
   -v "$ROOT_DIR/.artifacts:/app/.artifacts" \
+  "${DOCKER_E2E_HARNESS_ARGS[@]}" \
+  -v "$ROOT_DIR/extensions:/app/extensions:ro" \
   -v "$npm_prefix_host:/npm-global" \
   -i "$IMAGE_NAME" bash -s <<'EOF'
 set -euo pipefail
@@ -153,11 +159,55 @@ export NPM_CONFIG_PREFIX="/npm-global"
 export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
 export OPENCLAW_NPM_TELEGRAM_REPO_ROOT="/app"
 
+dump_hotpath_logs() {
+  local status="$1"
+  echo "installed npm onboarding recovery hot path failed with exit code $status" >&2
+  for file in \
+    /tmp/openclaw-npm-telegram-onboard.json \
+    /tmp/openclaw-npm-telegram-channel-add.log \
+    /tmp/openclaw-npm-telegram-doctor-fix.log \
+    /tmp/openclaw-npm-telegram-doctor-check.log; do
+    if [ -f "$file" ]; then
+      echo "--- $file ---" >&2
+      sed -n '1,220p' "$file" >&2 || true
+    fi
+  done
+}
+trap 'status=$?; dump_hotpath_logs "$status"; exit "$status"' ERR
+
 command -v openclaw
 openclaw --version
+# The mounted QA harness imports openclaw/plugin-sdk; point that package import
+# at the installed npm package without copying source into the test image.
+mkdir -p /app/node_modules
+ln -sfn /npm-global/lib/node_modules/openclaw /app/node_modules/openclaw
+
+echo "Running installed npm onboarding recovery hot path..."
+OPENAI_API_KEY="${OPENAI_API_KEY:-sk-openclaw-npm-telegram-hotpath}" openclaw onboard --non-interactive --accept-risk \
+  --mode local \
+  --auth-choice openai-api-key \
+  --secret-input-mode ref \
+  --gateway-port 18789 \
+  --gateway-bind loopback \
+  --skip-daemon \
+  --skip-ui \
+  --skip-skills \
+  --skip-health \
+  --json >/tmp/openclaw-npm-telegram-onboard.json </dev/null
+
+openclaw channels add --channel telegram --token "123456:openclaw-npm-telegram-hotpath" >/tmp/openclaw-npm-telegram-channel-add.log 2>&1 </dev/null
+openclaw doctor --fix --non-interactive >/tmp/openclaw-npm-telegram-doctor-fix.log 2>&1 </dev/null
+openclaw doctor --non-interactive >/tmp/openclaw-npm-telegram-doctor-check.log 2>&1 </dev/null
+if grep -F -q "Bundled plugin runtime deps are missing." /tmp/openclaw-npm-telegram-doctor-check.log; then
+  exit 1
+fi
+if grep -F -q "Failed to install bundled plugin runtime deps" /tmp/openclaw-npm-telegram-doctor-fix.log; then
+  exit 1
+fi
 
 export OPENCLAW_NPM_TELEGRAM_SUT_COMMAND="$(command -v openclaw)"
-node --import tsx scripts/e2e/npm-telegram-live-runner.ts
+trap - ERR
+tsx scripts/e2e/npm-telegram-live-runner.ts
 EOF
 
 echo "published npm Telegram live Docker E2E passed ($PACKAGE_SPEC)"

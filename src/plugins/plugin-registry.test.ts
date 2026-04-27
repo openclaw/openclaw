@@ -24,6 +24,9 @@ import {
   refreshPluginRegistry,
   resolveChannelOwners,
   resolveCliBackendOwners,
+  resolveManifestContractOwnerPluginId,
+  resolveManifestContractPluginIds,
+  resolveManifestContractPluginIdsByCompatibilityRuntimePath,
   resolvePluginContributionOwners,
   resolveProviderOwners,
   resolveSetupProviderOwners,
@@ -85,6 +88,10 @@ function createCandidate(rootDir: string): PluginCandidate {
       commandAliases: [{ name: "demo-command" }],
       contracts: {
         tools: ["demo-tool"],
+        webSearchProviders: ["demo-search"],
+      },
+      configContracts: {
+        compatibilityRuntimePaths: ["tools.web.search.demo-search.apiKey"],
       },
     }),
     "utf8",
@@ -159,6 +166,23 @@ describe("plugin registry facade", () => {
       }),
     ).toEqual(["demo"]);
     expect(resolveSetupProviderOwners({ index, setupProviderId: "demo-setup" })).toEqual(["demo"]);
+    expect(resolveManifestContractPluginIds({ index, contract: "webSearchProviders" })).toEqual([
+      "demo",
+    ]);
+    expect(
+      resolveManifestContractOwnerPluginId({
+        index,
+        contract: "webSearchProviders",
+        value: "demo-search",
+      }),
+    ).toBe("demo");
+    expect(
+      resolveManifestContractPluginIdsByCompatibilityRuntimePath({
+        index,
+        contract: "webSearchProviders",
+        path: "tools.web.search.demo-search.apiKey",
+      }),
+    ).toEqual(["demo"]);
   });
 
   it("keeps disabled records inspectable while excluding owners by default", () => {
@@ -285,6 +309,13 @@ describe("plugin registry facade", () => {
         policyHash: resolveInstalledPluginIndexPolicyHash({
           plugins: { entries: { persisted: { enabled: true } } },
         }),
+        installRecords: {
+          persisted: {
+            source: "npm",
+            spec: "persisted-plugin@1.0.0",
+            installPath: path.join(stateDir, "plugins", "persisted"),
+          },
+        },
       }),
       { stateDir },
     );
@@ -305,6 +336,12 @@ describe("plugin registry facade", () => {
     expect(listPluginRecords({ index: result.snapshot }).map((plugin) => plugin.pluginId)).toEqual([
       "demo",
     ]);
+    expect(result.snapshot.installRecords).toMatchObject({
+      persisted: {
+        source: "npm",
+        spec: "persisted-plugin@1.0.0",
+      },
+    });
   });
 
   it("falls back to the derived registry when the persisted registry is missing", () => {

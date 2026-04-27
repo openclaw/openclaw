@@ -12,6 +12,7 @@ import {
 } from "./bundled-compat.js";
 import type { PluginCompatCode } from "./compat/registry.js";
 import { normalizePluginsConfig } from "./config-state.js";
+import { resolveEffectivePluginIds } from "./effective-plugin-ids.js";
 import {
   buildPluginShapeSummary,
   type PluginCapabilityEntry,
@@ -149,6 +150,7 @@ function resolveReportedPluginVersion(
 
 type PluginReportParams = {
   config?: OpenClawConfig;
+  effectiveOnly?: boolean;
   workspaceDir?: string;
   /** Use an explicit env when plugin roots should resolve independently from process.env. */
   env?: NodeJS.ProcessEnv;
@@ -159,12 +161,19 @@ function buildPluginRecordFromInstalledIndex(
   plugin: import("./installed-plugin-index.js").InstalledPluginIndexRecord,
   manifest?: PluginManifestRecord,
 ): PluginRecord {
+  const format = plugin.format ?? manifest?.format ?? "openclaw";
+  const bundleFormat = plugin.bundleFormat ?? manifest?.bundleFormat;
   return {
     id: plugin.pluginId,
-    name: plugin.pluginId,
-    ...(plugin.packageVersion ? { version: plugin.packageVersion } : {}),
-    format: "openclaw",
-    source: plugin.manifestPath,
+    name: manifest?.name ?? plugin.packageName ?? plugin.pluginId,
+    ...(plugin.packageVersion || manifest?.version
+      ? { version: plugin.packageVersion ?? manifest?.version }
+      : {}),
+    ...(manifest?.description ? { description: manifest.description } : {}),
+    format,
+    ...(bundleFormat ? { bundleFormat } : {}),
+    ...(manifest?.kind ? { kind: manifest.kind } : {}),
+    source: plugin.source ?? plugin.manifestPath,
     rootDir: plugin.rootDir,
     origin: plugin.origin,
     enabled: plugin.enabled,
@@ -266,6 +275,14 @@ function buildPluginReport(
     config: effectiveConfig,
     pluginIds: bundledProviderIds,
   });
+  const onlyPluginIds =
+    params?.effectiveOnly === true
+      ? resolveEffectivePluginIds({
+          config: rawConfig,
+          workspaceDir,
+          env: params?.env ?? process.env,
+        })
+      : undefined;
 
   const registry = loadModules
     ? loadOpenClawPlugins(
@@ -277,6 +294,7 @@ function buildPluginReport(
           loadModules,
           activate: false,
           cache: false,
+          onlyPluginIds,
         }),
       )
     : loadPluginMetadataRegistrySnapshot({
@@ -286,6 +304,7 @@ function buildPluginReport(
         env: params?.env,
         logger: params?.logger,
         loadModules: false,
+        onlyPluginIds,
       });
   const importedPluginIds = new Set([
     ...(loadModules

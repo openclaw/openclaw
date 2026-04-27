@@ -195,7 +195,7 @@ async function writeLiveGatewayConfig(params: {
     agents: {
       defaults: {
         workspace: params.workspace,
-        embeddedHarness: { runtime: "codex", fallback: "none" },
+        agentRuntime: { id: "codex", fallback: "none" },
         skipBootstrap: true,
         timeoutSeconds: CODEX_HARNESS_AGENT_TIMEOUT_SECONDS,
         model: { primary: params.modelKey },
@@ -543,7 +543,7 @@ async function waitForCodexSubagentStarted(params: {
   events: CapturedAgentEvent[];
   parentSessionKey: string;
 }): Promise<Record<string, unknown> | undefined> {
-  const deadline = Date.now() + Math.min(CODEX_HARNESS_REQUEST_TIMEOUT_MS, 30_000);
+  const deadline = Date.now() + Math.min(CODEX_HARNESS_REQUEST_TIMEOUT_MS, 120_000);
   let lastRow: Record<string, unknown> | undefined;
   let lastError: unknown;
   while (Date.now() < deadline) {

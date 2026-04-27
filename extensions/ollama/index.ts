@@ -1,7 +1,4 @@
-import {
-  resolvePluginConfigObject,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/config-runtime";
+import { resolvePluginConfigObject, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   definePluginEntry,
   type OpenClawPluginApi,
@@ -11,7 +8,10 @@ import {
   type ProviderDiscoveryContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { buildApiKeyCredential } from "openclaw/plugin-sdk/provider-auth";
-import { OPENAI_COMPATIBLE_REPLAY_HOOKS } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  buildOpenAICompatibleReplayPolicy,
+  OPENAI_COMPATIBLE_REPLAY_HOOKS,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import {
   buildOllamaProvider,
   configureOllamaNonInteractive,
@@ -31,6 +31,7 @@ import {
 } from "./src/embedding-provider.js";
 import { ollamaMediaUnderstandingProvider } from "./src/media-understanding-provider.js";
 import { ollamaMemoryEmbeddingProviderAdapter } from "./src/memory-embedding-adapter.js";
+import { readProviderBaseUrl } from "./src/provider-base-url.js";
 import {
   createConfiguredOllamaCompatStreamWrapper,
   createConfiguredOllamaStreamFn,
@@ -161,20 +162,33 @@ export default definePluginEntry({
       createStreamFn: ({ config, model, provider }) => {
         return createConfiguredOllamaStreamFn({
           model,
-          providerBaseUrl: resolveConfiguredOllamaProviderConfig({ config, providerId: provider })
-            ?.baseUrl,
+          providerBaseUrl: readProviderBaseUrl(
+            resolveConfiguredOllamaProviderConfig({ config, providerId: provider }),
+          ),
         });
       },
       ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
+      buildReplayPolicy: (ctx) =>
+        ctx.modelApi === "ollama"
+          ? buildOpenAICompatibleReplayPolicy("openai-completions")
+          : buildOpenAICompatibleReplayPolicy(ctx.modelApi),
       contributeResolvedModelCompat: ({ model }) =>
         usesOllamaOpenAICompatTransport(model) ? { supportsUsageInStreaming: true } : undefined,
       resolveReasoningOutputMode: () => "native",
+      resolveThinkingProfile: ({ reasoning }) => ({
+        levels:
+          reasoning === true
+            ? [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }]
+            : [{ id: "off" }],
+        defaultLevel: "off",
+      }),
       wrapStreamFn: createConfiguredOllamaCompatStreamWrapper,
-      createEmbeddingProvider: async ({ config, model, remote }) => {
+      createEmbeddingProvider: async ({ config, model, provider: embeddingProvider, remote }) => {
         const { provider, client } = await createOllamaEmbeddingProvider({
           config,
           remote,
           model: model || DEFAULT_OLLAMA_EMBEDDING_MODEL,
+          provider: embeddingProvider || OLLAMA_PROVIDER_ID,
         });
         return {
           ...provider,
