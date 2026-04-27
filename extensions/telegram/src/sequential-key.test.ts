@@ -176,6 +176,25 @@ describe("getTelegramSequentialKey", () => {
       { message: mockMessage({ chat: mockChat({ id: 123 }), text: "please do not do that" }) },
       "telegram:123",
     ],
+    // Session control commands should bypass the queue
+    [
+      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/new" }) },
+      "telegram:123:control",
+    ],
+    [
+      { message: mockMessage({ chat: mockChat({ id: 456 }), text: "/reset" }) },
+      "telegram:456:control",
+    ],
+    [
+      {
+        me: { username: "openclaw_bot" } as never,
+        message: mockMessage({
+          chat: mockChat({ id: 123 }),
+          text: "/new@openclaw_bot",
+        }),
+      },
+      "telegram:123:control",
+    ],
   ])("resolves key %#", (input, expected) => {
     expect(getTelegramSequentialKey(input)).toBe(expected);
   });

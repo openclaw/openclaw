@@ -27,13 +27,10 @@ export type TelegramSequentialKeyContext = {
   };
 };
 
-function resolveStatusCommandControlLane(params: {
-  rawText?: string;
-  botUsername?: string;
-}): boolean {
-  // Only read-only status commands should bypass the per-topic lane. Commands
-  // like /export-session stay on the normal lane because they materialize
-  // session state to disk and should not interleave with an active turn.
+function resolveControlCommand(
+  params: { rawText?: string; botUsername?: string },
+  predicate: (command: { key: string; category?: string }) => boolean,
+): boolean {
   const normalizedBody = normalizeCommandBody(
     params.rawText?.trim() ?? "",
     params.botUsername ? { botUsername: params.botUsername } : undefined,
@@ -45,7 +42,32 @@ function resolveStatusCommandControlLane(params: {
   const command = listChatCommands().find((entry) =>
     entry.textAliases.some((candidate) => candidate.trim().toLowerCase() === alias),
   );
-  return command?.category === "status" && command.key !== "export-session";
+  return command ? predicate(command) : false;
+}
+
+function resolveStatusCommandControlLane(params: {
+  rawText?: string;
+  botUsername?: string;
+}): boolean {
+  // Only read-only status commands should bypass the per-topic lane. Commands
+  // like /export-session stay on the normal lane because they materialize
+  // session state to disk and should not interleave with an active turn.
+  return resolveControlCommand(params, (cmd) =>
+    cmd.category === "status" && cmd.key !== "export-session",
+  );
+}
+
+function resolveSessionControlCommand(params: {
+  rawText?: string;
+  botUsername?: string;
+}): boolean {
+  // Session lifecycle commands (/new, /reset) must bypass the per-topic
+  // sequential queue so they execute immediately even when an agent run is active.
+  // Without this, these commands get queued behind the running turn and never
+  // actually reset the session.
+  return resolveControlCommand(params, (cmd) =>
+    cmd.key === "new" || cmd.key === "reset",
+  );
 }
 
 export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): string {
@@ -72,6 +94,12 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
     return "telegram:control";
   }
   if (resolveStatusCommandControlLane({ rawText, botUsername })) {
+    if (typeof chatId === "number") {
+      return `telegram:${chatId}:control`;
+    }
+    return "telegram:control";
+  }
+  if (resolveSessionControlCommand({ rawText, botUsername })) {
     if (typeof chatId === "number") {
       return `telegram:${chatId}:control`;
     }
