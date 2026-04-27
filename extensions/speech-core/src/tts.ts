@@ -1662,7 +1662,10 @@ export async function maybeApplyTtsToPayload(params: {
       plainText,
     });
   const initialProviderConfig = resolveProviderConfigForTextRouting(effectiveProvider);
-  const resolveFirstRoutableText = (expressiveText: string, plainText: string): string => {
+  const resolveFirstRoutableText = (
+    expressiveText: string,
+    plainText: string,
+  ): { provider: TtsProvider; text: string } | undefined => {
     const providers = [
       effectiveProvider,
       ...providerOrder.filter((provider) => provider !== effectiveProvider),
@@ -1670,10 +1673,10 @@ export async function maybeApplyTtsToPayload(params: {
     for (const provider of providers) {
       const candidate = resolveRoutedSpeechText(provider, expressiveText, plainText).trim();
       if (candidate.length >= MIN_TTS_TEXT_LENGTH) {
-        return candidate;
+        return { provider, text: candidate };
       }
     }
-    return "";
+    return undefined;
   };
 
   // Per Copilot review on tts.ts:1595 — `{ ...params.payload, text }` creates
@@ -1708,13 +1711,13 @@ export async function maybeApplyTtsToPayload(params: {
   if (text.includes("MEDIA:")) {
     return nextPayload;
   }
-  const initialTextForAudio = resolveFirstRoutableText(expressiveSpeechText, plainSpeechText);
-  if (!initialTextForAudio) {
+  const initialRoute = resolveFirstRoutableText(expressiveSpeechText, plainSpeechText);
+  if (!initialRoute) {
     return nextPayload;
   }
 
   const maxLength = getTtsMaxLength(prefsPath);
-  let textForAudio = initialTextForAudio;
+  let textForAudio = initialRoute.text;
   let wasSummarized = false;
 
   if (textForAudio.length > maxLength) {
@@ -1751,8 +1754,9 @@ export async function maybeApplyTtsToPayload(params: {
   // The text that survived gating/summarization is what the primary provider receives.
   // For per-provider fallback routing we recompute the *other* variant from its
   // unsummarized source so a fallback to a different capability tier still gets the
-  // right text. When summarization fired, the unsummarized variant is no longer safe
-  // to use — collapse both to the summarized text for any provider (degraded path).
+  // right text. When summarization fired, keep the summarized text only on the
+  // variant used for the initial route; the opposite-capability fallback still
+  // receives its own capped variant so plain providers do not read tags aloud.
   // Per chatgpt-codex P2 review on PR-A's tts.ts:1608 — even when summarization
   // didn't fire on the primary, the *other* variant could still exceed the
   // configured maxLength (e.g. expressive variant carries `[warmly]…[softly]…`
@@ -1772,11 +1776,18 @@ export async function maybeApplyTtsToPayload(params: {
     return `${trimmed.slice(0, Math.max(0, cap - 3))}...`;
   };
   const preparedPrimaryText = stripMarkdown(textForAudio).trim();
+  const initialRouteUsesExpressiveText = Boolean(
+    resolveRoutedSpeechText(initialRoute.provider, expressiveSpeechText, "").trim(),
+  );
   const preparedPlainText = wasSummarized
-    ? preparedPrimaryText
+    ? initialRouteUsesExpressiveText
+      ? enforceMaxLength(stripMarkdown(plainSpeechText).trim())
+      : preparedPrimaryText
     : enforceMaxLength(stripMarkdown(plainSpeechText).trim());
   const preparedExpressiveText = wasSummarized
-    ? preparedPrimaryText
+    ? initialRouteUsesExpressiveText
+      ? preparedPrimaryText
+      : enforceMaxLength(stripMarkdown(expressiveSpeechText).trim()) || preparedPlainText
     : enforceMaxLength(stripMarkdown(expressiveSpeechText).trim()) || preparedPlainText;
   const effectiveTextForAudio = resolveSpeechTextForProvider({
     provider: effectiveProvider,
@@ -1788,7 +1799,7 @@ export async function maybeApplyTtsToPayload(params: {
   const preparedTextForAudio =
     effectiveTextForAudio.length >= MIN_TTS_TEXT_LENGTH
       ? effectiveTextForAudio
-      : resolveFirstRoutableText(preparedExpressiveText, preparedPlainText);
+      : resolveFirstRoutableText(preparedExpressiveText, preparedPlainText)?.text;
   if (!preparedTextForAudio) {
     return nextPayload;
   }

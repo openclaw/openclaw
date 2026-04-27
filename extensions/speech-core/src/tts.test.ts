@@ -1,4 +1,4 @@
-import { rmSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { setReplyPayloadMetadata, type ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
@@ -23,6 +23,9 @@ const synthesizeMock = vi.hoisted(() =>
 );
 const prepareSynthesisMock = vi.hoisted(() =>
   vi.fn(async (_ctx: SpeechProviderPrepareSynthesisContext) => undefined),
+);
+const summarizeTextMock = vi.hoisted(() =>
+  vi.fn(async () => ({ summary: "[warmly] compact summary", latencyMs: 1 })),
 );
 
 const listSpeechProvidersMock = vi.hoisted(() => vi.fn());
@@ -71,6 +74,7 @@ vi.mock("../api.js", async () => {
     getSpeechProvider: getSpeechProviderMock,
     listSpeechProviders: listSpeechProvidersMock,
     scheduleCleanup: vi.fn(),
+    summarizeText: summarizeTextMock,
   };
 });
 
@@ -165,6 +169,7 @@ describe("speech-core native voice-note routing", () => {
   afterEach(() => {
     synthesizeMock.mockClear();
     prepareSynthesisMock.mockClear();
+    summarizeTextMock.mockClear();
     installSpeechProviders([createMockSpeechProvider()]);
   });
 
@@ -929,6 +934,66 @@ describe("speech-core native voice-note routing", () => {
       expect(result.mediaUrl).toMatch(/voice-\d+\.ogg$/);
       mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
     } finally {
+      if (mediaDir) {
+        rmSync(mediaDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("preserves plain fallback text when expressive primary text is summarized", async () => {
+    const expressiveSynthesize = vi.fn(async () => {
+      throw new Error("expressive provider unavailable");
+    });
+    const plainSynthesize = vi.fn(async (request: SpeechSynthesisRequest) =>
+      synthesizeMock(request),
+    );
+    const expressive = createMockSpeechProvider("elevenlabs", {
+      capabilities: { sourceTextHandling: "preserve_expressive_tags" },
+      synthesize: expressiveSynthesize,
+      autoSelectOrder: 1,
+    });
+    const plain = createMockSpeechProvider("mock", {
+      synthesize: plainSynthesize,
+      autoSelectOrder: 2,
+    });
+    installSpeechProviders([expressive, plain]);
+    const prefsPath = "/tmp/openclaw-tts-summary-plain-fallback-test.json";
+    const cfg: OpenClawConfig = {
+      messages: {
+        tts: {
+          enabled: true,
+          provider: "elevenlabs",
+          prefsPath,
+        },
+      },
+    };
+    const payload = setReplyPayloadMetadata({ text: "[warmly] long expressive reply" }, {
+      ttsSourceText: `[warmly] ${"expressive words ".repeat(10)}`,
+      ttsPlainText: "plain fallback text",
+    } satisfies ReplyPayload);
+
+    let mediaDir: string | undefined;
+    try {
+      writeFileSync(prefsPath, JSON.stringify({ tts: { maxLength: 100, summarize: true } }));
+
+      const result = await maybeApplyTtsToPayload({
+        payload,
+        cfg,
+        channel: "slack",
+        kind: "final",
+      });
+
+      expect(summarizeTextMock).toHaveBeenCalled();
+      expect(expressiveSynthesize).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "[warmly] compact summary" }),
+      );
+      expect(plainSynthesize).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "plain fallback text" }),
+      );
+      expect(result.mediaUrl).toMatch(/voice-\d+\.ogg$/);
+      mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
+    } finally {
+      rmSync(prefsPath, { force: true });
       if (mediaDir) {
         rmSync(mediaDir, { recursive: true, force: true });
       }
