@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Providers/GitHub Copilot: also skip `function_call` items in `rewriteCopilotConnectionBoundResponseIds` so Copilot's server-side `encrypted_content` lookup keeps working. Synthesising `fc_<sha256>` IDs on replay was breaking every multi-turn tool-call session with `400 item_id did not match`, mirroring the `rs_<sha256>` reasoning-item bug fixed in #71684. Fixes #72602.
 - Plugins/install: stage bundled plugin runtime dependencies before Gateway startup and drain update restarts while preserving per-plugin isolation when pre-stage scan or install fails. Thanks @codex.
 - CLI/startup: read generated startup metadata from the bundled `dist` layout before falling back to live help rendering, so root/browser help and channel-option bootstrap stay on the fast path. Thanks @vincentkoc.
 - CLI/help: treat positional `help` invocations like `openclaw channels help` as help paths for startup gating, avoiding model/auth warmup while preserving positional arguments such as `openclaw docs help`. Thanks @gumadeiras.

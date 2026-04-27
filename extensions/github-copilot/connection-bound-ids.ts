@@ -35,11 +35,14 @@ export function rewriteCopilotConnectionBoundResponseIds(input: unknown): boolea
     if (typeof id !== "string" || id.length === 0) {
       continue;
     }
-    // Reasoning items always reference server-side encrypted state bound to the
-    // original item ID. Rewriting the ID — even when encrypted_content is absent
-    // or null — breaks Copilot's server-side lookup and causes a 400 validation
-    // failure regardless of whether the client included encrypted_content.
-    if (item.type === "reasoning") {
+    // Reasoning AND function_call items reference server-side state bound to
+    // the original item ID. Copilot validates the replayed ID against the
+    // encrypted blob and rejects any rewrite, even when encrypted_content is
+    // absent or null. Curl evidence in #72602 confirms `fc_<hash>` 400s the
+    // same way `rs_<hash>` did before #71684 — sending the original opaque ID
+    // (or omitting it) succeeds, the synthesised ID does not. Skip both types
+    // unconditionally so Copilot's server-side lookup keeps working.
+    if (item.type === "reasoning" || item.type === "function_call") {
       continue;
     }
     if (looksLikeConnectionBoundId(id)) {

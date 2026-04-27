@@ -31,8 +31,21 @@ describe("github-copilot connection-bound response IDs", () => {
     expect(input[0]?.id).toBe("rs_existing");
     expect(input[1]?.id).toBe("msg_existing");
     expect(input[2]?.id).toBe("fc_existing");
-    expect(input[3]?.id).toMatch(/^fc_[a-f0-9]{16}$/);
+    expect(input[3]?.id).toBe(functionCallId);
     expect(input[4]?.id).toMatch(/^msg_[a-f0-9]{16}$/);
+  });
+
+  it("preserves function_call IDs regardless of encrypted_content (#72602)", () => {
+    const withEncrypted = Buffer.from(`function-call-${"f".repeat(20)}`).toString("base64");
+    const withoutField = Buffer.from(`function-call-${"g".repeat(20)}`).toString("base64");
+    const input = [
+      { id: withEncrypted, type: "function_call", encrypted_content: "opaque-encrypted-payload" },
+      { id: withoutField, type: "function_call" },
+    ];
+
+    expect(rewriteCopilotConnectionBoundResponseIds(input)).toBe(false);
+    expect(input[0]?.id).toBe(withEncrypted);
+    expect(input[1]?.id).toBe(withoutField);
   });
 
   it("preserves reasoning IDs regardless of encrypted_content", () => {
