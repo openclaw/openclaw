@@ -62,15 +62,17 @@ describe("opencode provider plugin", () => {
       levels: expect.arrayContaining([{ id: "xhigh" }, { id: "adaptive" }, { id: "max" }]),
       defaultLevel: "off",
     });
-    expect(
-      resolveThinkingProfile({
-        provider: "opencode",
-        modelId: "claude-opus-4.6",
-      }),
-    ).toMatchObject({
+    const opus46Profile = resolveThinkingProfile({
+      provider: "opencode",
+      modelId: "claude-opus-4.6",
+    });
+    expect(opus46Profile).toMatchObject({
       levels: expect.arrayContaining([{ id: "adaptive" }]),
       defaultLevel: "adaptive",
     });
+    expect(opus46Profile?.levels.some((level) => level.id === "xhigh" || level.id === "max")).toBe(
+      false,
+    );
     const sonnet46Profile = resolveThinkingProfile({
       provider: "opencode",
       modelId: "claude-sonnet-4-6",
