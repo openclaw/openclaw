@@ -1,11 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const sessionUtilsState = vi.hoisted(() => ({
-  sessionRow: {
-    sessionId: "sess-main",
-    emotionMode: "off" as "off" | "on" | "full" | undefined,
-  },
-}));
+type MockSessionRow = {
+  sessionId: string;
+  emotionMode?: "off" | "on" | "full";
+};
+
+const sessionUtilsState = vi.hoisted(
+  (): { sessionRow: MockSessionRow } => ({
+    sessionRow: {
+      sessionId: "sess-main",
+      emotionMode: "off",
+    },
+  }),
+);
 
 vi.mock("./session-transcript-key.js", () => ({
   resolveSessionKeyForTranscriptFile: vi.fn(() => "agent:main:main"),

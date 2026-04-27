@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
 
 const persistGatewaySessionLifecycleEventMock = vi.fn();
-const loadSessionEntryMock = vi.fn(() => ({ entry: undefined }));
+type MockSessionEntry = { emotionMode?: "off" | "on" | "full" };
+const loadSessionEntryMock = vi.fn(
+  (..._args: unknown[]): { entry: MockSessionEntry | undefined } => ({ entry: undefined }),
+);
 
 vi.mock("./server-chat.persist-session-lifecycle.runtime.js", () => ({
   persistGatewaySessionLifecycleEvent: (...args: unknown[]) =>

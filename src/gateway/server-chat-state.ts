@@ -1,3 +1,10 @@
+import type { EmotionMode } from "../emotion-mode.js";
+
+export type CachedLiveEmotionMode = {
+  mode: EmotionMode;
+  expiresAt: number;
+};
+
 export type ChatRunEntry = {
   sessionKey: string;
   clientRunId: string;
@@ -67,6 +74,7 @@ export type ChatRunState = {
   registry: ChatRunRegistry;
   rawBuffers: Map<string, string>;
   buffers: Map<string, string>;
+  emotionModes: Map<string, CachedLiveEmotionMode>;
   deltaSentAt: Map<string, number>;
   /** Length of text at the time of the last broadcast, used to avoid duplicate flushes. */
   deltaLastBroadcastLen: Map<string, number>;
@@ -78,6 +86,7 @@ export function createChatRunState(): ChatRunState {
   const registry = createChatRunRegistry();
   const rawBuffers = new Map<string, string>();
   const buffers = new Map<string, string>();
+  const emotionModes = new Map<string, CachedLiveEmotionMode>();
   const deltaSentAt = new Map<string, number>();
   const deltaLastBroadcastLen = new Map<string, number>();
   const abortedRuns = new Map<string, number>();
@@ -86,6 +95,7 @@ export function createChatRunState(): ChatRunState {
     registry.clear();
     rawBuffers.clear();
     buffers.clear();
+    emotionModes.clear();
     deltaSentAt.clear();
     deltaLastBroadcastLen.clear();
     abortedRuns.clear();
@@ -95,6 +105,7 @@ export function createChatRunState(): ChatRunState {
     registry,
     rawBuffers,
     buffers,
+    emotionModes,
     deltaSentAt,
     deltaLastBroadcastLen,
     abortedRuns,
