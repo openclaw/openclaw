@@ -18,7 +18,6 @@ describe("Codex app-server config", () => {
           transport: "websocket",
           url: "ws://127.0.0.1:39175",
           headers: { "X-Test": "yes" },
-          clearEnv: ["OPENAI_API_KEY"],
           approvalPolicy: "on-request",
           sandbox: "danger-full-access",
           approvalsReviewer: "guardian_subagent",
@@ -41,10 +40,24 @@ describe("Codex app-server config", () => {
           transport: "websocket",
           url: "ws://127.0.0.1:39175",
           headers: { "X-Test": "yes" },
-          clearEnv: ["OPENAI_API_KEY"],
         }),
       }),
     );
+  });
+
+  it("ignores app-server environment clearing for websocket transports", () => {
+    const runtime = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: {
+        appServer: {
+          transport: "websocket",
+          url: "ws://127.0.0.1:39175",
+          clearEnv: ["OPENAI_API_KEY"],
+        },
+      },
+      env: {},
+    });
+
+    expect(runtime.start).not.toHaveProperty("clearEnv");
   });
 
   it("normalizes app-server environment variables to clear", () => {

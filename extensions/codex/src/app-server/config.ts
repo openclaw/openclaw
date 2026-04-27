@@ -214,7 +214,7 @@ export function resolveCodexAppServerRuntimeOptions(
       ...(url ? { url } : {}),
       ...(authToken ? { authToken } : {}),
       headers,
-      ...(clearEnv.length > 0 ? { clearEnv } : {}),
+      ...(transport === "stdio" && clearEnv.length > 0 ? { clearEnv } : {}),
     },
     requestTimeoutMs: normalizePositiveNumber(config.requestTimeoutMs, 60_000),
     approvalPolicy:

@@ -41,14 +41,22 @@ export function resolveCodexAppServerSpawnInvocation(
   };
 }
 
-export function createStdioTransport(options: CodexAppServerStartOptions): CodexAppServerTransport {
+export function resolveCodexAppServerSpawnEnv(
+  options: Pick<CodexAppServerStartOptions, "env" | "clearEnv">,
+  baseEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
   const env = {
-    ...process.env,
+    ...baseEnv,
     ...options.env,
   };
   for (const key of options.clearEnv ?? []) {
     delete env[key];
   }
+  return env;
+}
+
+export function createStdioTransport(options: CodexAppServerStartOptions): CodexAppServerTransport {
+  const env = resolveCodexAppServerSpawnEnv(options);
   const invocation = resolveCodexAppServerSpawnInvocation(options, {
     platform: process.platform,
     env,

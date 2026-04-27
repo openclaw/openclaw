@@ -109,31 +109,26 @@ function createStartOptions(
   };
 }
 
-async function writeCodexCliAuthFile(codexHome: string): Promise<void> {
-  await fs.mkdir(codexHome, { recursive: true });
-  await fs.writeFile(
-    path.join(codexHome, "auth.json"),
-    JSON.stringify({
-      tokens: {
-        access_token: "cli-access-token",
-        refresh_token: "cli-refresh-token",
-        account_id: "cli-account-123",
-      },
-    }),
-  );
-}
-
 describe("bridgeCodexAppServerStartOptions", () => {
-  it("clears an inherited OpenAI API key when local Codex CLI OAuth is available", async () => {
+  it("clears inherited API-key env vars when the default Codex profile is subscription auth", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
-    const codexHome = path.join(agentDir, "codex-home");
     const startOptions = createStartOptions({
-      env: { CODEX_HOME: "/tmp/source-codex-home", EXISTING: "1" },
+      env: { EXISTING: "1" },
       clearEnv: ["FOO"],
     });
-    vi.stubEnv("CODEX_HOME", codexHome);
     try {
-      await writeCodexCliAuthFile(codexHome);
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai-codex:default",
+        credential: {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 24 * 60 * 60_000,
+          accountId: "account-123",
+        },
+      });
 
       await expect(
         bridgeCodexAppServerStartOptions({
@@ -142,7 +137,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
         }),
       ).resolves.toEqual({
         ...startOptions,
-        clearEnv: ["FOO", "OPENAI_API_KEY"],
+        clearEnv: ["FOO", "CODEX_API_KEY", "OPENAI_API_KEY"],
       });
       expect(startOptions.clearEnv).toEqual(["FOO"]);
       await expect(fs.access(path.join(agentDir, "harness-auth"))).rejects.toMatchObject({
@@ -178,7 +173,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
         }),
       ).resolves.toEqual({
         ...startOptions,
-        clearEnv: ["FOO", "OPENAI_API_KEY"],
+        clearEnv: ["FOO", "CODEX_API_KEY", "OPENAI_API_KEY"],
       });
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
@@ -207,7 +202,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
         }),
       ).resolves.toEqual({
         ...startOptions,
-        clearEnv: ["FOO", "OPENAI_API_KEY"],
+        clearEnv: ["FOO", "CODEX_API_KEY", "OPENAI_API_KEY"],
       });
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
@@ -375,6 +370,105 @@ describe("bridgeCodexAppServerStartOptions", () => {
         type: "apiKey",
         apiKey: "ref-backed-api-key",
       });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to CODEX_API_KEY when no auth profile and no Codex account is available", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const request = vi.fn(async (method: string) => {
+      if (method === "account/read") {
+        return { account: null, requiresOpenaiAuth: true };
+      }
+      return { type: "apiKey" };
+    });
+    vi.stubEnv("CODEX_API_KEY", "codex-env-api-key");
+    vi.stubEnv("OPENAI_API_KEY", "openai-env-api-key");
+    try {
+      await applyCodexAppServerAuthProfile({
+        client: { request } as never,
+        agentDir,
+      });
+
+      expect(request).toHaveBeenNthCalledWith(1, "account/read", { refreshToken: false });
+      expect(request).toHaveBeenNthCalledWith(2, "account/login/start", {
+        type: "apiKey",
+        apiKey: "codex-env-api-key",
+      });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to OPENAI_API_KEY when CODEX_API_KEY is not set", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const request = vi.fn(async (method: string) => {
+      if (method === "account/read") {
+        return { account: null, requiresOpenaiAuth: true };
+      }
+      return { type: "apiKey" };
+    });
+    vi.stubEnv("CODEX_API_KEY", "");
+    vi.stubEnv("OPENAI_API_KEY", "openai-env-api-key");
+    try {
+      await applyCodexAppServerAuthProfile({
+        client: { request } as never,
+        agentDir,
+      });
+
+      expect(request).toHaveBeenNthCalledWith(1, "account/read", { refreshToken: false });
+      expect(request).toHaveBeenNthCalledWith(2, "account/login/start", {
+        type: "apiKey",
+        apiKey: "openai-env-api-key",
+      });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps an existing app-server ChatGPT account over env API-key fallback", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const request = vi.fn(async (method: string) => {
+      if (method === "account/read") {
+        return {
+          account: { type: "chatgpt", email: "codex@example.test", planType: "plus" },
+          requiresOpenaiAuth: true,
+        };
+      }
+      return { type: "apiKey" };
+    });
+    vi.stubEnv("CODEX_API_KEY", "codex-env-api-key");
+    try {
+      await applyCodexAppServerAuthProfile({
+        client: { request } as never,
+        agentDir,
+      });
+
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(request).toHaveBeenCalledWith("account/read", { refreshToken: false });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips env API-key fallback when app-server does not require OpenAI auth", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const request = vi.fn(async (method: string) => {
+      if (method === "account/read") {
+        return { account: null, requiresOpenaiAuth: false };
+      }
+      return { type: "apiKey" };
+    });
+    vi.stubEnv("CODEX_API_KEY", "codex-env-api-key");
+    try {
+      await applyCodexAppServerAuthProfile({
+        client: { request } as never,
+        agentDir,
+      });
+
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(request).toHaveBeenCalledWith("account/read", { refreshToken: false });
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }

@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { CodexAppServerStartOptions } from "./config.js";
-import { resolveCodexAppServerSpawnInvocation } from "./transport-stdio.js";
+import {
+  resolveCodexAppServerSpawnEnv,
+  resolveCodexAppServerSpawnInvocation,
+} from "./transport-stdio.js";
 
 const tempDirs: string[] = [];
 
@@ -83,6 +86,29 @@ describe("resolveCodexAppServerSpawnInvocation", () => {
       args: [entryPath, "app-server", "--listen", "stdio://"],
       shell: undefined,
       windowsHide: true,
+    });
+  });
+});
+
+describe("resolveCodexAppServerSpawnEnv", () => {
+  it("applies configured env overrides before clearing denied env vars", () => {
+    expect(
+      resolveCodexAppServerSpawnEnv(
+        {
+          env: {
+            OPENAI_API_KEY: "configured-openai-key",
+            KEEP: "override",
+          },
+          clearEnv: ["OPENAI_API_KEY", "CODEX_API_KEY", "MISSING"],
+        },
+        {
+          OPENAI_API_KEY: "parent-openai-key",
+          CODEX_API_KEY: "parent-codex-key",
+          KEEP: "parent",
+        },
+      ),
+    ).toEqual({
+      KEEP: "override",
     });
   });
 });

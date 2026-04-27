@@ -179,15 +179,15 @@ Codex after changing config.
 - Codex app-server `0.125.0` or newer. The bundled plugin manages a compatible
   Codex app-server binary by default, so local `codex` commands on `PATH` do
   not affect normal harness startup.
-- Codex auth available to the app-server process.
+- Codex auth available to the app-server process or to OpenClaw's Codex auth
+  bridge.
 
 The plugin blocks older or unversioned app-server handshakes. That keeps
 OpenClaw on the protocol surface it has been tested against.
 
-For live and Docker smoke tests, auth usually comes from `OPENAI_API_KEY`, plus
-optional Codex CLI files such as `~/.codex/auth.json` and
-`~/.codex/config.toml`. Use the same auth material your local Codex app-server
-uses.
+For live and Docker smoke tests, auth usually comes from the Codex CLI account,
+an OpenClaw `openai-codex` auth profile, or `CODEX_API_KEY` /
+`OPENAI_API_KEY` as a fallback when no account is present.
 
 ## Minimal config
 
@@ -508,16 +508,24 @@ For an already-running app-server, use WebSocket transport:
 }
 ```
 
-Stdio app-server launches inherit OpenClaw's process environment by default.
-When OpenClaw sees that the Codex harness is using a ChatGPT subscription-style
-auth profile, including the local Codex CLI login imported as
-`openai-codex:default`, it automatically removes `OPENAI_API_KEY` from the
-spawned Codex child process. That keeps Gateway-level API keys available for
-embeddings or direct OpenAI models without making native Codex app-server turns
-bill through the API by accident.
+Stdio app-server launches inherit OpenClaw's process environment by default,
+but OpenClaw owns the Codex app-server account bridge. Auth is selected in this
+order:
 
-Explicit Codex API-key profiles are left alone. If a deployment needs additional
-environment isolation, add those variables to `appServer.clearEnv`:
+1. An explicit OpenClaw Codex auth profile for the agent.
+2. The app-server's existing account, such as a local Codex CLI ChatGPT sign-in.
+3. `CODEX_API_KEY`, then `OPENAI_API_KEY`, only when no app-server account is
+   present and OpenAI auth is still required.
+
+When OpenClaw sees a ChatGPT subscription-style Codex auth profile, it removes
+`CODEX_API_KEY` and `OPENAI_API_KEY` from the spawned Codex child process. That
+keeps Gateway-level API keys available for embeddings or direct OpenAI models
+without making native Codex app-server turns bill through the API by accident.
+Explicit Codex API-key profiles and env-key fallback use app-server login
+instead of inherited child-process env.
+
+If a deployment needs additional environment isolation, add those variables to
+`appServer.clearEnv`:
 
 ```json5
 {
@@ -527,7 +535,7 @@ environment isolation, add those variables to `appServer.clearEnv`:
         enabled: true,
         config: {
           appServer: {
-            clearEnv: ["OPENAI_API_KEY"],
+            clearEnv: ["CODEX_API_KEY", "OPENAI_API_KEY"],
           },
         },
       },

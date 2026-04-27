@@ -10,11 +10,14 @@ import {
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import type { ChatgptAuthTokensRefreshResponse } from "./protocol-generated/typescript/v2/ChatgptAuthTokensRefreshResponse.js";
+import type { GetAccountResponse } from "./protocol-generated/typescript/v2/GetAccountResponse.js";
 import type { LoginAccountParams } from "./protocol-generated/typescript/v2/LoginAccountParams.js";
 
 const CODEX_APP_SERVER_AUTH_PROVIDER = "openai-codex";
 const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai-codex:default";
+const CODEX_API_KEY_ENV_VAR = "CODEX_API_KEY";
 const OPENAI_API_KEY_ENV_VAR = "OPENAI_API_KEY";
+const CODEX_APP_SERVER_API_KEY_ENV_VARS = [CODEX_API_KEY_ENV_VAR, OPENAI_API_KEY_ENV_VAR];
 
 export async function bridgeCodexAppServerStartOptions(params: {
   startOptions: CodexAppServerStartOptions;
@@ -30,7 +33,7 @@ export async function bridgeCodexAppServerStartOptions(params: {
     authProfileId: params.authProfileId,
   });
   return shouldClearInheritedOpenAiApiKey
-    ? withClearedEnvironmentVariable(params.startOptions, OPENAI_API_KEY_ENV_VAR)
+    ? withClearedEnvironmentVariables(params.startOptions, CODEX_APP_SERVER_API_KEY_ENV_VARS)
     : params.startOptions;
 }
 
@@ -44,6 +47,13 @@ export async function applyCodexAppServerAuthProfile(params: {
     authProfileId: params.authProfileId,
   });
   if (!loginParams) {
+    const fallbackLoginParams = await resolveCodexAppServerEnvApiKeyLoginParams({
+      client: params.client,
+      env: process.env,
+    });
+    if (fallbackLoginParams) {
+      await params.client.request("account/login/start", fallbackLoginParams);
+    }
     return;
   }
   await params.client.request("account/login/start", loginParams);
@@ -103,6 +113,23 @@ async function resolveCodexAppServerAuthProfileLoginParamsInternal(params: {
     );
   }
   return loginParams;
+}
+
+async function resolveCodexAppServerEnvApiKeyLoginParams(params: {
+  client: CodexAppServerClient;
+  env: NodeJS.ProcessEnv;
+}): Promise<LoginAccountParams | undefined> {
+  const apiKey = readFirstNonEmptyEnv(params.env, CODEX_APP_SERVER_API_KEY_ENV_VARS);
+  if (!apiKey) {
+    return undefined;
+  }
+  const response = await params.client.request<GetAccountResponse>("account/read", {
+    refreshToken: false,
+  });
+  if (response.account || !response.requiresOpenaiAuth) {
+    return undefined;
+  }
+  return { type: "apiKey", apiKey };
 }
 
 async function resolveLoginParamsForCredential(
@@ -189,18 +216,29 @@ function isCodexSubscriptionCredential(credential: AuthProfileCredential | undef
   return credential.type === "oauth" || credential.type === "token";
 }
 
-function withClearedEnvironmentVariable(
+function withClearedEnvironmentVariables(
   startOptions: CodexAppServerStartOptions,
-  envVar: string,
+  envVars: readonly string[],
 ): CodexAppServerStartOptions {
   const clearEnv = startOptions.clearEnv ?? [];
-  if (clearEnv.includes(envVar)) {
+  const missingEnvVars = envVars.filter((envVar) => !clearEnv.includes(envVar));
+  if (missingEnvVars.length === 0) {
     return startOptions;
   }
   return {
     ...startOptions,
-    clearEnv: [...clearEnv, envVar],
+    clearEnv: [...clearEnv, ...missingEnvVars],
   };
+}
+
+function readFirstNonEmptyEnv(env: NodeJS.ProcessEnv, keys: readonly string[]): string | undefined {
+  for (const key of keys) {
+    const value = env[key]?.trim();
+    if (value) {
+      return value;
+    }
+  }
+  return undefined;
 }
 
 function buildChatgptAuthTokensParams(
