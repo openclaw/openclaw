@@ -40,6 +40,7 @@ Docs: https://docs.openclaw.ai
 - Providers/Ollama: move memory embeddings to Ollama's current `/api/embed` endpoint with batched `input` requests while preserving vector normalization and custom provider auth/header overrides. Fixes #39983. Thanks @sskkcc and @LiudengZhang.
 - Providers/Ollama: route local web search through Ollama's signed `/api/experimental/web_search` daemon proxy, use hosted `/api/web_search` directly for `ollama.com`, and keep `OLLAMA_API_KEY` scoped to cloud fallback auth. Fixes #69132. Thanks @yoon1012 and @hyspacex.
 - Providers/Ollama: accept OpenAI SDK-style `baseURL` as an alias for `baseUrl` across discovery, streaming, setup pulls, embeddings, and web search so remote Ollama hosts are not silently ignored. Fixes #62533; supersedes #62549. Thanks @Julien-BKK and @Linux2010.
+- Providers/Ollama: scope synthetic local auth and embedding bearer headers to declared Ollama host boundaries so cloud keys are not sent to local/self-hosted embedding endpoints and remote/cloud Ollama endpoints no longer receive the `ollama-local` marker as if it were a real token. Supersedes #69261 and #69857; refs #43945. Thanks @hyspacex, @maxramsay, and @Meli73.
 - Providers/PDF/Ollama: add bounded network timeouts for Ollama model pulls and native Anthropic/Gemini PDF analysis requests so unresponsive provider endpoints no longer hang sessions indefinitely. Fixes #54142; supersedes #54144 and #54145. Thanks @jinduwang1001-max and @arkyu2077.
 - Memory/doctor: treat Ollama memory embeddings as key-optional so `openclaw doctor` no longer warns about a missing API key when the gateway reports embeddings are ready. Fixes #46584. Thanks @fengly78.
 - Agents/Ollama: apply provider-owned replay turn normalization to native Ollama chat so Cloud models no longer reject non-alternating replay history in agent/Gateway runs. Fixes #71697. Thanks @ismael-81.
@@ -69,7 +70,6 @@ Docs: https://docs.openclaw.ai
 - Plugins/memory-lancedb: request float embedding responses from OpenAI-compatible servers so local providers that default SDK requests to base64 no longer return dimension-mismatched LanceDB vectors while preserving configured dimensions. Fixes #45982. (#59048, #46069, #45986) Thanks @deep-introspection, @xiaokhkh, @caicongyang, and @thiswind.
 - Plugins/memory-core: respect configured memory-search embedding concurrency during non-batch indexing so local Ollama embedding backends can serialize indexing instead of flooding the server. Fixes #66822. (#66931) Thanks @oliviareid-svg and @LyraInTheFlesh.
 - Docker/update smoke: keep the package-derived update-channel fixture on package-shipped files and make its UI build stub create the asset the updater verifies. Thanks @vincentkoc.
-
 
 ## 2026.4.26
 

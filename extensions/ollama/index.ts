@@ -21,8 +21,8 @@ import {
 import {
   OLLAMA_DEFAULT_API_KEY,
   OLLAMA_PROVIDER_ID,
-  hasMeaningfulExplicitOllamaConfig,
   resolveOllamaDiscoveryResult,
+  shouldUseSyntheticOllamaAuth,
   type OllamaPluginConfig,
 } from "./src/discovery-shared.js";
 import {
@@ -199,7 +199,7 @@ export default definePluginEntry({
         /\bollama\b.*(?:context length|too many tokens|context window)/i.test(errorMessage) ||
         /\btruncating input\b.*\btoo long\b/i.test(errorMessage),
       resolveSyntheticAuth: ({ providerConfig }) => {
-        if (!hasMeaningfulExplicitOllamaConfig(providerConfig)) {
+        if (!shouldUseSyntheticOllamaAuth(providerConfig)) {
           return undefined;
         }
         return {

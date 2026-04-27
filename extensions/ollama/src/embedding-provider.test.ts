@@ -72,7 +72,7 @@ describe("ollama embedding provider", () => {
     expect(vector[1]).toBeCloseTo(0.8, 5);
   });
 
-  it("resolves configured base URL, API key, and headers", async () => {
+  it("resolves configured base URL and headers without sending local marker auth", async () => {
     const fetchMock = mockEmbeddingFetch([1, 0]);
 
     const { provider } = await createOllamaEmbeddingProvider({
@@ -102,11 +102,16 @@ describe("ollama embedding provider", () => {
         method: "POST",
         headers: expect.objectContaining({
           "Content-Type": "application/json",
-          Authorization: "Bearer ollama-local",
           "X-Provider-Header": "provider",
         }),
       }),
     );
+    const [, init] = (fetchMock.mock.calls[0] ?? []) as unknown as [
+      string,
+      RequestInit | undefined,
+    ];
+    const headers = init?.headers as Record<string, string> | undefined;
+    expect(headers?.Authorization).toBeUndefined();
   });
 
   it("resolves configured baseURL alias", async () => {
@@ -254,6 +259,137 @@ describe("ollama embedding provider", () => {
         }),
       }),
     );
+  });
+
+  it("does not attach pure env OLLAMA_API_KEY to a local host", async () => {
+    const fetchMock = mockEmbeddingFetch([1, 0]);
+    vi.stubEnv("OLLAMA_API_KEY", "ollama-cloud-key");
+
+    const { provider } = await createOllamaEmbeddingProvider({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "nomic-embed-text",
+      fallback: "none",
+      remote: { baseUrl: "http://127.0.0.1:11434" },
+    });
+
+    await provider.embedQuery("hello");
+
+    const [, init] = (fetchMock.mock.calls[0] ?? []) as unknown as [
+      string,
+      RequestInit | undefined,
+    ];
+    const headers = init?.headers as Record<string, string> | undefined;
+    expect(headers?.Authorization).toBeUndefined();
+  });
+
+  it("attaches pure env OLLAMA_API_KEY to Ollama Cloud", async () => {
+    const fetchMock = mockEmbeddingFetch([1, 0]);
+    vi.stubEnv("OLLAMA_API_KEY", "ollama-cloud-key");
+
+    const { provider } = await createOllamaEmbeddingProvider({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "nomic-embed-text",
+      fallback: "none",
+      remote: { baseUrl: "https://ollama.com" },
+    });
+
+    await provider.embedQuery("hello");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://ollama.com/api/embed",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer ollama-cloud-key",
+        }),
+      }),
+    );
+  });
+
+  it("does not attach provider apiKey to a different remote embedding host", async () => {
+    const fetchMock = mockEmbeddingFetch([1, 0]);
+
+    const { provider } = await createOllamaEmbeddingProvider({
+      config: {
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://127.0.0.1:11434",
+              apiKey: "provider-host-key",
+              models: [],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      provider: "ollama",
+      model: "nomic-embed-text",
+      fallback: "none",
+      remote: { baseUrl: "https://memory.example.com" },
+    });
+
+    await provider.embedQuery("hello");
+
+    const [, init] = (fetchMock.mock.calls[0] ?? []) as unknown as [
+      string,
+      RequestInit | undefined,
+    ];
+    const headers = init?.headers as Record<string, string> | undefined;
+    expect(headers?.Authorization).toBeUndefined();
+  });
+
+  it("attaches remote apiKey to a remote embedding host", async () => {
+    const fetchMock = mockEmbeddingFetch([1, 0]);
+
+    const { provider } = await createOllamaEmbeddingProvider({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "nomic-embed-text",
+      fallback: "none",
+      remote: { baseUrl: "https://memory.example.com", apiKey: "remote-host-key" },
+    });
+
+    await provider.embedQuery("hello");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://memory.example.com/api/embed",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer remote-host-key",
+        }),
+      }),
+    );
+  });
+
+  it("honors remote local marker as an explicit no-auth opt-out", async () => {
+    const fetchMock = mockEmbeddingFetch([1, 0]);
+
+    const { provider } = await createOllamaEmbeddingProvider({
+      config: {
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://127.0.0.1:11434",
+              apiKey: "provider-host-key",
+              models: [],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      provider: "ollama",
+      model: "nomic-embed-text",
+      fallback: "none",
+      remote: { apiKey: "ollama-local" }, // pragma: allowlist secret
+    });
+
+    await provider.embedQuery("hello");
+
+    const [, init] = (fetchMock.mock.calls[0] ?? []) as unknown as [
+      string,
+      RequestInit | undefined,
+    ];
+    const headers = init?.headers as Record<string, string> | undefined;
+    expect(headers?.Authorization).toBeUndefined();
   });
 
   it("marks inline memory batches as local-server timeout work", async () => {
