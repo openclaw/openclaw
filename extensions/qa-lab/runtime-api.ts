@@ -38,4 +38,5 @@ export {
   sendQaBusMessage,
   setQaChannelRuntime,
 } from "./src/runtime-api.js";
+export type { Command } from "./src/runtime-api.js";
 export { startQaLiveLaneGateway } from "./src/live-transports/shared/live-gateway.runtime.js";
