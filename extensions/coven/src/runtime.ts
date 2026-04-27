@@ -32,8 +32,10 @@ const DEFAULT_HARNESSES: Record<string, string> = {
   opencode: "opencode",
 };
 const HEALTH_CHECK_TIMEOUT_MS = 5_000;
+const MAX_COVEN_PROMPT_BYTES = 500_000;
 const MAX_TRACKED_EVENT_IDS = 10_000;
 const MAX_RUNTIME_SESSION_NAME_BYTES = 2_048;
+const MAX_STATUS_FIELD_CHARS = 256;
 
 type CovenRuntimeSessionState = {
   agent: string;
@@ -150,6 +152,17 @@ function sanitizeStatusText(input: string): string {
   return sanitizeTerminalText(input).replace(/\s+/g, " ").trim();
 }
 
+function sanitizeStatusField(input: string, fallback = "unknown"): string {
+  return sanitizeStatusText(input).slice(0, MAX_STATUS_FIELD_CHARS) || fallback;
+}
+
+function boundedCovenPrompt(input: string): string {
+  if (Buffer.byteLength(input, "utf8") > MAX_COVEN_PROMPT_BYTES) {
+    throw new Error("Coven prompt exceeded size limit");
+  }
+  return input;
+}
+
 function normalizeStopReason(value: unknown): string {
   const normalized =
     typeof value === "string" ? sanitizeStatusText(value).toLowerCase() : "completed";
@@ -172,8 +185,9 @@ function eventToRuntimeEvents(event: CovenEventRecord): AcpRuntimeEvent[] {
     return text ? [{ type: "text_delta", text, stream: "output", tag: "agent_message_chunk" }] : [];
   }
   if (event.kind === "exit") {
-    const status = sanitizeStatusText(
+    const status = sanitizeStatusField(
       typeof payload.status === "string" ? payload.status : "completed",
+      "completed",
     );
     const exitCode = typeof payload.exitCode === "number" ? payload.exitCode : null;
     return [
@@ -199,7 +213,7 @@ function sessionIsTerminal(session: CovenSessionRecord): boolean {
 }
 
 function terminalStatusEvent(session: CovenSessionRecord): AcpRuntimeEvent {
-  const status = sanitizeStatusText(session.status);
+  const status = sanitizeStatusField(session.status, "completed");
   return {
     type: "status",
     text: `coven session ${status}${session.exitCode == null ? "" : ` exitCode=${session.exitCode}`}`,
@@ -272,13 +286,14 @@ export class CovenAcpRuntime implements AcpRuntime {
     const cwd = this.resolveWorkspaceCwd(input.handle.cwd);
     let session: CovenSessionRecord;
     try {
+      const prompt = boundedCovenPrompt(input.text);
       session = await this.client.launchSession(
         {
           projectRoot: this.config.workspaceDir,
           cwd,
           harness: this.resolveHarness(state.agent),
-          prompt: input.text,
-          title: titleFromPrompt(input.text),
+          prompt,
+          title: titleFromPrompt(prompt),
         },
         input.signal,
       );
@@ -295,7 +310,7 @@ export class CovenAcpRuntime implements AcpRuntime {
     this.activeSessionIdsBySessionKey.set(input.handle.sessionKey, session.id);
     yield {
       type: "status",
-      text: `coven session ${session.id} started (${session.harness})`,
+      text: `coven session ${sanitizeStatusField(session.id)} started (${sanitizeStatusField(session.harness)})`,
       tag: "session_info_update",
     };
 
@@ -384,14 +399,17 @@ export class CovenAcpRuntime implements AcpRuntime {
       return { summary: "coven runtime ready" };
     }
     const session = await this.client.getSession(sessionId, input.signal);
+    const status = sanitizeStatusField(session.status, "completed");
+    const harness = sanitizeStatusField(session.harness);
+    const title = sanitizeStatusField(session.title, "untitled");
     return {
-      summary: `${sanitizeStatusText(session.status)} ${sanitizeStatusText(session.harness)} ${sanitizeStatusText(session.title)}`,
+      summary: `${status} ${harness} ${title}`,
       backendSessionId: session.id,
       agentSessionId: session.id,
       details: {
-        projectRoot: sanitizeStatusText(session.projectRoot),
-        harness: sanitizeStatusText(session.harness),
-        status: sanitizeStatusText(session.status),
+        projectRoot: sanitizeStatusField(session.projectRoot),
+        harness,
+        status,
         exitCode: session.exitCode,
       },
     };
@@ -534,6 +552,7 @@ export const __testing = {
   encodeRuntimeSessionName,
   eventToRuntimeEvents,
   normalizeStopReason,
+  sanitizeStatusField,
   sanitizeTerminalText,
   titleFromPrompt,
 };

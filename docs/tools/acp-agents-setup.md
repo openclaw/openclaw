@@ -239,7 +239,9 @@ For path safety, `~` in `covenHome` and `socketPath` expands to the current
 user home directory. Relative Coven paths resolve from the OpenClaw workspace,
 not from the process working directory. `socketPath` must stay inside
 `covenHome`; use the default `<covenHome>/coven.sock` unless your Coven daemon
-uses a different socket filename in the same home directory.
+uses a different socket filename in the same home directory. Keep `covenHome`
+owned by the OpenClaw user and not group/world-writable; OpenClaw rejects
+symlinked, shared-writable, or non-socket Coven socket paths before connecting.
 
 The default harness mapping sends common ACP agent ids such as `codex`,
 `claude`, `gemini`, and `opencode` to the matching Coven harness id. Override

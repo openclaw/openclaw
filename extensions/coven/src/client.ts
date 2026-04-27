@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import http from "node:http";
+import net from "node:net";
 import path from "node:path";
 
 export type CovenSessionRecord = {
@@ -82,6 +83,7 @@ export class CovenApiError extends Error {
 }
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
+const MAX_REQUEST_BYTES = 1_000_000;
 const MAX_RESPONSE_BYTES = 1_000_000;
 
 function pathIsInside(parent: string, child: string): boolean {
@@ -101,18 +103,63 @@ function validateSocketPathForUse(socketPath: string, socketRoot: string | undef
   if (!socketRoot) {
     return;
   }
-  if (lstatIfExists(socketRoot)?.isSymbolicLink()) {
+  const socketRootLstat = lstatIfExists(socketRoot);
+  if (socketRootLstat?.isSymbolicLink()) {
     throw new Error("Coven covenHome must not be a symlink");
   }
+  const socketRootStat = fs.statSync(socketRoot);
+  validateSocketOwnerAndMode(socketRootStat, "Coven covenHome");
+
   const socketStat = lstatIfExists(socketPath);
   if (socketStat?.isSymbolicLink()) {
     throw new Error("Coven socketPath must not be a symlink");
   }
+  const resolvedSocketStat = fs.statSync(socketPath);
+  if (!resolvedSocketStat.isSocket()) {
+    throw new Error("Coven socketPath must be a Unix socket");
+  }
+  validateSocketOwnerAndMode(resolvedSocketStat, "Coven socketPath");
+
   const realSocketRoot = fs.realpathSync.native(socketRoot);
   const realSocketDir = fs.realpathSync.native(path.dirname(socketPath));
   if (!pathIsInside(realSocketRoot, realSocketDir)) {
     throw new Error("Coven socketPath must stay inside covenHome");
   }
+}
+
+function validateSocketOwnerAndMode(stat: fs.Stats, label: string): void {
+  if (process.platform === "win32") {
+    return;
+  }
+  const currentUid = typeof process.getuid === "function" ? process.getuid() : null;
+  if (currentUid != null && stat.uid !== currentUid) {
+    throw new Error(`${label} must be owned by the current user`);
+  }
+  if ((stat.mode & 0o022) !== 0) {
+    throw new Error(`${label} must not be group or world writable`);
+  }
+}
+
+function serializeRequestBody(body: unknown): { text: string; byteLength: number } {
+  if (body === undefined) {
+    return { text: "", byteLength: 0 };
+  }
+  const text = JSON.stringify(body) ?? "";
+  const byteLength = Buffer.byteLength(text, "utf8");
+  if (byteLength > MAX_REQUEST_BYTES) {
+    throw new Error("Coven API request exceeded size limit");
+  }
+  return { text, byteLength };
+}
+
+function errorToError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+function socketThatFailsWith(error: unknown): net.Socket {
+  const socket = new net.Socket();
+  queueMicrotask(() => socket.destroy(errorToError(error)));
+  return socket;
 }
 
 function requestOverSocket(options: RequestOptions): Promise<HttpResponse> {
@@ -121,8 +168,13 @@ function requestOverSocket(options: RequestOptions): Promise<HttpResponse> {
       reject(options.signal.reason ?? new Error("request aborted"));
       return;
     }
+    let requestBody = "";
+    let requestBodyBytes = 0;
     try {
       validateSocketPathForUse(options.socketPath, options.socketRoot);
+      const serialized = serializeRequestBody(options.body);
+      requestBody = serialized.text;
+      requestBodyBytes = serialized.byteLength;
     } catch (error) {
       reject(error);
       return;
@@ -141,10 +193,16 @@ function requestOverSocket(options: RequestOptions): Promise<HttpResponse> {
       fn();
     };
 
-    const requestBody = options.body === undefined ? "" : JSON.stringify(options.body);
     const req = http.request(
       {
-        socketPath: options.socketPath,
+        createConnection: () => {
+          try {
+            validateSocketPathForUse(options.socketPath, options.socketRoot);
+            return net.createConnection({ path: options.socketPath });
+          } catch (error) {
+            return socketThatFailsWith(error);
+          }
+        },
         method: options.method,
         path: options.path,
         headers: {
@@ -153,7 +211,7 @@ function requestOverSocket(options: RequestOptions): Promise<HttpResponse> {
           ...(requestBody
             ? {
                 "Content-Type": "application/json",
-                "Content-Length": Buffer.byteLength(requestBody),
+                "Content-Length": requestBodyBytes,
               }
             : {}),
         },

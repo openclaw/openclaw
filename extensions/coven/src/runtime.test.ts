@@ -205,6 +205,65 @@ describe("CovenAcpRuntime", () => {
     ]);
   });
 
+  it("sanitizes daemon-controlled session fields in start status", async () => {
+    const client = fakeClient({
+      launchSession: vi.fn(async () =>
+        session({
+          id: "\u001b]0;spoof\u0007session-1\r",
+          harness: "\u001b[31mcodex\u001b[0m",
+        }),
+      ),
+    });
+    const runtime = new CovenAcpRuntime({ config, client });
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:test",
+      agent: "codex",
+      mode: "oneshot",
+      cwd: workspaceDir,
+    });
+
+    const events = await collect(
+      runtime.runTurn({
+        handle,
+        text: "Fix tests",
+        mode: "prompt",
+        requestId: "req-1",
+      }),
+    );
+
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: "status", text: "coven session session-1 started (codex)" }),
+    );
+  });
+
+  it("falls back without launching Coven when prompts exceed the Coven request limit", async () => {
+    const fallback = fallbackRuntime();
+    registerAcpRuntimeBackend({ id: "acpx", runtime: fallback });
+    const client = fakeClient();
+    const runtime = new CovenAcpRuntime({ config, client });
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:test",
+      agent: "codex",
+      mode: "oneshot",
+      cwd: workspaceDir,
+    });
+
+    const events = await collect(
+      runtime.runTurn({
+        handle,
+        text: "x".repeat(500_001),
+        mode: "prompt",
+        requestId: "req-1",
+      }),
+    );
+
+    expect(client.launchSession).not.toHaveBeenCalled();
+    expect(events).toEqual([
+      expect.objectContaining({ type: "text_delta", text: "direct fallback\n" }),
+      expect.objectContaining({ type: "done", stopReason: "complete" }),
+    ]);
+  });
+
   it("ignores cwd embedded in runtimeSessionName when launching Coven sessions", async () => {
     const client = fakeClient();
     const runtime = new CovenAcpRuntime({ config, client });
