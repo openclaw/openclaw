@@ -3,7 +3,6 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 
 export type ParsedAgentSessionKey = {
   agentId: string;
@@ -88,11 +87,7 @@ export function isDirectSessionKey(sessionKey: string | undefined | null): boole
   if (DIRECT_SESSION_MARKERS.has(parts[0] ?? "")) {
     return hasStrictDirectSessionTail(parts, 0);
   }
-  const channel = normalizeMessageChannel(parts[0]);
-  if (!channel || !isDeliverableMessageChannel(channel)) {
-    return false;
-  }
-  if (DIRECT_SESSION_MARKERS.has(parts[1] ?? "")) {
+  if (Boolean(normalizeOptionalString(parts[0])) && DIRECT_SESSION_MARKERS.has(parts[1] ?? "")) {
     return hasStrictDirectSessionTail(parts, 1);
   }
   return Boolean(normalizeOptionalString(parts[1])) && DIRECT_SESSION_MARKERS.has(parts[2] ?? "")
