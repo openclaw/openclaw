@@ -242,4 +242,108 @@ describe("slack sent-thread-cache persistence", () => {
     expect(keys).toContain("A1:C123:thread-00005");
     expect(keys).toContain("A1:C123:thread-05004");
   });
+
+  it("writes persist file with mode 0o600 (owner read/write only)", () => {
+    setup();
+    recordSlackThreadParticipation("A1", "C123", "1700000000.000001");
+    _flushPersist();
+    const stat = fs.statSync(tempFile);
+    // Mask off file-type bits, leaving only permission bits.
+    const mode = stat.mode & 0o777;
+    expect(mode).toBe(0o600);
+  });
+
+  it("refuses to load a persist file larger than MAX_PERSIST_FILE_BYTES (4 MB)", () => {
+    setup();
+    // Write a file > 4 MB to the configured persist path. The content is
+    // syntactically valid JSON that *would* parse if we attempted to
+    // read it — this proves we're rejecting on size, not on parse error.
+    // Strategy: one entry whose key is a 5 MB string. Object.keys order
+    // is preserved, so we can predict the key.
+    const enormousKey = "X".repeat(5 * 1024 * 1024);
+    const huge: Record<string, number> = { [enormousKey]: Date.now() };
+    fs.writeFileSync(tempFile, JSON.stringify(huge));
+    expect(fs.statSync(tempFile).size).toBeGreaterThan(4 * 1024 * 1024);
+
+    _resetForTests(tempFile); // forces re-hydration on next access
+    // Hydration must reject the oversized file; no entries loaded.
+    // We can't easily query the bypass key without recording it first,
+    // but the key isn't a thread-tuple shape anyway. Probe with a
+    // canonical-shaped lookup that would only succeed if hydration loaded
+    // SOMETHING from the file (it shouldn't):
+    expect(hasSlackThreadParticipation("A1", "C123", "1700000000.000001")).toBe(false);
+    // And recording a fresh entry still works — starts from empty state.
+    recordSlackThreadParticipation("A1", "C123", "1700000000.000001");
+    expect(hasSlackThreadParticipation("A1", "C123", "1700000000.000001")).toBe(true);
+  });
+
+  it("refuses non-object payloads in persist file (schema validation)", () => {
+    setup();
+    fs.writeFileSync(tempFile, JSON.stringify(["not", "an", "object"]));
+    _resetForTests(tempFile);
+    // Hydration accepted the file (it's valid JSON) but the array payload
+    // is rejected by the schema check, so no entries are loaded.
+    expect(hasSlackThreadParticipation("A1", "C123", "1700000000.000001")).toBe(false);
+    // Recording a new entry still works — starts fresh.
+    recordSlackThreadParticipation("A1", "C123", "1700000000.000001");
+    expect(hasSlackThreadParticipation("A1", "C123", "1700000000.000001")).toBe(true);
+  });
+
+  it("filters non-finite timestamps from a corrupt persist file (defensive)", () => {
+    setup();
+    const data: Record<string, unknown> = {
+      "A1:C123:valid": Date.now(),
+      "A1:C123:nan": "not-a-number",
+      "A1:C123:inf": Number.POSITIVE_INFINITY,
+    };
+    fs.writeFileSync(tempFile, JSON.stringify(data));
+    _resetForTests(tempFile);
+    expect(hasSlackThreadParticipation("A1", "C123", "valid")).toBe(true);
+    expect(hasSlackThreadParticipation("A1", "C123", "nan")).toBe(false);
+    // Note: Infinity serialises to null in JSON, so this is really a
+    // null-vs-number test, but the code path is the same.
+    expect(hasSlackThreadParticipation("A1", "C123", "inf")).toBe(false);
+  });
+});
+
+describe("slack sent-thread-cache test-helper guards", () => {
+  // These tests run inside vitest, so isTestEnvironment() is true and the
+  // helpers work normally. To prove the guard, we deliberately strip the
+  // env vars and assert that the helpers throw.
+
+  it("_resetForTests throws when called outside a test environment", () => {
+    const saved = {
+      NODE_ENV: process.env.NODE_ENV,
+      VITEST: process.env.VITEST,
+      OPENCLAW_TEST: process.env.OPENCLAW_TEST,
+    };
+    try {
+      delete process.env.NODE_ENV;
+      delete process.env.VITEST;
+      delete process.env.OPENCLAW_TEST;
+      expect(() => _resetForTests("/tmp/should-throw.json")).toThrow(/test-only helper/i);
+    } finally {
+      if (saved.NODE_ENV !== undefined) process.env.NODE_ENV = saved.NODE_ENV;
+      if (saved.VITEST !== undefined) process.env.VITEST = saved.VITEST;
+      if (saved.OPENCLAW_TEST !== undefined) process.env.OPENCLAW_TEST = saved.OPENCLAW_TEST;
+    }
+  });
+
+  it("_flushPersist throws when called outside a test environment", () => {
+    const saved = {
+      NODE_ENV: process.env.NODE_ENV,
+      VITEST: process.env.VITEST,
+      OPENCLAW_TEST: process.env.OPENCLAW_TEST,
+    };
+    try {
+      delete process.env.NODE_ENV;
+      delete process.env.VITEST;
+      delete process.env.OPENCLAW_TEST;
+      expect(() => _flushPersist()).toThrow(/test-only helper/i);
+    } finally {
+      if (saved.NODE_ENV !== undefined) process.env.NODE_ENV = saved.NODE_ENV;
+      if (saved.VITEST !== undefined) process.env.VITEST = saved.VITEST;
+      if (saved.OPENCLAW_TEST !== undefined) process.env.OPENCLAW_TEST = saved.OPENCLAW_TEST;
+    }
+  });
 });

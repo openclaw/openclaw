@@ -15,6 +15,24 @@ import { STATE_DIR } from "openclaw/plugin-sdk/state-paths";
 
 const TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const MAX_ENTRIES = 5000;
+
+/**
+ * Hard cap on the persisted file size. The schema is `Record<string, number>`
+ * — with reasonable thread-key lengths (~50 chars) and a 13-digit timestamp
+ * value, MAX_ENTRIES * ~80 bytes/entry ≈ 400 KB worst case. We cap at 4 MB
+ * to give 10x headroom for unusual key lengths but still hard-fail before
+ * a corrupt or malicious file can OOM the gateway via JSON.parse. (Aisle
+ * security review on PR #33845, P3.)
+ */
+const MAX_PERSIST_FILE_BYTES = 4 * 1024 * 1024;
+
+/**
+ * File mode for the persist file: owner read/write only. Prevents
+ * other users on multi-tenant hosts from reading thread participation
+ * (which can leak workspace structure / ID patterns) or writing to it
+ * (which would let them poison the cache).
+ */
+const PERSIST_FILE_MODE = 0o600;
 const PERSIST_DEBOUNCE_MS = 5_000;
 const PERSIST_FILENAME = "slack-thread-participation.json";
 
@@ -59,11 +77,28 @@ function hydrateFromDisk(): void {
   }
   persistState.hydrated = true;
   try {
-    const raw = fs.readFileSync(getPersistPath(), "utf-8");
+    const filePath = getPersistPath();
+    // Bounded parse: stat the file first and refuse to load if it's larger
+    // than MAX_PERSIST_FILE_BYTES. This prevents JSON.parse from being used
+    // as a memory-exhaustion vector by a corrupt, externally-tampered, or
+    // unusually-large persist file. (Aisle security review on PR #33845.)
+    const stat = fs.statSync(filePath);
+    if (stat.size > MAX_PERSIST_FILE_BYTES) {
+      // File is too large — likely corruption or external tampering.
+      // Start fresh; the next persist will overwrite atomically with a
+      // bounded snapshot.
+      return;
+    }
+    const raw = fs.readFileSync(filePath, "utf-8");
     const data = JSON.parse(raw) as Record<string, number>;
+    // Schema validation: refuse non-object payloads so a future writer
+    // that produces an array or scalar can't poison Object.entries below.
+    if (data === null || typeof data !== "object" || Array.isArray(data)) {
+      return;
+    }
     const now = Date.now();
     for (const [key, ts] of Object.entries(data)) {
-      if (typeof ts === "number" && now - ts < TTL_MS) {
+      if (typeof ts === "number" && Number.isFinite(ts) && now - ts < TTL_MS) {
         // Use check() to insert into the dedupe cache (it returns false for new entries)
         threadParticipation.check(key, ts);
         persistState.entries.set(key, ts);
@@ -102,7 +137,7 @@ function schedulePersist(): void {
       // Write atomically via temp file + rename so a mid-write crash
       // can't leave a truncated/corrupt JSON on disk.
       const tmpPath = `${filePath}.${process.pid}.tmp`;
-      fs.writeFileSync(tmpPath, JSON.stringify(data));
+      fs.writeFileSync(tmpPath, JSON.stringify(data), { mode: PERSIST_FILE_MODE });
       fs.renameSync(tmpPath, filePath);
     } catch {
       // Best-effort persistence — don't crash on write failures.
@@ -174,8 +209,33 @@ export function clearSlackThreadParticipationCache(): void {
   }
 }
 
+/**
+ * Detect whether we are running in a test environment. Used to gate
+ * test-only helpers below so that accidental runtime usage in production
+ * (e.g. via deep-import from a buggy plugin) fails loudly instead of
+ * silently performing arbitrary filesystem operations. This is
+ * defence-in-depth on top of the api.ts barrel which doesn't re-export
+ * these helpers; the threat model is accidental misuse, not adversarial
+ * plugins (which would have full process access anyway).
+ */
+function isTestEnvironment(): boolean {
+  return (
+    process.env.NODE_ENV === "test" ||
+    process.env.VITEST === "true" ||
+    process.env.VITEST === "1" ||
+    process.env.OPENCLAW_TEST === "1"
+  );
+}
+
 /** @internal Flush pending persist timer synchronously (for tests). */
 export function _flushPersist(): void {
+  if (!isTestEnvironment()) {
+    throw new Error(
+      "_flushPersist() is a test-only helper and was called outside a test " +
+        "environment (NODE_ENV/VITEST/OPENCLAW_TEST not set). This helper performs " +
+        "synchronous disk writes and must not be invoked from production code.",
+    );
+  }
   if (persistState.persistTimer) {
     clearTimeout(persistState.persistTimer);
     persistState.persistTimer = null;
@@ -197,7 +257,7 @@ export function _flushPersist(): void {
     const filePath = getPersistPath();
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     const tmpPath = `${filePath}.${process.pid}.tmp`;
-    fs.writeFileSync(tmpPath, JSON.stringify(data));
+    fs.writeFileSync(tmpPath, JSON.stringify(data), { mode: PERSIST_FILE_MODE });
     fs.renameSync(tmpPath, filePath);
   } catch {
     // Best-effort.
@@ -206,6 +266,14 @@ export function _flushPersist(): void {
 
 /** @internal Reset all state for tests, optionally setting a custom persist path. */
 export function _resetForTests(persistPath?: string): void {
+  if (!isTestEnvironment()) {
+    throw new Error(
+      "_resetForTests() is a test-only helper and was called outside a test " +
+        "environment (NODE_ENV/VITEST/OPENCLAW_TEST not set). This helper can " +
+        "redirect the persist file path and trigger arbitrary filesystem " +
+        "operations — it must not be invoked from production code.",
+    );
+  }
   // Set override BEFORE clearing so clearSlackThreadParticipationCache
   // doesn't delete the file at the new path we're about to hydrate from.
   _persistPathOverride = persistPath;
