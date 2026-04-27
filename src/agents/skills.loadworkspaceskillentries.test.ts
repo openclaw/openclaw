@@ -412,4 +412,76 @@ describe("loadWorkspaceSkillEntries", () => {
       });
     },
   );
+
+  describe("nested skill subdirectories", () => {
+    it("discovers SKILL.md two levels deep under a grouping subfolder", async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      // Grouped layout: skills/group/skill/SKILL.md (no SKILL.md at skills/group/).
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", "group", "nested-skill"),
+        name: "nested-skill",
+        description: "Nested under a group folder",
+      });
+
+      const entries = loadTestWorkspaceSkillEntries(workspaceDir);
+      const names = entries.map((entry) => entry.skill.name);
+      expect(names).toContain("nested-skill");
+    });
+
+    it("keeps loading direct skills (skills/skill/SKILL.md) unchanged", async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", "direct-skill"),
+        name: "direct-skill",
+        description: "Direct skill at first level",
+      });
+      // Sibling group with a deeper skill.
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", "group", "grouped-skill"),
+        name: "grouped-skill",
+        description: "Skill nested under a group",
+      });
+
+      const names = loadTestWorkspaceSkillEntries(workspaceDir).map(
+        (entry) => entry.skill.name,
+      );
+      expect(names).toEqual(expect.arrayContaining(["direct-skill", "grouped-skill"]));
+    });
+
+    it("does not descend more than two levels (skills/a/b/c/SKILL.md is ignored)", async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", "a", "b", "c"),
+        name: "too-deep",
+        description: "Should not be discovered (depth 3)",
+      });
+
+      const names = loadTestWorkspaceSkillEntries(workspaceDir).map(
+        (entry) => entry.skill.name,
+      );
+      expect(names).not.toContain("too-deep");
+    });
+
+    it("prefers the immediate SKILL.md and does not descend when one is present", async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      // skills/group/SKILL.md exists -> treat group as the skill itself.
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", "group"),
+        name: "group",
+        description: "Direct skill at the group level",
+      });
+      // skills/group/inner/SKILL.md should NOT be loaded as a separate skill.
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", "group", "inner"),
+        name: "inner",
+        description: "Should be ignored when parent is itself a skill",
+      });
+
+      const names = loadTestWorkspaceSkillEntries(workspaceDir).map(
+        (entry) => entry.skill.name,
+      );
+      expect(names).toContain("group");
+      expect(names).not.toContain("inner");
+    });
+  });
 });
