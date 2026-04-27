@@ -185,6 +185,43 @@ function enforceToolResultLimitInPlace(params: {
 }
 
 /**
+ * Drop trailing assistant-role messages from a transcript view before it
+ * is handed to a provider SDK.
+ *
+ * Anthropic in particular hard-rejects conversations that end on an
+ * assistant turn (`This model does not support assistant message
+ * prefill...`). This can happen via two routes the loop hook below sits
+ * directly between:
+ *
+ * 1. A context engine plugin returning the source array unchanged from
+ *    a short-circuit / bail-out path (so the prior reference-equality
+ *    check in `installContextEngineLoopHook` falsely concluded "no
+ *    transform" and the raw messages — possibly ending on an assistant
+ *    turn — flowed through).
+ * 2. A heartbeat / system-event injection racing with the conversation
+ *    state, leaving the active transcript ending on an assistant turn
+ *    when the loop hook is invoked.
+ *
+ * Stripping is provider-agnostic — other providers may also misbehave
+ * with a trailing assistant turn — so the guard runs unconditionally.
+ *
+ * Returns the input array reference when no trimming is needed (cheap
+ * fast path; preserves identity-equality assumptions downstream).
+ *
+ * Refs #72556.
+ */
+export function stripTrailingAssistantMessages(messages: AgentMessage[]): AgentMessage[] {
+  let lastNonAssistant = messages.length - 1;
+  while (lastNonAssistant >= 0 && messages[lastNonAssistant]?.role === "assistant") {
+    lastNonAssistant -= 1;
+  }
+  if (lastNonAssistant === messages.length - 1) {
+    return messages;
+  }
+  return messages.slice(0, lastNonAssistant + 1);
+}
+
+/**
  * Per-iteration `afterTurn` + `assemble` wrapper for sessions where
  * the context engine owns compaction. Lets the engine compact inside
  * a long tool loop instead of only at end of attempt.
@@ -229,7 +266,7 @@ export function installContextEngineLoopHook(params: {
 
     const hasNewMessages = sourceMessages.length > prePromptMessageCount;
     if (!hasNewMessages) {
-      return lastAssembledView ?? sourceMessages;
+      return stripTrailingAssistantMessages(lastAssembledView ?? sourceMessages);
     }
 
     try {
@@ -276,7 +313,7 @@ export function installContextEngineLoopHook(params: {
       });
       if (assembled && Array.isArray(assembled.messages) && assembled.messages !== sourceMessages) {
         lastAssembledView = assembled.messages;
-        return assembled.messages;
+        return stripTrailingAssistantMessages(assembled.messages);
       }
       lastAssembledView = null;
     } catch {
@@ -284,7 +321,7 @@ export function installContextEngineLoopHook(params: {
       // messages so the tool loop still makes forward progress.
     }
 
-    return sourceMessages;
+    return stripTrailingAssistantMessages(sourceMessages);
   }) as GuardableTransformContext;
 
   return () => {

@@ -8,6 +8,7 @@ import {
   installContextEngineLoopHook,
   installToolResultContextGuard,
   PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE,
+  stripTrailingAssistantMessages,
 } from "./tool-result-context-guard.js";
 
 function makeUser(text: string): AgentMessage {
@@ -115,6 +116,53 @@ function expectPiStyleTruncation(text: string): void {
 describe("formatContextLimitTruncationNotice", () => {
   it("formats pi-style truncation wording with a count", () => {
     expect(formatContextLimitTruncationNotice(123)).toBe("[... 123 more characters truncated]");
+  });
+});
+
+describe("stripTrailingAssistantMessages", () => {
+  it("returns input reference when last message is not assistant (fast path)", () => {
+    const messages = [makeUser("hi"), makeAssistant("ok"), makeUser("more")];
+    const result = stripTrailingAssistantMessages(messages);
+    expect(result).toBe(messages);
+  });
+
+  it("drops a single trailing assistant message", () => {
+    const u = makeUser("hi");
+    const result = stripTrailingAssistantMessages([u, makeAssistant("ok")]);
+    expect(result).toEqual([u]);
+  });
+
+  it("drops multiple consecutive trailing assistant messages (#72556)", () => {
+    const u = makeUser("hi");
+    const result = stripTrailingAssistantMessages([
+      u,
+      makeAssistant("first"),
+      makeAssistant("second"),
+      makeAssistant("third"),
+    ]);
+    expect(result).toEqual([u]);
+  });
+
+  it("returns empty array when conversation is entirely assistant turns", () => {
+    const result = stripTrailingAssistantMessages([makeAssistant("a"), makeAssistant("b")]);
+    expect(result).toEqual([]);
+  });
+
+  it("preserves earlier assistant turns interleaved with user/tool messages", () => {
+    const messages = [
+      makeUser("q1"),
+      makeAssistant("a1"),
+      makeUser("q2"),
+      makeAssistant("a2"),
+      makeAssistant("a2-prefill"),
+    ];
+    const result = stripTrailingAssistantMessages(messages);
+    expect(result).toEqual(messages.slice(0, 3));
+  });
+
+  it("returns empty input unchanged", () => {
+    const empty: AgentMessage[] = [];
+    expect(stripTrailingAssistantMessages(empty)).toBe(empty);
   });
 });
 
