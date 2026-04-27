@@ -20,6 +20,7 @@ export type AgentRuntimeFailoverReason =
   | "auth_permanent"
   | "format"
   | "rate_limit"
+  | "quota_exhausted"
   | "overloaded"
   | "billing"
   | "timeout"
