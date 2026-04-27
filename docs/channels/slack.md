@@ -558,7 +558,7 @@ Notes:
 - `partial` (default): replace preview text with the latest partial output.
 - `block`: append chunked preview updates.
 - `progress`: show progress status text while generating, then send final text.
-- `streaming.preview.toolProgress`: when draft preview is active, route tool/progress updates into the same edited preview message (default: `true`). Set `false` to keep separate tool/progress messages.
+- `streaming.preview.toolProgress`: when draft preview is active, route tool/progress updates into the same edited preview message. Defaults to `false` for `partial` so previews stay answer-text only; defaults to `true` for `block` and `progress`. Set explicitly when you want to override the mode default.
 
 `channels.slack.streaming.nativeTransport` controls Slack native text streaming when `channels.slack.streaming.mode` is `partial` (default: `true`).
 

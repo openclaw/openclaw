@@ -3,6 +3,7 @@ import {
   createSlackTurnDeliveryTracker,
   isSlackStreamingEnabled,
   resolveSlackDisableBlockStreaming,
+  resolveSlackPreviewToolProgressDefault,
   resolveSlackStreamRecipientTeamId,
   resolveSlackStreamingThreadHint,
   shouldEnableSlackPreviewStreaming,
@@ -252,6 +253,21 @@ describe("slack draft stream initialization", () => {
         useStreaming: false,
       }),
     ).toBe(true);
+  });
+});
+
+describe("slack preview tool progress defaults", () => {
+  it("keeps partial preview streaming final-answer focused by default", () => {
+    expect(resolveSlackPreviewToolProgressDefault({ mode: "partial" })).toBe(false);
+  });
+
+  it("keeps explicit progress-oriented preview modes active by default", () => {
+    expect(resolveSlackPreviewToolProgressDefault({ mode: "block" })).toBe(true);
+    expect(resolveSlackPreviewToolProgressDefault({ mode: "progress" })).toBe(true);
+  });
+
+  it("stays off with streaming disabled", () => {
+    expect(resolveSlackPreviewToolProgressDefault({ mode: "off" })).toBe(false);
   });
 });
 
