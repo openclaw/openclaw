@@ -651,13 +651,12 @@ describe("host-hook fixture plugin contract", () => {
         },
       }),
     ).resolves.toMatchObject({
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: "needs operator input",
+      ok: true,
+      payload: {
+        ok: false,
+        error: "needs operator input",
         details: {
-          code: "needs_input",
-          details: { field: "version" },
+          field: "version",
         },
       },
     });
