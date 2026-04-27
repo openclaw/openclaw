@@ -12,6 +12,7 @@ on:
           - all
           - security
           - quality
+          - android-security
   schedule:
     - cron: "0 6 * * *"
 
@@ -83,3 +84,36 @@ jobs:
         uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
         with:
           category: "/codeql-critical-quality/javascript-typescript"
+
+  android-security:
+    name: Critical Security (android)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.profile == 'android-security' }}
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          submodules: false
+
+      - name: Setup Java
+        uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        with:
+          languages: java-kotlin
+          build-mode: manual
+          config-file: ./.github/codeql/codeql-android-critical-security.yml
+
+      - name: Build Android for CodeQL
+        working-directory: apps/android
+        run: ./gradlew --no-daemon :app:assemblePlayDebug
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        with:
+          category: "/codeql-critical-security/android"
