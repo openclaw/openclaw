@@ -1,4 +1,3 @@
-import { isSuppressedControlReplyText } from "../../../../src/gateway/control-reply-text.js";
 import { resetToolStream } from "../app-tool-stream.ts";
 import { extractText } from "../chat/message-extract.ts";
 import { formatConnectError } from "../connect-error.ts";
@@ -12,6 +11,7 @@ import {
 } from "./scope-errors.ts";
 
 const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
+const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
   "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
@@ -40,7 +40,7 @@ function shouldApplyChatHistoryResult(
 }
 
 function isSilentReplyStream(text: string): boolean {
-  return isSuppressedControlReplyText(text);
+  return SILENT_REPLY_PATTERN.test(text);
 }
 
 function escapeRegExp(value: string): string {
@@ -133,7 +133,7 @@ function resolveMessageText(content: unknown): { text: string; hasNonTextContent
   return { text, hasNonTextContent };
 }
 
-/** Client-side defense-in-depth: detect assistant messages whose text is purely a control token. */
+/** Client-side defense-in-depth: detect assistant messages whose text is purely NO_REPLY. */
 function isAssistantSilentReply(message: unknown): boolean {
   if (!message || typeof message !== "object") {
     return false;

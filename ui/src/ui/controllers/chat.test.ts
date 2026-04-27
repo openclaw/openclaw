@@ -149,16 +149,16 @@ describe("handleChatEvent", () => {
   });
 
   it.each(["no_reply", "ANNOUNCE_SKIP", "REPLY_SKIP"])(
-    "drops %s final payload from another run without clearing active stream",
+    "keeps plain-text %s final payload from another run without clearing active stream",
     (text) => {
       const state = createActiveStreamingState();
       const payload = createOtherRunSilentFinalPayload(text);
 
-      expect(handleChatEvent(state, payload)).toBe("final");
+      expect(handleChatEvent(state, payload)).toBe(null);
       expect(state.chatRunId).toBe("run-user");
       expect(state.chatStream).toBe("Working...");
       expect(state.chatStreamStartedAt).toBe(123);
-      expect(state.chatMessages).toEqual([]);
+      expect(state.chatMessages).toEqual([payload.message]);
     },
   );
 
@@ -459,7 +459,7 @@ describe("handleChatEvent", () => {
   });
 
   it.each(["no_reply", "ANNOUNCE_SKIP", "REPLY_SKIP"])(
-    "drops %s final payload from own run",
+    "keeps plain-text %s final payload from own run",
     (text) => {
       const state = createState({
         sessionKey: "main",
@@ -478,7 +478,7 @@ describe("handleChatEvent", () => {
       };
 
       expect(handleChatEvent(state, payload)).toBe("final");
-      expect(state.chatMessages).toEqual([]);
+      expect(state.chatMessages).toEqual([payload.message]);
       expect(state.chatRunId).toBe(null);
       expect(state.chatStream).toBe(null);
     },
@@ -566,7 +566,7 @@ describe("handleChatEvent", () => {
 });
 
 describe("loadChatHistory", () => {
-  it("filters suppressed-control assistant messages from history", async () => {
+  it("filters legacy silent assistant messages from history", async () => {
     const messages = [
       { role: "user", content: [{ type: "text", text: "Hello" }] },
       { role: "assistant", content: [{ type: "text", text: "NO_REPLY" }] },
@@ -586,9 +586,12 @@ describe("loadChatHistory", () => {
 
     await loadChatHistory(state);
 
-    expect(state.chatMessages).toHaveLength(2);
+    expect(state.chatMessages).toHaveLength(5);
     expect(state.chatMessages[0]).toEqual(messages[0]);
-    expect(state.chatMessages[1]).toEqual(messages[5]);
+    expect(state.chatMessages[1]).toEqual(messages[2]);
+    expect(state.chatMessages[2]).toEqual(messages[3]);
+    expect(state.chatMessages[3]).toEqual(messages[4]);
+    expect(state.chatMessages[4]).toEqual(messages[5]);
     expect(state.chatThinkingLevel).toBe("low");
     expect(state.chatLoading).toBe(false);
   });
