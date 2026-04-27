@@ -191,8 +191,11 @@ function findLineStartIndex(text: string, header: string, from: number): number 
 
 // Returns the byte offset just past the privacy-notice line that follows
 // `headerIdx`, or null if the header isn't immediately followed by a newline
-// + the exact privacy-notice line. Tolerates an optional `\r` before the
-// newline that joins header → notice.
+// + the exact privacy-notice line + an end-of-line boundary. Tolerates an
+// optional `\r` before the newline that joins header → notice. Rejects
+// matches where extra characters follow the notice on the same line, so
+// model echoes like `"...Keep internal details private. [ack]"` are left
+// alone instead of being half-stripped.
 function findRuntimeContextPrefaceEnd(text: string, headerIdx: number, header: string): number | null {
   let cursor = headerIdx + header.length;
   if (text.charCodeAt(cursor) === 0x0d /* \r */) {
@@ -206,7 +209,14 @@ function findRuntimeContextPrefaceEnd(text: string, headerIdx: number, header: s
       RUNTIME_CONTEXT_PREFACE_NOTICE_LINE) {
     return null;
   }
-  return cursor + RUNTIME_CONTEXT_PREFACE_NOTICE_LINE.length;
+  const endOfNotice = cursor + RUNTIME_CONTEXT_PREFACE_NOTICE_LINE.length;
+  if (endOfNotice < text.length) {
+    const charAfter = text.charCodeAt(endOfNotice);
+    if (charAfter !== 0x0a /* \n */ && charAfter !== 0x0d /* \r */) {
+      return null;
+    }
+  }
+  return endOfNotice;
 }
 
 function hasRuntimeContextPreface(text: string): boolean {
@@ -240,8 +250,8 @@ function stripRuntimeContextPreface(text: string): string {
         searchFrom = headerIdx + header.length;
         continue;
       }
-      const before = next.slice(0, headerIdx).replace(/[ \t]*\r?\n+$/g, "");
-      const after = next.slice(blockEnd).replace(/^\r?\n+[ \t]*/g, "");
+      const before = next.slice(0, headerIdx).replace(/[ \t]*\r?\n+$/, "");
+      const after = next.slice(blockEnd).replace(/^\r?\n+[ \t]*/, "");
       const joiner = before && after ? "\n\n" : "";
       next = `${before}${joiner}${after}`;
       searchFrom = before.length;

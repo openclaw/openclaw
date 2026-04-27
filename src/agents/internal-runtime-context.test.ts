@@ -108,6 +108,19 @@ describe("internal runtime context codec", () => {
     expect(stripInternalRuntimeContext(input)).toBe(input);
   });
 
+  it("does not strip when extra characters follow the privacy notice on the same line", () => {
+    // Model echo where the privacy-notice line is continued with additional
+    // text on the same line. Without an end-of-line boundary check the strip
+    // would land in the middle of the line and leak the trailing fragment.
+    const input = [
+      "OpenClaw runtime context for the immediately preceding user message.",
+      "This context is runtime-generated, not user-authored. Keep internal details private. [ack]",
+      "",
+      "Visible reply.",
+    ].join("\n");
+    expect(stripInternalRuntimeContext(input)).toBe(input);
+  });
+
   it("does not strip when only the privacy notice line appears without a header above it", () => {
     const input = [
       "Reply to user.",
