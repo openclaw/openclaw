@@ -481,3 +481,11 @@ yuweuii
 yxjsxy
 zijiess
 clawtributors:hidden:end -->
+
+## 💰 Bounty Contribution
+
+- **Task:** Cost estimate omits cache read tokens (cacheRead cost not applied in /status)
+- **Reward:** $15
+- **Source:** GitHub-Paid
+- **Date:** 2026-04-27
+
