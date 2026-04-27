@@ -1600,6 +1600,7 @@
     "croner": "^10.0.1",
     "dotenv": "^17.4.2",
     "file-type": "22.0.1",
+    "global-agent": "^4.1.3",
     "https-proxy-agent": "^9.0.0",
     "ipaddr.js": "^2.3.0",
     "jiti": "^2.6.1",

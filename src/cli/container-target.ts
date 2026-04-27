@@ -26,6 +26,8 @@ type ContainerRuntimeExec = {
   argsPrefix: string[];
 };
 
+const CONTAINER_ALLOW_LOOPBACK_PROXY_URL_ENV = "OPENCLAW_CONTAINER_ALLOW_LOOPBACK_PROXY_URL";
+
 export function parseCliContainerArgs(argv: string[]): CliContainerParseResult {
   let container: string | null = null;
 
@@ -127,10 +129,16 @@ function buildContainerExecArgs(params: {
   exec: ContainerRuntimeExec;
   containerName: string;
   argv: string[];
+  env: NodeJS.ProcessEnv;
   stdinIsTTY: boolean;
   stdoutIsTTY: boolean;
 }): string[] {
   const envFlag = params.exec.runtime === "docker" ? "-e" : "--env";
+  const proxyUrl = normalizeOptionalString(params.env.OPENCLAW_PROXY_URL);
+  if (proxyUrl) {
+    assertContainerProxyUrlIsReachable(proxyUrl, params.env);
+  }
+  const proxyEnvArgs = proxyUrl ? [envFlag, `OPENCLAW_PROXY_URL=${proxyUrl}`] : [];
   const interactiveFlags = ["-i", ...(params.stdinIsTTY && params.stdoutIsTTY ? ["-t"] : [])];
   return [
     ...params.exec.argsPrefix,
@@ -140,10 +148,36 @@ function buildContainerExecArgs(params: {
     `OPENCLAW_CONTAINER_HINT=${params.containerName}`,
     envFlag,
     "OPENCLAW_CLI_CONTAINER_BYPASS=1",
+    ...proxyEnvArgs,
     params.containerName,
     "openclaw",
     ...params.argv,
   ];
+}
+
+function assertContainerProxyUrlIsReachable(proxyUrl: string, env: NodeJS.ProcessEnv): void {
+  if (env[CONTAINER_ALLOW_LOOPBACK_PROXY_URL_ENV] === "1") {
+    return;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(proxyUrl);
+  } catch {
+    return;
+  }
+  const hostname = parsed.hostname.toLowerCase();
+  if (
+    hostname !== "127.0.0.1" &&
+    hostname !== "localhost" &&
+    hostname !== "::1" &&
+    hostname !== "[::1]"
+  ) {
+    return;
+  }
+  throw new Error(
+    `OPENCLAW_PROXY_URL=${proxyUrl} is loopback; 127.0.0.1 inside a container points at the container, not the host. ` +
+      `Use a container-reachable proxy address, or set ${CONTAINER_ALLOW_LOOPBACK_PROXY_URL_ENV}=1 if this is intentional.`,
+  );
 }
 
 function buildContainerExecEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -230,6 +264,7 @@ export function maybeRunCliInContainer(
       exec: runningContainer,
       containerName: runningContainer.containerName,
       argv: parsed.argv.slice(2),
+      env: resolvedDeps.env,
       stdinIsTTY: resolvedDeps.stdinIsTTY,
       stdoutIsTTY: resolvedDeps.stdoutIsTTY,
     }),

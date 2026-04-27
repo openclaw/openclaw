@@ -42,11 +42,13 @@ type SharedServiceEnvironmentFields = {
   configPath: string | undefined;
   tmpDir: string;
   minimalPath: string | undefined;
+  proxyEnv: Record<string, string | undefined>;
   nodeCaCerts: string | undefined;
   nodeUseSystemCa: string | undefined;
 };
 
 export const SERVICE_PROXY_ENV_KEYS = [
+  "OPENCLAW_PROXY_URL",
   "HTTP_PROXY",
   "HTTPS_PROXY",
   "NO_PROXY",
@@ -56,6 +58,13 @@ export const SERVICE_PROXY_ENV_KEYS = [
   "no_proxy",
   "all_proxy",
 ] as const;
+
+function readServiceProxyEnvironment(
+  env: Record<string, string | undefined>,
+): Record<string, string | undefined> {
+  const proxyUrl = normalizeOptionalString(env.OPENCLAW_PROXY_URL);
+  return proxyUrl ? { OPENCLAW_PROXY_URL: proxyUrl } : {};
+}
 
 function addNonEmptyDir(dirs: string[], dir: string | undefined): void {
   if (dir) {
@@ -355,6 +364,7 @@ function buildCommonServiceEnvironment(
     NODE_USE_SYSTEM_CA: sharedEnv.nodeUseSystemCa,
     OPENCLAW_STATE_DIR: sharedEnv.stateDir,
     OPENCLAW_CONFIG_PATH: sharedEnv.configPath,
+    ...sharedEnv.proxyEnv,
   };
   if (sharedEnv.minimalPath) {
     serviceEnv.PATH = sharedEnv.minimalPath;
@@ -404,6 +414,7 @@ function resolveSharedServiceEnvironmentFields(
       platform === "win32"
         ? undefined
         : buildMinimalServicePath({ env, platform, extraDirs: extraPathDirs }),
+    proxyEnv: readServiceProxyEnvironment(env),
     nodeCaCerts: startupTlsEnv.NODE_EXTRA_CA_CERTS,
     nodeUseSystemCa: startupTlsEnv.NODE_USE_SYSTEM_CA,
   };

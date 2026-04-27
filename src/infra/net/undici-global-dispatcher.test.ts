@@ -15,6 +15,7 @@ const {
   }
 
   class EnvHttpProxyAgent {
+    public readonly capturedHttpProxy = process.env.HTTP_PROXY;
     constructor(public readonly options?: Record<string, unknown>) {}
   }
 
@@ -73,6 +74,7 @@ import { hasEnvHttpProxyAgentConfigured, resolveEnvHttpProxyAgentOptions } from 
 let DEFAULT_UNDICI_STREAM_TIMEOUT_MS: typeof import("./undici-global-dispatcher.js").DEFAULT_UNDICI_STREAM_TIMEOUT_MS;
 let ensureGlobalUndiciEnvProxyDispatcher: typeof import("./undici-global-dispatcher.js").ensureGlobalUndiciEnvProxyDispatcher;
 let ensureGlobalUndiciStreamTimeouts: typeof import("./undici-global-dispatcher.js").ensureGlobalUndiciStreamTimeouts;
+let forceResetGlobalDispatcher: typeof import("./undici-global-dispatcher.js").forceResetGlobalDispatcher;
 let resetGlobalUndiciStreamTimeoutsForTests: typeof import("./undici-global-dispatcher.js").resetGlobalUndiciStreamTimeoutsForTests;
 let undiciGlobalDispatcherModule: typeof import("./undici-global-dispatcher.js");
 
@@ -83,6 +85,7 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
       DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
       ensureGlobalUndiciEnvProxyDispatcher,
       ensureGlobalUndiciStreamTimeouts,
+      forceResetGlobalDispatcher,
       resetGlobalUndiciStreamTimeoutsForTests,
     } = undiciGlobalDispatcherModule);
   });
@@ -299,6 +302,38 @@ describe("ensureGlobalUndiciEnvProxyDispatcher", () => {
 
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
     expect(getCurrentDispatcher()).toBeInstanceOf(EnvHttpProxyAgent);
+  });
+});
+
+describe("forceResetGlobalDispatcher", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetGlobalUndiciStreamTimeoutsForTests();
+    vi.mocked(hasEnvHttpProxyConfigured).mockReturnValue(false);
+  });
+
+  it("replaces an EnvHttpProxyAgent with a direct Agent when proxy env is cleared", () => {
+    setCurrentDispatcher(new EnvHttpProxyAgent());
+
+    forceResetGlobalDispatcher();
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+    expect(getCurrentDispatcher()).toBeInstanceOf(Agent);
+  });
+
+  it("replaces a stale EnvHttpProxyAgent when restored proxy env is still configured", () => {
+    process.env.HTTP_PROXY = "http://proxy-a.example:8080";
+    vi.mocked(hasEnvHttpProxyConfigured).mockReturnValue(true);
+    setCurrentDispatcher(new EnvHttpProxyAgent());
+
+    process.env.HTTP_PROXY = "http://proxy-b.example:8080";
+    forceResetGlobalDispatcher();
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+    expect(getCurrentDispatcher()).toBeInstanceOf(EnvHttpProxyAgent);
+    expect((getCurrentDispatcher() as { capturedHttpProxy?: string }).capturedHttpProxy).toBe(
+      "http://proxy-b.example:8080",
+    );
   });
 });
 

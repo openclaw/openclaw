@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isValueToken } from "../infra/cli-root-options.js";
 import { isTruthyEnvValue, normalizeEnv } from "../infra/env.js";
 import { isMainModule } from "../infra/is-main.js";
+import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import type { PluginManifestCommandAliasRegistry } from "../plugins/manifest-command-aliases.js";
@@ -24,6 +25,7 @@ import {
   shouldEnsureCliPath,
   shouldStartCrestodianForBareRoot,
   shouldStartCrestodianForModernOnboard,
+  shouldStartProxyForCli,
   shouldUseBrowserHelpFastPath,
   shouldUseRootHelpFastPath,
 } from "./run-main-policy.js";
@@ -34,6 +36,7 @@ export {
   shouldEnsureCliPath,
   shouldStartCrestodianForBareRoot,
   shouldStartCrestodianForModernOnboard,
+  shouldStartProxyForCli,
   shouldUseBrowserHelpFastPath,
   shouldUseRootHelpFastPath,
 } from "./run-main-policy.js";
@@ -378,6 +381,55 @@ export async function runCli(argv: string[] = process.argv) {
   // Enforce the minimum supported runtime before doing any work.
   assertSupportedRuntime();
 
+  // Activate operator-managed proxy routing for network-capable commands.
+  // Local Gateway/control-plane commands keep direct loopback access while
+  // runtime, provider, plugin, update, and unknown plugin commands route egress.
+  let proxyHandle: ProxyHandle | null = null;
+  const stopStartedProxy = async () => {
+    const handle = proxyHandle;
+    proxyHandle = null;
+    if (handle) {
+      const { stopProxy } = await import("../infra/net/proxy/proxy-lifecycle.js");
+      await stopProxy(handle);
+    }
+  };
+  const killStartedProxy = () => {
+    const handle = proxyHandle;
+    proxyHandle = null;
+    handle?.kill("SIGTERM");
+  };
+  if (shouldStartProxyForCli(normalizedArgv)) {
+    const [{ loadConfig }, { startProxy }] = await Promise.all([
+      import("../config/io.js"),
+      import("../infra/net/proxy/proxy-lifecycle.js"),
+    ]);
+    const config = loadConfig();
+    proxyHandle = await startProxy(config?.proxy ?? undefined);
+  }
+
+  let onSigterm: (() => void) | null = null;
+  let onSigint: (() => void) | null = null;
+  let onExit: (() => void) | null = null;
+  if (proxyHandle) {
+    const shutdown = (exitCode: number) => {
+      if (onSigterm) {
+        process.off("SIGTERM", onSigterm);
+      }
+      if (onSigint) {
+        process.off("SIGINT", onSigint);
+      }
+      void stopStartedProxy().finally(() => {
+        process.exit(exitCode);
+      });
+    };
+    onSigterm = () => shutdown(143);
+    onSigint = () => shutdown(130);
+    onExit = () => killStartedProxy();
+    process.once("SIGTERM", onSigterm);
+    process.once("SIGINT", onSigint);
+    process.once("exit", onExit);
+  }
+
   try {
     if (shouldUseRootHelpFastPath(normalizedArgv)) {
       const { outputPrecomputedRootHelpText } = await import("./root-help-metadata.js");
@@ -606,6 +658,16 @@ export async function runCli(argv: string[] = process.argv) {
       stopStartupProgress();
     }
   } finally {
+    if (onSigterm) {
+      process.off("SIGTERM", onSigterm);
+    }
+    if (onSigint) {
+      process.off("SIGINT", onSigint);
+    }
+    if (onExit) {
+      process.off("exit", onExit);
+    }
+    await stopStartedProxy();
     await closeCliMemoryManagers();
   }
 }
