@@ -38,6 +38,15 @@
   max-width: min(980px, calc(100% - 46px));
 }
 
+.chat-group.chat-group--canvas .chat-group-messages {
+  width: 100%;
+  max-width: min(1200px, calc(100% - 52px));
+}
+
+.chat-group.chat-group--canvas .chat-bubble {
+  width: 100%;
+}
+
 .chat-group.user .chat-group-footer {
   justify-content: flex-end;
 }
@@ -590,6 +599,10 @@ details.msg-meta:not([open]) .msg-meta__details {
 
   .chat-group.tool .chat-group-messages {
     max-width: calc(100% - 46px);
+  }
+
+  .chat-group.chat-group--canvas .chat-group-messages {
+    max-width: 100%;
   }
 }
 

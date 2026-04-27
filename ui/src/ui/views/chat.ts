@@ -84,6 +84,7 @@ export type ChatProps = {
   canvasHostUrl?: string | null;
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
+  mcpAppsEnabled?: boolean;
   assistantName: string;
   assistantAvatar: string | null;
   userName?: string | null;
@@ -148,7 +149,6 @@ function getDeletedMessages(sessionKey: string): DeletedMessages {
     () => new DeletedMessages(sessionKey),
   );
 }
-
 interface ChatEphemeralState {
   sttRecording: boolean;
   sttInterimText: string;
@@ -887,6 +887,7 @@ export function renderChat(props: ChatProps) {
                 canvasHostUrl: props.canvasHostUrl,
                 embedSandboxMode: props.embedSandboxMode ?? "scripts",
                 allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
+                mcpAppsEnabled: props.mcpAppsEnabled ?? false,
                 contextWindow:
                   activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null,
                 onDelete: () => {

@@ -52,6 +52,10 @@ vi.mock("./pi-bundle-mcp-tools.js", () => ({
     callTool: async () => ({
       content: [{ type: "text", text: "FROM-BUNDLE" }],
     }),
+    listTools: async () => ({ tools: [] }),
+    listResources: async () => ({ resources: [] }),
+    listResourceTemplates: async () => ({ resourceTemplates: [] }),
+    readResource: async () => ({ contents: [] }),
     dispose: async () => {},
   }),
   materializeBundleMcpToolsForRun: async () => {

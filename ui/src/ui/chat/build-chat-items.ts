@@ -1,3 +1,4 @@
+import { extractCanvasShortcodes } from "../../../../src/chat/canvas-render.js";
 import type { ChatItem, MessageGroup, ToolCard } from "../types/chat-types.ts";
 import { extractTextCached } from "./message-extract.ts";
 import { normalizeMessage } from "./message-normalizer.ts";
@@ -25,13 +26,54 @@ function appendCanvasBlockToAssistantMessage(
   rawText: string | null,
 ) {
   const raw = message as Record<string, unknown>;
-  const existingContent = Array.isArray(raw.content)
+  const existingContentRaw = Array.isArray(raw.content)
     ? [...raw.content]
     : typeof raw.content === "string"
       ? [{ type: "text", text: raw.content }]
       : typeof raw.text === "string"
         ? [{ type: "text", text: raw.text }]
         : [];
+  const existingContent: unknown[] = [];
+  for (const block of existingContentRaw) {
+    let nextBlock = block;
+    if (block && typeof block === "object") {
+      const typed = block as { type?: unknown; text?: unknown };
+      if (typed.type === "text" && typeof typed.text === "string") {
+        const strippedText = stripSingleMatchingCanvasShortcode(typed.text, preview);
+        nextBlock =
+          strippedText === typed.text ? block : Object.assign({}, typed, { text: strippedText });
+        if (!strippedText.trim()) {
+          continue;
+        }
+      }
+    }
+    existingContent.push(nextBlock);
+  }
+  let upgradedExisting = false;
+  const upgradedContent = existingContent.map((block) => {
+    if (!block || typeof block !== "object") {
+      return block;
+    }
+    const typed = block as {
+      type?: unknown;
+      preview?: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>;
+    };
+    if (typed.type !== "canvas" || !typed.preview || !canvasPreviewsMatch(typed.preview, preview)) {
+      return block;
+    }
+    const mergedPreview = mergeCanvasPreview(typed.preview, preview);
+    if (mergedPreview === typed.preview) {
+      return block;
+    }
+    upgradedExisting = true;
+    return { ...typed, preview: mergedPreview };
+  });
+  if (upgradedExisting) {
+    return {
+      ...raw,
+      content: upgradedContent,
+    };
+  }
   const alreadyHasArtifact = existingContent.some((block) => {
     if (!block || typeof block !== "object") {
       return false;
@@ -43,8 +85,10 @@ function appendCanvasBlockToAssistantMessage(
     return (
       typed.type === "canvas" &&
       typed.preview?.kind === "canvas" &&
-      ((preview.viewId && typed.preview.viewId === preview.viewId) ||
-        (preview.url && typed.preview.url === preview.url))
+      canvasPreviewsMatch(
+        typed.preview as Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>,
+        preview,
+      )
     );
   });
   if (alreadyHasArtifact) {
@@ -61,6 +105,58 @@ function appendCanvasBlockToAssistantMessage(
       },
     ],
   };
+}
+
+function canvasPreviewsMatch(
+  a: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>,
+  b: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>,
+): boolean {
+  return Boolean(
+    (a.viewId && b.viewId && a.viewId === b.viewId) || (a.url && b.url && a.url === b.url),
+  );
+}
+
+function mergeCanvasPreview(
+  existing: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>,
+  next: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>,
+): Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }> {
+  if (!canvasPreviewsMatch(existing, next)) {
+    return existing;
+  }
+  const existingMcpApp = existing.mcpApp;
+  const nextMcpApp = next.mcpApp;
+  if (!nextMcpApp) {
+    return existing;
+  }
+  const mergedMcpApp = {
+    ...nextMcpApp,
+    ...existingMcpApp,
+    ...(existingMcpApp?.toolInput === undefined && nextMcpApp.toolInput !== undefined
+      ? { toolInput: nextMcpApp.toolInput }
+      : {}),
+    ...(existingMcpApp?.toolResult === undefined && nextMcpApp.toolResult !== undefined
+      ? { toolResult: nextMcpApp.toolResult }
+      : {}),
+    ...(existingMcpApp?.sessionKey === undefined && nextMcpApp.sessionKey !== undefined
+      ? { sessionKey: nextMcpApp.sessionKey }
+      : {}),
+  };
+  return {
+    ...next,
+    ...existing,
+    mcpApp: mergedMcpApp,
+  };
+}
+
+function stripSingleMatchingCanvasShortcode(
+  text: string,
+  preview: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>,
+): string {
+  const extracted = extractCanvasShortcodes(text);
+  if (extracted.previews.length !== 1) {
+    return text;
+  }
+  return canvasPreviewsMatch(extracted.previews[0], preview) ? extracted.text : text;
 }
 
 function extractChatMessagePreview(toolMessage: unknown): {
@@ -88,6 +184,22 @@ function extractChatMessagePreview(toolMessage: unknown): {
       : typeof toolRecord.tool_name === "string"
         ? toolRecord.tool_name
         : undefined;
+  if (Array.isArray(toolRecord.content)) {
+    for (let index = toolRecord.content.length - 1; index >= 0; index--) {
+      const item = toolRecord.content[index];
+      if (!item || typeof item !== "object") {
+        continue;
+      }
+      const text = (item as { text?: unknown }).text;
+      if (typeof text !== "string") {
+        continue;
+      }
+      const preview = extractToolPreview(text, toolName);
+      if (preview?.kind === "canvas") {
+        return { preview, text, timestamp: normalized.timestamp ?? null };
+      }
+    }
+  }
   const preview = extractToolPreview(text, toolName);
   if (preview?.kind !== "canvas") {
     return null;
@@ -137,7 +249,7 @@ function findNearestAssistantMessageIndex(
   if (previous && next) {
     const previousDelta = toolTimestamp - previous.timestamp;
     const nextDelta = next.timestamp - toolTimestamp;
-    return nextDelta < previousDelta ? next.index : previous.index;
+    return nextDelta <= previousDelta ? next.index : previous.index;
   }
   if (previous) {
     return previous.index;
@@ -146,6 +258,41 @@ function findNearestAssistantMessageIndex(
     return next.index;
   }
   return assistantEntries[assistantEntries.length - 1]?.index ?? null;
+}
+
+function findAssistantMessageIndexWithCanvasPreview(
+  items: ChatItem[],
+  preview: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>,
+  toolTimestamp: number | null,
+): number | null {
+  let best: { index: number; delta: number } | null = null;
+  for (let index = 0; index < items.length; index++) {
+    const item = items[index];
+    if (!item || item.kind !== "message") {
+      continue;
+    }
+    const normalized = normalizeMessage(item.message);
+    if (normalized.role.toLowerCase() !== "assistant") {
+      continue;
+    }
+    const hasPreview = normalized.content.some(
+      (block) =>
+        block.type === "canvas" &&
+        block.preview.kind === "canvas" &&
+        canvasPreviewsMatch(block.preview, preview),
+    );
+    if (!hasPreview) {
+      continue;
+    }
+    const delta =
+      toolTimestamp != null && normalized.timestamp != null
+        ? Math.abs(normalized.timestamp - toolTimestamp)
+        : 0;
+    if (!best || delta < best.delta) {
+      best = { index, delta };
+    }
+  }
+  return best?.index ?? null;
 }
 
 function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
@@ -199,6 +346,11 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   const items: ChatItem[] = [];
   const history = Array.isArray(props.messages) ? props.messages : [];
   const tools = Array.isArray(props.toolMessages) ? props.toolMessages : [];
+  const liftedCanvasSources: Array<{
+    preview: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>;
+    text: string | null;
+    timestamp: number | null;
+  }> = [];
   const historyStart = Math.max(0, history.length - CHAT_HISTORY_RENDER_LIMIT);
   if (historyStart > 0) {
     items.push({
@@ -229,6 +381,13 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       continue;
     }
 
+    if (normalized.role.toLowerCase() === "toolresult") {
+      const lifted = extractChatMessagePreview(msg);
+      if (lifted) {
+        liftedCanvasSources.push(lifted);
+      }
+    }
+
     if (!props.showToolCalls && normalized.role.toLowerCase() === "toolresult") {
       continue;
     }
@@ -244,15 +403,22 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       message: msg,
     });
   }
-  const liftedCanvasSources = tools
-    .map((tool) => extractChatMessagePreview(tool))
-    .filter((entry) => Boolean(entry)) as Array<{
-    preview: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>;
-    text: string | null;
-    timestamp: number | null;
-  }>;
+  liftedCanvasSources.push(
+    ...(tools
+      .map((tool) => extractChatMessagePreview(tool))
+      .filter((entry) => Boolean(entry)) as Array<{
+      preview: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>;
+      text: string | null;
+      timestamp: number | null;
+    }>),
+  );
   for (const liftedCanvasSource of liftedCanvasSources) {
-    const assistantIndex = findNearestAssistantMessageIndex(items, liftedCanvasSource.timestamp);
+    const assistantIndex =
+      findAssistantMessageIndexWithCanvasPreview(
+        items,
+        liftedCanvasSource.preview,
+        liftedCanvasSource.timestamp,
+      ) ?? findNearestAssistantMessageIndex(items, liftedCanvasSource.timestamp);
     if (assistantIndex == null) {
       continue;
     }

@@ -23,6 +23,7 @@ export type ControlUiBootstrapState = {
   hello?: { auth?: { deviceToken?: string | null } | null } | null;
   settings?: { token?: string | null } | null;
   password?: string | null;
+  mcpAppsEnabled: boolean;
 };
 
 export async function loadControlUiBootstrapConfig(state: ControlUiBootstrapState) {
@@ -99,6 +100,7 @@ export async function loadControlUiBootstrapConfig(state: ControlUiBootstrapStat
           ? "strict"
           : "scripts";
     state.allowExternalEmbedUrls = parsed.allowExternalEmbedUrls === true;
+    state.mcpAppsEnabled = parsed.mcpAppsEnabled === true;
   } catch {
     // Ignore bootstrap failures; UI will update identity after connecting.
   }

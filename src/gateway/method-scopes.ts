@@ -118,6 +118,10 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "talk.config",
     "agents.files.list",
     "agents.files.get",
+    "mcp.listResources",
+    "mcp.listResourceTemplates",
+    "mcp.listTools",
+    "mcp.readResource",
   ],
   [WRITE_SCOPE]: [
     "message.action",
@@ -155,6 +159,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "push.web.unsubscribe",
     "push.web.test",
     "node.pending.enqueue",
+    "mcp.callTool",
   ],
   [ADMIN_SCOPE]: [
     "channels.start",

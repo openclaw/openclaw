@@ -493,6 +493,67 @@ Example:
 These commands manage saved config only. They do not start the channel bridge, open a live MCP client session, or prove the target server is reachable.
 </Note>
 
+## MCP Apps UI
+
+Some MCP servers expose an MCP Apps UI resource for a tool. When MCP Apps are
+enabled, OpenClaw can fetch that resource, render it in the Control UI as a
+sandboxed iframe, and let the app call app-visible MCP tools through the active
+session runtime.
+
+This is separate from plain MCP tools:
+
+- plain MCP tools can be called without MCP Apps
+- MCP Apps UI rendering is opt-in with `mcp.apps.enabled`
+- tools marked app-only with `_meta.ui.visibility: ["app"]` stay hidden from the
+  model and are only callable through the app bridge when MCP Apps are enabled
+
+Enable MCP Apps:
+
+```bash
+openclaw config set mcp.apps.enabled true --strict-json
+```
+
+Disable MCP Apps:
+
+```bash
+openclaw config set mcp.apps.enabled false --strict-json
+```
+
+Example config:
+
+```json
+{
+  "mcp": {
+    "apps": {
+      "enabled": true
+    },
+    "servers": {
+      "system-monitor": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-system-monitor", "--stdio"]
+      }
+    }
+  }
+}
+```
+
+Security notes:
+
+- MCP Apps render HTML supplied by the configured MCP server.
+- OpenClaw only renders resources with the MCP Apps MIME type
+  `text/html;profile=mcp-app`.
+- OpenClaw renders app views in sandboxed iframes. The default Control UI embed
+  sandbox allows scripts while keeping the iframe origin-isolated.
+- MCP Apps are not upgraded to the Control UI `trusted` sandbox mode and do not
+  receive popup permissions.
+- App views receive the tool input/result they render.
+- App views can call app-visible MCP tools and read MCP resources through the
+  active session runtime.
+- Keep `mcp.apps.enabled` off unless you trust the configured MCP servers that
+  provide app UI resources.
+- `openclaw security audit` reports when MCP Apps are enabled. This is an
+  intentional attack-surface warning, not a `doctor` repair.
+
 ## Current limits
 
 This page documents the bridge as shipped today.

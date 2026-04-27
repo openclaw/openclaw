@@ -43,6 +43,14 @@ function coerceCanvasPreview(
     ...(typeof preview.viewId === "string" ? { viewId: preview.viewId } : {}),
     ...(typeof preview.className === "string" ? { className: preview.className } : {}),
     ...(typeof preview.style === "string" ? { style: preview.style } : {}),
+    ...(preview.mcpApp && typeof preview.mcpApp === "object" && !Array.isArray(preview.mcpApp)
+      ? {
+          mcpApp: preview.mcpApp as Extract<
+            NonNullable<NormalizedMessage["content"][number]>,
+            { type: "canvas" }
+          >["preview"]["mcpApp"],
+        }
+      : {}),
   };
 }
 

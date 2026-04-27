@@ -23282,6 +23282,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Named MCP server definitions. OpenClaw stores them in its own config and runtime adapters decide which transports are supported at execution time.",
           },
+          apps: {
+            type: "object",
+            properties: {
+              enabled: {
+                type: "boolean",
+                title: "MCP Apps Enabled",
+                description:
+                  "Opt-in toggle for MCP Apps UI rendering and the app-to-host MCP bridge. Keep disabled unless you trust the configured MCP servers that provide app UI resources.",
+              },
+            },
+            additionalProperties: false,
+            title: "MCP Apps",
+            description:
+              "MCP Apps UI support. When enabled, OpenClaw may render MCP-provided HTML views and allow those views to call MCP tools through the active session.",
+          },
           sessionIdleTtlMs: {
             type: "number",
             minimum: 0,
@@ -25498,6 +25513,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Dangerously Disable Control UI Device Auth",
       help: "Disables Control UI device identity checks and relies on token/password only. Use only for short-lived debugging on trusted networks, then turn it off immediately.",
       tags: ["security", "access", "network", "advanced"],
+    },
+    "mcp.apps": {
+      label: "MCP Apps",
+      help: "MCP Apps UI support. When enabled, OpenClaw may render MCP-provided HTML views and allow those views to call MCP tools through the active session.",
+      tags: ["advanced"],
+    },
+    "mcp.apps.enabled": {
+      label: "MCP Apps Enabled",
+      help: "Opt-in toggle for MCP Apps UI rendering and the app-to-host MCP bridge. Keep disabled unless you trust the configured MCP servers that provide app UI resources.",
+      tags: ["security", "access", "advanced"],
     },
     "gateway.push": {
       label: "Gateway Push Delivery",

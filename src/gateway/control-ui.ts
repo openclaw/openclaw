@@ -805,6 +805,7 @@ export async function handleControlUiHttpRequest(
             ? "strict"
             : "scripts",
       allowExternalEmbedUrls: config?.gateway?.controlUi?.allowExternalEmbedUrls === true,
+      mcpAppsEnabled: config?.mcp?.apps?.enabled === true,
     } satisfies ControlUiBootstrapConfig);
     return true;
   }

@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { buildMcpAppCanvasJson, fetchMcpAppView } from "./mcp-ui-resource.js";
 import {
   buildSafeToolName,
   normalizeReservedToolNames,
@@ -12,6 +13,10 @@ import {
 } from "./pi-bundle-mcp-names.js";
 import type { BundleMcpToolRuntime, SessionMcpRuntime } from "./pi-bundle-mcp-types.js";
 import type { AnyAgentTool } from "./tools/common.js";
+
+function isAppOnlyTool(uiVisibility: Array<"model" | "app"> | undefined): boolean {
+  return uiVisibility?.includes("app") === true && !uiVisibility.includes("model");
+}
 
 function toAgentToolResult(params: {
   serverName: string;
@@ -91,6 +96,9 @@ export async function materializeBundleMcpToolsForRun(params: {
   });
 
   for (const tool of sortedCatalogTools) {
+    if (isAppOnlyTool(tool.uiVisibility)) {
+      continue;
+    }
     const originalName = tool.toolName.trim();
     if (!originalName) {
       continue;
@@ -114,11 +122,34 @@ export async function materializeBundleMcpToolsForRun(params: {
       execute: async (_toolCallId: string, input: unknown) => {
         params.runtime.markUsed();
         const result = await params.runtime.callTool(tool.serverName, tool.toolName, input);
-        return toAgentToolResult({
+        const agentResult = toAgentToolResult({
           serverName: tool.serverName,
           toolName: tool.toolName,
           result,
         });
+        const uiResourceUri = tool.uiResourceUri;
+        if (params.runtime.mcpAppsEnabled === true && uiResourceUri) {
+          const view = await fetchMcpAppView({
+            runtime: params.runtime,
+            serverName: tool.serverName,
+            toolName: tool.toolName,
+            uiResourceUri,
+          });
+          if (view) {
+            agentResult.content = [
+              ...agentResult.content,
+              {
+                type: "text",
+                text: buildMcpAppCanvasJson({
+                  view,
+                  toolInput: input,
+                  toolResult: result,
+                }),
+              },
+            ];
+          }
+        }
+        return agentResult;
       },
     };
     setPluginToolMeta(agentTool, {
