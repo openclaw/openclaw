@@ -58,6 +58,7 @@ import {
   getQrRemoteCommandSecretTargetIds,
   getScopedChannelsCommandSecretTargets,
   getSecurityAuditCommandSecretTargetIds,
+  getTtsCommandSecretTargetIds,
 } from "./command-secret-targets.js";
 
 describe("command secret target ids", () => {
@@ -71,6 +72,11 @@ describe("command secret target ids", () => {
     expect(ids.has("models.providers.*.apiKey")).toBe(true);
     expect(ids.has("models.providers.*.request.tls.key")).toBe(true);
     expect(ids.has("channels.discord.token")).toBe(false);
+  });
+
+  it("keeps static TTS targets out of the registry path", () => {
+    const ids = getTtsCommandSecretTargetIds();
+    expect(ids).toEqual(new Set(["messages.tts.providers.*.apiKey"]));
   });
 
   it("includes memorySearch remote targets for agent runtime commands", () => {

@@ -97,6 +97,13 @@ const mocks = vi.hoisted(() => ({
         : {}),
     }),
   ),
+  resolveCommandSecretRefsViaGateway: vi.fn(async ({ config }: { config: unknown }) => ({
+    resolvedConfig: config,
+    diagnostics: [],
+    targetStatesByPath: {},
+    hadUnresolvedTargets: false,
+  })),
+  getTtsCommandSecretTargetIds: vi.fn(() => new Set(["messages.tts.providers.*.apiKey"])),
   createEmbeddingProvider: vi.fn(async () => ({
     provider: {
       id: "openai",
@@ -186,6 +193,14 @@ vi.mock("../gateway/connection-details.js", () => ({
     urlSource: "local loopback",
     message: "Gateway target: ws://127.0.0.1:18789",
   })),
+}));
+
+vi.mock("./command-secret-gateway.js", () => ({
+  resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway,
+}));
+
+vi.mock("./command-secret-targets.js", () => ({
+  getTtsCommandSecretTargetIds: mocks.getTtsCommandSecretTargetIds,
 }));
 
 vi.mock("../media-understanding/runtime.js", () => ({
@@ -311,6 +326,15 @@ describe("capability cli", () => {
     mocks.generateVideo.mockReset();
     mocks.transcribeAudioFile.mockClear();
     mocks.textToSpeech.mockClear();
+    mocks.resolveCommandSecretRefsViaGateway
+      .mockReset()
+      .mockImplementation(async ({ config }: { config: unknown }) => ({
+        resolvedConfig: config,
+        diagnostics: [],
+        targetStatesByPath: {},
+        hadUnresolvedTargets: false,
+      }));
+    mocks.getTtsCommandSecretTargetIds.mockClear();
     mocks.setTtsProvider.mockClear();
     mocks.resolveExplicitTtsOverrides.mockClear();
     mocks.buildMediaUnderstandingRegistry.mockReset().mockReturnValue(new Map());
@@ -1055,6 +1079,58 @@ describe("capability cli", () => {
       }),
     );
     expect(mocks.setTtsProvider).not.toHaveBeenCalled();
+  });
+
+  it("resolves static TTS SecretRefs before local conversion", async () => {
+    const sourceConfig = {
+      messages: {
+        tts: {
+          providers: {
+            minimax: {
+              apiKey: { source: "exec", provider: "mockexec", id: "minimax/tts/apiKey" },
+            },
+          },
+        },
+      },
+    };
+    const resolvedConfig = {
+      messages: {
+        tts: {
+          providers: {
+            minimax: {
+              apiKey: "resolved-minimax-key",
+            },
+          },
+        },
+      },
+    };
+    mocks.loadConfig.mockReturnValueOnce(sourceConfig);
+    mocks.resolveCommandSecretRefsViaGateway.mockResolvedValueOnce({
+      resolvedConfig,
+      diagnostics: [],
+      targetStatesByPath: {
+        "messages.tts.providers.minimax.apiKey": "resolved_local",
+      },
+      hadUnresolvedTargets: false,
+    });
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "tts", "convert", "--text", "hello", "--json"],
+    });
+
+    expect(mocks.resolveCommandSecretRefsViaGateway).toHaveBeenCalledWith({
+      config: sourceConfig,
+      commandName: "infer tts convert",
+      targetIds: new Set(["messages.tts.providers.*.apiKey"]),
+      mode: "enforce_resolved",
+    });
+    expect(mocks.resolveExplicitTtsOverrides).toHaveBeenCalledWith(
+      expect.objectContaining({ cfg: resolvedConfig }),
+    );
+    expect(mocks.textToSpeech).toHaveBeenCalledWith(
+      expect.objectContaining({ cfg: resolvedConfig }),
+    );
   });
 
   it("disables TTS fallback when explicit provider or voice/model selection is requested", async () => {
