@@ -115,6 +115,9 @@ function parseBashTimeoutOption(rest: string): { command: string; timeoutSec?: n
     trimmed.match(/^--timeout=(\d+(?:\.\d+)?)\s+([\s\S]+)$/) ??
     trimmed.match(/^--timeout\s+(\d+(?:\.\d+)?)\s+([\s\S]+)$/);
   if (!match) {
+    if (/^(?:timeout=|--timeout(?:=|\s|$))/.test(trimmed)) {
+      return { command: "" };
+    }
     return { command: rest };
   }
   const timeoutSec = Number(match[1]);

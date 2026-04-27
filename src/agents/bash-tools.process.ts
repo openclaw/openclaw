@@ -451,9 +451,16 @@ export function createProcessTool(
               window.effectiveOffset,
               window.effectiveLimit,
             );
+            const logText = mergeTimeoutPollOutput({
+              drainedOutput: slice,
+              failureReason: scopedSession.failureReason,
+              exitReason: scopedSession.exitReason,
+            });
             const logDefaultTailNote = defaultTailNote(totalLines, window.usingDefaultTail);
             return {
-              content: [{ type: "text", text: (slice || "(no output yet)") + logDefaultTailNote }],
+              content: [
+                { type: "text", text: (logText || "(no output yet)") + logDefaultTailNote },
+              ],
               details: {
                 status: scopedSession.exited ? "completed" : "running",
                 sessionId: params.sessionId,
@@ -472,11 +479,16 @@ export function createProcessTool(
               window.effectiveOffset,
               window.effectiveLimit,
             );
+            const logText = mergeTimeoutPollOutput({
+              drainedOutput: slice,
+              failureReason: scopedFinished.failureReason,
+              exitReason: scopedFinished.exitReason,
+            });
             const status = scopedFinished.status === "completed" ? "completed" : "failed";
             const logDefaultTailNote = defaultTailNote(totalLines, window.usingDefaultTail);
             return {
               content: [
-                { type: "text", text: (slice || "(no output recorded)") + logDefaultTailNote },
+                { type: "text", text: (logText || "(no output recorded)") + logDefaultTailNote },
               ],
               details: {
                 status,

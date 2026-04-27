@@ -39,6 +39,17 @@ async function pollSession(
   return processTool.execute(callId, args);
 }
 
+async function logSession(
+  processTool: ReturnType<typeof createProcessTool>,
+  callId: string,
+  sessionId: string,
+) {
+  return processTool.execute(callId, {
+    action: "log",
+    sessionId,
+  });
+}
+
 function retryMs(result: Awaited<ReturnType<ReturnType<typeof createProcessTool>["execute"]>>) {
   return (result.details as { retryInMs?: number }).retryInMs;
 }
@@ -179,4 +190,20 @@ test("process poll includes timeout guidance when a waited poll observes exit", 
   } finally {
     vi.useRealTimers();
   }
+});
+
+test("process log includes timeout guidance for silent finished sessions", async () => {
+  const sessionId = "sess-timeout-log";
+  const { processTool, session } = createProcessSessionHarness(sessionId);
+  const timeoutText =
+    "Command timed out after 30 seconds. If this command is expected to take longer, re-run with a higher timeout.";
+
+  session.failureReason = timeoutText;
+  markExited(session, null, "SIGKILL", "failed", "overall-timeout");
+
+  const log = await logSession(processTool, "toolcall-timeout-log", sessionId);
+  const text = log.content[0]?.type === "text" ? log.content[0].text : "";
+
+  expect(text).toContain(timeoutText);
+  expect(text).not.toContain("(no output recorded)");
 });

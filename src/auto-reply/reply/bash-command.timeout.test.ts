@@ -109,6 +109,19 @@ describe("handleBashChatCommand timeout handling", () => {
     );
   });
 
+  it("rejects timeout prefixes that omit the bash command", async () => {
+    const timeoutEquals = await handleBashChatCommand(buildParams("/bash timeout=0"));
+    const timeoutFlag = await handleBashChatCommand(buildParams("/bash --timeout 90"));
+    const malformedTimeout = await handleBashChatCommand(
+      buildParams("/bash --timeout nope npm test"),
+    );
+
+    expect(timeoutEquals.text).toContain("Usage");
+    expect(timeoutFlag.text).toContain("Usage");
+    expect(malformedTimeout.text).toContain("Usage");
+    expect(executeMock).not.toHaveBeenCalled();
+  });
+
   it("shows timeout exit reasons when polling finished chat bash jobs", async () => {
     getSessionMock.mockReturnValue(undefined);
     getFinishedSessionMock.mockReturnValue({
