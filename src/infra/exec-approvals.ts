@@ -264,10 +264,11 @@ function assertNoSymlinkPathComponents(targetPath: string, trustedRoot: string):
   // — the common GNU Stow / chezmoi dotfile layout. Once we follow it we
   // continue traversal from the realpath target with the same per-segment
   // symlink rejection, so deeper symlinks inside the resolved tree remain
-  // disallowed. Trust requires the symlink target to be (a) owned by the
-  // current effective user and (b) not group/other writable, matching the
-  // hardening intent of #64050 / #72377.
-  let trustedSymlinkConsumed = false;
+  // disallowed (the loop never revisits i === 0, so the at-most-one-hop
+  // invariant follows directly from the !isImmediateRootChild guard below).
+  // Trust requires the symlink target to be (a) owned by the current
+  // effective user and (b) not group/other writable, matching the hardening
+  // intent of #64050 / #72377.
   for (let i = 0; i < segments.length; i += 1) {
     const segment = segments[i];
     current = path.join(current, segment);
@@ -275,12 +276,11 @@ function assertNoSymlinkPathComponents(targetPath: string, trustedRoot: string):
       const stat = fs.lstatSync(current);
       if (stat.isSymbolicLink()) {
         const isImmediateRootChild = i === 0;
-        if (!isImmediateRootChild || trustedSymlinkConsumed) {
+        if (!isImmediateRootChild) {
           throw new Error(`Refusing to traverse symlink in exec approvals path: ${current}`);
         }
         const realTarget = fs.realpathSync(current);
         assertTrustedSymlinkTarget(current, realTarget);
-        trustedSymlinkConsumed = true;
         current = realTarget;
       }
     } catch (err) {
