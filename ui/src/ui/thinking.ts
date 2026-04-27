@@ -6,7 +6,7 @@ export type ThinkingCatalogEntry = {
   reasoning?: boolean;
 };
 
-const BASE_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high"] as const;
+const BASE_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"] as const;
 
 export function normalizeThinkingProviderId(provider?: string | null): string {
   if (!provider) {

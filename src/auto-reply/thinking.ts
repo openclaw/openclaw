@@ -174,13 +174,21 @@ export function resolveThinkingProfile(params: {
     provider: context.normalizedProvider,
     modelId: context.modelKey || context.modelId,
   };
-  if (
-    resolveProviderXHighThinking({
-      provider: context.normalizedProvider,
-      context: policyContext,
-    }) === true
-  ) {
-    appendProfileLevel(profile, "xhigh");
+  // Append advanced levels for non-binary thinking providers.
+  // Binary providers (off/on) should not expose xhigh/adaptive/max.
+  // For base profiles, these are already in BASE_THINKING_LEVELS.
+  // For plugin profiles, this ensures they're added if supported.
+  if (binaryDecision !== true) {
+    if (
+      resolveProviderXHighThinking({
+        provider: context.normalizedProvider,
+        context: policyContext,
+      }) === true
+    ) {
+      appendProfileLevel(profile, "xhigh");
+    }
+    appendProfileLevel(profile, "adaptive");
+    appendProfileLevel(profile, "max");
   }
   return profile;
 }

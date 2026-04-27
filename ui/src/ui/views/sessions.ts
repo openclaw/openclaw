@@ -65,7 +65,17 @@ export type SessionsProps = {
   onRestoreCheckpoint: (sessionKey: string, checkpointId: string) => void | Promise<void>;
 };
 
-const DEFAULT_THINK_LEVELS = ["off", "minimal", "low", "medium", "high"] as const;
+const DEFAULT_THINK_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"] as const;
+const THINKING_LEVEL_LABELS: Record<string, string> = {
+  off: "off",
+  minimal: "minimal",
+  low: "low",
+  medium: "medium",
+  high: "high",
+  xhigh: "extra high",
+  adaptive: "adaptive",
+  max: "maximum",
+};
 const VERBOSE_LEVELS = [
   { value: "", label: "inherit" },
   { value: "off", label: "off (explicit)" },
@@ -84,6 +94,15 @@ function normalizeThinkingOptionValue(raw: string): string {
   return normalizeThinkLevel(raw) ?? normalizeLowercaseStringOrEmpty(raw);
 }
 
+function applyThinkingLabel(id: string, fallback: string): string {
+  // Only apply friendly labels when the provider label matches the raw id
+  // (i.e., no custom label was given). Preserve custom provider labels like "on".
+  if (fallback === id) {
+    return THINKING_LEVEL_LABELS[id] ?? fallback;
+  }
+  return fallback;
+}
+
 function resolveThinkLevelOptions(
   row: GatewaySessionRow,
 ): readonly { value: string; label: string }[] {
@@ -97,7 +116,7 @@ function resolveThinkLevelOptions(
     { value: "", label: "inherit" },
     ...options.map((option) => ({
       value: normalizeThinkingOptionValue(option.id),
-      label: option.label,
+      label: applyThinkingLabel(normalizeThinkingOptionValue(option.id), option.label),
     })),
   ];
 }
