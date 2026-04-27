@@ -91,4 +91,10 @@ export async function dashboardCommand(
   } else if (hint) {
     runtime.log(hint);
   }
+
+  if (!copied && !opened && includeTokenInUrl) {
+    runtime.log(
+      "Token auto-auth not delivered. Append your gateway token (from OPENCLAW_GATEWAY_TOKEN or gateway.auth.token) as a URL fragment to authenticate.",
+    );
+  }
 }

@@ -166,6 +166,25 @@ describe("dashboardCommand", () => {
     }
   });
 
+  it("guides user to manual auth when delivery channels both fail (CVE-safe)", async () => {
+    const secretToken = "super-secret-bearer-token";
+    mockSnapshot(secretToken);
+    copyToClipboardMock.mockResolvedValue(false);
+    detectBrowserOpenSupportMock.mockResolvedValue({ ok: false, reason: "ssh" });
+    formatControlUiSshHintMock.mockReturnValue("ssh hint without token");
+
+    await dashboardCommand(runtime);
+
+    const allLogs = runtime.log.mock.calls.map((call) => String(call[0])).join("\n");
+
+    // CVE: token value and fragment marker must not appear in logs.
+    expect(allLogs).not.toContain(secretToken);
+    expect(allLogs).not.toContain("#token=");
+
+    // UX: user must be pointed to where their token lives so they can self-recover.
+    expect(allLogs).toMatch(/OPENCLAW_GATEWAY_TOKEN/);
+  });
+
   it("respects --no-open and tells user token URL is in clipboard", async () => {
     mockSnapshot("abc");
     copyToClipboardMock.mockResolvedValue(true);
