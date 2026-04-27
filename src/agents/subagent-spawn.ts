@@ -3,10 +3,8 @@ import { promises as fs } from "node:fs";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import { isValidAgentId, normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { isGatewayLifecycleRetryableError } from "../shared/gateway-lifecycle-errors.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { BootstrapContextMode } from "./bootstrap-files.js";
 import {
@@ -291,29 +289,6 @@ const SUBAGENT_GATEWAY_PREFLIGHT_TIMEOUT_MS = 5_000;
 const SUBAGENT_GATEWAY_PREFLIGHT_RETRY_DELAYS_MS = [250, 750, 1_500] as const;
 const SUBAGENT_AGENT_START_TIMEOUT_MS = 30_000;
 
-function isGatewayReadinessErrorMessage(message: unknown): boolean {
-  const lowered = normalizeOptionalString(
-    typeof message === "string" ? message : message instanceof Error ? message.message : undefined,
-  )?.toLowerCase();
-  if (!lowered) {
-    return false;
-  }
-  return (
-    lowered.includes("gateway timeout") ||
-    lowered.includes("gateway closed") ||
-    lowered.includes("handshake timeout") ||
-    lowered.includes("closed before connect") ||
-    lowered.includes("not yet ready to accept connections")
-  );
-}
-
-async function waitForDelay(ms: number): Promise<void> {
-  if (!Number.isFinite(ms) || ms <= 0) {
-    return;
-  }
-  await new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 async function ensureGatewayReadyForSubagentSpawn(): Promise<void> {
   let lastError = "";
   for (
@@ -322,22 +297,25 @@ async function ensureGatewayReadyForSubagentSpawn(): Promise<void> {
     attempt += 1
   ) {
     try {
+      // Use sessions.list (read-only) as readiness probe to avoid mutating
+      // the global session while still exercising the gateway connection.
       await callSubagentGateway({
-        method: "sessions.patch",
-        params: { key: "global" },
+        method: "sessions.list",
+        params: {},
         timeoutMs: SUBAGENT_GATEWAY_PREFLIGHT_TIMEOUT_MS,
       });
       return;
     } catch (err) {
       lastError = summarizeError(err);
-      if (!isGatewayReadinessErrorMessage(err)) {
+      if (!isGatewayLifecycleRetryableError(err)) {
         throw err;
       }
       const delayMs = SUBAGENT_GATEWAY_PREFLIGHT_RETRY_DELAYS_MS[attempt];
       if (delayMs == null) {
         break;
       }
-      await waitForDelay(delayMs);
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
   throw new Error(`Gateway not ready for subagent spawn: ${lastError || "unknown error"}`);
@@ -551,6 +529,7 @@ export async function spawnSubagentDirect(
       };
     }
   }
+  // Validate sandbox constraints before any gateway calls.
   const childSessionKey = `agent:${targetAgentId}:subagent:${crypto.randomUUID()}`;
   const requesterRuntime = resolveSandboxRuntimeStatus({
     cfg,
@@ -574,6 +553,23 @@ export async function spawnSubagentDirect(
         'sessions_spawn sandbox="require" needs a sandboxed target runtime. Pick a sandboxed agentId or use sandbox="inherit".',
     };
   }
+  // Resolve model & thinking plan before gateway probe so deterministic local
+  // input errors (invalid model ref, out-of-range thinking params) fail fast
+  // without consuming a gateway readiness probe.
+  const plan = resolveSubagentModelAndThinkingPlan({
+    cfg,
+    targetAgentId,
+    targetAgentConfig,
+    modelOverride,
+    thinkingOverrideRaw,
+  });
+  if (plan.status === "error") {
+    return {
+      status: "error",
+      error: plan.error,
+    };
+  }
+  // Gateway readiness probe after all local validation gates.
   try {
     await ensureGatewayReadyForSubagentSpawn();
   } catch (err) {
@@ -588,20 +584,6 @@ export async function spawnSubagentDirect(
     depth: childDepth,
     maxSpawnDepth,
   });
-  const targetAgentConfig = resolveAgentConfig(cfg, targetAgentId);
-  const plan = resolveSubagentModelAndThinkingPlan({
-    cfg,
-    targetAgentId,
-    targetAgentConfig,
-    modelOverride,
-    thinkingOverrideRaw,
-  });
-  if (plan.status === "error") {
-    return {
-      status: "error",
-      error: plan.error,
-    };
-  }
   const { resolvedModel, thinkingOverride } = plan;
   const patchChildSession = async (patch: Record<string, unknown>): Promise<string | undefined> => {
     try {

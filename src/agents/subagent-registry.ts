@@ -172,29 +172,7 @@ const PENDING_ERROR_TTL_MS = 5 * 60_000; // 5 minutes
 const SUBAGENT_SWEEP_DELETE_TIMEOUT_MS = 20_000;
 const SUBAGENT_SWEEP_DELETE_RETRY_DELAYS_MS = [1_000, 3_000] as const;
 
-function summarizeGatewayLifecycleError(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message || "error";
-  }
-  if (typeof error === "string") {
-    return error;
-  }
-  return "error";
-}
-
-function isRetryableGatewayLifecycleError(error: unknown): boolean {
-  const message = summarizeGatewayLifecycleError(error).toLowerCase();
-  if (!message) {
-    return false;
-  }
-  return (
-    message.includes("gateway timeout") ||
-    message.includes("gateway closed") ||
-    message.includes("handshake timeout") ||
-    message.includes("closed before connect") ||
-    message.includes("not yet ready to accept connections")
-  );
-}
+import { isGatewayLifecycleRetryableError } from "../shared/gateway-lifecycle-errors.js";
 
 async function waitForGatewayLifecycleRetryDelay(ms: number): Promise<void> {
   if (!Number.isFinite(ms) || ms <= 0) {
@@ -222,7 +200,7 @@ async function deleteSubagentSessionWithRetry(params: {
       return;
     } catch (err) {
       const delayMs = SUBAGENT_SWEEP_DELETE_RETRY_DELAYS_MS[attempt];
-      if (delayMs == null || !isRetryableGatewayLifecycleError(err)) {
+      if (delayMs == null || !isGatewayLifecycleRetryableError(err)) {
         throw err;
       }
       attempt += 1;

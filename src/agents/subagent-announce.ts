@@ -18,12 +18,12 @@ import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "./i
 import {
   deliverSubagentAnnouncement,
   loadRequesterSessionEntry,
-  isTransientAnnounceDeliveryError,
   loadSessionEntryByKey,
   runAnnounceDeliveryWithRetry,
   resolveSubagentAnnounceTimeoutMs,
   resolveSubagentCompletionOrigin,
 } from "./subagent-announce-delivery.js";
+import { isGatewayLifecycleRetryableError } from "../shared/gateway-lifecycle-errors.js";
 import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
 import {
   applySubagentWaitOutcome,
@@ -170,7 +170,7 @@ async function callGatewayForAnnounceFinalize(params: {
     });
     return;
   } catch (error) {
-    if (!isTransientAnnounceDeliveryError(error)) {
+    if (!isGatewayLifecycleRetryableError(error)) {
       throw error;
     }
     await runAnnounceDeliveryWithRetry({
