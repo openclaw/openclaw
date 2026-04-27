@@ -65,12 +65,6 @@ const { createGatewayCloseHandler } = await import("./server-close.js");
 type GatewayCloseHandlerParams = Parameters<typeof createGatewayCloseHandler>[0];
 type GatewayCloseClient = GatewayCloseHandlerParams["clients"] extends Set<infer T> ? T : never;
 
-async function flushMicrotasks(times = 5): Promise<void> {
-  for (let i = 0; i < times; i += 1) {
-    await Promise.resolve();
-  }
-}
-
 function createGatewayCloseTestDeps(
   overrides: Partial<GatewayCloseHandlerParams> = {},
 ): GatewayCloseHandlerParams {
@@ -243,7 +237,9 @@ describe("createGatewayCloseHandler", () => {
 
     const closePromise = close({ reason: "test shutdown" });
     try {
-      await flushMicrotasks();
+      await vi.waitFor(() => {
+        expect(disposalOrder).toContain("lsp-start");
+      });
       expect(disposalOrder).toEqual(["mcp-start", "lsp-start"]);
     } finally {
       releaseMcp?.();
