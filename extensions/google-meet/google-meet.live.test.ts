@@ -1,5 +1,5 @@
+import { isLiveTestEnabled } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it } from "vitest";
-import { isLiveTestEnabled } from "../../src/agents/live-test-helpers.js";
 import { buildGoogleMeetExportManifest, googleMeetExportFileNames } from "./src/cli.js";
 import {
   fetchGoogleMeetArtifacts,

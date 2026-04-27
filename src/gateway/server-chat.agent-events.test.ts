@@ -12,6 +12,10 @@ vi.mock("../config/io.js", () => ({
   getRuntimeConfig: vi.fn(() => ({})),
 }));
 
+vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: vi.fn(() => ({})),
+}));
+
 vi.mock("../infra/heartbeat-visibility.js", () => ({
   resolveHeartbeatVisibility: vi.fn(() => ({
     showOk: false,

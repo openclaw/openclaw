@@ -9,6 +9,13 @@ export type MatrixQaAutoJoinMode = "allowlist" | "always" | "off";
 export type MatrixQaStreamingMode = "off" | "partial" | "quiet";
 export type MatrixQaActorRole = "driver" | "observer" | "sut";
 
+export type MatrixQaStreamingConfig = {
+  mode?: MatrixQaStreamingMode;
+  preview?: {
+    toolProgress?: boolean;
+  };
+};
+
 export type MatrixQaAgentDefaultsOverrides = {
   blockStreamingChunk?: {
     breakPreference?: "newline" | "paragraph" | "sentence";
@@ -62,7 +69,7 @@ export type MatrixQaConfigOverrides = {
   groupsByKey?: Record<string, MatrixQaGroupConfigOverrides>;
   replyToMode?: MatrixQaReplyToMode;
   startupVerification?: "if-unverified" | "off";
-  streaming?: "off" | "partial" | "quiet" | boolean;
+  streaming?: MatrixQaStreamingMode | MatrixQaStreamingConfig | boolean;
   threadBindings?: MatrixQaThreadBindingsConfigOverrides;
   threadReplies?: MatrixQaThreadRepliesMode;
   toolProfile?: "coding" | "messaging" | "minimal";
@@ -86,6 +93,7 @@ export type MatrixQaConfigSnapshot = {
   replyToMode: MatrixQaReplyToMode;
   startupVerification?: "if-unverified" | "off";
   streaming: MatrixQaStreamingMode;
+  streamingPreviewToolProgress: boolean;
   threadBindings: MatrixQaThreadBindingsConfigOverrides;
   threadReplies: MatrixQaThreadRepliesMode;
 };
@@ -205,7 +213,27 @@ function resolveMatrixQaStreamingMode(
   if (value === "quiet") {
     return "quiet";
   }
+  if (isMatrixQaStreamingConfig(value)) {
+    if (value.mode === "partial" || value.mode === "quiet") {
+      return value.mode;
+    }
+  }
   return "off";
+}
+
+function isMatrixQaStreamingConfig(
+  value: MatrixQaConfigOverrides["streaming"],
+): value is MatrixQaStreamingConfig {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function resolveMatrixQaStreamingPreviewToolProgress(
+  value: MatrixQaConfigOverrides["streaming"],
+): boolean {
+  if (!isMatrixQaStreamingConfig(value)) {
+    return true;
+  }
+  return value.preview?.toolProgress ?? true;
 }
 
 function resolveMatrixQaAutoJoinAllowlist(params: { overrides?: MatrixQaConfigOverrides }) {
@@ -352,6 +380,9 @@ export function buildMatrixQaConfigSnapshot(params: {
     replyToMode: params.overrides?.replyToMode ?? "off",
     startupVerification: params.overrides?.startupVerification,
     streaming: resolveMatrixQaStreamingMode(params.overrides?.streaming),
+    streamingPreviewToolProgress: resolveMatrixQaStreamingPreviewToolProgress(
+      params.overrides?.streaming,
+    ),
     threadBindings: { ...params.overrides?.threadBindings },
     threadReplies: params.overrides?.threadReplies ?? "inbound",
   };
@@ -366,6 +397,7 @@ export function summarizeMatrixQaConfigSnapshot(snapshot: MatrixQaConfigSnapshot
     `dm.sessionScope=${snapshot.dm.sessionScope}`,
     `dm.threadReplies=${snapshot.dm.threadReplies}`,
     `streaming=${snapshot.streaming}`,
+    `streaming.preview.toolProgress=${formatMatrixQaBoolean(snapshot.streamingPreviewToolProgress)}`,
     `blockStreaming=${formatMatrixQaBoolean(snapshot.blockStreaming)}`,
     `autoJoin=${snapshot.autoJoin}`,
     `encryption=${formatMatrixQaBoolean(snapshot.encryption)}`,

@@ -183,6 +183,7 @@ export const CronFailureDestinationSchema = Type.Object(
 
 const CronDeliverySharedProperties = {
   channel: Type.Optional(Type.Union([Type.Literal("last"), NonEmptyString])),
+  threadId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
   accountId: Type.Optional(NonEmptyString),
   bestEffort: Type.Optional(Type.Boolean()),
   failureDestination: Type.Optional(CronFailureDestinationSchema),

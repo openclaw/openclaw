@@ -1,6 +1,6 @@
 import fs from "node:fs";
+import { resolveProviderPluginChoice } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it } from "vitest";
-import { resolveProviderPluginChoice } from "../../src/plugins/provider-auth-choice.runtime.js";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 import plugin from "./index.js";
 

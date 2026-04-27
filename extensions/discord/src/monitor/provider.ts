@@ -145,21 +145,45 @@ async function loadDiscordVoiceRuntime(): Promise<DiscordVoiceRuntimeModule> {
   if (loadDiscordVoiceRuntimeForTesting) {
     return await loadDiscordVoiceRuntimeForTesting();
   }
-  discordVoiceRuntimePromise ??= import("../voice/manager.runtime.js");
-  return await discordVoiceRuntimePromise;
+  const promise = discordVoiceRuntimePromise ?? import("../voice/manager.runtime.js");
+  discordVoiceRuntimePromise = promise;
+  try {
+    return await promise;
+  } catch (error) {
+    if (discordVoiceRuntimePromise === promise) {
+      discordVoiceRuntimePromise = undefined;
+    }
+    throw error;
+  }
 }
 
 async function loadDiscordProviderSessionRuntime(): Promise<DiscordProviderSessionRuntimeModule> {
   if (loadDiscordProviderSessionRuntimeForTesting) {
     return await loadDiscordProviderSessionRuntimeForTesting();
   }
-  discordProviderSessionRuntimePromise ??= import("./provider-session.runtime.js");
-  return await discordProviderSessionRuntimePromise;
+  const promise = discordProviderSessionRuntimePromise ?? import("./provider-session.runtime.js");
+  discordProviderSessionRuntimePromise = promise;
+  try {
+    return await promise;
+  } catch (error) {
+    if (discordProviderSessionRuntimePromise === promise) {
+      discordProviderSessionRuntimePromise = undefined;
+    }
+    throw error;
+  }
 }
 
 async function loadPluginRuntime() {
-  pluginRuntimePromise ??= import("openclaw/plugin-sdk/plugin-runtime");
-  return await pluginRuntimePromise;
+  const promise = pluginRuntimePromise ?? import("openclaw/plugin-sdk/plugin-runtime");
+  pluginRuntimePromise = promise;
+  try {
+    return await promise;
+  } catch (error) {
+    if (pluginRuntimePromise === promise) {
+      pluginRuntimePromise = undefined;
+    }
+    throw error;
+  }
 }
 
 function normalizeBooleanForTesting(value: unknown): boolean | undefined {

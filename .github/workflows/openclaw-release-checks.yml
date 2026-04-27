@@ -427,7 +427,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-qa-live-matrix-${{ needs.resolve_target.outputs.sha }}
-          path: ${{ steps.run_lane.outputs.output_dir }}
+          path: .artifacts/qa-e2e/
           retention-days: 14
           if-no-files-found: warn
 
@@ -511,7 +511,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-qa-live-telegram-${{ needs.resolve_target.outputs.sha }}
-          path: ${{ steps.run_lane.outputs.output_dir }}
+          path: .artifacts/qa-e2e/
           retention-days: 14
           if-no-files-found: warn
 
@@ -527,6 +527,7 @@ jobs:
       - qa_live_telegram_release_checks
     if: always()
     runs-on: ubuntu-24.04
+    permissions: {}
     timeout-minutes: 5
     steps:
       - name: Verify release check results

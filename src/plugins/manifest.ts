@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import JSON5 from "json5";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
@@ -23,6 +22,7 @@ import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
 import { isRecord } from "../utils.js";
+import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import {
   normalizeManifestCommandAliases,
   type PluginManifestCommandAlias,
@@ -1178,7 +1178,7 @@ export function loadPluginManifest(
   }
   let raw: unknown;
   try {
-    raw = JSON5.parse(fs.readFileSync(opened.fd, "utf-8"));
+    raw = parseJsonWithJson5Fallback(fs.readFileSync(opened.fd, "utf-8"));
   } catch (err) {
     return {
       ok: false,

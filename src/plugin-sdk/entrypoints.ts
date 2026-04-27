@@ -4,6 +4,8 @@ export const pluginSdkEntrypoints = [...pluginSdkEntryList];
 
 export const pluginSdkSubpaths = pluginSdkEntrypoints.filter((entry) => entry !== "index");
 
+// Transitional compatibility/helper surfaces owned by their matching bundled plugin.
+// Cross-owner extension imports are blocked by the package contract guardrails.
 export const reservedBundledPluginSdkEntrypoints = [
   "bluebubbles",
   "bluebubbles-policy",
@@ -58,6 +60,8 @@ export const reservedBundledPluginSdkEntrypoints = [
   "zalouser",
 ] as const;
 
+// Supported SDK facades backed by bundled plugins. These are intentionally public
+// until they move to generic, plugin-neutral contracts.
 export const supportedBundledFacadeSdkEntrypoints = [
   "lmstudio",
   "lmstudio-runtime",
@@ -66,6 +70,7 @@ export const supportedBundledFacadeSdkEntrypoints = [
   "tts-runtime",
 ] as const;
 
+// Plugin-owned surfaces that are intentionally public and documented for third-party plugins.
 export const publicPluginOwnedSdkEntrypoints = [
   "browser-config",
   "image-generation-core",

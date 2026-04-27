@@ -3310,6 +3310,66 @@ module.exports = { id: "throws-after-import", register() {} };`,
     clearInternalHooks();
   });
 
+  it("injects plugin config into internal hook event context", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "hook-config-context",
+      filename: "hook-config-context.cjs",
+      body: `module.exports = {
+        id: "hook-config-context",
+        register(api) {
+          api.registerHook(
+            "gateway:startup",
+            (event) => {
+              event.messages.push(event.context.pluginConfig?.marker);
+            },
+            { name: "hook-config-context" },
+          );
+        },
+      };`,
+    });
+    fs.writeFileSync(
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "hook-config-context",
+          configSchema: { type: "object" },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    clearInternalHooks();
+
+    loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["hook-config-context"],
+          entries: {
+            "hook-config-context": {
+              config: {
+                marker: "plugin-config-visible",
+              },
+            },
+          },
+        },
+      },
+      onlyPluginIds: ["hook-config-context"],
+    });
+
+    const event = createInternalHookEvent("gateway", "startup", "gateway:startup");
+    await triggerInternalHook(event);
+    expect(event.messages).toEqual(["plugin-config-visible"]);
+    expect(event.context).toEqual({});
+
+    clearInternalHooks();
+  });
+
   it("rolls back global side effects when registration fails", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({

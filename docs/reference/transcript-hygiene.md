@@ -137,6 +137,8 @@ external end-user instructions.
 
 - Tool result pairing repair and synthetic tool results.
 - Turn validation (merge consecutive user turns to satisfy strict alternation).
+- Trailing assistant prefill turns are stripped from outgoing Anthropic Messages
+  payloads when thinking is enabled, including Cloudflare AI Gateway routes.
 - Thinking blocks with missing, empty, or blank replay signatures are stripped
   before provider conversion. If that empties an assistant turn, OpenClaw keeps
   turn shape with non-empty omitted-reasoning text.

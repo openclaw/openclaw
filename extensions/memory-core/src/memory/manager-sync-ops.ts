@@ -85,6 +85,17 @@ const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
 ]);
 
 const log = createSubsystemLogger("memory");
+const TEST_MEMORY_WATCH_FACTORY_KEY = Symbol.for("openclaw.test.memoryWatchFactory");
+
+function resolveMemoryWatchFactory(): typeof chokidar.watch {
+  if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
+    const override = (globalThis as Record<PropertyKey, unknown>)[TEST_MEMORY_WATCH_FACTORY_KEY];
+    if (typeof override === "function") {
+      return override as typeof chokidar.watch;
+    }
+  }
+  return chokidar.watch.bind(chokidar);
+}
 
 function shouldIgnoreMemoryWatchPath(
   watchPath: string,
@@ -396,7 +407,7 @@ export abstract class MemoryManagerSyncOps {
         // Skip missing/unreadable additional paths.
       }
     }
-    this.watcher = chokidar.watch(Array.from(watchPaths), {
+    this.watcher = resolveMemoryWatchFactory()(Array.from(watchPaths), {
       ignoreInitial: true,
       ignored: (watchPath, stats) =>
         shouldIgnoreMemoryWatchPath(watchPath, stats, this.settings.multimodal),

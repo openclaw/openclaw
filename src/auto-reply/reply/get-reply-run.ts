@@ -502,7 +502,7 @@ export async function runPreparedReply(
   const transcriptBodyBase = isHeartbeat
     ? HEARTBEAT_TRANSCRIPT_PROMPT
     : isBareSessionReset
-      ? softResetTail
+      ? softResetTail || `[OpenClaw session ${startupAction}]`
       : hasUserBody
         ? baseBodyFinal
         : "[User sent media without caption]";

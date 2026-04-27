@@ -6,13 +6,6 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-const GUARDED_PUBLIC_API_BARRELS = [
-  "extensions/discord/api.ts",
-  "extensions/slack/api.ts",
-  "extensions/telegram/api.ts",
-  "extensions/whatsapp/api.ts",
-];
-
 const LOCAL_WILDCARD_REEXPORT_PATTERN = /^\s*export\s+(?:type\s+)?\*\s+from\s+["'](?:\.{1,2}\/)/u;
 
 async function walkFiles(rootDir, predicate) {
@@ -38,24 +31,11 @@ async function walkFiles(rootDir, predicate) {
 }
 
 async function listGuardedFiles(rootDir = repoRoot) {
-  const runtimeApiFiles = await walkFiles(path.join(rootDir, "extensions"), (filePath) =>
-    filePath.endsWith(`${path.sep}runtime-api.ts`),
+  return walkFiles(
+    path.join(rootDir, "extensions"),
+    (filePath) =>
+      filePath.endsWith(`${path.sep}runtime-api.ts`) || filePath.endsWith(`${path.sep}api.ts`),
   );
-  const files = new Set(runtimeApiFiles);
-  for (const relativePath of GUARDED_PUBLIC_API_BARRELS) {
-    const filePath = path.join(rootDir, relativePath);
-    try {
-      const stat = await fs.stat(filePath);
-      if (stat.isFile()) {
-        files.add(filePath);
-      }
-    } catch (error) {
-      if (!error || typeof error !== "object" || !("code" in error) || error.code !== "ENOENT") {
-        throw error;
-      }
-    }
-  }
-  return [...files].toSorted((left, right) => left.localeCompare(right));
 }
 
 export function findLocalWildcardReexports(source) {

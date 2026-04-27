@@ -242,14 +242,6 @@ function collectCrossOwnerReservedSdkImports(): Array<{
 
   for (const file of collectExtensionFiles(resolve(REPO_ROOT, "extensions"))) {
     const repoRelativePath = relative(REPO_ROOT, file).replaceAll("\\", "/");
-    if (
-      /(?:^|\/)(?:__tests__|tests|test-support)(?:\/|$)/.test(repoRelativePath) ||
-      /(?:^|\/)test-support\.[cm]?tsx?$/.test(repoRelativePath) ||
-      /\.test-support\.[cm]?tsx?$/.test(repoRelativePath) ||
-      /\.test\.[cm]?tsx?$/.test(repoRelativePath)
-    ) {
-      continue;
-    }
     const pluginId = repoRelativePath.split("/")[1];
     const source = readFileSync(file, "utf8");
     for (const match of source.matchAll(importPattern)) {

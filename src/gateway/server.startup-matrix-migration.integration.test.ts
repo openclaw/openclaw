@@ -1,33 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const runChannelPluginStartupMaintenanceMock = vi.hoisted(() =>
-  vi.fn().mockResolvedValue(undefined),
-);
-
-vi.mock("../channels/plugins/lifecycle-startup.js", () => ({
-  runChannelPluginStartupMaintenance: (params: unknown) =>
-    runChannelPluginStartupMaintenanceMock(params),
-}));
-
-vi.mock("../agents/agent-scope.js", () => ({
-  resolveAgentWorkspaceDir: () => "/workspace",
-  resolveDefaultAgentId: () => "default",
-}));
-
-vi.mock("../agents/subagent-registry.js", () => ({
-  initSubagentRegistry: vi.fn(),
-}));
+import { describe, expect, it } from "vitest";
+import { resolveGatewayStartupMaintenanceConfig } from "./server-startup-plugins.js";
 
 describe("gateway startup channel maintenance wiring", () => {
-  beforeEach(() => {
-    vi.resetModules();
-    runChannelPluginStartupMaintenanceMock.mockClear();
-  });
-
-  it("runs startup channel maintenance with the resolved startup config", async () => {
-    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
-
-    await prepareGatewayPluginBootstrap({
+  it("uses channels from the resolved startup config when startup config repaired them", () => {
+    const resolved = resolveGatewayStartupMaintenanceConfig({
       cfgAtStart: {
         plugins: { enabled: true },
       },
@@ -41,30 +17,45 @@ describe("gateway startup channel maintenance wiring", () => {
           },
         },
       },
-      minimalTestGateway: true,
-      log: {
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-        debug: vi.fn(),
+    });
+
+    expect(resolved.channels).toEqual({
+      matrix: {
+        homeserver: "https://matrix.example.org",
+        userId: "@bot:example.org",
+        accessToken: "tok-123",
+      },
+    });
+  });
+
+  it("preserves explicit startup channel config", () => {
+    const resolved = resolveGatewayStartupMaintenanceConfig({
+      cfgAtStart: {
+        plugins: { enabled: true },
+        channels: {
+          matrix: {
+            homeserver: "https://matrix.original.example",
+            userId: "@original:example.org",
+            accessToken: "original-token",
+          },
+        },
+      },
+      startupRuntimeConfig: {
+        plugins: { enabled: true },
+        channels: {
+          matrix: {
+            homeserver: "https://matrix.repaired.example",
+            userId: "@repaired:example.org",
+            accessToken: "repaired-token",
+          },
+        },
       },
     });
 
-    expect(runChannelPluginStartupMaintenanceMock).toHaveBeenCalledTimes(1);
-    expect(runChannelPluginStartupMaintenanceMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg: expect.objectContaining({
-          channels: expect.objectContaining({
-            matrix: expect.objectContaining({
-              homeserver: "https://matrix.example.org",
-              userId: "@bot:example.org",
-              accessToken: "tok-123",
-            }),
-          }),
-        }),
-        env: process.env,
-        log: expect.anything(),
-      }),
-    );
+    expect(resolved.channels?.matrix).toEqual({
+      homeserver: "https://matrix.original.example",
+      userId: "@original:example.org",
+      accessToken: "original-token",
+    });
   });
 });

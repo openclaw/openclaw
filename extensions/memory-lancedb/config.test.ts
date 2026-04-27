@@ -1,7 +1,6 @@
 import fs from "node:fs";
+import { type JsonSchemaObject, validateJsonSchemaValue } from "openclaw/plugin-sdk/config-schema";
 import { describe, expect, it } from "vitest";
-import { validateJsonSchemaValue } from "../../src/plugins/schema-validator.js";
-import type { JsonSchemaObject } from "../../src/shared/json-schema.types.js";
 import { memoryConfigSchema } from "./config.js";
 
 const manifest = JSON.parse(

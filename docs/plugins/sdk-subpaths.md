@@ -71,7 +71,7 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | `plugin-sdk/interactive-runtime` | Semantic message presentation, delivery, and legacy interactive reply helpers. See [Message Presentation](/plugins/message-presentation) |
     | `plugin-sdk/channel-inbound` | Compatibility barrel for inbound debounce, mention matching, mention-policy helpers, and envelope helpers |
     | `plugin-sdk/channel-inbound-debounce` | Narrow inbound debounce helpers |
-    | `plugin-sdk/channel-mention-gating` | Narrow mention-policy and mention text helpers without the broader inbound runtime surface |
+    | `plugin-sdk/channel-mention-gating` | Narrow mention-policy, mention marker, and mention text helpers without the broader inbound runtime surface |
     | `plugin-sdk/channel-envelope` | Narrow inbound envelope formatting helpers |
     | `plugin-sdk/channel-location` | Channel location context and formatting helpers |
     | `plugin-sdk/channel-logging` | Channel logging helpers for inbound drops and typing/ack failures |
@@ -170,7 +170,7 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | `plugin-sdk/approval-runtime` | Exec/plugin approval helpers, approval-capability builders, auth/profile helpers, native routing/runtime helpers, and structured approval display path formatting |
     | `plugin-sdk/reply-runtime` | Shared inbound/reply runtime helpers, chunking, dispatch, heartbeat, reply planner |
     | `plugin-sdk/reply-dispatch-runtime` | Narrow reply dispatch/finalize and conversation-label helpers |
-    | `plugin-sdk/reply-history` | Shared short-window reply-history helpers such as `buildHistoryContext`, `recordPendingHistoryEntry`, and `clearHistoryEntriesIfEnabled` |
+    | `plugin-sdk/reply-history` | Shared short-window reply-history helpers and markers such as `buildHistoryContext`, `HISTORY_CONTEXT_MARKER`, `recordPendingHistoryEntry`, and `clearHistoryEntriesIfEnabled` |
     | `plugin-sdk/reply-reference` | `createReplyReferencePlanner` |
     | `plugin-sdk/reply-chunking` | Narrow text/markdown chunking helpers |
     | `plugin-sdk/session-store-runtime` | Session store path, session-key, updated-at, and store mutation helpers |
@@ -257,7 +257,7 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | `plugin-sdk/webhook-path` | Webhook path normalization helpers |
     | `plugin-sdk/web-media` | Shared remote/local media loading helpers |
     | `plugin-sdk/zod` | Re-exported `zod` for plugin SDK consumers |
-    | `plugin-sdk/testing` | `installCommonResolveTargetErrorCases`, `shouldAckReaction` |
+    | `plugin-sdk/testing` | Public extension test helpers including plugin registry/runtime mocks, schema/media/live-test helpers, `installCommonResolveTargetErrorCases`, `writeSkill`, `createTestRegistry`, and live generation env loading. Extension `*.test-support.ts` helpers stay on this or focused SDK subpaths, not core internals |
   </Accordion>
 
   <Accordion title="Memory subpaths">

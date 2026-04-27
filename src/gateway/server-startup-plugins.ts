@@ -25,6 +25,19 @@ type GatewayPluginBootstrapLog = {
   debug: (message: string) => void;
 };
 
+export function resolveGatewayStartupMaintenanceConfig(params: {
+  cfgAtStart: OpenClawConfig;
+  startupRuntimeConfig: OpenClawConfig;
+}): OpenClawConfig {
+  return params.cfgAtStart.channels === undefined &&
+    params.startupRuntimeConfig.channels !== undefined
+    ? {
+        ...params.cfgAtStart,
+        channels: params.startupRuntimeConfig.channels,
+      }
+    : params.cfgAtStart;
+}
+
 async function prestageGatewayBundledRuntimeDeps(params: {
   cfg: OpenClawConfig;
   pluginIds: readonly string[];
@@ -101,13 +114,10 @@ export async function prepareGatewayPluginBootstrap(params: {
   log: GatewayPluginBootstrapLog;
 }) {
   const activationSourceConfig = params.activationSourceConfig ?? params.cfgAtStart;
-  const startupMaintenanceConfig =
-    params.cfgAtStart.channels === undefined && params.startupRuntimeConfig.channels !== undefined
-      ? {
-          ...params.cfgAtStart,
-          channels: params.startupRuntimeConfig.channels,
-        }
-      : params.cfgAtStart;
+  const startupMaintenanceConfig = resolveGatewayStartupMaintenanceConfig({
+    cfgAtStart: params.cfgAtStart,
+    startupRuntimeConfig: params.startupRuntimeConfig,
+  });
 
   const shouldRunStartupMaintenance =
     !params.minimalTestGateway || startupMaintenanceConfig.channels !== undefined;

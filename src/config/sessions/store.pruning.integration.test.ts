@@ -3,6 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
+import {
+  resolveTrajectoryFilePath,
+  resolveTrajectoryPointerFilePath,
+} from "../../trajectory/paths.js";
 import type { SessionEntry } from "./types.js";
 
 // Keep integration tests deterministic: never read a real openclaw.json.
@@ -151,6 +155,63 @@ describe("Integration: saveSessionStore with pruning", () => {
       entry.startsWith(`${staleSessionId}.jsonl.deleted.`),
     );
     expect(archived).toHaveLength(1);
+  });
+
+  it("removes trajectory sidecars for stale sessions pruned on write", async () => {
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
+
+    const now = Date.now();
+    const staleSessionId = "stale-trajectory-session";
+    const freshSessionId = "fresh-trajectory-session";
+    const store: Record<string, SessionEntry> = {
+      stale: { sessionId: staleSessionId, updatedAt: now - 30 * DAY_MS },
+      fresh: { sessionId: freshSessionId, updatedAt: now },
+    };
+    const staleTranscript = path.join(testDir, `${staleSessionId}.jsonl`);
+    const freshTranscript = path.join(testDir, `${freshSessionId}.jsonl`);
+    const staleRuntime = resolveTrajectoryFilePath({
+      env: {},
+      sessionFile: staleTranscript,
+      sessionId: staleSessionId,
+    });
+    const freshRuntime = resolveTrajectoryFilePath({
+      env: {},
+      sessionFile: freshTranscript,
+      sessionId: freshSessionId,
+    });
+    const stalePointer = resolveTrajectoryPointerFilePath(staleTranscript);
+    const freshPointer = resolveTrajectoryPointerFilePath(freshTranscript);
+    await fs.writeFile(staleTranscript, '{"type":"session"}\n', "utf-8");
+    await fs.writeFile(freshTranscript, '{"type":"session"}\n', "utf-8");
+    await fs.writeFile(staleRuntime, '{"traceSchema":"openclaw-trajectory"}\n', "utf-8");
+    await fs.writeFile(freshRuntime, '{"traceSchema":"openclaw-trajectory"}\n', "utf-8");
+    await fs.writeFile(
+      stalePointer,
+      JSON.stringify({
+        traceSchema: "openclaw-trajectory-pointer",
+        schemaVersion: 1,
+        sessionId: staleSessionId,
+        runtimeFile: staleRuntime,
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      freshPointer,
+      JSON.stringify({
+        traceSchema: "openclaw-trajectory-pointer",
+        schemaVersion: 1,
+        sessionId: freshSessionId,
+        runtimeFile: freshRuntime,
+      }),
+      "utf-8",
+    );
+
+    await saveSessionStore(storePath, store);
+
+    await expect(fs.stat(staleRuntime)).rejects.toThrow();
+    await expect(fs.stat(stalePointer)).rejects.toThrow();
+    await expect(fs.stat(freshRuntime)).resolves.toBeDefined();
+    await expect(fs.stat(freshPointer)).resolves.toBeDefined();
   });
 
   it("cleans up archived transcripts older than the prune window", async () => {

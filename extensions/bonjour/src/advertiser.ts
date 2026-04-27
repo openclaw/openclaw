@@ -183,9 +183,28 @@ function resolveSystemMdnsHostname(): string | null {
   return firstLabel;
 }
 
+const MAX_DNS_LABEL_BYTES = 63;
+const utf8Encoder = new TextEncoder();
+
+function truncateToDnsLabel(name: string, fallback = "OpenClaw"): string {
+  const encoded = utf8Encoder.encode(name);
+  if (encoded.byteLength <= MAX_DNS_LABEL_BYTES) {
+    return name;
+  }
+  for (let end = MAX_DNS_LABEL_BYTES; end > 0; end -= 1) {
+    try {
+      const decoded = new TextDecoder("utf-8", { fatal: true }).decode(encoded.subarray(0, end));
+      return decoded.replace(/-+$/, "").trim() || fallback;
+    } catch {
+      // Try the next shorter prefix until the byte slice ends on a UTF-8 boundary.
+    }
+  }
+  return fallback;
+}
+
 function safeServiceName(name: string) {
   const trimmed = name.trim();
-  return trimmed.length > 0 ? trimmed : "OpenClaw";
+  return trimmed.length > 0 ? truncateToDnsLabel(trimmed) : "OpenClaw";
 }
 
 function prettifyInstanceName(name: string) {
@@ -353,11 +372,13 @@ export async function startGatewayBonjourAdvertiser(
 
     const hostnameRaw =
       process.env.OPENCLAW_MDNS_HOSTNAME?.trim() || resolveSystemMdnsHostname() || "openclaw";
-    const hostname =
+    const hostname = truncateToDnsLabel(
       hostnameRaw
         .replace(/\.local$/i, "")
         .split(".")[0]
-        .trim() || "openclaw";
+        .trim() || "openclaw",
+      "openclaw",
+    );
     const instanceName =
       typeof opts.instanceName === "string" && opts.instanceName.trim()
         ? opts.instanceName.trim()
