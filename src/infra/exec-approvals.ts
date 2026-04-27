@@ -331,24 +331,27 @@ function resolveTrustedOpenClawSymlink(linkPath: string): string {
       `Refusing to use unsafe exec approvals .openclaw symlink target: ${linkPath}`,
     );
   }
-  if (process.platform !== "win32") {
-    const getuid = process.getuid;
-    if (typeof getuid !== "function") {
-      return realPath;
-    }
-    const currentUid = getuid.call(process);
-    if (targetStat.uid !== currentUid) {
-      throw new UnsafeExecApprovalsPathError(
-        `Refusing to use exec approvals .openclaw symlink target not owned by current user: ${linkPath}`,
-      );
-    }
-    if ((targetStat.mode & POSIX_GROUP_OR_OTHER_WRITE) !== 0) {
-      throw new UnsafeExecApprovalsPathError(
-        `Refusing to use group/other-writable exec approvals .openclaw symlink target: ${linkPath}`,
-      );
-    }
-    assertStableResolvedOpenClawSymlinkTarget(realPath, linkPath, currentUid);
+  if (process.platform === "win32") {
+    throw new UnsafeExecApprovalsPathError(
+      `Refusing to use exec approvals .openclaw symlink target on Windows without ACL validation: ${linkPath}`,
+    );
   }
+  const getuid = process.getuid;
+  if (typeof getuid !== "function") {
+    return realPath;
+  }
+  const currentUid = getuid.call(process);
+  if (targetStat.uid !== currentUid) {
+    throw new UnsafeExecApprovalsPathError(
+      `Refusing to use exec approvals .openclaw symlink target not owned by current user: ${linkPath}`,
+    );
+  }
+  if ((targetStat.mode & POSIX_GROUP_OR_OTHER_WRITE) !== 0) {
+    throw new UnsafeExecApprovalsPathError(
+      `Refusing to use group/other-writable exec approvals .openclaw symlink target: ${linkPath}`,
+    );
+  }
+  assertStableResolvedOpenClawSymlinkTarget(realPath, linkPath, currentUid);
   return realPath;
 }
 

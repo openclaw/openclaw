@@ -221,7 +221,7 @@ describe("exec approvals store helpers", () => {
     ).toContain('"security": "full"');
   });
 
-  it("accepts a trusted first-level .openclaw symlink", () => {
+  it.runIf(process.platform !== "win32")("accepts a trusted first-level .openclaw symlink", () => {
     const realHome = fs.realpathSync(makeTempDir());
     const linkedHome = `${realHome}-link`;
     const linkedStateTarget = path.join(realHome, "state-target");
