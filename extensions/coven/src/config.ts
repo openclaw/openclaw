@@ -71,10 +71,6 @@ function resolveCovenHome(raw: string | undefined): string {
   if (fromConfig) {
     return resolveConfiguredPath(fromConfig, "covenHome");
   }
-  const fromEnv = process.env.COVEN_HOME?.trim();
-  if (fromEnv) {
-    return resolveConfiguredPath(fromEnv, "covenHome");
-  }
   return path.join(os.homedir(), ".coven");
 }
 

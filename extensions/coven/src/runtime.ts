@@ -184,6 +184,11 @@ function sanitizeStatusField(input: string, fallback = "unknown"): string {
   return sanitizeStatusText(input).slice(0, MAX_STATUS_FIELD_CHARS) || fallback;
 }
 
+function sanitizeErrorText(error: unknown): string {
+  const raw = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  return sanitizeStatusField(raw, "unknown error");
+}
+
 function requireSafeSessionId(input: string): string {
   const value = input.trim();
   if (!value || value.length > MAX_SESSION_ID_CHARS || !SAFE_SESSION_ID_REGEX.test(value)) {
@@ -333,7 +338,7 @@ export class CovenAcpRuntime implements AcpRuntime {
 
     const cwd = this.resolveWorkspaceCwd(input.handle.cwd);
     const harness = this.resolveHarness(state.agent);
-    let session: CovenSessionRecord;
+    let session: CovenSessionRecord | undefined;
     let sessionId: string;
     try {
       const prompt = boundedCovenPrompt(input.text);
@@ -347,17 +352,38 @@ export class CovenAcpRuntime implements AcpRuntime {
         },
         input.signal,
       );
-      sessionId = requireSafeSessionId(session.id);
     } catch (error) {
+      const safeError = sanitizeErrorText(error);
       if (!this.config.allowFallback) {
         throw new AcpRuntimeError(
           "ACP_TURN_FAILED",
-          `Coven launch failed and fallback is disabled: ${String(error)}`,
+          `Coven launch failed and fallback is disabled: ${safeError}`,
           { cause: error },
         );
       }
       this.logger?.warn(
-        `coven launch failed; falling back to ${this.config.fallbackBackend}: ${String(error)}`,
+        `coven launch failed; falling back to ${this.config.fallbackBackend}: ${safeError}`,
+      );
+      yield* this.runFallbackFromCovenHandle(input, state);
+      return;
+    }
+    try {
+      if (!session) {
+        throw new Error("Coven launch did not return a session");
+      }
+      sessionId = requireSafeSessionId(session.id);
+    } catch (error) {
+      await this.killLaunchedSessionBestEffort(session?.id);
+      const safeError = sanitizeErrorText(error);
+      if (!this.config.allowFallback) {
+        throw new AcpRuntimeError(
+          "ACP_TURN_FAILED",
+          `Coven launch failed and fallback is disabled: ${safeError}`,
+          { cause: error },
+        );
+      }
+      this.logger?.warn(
+        `coven launch failed; falling back to ${this.config.fallbackBackend}: ${safeError}`,
       );
       yield* this.runFallbackFromCovenHandle(input, state);
       return;
@@ -425,7 +451,7 @@ export class CovenAcpRuntime implements AcpRuntime {
           await this.killActiveSession(sessionId).catch(() => undefined);
           throw input.signal.reason ?? error;
         }
-        this.logger?.warn(`coven polling failed: ${String(error)}`);
+        this.logger?.warn(`coven polling failed: ${sanitizeErrorText(error)}`);
         await this.killActiveSession(sessionId).catch(() => undefined);
         this.activeSessionIdsBySessionKey.delete(input.handle.sessionKey);
         yield { type: "status", text: "coven session polling failed", tag: "session_info_update" };
@@ -482,7 +508,7 @@ export class CovenAcpRuntime implements AcpRuntime {
         ok: false,
         code: "COVEN_UNAVAILABLE",
         message: "Coven daemon is not reachable; direct ACP fallback remains available.",
-        details: [String(error)],
+        details: [sanitizeErrorText(error)],
       };
     }
   }
@@ -628,6 +654,13 @@ export class CovenAcpRuntime implements AcpRuntime {
   private async killActiveSession(sessionId: string, signal?: AbortSignal): Promise<void> {
     await this.client.killSession(sessionId, signal);
   }
+
+  private async killLaunchedSessionBestEffort(sessionId: string | undefined): Promise<void> {
+    if (!sessionId) {
+      return;
+    }
+    await this.client.killSession(sessionId, undefined).catch(() => undefined);
+  }
 }
 
 export const __testing = {
@@ -635,6 +668,7 @@ export const __testing = {
   encodeRuntimeSessionName,
   eventToRuntimeEvents,
   normalizeStopReason,
+  sanitizeErrorText,
   sanitizeStatusField,
   sanitizeTerminalText,
   terminalStatusEvent,

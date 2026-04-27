@@ -137,17 +137,19 @@ function socketFingerprintMatches(left: SocketFingerprint, right: SocketFingerpr
 function validateSocketPathForUse(
   socketPath: string,
   socketRoot: string | undefined,
+  platform: NodeJS.Platform = process.platform,
 ): SocketFingerprint | null {
   if (!socketRoot) {
     return null;
   }
+  validateSocketPlatform(platform);
   const socketRootLstat = lstatIfExists(socketRoot);
   if (socketRootLstat?.isSymbolicLink()) {
     throw new Error("Coven covenHome must not be a symlink");
   }
   const socketRootStat = statExistingPath(socketRoot, "Coven covenHome");
-  validateSocketOwnerAndMode(socketRootStat, "Coven covenHome");
-  validatePrivateDirectory(socketRootStat, "Coven covenHome");
+  validateSocketOwnerAndMode(socketRootStat, "Coven covenHome", platform);
+  validatePrivateDirectory(socketRootStat, "Coven covenHome", platform);
   const expectedSocketPath = path.resolve(socketRoot, DEFAULT_SOCKET_FILENAME);
   if (path.resolve(socketPath) !== expectedSocketPath) {
     throw new Error("Coven socketPath must be <covenHome>/coven.sock");
@@ -161,7 +163,7 @@ function validateSocketPathForUse(
   if (!resolvedSocketStat.isSocket()) {
     throw new Error("Coven socketPath must be a Unix socket");
   }
-  validateSocketOwnerAndMode(resolvedSocketStat, "Coven socketPath");
+  validateSocketOwnerAndMode(resolvedSocketStat, "Coven socketPath", platform);
 
   const realSocketRoot = realpathExistingPath(socketRoot, "Coven covenHome");
   const realSocketDir = realpathExistingPath(
@@ -169,8 +171,8 @@ function validateSocketPathForUse(
     "Coven socketPath directory",
   );
   const socketDirStat = statExistingPath(path.dirname(socketPath), "Coven socketPath directory");
-  validateSocketOwnerAndMode(socketDirStat, "Coven socketPath directory");
-  validatePrivateDirectory(socketDirStat, "Coven socketPath directory");
+  validateSocketOwnerAndMode(socketDirStat, "Coven socketPath directory", platform);
+  validatePrivateDirectory(socketDirStat, "Coven socketPath directory", platform);
   if (!pathIsInside(realSocketRoot, realSocketDir)) {
     throw new Error("Coven socketPath must stay inside covenHome");
   }
@@ -181,6 +183,12 @@ function validateSocketPathForUse(
   return fingerprintSocket(resolvedSocketStat);
 }
 
+function validateSocketPlatform(platform: NodeJS.Platform): void {
+  if (platform === "win32") {
+    throw new Error("Coven Unix socket validation is not supported on Windows");
+  }
+}
+
 function requireSafeQueryId(input: string, label: string): string {
   const value = input.trim();
   if (!value || value.length > MAX_QUERY_ID_CHARS || !SAFE_QUERY_ID_REGEX.test(value)) {
@@ -189,10 +197,12 @@ function requireSafeQueryId(input: string, label: string): string {
   return value;
 }
 
-function validateSocketOwnerAndMode(stat: fs.Stats, label: string): void {
-  if (process.platform === "win32") {
-    return;
-  }
+function validateSocketOwnerAndMode(
+  stat: fs.Stats,
+  label: string,
+  platform: NodeJS.Platform,
+): void {
+  validateSocketPlatform(platform);
   const currentUid = typeof process.getuid === "function" ? process.getuid() : null;
   if (currentUid != null && stat.uid !== currentUid) {
     throw new Error(`${label} must be owned by the current user`);
@@ -202,10 +212,8 @@ function validateSocketOwnerAndMode(stat: fs.Stats, label: string): void {
   }
 }
 
-function validatePrivateDirectory(stat: fs.Stats, label: string): void {
-  if (process.platform === "win32") {
-    return;
-  }
+function validatePrivateDirectory(stat: fs.Stats, label: string, platform: NodeJS.Platform): void {
+  validateSocketPlatform(platform);
   if (!stat.isDirectory()) {
     throw new Error(`${label} must be a directory`);
   }
@@ -426,3 +434,7 @@ export function createCovenClient(
     },
   };
 }
+
+export const __testing = {
+  validateSocketPathForUse,
+};

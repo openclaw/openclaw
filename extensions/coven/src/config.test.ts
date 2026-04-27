@@ -105,7 +105,7 @@ describe("resolveCovenPluginConfig", () => {
     }
   });
 
-  it("uses COVEN_HOME with tilde expansion for the default socket path", () => {
+  it("ignores COVEN_HOME when resolving the socket trust anchor", () => {
     process.env.COVEN_HOME = "~/.custom-coven";
 
     const resolved = resolveCovenPluginConfig({
@@ -113,8 +113,8 @@ describe("resolveCovenPluginConfig", () => {
       workspaceDir: "/repo",
     });
 
-    expect(resolved.covenHome).toBe(path.join(os.homedir(), ".custom-coven"));
-    expect(resolved.socketPath).toBe(path.join(os.homedir(), ".custom-coven", "coven.sock"));
+    expect(resolved.covenHome).toBe(path.join(os.homedir(), ".coven"));
+    expect(resolved.socketPath).toBe(path.join(os.homedir(), ".coven", "coven.sock"));
     expect(resolved.allowFallback).toBe(false);
   });
 

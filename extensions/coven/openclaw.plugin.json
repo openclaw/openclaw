@@ -9,7 +9,7 @@
     "properties": {
       "covenHome": {
         "type": "string",
-        "description": "Path to COVEN_HOME. Defaults to COVEN_HOME or ~/.coven."
+        "description": "Path to the Coven daemon state directory. Defaults to ~/.coven; environment variables are not used for this trust anchor."
       },
       "socketPath": {
         "type": "string",

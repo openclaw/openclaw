@@ -327,6 +327,39 @@ describe("CovenAcpRuntime", () => {
     ).rejects.toThrow(/session id is invalid/);
     expect(handle.backendSessionId).toBeUndefined();
     expect(handle.agentSessionId).toBeUndefined();
+    expect(client.killSession).toHaveBeenCalledWith("\u001b]0;spoof\u0007session-1\r", undefined);
+  });
+
+  it("kills an already-launched Coven session before falling back on unsafe session ids", async () => {
+    const fallback = fallbackRuntime();
+    registerAcpRuntimeBackend({ id: "acpx", runtime: fallback });
+    const client = fakeClient({
+      launchSession: vi.fn(async () => session({ id: "bad\nsession" })),
+      killSession: vi.fn(async () => undefined),
+    });
+    const runtime = new CovenAcpRuntime({ config: { ...config, allowFallback: true }, client });
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:test",
+      agent: "codex",
+      mode: "oneshot",
+      cwd: workspaceDir,
+    });
+
+    const events = await collect(
+      runtime.runTurn({
+        handle,
+        text: "Fix tests",
+        mode: "prompt",
+        requestId: "req-1",
+      }),
+    );
+
+    expect(client.killSession).toHaveBeenCalledWith("bad\nsession", undefined);
+    expect(handle.backend).toBe("acpx");
+    expect(events).toEqual([
+      expect.objectContaining({ type: "text_delta", text: "direct fallback\n" }),
+      expect.objectContaining({ type: "done", stopReason: "complete" }),
+    ]);
   });
 
   it("fails closed without launching Coven when prompts exceed the Coven request limit", async () => {
@@ -639,6 +672,29 @@ describe("CovenAcpRuntime", () => {
     ]);
   });
 
+  it("sanitizes Coven polling errors before logging", async () => {
+    const logger = { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() };
+    const client = fakeClient({
+      listEvents: vi.fn(async () => {
+        throw new Error("\u001b]0;spoof\u0007bad\r\njson");
+      }),
+      killSession: vi.fn(async () => undefined),
+    });
+    const runtime = new CovenAcpRuntime({ config, client, logger });
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:test",
+      agent: "codex",
+      mode: "oneshot",
+      cwd: workspaceDir,
+    });
+
+    await collect(
+      runtime.runTurn({ handle, text: "Fix tests", mode: "prompt", requestId: "req-1" }),
+    );
+
+    expect(logger.warn).toHaveBeenCalledWith("coven polling failed: Error: bad json");
+  });
+
   it("strips terminal escape and control characters from Coven output", () => {
     expect(
       __testing.sanitizeTerminalText(
@@ -841,7 +897,7 @@ describe("CovenAcpRuntime", () => {
       config,
       client: fakeClient({
         launchSession: vi.fn(async () => {
-          throw new Error("launch failed");
+          throw new Error("\u001b]0;spoof\u0007launch\r\nfailed");
         }),
       }),
     });
@@ -854,6 +910,22 @@ describe("CovenAcpRuntime", () => {
 
     await expect(
       collect(runtime.runTurn({ handle, text: "Fix tests", mode: "prompt", requestId: "req-1" })),
-    ).rejects.toThrow(/fallback is disabled/);
+    ).rejects.toThrow(/Error: launch failed/);
+  });
+
+  it("sanitizes Coven doctor error details", async () => {
+    const runtime = new CovenAcpRuntime({
+      config,
+      client: fakeClient({
+        health: vi.fn(async () => {
+          throw new Error("\u001b[31moffline\r\nnow");
+        }),
+      }),
+    });
+
+    await expect(runtime.doctor()).resolves.toMatchObject({
+      ok: false,
+      details: ["Error: offline now"],
+    });
   });
 });

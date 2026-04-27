@@ -3,7 +3,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CovenApiError, createCovenClient } from "./client.js";
+import { __testing, CovenApiError, createCovenClient } from "./client.js";
 
 let tmpDir: string;
 
@@ -210,5 +210,15 @@ describe("createCovenClient", () => {
         server.close((error) => (error ? reject(error) : resolve()));
       });
     }
+  });
+
+  it("fails closed instead of bypassing socket validation on Windows", () => {
+    expect(() =>
+      __testing.validateSocketPathForUse(
+        path.join(tmpDir, ".coven", "coven.sock"),
+        path.join(tmpDir, ".coven"),
+        "win32",
+      ),
+    ).toThrow(/not supported on Windows/);
   });
 });

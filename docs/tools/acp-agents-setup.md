@@ -216,7 +216,7 @@ Minimal opt-in config:
       coven: {
         enabled: true,
         config: {
-          // Optional. Defaults to COVEN_HOME or ~/.coven.
+          // Optional. Defaults to ~/.coven. Environment variables are not used for this trust anchor.
           covenHome: "~/.coven",
           // Optional. Defaults to <covenHome>/coven.sock; overrides must resolve to that path.
           socketPath: "~/.coven/coven.sock",
@@ -246,7 +246,9 @@ daemon socket is a local user trust anchor, not repository-controlled state.
 arbitrary Coven socket filenames because the daemon socket is the local trust
 anchor. Keep `covenHome` owned by the OpenClaw user and private (`0700`);
 OpenClaw rejects symlinked, shared-accessible, shared-writable, or non-socket
-Coven socket paths before connecting.
+Coven socket paths before connecting. The Coven backend currently requires Unix
+socket validation and fails closed on Windows rather than trusting a socket path
+whose owner and permissions cannot be validated by this plugin.
 
 The default harness mapping sends known ACP agent ids such as `codex`, `claude`,
 `gemini`, and `opencode` to explicitly authorized Coven harness ids. Unknown
