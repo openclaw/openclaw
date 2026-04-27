@@ -139,6 +139,23 @@ describe("gateway session utils", () => {
     );
   });
 
+  test("session defaults honor configured thinking default and per-model override", () => {
+    const defaults = getSessionDefaults({
+      agents: {
+        defaults: {
+          model: { primary: "ollama/gemma4:hermes-e4b" },
+          thinkingDefault: "adaptive",
+          models: {
+            "ollama/gemma4:hermes-e4b": { params: { thinking: "adaptive" } },
+            "ollama/gemma4:26b": { params: { thinking: "off" } },
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(defaults.thinkingDefault).toBe("adaptive");
+  });
+
   test("classifySessionKey respects chat type + prefixes", () => {
     expect(classifySessionKey("global")).toBe("global");
     expect(classifySessionKey("unknown")).toBe("unknown");
@@ -905,6 +922,36 @@ describe("listSessionsFromStore selected model display", () => {
 
     expect(result.sessions[0]?.modelProvider).toBe("anthropic");
     expect(result.sessions[0]?.model).toBe("claude-opus-4-6");
+  });
+
+  test("uses config-aware thinking default for session rows", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "ollama/gemma4:hermes-e4b" },
+          thinkingDefault: "adaptive",
+          models: {
+            "ollama/gemma4:hermes-e4b": { params: { thinking: "adaptive" } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:main:main": {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          modelProvider: "ollama",
+          model: "gemma4:hermes-e4b",
+        } as SessionEntry,
+      },
+      opts: {},
+    });
+
+    expect(result.sessions[0]?.thinkingDefault).toBe("adaptive");
   });
 });
 
