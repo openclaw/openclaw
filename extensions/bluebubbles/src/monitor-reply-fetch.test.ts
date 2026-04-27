@@ -302,7 +302,7 @@ describe("fetchBlueBubblesReplyContext", () => {
     expect(second?.body).toBe("second");
   });
 
-  it("propagates the SSRF private-network opt-in to the fetch policy", async () => {
+  it("uses { allowPrivateNetwork: true } when private-network is explicitly opted in", async () => {
     const fetchImpl = vi
       .fn()
       .mockResolvedValue(
@@ -314,11 +314,13 @@ describe("fetchBlueBubblesReplyContext", () => {
       accountConfig: { network: { dangerouslyAllowPrivateNetwork: true } },
       fetchImpl,
     });
-    const policy = fetchImpl.mock.calls[0]?.[3];
-    expect(policy).toEqual({ allowPrivateNetwork: true });
+    expect(fetchImpl.mock.calls[0]?.[3]).toEqual({ allowPrivateNetwork: true });
   });
 
-  it("omits the SSRF policy when private-network opt-in is disabled", async () => {
+  it("treats local/loopback baseUrls as implicit private-network opt-in (mode 1)", async () => {
+    // `http://localhost:1234` is a private hostname; without an explicit
+    // opt-out the BB resolver treats this as the self-hosted case, matching
+    // resolveBlueBubblesEffectiveAllowPrivateNetworkFromConfig.
     const fetchImpl = vi
       .fn()
       .mockResolvedValue(
@@ -326,10 +328,59 @@ describe("fetchBlueBubblesReplyContext", () => {
       );
     await fetchBlueBubblesReplyContext({
       ...baseParams,
-      replyToId: "ssrf-off",
+      replyToId: "ssrf-implicit",
       fetchImpl,
     });
-    expect(fetchImpl.mock.calls[0]?.[3]).toBeUndefined();
+    expect(fetchImpl.mock.calls[0]?.[3]).toEqual({ allowPrivateNetwork: true });
+  });
+
+  it("uses a hostname allowlist for public BB servers without explicit opt-in (mode 2)", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ data: { text: "x", handle: { address: "user@example.com" } } }),
+      );
+    await fetchBlueBubblesReplyContext({
+      accountId: "default",
+      baseUrl: "https://bb.example.com",
+      password: "s3cret",
+      replyToId: "ssrf-public",
+      fetchImpl,
+    });
+    expect(fetchImpl.mock.calls[0]?.[3]).toEqual({ allowedHostnames: ["bb.example.com"] });
+  });
+
+  it("falls back to the default-deny SSRF guard when the user opts out on a private host (mode 3)", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ data: { text: "x", handle: { address: "+15555000001" } } }),
+      );
+    await fetchBlueBubblesReplyContext({
+      ...baseParams,
+      replyToId: "ssrf-opt-out",
+      accountConfig: { network: { dangerouslyAllowPrivateNetwork: false } },
+      fetchImpl,
+    });
+    expect(fetchImpl.mock.calls[0]?.[3]).toEqual({});
+  });
+
+  it("never passes undefined to the underlying fetch (regression for #71820 codex review)", async () => {
+    // Previously, an absent private-network opt-in left ssrfPolicy as
+    // `undefined`, which made blueBubblesFetchWithTimeout silently skip
+    // fetchWithSsrFGuard. The fix routes through
+    // resolveBlueBubblesClientSsrfPolicy, which never returns undefined.
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ data: { text: "x", handle: { address: "+15556000001" } } }),
+      );
+    await fetchBlueBubblesReplyContext({
+      ...baseParams,
+      replyToId: "ssrf-defined",
+      fetchImpl,
+    });
+    expect(fetchImpl.mock.calls[0]?.[3]).toBeDefined();
   });
 
   it("uses the configured timeout", async () => {

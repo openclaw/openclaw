@@ -1,8 +1,16 @@
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  resolveBlueBubblesEffectiveAllowPrivateNetworkFromConfig,
+  resolveBlueBubblesPrivateNetworkConfigValue,
+} from "./accounts-normalization.js";
+import { resolveBlueBubblesClientSsrfPolicy } from "./client.js";
 import { rememberBlueBubblesReplyCache } from "./monitor-reply-cache.js";
 import { normalizeBlueBubblesHandle } from "./targets.js";
-import { blueBubblesFetchWithTimeout, buildBlueBubblesApiUrl } from "./types.js";
+import {
+  blueBubblesFetchWithTimeout,
+  buildBlueBubblesApiUrl,
+  type BlueBubblesAccountConfig,
+} from "./types.js";
 
 const DEFAULT_REPLY_FETCH_TIMEOUT_MS = 5_000;
 
@@ -27,15 +35,18 @@ export function _resetBlueBubblesReplyFetchState(): void {
   inflight.clear();
 }
 
-type ReplyContextFetchAccountConfig = Parameters<typeof isPrivateNetworkOptInEnabled>[0];
-
 export type FetchBlueBubblesReplyContextParams = {
   accountId: string;
   replyToId: string;
   baseUrl: string;
   password: string;
-  /** Optional account config — used to resolve the SSRF private-network opt-in. */
-  accountConfig?: ReplyContextFetchAccountConfig;
+  /**
+   * Optional account config — used to resolve the SSRF policy for this fetch
+   * via the same three-mode resolver the BlueBubbles client uses. Even when
+   * omitted the request is still SSRF-guarded; we never pass `undefined` to
+   * the underlying fetch helper.
+   */
+  accountConfig?: BlueBubblesAccountConfig;
   /** Optional chat scope used to populate the reply cache for subsequent hits. */
   chatGuid?: string;
   chatIdentifier?: string;
@@ -89,10 +100,21 @@ async function runFetch(
       path: `/api/v1/message/${encodeURIComponent(replyToId)}`,
       password: params.password,
     });
-    const ssrfPolicy =
-      params.accountConfig && isPrivateNetworkOptInEnabled(params.accountConfig)
-        ? ({ allowPrivateNetwork: true as const } as const)
-        : undefined;
+    // Resolve the SSRF policy through the same three-mode helper the BB
+    // client uses (mode 1: explicit private-network opt-in, mode 2: hostname
+    // allowlist for trusted self-hosted servers, mode 3: default-deny guard).
+    // The resolver never returns `undefined`, so this fetch is always routed
+    // through `fetchWithSsrFGuard`. Previously we passed `undefined` when the
+    // user had not opted in to private-network access, which silently skipped
+    // the guard entirely. (PR #71820 review)
+    const { ssrfPolicy } = resolveBlueBubblesClientSsrfPolicy({
+      baseUrl: params.baseUrl,
+      allowPrivateNetwork: resolveBlueBubblesEffectiveAllowPrivateNetworkFromConfig({
+        baseUrl: params.baseUrl,
+        config: params.accountConfig,
+      }),
+      allowPrivateNetworkConfig: resolveBlueBubblesPrivateNetworkConfigValue(params.accountConfig),
+    });
     const response = await fetchImpl(
       url,
       { method: "GET" },
@@ -112,18 +134,16 @@ async function runFetch(
     if (!body && !sender) {
       return null;
     }
-    if (body || sender) {
-      rememberBlueBubblesReplyCache({
-        accountId: params.accountId,
-        messageId: replyToId,
-        chatGuid: params.chatGuid,
-        chatIdentifier: params.chatIdentifier,
-        chatId: params.chatId,
-        senderLabel: sender,
-        body,
-        timestamp: Date.now(),
-      });
-    }
+    rememberBlueBubblesReplyCache({
+      accountId: params.accountId,
+      messageId: replyToId,
+      chatGuid: params.chatGuid,
+      chatIdentifier: params.chatIdentifier,
+      chatId: params.chatId,
+      senderLabel: sender,
+      body,
+      timestamp: Date.now(),
+    });
     return { body, sender };
   } catch {
     // Best-effort: swallow network/parse errors. Caller proceeds with empty
