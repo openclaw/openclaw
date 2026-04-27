@@ -101,6 +101,7 @@ async function resolveSlackChannelName(client: WebClient, channelId: string): Pr
       `Slack search --channel-id requires resolving the channel name with conversations.info before calling search.messages. Ensure the user token can read this channel and has the required Slack scopes (for example channels:read/groups:read/im:read/mpim:read).${
         slackError ? ` Slack returned: ${slackError}.` : ""
       }`,
+      { cause: error },
     );
   }
   throw new Error(
