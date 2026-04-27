@@ -8,6 +8,7 @@ import {
 import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { detectMime, extensionForMime } from "./mime.js";
+import { stripFilenameControlChars } from "./outbound-filename.js";
 import { readResponseTextSnippet, readResponseWithLimit } from "./read-response-with-limit.js";
 
 type FetchMediaResult = {
@@ -69,14 +70,14 @@ function parseContentDispositionFileName(header?: string | null): string | undef
     const cleaned = stripQuotes(starMatch[1].trim());
     const encoded = cleaned.split("''").slice(1).join("''") || cleaned;
     try {
-      return path.basename(decodeURIComponent(encoded));
+      return stripFilenameControlChars(path.basename(decodeURIComponent(encoded)));
     } catch {
-      return path.basename(encoded);
+      return stripFilenameControlChars(path.basename(encoded));
     }
   }
   const match = /filename\s*=\s*([^;]+)/i.exec(header);
   if (match?.[1]) {
-    return path.basename(stripQuotes(match[1].trim()));
+    return stripFilenameControlChars(path.basename(stripQuotes(match[1].trim())));
   }
   return undefined;
 }
