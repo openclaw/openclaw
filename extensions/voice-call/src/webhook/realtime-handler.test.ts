@@ -4,9 +4,12 @@ import type {
   RealtimeVoiceProviderPlugin,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { describe, expect, it, vi } from "vitest";
+import { WebSocket } from "ws";
 import type { VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
 import type { VoiceCallProvider } from "../providers/base.js";
+import type { CallRecord } from "../types.js";
+import { connectWs, startUpgradeWsServer, waitForClose } from "../websocket-test-support.js";
 import { RealtimeCallHandler } from "./realtime-handler.js";
 
 function makeRequest(url: string, host = "gateway.ts.net"): http.IncomingMessage {
@@ -30,26 +33,40 @@ function makeBridge(): RealtimeVoiceBridge {
   };
 }
 
-const realtimeProvider: RealtimeVoiceProviderPlugin = {
-  id: "openai",
-  label: "OpenAI",
-  isConfigured: () => true,
-  createBridge: () => makeBridge(),
-};
+function makeRealtimeProvider(
+  createBridge: RealtimeVoiceProviderPlugin["createBridge"],
+): RealtimeVoiceProviderPlugin {
+  return {
+    id: "openai",
+    label: "OpenAI",
+    isConfigured: () => true,
+    createBridge,
+  };
+}
 
-function makeHandler(overrides?: Partial<VoiceCallRealtimeConfig>) {
+function makeHandler(
+  overrides?: Partial<VoiceCallRealtimeConfig>,
+  deps?: {
+    manager?: Partial<CallManager>;
+    provider?: Partial<VoiceCallProvider>;
+    realtimeProvider?: RealtimeVoiceProviderPlugin;
+  },
+) {
+  const config: VoiceCallRealtimeConfig = {
+    enabled: true,
+    streamPath: overrides?.streamPath ?? "/voice/stream/realtime",
+    instructions: overrides?.instructions ?? "Be helpful.",
+    toolPolicy: overrides?.toolPolicy ?? "safe-read-only",
+    tools: overrides?.tools ?? [],
+    providers: overrides?.providers ?? {},
+    ...(overrides?.provider ? { provider: overrides.provider } : {}),
+  };
   return new RealtimeCallHandler(
-    {
-      enabled: true,
-      streamPath: "/voice/stream/realtime",
-      instructions: "Be helpful.",
-      tools: [],
-      providers: {},
-      ...overrides,
-    },
+    config,
     {
       processEvent: vi.fn(),
       getCallByProviderCallId: vi.fn(),
+      ...deps?.manager,
     } as unknown as CallManager,
     {
       name: "twilio",
@@ -61,12 +78,33 @@ function makeHandler(overrides?: Partial<VoiceCallRealtimeConfig>) {
       startListening: vi.fn(),
       stopListening: vi.fn(),
       getCallStatus: vi.fn(),
+      ...deps?.provider,
     } as unknown as VoiceCallProvider,
-    realtimeProvider,
+    deps?.realtimeProvider ?? makeRealtimeProvider(() => makeBridge()),
     { apiKey: "test-key" },
     "/voice/webhook",
   );
 }
+
+const startRealtimeServer = async (
+  handler: RealtimeCallHandler,
+): Promise<{
+  url: string;
+  close: () => Promise<void>;
+}> => {
+  const payload = handler.buildTwiMLPayload(makeRequest("/voice/webhook"));
+  const match = payload.body.match(/wss:\/\/[^/]+(\/[^"]+)/);
+  if (!match) {
+    throw new Error("Failed to extract realtime stream path");
+  }
+
+  return await startUpgradeWsServer({
+    urlPath: match[1],
+    onUpgrade: (request, socket, head) => {
+      handler.handleWebSocketUpgrade(request, socket, head);
+    },
+  });
+};
 
 describe("RealtimeCallHandler path routing", () => {
   it("uses the request host and stream path in TwiML", () => {
@@ -88,5 +126,135 @@ describe("RealtimeCallHandler path routing", () => {
     expect(payload.body).toMatch(
       /wss:\/\/public\.example\/api\/custom\/stream\/realtime\/[0-9a-f-]{36}/,
     );
+  });
+
+  it("normalizes Twilio outbound realtime directions", async () => {
+    let callbacks:
+      | {
+          onReady?: () => void;
+        }
+      | undefined;
+    const createBridge = vi.fn(
+      (request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]) => {
+        callbacks = request;
+        return makeBridge();
+      },
+    );
+    const processEvent = vi.fn();
+    const getCallByProviderCallId = vi.fn(
+      (): CallRecord => ({
+        callId: "call-1",
+        providerCallId: "CA-outbound",
+        provider: "twilio",
+        direction: "outbound",
+        state: "ringing",
+        from: "+15550001234",
+        to: "+15550009999",
+        startedAt: Date.now(),
+        transcript: [],
+        processedEventIds: [],
+        metadata: {},
+      }),
+    );
+    const handler = makeHandler(undefined, {
+      manager: {
+        processEvent,
+        getCallByProviderCallId,
+      },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    const payload = handler.buildTwiMLPayload(
+      makeRequest("/voice/webhook"),
+      new URLSearchParams({
+        Direction: "outbound-dial",
+        From: "+15550001234",
+        To: "+15550009999",
+      }),
+    );
+    const match = payload.body.match(/wss:\/\/[^/]+(\/[^"]+)/);
+    if (!match) {
+      throw new Error("Failed to extract realtime stream path");
+    }
+    const server = await startUpgradeWsServer({
+      urlPath: match[1],
+      onUpgrade: (request, socket, head) => {
+        handler.handleWebSocketUpgrade(request, socket, head);
+      },
+    });
+
+    try {
+      const ws = await connectWs(server.url);
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            start: { streamSid: "MZ-outbound", callSid: "CA-outbound" },
+          }),
+        );
+        await vi.waitFor(() => {
+          expect(createBridge).toHaveBeenCalled();
+        });
+        callbacks?.onReady?.();
+        expect(processEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: "call.initiated",
+            direction: "outbound",
+            from: "+15550001234",
+            to: "+15550009999",
+          }),
+        );
+      } finally {
+        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+          ws.close();
+        }
+      }
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+describe("RealtimeCallHandler websocket hardening", () => {
+  it("rejects oversized pre-start frames before bridge setup", async () => {
+    const createBridge = vi.fn(() => makeBridge());
+    const processEvent = vi.fn();
+    const getCallByProviderCallId = vi.fn();
+    const handler = makeHandler(undefined, {
+      manager: {
+        processEvent,
+        getCallByProviderCallId,
+      },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    const server = await startRealtimeServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            start: {
+              streamSid: "MZ-oversized",
+              callSid: "CA-oversized",
+              padding: "A".repeat(300 * 1024),
+            },
+          }),
+        );
+
+        const closed = await waitForClose(ws);
+
+        expect(closed.code).toBe(1009);
+        expect(createBridge).not.toHaveBeenCalled();
+        expect(processEvent).not.toHaveBeenCalled();
+        expect(getCallByProviderCallId).not.toHaveBeenCalled();
+      } finally {
+        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+          ws.close();
+        }
+      }
+    } finally {
+      await server.close();
+    }
   });
 });

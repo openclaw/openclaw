@@ -1,6 +1,8 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
-import type { OpenClawConfig } from "../../config/config.js";
+import { stripInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
   sanitizeProviderReplayHistoryWithPlugin,
   validateProviderReplayTurnsWithPlugin,
@@ -8,7 +10,6 @@ import {
 import type {
   ProviderReplaySessionEntry,
   ProviderReplaySessionState,
-  ProviderRuntimeModel,
 } from "../../plugins/types.js";
 import {
   hasInterSessionUserProvenance,
@@ -28,15 +29,21 @@ import {
   sanitizeToolUseResultPairing,
   stripToolResultDetails,
 } from "../session-transcript-repair.js";
+import { STREAM_ERROR_FALLBACK_TEXT } from "../stream-message-shared.js";
+import { sanitizeToolCallIdsForCloudCodeAssist } from "../tool-call-id.js";
 import type { TranscriptPolicy } from "../transcript-policy.js";
-import { resolveTranscriptPolicy } from "../transcript-policy.js";
+import {
+  resolveTranscriptPolicy,
+  shouldAllowProviderOwnedThinkingReplay,
+} from "../transcript-policy.js";
 import {
   makeZeroUsageSnapshot,
   normalizeUsage,
   type AssistantUsageSnapshot,
   type UsageLike,
 } from "../usage.js";
-import { dropThinkingBlocks } from "./thinking.js";
+import { isZeroUsageEmptyStopAssistantTurn } from "./empty-assistant-turn.js";
+import { dropThinkingBlocks, stripInvalidThinkingSignatures } from "./thinking.js";
 
 const INTER_SESSION_PREFIX_BASE = "[Inter-session message]";
 const MODEL_SNAPSHOT_CUSTOM_TYPE = "model-snapshot";
@@ -47,6 +54,37 @@ type ModelSnapshotEntry = {
   modelApi?: string | null;
   modelId?: string;
 };
+
+type ProviderReplayHookParams = {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  provider: string;
+  modelId?: string;
+  modelApi?: string | null;
+  model?: ProviderRuntimeModel;
+  sessionId?: string;
+};
+
+function createProviderReplayPluginParams(params: ProviderReplayHookParams) {
+  const context = {
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    provider: params.provider,
+    modelId: params.modelId,
+    modelApi: params.modelApi,
+    model: params.model,
+    sessionId: params.sessionId,
+  };
+  return {
+    provider: params.provider,
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    context,
+  };
+}
 
 function buildInterSessionPrefix(message: AgentMessage): string {
   const provenance = normalizeInputProvenance((message as { provenance?: unknown }).provenance);
@@ -188,6 +226,119 @@ function stripStaleAssistantUsageBeforeLatestCompaction(messages: AgentMessage[]
       usage: makeZeroUsageSnapshot(),
     } as unknown as AgentMessage;
     touched = true;
+  }
+  return touched ? out : messages;
+}
+
+// `provider:"openclaw"` assistant entries written by the channel-delivery
+// transcript mirror (`model:"delivery-mirror"`, see config/sessions/transcript.ts)
+// and by the Gateway transcript-inject helper (`model:"gateway-injected"`, see
+// gateway/server-methods/chat-transcript-inject.ts) are user-visible transcript
+// records, not model output. Replaying them to the actual provider duplicates
+// content and, on Bedrock or strict OpenAI-compatible providers, can also
+// trigger turn-ordering rejections.
+const TRANSCRIPT_ONLY_OPENCLAW_MODELS = new Set<string>(["delivery-mirror", "gateway-injected"]);
+const OMITTED_INBOUND_METADATA_TEXT = "[assistant copied inbound metadata omitted]";
+
+function isTranscriptOnlyOpenclawAssistant(message: AgentMessage): boolean {
+  if (!message || message.role !== "assistant") {
+    return false;
+  }
+  const provider = (message as { provider?: unknown }).provider;
+  const model = (message as { model?: unknown }).model;
+  return (
+    provider === "openclaw" &&
+    typeof model === "string" &&
+    TRANSCRIPT_ONLY_OPENCLAW_MODELS.has(model)
+  );
+}
+
+export function normalizeAssistantReplayContent(messages: AgentMessage[]): AgentMessage[] {
+  let touched = false;
+  const out: AgentMessage[] = [];
+  for (const message of messages) {
+    if (!message || message.role !== "assistant") {
+      out.push(message);
+      continue;
+    }
+    if (isTranscriptOnlyOpenclawAssistant(message)) {
+      // Drop from the in-memory replay copy; the persisted JSONL keeps the
+      // entry so user-facing transcript surfaces are unchanged.
+      touched = true;
+      continue;
+    }
+    const replayContent = (message as { content?: unknown }).content;
+    if (typeof replayContent === "string") {
+      const strippedText = stripInboundMetadata(replayContent);
+      out.push({
+        ...message,
+        content: [
+          {
+            type: "text",
+            text: strippedText.trim() ? strippedText : OMITTED_INBOUND_METADATA_TEXT,
+          },
+        ],
+      });
+      touched = true;
+      continue;
+    }
+    if (Array.isArray(replayContent)) {
+      let contentTouched = false;
+      const sanitizedContent = replayContent.map((block) => {
+        if (!block || typeof block !== "object") {
+          return block;
+        }
+        const text = (block as { text?: unknown }).text;
+        if (typeof text !== "string") {
+          return block;
+        }
+        const strippedText = stripInboundMetadata(text);
+        if (strippedText === text) {
+          return block;
+        }
+        contentTouched = true;
+        return {
+          ...block,
+          text: strippedText.trim() ? strippedText : OMITTED_INBOUND_METADATA_TEXT,
+        };
+      });
+      if (contentTouched) {
+        out.push({
+          ...message,
+          content: sanitizedContent,
+        });
+        touched = true;
+        continue;
+      }
+    }
+    if (Array.isArray(replayContent) && replayContent.length === 0) {
+      // An assistant turn can legitimately end with `content: []` — for
+      // example the silent-reply / NO_REPLY path locked in by
+      // run.empty-error-retry.test.ts ("Clean stop with no output is a
+      // legitimate silent reply, not a crash"). We must NOT inject the
+      // failure sentinel into those turns: doing so would fabricate a
+      // failure statement in the next provider request and change model
+      // behavior even when no failure occurred.
+      //
+      // `stopReason: "error"` turns are Bedrock-Converse replay poison:
+      // the provider rejects assistant messages with no ContentBlock, and
+      // the persisted error turn was never going to render anything useful
+      // to the model anyway. A zero-token `stop` turn is the same shape from
+      // the next run's perspective: the provider produced no billable prompt
+      // or completion and no content. Leaving other non-error empty-content
+      // turns untouched preserves silent-reply semantics on every other code
+      // path.
+      const stopReason = (message as { stopReason?: unknown }).stopReason;
+      if (stopReason === "error" || isZeroUsageEmptyStopAssistantTurn(message)) {
+        out.push({
+          ...message,
+          content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
+        });
+        touched = true;
+        continue;
+      }
+    }
+    out.push(message);
   }
   return touched ? out : messages;
 }
@@ -400,35 +551,10 @@ export async function sanitizeSessionHistory(params: {
       model: params.model,
     });
   const withInterSessionMarkers = annotateInterSessionUserMessages(params.messages);
-  const sanitizedImages = await sanitizeSessionMessagesImages(
-    withInterSessionMarkers,
-    "session:history",
-    {
-      sanitizeMode: policy.sanitizeMode,
-      sanitizeToolCallIds: policy.sanitizeToolCallIds,
-      toolCallIdMode: policy.toolCallIdMode,
-      preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
-      preserveSignatures: policy.preserveSignatures,
-      sanitizeThoughtSignatures: policy.sanitizeThoughtSignatures,
-      ...resolveImageSanitizationLimits(params.config),
-    },
-  );
-  const droppedThinking = policy.dropThinkingBlocks
-    ? dropThinkingBlocks(sanitizedImages)
-    : sanitizedImages;
-  const sanitizedToolCalls = sanitizeToolCallInputs(droppedThinking, {
-    allowedToolNames: params.allowedToolNames,
+  const allowProviderOwnedThinkingReplay = shouldAllowProviderOwnedThinkingReplay({
+    modelApi: params.modelApi,
+    policy,
   });
-  const repairedTools = policy.repairToolUseResultPairing
-    ? sanitizeToolUseResultPairing(sanitizedToolCalls, {
-        erroredAssistantResultPolicy: "drop",
-      })
-    : sanitizedToolCalls;
-  const sanitizedToolResults = stripToolResultDetails(repairedTools);
-  const sanitizedCompactionUsage = ensureAssistantUsageSnapshots(
-    stripStaleAssistantUsageBeforeLatestCompaction(sanitizedToolResults),
-  );
-
   const isOpenAIResponsesApi =
     params.modelApi === "openai-responses" ||
     params.modelApi === "openai-codex-responses" ||
@@ -443,35 +569,89 @@ export async function sanitizeSessionHistory(params: {
         modelId: params.modelId,
       })
     : false;
-  const sanitizedOpenAI = isOpenAIResponsesApi
-    ? downgradeOpenAIFunctionCallReasoningPairs(
-        downgradeOpenAIReasoningBlocks(sanitizedCompactionUsage),
-      )
-    : sanitizedCompactionUsage;
-  const provider = params.provider?.trim();
-  const providerSanitized =
-    provider && provider.length > 0
-      ? await sanitizeProviderReplayHistoryWithPlugin({
-          provider,
-          config: params.config,
-          workspaceDir: params.workspaceDir,
-          env: params.env,
-          context: {
-            config: params.config,
-            workspaceDir: params.workspaceDir,
-            env: params.env,
-            provider,
-            modelId: params.modelId,
-            modelApi: params.modelApi,
-            model: params.model,
-            sessionId: params.sessionId,
-            messages: sanitizedOpenAI,
-            allowedToolNames: params.allowedToolNames,
-            sessionState: createProviderReplaySessionState(params.sessionManager),
-          },
+  const normalizedAssistantReplay = normalizeAssistantReplayContent(withInterSessionMarkers);
+  const sanitizedImages = await sanitizeSessionMessagesImages(
+    normalizedAssistantReplay,
+    "session:history",
+    {
+      sanitizeMode: policy.sanitizeMode,
+      sanitizeToolCallIds:
+        policy.sanitizeToolCallIds && !allowProviderOwnedThinkingReplay && !isOpenAIResponsesApi,
+      toolCallIdMode: policy.toolCallIdMode,
+      preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
+      preserveSignatures: policy.preserveSignatures,
+      sanitizeThoughtSignatures: policy.sanitizeThoughtSignatures,
+      ...resolveImageSanitizationLimits(params.config),
+    },
+  );
+  const validatedThinkingSignatures = policy.preserveSignatures
+    ? stripInvalidThinkingSignatures(sanitizedImages)
+    : sanitizedImages;
+  const droppedThinking = policy.dropThinkingBlocks
+    ? dropThinkingBlocks(validatedThinkingSignatures)
+    : validatedThinkingSignatures;
+  const sanitizedToolCalls = sanitizeToolCallInputs(droppedThinking, {
+    allowedToolNames: params.allowedToolNames,
+    allowProviderOwnedThinkingReplay,
+  });
+  // OpenAI Responses rejects orphan/missing function_call_output items. Upstream
+  // Codex repairs those gaps with "aborted"; keep that before the fc_* downgrade
+  // so both call and result ids are rewritten together. Covered by unit replay
+  // tests plus live OpenAI/Codex and generic replay-repair model tests.
+  const openAIRepairedToolCalls =
+    isOpenAIResponsesApi && policy.repairToolUseResultPairing
+      ? sanitizeToolUseResultPairing(sanitizedToolCalls, {
+          erroredAssistantResultPolicy: "drop",
+          // Match upstream Codex history normalization for OpenAI Responses:
+          // missing function_call_output entries are model-visible "aborted".
+          missingToolResultText: "aborted",
         })
-      : undefined;
-  const sanitizedWithProvider = providerSanitized ?? sanitizedOpenAI;
+      : sanitizedToolCalls;
+  const openAISafeToolCalls = isOpenAIResponsesApi
+    ? downgradeOpenAIFunctionCallReasoningPairs(
+        downgradeOpenAIReasoningBlocks(openAIRepairedToolCalls, {
+          dropReplayableReasoning: modelChanged,
+        }),
+      )
+    : sanitizedToolCalls;
+  const sanitizedToolIds =
+    policy.sanitizeToolCallIds && policy.toolCallIdMode
+      ? sanitizeToolCallIdsForCloudCodeAssist(openAISafeToolCalls, policy.toolCallIdMode, {
+          preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
+          preserveReplaySafeThinkingToolCallIds: allowProviderOwnedThinkingReplay,
+          allowedToolNames: params.allowedToolNames,
+        })
+      : openAISafeToolCalls;
+  // Gemini/Anthropic-class providers also require tool results to stay adjacent
+  // to their assistant tool calls. They do not use Codex's "aborted" text, but
+  // the same ordering repair is live-tested with Gemini 3 Flash.
+  const repairedTools =
+    !isOpenAIResponsesApi && policy.repairToolUseResultPairing
+      ? sanitizeToolUseResultPairing(sanitizedToolIds, {
+          erroredAssistantResultPolicy: "drop",
+        })
+      : sanitizedToolIds;
+  const sanitizedToolResults = stripToolResultDetails(repairedTools);
+  const sanitizedCompactionUsage = ensureAssistantUsageSnapshots(
+    stripStaleAssistantUsageBeforeLatestCompaction(sanitizedToolResults),
+  );
+  const provider = params.provider?.trim();
+  let providerSanitized: AgentMessage[] | undefined;
+  if (provider && provider.length > 0) {
+    const pluginParams = createProviderReplayPluginParams({ ...params, provider });
+    const providerResult = await sanitizeProviderReplayHistoryWithPlugin({
+      ...pluginParams,
+      context: {
+        ...pluginParams.context,
+        sessionId: params.sessionId ?? "",
+        messages: sanitizedCompactionUsage,
+        allowedToolNames: params.allowedToolNames,
+        sessionState: createProviderReplaySessionState(params.sessionManager),
+      },
+    });
+    providerSanitized = providerResult ?? undefined;
+  }
+  const sanitizedWithProvider = providerSanitized ?? sanitizedCompactionUsage;
 
   if (hasSnapshot && (!priorSnapshot || modelChanged)) {
     appendModelSnapshot(params.sessionManager, {
@@ -524,20 +704,11 @@ export async function validateReplayTurns(params: {
     });
   const provider = params.provider?.trim();
   if (provider) {
+    const pluginParams = createProviderReplayPluginParams({ ...params, provider });
     const providerValidated = await validateProviderReplayTurnsWithPlugin({
-      provider,
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
+      ...pluginParams,
       context: {
-        config: params.config,
-        workspaceDir: params.workspaceDir,
-        env: params.env,
-        provider,
-        modelId: params.modelId,
-        modelApi: params.modelApi,
-        model: params.model,
-        sessionId: params.sessionId,
+        ...pluginParams.context,
         messages: params.messages,
       },
     });

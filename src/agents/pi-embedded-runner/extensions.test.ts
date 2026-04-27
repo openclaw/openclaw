@@ -1,11 +1,20 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getCompactionSafeguardRuntime } from "../pi-hooks/compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "../pi-hooks/compaction-safeguard.js";
 import contextPruningExtension from "../pi-hooks/context-pruning.js";
 import { buildEmbeddedExtensionFactories } from "./extensions.js";
+
+vi.mock("../../plugins/provider-runtime.js", () => ({
+  resolveProviderCacheTtlEligibility: () => undefined,
+  resolveProviderRuntimePlugin: () => undefined,
+}));
+
+vi.mock("../../plugins/provider-hook-runtime.js", () => ({
+  resolveProviderRuntimePlugin: () => undefined,
+}));
 
 function buildSafeguardFactories(cfg: OpenClawConfig) {
   const sessionManager = {} as SessionManager;
@@ -36,12 +45,30 @@ function expectSafeguardRuntime(
 }
 
 describe("buildEmbeddedExtensionFactories", () => {
-  it("does not opt safeguard mode into quality-guard retries", () => {
+  it("enables quality-guard retries by default in safeguard mode", () => {
     const cfg = {
       agents: {
         defaults: {
           compaction: {
             mode: "safeguard",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    expectSafeguardRuntime(cfg, {
+      qualityGuardEnabled: true,
+    });
+  });
+
+  it("honors explicit safeguard quality-guard disablement", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          compaction: {
+            mode: "safeguard",
+            qualityGuard: {
+              enabled: false,
+            },
           },
         },
       },

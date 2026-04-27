@@ -1,11 +1,10 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../plugins/provider-runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
-    "../plugins/provider-runtime.js",
-  );
+vi.mock("../plugins/provider-hook-runtime.js", async () => {
+  const replayHelpers = await vi.importActual<
+    typeof import("../plugins/provider-replay-helpers.js")
+  >("../plugins/provider-replay-helpers.js");
   return {
-    ...actual,
     resolveProviderRuntimePlugin: vi.fn(({ provider }: { provider?: string }) => {
       if (
         !provider ||
@@ -13,6 +12,7 @@ vi.mock("../plugins/provider-runtime.js", async () => {
           "amazon-bedrock",
           "anthropic",
           "google",
+          "github-copilot",
           "kilocode",
           "kimi",
           "kimi-code",
@@ -51,7 +51,10 @@ vi.mock("../plugins/provider-runtime.js", async () => {
                 repairToolUseResultPairing: true,
                 validateAnthropicTurns: true,
                 allowSyntheticToolResults: true,
-                ...(modelId.includes("claude") ? { dropThinkingBlocks: true } : {}),
+                ...(modelId.includes("claude") &&
+                !replayHelpers.shouldPreserveThinkingBlocks(modelId)
+                  ? { dropThinkingBlocks: true }
+                  : {}),
               };
             case "minimax":
             case "minimax-portal":
@@ -71,7 +74,10 @@ vi.mock("../plugins/provider-runtime.js", async () => {
                     repairToolUseResultPairing: true,
                     validateAnthropicTurns: true,
                     allowSyntheticToolResults: true,
-                    ...(modelId.includes("claude") ? { dropThinkingBlocks: true } : {}),
+                    ...(modelId.includes("claude") &&
+                    !replayHelpers.shouldPreserveThinkingBlocks(modelId)
+                      ? { dropThinkingBlocks: true }
+                      : {}),
                   };
             case "moonshot":
             case "ollama":
@@ -100,6 +106,12 @@ vi.mock("../plugins/provider-runtime.js", async () => {
                 validateAnthropicTurns: false,
                 allowSyntheticToolResults: true,
               };
+            case "github-copilot":
+              return modelId.includes("claude")
+                ? {
+                    dropThinkingBlocks: true,
+                  }
+                : {};
             case "mistral":
               return {
                 sanitizeToolCallIds: true,
@@ -173,20 +185,35 @@ vi.mock("../plugins/provider-runtime.js", async () => {
         },
       };
     }),
-    resetProviderRuntimeHookCacheForTest: vi.fn(),
   };
 });
 
 let resolveTranscriptPolicy: typeof import("./transcript-policy.js").resolveTranscriptPolicy;
+let shouldAllowProviderOwnedThinkingReplay: typeof import("./transcript-policy.js").shouldAllowProviderOwnedThinkingReplay;
 
 describe("resolveTranscriptPolicy", () => {
   beforeAll(async () => {
-    ({ resolveTranscriptPolicy } = await import("./transcript-policy.js"));
+    ({ resolveTranscriptPolicy, shouldAllowProviderOwnedThinkingReplay } =
+      await import("./transcript-policy.js"));
   });
 
   beforeEach(() => {
     vi.clearAllMocks();
   });
+
+  function expectStrictOpenAiCompatibleReplayDefaults(provider: string): void {
+    const policy = resolveTranscriptPolicy({
+      provider,
+      modelId: "demo-model",
+      modelApi: "openai-completions",
+    });
+
+    expect(policy.sanitizeToolCallIds).toBe(true);
+    expect(policy.toolCallIdMode).toBe("strict");
+    expect(policy.applyGoogleTurnOrdering).toBe(true);
+    expect(policy.validateGeminiTurns).toBe(true);
+    expect(policy.validateAnthropicTurns).toBe(true);
+  }
 
   it("enables sanitizeToolCallIds for Anthropic provider", () => {
     const policy = resolveTranscriptPolicy({
@@ -255,17 +282,7 @@ describe("resolveTranscriptPolicy", () => {
   });
 
   it("falls back to unowned transport defaults when no owning plugin exists", () => {
-    const policy = resolveTranscriptPolicy({
-      provider: "custom-openai-proxy",
-      modelId: "demo-model",
-      modelApi: "openai-completions",
-    });
-
-    expect(policy.sanitizeToolCallIds).toBe(true);
-    expect(policy.toolCallIdMode).toBe("strict");
-    expect(policy.applyGoogleTurnOrdering).toBe(true);
-    expect(policy.validateGeminiTurns).toBe(true);
-    expect(policy.validateAnthropicTurns).toBe(true);
+    expectStrictOpenAiCompatibleReplayDefaults("custom-openai-proxy");
   });
 
   it("preserves thinking blocks for newer Claude models in unowned Anthropic transport fallback", () => {
@@ -295,17 +312,7 @@ describe("resolveTranscriptPolicy", () => {
   });
 
   it("preserves transport defaults when a runtime plugin has not adopted replay hooks", () => {
-    const policy = resolveTranscriptPolicy({
-      provider: "vllm",
-      modelId: "demo-model",
-      modelApi: "openai-completions",
-    });
-
-    expect(policy.sanitizeToolCallIds).toBe(true);
-    expect(policy.toolCallIdMode).toBe("strict");
-    expect(policy.applyGoogleTurnOrdering).toBe(true);
-    expect(policy.validateGeminiTurns).toBe(true);
-    expect(policy.validateAnthropicTurns).toBe(true);
+    expectStrictOpenAiCompatibleReplayDefaults("vllm");
   });
 
   it("uses provider-owned Anthropic replay policy for MiniMax transports", () => {
@@ -402,6 +409,76 @@ describe("resolveTranscriptPolicy", () => {
   ])("sets preserveSignatures for $title (#32526, #39798)", ({ preserveSignatures, ...input }) => {
     const policy = resolveTranscriptPolicy(input);
     expect(policy.preserveSignatures).toBe(preserveSignatures);
+  });
+
+  it("allows immutable provider-owned thinking replay for anthropic-compatible native replay policies", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "minimax",
+      modelId: "MiniMax-M2.7",
+      modelApi: "anthropic-messages",
+    });
+    expect(
+      shouldAllowProviderOwnedThinkingReplay({
+        modelApi: "anthropic-messages",
+        policy,
+      }),
+    ).toBe(true);
+  });
+
+  it("allows immutable provider-owned thinking replay for bedrock claude replay policies", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "amazon-bedrock",
+      modelId: "us.anthropic.claude-opus-4-6-v1",
+      modelApi: "bedrock-converse-stream",
+    });
+    expect(
+      shouldAllowProviderOwnedThinkingReplay({
+        modelApi: "bedrock-converse-stream",
+        policy,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not allow immutable provider-owned thinking replay for github-copilot claude models", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "github-copilot",
+      modelId: "claude-sonnet-4",
+      modelApi: "anthropic-messages",
+    });
+    expect(
+      shouldAllowProviderOwnedThinkingReplay({
+        modelApi: "anthropic-messages",
+        policy,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not allow immutable provider-owned thinking replay for openrouter models on openai replay", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "openrouter",
+      modelId: "anthropic/claude-sonnet-4-6",
+      modelApi: "openai-completions",
+    });
+    expect(
+      shouldAllowProviderOwnedThinkingReplay({
+        modelApi: "openai-completions",
+        policy,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not allow immutable provider-owned thinking replay for strict openai-compatible replay", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "vllm",
+      modelId: "gemma-3-27b",
+      modelApi: "openai-completions",
+    });
+    expect(
+      shouldAllowProviderOwnedThinkingReplay({
+        modelApi: "openai-completions",
+        policy,
+      }),
+    ).toBe(false);
   });
 
   it("enables turn-ordering and assistant-merge for strict OpenAI-compatible providers (#38962)", () => {

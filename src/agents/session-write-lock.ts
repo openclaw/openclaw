@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { getProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { resolveProcessScopedMap } from "../shared/process-scoped-map.js";
+import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 
 type LockFilePayload = {
   pid?: number;
@@ -22,6 +23,10 @@ type HeldLock = {
   acquiredAt: number;
   maxHoldMs: number;
   releasePromise?: Promise<void>;
+};
+
+type SyncClosableFileHandle = fs.FileHandle & {
+  [key: symbol]: unknown;
 };
 
 export type SessionLockInspection = {
@@ -49,6 +54,7 @@ const MAX_LOCK_HOLD_MS = 2_147_000_000;
 
 type CleanupState = {
   registered: boolean;
+  exitHandler?: () => void;
   cleanupHandlers: Map<CleanupSignal, () => void>;
 };
 
@@ -72,6 +78,7 @@ function resolveCleanupState(): CleanupState {
   if (!proc[CLEANUP_STATE_KEY]) {
     proc[CLEANUP_STATE_KEY] = {
       registered: false,
+      exitHandler: undefined,
       cleanupHandlers: new Map<CleanupSignal, () => void>(),
     };
   }
@@ -177,7 +184,7 @@ async function releaseHeldLock(
  */
 function releaseAllLocksSync(): void {
   for (const [sessionFile, held] of HELD_LOCKS) {
-    void held.handle.close().catch(() => undefined);
+    closeFileHandleSyncBestEffort(held.handle);
     try {
       fsSync.rmSync(held.lockPath, { force: true });
     } catch {
@@ -188,6 +195,24 @@ function releaseAllLocksSync(): void {
   if (HELD_LOCKS.size === 0) {
     stopWatchdogTimer();
   }
+}
+
+function closeFileHandleSyncBestEffort(handle: fs.FileHandle): void {
+  const syncCloseSymbol = Object.getOwnPropertySymbols(Object.getPrototypeOf(handle)).find(
+    (symbol) => symbol.description === "kCloseSync",
+  );
+  if (syncCloseSymbol) {
+    const closeSync = (handle as SyncClosableFileHandle)[syncCloseSymbol];
+    if (typeof closeSync === "function") {
+      try {
+        closeSync.call(handle);
+        return;
+      } catch {
+        // Fall back to async close below.
+      }
+    }
+  }
+  void handle.close().catch(() => undefined);
 }
 
 async function runLockWatchdogCheck(nowMs = Date.now()): Promise<number> {
@@ -219,7 +244,14 @@ function stopWatchdogTimer(): void {
   watchdogState.started = false;
 }
 
+function shouldStartBackgroundWatchdog(): boolean {
+  return process.env.VITEST !== "true" || process.env.OPENCLAW_TEST_SESSION_LOCK_WATCHDOG === "1";
+}
+
 function ensureWatchdogStarted(intervalMs: number): void {
+  if (!shouldStartBackgroundWatchdog()) {
+    return;
+  }
   const watchdogState = resolveWatchdogState();
   if (watchdogState.started) {
     return;
@@ -254,12 +286,13 @@ function handleTerminationSignal(signal: CleanupSignal): void {
 
 function registerCleanupHandlers(): void {
   const cleanupState = resolveCleanupState();
-  if (!cleanupState.registered) {
-    cleanupState.registered = true;
+  cleanupState.registered = true;
+  if (!cleanupState.exitHandler) {
     // Cleanup on normal exit and process.exit() calls
-    process.on("exit", () => {
+    cleanupState.exitHandler = () => {
       releaseAllLocksSync();
-    });
+    };
+    process.on("exit", cleanupState.exitHandler);
   }
 
   ensureWatchdogStarted(DEFAULT_WATCHDOG_INTERVAL_MS);
@@ -281,6 +314,10 @@ function registerCleanupHandlers(): void {
 
 function unregisterCleanupHandlers(): void {
   const cleanupState = resolveCleanupState();
+  if (cleanupState.exitHandler) {
+    process.off("exit", cleanupState.exitHandler);
+    cleanupState.exitHandler = undefined;
+  }
   for (const [signal, handler] of cleanupState.cleanupHandlers) {
     process.off(signal, handler);
   }
@@ -468,6 +505,7 @@ export async function acquireSessionWriteLock(params: {
   release: () => Promise<void>;
 }> {
   registerCleanupHandlers();
+  const allowReentrant = params.allowReentrant ?? false;
   const timeoutMs = resolvePositiveMs(params.timeoutMs, 10_000, { allowInfinity: true });
   const staleMs = resolvePositiveMs(params.staleMs, DEFAULT_STALE_MS);
   const maxHoldMs = resolvePositiveMs(params.maxHoldMs, DEFAULT_MAX_HOLD_MS);
@@ -483,7 +521,6 @@ export async function acquireSessionWriteLock(params: {
   const normalizedSessionFile = path.join(normalizedDir, path.basename(sessionFile));
   const lockPath = `${normalizedSessionFile}.lock`;
 
-  const allowReentrant = params.allowReentrant ?? true;
   const held = HELD_LOCKS.get(normalizedSessionFile);
   if (allowReentrant && held) {
     held.count += 1;
@@ -559,14 +596,18 @@ export async function acquireSessionWriteLock(params: {
         continue;
       }
 
-      const delay = Math.min(1000, 50 * attempt);
+      const remainingMs = timeoutMs - (Date.now() - startedAt);
+      if (remainingMs <= 0) {
+        break;
+      }
+      const delay = Math.min(1000, 50 * attempt, remainingMs);
       await new Promise((r) => setTimeout(r, delay));
     }
   }
 
   const payload = await readLockPayload(lockPath);
   const owner = typeof payload?.pid === "number" ? `pid=${payload.pid}` : "unknown";
-  throw new Error(`session file locked (timeout ${timeoutMs}ms): ${owner} ${lockPath}`);
+  throw new SessionWriteLockTimeoutError({ timeoutMs, owner, lockPath });
 }
 
 export const __testing = {

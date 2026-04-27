@@ -1,10 +1,10 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
-  resolvePluginDiscoveryProviders,
+  resolveRuntimePluginDiscoveryProviders,
   runProviderCatalog,
 } from "../plugins/provider-discovery.js";
 import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
@@ -70,6 +70,7 @@ function resolveProviderDiscoveryFilter(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
+  resolveOwners?: (provider: string) => readonly string[] | undefined;
 }): string[] | undefined {
   const { config, workspaceDir, env } = params;
   const testRaw = env.OPENCLAW_TEST_ONLY_PROVIDER_PLUGIN_IDS?.trim();
@@ -102,12 +103,14 @@ function resolveProviderDiscoveryFilter(params: {
   const pluginIds = new Set<string>();
   for (const id of ids) {
     const owners =
+      params.resolveOwners?.(id) ??
       resolveOwningPluginIdsForProvider({
         provider: id,
         config,
         workspaceDir,
         env,
-      }) ?? [];
+      }) ??
+      [];
     if (owners.length > 0) {
       for (const owner of owners) {
         pluginIds.add(owner);
@@ -125,6 +128,7 @@ export function resolveProviderDiscoveryFilterForTest(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
+  resolveOwners?: (provider: string) => readonly string[] | undefined;
 }): string[] | undefined {
   return resolveProviderDiscoveryFilter(params);
 }
@@ -341,17 +345,21 @@ export async function resolveImplicitProviders(
 ): Promise<NonNullable<OpenClawConfig["models"]>["providers"]> {
   const providers: Record<string, ProviderConfig> = {};
   const env = params.env ?? process.env;
-  const authStore = ensureAuthProfileStore(params.agentDir, {
-    allowKeychainPrompt: false,
-  });
+  let authStore: ReturnType<typeof ensureAuthProfileStore> | undefined;
+  const getAuthStore = () =>
+    (authStore ??= ensureAuthProfileStore(params.agentDir, {
+      allowKeychainPrompt: false,
+    }));
   const context: ImplicitProviderContext = {
     ...params,
-    authStore,
+    get authStore() {
+      return getAuthStore();
+    },
     env,
-    resolveProviderApiKey: createProviderApiKeyResolver(env, authStore, params.config),
-    resolveProviderAuth: createProviderAuthResolver(env, authStore, params.config),
+    resolveProviderApiKey: createProviderApiKeyResolver(env, getAuthStore, params.config),
+    resolveProviderAuth: createProviderAuthResolver(env, getAuthStore, params.config),
   };
-  const discoveryProviders = await resolvePluginDiscoveryProviders({
+  const discoveryProviders = await resolveRuntimePluginDiscoveryProviders({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env,

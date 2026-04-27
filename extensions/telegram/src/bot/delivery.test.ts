@@ -1,7 +1,6 @@
 import type { Bot } from "grammy";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
 const { loadWebMedia } = vi.hoisted(() => ({
   loadWebMedia: vi.fn(),
 }));
@@ -112,6 +111,12 @@ function createVoiceMessagesForbiddenError() {
 function createThreadNotFoundError(operation = "sendMessage") {
   return new Error(
     `GrammyError: Call to '${operation}' failed! (400: Bad Request: message thread not found)`,
+  );
+}
+
+function createQuoteNotFoundError(operation = "sendMessage") {
+  return new Error(
+    `GrammyError: Call to '${operation}' failed! (400: Bad Request: quote not found)`,
   );
 }
 
@@ -294,6 +299,56 @@ describe("deliverReplies", () => {
     expect(triggerInternalHook).not.toHaveBeenCalled();
   });
 
+  it("rewrites exact NO_REPLY for direct Telegram sessions", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 12, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      sessionKeyForInternalHooks: "agent:test:telegram:direct:123",
+      replies: [{ text: "NO_REPLY" }],
+      runtime,
+      bot,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls[0]?.[1]).toEqual(expect.any(String));
+    expect(sendMessage.mock.calls[0]?.[1]?.trim()).not.toBe("NO_REPLY");
+  });
+
+  it("uses the policy session key for exact NO_REPLY policy", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 121, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      sessionKeyForInternalHooks: "agent:test:telegram:slash:123",
+      policySessionKey: "agent:test:telegram:direct:123",
+      replies: [{ text: "NO_REPLY" }],
+      runtime,
+      bot,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls[0]?.[1]).toEqual(expect.any(String));
+    expect(sendMessage.mock.calls[0]?.[1]?.trim()).not.toBe("NO_REPLY");
+  });
+
+  it("suppresses exact NO_REPLY for group Telegram sessions", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 13, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      sessionKeyForInternalHooks: "agent:test:telegram:group:123",
+      replies: [{ text: "NO_REPLY" }],
+      runtime,
+      bot,
+    });
+
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("emits internal message:sent with success=false on delivery failure", async () => {
     const runtime = createRuntime(false);
     const sendMessage = vi.fn().mockRejectedValue(new Error("network error"));
@@ -347,6 +402,36 @@ describe("deliverReplies", () => {
         metadata: expect.objectContaining({
           channel: "telegram",
           mediaUrls: ["https://example.com/photo.jpg"],
+        }),
+      }),
+      expect.objectContaining({ channelId: "telegram", conversationId: "123" }),
+    );
+  });
+
+  it("passes shared routing fields to message_sending hooks", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sending");
+
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 3, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "caption", replyToId: "500" }],
+      runtime,
+      bot,
+      replyToMode: "all",
+      thread: { id: 42, scope: "forum" },
+    });
+
+    expect(messageHookRunner.runMessageSending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "123",
+        content: "caption",
+        replyToId: 500,
+        threadId: 42,
+        metadata: expect.objectContaining({
+          channel: "telegram",
+          threadId: 42,
         }),
       }),
       expect.objectContaining({ channelId: "telegram", conversationId: "123" }),
@@ -619,7 +704,7 @@ describe("deliverReplies", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("uses reply_to_message_id when quote text is provided", async () => {
+  it("uses reply_parameters when quote text is provided", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({
       message_id: 10,
@@ -632,6 +717,131 @@ describe("deliverReplies", () => {
       runtime,
       bot,
       replyToMode: "all",
+      replyQuoteMessageId: 500,
+      replyQuoteText: " quoted text\n",
+      replyQuotePosition: 17,
+      replyQuoteEntities: [{ type: "bold", offset: 0, length: 6 }],
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.any(String),
+      expect.objectContaining({
+        reply_parameters: {
+          message_id: 500,
+          quote: " quoted text\n",
+          quote_position: 17,
+          quote_entities: [{ type: "bold", offset: 0, length: 6 }],
+          allow_sending_without_reply: true,
+        },
+      }),
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.any(String),
+      expect.not.objectContaining({
+        reply_to_message_id: expect.anything(),
+      }),
+    );
+  });
+
+  it("uses the native quote candidate that matches each reply target", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 10,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [
+        { text: "First", replyToId: "500" },
+        { text: "Second", replyToId: "501" },
+      ],
+      runtime,
+      bot,
+      replyToMode: "all",
+      replyQuoteByMessageId: {
+        "500": { text: "first quote", position: 0 },
+        "501": { text: "second quote", position: 0 },
+      },
+    });
+
+    expect(sendMessage.mock.calls[0]?.[2]).toEqual(
+      expect.objectContaining({
+        reply_parameters: {
+          message_id: 500,
+          quote: "first quote",
+          quote_position: 0,
+          allow_sending_without_reply: true,
+        },
+      }),
+    );
+    expect(sendMessage.mock.calls[1]?.[2]).toEqual(
+      expect.objectContaining({
+        reply_parameters: {
+          message_id: 501,
+          quote: "second quote",
+          quote_position: 0,
+          allow_sending_without_reply: true,
+        },
+      }),
+    );
+  });
+
+  it("retries with legacy reply id when native quote parameters are rejected", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(createQuoteNotFoundError())
+      .mockResolvedValueOnce({
+        message_id: 11,
+        chat: { id: "123" },
+      });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "Hello there", replyToId: "500" }],
+      runtime,
+      bot,
+      replyToMode: "all",
+      replyQuoteMessageId: 500,
+      replyQuoteText: " quoted text\n",
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(sendMessage.mock.calls[0][2]).toEqual(
+      expect.objectContaining({
+        reply_parameters: {
+          message_id: 500,
+          quote: " quoted text\n",
+          allow_sending_without_reply: true,
+        },
+      }),
+    );
+    expect(sendMessage.mock.calls[1][2]).toEqual(
+      expect.objectContaining({
+        reply_to_message_id: 500,
+        allow_sending_without_reply: true,
+      }),
+    );
+    expect(sendMessage.mock.calls[1][2]).not.toHaveProperty("reply_parameters");
+  });
+
+  it("uses legacy reply id when selected reply target differs from quote source", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 11,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "Hello there", replyToId: "501" }],
+      runtime,
+      bot,
+      replyToMode: "all",
+      replyQuoteMessageId: 500,
       replyQuoteText: "quoted text",
     });
 
@@ -639,17 +849,59 @@ describe("deliverReplies", () => {
       "123",
       expect.any(String),
       expect.objectContaining({
-        reply_to_message_id: 500,
+        reply_to_message_id: 501,
         allow_sending_without_reply: true,
       }),
     );
+    expect(sendMessage.mock.calls[0][2]).not.toHaveProperty("reply_parameters");
+  });
+
+  it("omits native quote parameters when reply mode suppresses the reply", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 13,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "Hello there", replyToId: "500" }],
+      runtime,
+      bot,
+      replyToMode: "off",
+      replyQuoteMessageId: 500,
+      replyQuoteText: "quoted text",
+    });
+
+    expect(sendMessage.mock.calls[0][2]).not.toHaveProperty("reply_parameters");
+    expect(sendMessage.mock.calls[0][2]).not.toHaveProperty("reply_to_message_id");
+  });
+
+  it("uses legacy reply id when quote text has no quoted message id", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 12,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "Hello there", replyToId: "501" }],
+      runtime,
+      bot,
+      replyToMode: "all",
+      replyQuoteText: "quoted text",
+    });
+
     expect(sendMessage).toHaveBeenCalledWith(
       "123",
       expect.any(String),
-      expect.not.objectContaining({
-        reply_parameters: expect.anything(),
+      expect.objectContaining({
+        reply_to_message_id: 501,
+        allow_sending_without_reply: true,
       }),
     );
+    expect(sendMessage.mock.calls[0][2]).not.toHaveProperty("reply_parameters");
   });
 
   it("falls back to text when sendVoice fails with VOICE_MESSAGES_FORBIDDEN", async () => {
@@ -740,6 +992,7 @@ describe("deliverReplies", () => {
       runtime,
       bot,
       replyToMode: "first",
+      replyQuoteMessageId: 77,
       replyQuoteText: "quoted context",
       textLimit: 12,
     });
@@ -748,8 +1001,11 @@ describe("deliverReplies", () => {
     expect(sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(sendMessage.mock.calls[0][2]).toEqual(
       expect.objectContaining({
-        reply_to_message_id: 77,
-        allow_sending_without_reply: true,
+        reply_parameters: {
+          message_id: 77,
+          quote: "quoted context",
+          allow_sending_without_reply: true,
+        },
         reply_markup: {
           inline_keyboard: [[{ text: "Ack", callback_data: "ack" }]],
         },
@@ -887,7 +1143,7 @@ describe("deliverReplies", () => {
     const bot = createBot({ sendMessage, pinChatMessage });
 
     await deliverReplies({
-      replies: [{ text: "chunk-one\n\nchunk-two", channelData: { telegram: { pin: true } } }],
+      replies: [{ text: "chunk-one\n\nchunk-two", delivery: { pin: true } }],
       chatId: "123",
       token: "tok",
       runtime,
@@ -900,6 +1156,25 @@ describe("deliverReplies", () => {
     expect(pinChatMessage).toHaveBeenCalledWith("123", 101, { disable_notification: true });
   });
 
+  it("honors notify on reply delivery pins", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 101, chat: { id: "123" } });
+    const pinChatMessage = vi.fn().mockResolvedValue(true);
+    const bot = createBot({ sendMessage, pinChatMessage });
+
+    await deliverReplies({
+      replies: [{ text: "hello", delivery: { pin: { enabled: true, notify: true } } }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 4096,
+    });
+
+    expect(pinChatMessage).toHaveBeenCalledWith("123", 101, { disable_notification: false });
+  });
+
   it("continues when pinning fails", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({ message_id: 201, chat: { id: "123" } });
@@ -907,7 +1182,7 @@ describe("deliverReplies", () => {
     const bot = createBot({ sendMessage, pinChatMessage });
 
     await deliverWith({
-      replies: [{ text: "hello", channelData: { telegram: { pin: true } } }],
+      replies: [{ text: "hello", delivery: { pin: true } }],
       runtime,
       bot,
     });

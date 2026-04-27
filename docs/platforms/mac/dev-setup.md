@@ -2,7 +2,7 @@
 summary: "Setup guide for developers working on the OpenClaw macOS app"
 read_when:
   - Setting up the macOS development environment
-title: "macOS Dev Setup"
+title: "macOS dev setup"
 ---
 
 # macOS Developer Setup
@@ -105,3 +105,8 @@ lsof -nP -iTCP:18789 -sTCP:LISTEN
 ```
 
 If a manual run is holding the port, stop that process (Ctrl+C). As a last resort, kill the PID you found above.
+
+## Related
+
+- [macOS app](/platforms/macos)
+- [Install overview](/install)

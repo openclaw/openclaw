@@ -1,4 +1,5 @@
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { buildCommandsPaginationKeyboard } from "openclaw/plugin-sdk/telegram-command-ui";
 import {
   buildBrowseProvidersButton,
   buildModelsKeyboard,
@@ -6,34 +7,23 @@ import {
   type ProviderInfo,
 } from "./model-buttons.js";
 
-export function buildCommandsPaginationKeyboard(
-  currentPage: number,
-  totalPages: number,
-  agentId?: string,
-): Array<Array<{ text: string; callback_data: string }>> {
-  const buttons: Array<{ text: string; callback_data: string }> = [];
-  const suffix = agentId ? `:${agentId}` : "";
+export { buildCommandsPaginationKeyboard };
 
-  if (currentPage > 1) {
-    buttons.push({
-      text: "◀ Prev",
-      callback_data: `commands_page_${currentPage - 1}${suffix}`,
-    });
+export function buildTelegramModelsMenuButtons(params: { providers: ProviderInfo[] }) {
+  return buildProviderKeyboard(params.providers);
+}
+
+export function buildTelegramModelsMenuChannelData(params: {
+  providers: ProviderInfo[];
+}): ReplyPayload["channelData"] | null {
+  if (params.providers.length === 0) {
+    return null;
   }
-
-  buttons.push({
-    text: `${currentPage}/${totalPages}`,
-    callback_data: `commands_page_noop${suffix}`,
-  });
-
-  if (currentPage < totalPages) {
-    buttons.push({
-      text: "Next ▶",
-      callback_data: `commands_page_${currentPage + 1}${suffix}`,
-    });
-  }
-
-  return [buttons];
+  return {
+    telegram: {
+      buttons: buildTelegramModelsMenuButtons(params),
+    },
+  };
 }
 
 export function buildTelegramCommandsListChannelData(params: {
@@ -64,6 +54,25 @@ export function buildTelegramModelsProviderChannelData(params: {
   return {
     telegram: {
       buttons: buildProviderKeyboard(params.providers),
+    },
+  };
+}
+
+export function buildTelegramModelsAddProviderChannelData(params: {
+  providers: Array<{ id: string }>;
+}): ReplyPayload["channelData"] | null {
+  if (params.providers.length === 0) {
+    return null;
+  }
+  const buttons = params.providers.map((provider) => [
+    {
+      text: provider.id,
+      callback_data: `/models add ${provider.id}`,
+    },
+  ]);
+  return {
+    telegram: {
+      buttons,
     },
   };
 }

@@ -1,16 +1,21 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
+  asToolParamsRecord,
   jsonResult,
   readNumberParam,
   readStringParam,
-  type AnyAgentTool,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import type {
+  MemorySearchResult,
+  MemorySearchRuntimeDebug,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
   resolveMemoryCorePluginConfig,
   resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import { filterMemorySearchHitsBySessionVisibility } from "./session-search-visibility.js";
 import { recordShortTermRecalls } from "./short-term-promotion.js";
 import {
   clampResultsByInjectedChars,
@@ -69,6 +74,40 @@ function queueShortTermRecallTracking(params: {
   }).catch(() => {
     // Recall tracking is best-effort and must never block memory recall.
   });
+}
+
+function normalizeActiveMemoryQmdSearchMode(
+  value: unknown,
+): "inherit" | "search" | "vsearch" | "query" {
+  return value === "inherit" || value === "search" || value === "vsearch" || value === "query"
+    ? value
+    : "search";
+}
+
+function isActiveMemorySessionKey(sessionKey?: string): boolean {
+  return typeof sessionKey === "string" && sessionKey.includes(":active-memory:");
+}
+
+function resolveActiveMemoryQmdSearchModeOverride(
+  cfg: OpenClawConfig,
+  sessionKey?: string,
+): "search" | "vsearch" | "query" | undefined {
+  if (!isActiveMemorySessionKey(sessionKey)) {
+    return undefined;
+  }
+  const entry = cfg.plugins?.entries?.["active-memory"];
+  const entryRecord =
+    entry && typeof entry === "object" && !Array.isArray(entry)
+      ? (entry as { config?: unknown })
+      : undefined;
+  const pluginConfig =
+    entryRecord?.config &&
+    typeof entryRecord.config === "object" &&
+    !Array.isArray(entryRecord.config)
+      ? (entryRecord.config as { qmd?: { searchMode?: unknown } })
+      : undefined;
+  const searchMode = normalizeActiveMemoryQmdSearchMode(pluginConfig?.qmd?.searchMode);
+  return searchMode === "inherit" ? undefined : searchMode;
 }
 
 async function getSupplementMemoryReadResult(params: {
@@ -144,24 +183,27 @@ async function executeMemoryReadResult<T>(params: {
 export function createMemorySearchTool(options: {
   config?: OpenClawConfig;
   agentSessionKey?: string;
-}): AnyAgentTool | null {
+  sandboxed?: boolean;
+}) {
   return createMemoryTool({
     options,
     label: "Memory Search",
     name: "memory_search",
     description:
-      "Mandatory recall step: semantically search MEMORY.md + memory/*.md (and optional session transcripts) before answering questions about prior work, decisions, dates, people, preferences, or todos. Optional `corpus=wiki` or `corpus=all` also searches registered compiled-wiki supplements. If response has disabled=true, memory retrieval is unavailable and should be surfaced to the user.",
+      "Mandatory recall step: semantically search MEMORY.md + memory/*.md (and optional session transcripts) before answering questions about prior work, decisions, dates, people, preferences, or todos. Optional `corpus=wiki` or `corpus=all` also searches registered compiled-wiki supplements. `corpus=memory` restricts hits to indexed memory files (excludes session transcript chunks from ranking). `corpus=sessions` restricts hits to indexed session transcripts (same visibility rules as session history tools). If response has disabled=true, memory retrieval is unavailable and should be surfaced to the user.",
     parameters: MemorySearchSchema,
     execute:
       ({ cfg, agentId }) =>
       async (_toolCallId, params) => {
-        const query = readStringParam(params, "query", { required: true });
-        const maxResults = readNumberParam(params, "maxResults");
-        const minScore = readNumberParam(params, "minScore");
-        const requestedCorpus = readStringParam(params, "corpus") as
+        const rawParams = asToolParamsRecord(params);
+        const query = readStringParam(rawParams, "query", { required: true });
+        const maxResults = readNumberParam(rawParams, "maxResults");
+        const minScore = readNumberParam(rawParams, "minScore");
+        const requestedCorpus = readStringParam(rawParams, "corpus") as
           | "memory"
           | "wiki"
           | "all"
+          | "sessions"
           | undefined;
         const { resolveMemoryBackendConfig } = await loadMemoryToolRuntime();
         const shouldQueryMemory = requestedCorpus !== "wiki";
@@ -176,18 +218,58 @@ export function createMemorySearchTool(options: {
             mode: citationsMode,
             sessionKey: options.agentSessionKey,
           });
+          const searchStartedAt = Date.now();
           let rawResults: MemorySearchResult[] = [];
-          let surfacedMemoryResults: Array<MemorySearchResult & { corpus: "memory" }> = [];
+          let surfacedMemoryResults: Array<
+            Record<string, unknown> & { corpus: "memory"; score: number; path: string }
+          > = [];
           let provider: string | undefined;
           let model: string | undefined;
           let fallback: unknown;
           let searchMode: string | undefined;
+          let searchDebug:
+            | {
+                backend: string;
+                configuredMode?: string;
+                effectiveMode?: string;
+                fallback?: string;
+                searchMs: number;
+                hits: number;
+              }
+            | undefined;
           if (shouldQueryMemory && memory && !("error" in memory)) {
+            const runtimeDebug: MemorySearchRuntimeDebug[] = [];
+            const qmdSearchModeOverride = resolveActiveMemoryQmdSearchModeOverride(
+              cfg,
+              options.agentSessionKey,
+            );
+            const searchSources: MemorySource[] | undefined =
+              requestedCorpus === "sessions"
+                ? (["sessions"] as MemorySource[])
+                : requestedCorpus === "memory"
+                  ? (["memory"] as MemorySource[])
+                  : undefined;
             rawResults = await memory.manager.search(query, {
               maxResults,
               minScore,
               sessionKey: options.agentSessionKey,
+              qmdSearchModeOverride,
+              onDebug: (debug) => {
+                runtimeDebug.push(debug);
+              },
+              ...(searchSources ? { sources: searchSources } : {}),
             });
+            rawResults = await filterMemorySearchHitsBySessionVisibility({
+              cfg,
+              requesterSessionKey: options.agentSessionKey,
+              sandboxed: options.sandboxed === true,
+              hits: rawResults,
+            });
+            if (requestedCorpus === "sessions") {
+              rawResults = rawResults.filter((hit) => hit.source === "sessions");
+            } else if (requestedCorpus === "memory") {
+              rawResults = rawResults.filter((hit) => hit.source === "memory");
+            }
             const status = memory.manager.status();
             const decorated = decorateCitations(rawResults, includeCitations);
             const resolved = resolveMemoryBackendConfig({ cfg, agentId });
@@ -213,7 +295,19 @@ export function createMemorySearchTool(options: {
             provider = status.provider;
             model = status.model;
             fallback = status.fallback;
-            searchMode = (status.custom as { searchMode?: string } | undefined)?.searchMode;
+            const latestDebug = runtimeDebug.at(-1);
+            searchMode = latestDebug?.effectiveMode;
+            searchDebug = {
+              backend: status.backend,
+              configuredMode: latestDebug?.configuredMode,
+              effectiveMode:
+                status.backend === "qmd"
+                  ? (latestDebug?.effectiveMode ?? latestDebug?.configuredMode)
+                  : "n/a",
+              fallback: latestDebug?.fallback,
+              searchMs: Math.max(0, Date.now() - searchStartedAt),
+              hits: rawResults.length,
+            };
           }
           const supplementResults = shouldQuerySupplements
             ? await searchMemoryCorpusSupplements({
@@ -238,6 +332,7 @@ export function createMemorySearchTool(options: {
             fallback,
             citations: citationsMode,
             mode: searchMode,
+            debug: searchDebug,
           });
         } catch (err) {
           const message = formatErrorMessage(err);
@@ -250,21 +345,22 @@ export function createMemorySearchTool(options: {
 export function createMemoryGetTool(options: {
   config?: OpenClawConfig;
   agentSessionKey?: string;
-}): AnyAgentTool | null {
+}) {
   return createMemoryTool({
     options,
     label: "Memory Get",
     name: "memory_get",
     description:
-      "Safe snippet read from MEMORY.md or memory/*.md with optional from/lines; `corpus=wiki` reads from registered compiled-wiki supplements. Use after search to pull only the needed lines and keep context small.",
+      "Safe exact excerpt read from MEMORY.md or memory/*.md. Defaults to a bounded excerpt when lines are omitted, includes truncation/continuation info when more content exists, and `corpus=wiki` reads from registered compiled-wiki supplements.",
     parameters: MemoryGetSchema,
     execute:
       ({ cfg, agentId }) =>
       async (_toolCallId, params) => {
-        const relPath = readStringParam(params, "path", { required: true });
-        const from = readNumberParam(params, "from", { integer: true });
-        const lines = readNumberParam(params, "lines", { integer: true });
-        const requestedCorpus = readStringParam(params, "corpus") as
+        const rawParams = asToolParamsRecord(params);
+        const relPath = readStringParam(rawParams, "path", { required: true });
+        const from = readNumberParam(rawParams, "from", { integer: true });
+        const lines = readNumberParam(rawParams, "lines", { integer: true });
+        const requestedCorpus = readStringParam(rawParams, "corpus") as
           | "memory"
           | "wiki"
           | "all"

@@ -100,6 +100,23 @@ describe("createWebSendApi", () => {
     });
   });
 
+  it("sends visible text separately from push-to-talk voice notes", async () => {
+    const payload = Buffer.from("aud");
+    await api.sendMessage("+1555", "voice text", payload, "audio/ogg");
+    expect(sendMessage).toHaveBeenNthCalledWith(
+      1,
+      "1555@s.whatsapp.net",
+      expect.objectContaining({
+        audio: payload,
+        ptt: true,
+        mimetype: "audio/ogg",
+      }),
+    );
+    expect(sendMessage).toHaveBeenNthCalledWith(2, "1555@s.whatsapp.net", {
+      text: "voice text",
+    });
+  });
+
   it("supports video media and gifPlayback option", async () => {
     const payload = Buffer.from("vid");
     await api.sendMessage("+1555", "cap", payload, "video/mp4", { gifPlayback: true });
@@ -158,6 +175,42 @@ describe("createWebSendApi", () => {
     );
   });
 
+  it("keeps direct-chat reactions without a participant key", async () => {
+    await api.sendReaction("+1555", "msg-2", "👍", false);
+    expect(sendMessage).toHaveBeenCalledWith(
+      "1555@s.whatsapp.net",
+      expect.objectContaining({
+        react: {
+          text: "👍",
+          key: expect.objectContaining({
+            remoteJid: "1555@s.whatsapp.net",
+            id: "msg-2",
+            fromMe: false,
+            participant: undefined,
+          }),
+        },
+      }),
+    );
+  });
+
+  it("preserves LID participants in reaction keys", async () => {
+    await api.sendReaction("12345@g.us", "msg-2", "👍", false, "123@lid");
+    expect(sendMessage).toHaveBeenCalledWith(
+      "12345@g.us",
+      expect.objectContaining({
+        react: {
+          text: "👍",
+          key: expect.objectContaining({
+            remoteJid: "12345@g.us",
+            id: "msg-2",
+            fromMe: false,
+            participant: "123@lid",
+          }),
+        },
+      }),
+    );
+  });
+
   it("sends composing presence updates to the recipient JID", async () => {
     await api.sendComposingTo("+1555");
     expect(sendPresenceUpdate).toHaveBeenCalledWith("composing", "1555@s.whatsapp.net");
@@ -181,5 +234,30 @@ describe("createWebSendApi", () => {
     await api.sendMessage("123", "hello");
 
     expect(sendMessage).toHaveBeenCalledWith("123@s.whatsapp.net", { text: "hello" });
+  });
+
+  it("preserves the quoted remoteJid provided by the outbound adapter", async () => {
+    await api.sendMessage("+1555", "hello", undefined, undefined, {
+      quotedMessageKey: {
+        id: "quoted-1",
+        remoteJid: "277038292303944@lid",
+        fromMe: false,
+        participant: "1234@s.whatsapp.net",
+        messageText: "quoted body",
+      },
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "1555@s.whatsapp.net",
+      { text: "hello" },
+      expect.objectContaining({
+        quoted: expect.objectContaining({
+          key: expect.objectContaining({
+            remoteJid: "277038292303944@lid",
+            id: "quoted-1",
+          }),
+        }),
+      }),
+    );
   });
 });

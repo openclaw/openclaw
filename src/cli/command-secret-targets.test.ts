@@ -14,6 +14,7 @@ const REGISTRY_IDS = [
   "models.providers.openai.apiKey",
   "messages.tts.providers.openai.apiKey",
   "plugins.entries.firecrawl.config.webFetch.apiKey",
+  "plugins.entries.exa.config.webSearch.apiKey",
   "skills.entries.demo.apiKey",
   "tools.web.search.apiKey",
 ] as const;
@@ -57,6 +58,7 @@ import {
   getQrRemoteCommandSecretTargetIds,
   getScopedChannelsCommandSecretTargets,
   getSecurityAuditCommandSecretTargetIds,
+  getTtsCommandSecretTargetIds,
 } from "./command-secret-targets.js";
 
 describe("command secret target ids", () => {
@@ -72,11 +74,17 @@ describe("command secret target ids", () => {
     expect(ids.has("channels.discord.token")).toBe(false);
   });
 
+  it("keeps static TTS targets out of the registry path", () => {
+    const ids = getTtsCommandSecretTargetIds();
+    expect(ids).toEqual(new Set(["messages.tts.providers.*.apiKey"]));
+  });
+
   it("includes memorySearch remote targets for agent runtime commands", () => {
     const ids = getAgentRuntimeCommandSecretTargetIds();
     expect(ids.has("agents.defaults.memorySearch.remote.apiKey")).toBe(true);
     expect(ids.has("agents.list[].memorySearch.remote.apiKey")).toBe(true);
     expect(ids.has("plugins.entries.firecrawl.config.webFetch.apiKey")).toBe(true);
+    expect(ids.has("plugins.entries.exa.config.webSearch.apiKey")).toBe(true);
     expect(ids.has("channels.discord.token")).toBe(false);
   });
 

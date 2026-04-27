@@ -1,5 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
-import { cancelTaskById, listTasksForFlowId } from "../../tasks/runtime-internal.js";
+import { listTasksForFlowId } from "../../tasks/runtime-internal.js";
 import {
   mapTaskFlowDetail,
   mapTaskFlowView,
@@ -7,7 +6,7 @@ import {
   mapTaskRunDetail,
   mapTaskRunView,
 } from "../../tasks/task-domain-views.js";
-import { getFlowTaskSummary } from "../../tasks/task-executor.js";
+import { cancelDetachedTaskRunById, getFlowTaskSummary } from "../../tasks/task-executor.js";
 import {
   getTaskFlowByIdForOwner,
   listTaskFlowsForOwner,
@@ -20,17 +19,24 @@ import {
   listTasksForRelatedSessionKeyForOwner,
   resolveTaskForLookupTokenForOwner,
 } from "../../tasks/task-owner-access.js";
-import { normalizeDeliveryContext } from "../../utils/delivery-context.js";
-import type { OpenClawPluginToolContext } from "../types.js";
-import type { PluginRuntimeTaskFlow } from "./runtime-taskflow.js";
+import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
+import type { PluginRuntimeTaskFlow } from "./runtime-taskflow.types.js";
 import type {
+  BoundTaskFlowsRuntime,
+  BoundTaskRunsRuntime,
+  PluginRuntimeTaskFlows,
+  PluginRuntimeTaskRuns,
+  PluginRuntimeTasks,
   TaskFlowDetail,
-  TaskFlowView,
-  TaskRunAggregateSummary,
   TaskRunCancelResult,
-  TaskRunDetail,
-  TaskRunView,
-} from "./task-domain-types.js";
+} from "./runtime-tasks.types.js";
+export type {
+  BoundTaskFlowsRuntime,
+  BoundTaskRunsRuntime,
+  PluginRuntimeTaskFlows,
+  PluginRuntimeTaskRuns,
+  PluginRuntimeTasks,
+} from "./runtime-tasks.types.js";
 
 function assertSessionKey(sessionKey: string | undefined, errorMessage: string): string {
   const normalized = sessionKey?.trim();
@@ -41,7 +47,7 @@ function assertSessionKey(sessionKey: string | undefined, errorMessage: string):
 }
 
 function mapCancelledTaskResult(
-  result: Awaited<ReturnType<typeof cancelTaskById>>,
+  result: Awaited<ReturnType<typeof cancelDetachedTaskRunById>>,
 ): TaskRunCancelResult {
   return {
     found: result.found,
@@ -50,53 +56,6 @@ function mapCancelledTaskResult(
     ...(result.task ? { task: mapTaskRunDetail(result.task) } : {}),
   };
 }
-
-export type BoundTaskRunsRuntime = {
-  readonly sessionKey: string;
-  readonly requesterOrigin?: ReturnType<typeof normalizeDeliveryContext>;
-  get: (taskId: string) => TaskRunDetail | undefined;
-  list: () => TaskRunView[];
-  findLatest: () => TaskRunDetail | undefined;
-  resolve: (token: string) => TaskRunDetail | undefined;
-  cancel: (params: { taskId: string; cfg: OpenClawConfig }) => Promise<TaskRunCancelResult>;
-};
-
-export type PluginRuntimeTaskRuns = {
-  bindSession: (params: {
-    sessionKey: string;
-    requesterOrigin?: import("../../tasks/task-registry.types.js").TaskDeliveryState["requesterOrigin"];
-  }) => BoundTaskRunsRuntime;
-  fromToolContext: (
-    ctx: Pick<OpenClawPluginToolContext, "sessionKey" | "deliveryContext">,
-  ) => BoundTaskRunsRuntime;
-};
-
-export type BoundTaskFlowsRuntime = {
-  readonly sessionKey: string;
-  readonly requesterOrigin?: ReturnType<typeof normalizeDeliveryContext>;
-  get: (flowId: string) => TaskFlowDetail | undefined;
-  list: () => TaskFlowView[];
-  findLatest: () => TaskFlowDetail | undefined;
-  resolve: (token: string) => TaskFlowDetail | undefined;
-  getTaskSummary: (flowId: string) => TaskRunAggregateSummary | undefined;
-};
-
-export type PluginRuntimeTaskFlows = {
-  bindSession: (params: {
-    sessionKey: string;
-    requesterOrigin?: import("../../tasks/task-registry.types.js").TaskDeliveryState["requesterOrigin"];
-  }) => BoundTaskFlowsRuntime;
-  fromToolContext: (
-    ctx: Pick<OpenClawPluginToolContext, "sessionKey" | "deliveryContext">,
-  ) => BoundTaskFlowsRuntime;
-};
-
-export type PluginRuntimeTasks = {
-  runs: PluginRuntimeTaskRuns;
-  flows: PluginRuntimeTaskFlows;
-  /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
-  flow: PluginRuntimeTaskFlow;
-};
 
 function createBoundTaskRunsRuntime(params: {
   sessionKey: string;
@@ -148,7 +107,7 @@ function createBoundTaskRunsRuntime(params: {
         };
       }
       return mapCancelledTaskResult(
-        await cancelTaskById({
+        await cancelDetachedTaskRunById({
           cfg,
           taskId: task.taskId,
         }),

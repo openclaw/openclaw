@@ -1,4 +1,4 @@
-import type { ChannelId } from "../channels/plugins/types.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { SecretInputMode } from "../plugins/provider-auth-types.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 
@@ -58,6 +58,7 @@ export type OnboardOptions = OnboardDynamicProviderOptions & {
   cloudflareAiGatewayGatewayId?: string;
   customBaseUrl?: string;
   customApiKey?: string;
+  lmstudioApiKey?: string;
   customModelId?: string;
   customProviderId?: string;
   customCompatibility?: "openai" | "anthropic";
@@ -75,6 +76,7 @@ export type OnboardOptions = OnboardDynamicProviderOptions & {
   /** @deprecated Legacy alias for `skipChannels`. */
   skipProviders?: boolean;
   skipSkills?: boolean;
+  skipBootstrap?: boolean;
   skipSearch?: boolean;
   skipHealth?: boolean;
   skipUi?: boolean;

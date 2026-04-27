@@ -1,33 +1,34 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelMessagingAdapter } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 
 const callGatewayMock = vi.fn();
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-  return {
-    ...actual,
-    loadConfig: () => ({
-      session: {
-        mainKey: "main",
-        scope: "per-sender",
-        agentToAgent: { maxPingPongTurns: 2 },
-      },
-      tools: {
-        // Keep sessions tools permissive in this suite; dedicated visibility tests cover defaults.
-        sessions: { visibility: "all" },
-        agentToAgent: { enabled: true },
-      },
-    }),
-    resolveGatewayPort: () => 18789,
-  };
-});
+vi.mock("../config/config.js", () => ({
+  loadConfig: () => ({
+    session: {
+      mainKey: "main",
+      scope: "per-sender",
+      agentToAgent: { maxPingPongTurns: 2 },
+    },
+    tools: {
+      // Keep sessions tools permissive in this suite; dedicated visibility tests cover defaults.
+      sessions: { visibility: "all" },
+      agentToAgent: { enabled: true },
+    },
+  }),
+  resolveGatewayPort: () => 18789,
+}));
 
 import "./test-helpers/fast-openclaw-tools-sessions.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { __testing as agentStepTesting } from "./tools/agent-step.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
@@ -46,6 +47,71 @@ const TEST_CONFIG = {
     agentToAgent: { enabled: true },
   },
 } as OpenClawConfig;
+
+const resolveSessionConversationStub: NonNullable<
+  ChannelMessagingAdapter["resolveSessionConversation"]
+> = ({ rawId }) => ({
+  id: rawId,
+});
+const resolveSessionTargetStub: NonNullable<ChannelMessagingAdapter["resolveSessionTarget"]> = ({
+  kind,
+  id,
+  threadId,
+}) => (threadId ? `${kind}:${id}:thread:${threadId}` : `${kind}:${id}`);
+
+function installMessagingTestRegistry() {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "discord",
+        source: "test",
+        plugin: {
+          id: "discord",
+          meta: {
+            id: "discord",
+            label: "Discord",
+            selectionLabel: "Discord",
+            docsPath: "/channels/discord",
+            blurb: "Discord test stub.",
+          },
+          capabilities: { chatTypes: ["direct", "channel", "thread"] },
+          messaging: {
+            resolveSessionConversation: resolveSessionConversationStub,
+            resolveSessionTarget: resolveSessionTargetStub,
+          },
+          config: {
+            listAccountIds: () => ["default"],
+            resolveAccount: () => ({}),
+          },
+        },
+      },
+      {
+        pluginId: "whatsapp",
+        source: "test",
+        plugin: {
+          id: "whatsapp",
+          meta: {
+            id: "whatsapp",
+            label: "WhatsApp",
+            selectionLabel: "WhatsApp",
+            docsPath: "/channels/whatsapp",
+            blurb: "WhatsApp test stub.",
+            preferSessionLookupForAnnounceTarget: true,
+          },
+          capabilities: { chatTypes: ["direct", "group"] },
+          messaging: {
+            resolveSessionConversation: resolveSessionConversationStub,
+            resolveSessionTarget: resolveSessionTargetStub,
+          },
+          config: {
+            listAccountIds: () => ["default"],
+            resolveAccount: () => ({}),
+          },
+        },
+      },
+    ]),
+  );
+}
 
 function createOpenClawTools(options?: {
   agentSessionKey?: string;
@@ -90,6 +156,7 @@ const waitForCalls = async (getCount: () => number, count: number, timeoutMs = 2
 describe("sessions tools", () => {
   beforeEach(() => {
     callGatewayMock.mockClear();
+    installMessagingTestRegistry();
     agentStepTesting.setDepsForTest({
       callGateway: (opts: unknown) => callGatewayMock(opts),
     });
@@ -135,10 +202,15 @@ describe("sessions tools", () => {
     expect(schemaProp("sessions_list", "limit").type).toBe("number");
     expect(schemaProp("sessions_list", "activeMinutes").type).toBe("number");
     expect(schemaProp("sessions_list", "messageLimit").type).toBe("number");
+    expect(schemaProp("sessions_list", "label").type).toBe("string");
+    expect(schemaProp("sessions_list", "agentId").type).toBe("string");
+    expect(schemaProp("sessions_list", "search").type).toBe("string");
+    expect(schemaProp("sessions_list", "includeDerivedTitles").type).toBe("boolean");
+    expect(schemaProp("sessions_list", "includeLastMessage").type).toBe("boolean");
     expect(schemaProp("sessions_send", "timeoutSeconds").type).toBe("number");
   });
 
-  it("sessions_list filters kinds and includes messages", async () => {
+  it("sessions_list forwards mailbox filters and includes messages", async () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "sessions.list") {
@@ -151,6 +223,8 @@ describe("sessions tools", () => {
               sessionId: "s-main",
               updatedAt: 10,
               lastChannel: "whatsapp",
+              derivedTitle: "Main mailbox",
+              lastMessagePreview: "Latest assistant update",
             },
             {
               key: "discord:group:dev",
@@ -164,6 +238,8 @@ describe("sessions tools", () => {
               runtimeMs: 42,
               estimatedCostUsd: 0.0042,
               childSessions: ["agent:main:subagent:worker"],
+              derivedTitle: "Dev room",
+              lastMessagePreview: "Need review on the patch",
             },
             {
               key: "agent:main:dashboard:child",
@@ -210,11 +286,34 @@ describe("sessions tools", () => {
       throw new Error("missing sessions_list tool");
     }
 
-    const result = await tool.execute("call1", { messageLimit: 1 });
+    const result = await tool.execute("call1", {
+      agentId: "main",
+      label: "mailbox",
+      search: "review",
+      includeDerivedTitles: true,
+      includeLastMessage: true,
+      messageLimit: 1,
+    });
+    expect(callGatewayMock).toHaveBeenNthCalledWith(1, {
+      method: "sessions.list",
+      params: {
+        activeMinutes: undefined,
+        agentId: "main",
+        includeGlobal: true,
+        includeUnknown: true,
+        label: "mailbox",
+        limit: undefined,
+        search: "review",
+        spawnedBy: undefined,
+      },
+    });
     const details = result.details as {
       sessions?: Array<{
         key?: string;
+        agentId?: string;
         channel?: string;
+        derivedTitle?: string;
+        lastMessagePreview?: string;
         spawnedBy?: string;
         status?: string;
         startedAt?: number;
@@ -227,7 +326,10 @@ describe("sessions tools", () => {
     };
     expect(details.sessions).toHaveLength(5);
     const main = details.sessions?.find((s) => s.key === "main");
+    expect(main?.agentId).toBe("main");
     expect(main?.channel).toBe("whatsapp");
+    expect(main?.derivedTitle).toBe("Main mailbox");
+    expect(main?.lastMessagePreview).toBe("Latest assistant update");
     expect(main?.messages?.length).toBe(1);
     expect(main?.messages?.[0]?.role).toBe("assistant");
 
@@ -237,6 +339,8 @@ describe("sessions tools", () => {
     expect(group?.runtimeMs).toBe(42);
     expect(group?.estimatedCostUsd).toBe(0.0042);
     expect(group?.childSessions).toEqual(["agent:main:subagent:worker"]);
+    expect(group?.derivedTitle).toBe("Dev room");
+    expect(group?.lastMessagePreview).toBe("Need review on the patch");
 
     const dashboardChild = details.sessions?.find((s) => s.key === "agent:main:dashboard:child");
     expect(dashboardChild?.parentSessionKey).toBe("agent:main:main");
@@ -250,6 +354,93 @@ describe("sessions tools", () => {
     };
     expect(cronDetails.sessions).toHaveLength(1);
     expect(cronDetails.sessions?.[0]?.kind).toBe("cron");
+  });
+
+  it("derives mailbox previews only after agent visibility filtering", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-list-preview-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    try {
+      fs.writeFileSync(
+        path.join(tmpDir, "visible.jsonl"),
+        [
+          JSON.stringify({ type: "session", id: "visible" }),
+          JSON.stringify({ message: { role: "user", content: "Visible project kickoff" } }),
+          JSON.stringify({ message: { role: "assistant", content: "Visible latest reply" } }),
+        ].join("\n"),
+        "utf-8",
+      );
+      fs.writeFileSync(
+        path.join(tmpDir, "hidden.jsonl"),
+        [
+          JSON.stringify({ type: "session", id: "hidden" }),
+          JSON.stringify({ message: { role: "user", content: "Hidden cross-agent topic" } }),
+          JSON.stringify({ message: { role: "assistant", content: "Hidden latest reply" } }),
+        ].join("\n"),
+        "utf-8",
+      );
+
+      callGatewayMock.mockImplementation(async (opts: unknown) => {
+        const request = opts as { method?: string; params?: Record<string, unknown> };
+        if (request.method === "sessions.list") {
+          expect(request.params?.includeDerivedTitles).toBeUndefined();
+          expect(request.params?.includeLastMessage).toBeUndefined();
+          return {
+            path: storePath,
+            sessions: [
+              {
+                key: "agent:main:main",
+                kind: "direct",
+                sessionId: "visible",
+                updatedAt: 20,
+              },
+              {
+                key: "agent:other:main",
+                kind: "direct",
+                sessionId: "hidden",
+                updatedAt: 21,
+              },
+            ],
+          };
+        }
+        return {};
+      });
+
+      const tool = createOpenClawTools({
+        agentSessionKey: "agent:main:main",
+        config: {
+          ...TEST_CONFIG,
+          tools: {
+            sessions: { visibility: "agent" },
+            agentToAgent: { enabled: false },
+          },
+        } as OpenClawConfig,
+      }).find((candidate) => candidate.name === "sessions_list");
+      expect(tool).toBeDefined();
+      if (!tool) {
+        throw new Error("missing sessions_list tool");
+      }
+
+      const result = await tool.execute("call-preview", {
+        includeDerivedTitles: true,
+        includeLastMessage: true,
+      });
+      const details = result.details as {
+        sessions?: Array<{
+          key?: string;
+          derivedTitle?: string;
+          lastMessagePreview?: string;
+        }>;
+      };
+      expect(details.sessions).toHaveLength(1);
+      expect(details.sessions?.[0]).toMatchObject({
+        key: "agent:main:main",
+        derivedTitle: "Visible project kickoff",
+        lastMessagePreview: "Visible latest reply",
+      });
+      expect(JSON.stringify(details.sessions)).not.toContain("Hidden");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it("sessions_list resolves transcriptPath from agent state dir for multi-store listings", async () => {
@@ -693,7 +884,7 @@ describe("sessions tools", () => {
     expect(agentCalls).toHaveLength(8);
     for (const call of agentCalls) {
       expect(call.params).toMatchObject({
-        lane: "nested",
+        lane: expect.stringMatching(/^nested(?::|$)/),
         channel: "webchat",
         inputProvenance: { kind: "inter_session" },
       });
@@ -873,7 +1064,7 @@ describe("sessions tools", () => {
     expect(agentCalls).toHaveLength(4);
     for (const call of agentCalls) {
       expect(call.params).toMatchObject({
-        lane: "nested",
+        lane: expect.stringMatching(/^nested(?::|$)/),
         channel: "webchat",
         inputProvenance: { kind: "inter_session" },
       });
@@ -892,6 +1083,135 @@ describe("sessions tools", () => {
       to: "group:target",
       channel: "discord",
       message: "announce now",
+    });
+  });
+
+  it("sessions_send preserves threadId when announce target is hydrated via sessions.list", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    let agentCallCount = 0;
+    let lastWaitedRunId: string | undefined;
+    const replyByRunId = new Map<string, string>();
+    const requesterKey = "discord:group:req";
+    const targetKey = "agent:main:worker";
+    let sendParams: {
+      to?: string;
+      channel?: string;
+      accountId?: string;
+      message?: string;
+      threadId?: string;
+    } = {};
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "agent") {
+        agentCallCount += 1;
+        const runId = `run-${agentCallCount}`;
+        const params = request.params as
+          | {
+              sessionKey?: string;
+              extraSystemPrompt?: string;
+            }
+          | undefined;
+        let reply = "initial";
+        if (params?.extraSystemPrompt?.includes("Agent-to-agent reply step")) {
+          reply = params.sessionKey === requesterKey ? "pong-1" : "pong-2";
+        }
+        if (params?.extraSystemPrompt?.includes("Agent-to-agent announce step")) {
+          reply = "announce now";
+        }
+        replyByRunId.set(runId, reply);
+        return {
+          runId,
+          status: "accepted",
+          acceptedAt: 3000 + agentCallCount,
+        };
+      }
+      if (request.method === "agent.wait") {
+        const params = request.params as { runId?: string } | undefined;
+        lastWaitedRunId = params?.runId;
+        return { runId: params?.runId ?? "run-1", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        const text = (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "";
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text }],
+              timestamp: 20,
+            },
+          ],
+        };
+      }
+      if (request.method === "sessions.list") {
+        return {
+          sessions: [
+            {
+              key: targetKey,
+              deliveryContext: {
+                channel: "whatsapp",
+                to: "123@g.us",
+                accountId: "work",
+                threadId: 99,
+              },
+            },
+          ],
+        };
+      }
+      if (request.method === "send") {
+        const params = request.params as
+          | {
+              to?: string;
+              channel?: string;
+              accountId?: string;
+              message?: string;
+              threadId?: string;
+            }
+          | undefined;
+        sendParams = {
+          to: params?.to,
+          channel: params?.channel,
+          accountId: params?.accountId,
+          message: params?.message,
+          threadId: params?.threadId,
+        };
+        return { messageId: "m-threaded-announce" };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: requesterKey,
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_send");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const waited = await tool.execute("call-thread", {
+      sessionKey: targetKey,
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+    expect(waited.details).toMatchObject({
+      status: "ok",
+      reply: "initial",
+    });
+    await vi.waitFor(
+      () => {
+        expect(calls.filter((call) => call.method === "send")).toHaveLength(1);
+      },
+      { timeout: 2_000, interval: 5 },
+    );
+
+    expect(sendParams).toMatchObject({
+      to: "123@g.us",
+      channel: "whatsapp",
+      accountId: "work",
+      message: "announce now",
+      threadId: "99",
     });
   });
 });

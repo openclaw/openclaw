@@ -1,5 +1,31 @@
 import { describe, expect, it } from "vitest";
-import { resolveCronPayloadOutcome } from "./isolated-agent/helpers.js";
+import { detectCronDenialToken, resolveCronPayloadOutcome } from "./isolated-agent/helpers.js";
+
+describe("detectCronDenialToken", () => {
+  it("matches host denial markers case-sensitively", () => {
+    expect(detectCronDenialToken("SYSTEM_RUN_DENIED: approval blocked")).toBe("SYSTEM_RUN_DENIED");
+    expect(detectCronDenialToken("INVALID_REQUEST: denied")).toBe("INVALID_REQUEST");
+    expect(detectCronDenialToken("system_run_denied: approval blocked")).toBeUndefined();
+    expect(detectCronDenialToken("invalid_request: denied")).toBeUndefined();
+  });
+
+  it("matches model-narrated denial phrases case-insensitively", () => {
+    expect(detectCronDenialToken("Approval Cannot Safely Bind this runtime command")).toBe(
+      "approval cannot safely bind",
+    );
+    expect(detectCronDenialToken("The runtime denied the operation.")).toBe("runtime denied");
+    expect(detectCronDenialToken("I could not run the script.")).toBe("could not run");
+    expect(detectCronDenialToken("The command did not run to completion.")).toBe("did not run");
+    expect(detectCronDenialToken("The request was denied by policy.")).toBe("was denied");
+  });
+
+  it("ignores empty and non-token text", () => {
+    expect(detectCronDenialToken(undefined)).toBeUndefined();
+    expect(
+      detectCronDenialToken("The denied claim was reviewed, then the job succeeded."),
+    ).toBeUndefined();
+  });
+});
 
 describe("resolveCronPayloadOutcome", () => {
   it("uses the last non-empty non-error payload as summary and output", () => {
@@ -57,10 +83,10 @@ describe("resolveCronPayloadOutcome", () => {
       payloads: [{ text: "a".repeat(2001) }],
     });
 
-    expect(String(result.summary ?? "")).toMatch(/…$/);
+    expect(result.summary ?? "").toMatch(/…$/);
   });
 
-  it("preserves all successful deliverable payloads for announce delivery", () => {
+  it("preserves all successful deliverable payloads when no final assistant text is available", () => {
     const result = resolveCronPayloadOutcome({
       payloads: [
         { text: "line 1" },
@@ -73,15 +99,37 @@ describe("resolveCronPayloadOutcome", () => {
     expect(result.deliveryPayload).toEqual({ text: "line 2" });
   });
 
+  it("prefers finalAssistantVisibleText for text-only announce delivery", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        { text: "section 1" },
+        { text: "temporary error", isError: true },
+        { text: "section 2" },
+      ],
+      finalAssistantVisibleText: "section 1\nsection 2",
+      preferFinalAssistantVisibleText: true,
+    });
+
+    expect(result.summary).toBe("section 1\nsection 2");
+    expect(result.outputText).toBe("section 1\nsection 2");
+    expect(result.synthesizedText).toBe("section 1\nsection 2");
+    expect(result.deliveryPayloads).toEqual([{ text: "section 1\nsection 2" }]);
+    expect(result.deliveryPayload).toEqual({ text: "section 2" });
+  });
+
   it("keeps structured-content detection scoped to the last delivery payload", () => {
     const result = resolveCronPayloadOutcome({
       payloads: [{ mediaUrl: "https://example.com/report.png" }, { text: "final text" }],
+      finalAssistantVisibleText: "full final report",
+      preferFinalAssistantVisibleText: true,
     });
 
     expect(result.deliveryPayloads).toEqual([
       { mediaUrl: "https://example.com/report.png" },
       { text: "final text" },
     ]);
+    expect(result.outputText).toBe("final text");
+    expect(result.synthesizedText).toBe("final text");
     expect(result.deliveryPayloadHasStructuredContent).toBe(false);
   });
 
@@ -91,9 +139,113 @@ describe("resolveCronPayloadOutcome", () => {
         { text: "first error", isError: true },
         { text: "last error", isError: true },
       ],
+      finalAssistantVisibleText: "Recovered final answer",
+      preferFinalAssistantVisibleText: true,
     });
 
+    expect(result.outputText).toBe("last error");
     expect(result.deliveryPayloads).toEqual([{ text: "last error", isError: true }]);
     expect(result.deliveryPayload).toEqual({ text: "last error", isError: true });
+  });
+
+  it("keeps multi-payload direct delivery when finalAssistantVisibleText is not preferred", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "Working on it..." }, { text: "Final weather summary" }],
+      finalAssistantVisibleText: "Final weather summary",
+    });
+
+    expect(result.outputText).toBe("Final weather summary");
+    expect(result.deliveryPayloads).toEqual([
+      { text: "Working on it..." },
+      { text: "Final weather summary" },
+    ]);
+  });
+
+  it("promotes narrated denial markers in summary text to fatal errors", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        {
+          text: "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
+        },
+      ],
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.embeddedRunError).toBe(
+      'cron classifier: denial token "SYSTEM_RUN_DENIED" detected in summary',
+    );
+  });
+
+  it("promotes narrated denial markers from final assistant visible text", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "Working on it..." }],
+      finalAssistantVisibleText: "I could not run the requested script.",
+      preferFinalAssistantVisibleText: true,
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.outputText).toBe("I could not run the requested script.");
+    expect(result.embeddedRunError).toBe(
+      'cron classifier: denial token "could not run" detected in summary',
+    );
+  });
+
+  it("prefers typed failure signals over denial-token fallback", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "On it, retrying now." }],
+      failureSignal: {
+        kind: "execution_denied",
+        source: "tool",
+        toolName: "exec",
+        code: "SYSTEM_RUN_DENIED",
+        message: "SYSTEM_RUN_DENIED: approval required",
+        fatalForCron: true,
+      },
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.embeddedRunError).toBe(
+      "cron classifier: execution_denied failure from exec (SYSTEM_RUN_DENIED): SYSTEM_RUN_DENIED: approval required",
+    );
+    expect(result.summary).toBe("SYSTEM_RUN_DENIED: approval required");
+    expect(result.outputText).toBe("SYSTEM_RUN_DENIED: approval required");
+    expect(result.synthesizedText).toBe("SYSTEM_RUN_DENIED: approval required");
+    expect(result.deliveryPayload).toEqual({
+      text: "SYSTEM_RUN_DENIED: approval required",
+      isError: true,
+    });
+    expect(result.deliveryPayloads).toEqual([
+      { text: "SYSTEM_RUN_DENIED: approval required", isError: true },
+    ]);
+    expect(result.deliveryPayloadHasStructuredContent).toBe(false);
+  });
+
+  it("ignores non-fatal failure signal metadata", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "ordinary success" }],
+      failureSignal: {
+        kind: "execution_denied",
+        source: "tool",
+        message: "SYSTEM_RUN_DENIED: approval required",
+        fatalForCron: false,
+      },
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(false);
+    expect(result.embeddedRunError).toBeUndefined();
+  });
+
+  it("keeps structured error payload reasons ahead of denial-token reasons", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        {
+          text: "Exec failed before SYSTEM_RUN_DENIED could be retried",
+          isError: true,
+        },
+      ],
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.embeddedRunError).toBe("Exec failed before SYSTEM_RUN_DENIED could be retried");
   });
 });

@@ -6,13 +6,14 @@ import { BUNDLED_PLUGIN_ROOT_DIR } from "../test/helpers/bundled-plugin-paths.js
 
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const dockerfilePath = join(repoRoot, "Dockerfile");
+const packageJsonPath = join(repoRoot, "package.json");
 
 function collapseDockerContinuations(dockerfile: string): string {
   return dockerfile.replace(/\\\r?\n[ \t]*/g, " ");
 }
 
 describe("Dockerfile", () => {
-  it("uses shared multi-arch base image refs for all root Node stages", async () => {
+  it("uses full bookworm for build stages and slim bookworm for runtime", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     expect(dockerfile).toContain(
       'ARG OPENCLAW_NODE_BOOKWORM_IMAGE="node:24-bookworm@sha256:3a09aa6354567619221ef6c45a5051b671f953f0a1924d1f819ffb236e520e6b"',
@@ -22,10 +23,11 @@ describe("Dockerfile", () => {
     );
     expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS ext-deps");
     expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS build");
-    expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS base-default");
-    expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-slim");
-    expect(dockerfile).toContain("current multi-arch manifest list entry");
+    expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-runtime");
+    expect(dockerfile).toContain("FROM base-runtime");
+    expect(dockerfile).toContain("current multi-arch manifest list entries");
     expect(dockerfile).not.toContain("current amd64 entry");
+    expect(dockerfile).not.toContain("OPENCLAW_VARIANT");
   });
 
   it("installs optional browser dependencies after pnpm install", async () => {
@@ -42,6 +44,15 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain("apt-get install -y --no-install-recommends xvfb");
   });
 
+  it("verifies matrix-sdk-crypto native addons without hardcoded pnpm virtual-store paths", async () => {
+    const dockerfile = await readFile(dockerfilePath, "utf8");
+    expect(dockerfile).toContain("Verifying critical native addons");
+    expect(dockerfile).toContain('find /app/node_modules -name "matrix-sdk-crypto*.node"');
+    expect(dockerfile).not.toMatch(
+      /ADDON_DIR=.*node_modules\/\.pnpm\/@matrix-org\+matrix-sdk-crypto-nodejs@/,
+    );
+  });
+
   it("prunes runtime dependencies after the build stage", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     expect(dockerfile).toContain("FROM build AS runtime-assets");
@@ -56,6 +67,21 @@ describe("Dockerfile", () => {
     );
     expect(dockerfile).toContain(
       "COPY --from=runtime-assets --chown=node:node /app/node_modules ./node_modules",
+    );
+    expect(dockerfile).toContain(
+      "COPY --from=runtime-assets --chown=node:node /app/patches ./patches",
+    );
+  });
+
+  it("keeps package manager patch files in runtime images", async () => {
+    const dockerfile = await readFile(dockerfilePath, "utf8");
+    const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8")) as {
+      pnpm?: { patchedDependencies?: Record<string, string> };
+    };
+
+    expect(Object.keys(packageJson.pnpm?.patchedDependencies ?? {})).not.toHaveLength(0);
+    expect(dockerfile).toContain(
+      "COPY --from=runtime-assets --chown=node:node /app/patches ./patches",
     );
   });
 

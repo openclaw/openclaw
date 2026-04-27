@@ -44,6 +44,7 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
   messageChannelId: string;
   author: User;
   sender: DiscordSenderIdentity;
+  memberRoleIds: string[];
 
   channelInfo: DiscordChannelInfo | null;
   channelName?: string;
@@ -55,6 +56,7 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
   commandAuthorized: boolean;
   baseText: string;
   messageText: string;
+  preflightAudioTranscript?: string;
   wasMentioned: boolean;
 
   route: ReturnType<typeof resolveAgentRoute>;

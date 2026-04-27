@@ -1,9 +1,9 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
-import { setReplyPayloadMetadata } from "../auto-reply/types.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { InlineCodeState } from "../markdown/code-spans.js";
@@ -15,8 +15,17 @@ import {
   normalizeTextForComparison,
 } from "./pi-embedded-helpers.js";
 import type { BlockReplyPayload } from "./pi-embedded-payloads.js";
+import {
+  createEmbeddedRunReplayState,
+  mergeEmbeddedRunReplayState,
+} from "./pi-embedded-runner/replay-state.js";
+import type { EmbeddedRunLivenessState } from "./pi-embedded-runner/types.js";
 import { createEmbeddedPiSessionEventHandler } from "./pi-embedded-subscribe.handlers.js";
-import { consumePendingToolMediaIntoReply } from "./pi-embedded-subscribe.handlers.messages.js";
+import {
+  consumePendingAssistantReplyDirectivesIntoReply,
+  consumePendingToolMediaIntoReply,
+  readPendingToolMediaReply,
+} from "./pi-embedded-subscribe.handlers.messages.js";
 import type {
   EmbeddedPiSubscribeContext,
   EmbeddedPiSubscribeState,
@@ -24,10 +33,13 @@ import type {
 import { isPromiseLike } from "./pi-embedded-subscribe.promise.js";
 import { filterToolResultMediaUrls } from "./pi-embedded-subscribe.tools.js";
 import type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.types.js";
-import { formatReasoningMessage, stripDowngradedToolCallText } from "./pi-embedded-utils.js";
+import {
+  formatReasoningMessage,
+  stripDowngradedToolCallText,
+  THINKING_TAG_SCAN_RE,
+} from "./pi-embedded-utils.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
 
-const THINKING_TAG_SCAN_RE = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
 const FINAL_TAG_SCAN_RE = /<\s*(\/?)\s*final\s*>/gi;
 const log = createSubsystemLogger("agent/embedded");
 
@@ -63,6 +75,7 @@ export type {
 
 export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionParams) {
   const reasoningMode = params.reasoningMode ?? "off";
+  const canShowReasoning = params.thinkingLevel !== "off";
   const toolResultFormat = params.toolResultFormat ?? "markdown";
   const useMarkdown = toolResultFormat === "markdown";
   const initialPendingToolMediaUrls = collectPendingMediaFromInternalEvents(params.internalEvents);
@@ -77,9 +90,12 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     lastToolError: undefined,
     blockReplyBreak: params.blockReplyBreak ?? "text_end",
     reasoningMode,
-    includeReasoning: reasoningMode === "on",
+    includeReasoning: reasoningMode === "on" && canShowReasoning,
     shouldEmitPartialReplies: !(reasoningMode === "on" && !params.onBlockReply),
-    streamReasoning: reasoningMode === "stream" && typeof params.onReasoningStream === "function",
+    streamReasoning:
+      reasoningMode === "stream" &&
+      canShowReasoning &&
+      typeof params.onReasoningStream === "function",
     deltaBuffer: "",
     blockBuffer: "",
     // Track if a streamed chunk opened a <think> block (stateful across chunks).
@@ -92,18 +108,24 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     lastBlockReplyText: undefined,
     reasoningStreamOpen: false,
     assistantMessageIndex: 0,
+    lastAssistantStreamItemId: undefined,
     lastAssistantTextMessageIndex: -1,
     lastAssistantTextNormalized: undefined,
     lastAssistantTextTrimmed: undefined,
     assistantTextBaseline: 0,
     suppressBlockChunks: false, // Avoid late chunk inserts after final text merge.
     lastReasoningSent: undefined,
+    pendingAssistantUsage: undefined,
+    assistantUsageCommitted: false,
     compactionInFlight: false,
     pendingCompactionRetry: 0,
     compactionRetryResolve: undefined,
     compactionRetryReject: undefined,
     compactionRetryPromise: null,
     unsubscribed: false,
+    replayState: createEmbeddedRunReplayState(params.initialReplayState),
+    livenessState: "working",
+    hadDeterministicSideEffect: false,
     messagingToolSentTexts: [],
     messagingToolSentTextsNormalized: [],
     messagingToolSentTargets: [],
@@ -114,6 +136,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     pendingMessagingMediaUrls: new Map(),
     pendingToolMediaUrls: initialPendingToolMediaUrls,
     pendingToolAudioAsVoice: false,
+    pendingToolTrustedLocalMedia: false,
+    pendingAssistantReplyDirectives: undefined,
     deterministicApprovalPromptPending: false,
     deterministicApprovalPromptSent: false,
   };
@@ -174,7 +198,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     payload: BlockReplyPayload,
     options?: { assistantMessageIndex?: number },
   ) => {
-    emitBlockReplySafely(consumePendingToolMediaIntoReply(state, payload), options);
+    const withAssistantDirectives = consumePendingAssistantReplyDirectivesIntoReply(state, payload);
+    emitBlockReplySafely(consumePendingToolMediaIntoReply(state, withAssistantDirectives), options);
   };
 
   const resetAssistantMessageState = (nextAssistantTextBaseline: number) => {
@@ -197,11 +222,15 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.lastReasoningSent = undefined;
     state.reasoningStreamOpen = false;
     state.suppressBlockChunks = false;
+    state.pendingAssistantUsage = undefined;
+    state.assistantUsageCommitted = false;
     state.assistantMessageIndex += 1;
+    state.lastAssistantStreamItemId = undefined;
     state.lastAssistantTextMessageIndex = -1;
     state.lastAssistantTextNormalized = undefined;
     state.lastAssistantTextTrimmed = undefined;
     state.assistantTextBaseline = nextAssistantTextBaseline;
+    state.pendingAssistantReplyDirectives = undefined;
   };
 
   const rememberAssistantText = (text: string) => {
@@ -314,32 +343,63 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     ensureCompactionPromise();
   };
 
+  const resolveCompactionPromiseIfIdle = () => {
+    if (state.pendingCompactionRetry !== 0 || state.compactionInFlight) {
+      return;
+    }
+    state.compactionRetryResolve?.();
+    state.compactionRetryResolve = undefined;
+    state.compactionRetryReject = undefined;
+    state.compactionRetryPromise = null;
+  };
+
   const resolveCompactionRetry = () => {
     if (state.pendingCompactionRetry <= 0) {
       return;
     }
     state.pendingCompactionRetry -= 1;
-    if (state.pendingCompactionRetry === 0 && !state.compactionInFlight) {
-      state.compactionRetryResolve?.();
-      state.compactionRetryResolve = undefined;
-      state.compactionRetryReject = undefined;
-      state.compactionRetryPromise = null;
-    }
+    resolveCompactionPromiseIfIdle();
   };
 
   const maybeResolveCompactionWait = () => {
-    if (state.pendingCompactionRetry === 0 && !state.compactionInFlight) {
-      state.compactionRetryResolve?.();
-      state.compactionRetryResolve = undefined;
-      state.compactionRetryReject = undefined;
-      state.compactionRetryPromise = null;
-    }
+    resolveCompactionPromiseIfIdle();
   };
-  const recordAssistantUsage = (usageLike: unknown) => {
-    const usage = normalizeUsage((usageLike ?? undefined) as UsageLike | undefined);
-    if (!hasNonzeroUsage(usage)) {
+  const resolveAssistantUsage = (usageLike: unknown) => {
+    const candidates: unknown[] = [usageLike];
+    if (usageLike && typeof usageLike === "object") {
+      const record = usageLike as Record<string, unknown>;
+      const partial =
+        record.partial && typeof record.partial === "object"
+          ? (record.partial as Record<string, unknown>)
+          : undefined;
+      const message =
+        record.message && typeof record.message === "object"
+          ? (record.message as Record<string, unknown>)
+          : undefined;
+      candidates.push(
+        record.usage,
+        record.timings,
+        record.partial,
+        record.message,
+        partial?.usage,
+        partial?.timings,
+        message?.usage,
+        message?.timings,
+      );
+    }
+    for (const candidate of candidates) {
+      const usage = normalizeUsage((candidate ?? undefined) as UsageLike | undefined);
+      if (hasNonzeroUsage(usage)) {
+        return usage;
+      }
+    }
+    return undefined;
+  };
+  const commitAssistantUsage = () => {
+    if (state.assistantUsageCommitted || !state.pendingAssistantUsage) {
       return;
     }
+    const usage = state.pendingAssistantUsage;
     usageTotals.input += usage.input ?? 0;
     usageTotals.output += usage.output ?? 0;
     usageTotals.cacheRead += usage.cacheRead ?? 0;
@@ -348,6 +408,17 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       usage.total ??
       (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
     usageTotals.total += usageTotal;
+    state.assistantUsageCommitted = true;
+  };
+  const recordAssistantUsage = (usageLike: unknown) => {
+    if (state.assistantUsageCommitted) {
+      return;
+    }
+    const usage = resolveAssistantUsage(usageLike);
+    if (!usage) {
+      return;
+    }
+    state.pendingAssistantUsage = usage;
   };
   const getUsageTotals = () => {
     const hasUsage =
@@ -405,7 +476,12 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       return;
     }
     const { text: cleanedText, mediaUrls } = parseReplyDirectives(message);
-    const filteredMediaUrls = filterToolResultMediaUrls(toolName, mediaUrls ?? [], result);
+    const filteredMediaUrls = filterToolResultMediaUrls(
+      toolName,
+      mediaUrls ?? [],
+      result,
+      params.builtinToolNames,
+    );
     if (!cleanedText && filteredMediaUrls.length === 0) {
       return;
     }
@@ -446,7 +522,6 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     const inlineStateStart = state.inlineCode ?? createInlineCodeState();
     const codeSpans = buildCodeSpanIndex(text, inlineStateStart);
 
-    // 1. Handle <think> blocks (stateful, strip content inside)
     let processed = "";
     THINKING_TAG_SCAN_RE.lastIndex = 0;
     let lastIndex = 0;
@@ -468,7 +543,6 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     }
     state.thinking = inThinking;
 
-    // 2. Handle <final> blocks (stateful, strip content OUTSIDE)
     // If enforcement is disabled, we still strip the tags themselves to prevent
     // hallucinations (e.g. Minimax copying the style) from leaking, but we
     // do not enforce buffering/extraction logic.
@@ -671,6 +745,11 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   };
 
   const resetForCompactionRetry = () => {
+    state.hadDeterministicSideEffect =
+      state.hadDeterministicSideEffect === true ||
+      messagingToolSentTexts.length > 0 ||
+      messagingToolSentMediaUrls.length > 0 ||
+      state.successfulCronAdds > 0;
     assistantTexts.length = 0;
     toolMetas.length = 0;
     toolMetaById.clear();
@@ -689,8 +768,11 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.pendingMessagingMediaUrls.clear();
     state.pendingToolMediaUrls = [];
     state.pendingToolAudioAsVoice = false;
+    state.pendingAssistantReplyDirectives = undefined;
     state.deterministicApprovalPromptPending = false;
     state.deterministicApprovalPromptSent = false;
+    state.replayState = mergeEmbeddedRunReplayState(state.replayState, params.initialReplayState);
+    state.livenessState = "working";
     resetAssistantMessageState(0);
   };
 
@@ -707,6 +789,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     blockChunking,
     blockChunker,
     hookRunner: params.hookRunner,
+    builtinToolNames: params.builtinToolNames,
     noteLastAssistant,
     shouldEmitToolResult,
     shouldEmitToolOutput,
@@ -728,6 +811,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     resolveCompactionRetry,
     maybeResolveCompactionWait,
     recordAssistantUsage,
+    commitAssistantUsage,
     incrementCompactionCount,
     getUsageTotals,
     getCompactionCount: () => compactionCount,
@@ -772,12 +856,25 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     assistantTexts,
     toolMetas,
     unsubscribe,
+    setTerminalLifecycleMeta: (meta: {
+      replayInvalid?: boolean;
+      livenessState?: EmbeddedRunLivenessState;
+    }) => {
+      if (typeof meta.replayInvalid === "boolean") {
+        state.replayState = { ...state.replayState, replayInvalid: meta.replayInvalid };
+      }
+      if (meta.livenessState) {
+        state.livenessState = meta.livenessState;
+      }
+    },
     isCompacting: () => state.compactionInFlight || state.pendingCompactionRetry > 0,
     isCompactionInFlight: () => state.compactionInFlight,
     getMessagingToolSentTexts: () => messagingToolSentTexts.slice(),
     getMessagingToolSentMediaUrls: () => messagingToolSentMediaUrls.slice(),
     getMessagingToolSentTargets: () => messagingToolSentTargets.slice(),
+    getPendingToolMediaReply: () => readPendingToolMediaReply(state),
     getSuccessfulCronAdds: () => state.successfulCronAdds,
+    getReplayState: () => ({ ...state.replayState }),
     // Returns true if any messaging tool successfully sent a message.
     // Used to suppress agent's confirmation text (e.g., "Respondi no Telegram!")
     // which is generated AFTER the tool sends the actual answer.

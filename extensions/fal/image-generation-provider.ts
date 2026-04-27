@@ -6,11 +6,13 @@ import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
+  assertOkOrThrowProviderError,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
   fetchWithSsrFGuard,
+  mergeSsrFPolicies,
   type SsrFPolicy,
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
 } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -23,6 +25,7 @@ const DEFAULT_FAL_BASE_URL = "https://fal.run";
 const DEFAULT_FAL_IMAGE_MODEL = "fal-ai/flux/dev";
 const DEFAULT_FAL_EDIT_SUBPATH = "image-to-image";
 const DEFAULT_OUTPUT_FORMAT = "png";
+const FAL_OUTPUT_FORMATS = ["png", "jpeg"] as const;
 const FAL_SUPPORTED_SIZES = [
   "1024x1024",
   "1024x1536",
@@ -53,35 +56,6 @@ let falFetchGuard = fetchWithSsrFGuard;
 
 export function _setFalFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
   falFetchGuard = impl ?? fetchWithSsrFGuard;
-}
-
-function mergeSsrFPolicies(...policies: Array<SsrFPolicy | undefined>): SsrFPolicy | undefined {
-  const merged: SsrFPolicy = {};
-  for (const policy of policies) {
-    if (!policy) {
-      continue;
-    }
-    if (policy.allowPrivateNetwork) {
-      merged.allowPrivateNetwork = true;
-    }
-    if (policy.dangerouslyAllowPrivateNetwork) {
-      merged.dangerouslyAllowPrivateNetwork = true;
-    }
-    if (policy.allowRfc2544BenchmarkRange) {
-      merged.allowRfc2544BenchmarkRange = true;
-    }
-    if (policy.allowedHostnames?.length) {
-      merged.allowedHostnames = Array.from(
-        new Set([...(merged.allowedHostnames ?? []), ...policy.allowedHostnames]),
-      );
-    }
-    if (policy.hostnameAllowlist?.length) {
-      merged.hostnameAllowlist = Array.from(
-        new Set([...(merged.hostnameAllowlist ?? []), ...policy.hostnameAllowlist]),
-      );
-    }
-  }
-  return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
 function matchesTrustedHostSuffix(hostname: string, trustedSuffix: string): boolean {
@@ -279,12 +253,7 @@ async function fetchImageBuffer(
     auditContext: "fal-image-download",
   });
   try {
-    if (!response.ok) {
-      const text = await response.text().catch(() => "");
-      throw new Error(
-        `fal image download failed (${response.status}): ${text || response.statusText}`,
-      );
-    }
+    await assertOkOrThrowProviderError(response, "fal image download failed");
     const mimeType = response.headers.get("content-type")?.trim() || "image/png";
     const arrayBuffer = await response.arrayBuffer();
     return { buffer: Buffer.from(arrayBuffer), mimeType };
@@ -323,6 +292,9 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
         sizes: [...FAL_SUPPORTED_SIZES],
         aspectRatios: [...FAL_SUPPORTED_ASPECT_RATIOS],
         resolutions: ["1K", "2K", "4K"],
+      },
+      output: {
+        formats: [...FAL_OUTPUT_FORMATS],
       },
     },
     async generateImage(req) {
@@ -365,7 +337,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
       const requestBody: Record<string, unknown> = {
         prompt: req.prompt,
         num_images: req.count ?? 1,
-        output_format: DEFAULT_OUTPUT_FORMAT,
+        output_format: req.outputFormat ?? DEFAULT_OUTPUT_FORMAT,
       };
       if (imageSize !== undefined) {
         requestBody.image_size = imageSize;

@@ -1,5 +1,5 @@
 import { deriveSessionTotalTokens, type NormalizedUsage } from "../../agents/usage.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { incrementCompactionCount } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
 
@@ -14,6 +14,7 @@ type IncrementRunCompactionCountParams = Omit<
   lastCallUsage?: NormalizedUsage;
   contextTokensUsed?: number;
   newSessionId?: string;
+  newSessionFile?: string;
 };
 
 export async function persistRunSessionUsage(params: PersistRunSessionUsageParams): Promise<void> {
@@ -38,5 +39,6 @@ export async function incrementRunCompactionCount(
     amount: params.amount,
     tokensAfter: tokensAfterCompaction,
     newSessionId: params.newSessionId,
+    newSessionFile: params.newSessionFile,
   });
 }

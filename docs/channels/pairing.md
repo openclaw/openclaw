@@ -7,8 +7,6 @@ read_when:
 title: "Pairing"
 ---
 
-# Pairing
-
 “Pairing” is OpenClaw’s explicit **owner approval** step.
 It is used in two places:
 
@@ -85,6 +83,8 @@ That bootstrap token carries the built-in pairing bootstrap profile:
 - bootstrap scope checks are role-prefixed, not one flat scope pool:
   operator scope entries only satisfy operator requests, and non-operator roles
   must still request scopes under their own role prefix
+- later token rotation/revocation remains bounded by both the device's approved
+  role contract and the caller session's operator scopes
 
 Treat the setup code like a password while it is valid.
 
@@ -99,6 +99,34 @@ openclaw devices reject <requestId>
 If the same device retries with different auth details (for example different
 role/scopes/public key), the previous pending request is superseded and a new
 `requestId` is created.
+
+Important: an already paired device does not get broader access silently. If it
+reconnects asking for more scopes or a broader role, OpenClaw keeps the
+existing approval as-is and creates a fresh pending upgrade request. Use
+`openclaw devices list` to compare the currently approved access with the newly
+requested access before you approve.
+
+### Optional trusted-CIDR node auto-approve
+
+Device pairing remains manual by default. For tightly controlled node networks,
+you can opt in to first-time node auto-approval with explicit CIDRs or exact IPs:
+
+```json5
+{
+  gateway: {
+    nodes: {
+      pairing: {
+        autoApproveCidrs: ["192.168.1.0/24"],
+      },
+    },
+  },
+}
+```
+
+This only applies to fresh `role: node` pairing requests with no requested
+scopes. Operator, browser, Control UI, and WebChat clients still require manual
+approval. Role, scope, metadata, and public-key changes still require manual
+approval.
 
 ### Node pairing state storage
 

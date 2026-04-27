@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { NonEmptyString, SecretInputSchema } from "./primitives.js";
 
 export const TalkModeParamsSchema = Type.Object(
@@ -36,6 +36,27 @@ export const TalkSpeakParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const TalkRealtimeSessionParamsSchema = Type.Object(
+  {
+    sessionKey: Type.Optional(Type.String()),
+    provider: Type.Optional(Type.String()),
+    model: Type.Optional(Type.String()),
+    voice: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const TalkRealtimeSessionResultSchema = Type.Object(
+  {
+    provider: NonEmptyString,
+    clientSecret: NonEmptyString,
+    model: Type.Optional(Type.String()),
+    voice: Type.Optional(Type.String()),
+    expiresAt: Type.Optional(Type.Number()),
+  },
+  { additionalProperties: false },
+);
+
 const talkProviderFieldSchemas = {
   apiKey: Type.Optional(SecretInputSchema),
 };
@@ -57,6 +78,7 @@ const TalkConfigSchema = Type.Object(
     provider: Type.Optional(Type.String()),
     providers: Type.Optional(Type.Record(Type.String(), TalkProviderConfigSchema)),
     resolved: ResolvedTalkConfigSchema,
+    speechLocale: Type.Optional(Type.String()),
     interruptOnSpeech: Type.Optional(Type.Boolean()),
     silenceTimeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
   },
@@ -130,6 +152,7 @@ export const ChannelAccountSnapshotSchema = Type.Object(
     lastStopAt: Type.Optional(Type.Integer({ minimum: 0 })),
     lastInboundAt: Type.Optional(Type.Integer({ minimum: 0 })),
     lastOutboundAt: Type.Optional(Type.Integer({ minimum: 0 })),
+    lastTransportActivityAt: Type.Optional(Type.Integer({ minimum: 0 })),
     busy: Type.Optional(Type.Boolean()),
     activeRuns: Type.Optional(Type.Integer({ minimum: 0 })),
     lastRunActivityAt: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -185,6 +208,14 @@ export const ChannelsLogoutParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const ChannelsStartParamsSchema = Type.Object(
+  {
+    channel: NonEmptyString,
+    accountId: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
 export const WebLoginStartParamsSchema = Type.Object(
   {
     force: Type.Optional(Type.Boolean()),
@@ -195,10 +226,16 @@ export const WebLoginStartParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const QrDataUrlSchema = Type.String({
+  maxLength: 16_384,
+  pattern: "^data:image/png;base64,",
+});
+
 export const WebLoginWaitParamsSchema = Type.Object(
   {
     timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
     accountId: Type.Optional(Type.String()),
+    currentQrDataUrl: Type.Optional(QrDataUrlSchema),
   },
   { additionalProperties: false },
 );

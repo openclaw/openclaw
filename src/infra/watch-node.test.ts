@@ -47,6 +47,41 @@ const createWatchHarness = () => {
   return { child, spawn, watcher, createWatcher, fakeProcess };
 };
 
+const createAutoExitChild = () => {
+  const child = Object.assign(new EventEmitter(), {
+    kill: vi.fn(),
+  });
+  child.kill.mockImplementation(() => {
+    queueMicrotask(() => child.emit("exit", 0, null));
+  });
+  return child;
+};
+
+const startWatchRun = ({
+  args = ["gateway", "--force"],
+  env,
+  spawn,
+}: {
+  args?: string[];
+  env?: WatchRunParams["env"];
+  spawn: NonNullable<WatchRunParams["spawn"]>;
+}) => {
+  const watcher = Object.assign(new EventEmitter(), {
+    close: vi.fn(async () => {}),
+  });
+  const createWatcher = vi.fn(() => watcher);
+  const fakeProcess = createFakeProcess();
+  const runPromise = runWatch({
+    args,
+    createWatcher,
+    env,
+    lockDisabled: true,
+    process: fakeProcess,
+    spawn,
+  });
+  return { watcher, createWatcher, fakeProcess, runPromise };
+};
+
 describe("watch-node script", () => {
   it("wires chokidar watch to run-node with watched source/config paths", async () => {
     const { child, spawn, watcher, createWatcher, fakeProcess } = createWatchHarness();
@@ -190,19 +225,7 @@ describe("watch-node script", () => {
       kill: vi.fn(() => {}),
     });
     const spawn = vi.fn().mockReturnValueOnce(childA).mockReturnValueOnce(childB);
-    const watcher = Object.assign(new EventEmitter(), {
-      close: vi.fn(async () => {}),
-    });
-    const createWatcher = vi.fn(() => watcher);
-    const fakeProcess = createFakeProcess();
-
-    const runPromise = runWatch({
-      args: ["gateway", "--force"],
-      createWatcher,
-      lockDisabled: true,
-      process: fakeProcess,
-      spawn,
-    });
+    const { watcher, fakeProcess, runPromise } = startWatchRun({ spawn });
 
     childA.emit("exit", 143, null);
     await new Promise((resolve) => setImmediate(resolve));
@@ -249,21 +272,9 @@ describe("watch-node script", () => {
   });
 
   it("ignores test-only changes and restarts on non-test source changes", async () => {
-    const childA = Object.assign(new EventEmitter(), {
-      kill: vi.fn(function () {
-        queueMicrotask(() => childA.emit("exit", 0, null));
-      }),
-    });
-    const childB = Object.assign(new EventEmitter(), {
-      kill: vi.fn(function () {
-        queueMicrotask(() => childB.emit("exit", 0, null));
-      }),
-    });
-    const childC = Object.assign(new EventEmitter(), {
-      kill: vi.fn(function () {
-        queueMicrotask(() => childC.emit("exit", 0, null));
-      }),
-    });
+    const childA = createAutoExitChild();
+    const childB = createAutoExitChild();
+    const childC = createAutoExitChild();
     const childD = Object.assign(new EventEmitter(), {
       kill: vi.fn(() => {}),
     });
@@ -273,19 +284,7 @@ describe("watch-node script", () => {
       .mockReturnValueOnce(childB)
       .mockReturnValueOnce(childC)
       .mockReturnValueOnce(childD);
-    const watcher = Object.assign(new EventEmitter(), {
-      close: vi.fn(async () => {}),
-    });
-    const createWatcher = vi.fn(() => watcher);
-    const fakeProcess = createFakeProcess();
-
-    const runPromise = runWatch({
-      args: ["gateway", "--force"],
-      createWatcher,
-      lockDisabled: true,
-      process: fakeProcess,
-      spawn,
-    });
+    const { watcher, fakeProcess, runPromise } = startWatchRun({ spawn });
 
     watcher.emit("change", "src/infra/watch-node.test.ts");
     await new Promise((resolve) => setImmediate(resolve));
@@ -344,6 +343,69 @@ describe("watch-node script", () => {
     expect(exitCode).toBe(1);
     expect(child.kill).toHaveBeenCalledWith("SIGTERM");
     expect(watcher.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("prints recovery guidance when chokidar fails with invalid package config", async () => {
+    const error = Object.assign(
+      new Error(
+        'Invalid package config /tmp/openclaw/.pnpm/chokidar/package.json while importing "chokidar" from /tmp/openclaw/scripts/watch-node.mjs.',
+      ),
+      { code: "ERR_INVALID_PACKAGE_CONFIG" },
+    );
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      await expect(
+        runWatch({
+          args: ["gateway", "--force"],
+          cwd: "/tmp/openclaw",
+          loadChokidar: vi.fn(async () => {
+            throw error;
+          }),
+          process: createFakeProcess(),
+        }),
+      ).rejects.toBe(error);
+
+      expect(errorSpy.mock.calls).toEqual([
+        [""],
+        [
+          "[openclaw] gateway:watch could not start because a dependency package config looks corrupted.",
+        ],
+        ["[openclaw] Invalid package config: /tmp/openclaw/.pnpm/chokidar/package.json"],
+        ["[openclaw] This usually means a file in node_modules is empty or truncated."],
+        ["[openclaw] Recommended recovery:"],
+        ["[openclaw]   rm -rf node_modules"],
+        ["[openclaw]   pnpm store prune"],
+        ["[openclaw]   pnpm install"],
+        [""],
+        ["[openclaw] Original error:"],
+        [error],
+      ]);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("does not log non-package-config chokidar import errors before rethrowing", async () => {
+    const error = Object.assign(new Error("Cannot find package 'chokidar'"), {
+      code: "ERR_MODULE_NOT_FOUND",
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      await expect(
+        runWatch({
+          loadChokidar: vi.fn(async () => {
+            throw error;
+          }),
+          process: createFakeProcess(),
+        }),
+      ).rejects.toBe(error);
+
+      expect(errorSpy).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   it("replaces an existing watcher lock holder before starting", async () => {

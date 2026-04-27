@@ -1,8 +1,22 @@
 import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.js";
+import type {
+  ChannelId,
+  ChannelThreadingToolContext,
+} from "../../channels/plugins/types.public.js";
 import { normalizeAnyChannelId, normalizeChannelId } from "../../channels/registry.js";
-import { getRuntimeConfigSnapshot, type OpenClawConfig } from "../../config/config.js";
+import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
+import {
+  getAgentRuntimeCommandSecretTargetIds,
+  getScopedChannelsCommandSecretTargets,
+} from "../../cli/command-secret-targets.js";
+import { resolveMessageSecretScope } from "../../cli/message-secret-scope.js";
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+  selectApplicableRuntimeConfig,
+  type OpenClawConfig,
+} from "../../config/config.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -20,9 +34,62 @@ import type { FollowupRun } from "./queue.js";
 const BUN_FETCH_SOCKET_ERROR_RE = /socket connection was closed unexpectedly/i;
 
 export function resolveQueuedReplyRuntimeConfig(config: OpenClawConfig): OpenClawConfig {
+  const runtimeConfig =
+    typeof getRuntimeConfigSnapshot === "function" ? getRuntimeConfigSnapshot() : null;
+  const runtimeSourceConfig =
+    typeof getRuntimeConfigSourceSnapshot === "function" ? getRuntimeConfigSourceSnapshot() : null;
   return (
-    (typeof getRuntimeConfigSnapshot === "function" ? getRuntimeConfigSnapshot() : null) ?? config
+    selectApplicableRuntimeConfig({
+      inputConfig: config,
+      runtimeConfig,
+      runtimeSourceConfig,
+    }) ?? config
   );
+}
+
+export async function resolveQueuedReplyExecutionConfig(
+  config: OpenClawConfig,
+  params?: {
+    originatingChannel?: string;
+    messageProvider?: string;
+    originatingAccountId?: string;
+    agentAccountId?: string;
+  },
+): Promise<OpenClawConfig> {
+  const runtimeConfig = resolveQueuedReplyRuntimeConfig(config);
+  const { resolvedConfig } = await resolveCommandSecretRefsViaGateway({
+    config: runtimeConfig,
+    commandName: "reply",
+    targetIds: getAgentRuntimeCommandSecretTargetIds(),
+  });
+  const baseResolvedConfig = resolvedConfig ?? runtimeConfig;
+
+  const scope = resolveMessageSecretScope({
+    channel: params?.originatingChannel,
+    fallbackChannel: params?.messageProvider,
+    accountId: params?.originatingAccountId,
+    fallbackAccountId: params?.agentAccountId,
+  });
+  if (!scope.channel) {
+    return baseResolvedConfig;
+  }
+
+  const scopedTargets = getScopedChannelsCommandSecretTargets({
+    config: baseResolvedConfig,
+    channel: scope.channel,
+    accountId: scope.accountId,
+  });
+  if (scopedTargets.targetIds.size === 0) {
+    return baseResolvedConfig;
+  }
+
+  const scopedResolved = await resolveCommandSecretRefsViaGateway({
+    config: baseResolvedConfig,
+    commandName: "reply",
+    targetIds: scopedTargets.targetIds,
+    ...(scopedTargets.allowedPaths ? { allowedPaths: scopedTargets.allowedPaths } : {}),
+  });
+  return scopedResolved.resolvedConfig ?? baseResolvedConfig;
 }
 
 /**
@@ -90,7 +157,7 @@ export function buildThreadingToolContext(params: {
 }
 
 export const isBunFetchSocketError = (message?: string) =>
-  Boolean(message && BUN_FETCH_SOCKET_ERROR_RE.test(message));
+  message ? BUN_FETCH_SOCKET_ERROR_RE.test(message) : false;
 
 export const formatBunFetchSocketError = (message: string) => {
   const trimmed = message.trim();
@@ -107,18 +174,16 @@ export const resolveEnforceFinalTag = (
   provider: string,
   model = run.model,
 ) =>
-  Boolean(
-    (run.skipProviderRuntimeHints ? false : undefined) ??
-    (run.enforceFinalTag ||
-      isReasoningTagProvider(provider, {
-        config: resolveQueuedReplyRuntimeConfig(run.config),
-        workspaceDir: run.workspaceDir,
-        modelId: model,
-      })),
-  );
+  (run.skipProviderRuntimeHints ? false : undefined) ??
+  (run.enforceFinalTag ||
+    isReasoningTagProvider(provider, {
+      config: run.config,
+      workspaceDir: run.workspaceDir,
+      modelId: model,
+    }));
 
 export function resolveModelFallbackOptions(run: FollowupRun["run"]) {
-  const config = resolveQueuedReplyRuntimeConfig(run.config);
+  const config = run.config;
   return {
     cfg: config,
     provider: run.provider,
@@ -140,7 +205,7 @@ export function buildEmbeddedRunBaseParams(params: {
   authProfile: ReturnType<typeof resolveProviderScopedAuthProfile>;
   allowTransientCooldownProbe?: boolean;
 }) {
-  const config = resolveQueuedReplyRuntimeConfig(params.run.config);
+  const config = params.run.config;
   return {
     sessionFile: params.run.sessionFile,
     workspaceDir: params.run.workspaceDir,
@@ -152,6 +217,7 @@ export function buildEmbeddedRunBaseParams(params: {
     senderIsOwner: params.run.senderIsOwner,
     enforceFinalTag: resolveEnforceFinalTag(params.run, params.provider, params.model),
     silentExpected: params.run.silentExpected,
+    allowEmptyAssistantReplyAsSilent: params.run.allowEmptyAssistantReplyAsSilent,
     provider: params.provider,
     model: params.model,
     ...params.authProfile,
@@ -171,10 +237,11 @@ export function buildEmbeddedContextFromTemplate(params: {
   sessionCtx: TemplateContext;
   hasRepliedRef: { value: boolean } | undefined;
 }) {
-  const config = resolveQueuedReplyRuntimeConfig(params.run.config);
+  const config = params.run.config;
   return {
     sessionId: params.run.sessionId,
     sessionKey: params.run.sessionKey,
+    sandboxSessionKey: params.run.runtimePolicySessionKey,
     agentId: params.run.agentId,
     messageProvider: resolveOriginMessageProvider({
       originatingChannel: params.sessionCtx.OriginatingChannel,
@@ -186,6 +253,7 @@ export function buildEmbeddedContextFromTemplate(params: {
       to: params.sessionCtx.To,
     }),
     messageThreadId: params.sessionCtx.MessageThreadId ?? undefined,
+    memberRoleIds: normalizeMemberRoleIds(params.sessionCtx.MemberRoleIds),
     // Provider threading context for tool auto-injection
     ...buildThreadingToolContext({
       sessionCtx: params.sessionCtx,
@@ -193,6 +261,15 @@ export function buildEmbeddedContextFromTemplate(params: {
       hasRepliedRef: params.hasRepliedRef,
     }),
   };
+}
+
+function normalizeMemberRoleIds(value: TemplateContext["MemberRoleIds"]): string[] | undefined {
+  const roles = Array.isArray(value)
+    ? value
+        .map((roleId) => normalizeOptionalString(roleId))
+        .filter((roleId): roleId is string => Boolean(roleId))
+    : [];
+  return roles.length > 0 ? roles : undefined;
 }
 
 export function buildTemplateSenderContext(sessionCtx: TemplateContext) {

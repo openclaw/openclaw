@@ -11,6 +11,7 @@ import {
   renderGatewayServiceCleanupHints,
   type ExtraGatewayService,
 } from "../daemon/inspect.js";
+import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
 import { renderSystemNodeWarning, resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
 import {
   auditGatewayServiceConfig,
@@ -18,7 +19,7 @@ import {
   readEmbeddedGatewayToken,
   SERVICE_AUDIT_CODES,
 } from "../daemon/service-audit.js";
-import { resolveGatewayService } from "../daemon/service.js";
+import { resolveGatewayService, type GatewayServiceCommandConfig } from "../daemon/service.js";
 import { uninstallLegacySystemdUnits } from "../daemon/systemd.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
@@ -31,6 +32,12 @@ import { DEFAULT_GATEWAY_DAEMON_RUNTIME, type GatewayDaemonRuntime } from "./dae
 import { resolveGatewayAuthTokenForService } from "./doctor-gateway-auth-token.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 import { isDoctorUpdateRepairMode } from "./doctor-repair-mode.js";
+import {
+  confirmDoctorServiceRepair,
+  EXTERNAL_SERVICE_REPAIR_NOTE,
+  isServiceRepairExternallyManaged,
+  resolveServiceRepairPolicy,
+} from "./doctor-service-repair-policy.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -57,6 +64,25 @@ function findGatewayEntrypoint(programArguments?: string[]): string | null {
     return null;
   }
   return programArguments[gatewayIndex - 1] ?? null;
+}
+
+function buildGatewayServiceRepairEnv(
+  command: GatewayServiceCommandConfig | null,
+): NodeJS.ProcessEnv {
+  const wrapperPath = command?.environment?.[OPENCLAW_WRAPPER_ENV_KEY]?.trim();
+  if (!wrapperPath || Object.hasOwn(process.env, OPENCLAW_WRAPPER_ENV_KEY)) {
+    return process.env;
+  }
+  return {
+    ...process.env,
+    [OPENCLAW_WRAPPER_ENV_KEY]: wrapperPath,
+  };
+}
+
+function resolveGatewayServiceWrapperPath(
+  command: GatewayServiceCommandConfig | null,
+): string | null {
+  return normalizeOptionalString(command?.environment?.[OPENCLAW_WRAPPER_ENV_KEY]) ?? null;
 }
 
 async function normalizeExecutablePath(value: string): Promise<string> {
@@ -221,6 +247,11 @@ export async function maybeRepairGatewayServiceConfig(
   if (!command) {
     return;
   }
+  const serviceInstallEnv = buildGatewayServiceRepairEnv(command);
+  const serviceWrapperPath = resolveGatewayServiceWrapperPath(command);
+  if (serviceWrapperPath) {
+    note(`Gateway service invokes ${OPENCLAW_WRAPPER_ENV_KEY}: ${serviceWrapperPath}`, "Gateway");
+  }
 
   const tokenRefConfigured = Boolean(
     resolveSecretInputRef({
@@ -270,10 +301,11 @@ export async function maybeRepairGatewayServiceConfig(
   const port = resolveGatewayPort(cfg, process.env);
   const runtimeChoice = detectGatewayRuntime(command.programArguments);
   const { programArguments } = await buildGatewayInstallPlan({
-    env: process.env,
+    env: serviceInstallEnv,
     port,
     runtime: needsNodeRuntime && systemNodePath ? "node" : runtimeChoice,
     nodePath: systemNodePath ?? undefined,
+    existingEnvironment: command.environment,
     warn: (message, title) => note(message, title),
     config: cfg,
   });
@@ -302,6 +334,9 @@ export async function maybeRepairGatewayServiceConfig(
     return;
   }
 
+  const serviceRepairPolicy = resolveServiceRepairPolicy();
+  const serviceRepairExternal = isServiceRepairExternallyManaged(serviceRepairPolicy);
+
   note(
     audit.issues
       .map((issue) =>
@@ -321,10 +356,15 @@ export async function maybeRepairGatewayServiceConfig(
     );
   }
 
+  if (serviceRepairExternal) {
+    note(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway service config");
+    return;
+  }
+
   const repair = needsAggressive
     ? await prompter.confirmAggressiveAutoFix({
         message: "Overwrite gateway service config with current defaults now?",
-        initialValue: Boolean(prompter.shouldForce),
+        initialValue: prompter.shouldForce,
       })
     : await prompter.confirmAutoFix({
         message: "Update gateway service config to the recommended defaults now?",
@@ -375,16 +415,17 @@ export async function maybeRepairGatewayServiceConfig(
 
   const updatedPort = resolveGatewayPort(cfgForServiceInstall, process.env);
   const updatedPlan = await buildGatewayInstallPlan({
-    env: process.env,
+    env: serviceInstallEnv,
     port: updatedPort,
     runtime: needsNodeRuntime && systemNodePath ? "node" : runtimeChoice,
     nodePath: systemNodePath ?? undefined,
+    existingEnvironment: command.environment,
     warn: (message, title) => note(message, title),
     config: cfgForServiceInstall,
   });
   try {
     await (updateRepairMode ? service.stage : service.install)({
-      env: process.env,
+      env: serviceInstallEnv,
       stdout: process.stdout,
       programArguments: updatedPlan.programArguments,
       workingDirectory: updatedPlan.workingDirectory,
@@ -414,10 +455,21 @@ export async function maybeScanExtraGatewayServices(
 
   const legacyServices = extraServices.filter((svc) => svc.legacy === true);
   if (legacyServices.length > 0) {
-    const shouldRemove = await prompter.confirmRuntimeRepair({
-      message: "Remove legacy gateway services now?",
-      initialValue: true,
-    });
+    const serviceRepairPolicy = resolveServiceRepairPolicy();
+    const serviceRepairExternal = isServiceRepairExternallyManaged(serviceRepairPolicy);
+    if (serviceRepairExternal) {
+      note(EXTERNAL_SERVICE_REPAIR_NOTE, "Legacy gateway cleanup skipped");
+    }
+    const shouldRemove = serviceRepairExternal
+      ? false
+      : await confirmDoctorServiceRepair(
+          prompter,
+          {
+            message: "Remove legacy gateway services now?",
+            initialValue: true,
+          },
+          serviceRepairPolicy,
+        );
     if (shouldRemove) {
       const removed: string[] = [];
       const { darwinUserServices, linuxUserServices, failed } =

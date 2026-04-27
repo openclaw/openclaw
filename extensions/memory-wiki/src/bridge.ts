@@ -2,13 +2,19 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  getMemoryCapabilityRegistration,
   listActiveMemoryPublicArtifacts,
   type MemoryPluginPublicArtifact,
 } from "openclaw/plugin-sdk/memory-host-core";
 import type { OpenClawConfig } from "../api.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
-import { renderMarkdownFence, renderWikiMarkdown, slugifyWikiSegment } from "./markdown.js";
+import {
+  createWikiPageFilename,
+  renderMarkdownFence,
+  renderWikiMarkdown,
+  slugifyWikiSegment,
+} from "./markdown.js";
 import { writeImportedSourcePage } from "./source-page-shared.js";
 import { resolveArtifactKey } from "./source-path-shared.js";
 import {
@@ -110,11 +116,10 @@ function resolveBridgePagePath(params: { workspaceDir: string; relativePath: str
   const artifactHash = createHash("sha1").update(params.relativePath).digest("hex");
   const workspaceSlug = `${workspaceBaseSlug}-${workspaceHash.slice(0, 8)}`;
   const artifactSlug = `${artifactBaseSlug}-${artifactHash.slice(0, 8)}`;
+  const fileName = createWikiPageFilename(`bridge-${workspaceSlug}-${artifactSlug}`);
   return {
     pageId: `source.bridge.${workspaceSlug}.${artifactSlug}`,
-    pagePath: path
-      .join("sources", `bridge-${workspaceSlug}-${artifactSlug}.md`)
-      .replace(/\\/g, "/"),
+    pagePath: path.join("sources", fileName).replace(/\\/g, "/"),
     workspaceSlug,
     artifactSlug,
   };
@@ -244,12 +249,17 @@ export async function syncMemoryWikiBridgeSources(params: {
   }
   const workspaceCount = new Set(publicArtifacts.map((artifact) => artifact.workspaceDir)).size;
 
-  const removedCount = await pruneImportedSourceEntries({
-    vaultRoot: params.config.vault.path,
-    group: "bridge",
-    activeKeys,
-    state,
-  });
+  // Skip pruning when memory-core is not loaded (e.g. CLI context) to avoid
+  // removing all bridge-imported entries. See #68373.
+  const memoryCapability = getMemoryCapabilityRegistration();
+  const removedCount = memoryCapability
+    ? await pruneImportedSourceEntries({
+        vaultRoot: params.config.vault.path,
+        group: "bridge",
+        activeKeys,
+        state,
+      })
+    : 0;
   await writeMemoryWikiSourceSyncState(params.config.vault.path, state);
   const importedCount = results.filter((result) => result.changed && result.created).length;
   const updatedCount = results.filter((result) => result.changed && !result.created).length;

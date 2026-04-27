@@ -1,6 +1,6 @@
 import type { ProgressReporter } from "../../cli/progress.js";
 import { formatConfigIssueLine } from "../../config/issue-format.js";
-import { resolveGatewayLogPaths } from "../../daemon/launchd.js";
+import { resolveGatewayLogPaths, resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
 import {
   formatPortDiagnostics,
   isDualStackLoopbackGatewayListeners,
@@ -169,8 +169,8 @@ export async function appendStatusAllDiagnosis(params: {
     const hasDns = Boolean(params.tailscale.dnsName);
     const label =
       params.tailscaleMode === "off"
-        ? `Tailscale: off · ${backend}${params.tailscale.dnsName ? ` · ${params.tailscale.dnsName}` : ""}`
-        : `Tailscale: ${params.tailscaleMode} · ${backend}${params.tailscale.dnsName ? ` · ${params.tailscale.dnsName}` : ""}`;
+        ? `Tailscale exposure: off · daemon ${backend}${params.tailscale.dnsName ? ` · ${params.tailscale.dnsName}` : ""}`
+        : `Tailscale exposure: ${params.tailscaleMode} · daemon ${backend}${params.tailscale.dnsName ? ` · ${params.tailscale.dnsName}` : ""}`;
     emitCheck(label, okBackend && (params.tailscaleMode === "off" || hasDns) ? "ok" : "warn");
     if (params.tailscale.error) {
       lines.push(`  ${muted(`error: ${params.tailscale.error}`)}`);
@@ -218,9 +218,11 @@ export async function appendStatusAllDiagnosis(params: {
   })();
   if (logPaths) {
     params.progress.setLabel("Reading logs…");
-    const [stderrTail, stdoutTail] = await Promise.all([
+    const restartLogPath = resolveGatewayRestartLogPath(process.env);
+    const [stderrTail, stdoutTail, restartTail] = await Promise.all([
       readFileTailLines(logPaths.stderrPath, 40).catch(() => []),
       readFileTailLines(logPaths.stdoutPath, 40).catch(() => []),
+      readFileTailLines(restartLogPath, 30).catch(() => []),
     ]);
     if (stderrTail.length > 0 || stdoutTail.length > 0) {
       lines.push("");
@@ -231,6 +233,13 @@ export async function appendStatusAllDiagnosis(params: {
       }
       lines.push(`  ${muted(`# stdout: ${logPaths.stdoutPath}`)}`);
       for (const line of summarizeLogTail(stdoutTail, { maxLines: 22 }).map(redactSecrets)) {
+        lines.push(`  ${muted(line)}`);
+      }
+    }
+    if (restartTail.length > 0) {
+      lines.push("");
+      lines.push(muted(`Gateway restart attempts (tail): ${restartLogPath}`));
+      for (const line of summarizeLogTail(restartTail, { maxLines: 16 }).map(redactSecrets)) {
         lines.push(`  ${muted(line)}`);
       }
     }

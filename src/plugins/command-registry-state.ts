@@ -1,4 +1,6 @@
-import { getChannelPlugin } from "../channels/plugins/index.js";
+import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
+import { resolveReadOnlyChannelCommandDefaults } from "../channels/plugins/read-only-command-defaults.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import type { OpenClawPluginCommandDefinition } from "./types.js";
@@ -51,6 +53,21 @@ export function clearPluginCommandsForPlugin(pluginId: string): void {
   }
 }
 
+export function listRegisteredPluginCommands(): RegisteredPluginCommand[] {
+  return Array.from(pluginCommands.values());
+}
+
+export function restorePluginCommands(commands: readonly RegisteredPluginCommand[]): void {
+  pluginCommands.clear();
+  for (const command of commands) {
+    const name = normalizeOptionalLowercaseString(command.name);
+    if (!name) {
+      continue;
+    }
+    pluginCommands.set(`/${name}`, command);
+  }
+}
+
 function resolvePluginNativeName(
   command: OpenClawPluginCommandDefinition,
   provider?: string,
@@ -67,18 +84,43 @@ function resolvePluginNativeName(
   return command.name;
 }
 
-export function getPluginCommandSpecs(provider?: string): Array<{
+export function getPluginCommandSpecs(
+  provider?: string,
+  options: {
+    env?: NodeJS.ProcessEnv;
+    stateDir?: string;
+    workspaceDir?: string;
+    config?: OpenClawConfig;
+  } = {},
+): Array<{
   name: string;
   description: string;
   acceptsArgs: boolean;
 }> {
   const providerName = normalizeOptionalLowercaseString(provider);
+  const commandDefaults =
+    providerName && options.config
+      ? resolveReadOnlyChannelCommandDefaults(providerName, {
+          ...options,
+          config: options.config,
+        })
+      : undefined;
   if (
     providerName &&
-    getChannelPlugin(providerName)?.commands?.nativeCommandsAutoEnabled !== true
+    (getLoadedChannelPlugin(providerName)?.commands ?? commandDefaults)
+      ?.nativeCommandsAutoEnabled !== true
   ) {
     return [];
   }
+  return listProviderPluginCommandSpecs(provider);
+}
+
+/** Resolve plugin command specs for a provider's native naming surface without support gating. */
+export function listProviderPluginCommandSpecs(provider?: string): Array<{
+  name: string;
+  description: string;
+  acceptsArgs: boolean;
+}> {
   return Array.from(pluginCommands.values()).map((cmd) => ({
     name: resolvePluginNativeName(cmd, provider),
     description: cmd.description,

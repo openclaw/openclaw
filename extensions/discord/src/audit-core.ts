@@ -1,6 +1,7 @@
 import type {
   DiscordGuildChannelConfig,
   DiscordGuildEntry,
+  OpenClawConfig,
 } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
@@ -50,7 +51,7 @@ export function listConfiguredGuildChannelKeys(
       continue;
     }
     for (const [key, value] of Object.entries(channelsRaw)) {
-      const channelId = normalizeOptionalString(String(key)) ?? "";
+      const channelId = normalizeOptionalString(key) ?? "";
       if (!channelId) {
         continue;
       }
@@ -76,13 +77,14 @@ export function collectDiscordAuditChannelIdsForGuilds(
 }
 
 export async function auditDiscordChannelPermissionsWithFetcher(params: {
+  cfg: OpenClawConfig;
   token: string;
   accountId?: string | null;
   channelIds: string[];
   timeoutMs: number;
   fetchChannelPermissions: (
     channelId: string,
-    params: { token: string; accountId?: string },
+    params: { cfg: OpenClawConfig; token: string; accountId?: string },
   ) => Promise<{
     permissions: string[];
   }>;
@@ -105,6 +107,7 @@ export async function auditDiscordChannelPermissionsWithFetcher(params: {
   for (const channelId of params.channelIds) {
     try {
       const perms = await params.fetchChannelPermissions(channelId, {
+        cfg: params.cfg,
         token,
         accountId: params.accountId ?? undefined,
       });

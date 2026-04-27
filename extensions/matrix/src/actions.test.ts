@@ -78,6 +78,7 @@ describe("matrixMessageActions", () => {
 
     const discovery = describeMessageTool({
       cfg: createConfiguredMatrixConfig(),
+      senderIsOwner: true,
     } as never);
     if (!discovery) {
       throw new Error("describeMessageTool returned null");
@@ -91,9 +92,37 @@ describe("matrixMessageActions", () => {
 
     expect(actions).toContain(profileAction);
     expect(supportsAction({ action: profileAction } as never)).toBe(true);
+    expect(discovery.mediaSourceParams).toEqual({
+      "set-profile": ["avatarUrl", "avatarPath"],
+    });
     expect(properties.displayName).toBeDefined();
     expect(properties.avatarUrl).toBeDefined();
     expect(properties.avatarPath).toBeDefined();
+  });
+
+  it("hides self-profile updates for non-owner discovery", () => {
+    const discovery = matrixMessageActions.describeMessageTool({
+      cfg: createConfiguredMatrixConfig(),
+      senderIsOwner: false,
+    } as never);
+    if (!discovery) {
+      throw new Error("describeMessageTool returned null");
+    }
+
+    expect(discovery.actions).not.toContain(profileAction);
+    expect(discovery.schema).toBeNull();
+  });
+
+  it("hides self-profile updates when owner status is unknown", () => {
+    const discovery = matrixMessageActions.describeMessageTool({
+      cfg: createConfiguredMatrixConfig(),
+    } as never);
+    if (!discovery) {
+      throw new Error("describeMessageTool returned null");
+    }
+
+    expect(discovery.actions).not.toContain(profileAction);
+    expect(discovery.schema).toBeNull();
   });
 
   it("hides gated actions when the default Matrix account disables them", () => {

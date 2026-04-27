@@ -6,11 +6,10 @@ import {
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
 import { validateTalkConfigResult } from "./protocol/index.js";
+import { withSpeechProviders } from "./talk.test-helpers.js";
 import {
   connectOk,
   createGatewaySuiteHarness,
@@ -35,6 +34,7 @@ type TalkConfigPayload = {
         provider?: string;
         config?: { voiceId?: string; apiKey?: string | SecretRef };
       };
+      speechLocale?: string;
       silenceTimeoutMs?: number;
     };
     session?: { mainKey?: string };
@@ -137,22 +137,6 @@ async function withTalkConfigConnection<T>(
   }
 }
 
-async function withSpeechProviders<T>(
-  speechProviders: NonNullable<ReturnType<typeof createEmptyPluginRegistry>["speechProviders"]>,
-  run: () => Promise<T>,
-): Promise<T> {
-  const previousRegistry = getActivePluginRegistry() ?? createEmptyPluginRegistry();
-  setActivePluginRegistry({
-    ...createEmptyPluginRegistry(),
-    speechProviders,
-  });
-  try {
-    return await run();
-  } finally {
-    setActivePluginRegistry(previousRegistry);
-  }
-}
-
 function expectTalkConfig(
   talk: TalkConfig | undefined,
   expected: {
@@ -161,6 +145,7 @@ function expectTalkConfig(
     apiKey?: string | SecretRef;
     providerApiKey?: string | SecretRef;
     resolvedApiKey?: string | SecretRef;
+    speechLocale?: string;
     silenceTimeoutMs?: number;
   },
 ) {
@@ -179,6 +164,9 @@ function expectTalkConfig(
   if ("resolvedApiKey" in expected) {
     expect(talk?.resolved?.config?.apiKey).toEqual(expected.resolvedApiKey);
   }
+  if ("speechLocale" in expected) {
+    expect(talk?.speechLocale).toBe(expected.speechLocale);
+  }
   if ("silenceTimeoutMs" in expected) {
     expect(talk?.silenceTimeoutMs).toBe(expected.silenceTimeoutMs);
   }
@@ -196,6 +184,7 @@ describe("gateway talk.config", () => {
             apiKey: "secret-key-abc", // pragma: allowlist secret
           },
         },
+        speechLocale: "ru-RU",
         silenceTimeoutMs: 1500,
       },
       session: {
@@ -213,6 +202,7 @@ describe("gateway talk.config", () => {
         provider: GENERIC_TALK_PROVIDER_ID,
         voiceId: "voice-123",
         apiKey: "__OPENCLAW_REDACTED__",
+        speechLocale: "ru-RU",
         silenceTimeoutMs: 1500,
       });
       expect(res.payload?.config?.session?.mainKey).toBe("main-test");

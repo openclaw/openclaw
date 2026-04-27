@@ -1,11 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
+import type { OpenClawConfig } from "../config/types.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeOptionalTrimmedStringList } from "../shared/string-normalization.js";
+import { sanitizeForLog } from "../terminal/ansi.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { loadBundleManifest } from "./bundle-manifest.js";
@@ -14,36 +14,70 @@ import {
   type NormalizedPluginsConfig,
 } from "./config-policy.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
+import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
+import type { PluginManifestCommandAlias } from "./manifest-command-aliases.js";
 import {
-  loadPluginManifest,
-  type OpenClawPackageManifest,
-  type PluginManifestConfigContracts,
-  type PluginManifest,
-  type PluginManifestChannelConfig,
-  type PluginManifestContracts,
-  type PluginManifestModelSupport,
-} from "./manifest.js";
-import { checkMinHostVersion } from "./min-host-version.js";
-import { isPathInside, safeRealpathSync } from "./path-safety.js";
-import { resolvePluginCacheInputs } from "./roots.js";
+  clearPluginManifestRegistryCache,
+  pluginManifestRegistryCache,
+} from "./manifest-registry-state.js";
 import type {
   PluginBundleFormat,
   PluginConfigUiHint,
   PluginDiagnostic,
   PluginFormat,
-  PluginKind,
-  PluginOrigin,
-} from "./types.js";
+} from "./manifest-types.js";
+import {
+  loadPluginManifest,
+  type OpenClawPackageManifest,
+  type PluginManifestActivation,
+  type PluginManifestConfigContracts,
+  type PluginManifest,
+  type PluginManifestChannelCommandDefaults,
+  type PluginManifestChannelConfig,
+  type PluginManifestContracts,
+  type PluginManifestMediaUnderstandingProviderMetadata,
+  type PluginManifestModelCatalog,
+  type PluginManifestModelSupport,
+  type PluginManifestProviderEndpoint,
+  type PluginManifestQaRunner,
+  type PluginManifestSetup,
+} from "./manifest.js";
+import { checkMinHostVersion } from "./min-host-version.js";
+import { isPathInside, safeRealpathSync } from "./path-safety.js";
+import type { PluginKind } from "./plugin-kind.types.js";
+import type { PluginOrigin } from "./plugin-origin.types.js";
+import { resolvePluginCacheInputs } from "./roots.js";
 
-type PluginManifestContractListKey =
+/**
+ * Resolve a plugin source path, falling back from .ts to .js when the
+ * .ts file doesn't exist on disk (e.g. in dist builds where only .js
+ * is emitted but the manifest still references the .ts entry).
+ */
+function resolvePluginSourcePath(sourcePath: string): string {
+  if (fs.existsSync(sourcePath)) {
+    return sourcePath;
+  }
+  if (sourcePath.endsWith(".ts")) {
+    const jsPath = sourcePath.slice(0, -3) + ".js";
+    if (fs.existsSync(jsPath)) {
+      return jsPath;
+    }
+  }
+  return sourcePath;
+}
+
+export type PluginManifestContractListKey =
   | "speechProviders"
+  | "externalAuthProviders"
   | "mediaUnderstandingProviders"
+  | "documentExtractors"
   | "realtimeVoiceProviders"
   | "realtimeTranscriptionProviders"
   | "imageGenerationProviders"
   | "videoGenerationProviders"
   | "musicGenerationProviders"
   | "memoryEmbeddingProviders"
+  | "webContentExtractors"
   | "webFetchProviders"
   | "webSearchProviders";
 
@@ -75,11 +109,21 @@ export type PluginManifestRecord = {
   kind?: PluginKind | PluginKind[];
   channels: string[];
   providers: string[];
+  providerDiscoverySource?: string;
   modelSupport?: PluginManifestModelSupport;
+  modelCatalog?: PluginManifestModelCatalog;
+  providerEndpoints?: PluginManifestProviderEndpoint[];
   cliBackends: string[];
+  syntheticAuthRefs?: string[];
+  nonSecretAuthMarkers?: string[];
+  commandAliases?: PluginManifestCommandAlias[];
   providerAuthEnvVars?: Record<string, string[]>;
+  providerAuthAliases?: Record<string, string>;
   channelEnvVars?: Record<string, string[]>;
   providerAuthChoices?: PluginManifest["providerAuthChoices"];
+  activation?: PluginManifestActivation;
+  setup?: PluginManifestSetup;
+  qaRunners?: PluginManifestQaRunner[];
   skills: string[];
   settingsFiles?: string[];
   hooks: string[];
@@ -94,6 +138,10 @@ export type PluginManifestRecord = {
   configSchema?: Record<string, unknown>;
   configUiHints?: Record<string, PluginConfigUiHint>;
   contracts?: PluginManifestContracts;
+  mediaUnderstandingProviderMetadata?: Record<
+    string,
+    PluginManifestMediaUnderstandingProviderMetadata
+  >;
   configContracts?: PluginManifestConfigContracts;
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
   channelCatalogMeta?: {
@@ -101,6 +149,7 @@ export type PluginManifestRecord = {
     label?: string;
     blurb?: string;
     preferOver?: readonly string[];
+    commands?: PluginManifestChannelCommandDefaults;
   };
 };
 
@@ -109,98 +158,21 @@ export type PluginManifestRegistry = {
   diagnostics: PluginDiagnostic[];
 };
 
-const registryCache = new Map<string, { expiresAt: number; registry: PluginManifestRegistry }>();
+export type BundledChannelConfigCollector = (params: {
+  pluginDir: string;
+  manifest: PluginManifest;
+  packageManifest?: OpenClawPackageManifest;
+}) => Record<string, PluginManifestChannelConfig> | undefined;
+
+const registryCache = pluginManifestRegistryCache as Map<
+  string,
+  { expiresAt: number; registry: PluginManifestRegistry }
+>;
 
 // Keep a short cache window to collapse bursty reloads during startup flows.
 const DEFAULT_MANIFEST_CACHE_MS = 1000;
 
-export function clearPluginManifestRegistryCache(): void {
-  registryCache.clear();
-}
-
-function listContractValues(
-  plugin: PluginManifestRecord,
-  contract: PluginManifestContractListKey,
-): readonly string[] {
-  return plugin.contracts?.[contract] ?? [];
-}
-
-export function resolveManifestContractPluginIds(params: {
-  contract: PluginManifestContractListKey;
-  origin?: PluginOrigin;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  onlyPluginIds?: readonly string[];
-}): string[] {
-  const onlyPluginIdSet =
-    params.onlyPluginIds && params.onlyPluginIds.length > 0 ? new Set(params.onlyPluginIds) : null;
-  return loadPluginManifestRegistry({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  })
-    .plugins.filter(
-      (plugin) =>
-        (!params.origin || plugin.origin === params.origin) &&
-        (!onlyPluginIdSet || onlyPluginIdSet.has(plugin.id)) &&
-        listContractValues(plugin, params.contract).length > 0,
-    )
-    .map((plugin) => plugin.id)
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
-export function resolveManifestContractPluginIdsByCompatibilityRuntimePath(params: {
-  contract: PluginManifestContractListKey;
-  path: string | undefined;
-  origin?: PluginOrigin;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): string[] {
-  const normalizedPath = params.path?.trim();
-  if (!normalizedPath) {
-    return [];
-  }
-  return loadPluginManifestRegistry({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  })
-    .plugins.filter(
-      (plugin) =>
-        (!params.origin || plugin.origin === params.origin) &&
-        listContractValues(plugin, params.contract).length > 0 &&
-        (plugin.configContracts?.compatibilityRuntimePaths ?? []).includes(normalizedPath),
-    )
-    .map((plugin) => plugin.id)
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
-export function resolveManifestContractOwnerPluginId(params: {
-  contract: PluginManifestContractListKey;
-  value: string | undefined;
-  origin?: PluginOrigin;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): string | undefined {
-  const normalizedValue = normalizeOptionalLowercaseString(params.value);
-  if (!normalizedValue) {
-    return undefined;
-  }
-  return loadPluginManifestRegistry({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  }).plugins.find(
-    (plugin) =>
-      (!params.origin || plugin.origin === params.origin) &&
-      listContractValues(plugin, params.contract).some(
-        (candidate) => normalizeOptionalLowercaseString(candidate) === normalizedValue,
-      ),
-  )?.id;
-}
+export { clearPluginManifestRegistryCache } from "./manifest-registry-state.js";
 
 function resolveManifestCacheMs(env: NodeJS.ProcessEnv): number {
   const raw = env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS?.trim();
@@ -256,31 +228,69 @@ function normalizePreferredPluginIds(raw: unknown): string[] | undefined {
   return normalizeOptionalTrimmedStringList(raw);
 }
 
+function normalizePackageChannelCommands(
+  commands: unknown,
+): PluginManifestChannelCommandDefaults | undefined {
+  if (!commands || typeof commands !== "object" || Array.isArray(commands)) {
+    return undefined;
+  }
+  const record = commands as Record<string, unknown>;
+  const nativeCommandsAutoEnabled =
+    typeof record.nativeCommandsAutoEnabled === "boolean"
+      ? record.nativeCommandsAutoEnabled
+      : undefined;
+  const nativeSkillsAutoEnabled =
+    typeof record.nativeSkillsAutoEnabled === "boolean"
+      ? record.nativeSkillsAutoEnabled
+      : undefined;
+  return nativeCommandsAutoEnabled !== undefined || nativeSkillsAutoEnabled !== undefined
+    ? {
+        ...(nativeCommandsAutoEnabled !== undefined ? { nativeCommandsAutoEnabled } : {}),
+        ...(nativeSkillsAutoEnabled !== undefined ? { nativeSkillsAutoEnabled } : {}),
+      }
+    : undefined;
+}
+
 function mergePackageChannelMetaIntoChannelConfigs(params: {
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
   packageChannel?: OpenClawPackageManifest["channel"];
 }): Record<string, PluginManifestChannelConfig> | undefined {
   const channelId = params.packageChannel?.id?.trim();
-  if (!channelId || !params.channelConfigs?.[channelId]) {
+  if (
+    !channelId ||
+    isBlockedObjectKey(channelId) ||
+    !params.channelConfigs ||
+    !Object.prototype.hasOwnProperty.call(params.channelConfigs, channelId)
+  ) {
     return params.channelConfigs;
   }
 
   const existing = params.channelConfigs[channelId];
+  if (!existing) {
+    return params.channelConfigs;
+  }
   const label = existing.label ?? normalizeOptionalString(params.packageChannel?.label) ?? "";
   const description =
     existing.description ?? normalizeOptionalString(params.packageChannel?.blurb) ?? "";
   const preferOver =
     existing.preferOver ?? normalizePreferredPluginIds(params.packageChannel?.preferOver);
+  const commands =
+    existing.commands ?? normalizePackageChannelCommands(params.packageChannel?.commands);
 
-  return {
-    ...params.channelConfigs,
-    [channelId]: {
-      ...existing,
-      ...(label ? { label } : {}),
-      ...(description ? { description } : {}),
-      ...(preferOver?.length ? { preferOver } : {}),
-    },
+  const merged: Record<string, PluginManifestChannelConfig> = Object.create(null);
+  for (const [key, value] of Object.entries(params.channelConfigs)) {
+    if (!isBlockedObjectKey(key)) {
+      merged[key] = value;
+    }
+  }
+  merged[channelId] = {
+    ...existing,
+    ...(label ? { label } : {}),
+    ...(description ? { description } : {}),
+    ...(preferOver?.length ? { preferOver } : {}),
+    ...(commands ? { commands } : {}),
   };
+  return merged;
 }
 
 function buildRecord(params: {
@@ -289,11 +299,23 @@ function buildRecord(params: {
   manifestPath: string;
   schemaCacheKey?: string;
   configSchema?: Record<string, unknown>;
+  bundledChannelConfigCollector?: BundledChannelConfigCollector;
 }): PluginManifestRecord {
+  const manifestChannelConfigs =
+    params.candidate.origin === "bundled" && params.bundledChannelConfigCollector
+      ? params.bundledChannelConfigCollector({
+          pluginDir: params.candidate.packageDir ?? params.candidate.rootDir,
+          manifest: params.manifest,
+          packageManifest: params.candidate.packageManifest,
+        })
+      : params.manifest.channelConfigs;
   const channelConfigs = mergePackageChannelMetaIntoChannelConfigs({
-    channelConfigs: params.manifest.channelConfigs,
+    channelConfigs: manifestChannelConfigs,
     packageChannel: params.candidate.packageManifest?.channel,
   });
+  const packageChannelCommands = normalizePackageChannelCommands(
+    params.candidate.packageManifest?.channel?.commands,
+  );
   return {
     id: params.manifest.id,
     name: normalizeOptionalString(params.manifest.name) ?? params.candidate.packageName,
@@ -308,11 +330,25 @@ function buildRecord(params: {
     kind: params.manifest.kind,
     channels: params.manifest.channels ?? [],
     providers: params.manifest.providers ?? [],
+    providerDiscoverySource: params.manifest.providerDiscoveryEntry
+      ? resolvePluginSourcePath(
+          path.resolve(params.candidate.rootDir, params.manifest.providerDiscoveryEntry),
+        )
+      : undefined,
     modelSupport: params.manifest.modelSupport,
+    modelCatalog: params.manifest.modelCatalog,
+    providerEndpoints: params.manifest.providerEndpoints,
     cliBackends: params.manifest.cliBackends ?? [],
+    syntheticAuthRefs: params.manifest.syntheticAuthRefs ?? [],
+    nonSecretAuthMarkers: params.manifest.nonSecretAuthMarkers ?? [],
+    commandAliases: params.manifest.commandAliases,
     providerAuthEnvVars: params.manifest.providerAuthEnvVars,
+    providerAuthAliases: params.manifest.providerAuthAliases,
     channelEnvVars: params.manifest.channelEnvVars,
     providerAuthChoices: params.manifest.providerAuthChoices,
+    activation: params.manifest.activation,
+    setup: params.manifest.setup,
+    qaRunners: params.manifest.qaRunners,
     skills: params.manifest.skills ?? [],
     settingsFiles: [],
     hooks: [],
@@ -329,6 +365,7 @@ function buildRecord(params: {
     configSchema: params.configSchema,
     configUiHints: params.manifest.uiHints,
     contracts: params.manifest.contracts,
+    mediaUnderstandingProviderMetadata: params.manifest.mediaUnderstandingProviderMetadata,
     configContracts: params.manifest.configContracts,
     channelConfigs,
     ...(params.candidate.packageManifest?.channel?.id
@@ -344,6 +381,7 @@ function buildRecord(params: {
             ...(params.candidate.packageManifest.channel.preferOver
               ? { preferOver: params.candidate.packageManifest.channel.preferOver }
               : {}),
+            ...(packageChannelCommands ? { commands: packageChannelCommands } : {}),
           },
         }
       : {}),
@@ -375,6 +413,8 @@ function buildBundleRecord(params: {
     channels: [],
     providers: [],
     cliBackends: [],
+    syntheticAuthRefs: [],
+    nonSecretAuthMarkers: [],
     skills: params.manifest.skills ?? [],
     settingsFiles: params.manifest.settingsFiles ?? [],
     hooks: params.manifest.hooks ?? [],
@@ -391,16 +431,76 @@ function buildBundleRecord(params: {
   };
 }
 
+function pushProviderAuthEnvVarsCompatDiagnostic(params: {
+  record: PluginManifestRecord;
+  diagnostics: PluginDiagnostic[];
+}): void {
+  if (params.record.origin === "bundled" || !params.record.providerAuthEnvVars) {
+    return;
+  }
+  const providerIds = Object.entries(params.record.providerAuthEnvVars)
+    .filter(([providerId, envVars]) => providerId.trim() && envVars.length > 0)
+    .map(([providerId]) => providerId)
+    .toSorted((left, right) => left.localeCompare(right));
+  if (providerIds.length === 0) {
+    return;
+  }
+  params.diagnostics.push({
+    level: "warn",
+    pluginId: sanitizeForLog(params.record.id),
+    source: sanitizeForLog(params.record.manifestPath),
+    message: `providerAuthEnvVars is deprecated compatibility metadata for provider env-var lookup; mirror ${providerIds.map(sanitizeForLog).join(", ")} env vars to setup.providers[].envVars before the deprecation window closes`,
+  });
+}
+
+function pushNonBundledChannelConfigDescriptorDiagnostic(params: {
+  record: PluginManifestRecord;
+  diagnostics: PluginDiagnostic[];
+}): void {
+  if (params.record.origin === "bundled" || params.record.format === "bundle") {
+    return;
+  }
+  const declaredChannels = params.record.channels
+    .map((channelId) => channelId.trim())
+    .filter((channelId) => channelId.length > 0);
+  if (declaredChannels.length === 0) {
+    return;
+  }
+  const channelConfigs = params.record.channelConfigs ?? {};
+  const missingChannels = declaredChannels.filter(
+    (channelId) => !Object.prototype.hasOwnProperty.call(channelConfigs, channelId),
+  );
+  if (missingChannels.length === 0) {
+    return;
+  }
+  const safeMissingChannels = missingChannels.map(sanitizeForLog);
+  params.diagnostics.push({
+    level: "warn",
+    pluginId: sanitizeForLog(params.record.id),
+    source: sanitizeForLog(params.record.manifestPath),
+    message: `channel plugin manifest declares ${safeMissingChannels.join(", ")} without channelConfigs metadata; add openclaw.plugin.json#channelConfigs so config schema and setup surfaces work before runtime loads`,
+  });
+}
+
+function pushManifestCompatibilityDiagnostics(params: {
+  record: PluginManifestRecord;
+  diagnostics: PluginDiagnostic[];
+}): void {
+  pushProviderAuthEnvVarsCompatDiagnostic(params);
+  pushNonBundledChannelConfigDescriptorDiagnostic(params);
+}
+
 function matchesInstalledPluginRecord(params: {
   pluginId: string;
   candidate: PluginCandidate;
   config?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  installRecords: Record<string, PluginInstallRecord>;
 }): boolean {
   if (params.candidate.origin !== "global") {
     return false;
   }
-  const record = params.config?.plugins?.installs?.[params.pluginId];
+  const record = params.installRecords[params.pluginId];
   if (!record) {
     return false;
   }
@@ -421,6 +521,7 @@ function resolveDuplicatePrecedenceRank(params: {
   candidate: PluginCandidate;
   config?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  installRecords: Record<string, PluginInstallRecord>;
 }): number {
   if (params.candidate.origin === "config") {
     return 0;
@@ -432,6 +533,7 @@ function resolveDuplicatePrecedenceRank(params: {
       candidate: params.candidate,
       config: params.config,
       env: params.env,
+      installRecords: params.installRecords,
     })
   ) {
     return 1;
@@ -454,13 +556,19 @@ export function loadPluginManifestRegistry(
     env?: NodeJS.ProcessEnv;
     candidates?: PluginCandidate[];
     diagnostics?: PluginDiagnostic[];
+    installRecords?: Record<string, PluginInstallRecord>;
+    bundledChannelConfigCollector?: BundledChannelConfigCollector;
   } = {},
 ): PluginManifestRegistry {
   const config = params.config ?? {};
   const normalized = normalizePluginsConfigWithResolver(config.plugins);
   const env = params.env ?? process.env;
   const cacheKey = buildCacheKey({ workspaceDir: params.workspaceDir, plugins: normalized, env });
-  const cacheEnabled = params.cache !== false && shouldUseManifestCache(env);
+  const cacheEnabled =
+    params.cache !== false &&
+    !params.installRecords &&
+    !params.bundledChannelConfigCollector &&
+    shouldUseManifestCache(env);
   if (cacheEnabled) {
     const cached = registryCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) {
@@ -485,6 +593,15 @@ export function loadPluginManifestRegistry(
   const seenIds = new Map<string, SeenIdEntry>();
   const realpathCache = new Map<string, string>();
   const currentHostVersion = resolveCompatibilityHostVersion(env);
+  let installRecords = params.installRecords;
+  let installRecordsLoaded = Boolean(params.installRecords);
+  const getInstallRecords = (): Record<string, PluginInstallRecord> => {
+    if (!installRecordsLoaded) {
+      installRecords = loadInstalledPluginIndexInstallRecordsSync({ env });
+      installRecordsLoaded = true;
+    }
+    return installRecords ?? {};
+  };
 
   for (const candidate of candidates) {
     const rejectHardlinks = candidate.origin !== "bundled";
@@ -549,6 +666,23 @@ export function loadPluginManifestRegistry(
         : manifestRes.manifestPath;
     })();
 
+    const record = isBundleRecord
+      ? buildBundleRecord({
+          manifest: manifest as Parameters<typeof buildBundleRecord>[0]["manifest"],
+          candidate,
+          manifestPath: manifestRes.manifestPath,
+        })
+      : buildRecord({
+          manifest: manifest as PluginManifest,
+          candidate,
+          manifestPath: manifestRes.manifestPath,
+          schemaCacheKey,
+          configSchema,
+          ...(params.bundledChannelConfigCollector
+            ? { bundledChannelConfigCollector: params.bundledChannelConfigCollector }
+            : {}),
+        });
+
     const existing = seenIds.get(manifest.id);
     if (existing) {
       // Check whether both candidates point to the same physical directory
@@ -567,62 +701,47 @@ export function loadPluginManifestRegistry(
         // Prefer higher-precedence origins even if candidates are passed in
         // an unexpected order (config > workspace > global > bundled).
         if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
-          records[existing.recordIndex] = isBundleRecord
-            ? buildBundleRecord({
-                manifest: manifest as Parameters<typeof buildBundleRecord>[0]["manifest"],
-                candidate,
-                manifestPath: manifestRes.manifestPath,
-              })
-            : buildRecord({
-                manifest: manifest as PluginManifest,
-                candidate,
-                manifestPath: manifestRes.manifestPath,
-                schemaCacheKey,
-                configSchema,
-              });
+          records[existing.recordIndex] = record;
           seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
+          pushManifestCompatibilityDiagnostics({ record, diagnostics });
         }
         continue;
+      }
+
+      const candidateRank = resolveDuplicatePrecedenceRank({
+        pluginId: manifest.id,
+        candidate,
+        config,
+        env,
+        installRecords: getInstallRecords(),
+      });
+      const existingRank = resolveDuplicatePrecedenceRank({
+        pluginId: manifest.id,
+        candidate: existing.candidate,
+        config,
+        env,
+        installRecords: getInstallRecords(),
+      });
+      const candidateWins = candidateRank < existingRank;
+      const winnerCandidate = candidateWins ? candidate : existing.candidate;
+      const overriddenCandidate = candidateWins ? existing.candidate : candidate;
+      if (candidateWins) {
+        records[existing.recordIndex] = record;
+        seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
+        pushManifestCompatibilityDiagnostics({ record, diagnostics });
       }
       diagnostics.push({
         level: "warn",
         pluginId: manifest.id,
-        source: candidate.source,
-        message:
-          resolveDuplicatePrecedenceRank({
-            pluginId: manifest.id,
-            candidate,
-            config,
-            env,
-          }) <
-          resolveDuplicatePrecedenceRank({
-            pluginId: manifest.id,
-            candidate: existing.candidate,
-            config,
-            env,
-          })
-            ? `duplicate plugin id detected; ${existing.candidate.origin} plugin will be overridden by ${candidate.origin} plugin (${candidate.source})`
-            : `duplicate plugin id detected; ${candidate.origin} plugin will be overridden by ${existing.candidate.origin} plugin (${candidate.source})`,
+        source: overriddenCandidate.source,
+        message: `duplicate plugin id detected; ${overriddenCandidate.origin} plugin will be overridden by ${winnerCandidate.origin} plugin (${winnerCandidate.source})`,
       });
-    } else {
-      seenIds.set(manifest.id, { candidate, recordIndex: records.length });
+      continue;
     }
 
-    records.push(
-      isBundleRecord
-        ? buildBundleRecord({
-            manifest: manifest as Parameters<typeof buildBundleRecord>[0]["manifest"],
-            candidate,
-            manifestPath: manifestRes.manifestPath,
-          })
-        : buildRecord({
-            manifest: manifest as PluginManifest,
-            candidate,
-            manifestPath: manifestRes.manifestPath,
-            schemaCacheKey,
-            configSchema,
-          }),
-    );
+    seenIds.set(manifest.id, { candidate, recordIndex: records.length });
+    records.push(record);
+    pushManifestCompatibilityDiagnostics({ record, diagnostics });
   }
 
   const registry = { plugins: records, diagnostics };
