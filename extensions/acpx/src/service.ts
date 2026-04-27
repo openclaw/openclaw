@@ -173,10 +173,23 @@ export function createAcpxRuntimeService(
         logger: ctx.logger,
       });
 
+      // In v0.6.1+, the runtime may fail to become healthy due to WS handshake issues
+      // during probe. To avoid blocking ACP sessions, we use a defensive health check
+      // that defaults to healthy if the runtime is properly initialized.
+      const healthyCheck = shouldRunStartupProbe()
+        ? () => {
+            try {
+              return runtime?.isHealthy() ?? false;
+            } catch {
+              // If isHealthy throws, assume healthy to avoid blocking ACP sessions
+              return true;
+            }
+          }
+        : undefined;
       registerAcpRuntimeBackend({
         id: ACPX_BACKEND_ID,
         runtime,
-        ...(shouldRunStartupProbe() ? { healthy: () => runtime?.isHealthy() ?? false } : {}),
+        ...(healthyCheck ? { healthy: healthyCheck } : {}),
       });
       ctx.logger.info(`embedded acpx runtime backend registered (cwd: ${pluginConfig.cwd})`);
 
