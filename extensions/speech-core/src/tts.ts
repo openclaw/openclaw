@@ -1696,8 +1696,7 @@ export async function maybeApplyTtsToPayload(params: {
   // Per-variant text extraction: plain providers prefer ttsPlainText then visible
   // text; tag-aware providers prefer ttsSourceText then visible. Either can fall
   // back to the directives' [[tts]] block when present.
-  const plainSpeechText =
-    visibleTtsOverride ?? plainVariantText ?? visibleCleanedText.trim() ?? visibleText;
+  const plainSpeechText = visibleTtsOverride ?? plainVariantText ?? visibleText;
   const expressiveSpeechText = visibleTtsOverride ?? expressiveVariantText ?? plainSpeechText;
   // Initial routing uses the same persona-merged config as synthesis so
   // model-aware capability gates (e.g. ElevenLabs `expressiveTagsModels: ["eleven_v3"]`)
@@ -1829,7 +1828,26 @@ export async function maybeApplyTtsToPayload(params: {
   if (!initialRoute) {
     return nextPayload;
   }
-  const initialProviderConfig = resolveProviderConfigForTextRouting(effectiveProvider);
+  // Per chatgpt-codex P1 review on tts.ts:1832 — even though the preflight
+  // loop above catches per-provider resolution failures, this call to
+  // `resolveProviderConfigForTextRouting(effectiveProvider)` can still throw
+  // if the primary provider's config resolver errors (e.g. unresolved SecretRef
+  // or bad provider config). Without this guard a recoverable TTS-provider
+  // failure would escape `maybeApplyTtsToPayload` and become a hard reply-path
+  // failure in callers that don't wrap this path. Fall back to text-only by
+  // returning `nextPayload` if preflight already accepted a route but the
+  // primary-provider config resolution then fails.
+  let initialProviderConfig: SpeechProviderConfig;
+  try {
+    initialProviderConfig = resolveProviderConfigForTextRouting(effectiveProvider);
+  } catch (err) {
+    if (isVerbose()) {
+      logVerbose(
+        `tts initial config resolution failed for ${effectiveProvider}: ${formatErrorMessage(err)}`,
+      );
+    }
+    return nextPayload;
+  }
 
   const maxLength = getTtsMaxLength(prefsPath);
   let textForAudio = initialRoute.text;
