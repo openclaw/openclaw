@@ -337,7 +337,10 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   session.exitNotified = true;
   const exitLabel = formatExecSessionExitLabel(session);
   const output = compactNotifyOutput(
-    tail(session.tail || session.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
+    tail(
+      session.failureReason || session.tail || session.aggregated || "",
+      DEFAULT_NOTIFY_TAIL_CHARS,
+    ),
   );
   if (status === "failed" && session.exitReason === "manual-cancel" && !output) {
     return;
@@ -448,9 +451,7 @@ function persistBackgroundFailureReason(session: ProcessSession, outcome: ExecPr
   if (!reason) {
     return;
   }
-  outcome.aggregated = reason;
-  session.aggregated = reason;
-  session.tail = tail(reason, 2000);
+  session.failureReason = reason;
 }
 
 function classifyExecFailureKind(params: {

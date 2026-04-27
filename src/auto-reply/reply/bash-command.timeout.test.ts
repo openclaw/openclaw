@@ -68,10 +68,13 @@ describe("handleBashChatCommand timeout handling", () => {
     getFinishedSessionMock.mockReturnValue(undefined);
   });
 
-  it("disables the exec timeout for chat bash jobs when no timeout is configured", async () => {
+  it("uses the configured exec default timeout when no chat bash timeout is configured", async () => {
     await handleBashChatCommand(buildParams("/bash tail -f app.log"));
 
-    expect(executeMock).toHaveBeenCalledWith("chat-bash", expect.objectContaining({ timeout: 0 }));
+    expect(executeMock).toHaveBeenCalledWith(
+      "chat-bash",
+      expect.objectContaining({ timeout: undefined }),
+    );
   });
 
   it("preserves configured exec timeouts for chat bash jobs", async () => {
@@ -94,8 +97,9 @@ describe("handleBashChatCommand timeout handling", () => {
       exitCode: null,
       exitSignal: null,
       exitReason: "overall-timeout",
-      aggregated: "Command timed out after 30 seconds.",
-      tail: "Command timed out after 30 seconds.",
+      failureReason: "Command timed out after 30 seconds.",
+      aggregated: "",
+      tail: "",
       truncated: false,
       startedAt: 123,
       endedAt: 456,
@@ -106,6 +110,7 @@ describe("handleBashChatCommand timeout handling", () => {
     const result = await handleBashChatCommand(buildParams("/bash poll bash-session-1"));
 
     expect(result.text).toContain("Exit: timeout");
+    expect(result.text).toContain("Command timed out after 30 seconds.");
     expect(result.text).not.toContain("Exit: code 0");
   });
 });

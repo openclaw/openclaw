@@ -398,9 +398,9 @@ export async function processGatewayAllowlist(
       markBackgrounded(run.session);
 
       const outcome = await run.promise;
-      const output = normalizeNotifyOutput(
-        tail(outcome.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
-      );
+      const outcomeText =
+        outcome.status === "failed" && outcome.timedOut ? outcome.reason : outcome.aggregated;
+      const output = normalizeNotifyOutput(tail(outcomeText || "", DEFAULT_NOTIFY_TAIL_CHARS));
       const exitLabel = outcome.timedOut ? "timeout" : `code ${outcome.exitCode ?? "?"}`;
       const summary = output
         ? `Exec finished (gateway id=${approvalId}, session=${run.session.id}, ${exitLabel})\n${output}`

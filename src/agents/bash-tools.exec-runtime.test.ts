@@ -360,11 +360,11 @@ describe("exec notifyOnExit suppression", () => {
       timeoutSec: null,
     });
     markBackgrounded(run.session);
-    return await run.promise;
+    return { outcome: await run.promise, session: run.session };
   }
 
   it("keeps manual-cancelled no-output background execs silent", async () => {
-    const outcome = await runBackgroundedExit({ reason: "manual-cancel" });
+    const { outcome } = await runBackgroundedExit({ reason: "manual-cancel" });
 
     expect(outcome.status).toBe("failed");
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
@@ -382,9 +382,10 @@ describe("exec notifyOnExit suppression", () => {
   });
 
   it("still notifies for no-output background exec timeouts", async () => {
-    const outcome = await runBackgroundedExit({ reason: "overall-timeout" });
+    const { outcome, session } = await runBackgroundedExit({ reason: "overall-timeout" });
 
-    expect(outcome.aggregated).toContain("Command timed out");
+    expect(outcome.aggregated).toBe("");
+    expect(session.failureReason).toContain("Command timed out");
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       expect.stringMatching(/Exec failed \([^,]+, timeout\) ::/),
       expect.objectContaining({ sessionKey: "agent:main:main" }),

@@ -80,6 +80,21 @@ function formatBashExitLabel(finished: {
     : `code ${String(finished.exitCode ?? 0)}`;
 }
 
+function formatBashFinishedOutput(finished: {
+  aggregated?: string;
+  tail?: string;
+  failureReason?: string;
+  exitReason?: string;
+}) {
+  if (
+    (finished.exitReason === "overall-timeout" || finished.exitReason === "no-output-timeout") &&
+    finished.failureReason?.trim()
+  ) {
+    return finished.failureReason;
+  }
+  return finished.aggregated || finished.tail;
+}
+
 function parseBashRequest(raw: string): BashRequest | null {
   const trimmed = raw.trimStart();
   let restSource = "";
@@ -289,7 +304,7 @@ export async function handleBashChatCommand(params: {
         text: [
           `${prefix} bash finished (session ${formatSessionSnippet(sessionId)}).`,
           `Exit: ${exitLabel}`,
-          formatOutputBlock(finished.aggregated || finished.tail),
+          formatOutputBlock(formatBashFinishedOutput(finished) || ""),
         ].join("\n"),
       };
     }
@@ -358,8 +373,7 @@ export async function handleBashChatCommand(params: {
   try {
     const foregroundMs = resolveForegroundMs(params.cfg);
     const shouldBackgroundImmediately = foregroundMs <= 0;
-    const configuredTimeoutSec = params.cfg.tools?.exec?.timeoutSec;
-    const timeoutSec = typeof configuredTimeoutSec === "number" ? configuredTimeoutSec : 0;
+    const timeoutSec = params.cfg.tools?.exec?.timeoutSec;
     const notifyOnExit = params.cfg.tools?.exec?.notifyOnExit;
     const notifyOnExitEmptySuccess = params.cfg.tools?.exec?.notifyOnExitEmptySuccess;
     const execTool = createExecTool({

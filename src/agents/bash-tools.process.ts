@@ -103,13 +103,13 @@ function formatProcessExitLabel(params: {
 
 function mergeTimeoutPollOutput(params: {
   drainedOutput: string;
-  session: ProcessSession;
+  failureReason?: string;
   exitReason: unknown;
 }) {
   if (!isTimeoutExitReason(params.exitReason)) {
     return params.drainedOutput;
   }
-  const timeoutOutput = (params.session.tail || params.session.aggregated || "").trim();
+  const timeoutOutput = (params.failureReason || "").trim();
   if (!timeoutOutput) {
     return params.drainedOutput;
   }
@@ -326,7 +326,11 @@ export function createProcessTool(
                   {
                     type: "text",
                     text:
-                      (scopedFinished.tail ||
+                      (mergeTimeoutPollOutput({
+                        drainedOutput: scopedFinished.tail,
+                        failureReason: scopedFinished.failureReason,
+                        exitReason: scopedFinished.exitReason,
+                      }) ||
                         `(no output recorded${
                           scopedFinished.truncated ? " — truncated to cap" : ""
                         })`) +
@@ -389,7 +393,11 @@ export function createProcessTool(
             .join("\n")
             .trim();
           const output = exited
-            ? mergeTimeoutPollOutput({ drainedOutput, session: scopedSession, exitReason })
+            ? mergeTimeoutPollOutput({
+                drainedOutput,
+                failureReason: scopedSession.failureReason,
+                exitReason,
+              })
             : drainedOutput;
           const hasNewOutput = output.length > 0;
           const retryInMs = exited

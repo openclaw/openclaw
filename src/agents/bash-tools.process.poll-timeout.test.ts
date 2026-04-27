@@ -162,8 +162,7 @@ test("process poll includes timeout guidance when a waited poll observes exit", 
       "Command timed out after 30 seconds. If this command is expected to take longer, re-run with a higher timeout.";
 
     setTimeout(() => {
-      session.aggregated = timeoutText;
-      session.tail = timeoutText;
+      session.failureReason = timeoutText;
       markExited(session, null, "SIGKILL", "failed", "overall-timeout");
     }, 10);
 
@@ -176,6 +175,7 @@ test("process poll includes timeout guidance when a waited poll observes exit", 
     expect(text).toContain(timeoutText);
     expect(text).toContain("Process exited with timeout.");
     expect(text).not.toContain("code 0");
+    expect((poll.details as { aggregated?: string }).aggregated).toBe("");
   } finally {
     vi.useRealTimers();
   }

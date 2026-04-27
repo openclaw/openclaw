@@ -323,8 +323,7 @@ describe("processGatewayAllowlist", () => {
         exitCode: null,
         exitSignal: "SIGKILL",
         durationMs: 30_000,
-        aggregated:
-          "Command timed out after 30 seconds. If this command is expected to take longer, re-run with a higher timeout.",
+        aggregated: "",
         timedOut: true,
         failureKind: "overall-timeout" as const,
         reason:

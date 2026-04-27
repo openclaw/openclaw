@@ -53,6 +53,7 @@ export interface ProcessSession {
   exitCode?: number | null;
   exitSignal?: NodeJS.Signals | number | null;
   exitReason?: TerminationReason;
+  failureReason?: string;
   exited: boolean;
   truncated: boolean;
   backgrounded: boolean;
@@ -71,6 +72,7 @@ export interface FinishedSession {
   exitCode?: number | null;
   exitSignal?: NodeJS.Signals | number | null;
   exitReason?: TerminationReason;
+  failureReason?: string;
   aggregated: string;
   tail: string;
   truncated: boolean;
@@ -215,6 +217,7 @@ function moveToFinished(session: ProcessSession, status: ProcessStatus) {
     exitCode: session.exitCode,
     exitSignal: session.exitSignal,
     exitReason: session.exitReason,
+    failureReason: session.failureReason,
     aggregated: session.aggregated,
     tail: session.tail,
     truncated: session.truncated,
