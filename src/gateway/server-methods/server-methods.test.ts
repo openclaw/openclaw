@@ -484,6 +484,15 @@ describe("projectRecentChatDisplayMessages", () => {
     expect(result).toEqual([{ role: "assistant", content: "hello", timestamp: 1 }]);
   });
 
+  it("uses normalized assistant roles for emotion tag stripping", () => {
+    const result = projectRecentChatDisplayMessages(
+      [{ role: "Assistant", content: "[warmly] hello", timestamp: 1 }],
+      { emotionMode: "off" },
+    );
+
+    expect(result).toEqual([{ role: "Assistant", content: "hello", timestamp: 1 }]);
+  });
+
   it("threads emotion mode through single-message projection", () => {
     const result = projectChatDisplayMessage(
       { role: "assistant", content: "[softly] hello", timestamp: 1 },

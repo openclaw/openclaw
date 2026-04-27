@@ -300,7 +300,7 @@ function sanitizeChatHistoryMessage(
   // per Copilot's review of the original PR (`chat.ts:919`). Non-assistant
   // messages with bracketed text (e.g. `[Note]` from a user) must be
   // preserved verbatim — we only strip inline `[[…]]` directive tags.
-  const messageEmotionMode = entry.role === "assistant" ? emotionMode : undefined;
+  const messageEmotionMode = role === "assistant" ? emotionMode : undefined;
   const stripWithEmotionMode = (text: string) => {
     const stripped = stripInlineDirectiveTagsForDisplay(text);
     if (messageEmotionMode === undefined) {

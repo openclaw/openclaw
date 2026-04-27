@@ -1740,7 +1740,6 @@ export async function maybeApplyTtsToPayload(params: {
       expressiveText,
       plainText,
     });
-  const initialProviderConfig = resolveProviderConfigForTextRouting(effectiveProvider);
   const resolveFirstRoutableText = (
     expressiveText: string,
     plainText: string,
@@ -1808,6 +1807,7 @@ export async function maybeApplyTtsToPayload(params: {
   if (!initialRoute) {
     return nextPayload;
   }
+  const initialProviderConfig = resolveProviderConfigForTextRouting(effectiveProvider);
 
   const maxLength = getTtsMaxLength(prefsPath);
   let textForAudio = initialRoute.text;
