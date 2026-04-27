@@ -1602,6 +1602,8 @@ export const FIELD_HELP: Record<string, string> = {
     'Drop strategy when queue cap is exceeded: "old", "new", or "summarize". Use summarize when preserving intent matters, or old/new when deterministic dropping is preferred.',
   "messages.inbound":
     "Direct inbound debounce settings used before queue/turn processing starts. Configure this for provider-specific rapid message bursts from the same sender.",
+  "messages.inboundMetadataMode":
+    'Model-visible inbound metadata format: "full" keeps existing fenced metadata blocks, while "compact-direct" uses a terse direct-chat line and keeps full metadata for groups and richer context.',
   "messages.inbound.byChannel":
     "Per-channel inbound debounce overrides keyed by provider id in milliseconds. Use this where some providers send message fragments more aggressively than others.",
   "messages.removeAckAfterReply":

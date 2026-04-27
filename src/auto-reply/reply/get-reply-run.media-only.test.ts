@@ -328,6 +328,45 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(false);
   });
 
+  it("passes compact direct metadata mode into inbound prompt construction", async () => {
+    await runPreparedReply(
+      baseParams({
+        cfg: {
+          session: {},
+          channels: {},
+          agents: { defaults: {} },
+          messages: { inboundMetadataMode: "compact-direct" },
+        },
+        ctx: {
+          Body: "hello",
+          RawBody: "hello",
+          CommandBody: "hello",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "telegram:123",
+          ChatType: "direct",
+        },
+        sessionCtx: {
+          Body: "hello",
+          BodyStripped: "hello",
+          Provider: "telegram",
+          ChatType: "direct",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "telegram:123",
+        },
+      }),
+    );
+
+    expect(buildInboundUserContextPrefix).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ChatType: "direct",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:123",
+      }),
+      expect.any(Object),
+      { metadataMode: "compact-direct" },
+    );
+  });
+
   it("allows media-only prompts and preserves thread context in queued followups", async () => {
     const result = await runPreparedReply(baseParams());
     expect(result).toEqual({ text: "ok" });

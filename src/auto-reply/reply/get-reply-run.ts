@@ -464,6 +464,7 @@ export async function runPreparedReply(
         }
       : { ...sessionCtx, ThreadStarterBody: undefined },
     envelopeOptions,
+    { metadataMode: cfg.messages?.inboundMetadataMode },
   );
   const baseBodyForPrompt = isBareSessionReset
     ? [

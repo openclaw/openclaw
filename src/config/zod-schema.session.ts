@@ -162,6 +162,7 @@ export const MessagesSchema = z
     groupChat: GroupChatSchema,
     queue: QueueSchema,
     inbound: InboundDebounceSchema,
+    inboundMetadataMode: z.enum(["full", "compact-direct"]).optional(),
     ackReaction: z.string().optional(),
     ackReactionScope: z
       .enum(["group-mentions", "group-all", "direct", "all", "off", "none"])
