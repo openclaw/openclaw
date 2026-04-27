@@ -1,4 +1,5 @@
 import path from "node:path";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   normalizeDeviceBootstrapHandoffProfile,
   normalizeDeviceBootstrapProfile,
@@ -36,9 +37,27 @@ export type DeviceBootstrapTokenRecord = {
 type DeviceBootstrapStateFile = Record<string, DeviceBootstrapTokenRecord>;
 
 const withLock = createAsyncLock();
+const log = createSubsystemLogger("device-bootstrap");
 
 function resolveBootstrapPath(baseDir?: string): string {
   return path.join(resolvePairingPaths(baseDir, "devices").dir, "bootstrap.json");
+}
+
+function resolveIssuedBootstrapProfileInput(params: {
+  profile?: DeviceBootstrapProfileInput;
+  roles?: readonly string[];
+  scopes?: readonly string[];
+}): DeviceBootstrapProfileInput | undefined {
+  if (params.profile) {
+    return params.profile;
+  }
+  if (params.roles || params.scopes) {
+    return {
+      roles: params.roles,
+      scopes: params.scopes,
+    };
+  }
+  return undefined;
 }
 
 function resolvePersistedBootstrapProfile(
@@ -58,16 +77,37 @@ function resolveIssuedBootstrapProfile(params: {
   roles?: readonly string[];
   scopes?: readonly string[];
 }): DeviceBootstrapProfile {
-  if (params.profile) {
-    return normalizeDeviceBootstrapHandoffProfile(params.profile);
-  }
-  if (params.roles || params.scopes) {
-    return normalizeDeviceBootstrapHandoffProfile({
-      roles: params.roles,
-      scopes: params.scopes,
-    });
+  const input = resolveIssuedBootstrapProfileInput(params);
+  if (input) {
+    return normalizeDeviceBootstrapHandoffProfile(input);
   }
   return PAIRING_SETUP_BOOTSTRAP_PROFILE;
+}
+
+function warnIfIssuedBootstrapScopesWereStripped(params: {
+  input: DeviceBootstrapProfileInput | undefined;
+  profile: DeviceBootstrapProfile;
+}): void {
+  if (!params.input) {
+    return;
+  }
+  const requestedProfile = normalizeDeviceBootstrapProfile(params.input);
+  const requestedScopes = requestedProfile.scopes;
+  if (requestedScopes.length === 0) {
+    return;
+  }
+  const retainedScopeSet = new Set(params.profile.scopes);
+  const strippedScopes = requestedScopes.filter((scope) => !retainedScopeSet.has(scope));
+  if (strippedScopes.length === 0) {
+    return;
+  }
+  log.warn("bootstrap_token_scopes_stripped", {
+    roles: requestedProfile.roles,
+    requestedScopes,
+    retainedScopes: params.profile.scopes,
+    strippedScopes,
+    consoleMessage: "bootstrap token scopes stripped to bootstrap handoff allowlist",
+  });
 }
 
 function bootstrapProfileAllowsRequest(params: {
@@ -170,7 +210,9 @@ export async function issueDeviceBootstrapToken(
     const state = await loadState(params.baseDir);
     const token = generatePairingToken();
     const issuedAtMs = Date.now();
+    const profileInput = resolveIssuedBootstrapProfileInput(params);
     const profile = resolveIssuedBootstrapProfile(params);
+    warnIfIssuedBootstrapScopesWereStripped({ input: profileInput, profile });
     state[token] = {
       token,
       ts: issuedAtMs,

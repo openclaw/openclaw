@@ -31,6 +31,10 @@ describe("device bootstrap profile", () => {
         ["node.exec", "operator.admin", "operator.approvals", "operator.read", "operator.write"],
       ),
     ).toEqual(["operator.approvals", "operator.read", "operator.write"]);
+
+    expect(
+      resolveBootstrapProfileScopesForRoles(["node"], ["node.exec", "operator.admin"]),
+    ).toEqual([]);
   });
 
   test("normalizes issued handoff profiles to the bootstrap allowlist", () => {

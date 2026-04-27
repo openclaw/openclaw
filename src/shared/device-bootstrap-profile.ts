@@ -49,6 +49,7 @@ export function normalizeDeviceBootstrapHandoffProfile(
   input: DeviceBootstrapProfileInput | undefined,
 ): DeviceBootstrapProfile {
   const profile = normalizeDeviceBootstrapProfile(input);
+  // Bootstrap handoff profiles can only carry the documented handoff allowlist.
   return {
     roles: profile.roles,
     scopes: resolveBootstrapProfileScopesForRoles(profile.roles, profile.scopes),

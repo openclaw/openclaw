@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resetLogger, setLoggerOverride } from "../logging.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   clearDeviceBootstrapTokens,
@@ -40,6 +41,8 @@ async function verifyBootstrapToken(
 
 afterEach(async () => {
   vi.useRealTimers();
+  resetLogger();
+  setLoggerOverride(null);
   await tempDirs.cleanup();
 });
 
@@ -359,6 +362,26 @@ describe("device bootstrap tokens", () => {
         scopes: ["operator.admin"],
       }),
     ).resolves.toEqual({ ok: false, reason: "bootstrap_token_invalid" });
+  });
+
+  it("logs when issued bootstrap profiles strip overbroad scopes", async () => {
+    const baseDir = await createTempDir();
+    const logPath = path.join(baseDir, "bootstrap.log");
+    setLoggerOverride({ level: "warn", consoleLevel: "silent", file: logPath });
+
+    await issueDeviceBootstrapToken({
+      baseDir,
+      profile: {
+        roles: ["node", "operator"],
+        scopes: ["node.exec", "operator.admin", "operator.read"],
+      },
+    });
+
+    const content = await fs.readFile(logPath, "utf8");
+    expect(content).toContain("bootstrap_token_scopes_stripped");
+    expect(content).toContain("node.exec");
+    expect(content).toContain("operator.admin");
+    expect(content).toContain("operator.read");
   });
 
   it("bounds redeemed bootstrap profiles to handoff scopes", async () => {
