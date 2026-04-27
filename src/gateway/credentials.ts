@@ -110,7 +110,9 @@ function resolveLocalGatewayCredentials(params: {
     : params.plan.remoteToken.value;
   const fallbackPassword = params.plan.localPassword.configured
     ? params.plan.localPassword.value
-    : params.plan.remotePassword.value;
+    : params.plan.authMode === "trusted-proxy"
+      ? undefined
+      : params.plan.remotePassword.value;
   const localResolved = resolveGatewayCredentialsFromValues({
     configToken: fallbackToken,
     configPassword: fallbackPassword,

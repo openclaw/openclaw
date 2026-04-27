@@ -139,7 +139,8 @@ export function createGatewayCredentialPlan(params: {
     gateway?.tailscale?.mode === "serve" || gateway?.tailscale?.mode === "funnel";
   const remoteConfiguredSurface = remoteMode || remoteUrlConfigured || tailscaleRemoteExposure;
   const remoteTokenFallbackActive = localTokenCanWin && !envToken && !localToken.configured;
-  const remotePasswordFallbackActive = !envPassword && !localPassword.configured && passwordCanWin;
+  const remotePasswordFallbackActive =
+    authMode !== "trusted-proxy" && !envPassword && !localPassword.configured && passwordCanWin;
 
   return {
     configuredMode: gateway?.mode === "remote" ? "remote" : "local",

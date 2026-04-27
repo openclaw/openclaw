@@ -309,6 +309,28 @@ describe("resolveGatewayCredentialsFromConfig", () => {
     });
   });
 
+  it("does not use remote password as trusted-proxy local fallback", () => {
+    const resolved = resolveGatewayCredentialsFromConfig({
+      cfg: cfg({
+        gateway: {
+          mode: "local",
+          auth: {
+            mode: "trusted-proxy",
+          },
+          remote: {
+            password: "remote-password", // pragma: allowlist secret
+          },
+        },
+      }),
+      env: {} as NodeJS.ProcessEnv,
+    });
+
+    expect(resolved).toEqual({
+      token: undefined,
+      password: undefined,
+    });
+  });
+
   it("keeps local credentials ahead of remote fallback in local mode", () => {
     const resolved = resolveGatewayCredentialsFromConfig({
       cfg: cfg({
