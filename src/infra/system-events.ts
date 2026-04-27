@@ -25,7 +25,6 @@ const MAX_EVENTS = 20;
 
 type SessionQueue = {
   queue: SystemEvent[];
-  lastText: string | null;
   lastContextKey: string | null;
 };
 
@@ -64,7 +63,6 @@ function getOrCreateSessionQueue(sessionKey: string): SessionQueue {
   }
   const created: SessionQueue = {
     queue: [],
-    lastText: null,
     lastContextKey: null,
   };
   queues.set(key, created);
@@ -119,7 +117,6 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
     return false;
   }
   applyContextKeyPolicy(entry, normalizedContextKey);
-  entry.lastText = cleaned;
   entry.queue.push({
     text: cleaned,
     ts: Date.now(),
@@ -141,7 +138,6 @@ export function drainSystemEventEntries(sessionKey: string): SystemEvent[] {
   }
   const out = entry.queue.map(cloneSystemEvent);
   entry.queue.length = 0;
-  entry.lastText = null;
   entry.lastContextKey = null;
   queues.delete(key);
   return out;
@@ -188,12 +184,10 @@ export function consumeSystemEventEntries(
   }
   const removed = entry.queue.splice(0, consumedEntries.length).map(cloneSystemEvent);
   if (entry.queue.length === 0) {
-    entry.lastText = null;
     entry.lastContextKey = null;
     queues.delete(key);
   } else {
     const newest = entry.queue[entry.queue.length - 1];
-    entry.lastText = newest.text;
     entry.lastContextKey = newest.contextKey ?? null;
   }
   return removed;
