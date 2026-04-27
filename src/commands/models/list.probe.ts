@@ -281,19 +281,34 @@ export async function buildProbeTargets(params: {
       continue;
     }
 
-    const model = selectProbeModel({
-      provider: providerKey,
-      candidates,
-      catalog,
-    });
+    const defaultAgentId = resolveDefaultAgentId(cfg);
+    const cliExecutionProviderForProvider =
+      resolveCliRuntimeExecutionProvider({
+        provider: providerKey,
+        cfg,
+        agentId: defaultAgentId,
+      }) ?? providerKey;
+    const model =
+      selectProbeModel({
+        provider: providerKey,
+        candidates,
+        catalog,
+      }) ??
+      (cliExecutionProviderForProvider !== providerKey
+        ? selectProbeModel({
+            provider: cliExecutionProviderForProvider,
+            candidates,
+            catalog,
+          })
+        : null);
 
     const cliExecutionProvider = model
       ? (resolveCliRuntimeExecutionProvider({
           provider: model.provider,
           cfg,
-          agentId: resolveDefaultAgentId(cfg),
+          agentId: defaultAgentId,
         }) ?? model.provider)
-      : providerKey;
+      : cliExecutionProviderForProvider;
     const runtimeProfileProviderKey = isCliProvider(cliExecutionProvider, cfg)
       ? normalizeProviderId(cliExecutionProvider)
       : providerKey;
