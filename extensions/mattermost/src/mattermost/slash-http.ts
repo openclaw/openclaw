@@ -40,9 +40,16 @@ import {
 } from "./runtime-api.js";
 import { sendMessageMattermost } from "./send.js";
 import {
+  MATTERMOST_SLASH_POST_METHOD,
+  getMattermostCommand,
+  listMattermostCommands,
+  normalizeSlashCommandTrigger,
   parseSlashCommandPayload,
   resolveCommandText,
+  type MattermostRegisteredCommand,
+  type MattermostCommandResponse,
   type MattermostSlashCommandResponse,
+  type MattermostSlashCommandPayload,
 } from "./slash-commands.js";
 
 type SlashHttpHandlerParams = {
@@ -51,6 +58,8 @@ type SlashHttpHandlerParams = {
   runtime: RuntimeEnv;
   /** Expected token from registered commands (for validation). */
   commandTokens: Set<string>;
+  /** Commands registered or reconciled during monitor startup. */
+  registeredCommands: readonly MattermostRegisteredCommand[];
   /** Map from trigger to original command name (for skill commands that start with oc_). */
   triggerMap?: ReadonlyMap<string, string>;
   log?: (msg: string) => void;
@@ -94,6 +103,71 @@ function matchesRegisteredCommandToken(
     }
   }
   return false;
+}
+
+function findRegisteredCommandForPayload(params: {
+  registeredCommands: readonly MattermostRegisteredCommand[];
+  payload: MattermostSlashCommandPayload;
+}): MattermostRegisteredCommand | undefined {
+  const trigger = normalizeSlashCommandTrigger(params.payload.command);
+  return params.registeredCommands.find(
+    (cmd) => cmd.teamId === params.payload.team_id && cmd.trigger === trigger,
+  );
+}
+
+function isDeletedMattermostCommand(command: { delete_at?: number }): boolean {
+  return typeof command.delete_at === "number" && command.delete_at > 0;
+}
+
+async function fetchCurrentMattermostCommand(params: {
+  client: ReturnType<typeof createMattermostClient>;
+  registered: MattermostRegisteredCommand;
+  log?: (msg: string) => void;
+}): Promise<MattermostCommandResponse | null> {
+  try {
+    return await getMattermostCommand(params.client, params.registered.id);
+  } catch {
+    // Older Mattermost servers may not expose GET /commands/{id}; fall back to
+    // the team command list, which registration already requires.
+  }
+
+  try {
+    const currentCommands = await listMattermostCommands(params.client, params.registered.teamId);
+    return currentCommands.find((cmd) => cmd.id === params.registered.id) ?? null;
+  } catch (err) {
+    params.log?.(
+      `mattermost: slash command registration check failed for /${params.registered.trigger}: ${String(err)}`,
+    );
+    return null;
+  }
+}
+
+export async function validateMattermostSlashCommandToken(params: {
+  client: ReturnType<typeof createMattermostClient>;
+  registeredCommand: MattermostRegisteredCommand;
+  payload: MattermostSlashCommandPayload;
+  log?: (msg: string) => void;
+}): Promise<boolean> {
+  const current = await fetchCurrentMattermostCommand({
+    client: params.client,
+    registered: params.registeredCommand,
+    log: params.log,
+  });
+  if (!current || isDeletedMattermostCommand(current)) {
+    return false;
+  }
+  if (
+    current.team_id !== params.registeredCommand.teamId ||
+    current.trigger !== params.registeredCommand.trigger ||
+    current.method !== MATTERMOST_SLASH_POST_METHOD ||
+    current.url !== params.registeredCommand.url
+  ) {
+    return false;
+  }
+  if (!current.token || !safeEqualSecret(params.payload.token, current.token)) {
+    return false;
+  }
+  return true;
 }
 
 type SlashInvocationAuth = {
@@ -224,7 +298,16 @@ async function authorizeSlashInvocation(params: {
  * from the Mattermost server when a user invokes a registered slash command.
  */
 export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
-  const { account, cfg, runtime, commandTokens, triggerMap, log, bodyTimeoutMs } = params;
+  const {
+    account,
+    cfg,
+    runtime,
+    commandTokens,
+    registeredCommands,
+    triggerMap,
+    log,
+    bodyTimeoutMs,
+  } = params;
 
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     if (req.method !== "POST") {
@@ -258,9 +341,15 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
       return;
     }
 
-    // Validate token — fail closed: reject when no tokens are registered
-    // (e.g. registration failed or startup was partial)
-    if (commandTokens.size === 0 || !matchesRegisteredCommandToken(commandTokens, payload.token)) {
+    const registeredCommand = findRegisteredCommandForPayload({ registeredCommands, payload });
+
+    // Validate token — fail closed: reject when no commands are registered
+    // (e.g. registration failed or startup was partial).
+    if (
+      commandTokens.size === 0 ||
+      !registeredCommand ||
+      !matchesRegisteredCommandToken(commandTokens, payload.token)
+    ) {
       sendJsonResponse(res, 401, {
         response_type: "ephemeral",
         text: "Unauthorized: invalid command token.",
@@ -269,17 +358,32 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
     }
 
     // Extract command info
-    const trigger = payload.command.replace(/^\//, "").trim();
-    const commandText = resolveCommandText(trigger, payload.text, triggerMap);
-    const channelId = payload.channel_id;
-    const senderId = payload.user_id;
-    const senderName = payload.user_name ?? senderId;
-
     const client = createMattermostClient({
       baseUrl: account.baseUrl ?? "",
       botToken: account.botToken ?? "",
       allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
     });
+
+    const tokenIsCurrent = await validateMattermostSlashCommandToken({
+      client,
+      registeredCommand,
+      payload,
+      log,
+    });
+    if (!tokenIsCurrent) {
+      sendJsonResponse(res, 401, {
+        response_type: "ephemeral",
+        text: "Unauthorized: invalid command token.",
+      });
+      return;
+    }
+
+    // Extract command info
+    const trigger = normalizeSlashCommandTrigger(payload.command);
+    const commandText = resolveCommandText(trigger, payload.text, triggerMap);
+    const channelId = payload.channel_id;
+    const senderId = payload.user_id;
+    const senderName = payload.user_name ?? senderId;
 
     const auth = await authorizeSlashInvocation({
       account,

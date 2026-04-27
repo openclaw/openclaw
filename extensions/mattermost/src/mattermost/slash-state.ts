@@ -96,6 +96,7 @@ export function activateSlashCommands(params: {
     cfg: api.cfg,
     runtime: api.runtime,
     commandTokens: tokenSet,
+    registeredCommands,
     triggerMap,
     log,
   });

@@ -17,6 +17,8 @@ import type { MattermostClient } from "./client.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
+export const MATTERMOST_SLASH_POST_METHOD = "P";
+
 export type MattermostSlashCommandConfig = {
   /** Enable native slash commands. "auto" resolves to false for now (opt-in). */
   native: boolean | "auto";
@@ -45,6 +47,7 @@ export type MattermostRegisteredCommand = {
   trigger: string;
   teamId: string;
   token: string;
+  url: string;
   /** True when this process created the command and should delete it on shutdown. */
   managed: boolean;
 };
@@ -84,7 +87,7 @@ export type MattermostSlashCommandResponse = {
 type MattermostCommandCreate = {
   team_id: string;
   trigger: string;
-  method: "P" | "G";
+  method: typeof MATTERMOST_SLASH_POST_METHOD | "G";
   url: string;
   description?: string;
   auto_complete: boolean;
@@ -98,7 +101,7 @@ type MattermostCommandUpdate = {
   id: string;
   team_id: string;
   trigger: string;
-  method: "P" | "G";
+  method: typeof MATTERMOST_SLASH_POST_METHOD | "G";
   url: string;
   description?: string;
   auto_complete: boolean;
@@ -106,7 +109,7 @@ type MattermostCommandUpdate = {
   auto_complete_hint?: string;
 };
 
-type MattermostCommandResponse = {
+export type MattermostCommandResponse = {
   id: string;
   token: string;
   team_id: string;
@@ -195,6 +198,18 @@ export async function listMattermostCommands(
 ): Promise<MattermostCommandResponse[]> {
   return await client.request<MattermostCommandResponse[]>(
     `/commands?team_id=${encodeURIComponent(teamId)}&custom_only=true`,
+  );
+}
+
+/**
+ * Get a custom slash command by id.
+ */
+export async function getMattermostCommand(
+  client: MattermostClient,
+  commandId: string,
+): Promise<MattermostCommandResponse> {
+  return await client.request<MattermostCommandResponse>(
+    `/commands/${encodeURIComponent(commandId)}`,
   );
 }
 
@@ -311,6 +326,7 @@ export async function registerSlashCommands(params: {
         trigger: spec.trigger,
         teamId,
         token: existingCmd.token,
+        url: callbackUrl,
         managed: false,
       });
       continue;
@@ -327,7 +343,7 @@ export async function registerSlashCommands(params: {
           id: existingCmd.id,
           team_id: teamId,
           trigger: spec.trigger,
-          method: "P",
+          method: MATTERMOST_SLASH_POST_METHOD,
           url: callbackUrl,
           description: spec.description,
           auto_complete: spec.autoComplete,
@@ -339,6 +355,7 @@ export async function registerSlashCommands(params: {
           trigger: spec.trigger,
           teamId,
           token: updated.token,
+          url: callbackUrl,
           managed: false,
         });
         continue;
@@ -365,7 +382,7 @@ export async function registerSlashCommands(params: {
       const created = await createMattermostCommand(client, {
         team_id: teamId,
         trigger: spec.trigger,
-        method: "P",
+        method: MATTERMOST_SLASH_POST_METHOD,
         url: callbackUrl,
         description: spec.description,
         auto_complete: spec.autoComplete,
@@ -378,6 +395,7 @@ export async function registerSlashCommands(params: {
         trigger: spec.trigger,
         teamId,
         token: created.token,
+        url: callbackUrl,
         managed: true,
       });
     } catch (err) {
@@ -497,6 +515,10 @@ export function resolveCommandText(
     triggerMap?.get(trigger) ?? (trigger.startsWith("oc_") ? trigger.slice(3) : trigger);
   const args = text.trim();
   return args ? `/${commandName} ${args}` : `/${commandName}`;
+}
+
+export function normalizeSlashCommandTrigger(command: string): string {
+  return command.replace(/^\//, "").trim();
 }
 
 // ─── Config resolution ───────────────────────────────────────────────────────
