@@ -18,6 +18,7 @@ import {
   resolveDefaultModelForAgent,
   resolvePersistedSelectedModelRef,
 } from "../agents/model-selection.js";
+import { resolveThinkingDefault } from "../agents/model-thinking-default.js";
 import {
   countActiveDescendantRuns,
   getSessionDisplaySubagentRunByChildSessionKey,
@@ -31,10 +32,7 @@ import {
   RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
   shouldKeepSubagentRunChildLink,
 } from "../agents/subagent-run-liveness.js";
-import {
-  listThinkingLevelOptions,
-  resolveThinkingDefaultForModel,
-} from "../auto-reply/thinking.js";
+import { listThinkingLevelOptions } from "../auto-reply/thinking.js";
 import { loadConfig } from "../config/config.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -1055,7 +1053,8 @@ export function getSessionDefaults(cfg: OpenClawConfig): GatewaySessionsDefaults
     contextTokens: contextTokens ?? null,
     thinkingLevels,
     thinkingOptions: thinkingLevels.map((level) => level.label),
-    thinkingDefault: resolveThinkingDefaultForModel({
+    thinkingDefault: resolveThinkingDefault({
+      cfg,
       provider: resolved.provider,
       model: resolved.model,
     }),
@@ -1429,7 +1428,8 @@ export function buildGatewaySessionRow(params: {
     thinkingLevel: entry?.thinkingLevel,
     thinkingLevels,
     thinkingOptions: thinkingLevels.map((level) => level.label),
-    thinkingDefault: resolveThinkingDefaultForModel({
+    thinkingDefault: resolveThinkingDefault({
+      cfg,
       provider: thinkingProvider,
       model: thinkingModel,
     }),
