@@ -55,7 +55,7 @@ function shouldHideHeartbeatChatOutput(runId: string, sourceRunId?: string): boo
   try {
     const cfg = loadConfig();
     const visibility = resolveHeartbeatVisibility({ cfg, channel: "webchat" });
-    return !visibility.showOk;
+    return !visibility.showAlerts;
   } catch {
     // Default to suppressing if we can't load config
     return true;
