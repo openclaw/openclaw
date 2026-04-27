@@ -132,6 +132,7 @@ describe("Dockerfile", () => {
     expect(userIndex).toBeGreaterThan(-1);
     expect(stateDirIndex).toBeGreaterThan(runtimeStageIndex);
     expect(stateDirIndex).toBeLessThan(userIndex);
+    expect(dockerfile).not.toContain("mkdir -p /home/node/.openclaw");
     expect(dockerfile).toContain(
       "stat -c '%U:%G %a' /home/node/.openclaw | grep -qx 'node:node 700'",
     );
