@@ -274,6 +274,7 @@
   "provider-auth-login",
   "provider-selection-runtime",
   "plugin-entry",
+  "provider-catalog-runtime",
   "provider-catalog-shared",
   "provider-entry",
   "provider-env-vars",

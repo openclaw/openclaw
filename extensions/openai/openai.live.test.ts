@@ -277,7 +277,7 @@ describeLive("openai plugin live", () => {
     const ttsConfig = createLiveTtsConfig();
 
     const synthesized = await speechProvider.synthesize({
-      text: "Open claw. Open claw. Integration test OK.",
+      text: "Speech transcription check okay.",
       cfg,
       providerConfig: ttsConfig.providerConfigs.openai ?? {},
       target: "audio-file",
@@ -295,7 +295,7 @@ describeLive("openai plugin live", () => {
     const text = (transcription?.text ?? "").toLowerCase();
     const collapsedText = text.replace(/[\s-]+/g, "");
     expect(text.length).toBeGreaterThan(0);
-    expect(collapsedText).toContain("openclaw");
+    expect(collapsedText).toContain("speechtranscription");
     expect(text).toMatch(/\bok(?:ay)?\b/);
   }, 45_000);
 

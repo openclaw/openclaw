@@ -4,6 +4,7 @@ import path from "node:path";
 import { ChannelType, type AutocompleteInteraction } from "@buape/carbon";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { clearSessionStoreCacheForTest } from "openclaw/plugin-sdk/session-store-runtime";
+import { createEmptyPluginRegistry, setActivePluginRegistry } from "openclaw/plugin-sdk/testing";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
@@ -125,14 +126,44 @@ let findCommandByNativeName: typeof import("openclaw/plugin-sdk/command-auth").f
 let resolveCommandArgChoices: typeof import("openclaw/plugin-sdk/command-auth").resolveCommandArgChoices;
 let resolveDiscordNativeChoiceContext: typeof import("./native-command-ui.js").resolveDiscordNativeChoiceContext;
 
+function installProviderThinkingRegistryForTest(): void {
+  const registry = createEmptyPluginRegistry();
+  registry.providers.push({
+    pluginId: "discord-test",
+    source: "test",
+    provider: {
+      id: "discord-test-thinking",
+      label: "Discord Test Thinking",
+      aliases: ["anthropic", "openai-codex"],
+      auth: [],
+      isBinaryThinking: (context) =>
+        providerThinkingMocks.resolveProviderBinaryThinking({
+          provider: context.provider,
+          context,
+        }),
+      supportsXHighThinking: (context) =>
+        providerThinkingMocks.resolveProviderXHighThinking({
+          provider: context.provider,
+          context,
+        }),
+      resolveThinkingProfile: (context) =>
+        providerThinkingMocks.resolveProviderThinkingProfile({
+          provider: context.provider,
+          context,
+        }),
+      resolveDefaultThinkingLevel: (context) =>
+        providerThinkingMocks.resolveProviderDefaultThinkingLevel({
+          provider: context.provider,
+          context,
+        }),
+    },
+  });
+  setActivePluginRegistry(registry);
+}
+
 async function loadDiscordThinkAutocompleteModulesForTest() {
   vi.resetModules();
-  vi.doMock("../../../../src/plugins/provider-thinking.js", () => ({
-    resolveProviderBinaryThinking: providerThinkingMocks.resolveProviderBinaryThinking,
-    resolveProviderDefaultThinkingLevel: providerThinkingMocks.resolveProviderDefaultThinkingLevel,
-    resolveProviderThinkingProfile: providerThinkingMocks.resolveProviderThinkingProfile,
-    resolveProviderXHighThinking: providerThinkingMocks.resolveProviderXHighThinking,
-  }));
+  installProviderThinkingRegistryForTest();
   const commandAuth = await import("openclaw/plugin-sdk/command-auth");
   const nativeCommandUi = await import("./native-command-ui.js");
   return {
@@ -183,6 +214,7 @@ describe("discord native /think autocomplete", () => {
         ? true
         : undefined,
     );
+    installProviderThinkingRegistryForTest();
     fs.mkdirSync(path.dirname(STORE_PATH), { recursive: true });
     fs.writeFileSync(
       STORE_PATH,

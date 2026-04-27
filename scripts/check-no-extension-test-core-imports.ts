@@ -37,6 +37,8 @@ const FORBIDDEN_PATTERNS: Array<{ pattern: RegExp; hint: string }> = [
 
 const STATIC_RELATIVE_MODULE_PATTERN = /\b(?:import|export)\b[\s\S]*?\bfrom\s*["']([^"']+)["']/g;
 const DYNAMIC_RELATIVE_MODULE_PATTERN = /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g;
+const MOCK_RELATIVE_MODULE_PATTERN =
+  /\bvi\.(?:mock|doMock|unmock|doUnmock)\s*\(\s*["']([^"']+)["']/g;
 
 const RELATIVE_CORE_HINT =
   "Use openclaw/plugin-sdk/testing or a focused plugin-sdk test/runtime subpath instead of core internals.";
@@ -88,6 +90,7 @@ function collectRelativeCoreImportOffenders(
   const matches = [
     ...content.matchAll(STATIC_RELATIVE_MODULE_PATTERN),
     ...(opts.includeDynamic ? [...content.matchAll(DYNAMIC_RELATIVE_MODULE_PATTERN)] : []),
+    ...content.matchAll(MOCK_RELATIVE_MODULE_PATTERN),
   ];
   for (const match of matches) {
     const specifier = match[1];

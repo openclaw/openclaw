@@ -16,7 +16,7 @@ const oauthMocks = vi.hoisted(() => ({
 const providerRuntimeMocks = vi.hoisted(() => ({
   formatProviderAuthProfileApiKeyWithPlugin: vi.fn(),
   refreshProviderOAuthCredentialWithPlugin: vi.fn(
-    async (params: { context: { refresh: string } }) => {
+    async (params: { provider?: string; context: { refresh: string } }) => {
       const refreshed = await oauthMocks.refreshOpenAICodexToken(params.context.refresh);
       return refreshed
         ? {
@@ -37,12 +37,57 @@ vi.mock("@mariozechner/pi-ai/oauth", () => ({
   refreshOpenAICodexToken: oauthMocks.refreshOpenAICodexToken,
 }));
 
-vi.mock("../../../../src/plugins/provider-runtime.runtime.js", () => ({
-  formatProviderAuthProfileApiKeyWithPlugin:
-    providerRuntimeMocks.formatProviderAuthProfileApiKeyWithPlugin,
-  refreshProviderOAuthCredentialWithPlugin:
-    providerRuntimeMocks.refreshProviderOAuthCredentialWithPlugin,
-}));
+vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>();
+  return {
+    ...actual,
+    resolveApiKeyForProfile: async (
+      params: Parameters<typeof actual.resolveApiKeyForProfile>[0],
+    ) => {
+      const credential = params.store.profiles[params.profileId];
+      if (!credential) {
+        return null;
+      }
+      if (credential.type === "api_key") {
+        const apiKey =
+          credential.key?.trim() ||
+          (credential.keyRef?.source === "env" ? process.env[credential.keyRef.id]?.trim() : "");
+        return apiKey ? { apiKey, provider: credential.provider } : null;
+      }
+      if (credential.type === "token") {
+        const apiKey =
+          credential.token?.trim() ||
+          (credential.tokenRef?.source === "env"
+            ? process.env[credential.tokenRef.id]?.trim()
+            : "");
+        return apiKey ? { apiKey, provider: credential.provider, email: credential.email } : null;
+      }
+      let oauthCredential = credential;
+      if ((oauthCredential.expires ?? 0) <= Date.now()) {
+        const refreshed = await providerRuntimeMocks.refreshProviderOAuthCredentialWithPlugin({
+          provider: oauthCredential.provider,
+          context: oauthCredential,
+        });
+        if (refreshed?.access) {
+          oauthCredential = refreshed as typeof oauthCredential;
+          params.store.profiles[params.profileId] = oauthCredential;
+          if (params.agentDir) {
+            actual.saveAuthProfileStore(params.store, params.agentDir);
+          }
+        }
+      }
+      const formatted = await providerRuntimeMocks.formatProviderAuthProfileApiKeyWithPlugin({
+        provider: oauthCredential.provider,
+        context: oauthCredential,
+      });
+      const apiKey =
+        typeof formatted === "string" && formatted ? formatted : oauthCredential.access;
+      return apiKey
+        ? { apiKey, provider: oauthCredential.provider, email: oauthCredential.email }
+        : null;
+    },
+  };
+});
 
 afterEach(() => {
   vi.unstubAllEnvs();

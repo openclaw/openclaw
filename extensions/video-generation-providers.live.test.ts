@@ -234,6 +234,13 @@ function resolveLiveVideoSkipReason(message: string): string | null {
   if (isOverloadedErrorMessage(message) || isServerErrorMessage(message)) {
     return "provider outage";
   }
+  if (
+    /HTTP\s+404/i.test(message) &&
+    /Invalid URL/i.test(message) &&
+    /\/platform\/video_gen/i.test(message)
+  ) {
+    return "provider endpoint drift";
+  }
   if (/access denied|not authorized|not enabled|permission denied/i.test(message)) {
     return "provider/model drift";
   }
