@@ -297,7 +297,7 @@ describe("ensureAgentWorkspace", () => {
     expect(voice).toContain("# Voice Speech Preparation Library");
     expect(voice).toContain("This file is a prompting contract, not proof of a live TTS backend.");
     expect(voice).toContain("[calm]");
-    expect(voice).toContain("ElevenLabs Eleven v3 and Eleven v3 Conversational");
+    expect(voice).toContain("ElevenLabs v3 and v3 Conversational");
   });
 
   it("does not seed voice.md into legacy workspaces where it is absent", async () => {
