@@ -20,7 +20,17 @@ export * from "./src/group-policy.js";
 export * from "./src/monitor/allow-list.js";
 export * from "./src/probe.js";
 export * from "./src/security-audit.js";
-export * from "./src/sent-thread-cache.js";
+// Explicitly list public exports so test-only helpers (_flushPersist,
+// _resetForTests) stay internal. A wildcard export would re-export those
+// underscored helpers as part of the slack extension's public API,
+// allowing same-process consumers to redirect the persist path and
+// trigger arbitrary writes/renames/unlinks (clawsweeper review on
+// PR #33845).
+export {
+  recordSlackThreadParticipation,
+  hasSlackThreadParticipation,
+  clearSlackThreadParticipationCache,
+} from "./src/sent-thread-cache.js";
 export * from "./src/targets.js";
 export * from "./src/threading-tool-context.js";
 export { resolveSlackRuntimeGroupPolicy } from "./src/monitor/provider.js";

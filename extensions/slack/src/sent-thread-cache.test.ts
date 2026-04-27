@@ -202,4 +202,44 @@ describe("slack sent-thread-cache persistence", () => {
     recordSlackThreadParticipation("A1", "C123", "1700000000.000001");
     expect(hasSlackThreadParticipation("A1", "C123", "1700000000.000001")).toBe(true);
   });
+
+  it("reinserts on update so Map insertion order reflects recency", () => {
+    setup();
+    // Record A first, then B, then re-record A. After re-recording A,
+    // its insertion-order position should be at the end (most recent),
+    // not still at its original first position.
+    recordSlackThreadParticipation("A1", "C123", "thread-A");
+    recordSlackThreadParticipation("A1", "C123", "thread-B");
+    recordSlackThreadParticipation("A1", "C123", "thread-A"); // re-record
+
+    _flushPersist();
+    const data: Record<string, number> = JSON.parse(fs.readFileSync(tempFile, "utf8"));
+    const keys = Object.keys(data);
+    // After re-record, thread-A's position should be after thread-B in
+    // insertion order (Object.keys preserves Map insertion order in V8).
+    expect(keys).toEqual([
+      "A1:C123:thread-B",
+      "A1:C123:thread-A",
+    ]);
+  });
+
+  it("caps in-memory map size on insert (not just on serialise)", () => {
+    setup();
+    // The MAX_ENTRIES cap is 5000. Recording 5005 unique entries should
+    // leave the in-memory map capped at 5000 — the oldest 5 should be
+    // evicted at insertion time, not deferred to the next persist.
+    for (let i = 0; i < 5005; i++) {
+      recordSlackThreadParticipation("A1", "C123", `thread-${i.toString().padStart(5, "0")}`);
+    }
+    _flushPersist();
+    const data: Record<string, number> = JSON.parse(fs.readFileSync(tempFile, "utf8"));
+    const keys = Object.keys(data);
+    expect(keys.length).toBe(5000);
+    // The oldest 5 (thread-00000 through thread-00004) should have been
+    // evicted; the most recent (thread-05004) should remain.
+    expect(keys).not.toContain("A1:C123:thread-00000");
+    expect(keys).not.toContain("A1:C123:thread-00004");
+    expect(keys).toContain("A1:C123:thread-00005");
+    expect(keys).toContain("A1:C123:thread-05004");
+  });
 });

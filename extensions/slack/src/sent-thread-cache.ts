@@ -127,7 +127,24 @@ export function recordSlackThreadParticipation(
   hydrateFromDisk();
   const key = makeKey(accountId, channelId, threadTs);
   threadParticipation.check(key);
+  // Reinsert on update so Map insertion order reflects recency.
+  // `Map.set` on an existing key updates the value but keeps the key in
+  // its original insertion position; without delete-then-set the
+  // insertion-order semantics drift from actual recency, which would
+  // matter for any future iteration order-based eviction (clawsweeper
+  // review on PR #33845).
+  persistState.entries.delete(key);
   persistState.entries.set(key, Date.now());
+  // Bound in-memory growth between debounced writes. The pre-existing
+  // serialise-time cap protects the on-disk file but did NOT protect
+  // memory in busy workspaces accumulating thousands of unique threads
+  // between persists. Evict the oldest entries (Map insertion order =
+  // recency thanks to delete-then-set above) once we exceed the cap.
+  while (persistState.entries.size > MAX_ENTRIES) {
+    const oldest = persistState.entries.keys().next().value;
+    if (oldest === undefined) break;
+    persistState.entries.delete(oldest);
+  }
   schedulePersist();
 }
 
