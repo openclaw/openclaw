@@ -109,15 +109,22 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
           );
           return;
         }
+        // Plugin-declared action failures are returned as a successful RPC
+        // with `ok: false` per PluginsSessionActionResultSchema. Reserve
+        // transport errorShape for protocol-level failures (validation,
+        // schema mismatch, dispatch error). Distinguishing these in the
+        // wire shape lets callers handle plugin failures (often retryable
+        // or user-facing) differently from transport errors (operator
+        // diagnostics).
         respond(
-          false,
+          true,
+          {
+            ok: false,
+            error: result.error,
+            ...(result.code !== undefined ? { code: result.code } : {}),
+            ...(result.details !== undefined ? { details: result.details } : {}),
+          },
           undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, result.error, {
-            details:
-              result.code !== undefined
-                ? { code: result.code, details: result.details }
-                : result.details,
-          }),
         );
         return;
       }
