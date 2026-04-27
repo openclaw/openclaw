@@ -25,6 +25,11 @@ import {
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { isPlainObject } from "../utils.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
+import {
+  classifyDestructiveAction,
+  inventoryCredentialBlastRadius,
+  type ClassificationResult,
+} from "./credential-blast-radius-classifier.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -60,6 +65,7 @@ const adjustedParamsByToolCallId = new Map<string, unknown>();
 const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
 const LOOP_WARNING_BUCKET_SIZE = 10;
 const MAX_LOOP_WARNING_KEYS = 256;
+const CREDENTIAL_BLAST_RADIUS_APPROVAL_TIMEOUT_MS = 120_000;
 
 /**
  * Error used when before_tool_call intentionally vetoes a tool call.
@@ -318,6 +324,39 @@ export function buildBlockedToolResult(params: {
   };
 }
 
+function createAbortError(): Error {
+  const err = new Error("Run aborted");
+  err.name = "AbortError";
+  return err;
+}
+
+function raceWithAbortSignal<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) {
+    return promise;
+  }
+  if (signal.aborted) {
+    return Promise.reject(signal.reason ?? createAbortError());
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => {
+      cleanup();
+      reject(signal.reason ?? createAbortError());
+    };
+    const cleanup = (): void => signal.removeEventListener("abort", onAbort);
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (err: unknown) => {
+        cleanup();
+        reject(err);
+      },
+    );
+  });
+}
+
 function summarizeToolParams(params: unknown): DiagnosticToolParamsSummary {
   if (params === null) {
     return { kind: "null" };
@@ -341,6 +380,107 @@ function summarizeToolParams(params: unknown): DiagnosticToolParamsSummary {
     return { kind: "boolean" };
   }
   return { kind: "other" };
+}
+
+function buildCredentialBlastRadiusApprovalMetadata(env = process.env): {
+  credentials: Array<{ name: string; class: string; description: string }>;
+} {
+  return {
+    credentials: inventoryCredentialBlastRadius(env),
+  };
+}
+
+function formatDestructiveActionMatchIds(
+  result: Extract<ClassificationResult, { isDestructive: true }>,
+): string {
+  return result.matches.map((match) => match.patternId).join(", ");
+}
+
+async function applyCredentialBlastRadiusGuard(args: {
+  toolName: string;
+  params: unknown;
+  toolCallId?: string;
+  ctx?: HookContext;
+  signal?: AbortSignal;
+}): Promise<HookOutcome | undefined> {
+  const result = classifyDestructiveAction(args.toolName, args.params);
+  if (!result.isDestructive) {
+    return undefined;
+  }
+
+  const matchIds = formatDestructiveActionMatchIds(result);
+  const credentialMetadata = buildCredentialBlastRadiusApprovalMetadata();
+  log.warn(
+    `credential blast-radius guard observed destructive tool call: tool=${args.toolName} severity=${result.highestSeverity} patterns=${matchIds} credentialNames=${credentialMetadata.credentials
+      .map((credential) => `${credential.name}:${credential.class}`)
+      .join(",")}`,
+  );
+
+  if (result.highestSeverity === "block") {
+    return {
+      blocked: true,
+      reason: `Destructive action blocked by credential blast-radius guard: ${matchIds}`,
+    };
+  }
+
+  try {
+    const requestResult: { id?: string; decision?: string | null } = await callGatewayTool(
+      "plugin.approval.request",
+      { timeoutMs: CREDENTIAL_BLAST_RADIUS_APPROVAL_TIMEOUT_MS + 10_000 },
+      {
+        pluginId: "credential-blast-radius-guard",
+        title: "Destructive tool call requires approval",
+        description: `Credential blast-radius guard matched destructive operation(s): ${matchIds}`,
+        severity: "warning",
+        toolName: args.toolName,
+        toolCallId: args.toolCallId,
+        agentId: args.ctx?.agentId,
+        sessionKey: args.ctx?.sessionKey,
+        timeoutMs: CREDENTIAL_BLAST_RADIUS_APPROVAL_TIMEOUT_MS,
+        twoPhase: true,
+        metadata: credentialMetadata,
+      },
+      { expectFinal: false },
+    );
+    const id = requestResult?.id;
+    if (!id) {
+      return { blocked: true, reason: "Credential blast-radius approval request failed" };
+    }
+
+    const hasImmediateDecision = Object.prototype.hasOwnProperty.call(requestResult, "decision");
+    let decision = requestResult.decision;
+    if (hasImmediateDecision && decision === null) {
+      return { blocked: true, reason: "Credential blast-radius approval unavailable" };
+    }
+    if (!hasImmediateDecision) {
+      const waitResult: { decision?: string | null } = await raceWithAbortSignal(
+        callGatewayTool(
+          "plugin.approval.waitDecision",
+          { timeoutMs: CREDENTIAL_BLAST_RADIUS_APPROVAL_TIMEOUT_MS + 10_000 },
+          { id },
+        ),
+        args.signal,
+      );
+      decision = waitResult?.decision;
+    }
+
+    if (
+      decision === PluginApprovalResolutions.ALLOW_ONCE ||
+      decision === PluginApprovalResolutions.ALLOW_ALWAYS
+    ) {
+      return { blocked: false, params: args.params };
+    }
+    if (decision === PluginApprovalResolutions.DENY) {
+      return { blocked: true, reason: "Denied by user" };
+    }
+    return { blocked: true, reason: "Credential blast-radius approval timed out" };
+  } catch (err) {
+    if (isAbortSignalCancellation(err, args.signal)) {
+      return { blocked: true, reason: "Approval cancelled (run aborted)" };
+    }
+    log.warn(`credential blast-radius approval gateway request failed: ${String(err)}`);
+    return { blocked: true, reason: "Credential blast-radius approval required" };
+  }
 }
 
 function shouldEmitLoopWarning(state: SessionState, warningKey: string, count: number): boolean {
@@ -469,6 +609,17 @@ export async function runBeforeToolCallHook(args: {
       args.ctx.loopDetection,
       loopScope,
     );
+  }
+
+  const credentialBlastRadiusOutcome = await applyCredentialBlastRadiusGuard({
+    toolName,
+    params,
+    toolCallId: args.toolCallId,
+    ctx: args.ctx,
+    signal: args.signal,
+  });
+  if (credentialBlastRadiusOutcome) {
+    return credentialBlastRadiusOutcome;
   }
 
   const hookRunner = getGlobalHookRunner();
@@ -741,5 +892,7 @@ export const __testing = {
   adjustedParamsByToolCallId,
   runBeforeToolCallHook,
   mergeParamsWithApprovalOverrides,
+  buildCredentialBlastRadiusApprovalMetadata,
+  applyCredentialBlastRadiusGuard,
   isPlainObject,
 };
