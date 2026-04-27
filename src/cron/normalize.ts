@@ -315,6 +315,10 @@ function inferTopLevelPayload(next: UnknownRecord) {
   }
 
   const text = normalizeOptionalString(next.text) ?? "";
+  if (text && hasAgentTurnPayloadHint(next)) {
+    // text + agentTurn-only fields (e.g. model) -> promote to agentTurn, text -> message.
+    return { kind: "agentTurn", message: text } satisfies UnknownRecord;
+  }
   if (text) {
     return { kind: "systemEvent", text } satisfies UnknownRecord;
   }
