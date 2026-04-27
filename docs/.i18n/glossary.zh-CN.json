@@ -436,6 +436,22 @@
     "target": "设置"
   },
   {
+    "source": "Migrate",
+    "target": "迁移"
+  },
+  {
+    "source": "Migration",
+    "target": "迁移"
+  },
+  {
+    "source": "Hermes",
+    "target": "Hermes"
+  },
+  {
+    "source": "Archive-only",
+    "target": "仅归档"
+  },
+  {
     "source": "Channel Plugin SDK",
     "target": "渠道插件 SDK"
   },

@@ -7,10 +7,12 @@ import {
 import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
 import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import type {
+  BundledChannelConfigCollector,
   PluginManifestContractListKey,
   PluginManifestRecord,
   PluginManifestRegistry,
 } from "./manifest-registry.js";
+import type { PluginLookUpTable } from "./plugin-lookup-table.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import {
   loadPluginRegistrySnapshot,
@@ -20,11 +22,13 @@ import {
 
 export type PluginRegistryContributionOptions = LoadPluginRegistryParams & {
   includeDisabled?: boolean;
+  lookUpTable?: PluginLookUpTable;
 };
 
 export type LoadPluginRegistryManifestParams = LoadPluginRegistryParams & {
   includeDisabled?: boolean;
   pluginIds?: readonly string[];
+  bundledChannelConfigCollector?: BundledChannelConfigCollector;
 };
 
 export type PluginRegistryContributionKey =
@@ -80,6 +84,11 @@ export type ResolveManifestContractPluginIdsByCompatibilityRuntimePathParams =
     path: string | undefined;
     origin?: PluginOrigin;
   };
+
+export type PluginRegistryIdNormalizerOptions = {
+  manifestRegistry?: PluginManifestRegistry;
+  lookUpTable?: PluginLookUpTable;
+};
 
 function normalizeContributionId(value: string): string {
   return value.trim();
@@ -190,6 +199,69 @@ function loadContributionManifestRegistry(
   });
 }
 
+function listContributionManifestPlugins(
+  params: PluginRegistryContributionOptions & {
+    index: PluginRegistrySnapshot;
+  },
+): readonly PluginManifestRecord[] {
+  const plugins = params.lookUpTable?.plugins;
+  if (plugins) {
+    const enabledPluginIds = new Set(
+      resolveContributionPluginIds({
+        index: params.index,
+        includeDisabled: params.includeDisabled,
+        config: params.config,
+      }),
+    );
+    return plugins.filter((plugin) => enabledPluginIds.has(plugin.id));
+  }
+  return loadContributionManifestRegistry({
+    ...params,
+    index: params.index,
+  }).plugins;
+}
+
+function resolveContributionOwnerMap(
+  table: PluginLookUpTable,
+  contribution: PluginRegistryContributionKey,
+): ReadonlyMap<string, readonly string[]> | undefined {
+  switch (contribution) {
+    case "channels":
+      return table.owners.channels;
+    case "channelConfigs":
+      return table.owners.channelConfigs;
+    case "providers":
+      return table.owners.providers;
+    case "modelCatalogProviders":
+      return table.owners.modelCatalogProviders;
+    case "cliBackends":
+      return table.owners.cliBackends;
+    case "setupProviders":
+      return table.owners.setupProviders;
+    case "commandAliases":
+      return table.owners.commandAliases;
+    case "contracts":
+      return table.owners.contracts;
+  }
+  return undefined;
+}
+
+function filterContributionOwnerIds(params: {
+  owners: readonly string[];
+  index: PluginRegistrySnapshot;
+  includeDisabled?: boolean;
+  config?: OpenClawConfig;
+}): readonly string[] {
+  const enabledPluginIds = new Set(
+    resolveContributionPluginIds({
+      index: params.index,
+      includeDisabled: params.includeDisabled,
+      config: params.config,
+    }),
+  );
+  return sortUnique(params.owners.filter((owner) => enabledPluginIds.has(owner)));
+}
+
 export function loadPluginManifestRegistryForPluginRegistry(
   params: LoadPluginRegistryManifestParams = {},
 ): PluginManifestRegistry {
@@ -201,11 +273,15 @@ export function loadPluginManifestRegistryForPluginRegistry(
     env: params.env,
     pluginIds: params.pluginIds,
     includeDisabled: params.includeDisabled,
+    ...(params.bundledChannelConfigCollector
+      ? { bundledChannelConfigCollector: params.bundledChannelConfigCollector }
+      : {}),
   });
 }
 
 export function createPluginRegistryIdNormalizer(
   index: PluginRegistrySnapshot,
+  options: PluginRegistryIdNormalizerOptions = {},
 ): (pluginId: string) => string {
   const aliases = new Map<string, string>();
   for (const plugin of index.plugins) {
@@ -214,10 +290,13 @@ export function createPluginRegistryIdNormalizer(
       aliases.set(normalizePluginRegistryAliasKey(pluginId), plugin.pluginId);
     }
   }
-  const registry = loadPluginManifestRegistryForInstalledIndex({
-    index,
-    includeDisabled: true,
-  });
+  const registry =
+    options.lookUpTable?.manifestRegistry ??
+    options.manifestRegistry ??
+    loadPluginManifestRegistryForInstalledIndex({
+      index,
+      includeDisabled: true,
+    });
   for (const plugin of [...registry.plugins].toSorted((left, right) =>
     left.id.localeCompare(right.id),
   )) {
@@ -251,37 +330,48 @@ export function createPluginRegistryIdNormalizer(
 export function normalizePluginsConfigWithRegistry(
   config: OpenClawConfig["plugins"] | undefined,
   index: PluginRegistrySnapshot,
+  options: PluginRegistryIdNormalizerOptions = {},
 ): NormalizedPluginsConfig {
-  return normalizePluginsConfigWithResolver(config, createPluginRegistryIdNormalizer(index));
+  return normalizePluginsConfigWithResolver(
+    config,
+    createPluginRegistryIdNormalizer(index, options),
+  );
 }
 
 export function listPluginContributionIds(
   params: ListPluginContributionIdsParams,
 ): readonly string[] {
-  const index = loadPluginRegistrySnapshot(params);
-  const registry = loadContributionManifestRegistry({
-    ...params,
-    index,
-  });
+  const index = params.lookUpTable?.index ?? loadPluginRegistrySnapshot(params);
+  const plugins = listContributionManifestPlugins({ ...params, index });
   return sortUnique(
-    registry.plugins.flatMap((plugin) => listManifestContributionIds(plugin, params.contribution)),
+    plugins.flatMap((plugin) => listManifestContributionIds(plugin, params.contribution)),
   );
 }
 
 export function resolvePluginContributionOwners(
   params: ResolvePluginContributionOwnersParams,
 ): readonly string[] {
+  const index = params.lookUpTable?.index ?? loadPluginRegistrySnapshot(params);
+  if (params.lookUpTable && typeof params.matches === "string") {
+    const ownerMap = resolveContributionOwnerMap(params.lookUpTable, params.contribution);
+    const owners = ownerMap?.get(params.matches);
+    if (owners) {
+      return filterContributionOwnerIds({
+        owners,
+        index,
+        includeDisabled: params.includeDisabled,
+        config: params.config,
+      });
+    }
+    return [];
+  }
   const matcher =
     typeof params.matches === "string"
       ? (contributionId: string) => contributionId === params.matches
       : params.matches;
-  const index = loadPluginRegistrySnapshot(params);
-  const registry = loadContributionManifestRegistry({
-    ...params,
-    index,
-  });
+  const plugins = listContributionManifestPlugins({ ...params, index });
   return sortUnique(
-    registry.plugins.flatMap((plugin) =>
+    plugins.flatMap((plugin) =>
       listManifestContributionIds(plugin, params.contribution).some(matcher) ? [plugin.id] : [],
     ),
   );
@@ -291,6 +381,21 @@ export function resolveProviderOwners(params: ResolveProviderOwnersParams): read
   const providerId = normalizeProviderId(params.providerId);
   if (!providerId) {
     return [];
+  }
+  if (params.lookUpTable) {
+    const index = params.lookUpTable.index;
+    const owners: string[] = [];
+    for (const [contributionId, ownerIds] of params.lookUpTable.owners.providers.entries()) {
+      if (normalizeProviderId(contributionId) === providerId) {
+        owners.push(...ownerIds);
+      }
+    }
+    return filterContributionOwnerIds({
+      owners,
+      index,
+      includeDisabled: params.includeDisabled,
+      config: params.config,
+    });
   }
   return resolvePluginContributionOwners({
     ...params,

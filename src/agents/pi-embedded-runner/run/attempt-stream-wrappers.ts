@@ -10,7 +10,7 @@ import {
   shouldAllowProviderOwnedThinkingReplay,
   type TranscriptPolicy,
 } from "../../transcript-policy.js";
-import { dropThinkingBlocks } from "../thinking.js";
+import { dropReasoningFromHistory, dropThinkingBlocks } from "../thinking.js";
 import { createYieldAbortedResponse } from "./attempt.sessions-yield.js";
 import { wrapStreamFnHandleSensitiveStopReason } from "./attempt.stop-reason-recovery.js";
 import {
@@ -31,22 +31,30 @@ type AttemptStreamWrapperSession = {
   };
 };
 
-function wrapStreamFnDropThinkingBlocks(streamFn: StreamFn): StreamFn {
-  return (model, context, options) => {
+function wrapStreamFnDropThinkingBlocks(
+  streamFn: StreamFn,
+  options: { dropThinkingBlocks: boolean; dropReasoningFromHistory: boolean },
+): StreamFn {
+  return (model, context, opts) => {
     const ctx = context as unknown as { messages?: unknown };
     const messages = ctx?.messages;
     if (!Array.isArray(messages)) {
-      return streamFn(model, context, options);
+      return streamFn(model, context, opts);
     }
-    const sanitized = dropThinkingBlocks(messages as unknown as AgentMessage[]) as unknown;
+    const reasoningSanitized = options.dropReasoningFromHistory
+      ? dropReasoningFromHistory(messages as unknown as AgentMessage[])
+      : (messages as unknown as AgentMessage[]);
+    const sanitized = options.dropThinkingBlocks
+      ? (dropThinkingBlocks(reasoningSanitized) as unknown)
+      : (reasoningSanitized as unknown);
     if (sanitized === messages) {
-      return streamFn(model, context, options);
+      return streamFn(model, context, opts);
     }
     const nextContext = {
       ...(context as unknown as Record<string, unknown>),
       messages: sanitized,
     } as unknown;
-    return streamFn(model, nextContext as typeof context, options);
+    return streamFn(model, nextContext as typeof context, opts);
   };
 }
 
@@ -141,9 +149,16 @@ export function applyAttemptStreamWrappers(params: {
     );
   }
 
-  if (params.transcriptPolicy.dropThinkingBlocks) {
+  if (
+    params.transcriptPolicy.dropThinkingBlocks ||
+    params.transcriptPolicy.dropReasoningFromHistory
+  ) {
     params.activeSession.agent.streamFn = wrapStreamFnDropThinkingBlocks(
       params.activeSession.agent.streamFn,
+      {
+        dropThinkingBlocks: params.transcriptPolicy.dropThinkingBlocks ?? false,
+        dropReasoningFromHistory: params.transcriptPolicy.dropReasoningFromHistory ?? false,
+      },
     );
   }
 

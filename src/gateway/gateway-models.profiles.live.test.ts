@@ -695,7 +695,7 @@ describe("shouldSkipToolNonceProbeMissForLiveModel", () => {
     { modelKey: "opencode/big-pickle", expected: true },
     { modelKey: "opencode-go/glm-5", expected: true },
     { modelKey: "xai/grok-4.1-fast", expected: true },
-    { modelKey: "zai/glm-4.7", expected: true },
+    { modelKey: "zai/glm-5.1", expected: true },
     { modelKey: "google/gemini-3-flash-preview", expected: true },
     { modelKey: "openai/gpt-5.4", expected: false },
   ])("returns $expected for $modelKey", ({ modelKey, expected }) => {
@@ -2287,7 +2287,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     const authStorage = discoverAuthStorage(agentDir);
     const modelRegistry = discoverModels(authStorage, agentDir);
     const anthropic = modelRegistry.find("anthropic", "claude-opus-4-6") as Model<Api> | null;
-    const zai = modelRegistry.find("zai", "glm-4.7") as Model<Api> | null;
+    const zai = modelRegistry.find("zai", "glm-5.1") as Model<Api> | null;
 
     if (!anthropic || !zai) {
       return;
@@ -2393,7 +2393,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       await withGatewayLiveProbeTimeout(
         client.request("sessions.patch", {
           key: sessionKey,
-          model: "zai/glm-4.7",
+          model: "zai/glm-5.1",
         }),
         "zai-fallback: sessions-patch-zai",
       );
@@ -2402,7 +2402,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         client,
         sessionKey,
         idempotencyKey: `idem-${randomUUID()}-followup`,
-        modelKey: "zai/glm-4.7",
+        modelKey: "zai/glm-5.1",
         message:
           `What are the values of nonceA and nonceB in "${toolProbePath}"? ` +
           `Reply with exactly: ${nonceA} ${nonceB}.`,
@@ -2411,7 +2411,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       });
       assertNoReasoningTags({
         text: followupText,
-        model: "zai/glm-4.7",
+        model: "zai/glm-5.1",
         phase: "zai-fallback-followup",
         label: "zai-fallback",
       });

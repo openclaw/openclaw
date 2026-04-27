@@ -326,16 +326,19 @@ function recordFailedCandidateAttempt(params: {
   });
 }
 
-function findLaterLiveSessionModelSwitchCandidateIndex(params: {
+function findLiveSessionModelSwitchRedirectIndex(params: {
   error: LiveSessionModelSwitchError;
   candidates: ModelCandidate[];
   currentIndex: number;
 }): number | null {
   const targetKey = modelKey(params.error.provider, params.error.model);
-  const targetIndex = params.candidates.findIndex(
-    (candidate) => modelKey(candidate.provider, candidate.model) === targetKey,
-  );
-  return targetIndex > params.currentIndex ? targetIndex : null;
+  for (let i = params.currentIndex + 1; i < params.candidates.length; i += 1) {
+    const candidate = params.candidates[i];
+    if (modelKey(candidate.provider, candidate.model) === targetKey) {
+      return i;
+    }
+  }
+  return null;
 }
 
 function throwFallbackFailureSummary(params: {
@@ -930,13 +933,12 @@ export async function runWithModelFallback<T>(params: {
           model: candidate.model,
         }) ?? err;
 
-      // LiveSessionModelSwitchError during fallback means the session's
-      // persisted model conflicts with this fallback candidate.  Treat it
-      // as a known failover so the chain continues to the next candidate
-      // instead of re-throwing and triggering infinite retry loops in the
-      // outer runner.  (#58466)
+      // LiveSessionModelSwitchError during fallback may point at a later
+      // candidate that is already the active live-session selection.  Jump
+      // there directly.  Stale same/earlier targets remain a known failover
+      // so the outer runner cannot loop on the conflicting model.
       if (err instanceof LiveSessionModelSwitchError) {
-        const liveSwitchTargetIndex = findLaterLiveSessionModelSwitchCandidateIndex({
+        const liveSwitchTargetIndex = findLiveSessionModelSwitchRedirectIndex({
           error: err,
           candidates,
           currentIndex: i,

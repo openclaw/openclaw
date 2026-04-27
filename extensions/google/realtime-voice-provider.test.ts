@@ -77,6 +77,9 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
             temperature: 0.4,
             silenceDurationMs: 700,
             startSensitivity: "high",
+            activityHandling: "no_interruption",
+            turnCoverage: "turn_includes_only_activity",
+            automaticActivityDetectionDisabled: false,
           },
         },
       },
@@ -92,6 +95,9 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       silenceDurationMs: 700,
       startSensitivity: "high",
       endSensitivity: undefined,
+      activityHandling: "no-interruption",
+      turnCoverage: "only-activity",
+      automaticActivityDetectionDisabled: false,
       enableAffectiveDialog: undefined,
       thinkingLevel: undefined,
       thinkingBudget: undefined,
@@ -107,6 +113,9 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
         voice: "Kore",
         temperature: 0.3,
         startSensitivity: "low",
+        endSensitivity: "low",
+        activityHandling: "no-interruption",
+        turnCoverage: "only-activity",
       },
       instructions: "Speak briefly.",
       tools: [
@@ -144,6 +153,14 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
           },
         },
         outputAudioTranscription: {},
+        realtimeInputConfig: {
+          activityHandling: "NO_INTERRUPTION",
+          automaticActivityDetection: {
+            startOfSpeechSensitivity: "START_SENSITIVITY_LOW",
+            endOfSpeechSensitivity: "END_SENSITIVITY_LOW",
+          },
+          turnCoverage: "TURN_INCLUDES_ONLY_ACTIVITY",
+        },
         tools: [
           {
             functionDeclarations: [
@@ -238,6 +255,28 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     bridge.sendAudio(silence20ms);
 
     expect(session.sendRealtimeInput).toHaveBeenCalledWith({ audioStreamEnd: true });
+  });
+
+  it("can disable automatic VAD for manual activity signaling experiments", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: {
+        apiKey: "gemini-key",
+        automaticActivityDetectionDisabled: true,
+      },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    await bridge.connect();
+
+    expect(lastConnectParams().config).toMatchObject({
+      realtimeInputConfig: {
+        automaticActivityDetection: {
+          disabled: true,
+        },
+      },
+    });
   });
 
   it("sends text prompts as ordered client turns", async () => {

@@ -2,9 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   ensureBundledPluginRuntimeDeps,
+  materializeBundledRuntimeMirrorDistFile,
   resolveBundledRuntimeDependencyInstallRoot,
   resolveBundledRuntimeDependencyPackageRoot,
   registerBundledRuntimeDependencyNodePath,
+  shouldMaterializeBundledRuntimeMirrorDistFile,
   withBundledRuntimeDepsFilesystemLock,
 } from "./bundled-runtime-deps.js";
 
@@ -107,6 +109,9 @@ function mirrorBundledPluginRuntimeRoot(params: {
         // Best-effort only: the access check below will surface non-writable dirs.
       }
       fs.accessSync(mirrorParent, fs.constants.W_OK);
+      if (path.resolve(mirrorRoot) === path.resolve(params.pluginRoot)) {
+        return mirrorRoot;
+      }
       const tempDir = fs.mkdtempSync(path.join(mirrorParent, `.plugin-${params.pluginId}-`));
       const stagedRoot = path.join(tempDir, "plugin");
       try {
@@ -137,6 +142,13 @@ function prepareBundledPluginRuntimeDistMirror(params: {
     }
     const sourcePath = path.join(sourceDistRoot, entry.name);
     const targetPath = path.join(mirrorDistRoot, entry.name);
+    if (path.resolve(sourcePath) === path.resolve(targetPath)) {
+      continue;
+    }
+    if (entry.isFile() && shouldMaterializeBundledRuntimeMirrorDistFile(sourcePath)) {
+      materializeBundledRuntimeMirrorDistFile(sourcePath, targetPath);
+      continue;
+    }
     if (fs.existsSync(targetPath)) {
       continue;
     }
@@ -166,6 +178,9 @@ function ensureBundledRuntimeDistPackageJson(mirrorDistRoot: string): void {
 }
 
 function copyBundledPluginRuntimeRoot(sourceRoot: string, targetRoot: string): void {
+  if (path.resolve(sourceRoot) === path.resolve(targetRoot)) {
+    return;
+  }
   fs.mkdirSync(targetRoot, { recursive: true, mode: 0o755 });
   for (const entry of fs.readdirSync(sourceRoot, { withFileTypes: true })) {
     if (entry.name === "node_modules") {

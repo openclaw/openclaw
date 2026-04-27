@@ -4,6 +4,7 @@ import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-co
 import type {
   EmbeddedPiAgentMeta,
   EmbeddedPiRunResult,
+  EmbeddedRunFailureSignal,
   EmbeddedRunLivenessState,
   ToolSummaryTrace,
   TraceAttempt,
@@ -34,9 +35,8 @@ export function buildEmbeddedRunExecutionTrace(params: {
   winnerModel: string;
   includeSuccessAttempt?: boolean;
 }): EmbeddedPiRunResult["meta"]["executionTrace"] {
-  const attempts = params.includeSuccessAttempt
+  const successRow = params.includeSuccessAttempt
     ? [
-        ...params.traceAttempts,
         {
           provider: params.winnerProvider,
           model: params.winnerModel,
@@ -44,7 +44,9 @@ export function buildEmbeddedRunExecutionTrace(params: {
           stage: "assistant" as const,
         },
       ]
-    : undefined;
+    : [];
+  const hasAttempts = params.traceAttempts.length > 0 || successRow.length > 0;
+  const attempts = hasAttempts ? [...params.traceAttempts, ...successRow] : undefined;
   return {
     winnerProvider: params.winnerProvider,
     winnerModel: params.winnerModel,
@@ -89,6 +91,7 @@ export function buildEmbeddedRunTerminalResult(params: {
   verboseLevel?: string;
   blockReplyBreak?: string;
   toolSummary?: ToolSummaryTrace;
+  failureSignal?: EmbeddedRunFailureSignal;
   autoCompactionCount: number;
   toolCallIdFactory?: () => string;
 }): EmbeddedRunTerminalResult {
@@ -138,6 +141,7 @@ export function buildEmbeddedRunTerminalResult(params: {
         ...(params.blockReplyBreak ? { blockStreaming: params.blockReplyBreak } : {}),
       },
       toolSummary: params.toolSummary,
+      ...(params.failureSignal ? { failureSignal: params.failureSignal } : {}),
       completion: {
         ...(params.stopReason ? { stopReason: params.stopReason } : {}),
         ...(params.stopReason ? { finishReason: params.stopReason } : {}),

@@ -554,9 +554,19 @@ async function activateSystemdService(params: { env: GatewayServiceEnv }) {
   const serviceName = resolveSystemdServiceName(params.env);
   const unitName = `${serviceName}.service`;
   const reloadSystemd = async () => await execSystemctlUser(params.env, ["daemon-reload"]);
+  const throwActivationFailure = (
+    action: "daemon-reload" | "enable" | "restart",
+    result: { stdout: string; stderr: string },
+  ): never => {
+    const detail = readSystemctlDetail(result);
+    if (isSystemdUserScopeUnavailable(detail)) {
+      throw new Error(`systemctl --user unavailable: ${detail || "unknown error"}`.trim());
+    }
+    throw new Error(`systemctl ${action} failed: ${detail || "unknown error"}`.trim());
+  };
   const reload = await reloadSystemd();
   if (reload.code !== 0) {
-    throw new Error(`systemctl daemon-reload failed: ${reload.stderr || reload.stdout}`.trim());
+    throwActivationFailure("daemon-reload", reload);
   }
 
   const runAfterReloadRetry = async (action: "enable" | "restart") => {
@@ -566,21 +576,19 @@ async function activateSystemdService(params: { env: GatewayServiceEnv }) {
     }
     const retryReload = await reloadSystemd();
     if (retryReload.code !== 0) {
-      throw new Error(
-        `systemctl daemon-reload failed: ${retryReload.stderr || retryReload.stdout}`.trim(),
-      );
+      throwActivationFailure("daemon-reload", retryReload);
     }
     return await execSystemctlUser(params.env, [action, unitName]);
   };
 
   const enable = await runAfterReloadRetry("enable");
   if (enable.code !== 0) {
-    throw new Error(`systemctl enable failed: ${enable.stderr || enable.stdout}`.trim());
+    throwActivationFailure("enable", enable);
   }
 
   const restart = await runAfterReloadRetry("restart");
   if (restart.code !== 0) {
-    throw new Error(`systemctl restart failed: ${restart.stderr || restart.stdout}`.trim());
+    throwActivationFailure("restart", restart);
   }
 }
 

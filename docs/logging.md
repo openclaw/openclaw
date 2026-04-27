@@ -103,6 +103,18 @@ openclaw channels logs --channel whatsapp
 Each line in the log file is a JSON object. The CLI and Control UI parse these
 entries to render structured output (time, level, subsystem, message).
 
+File-log JSONL records also include machine-filterable top-level fields when
+available:
+
+- `hostname`: gateway host name.
+- `message`: flattened log message text for full-text search.
+- `agent_id`: active agent id when the log call carries agent context.
+- `session_id`: active session id/key when the log call carries session context.
+- `channel`: active channel when the log call carries channel context.
+
+OpenClaw preserves the original structured log arguments alongside these fields
+so existing parsers that read numbered tslog argument keys keep working.
+
 ### Console output
 
 Console logs are **TTY-aware** and formatted for readability:

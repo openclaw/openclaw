@@ -1,5 +1,13 @@
+import type { ChildProcess } from "node:child_process";
+import fs from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const nodeRequire = createRequire(import.meta.url);
+const childProcessModule = nodeRequire("node:child_process") as {
+  exec: typeof import("node:child_process").exec;
+};
 
 const mocks = vi.hoisted(() => ({
   createService: vi.fn(),
@@ -205,6 +213,74 @@ describe("gateway bonjour advertiser", () => {
 
     expect(createService).not.toHaveBeenCalled();
     await expect(started.stop()).resolves.toBeUndefined();
+  });
+
+  it("auto-disables Bonjour in detected containers", async () => {
+    enableAdvertiserUnitMode();
+    vi.spyOn(fs, "existsSync").mockImplementation((filePath) => String(filePath) === "/.dockerenv");
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    expect(createService).not.toHaveBeenCalled();
+    await expect(started.stop()).resolves.toBeUndefined();
+  });
+
+  it("honors explicit Bonjour opt-in inside detected containers", async () => {
+    enableAdvertiserUnitMode();
+    process.env.OPENCLAW_DISABLE_BONJOUR = "0";
+    vi.spyOn(fs, "existsSync").mockImplementation((filePath) => String(filePath) === "/.dockerenv");
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy });
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    expect(createService).toHaveBeenCalledTimes(1);
+
+    await started.stop();
+  });
+
+  it("hides ciao Windows ARP probe shell while advertiser is active", async () => {
+    enableAdvertiserUnitMode();
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const originalExec = childProcessModule.exec;
+    const execMock = vi.fn((command: string, options?: unknown, callback?: unknown) => {
+      const cb = typeof options === "function" ? options : callback;
+      if (typeof cb === "function") {
+        cb(null, "", "");
+      }
+      return { kill: vi.fn() } as unknown as ChildProcess;
+    });
+    childProcessModule.exec = execMock as unknown as typeof childProcessModule.exec;
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy });
+
+    try {
+      const started = await startAdvertiser({ gatewayPort: 18789 });
+      childProcessModule.exec('arp -a | findstr /C:"---"', () => {});
+
+      expect(execMock).toHaveBeenCalledWith(
+        'arp -a | findstr /C:"---"',
+        { windowsHide: true },
+        expect.any(Function),
+      );
+
+      await started.stop();
+      childProcessModule.exec('arp -a | findstr /C:"---"', () => {});
+      const afterStopOptions = execMock.mock.calls.at(-1)?.[1];
+      expect(afterStopOptions).toEqual(expect.any(Function));
+    } finally {
+      childProcessModule.exec = originalExec;
+    }
   });
 
   it("attaches conflict listeners for services", async () => {
