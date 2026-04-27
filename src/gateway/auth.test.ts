@@ -349,6 +349,19 @@ describe("gateway auth", () => {
     expect(res.reason).toBe("password_mismatch");
   });
 
+  it("records wrong Rabbit token payloads as password-mode failures", async () => {
+    const limiter = createLimiterSpy();
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "password", password: "secret", allowTailscale: false },
+      connectAuth: { token: "wrong" },
+      rateLimiter: limiter,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("password_mismatch");
+    expect(limiter.recordFailure).toHaveBeenCalledWith(undefined, "shared-secret");
+  });
+
   it("prefers password over token when both are supplied in password mode", async () => {
     const res = await authorizeGatewayConnect({
       auth: { mode: "password", password: "secret", allowTailscale: false },
