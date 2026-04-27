@@ -649,6 +649,7 @@ enum ExecApprovalsSocketPathGuard {
 
     private static func trustedParentSymlinkTarget(for parentURL: URL) throws -> URL {
         let parentPath = parentURL.path
+        try self.validateParentSymlinkLocation(for: parentURL)
         var status = stat()
         if stat(parentPath, &status) != 0 {
             throw ExecApprovalsSocketPathGuardError.parentSymlinkTargetInvalid(
@@ -686,6 +687,29 @@ enum ExecApprovalsSocketPathGuard {
         }
         try self.validateResolvedAncestorChain(for: targetURL, reportedPath: parentPath)
         return targetURL
+    }
+
+    private static func validateParentSymlinkLocation(for parentURL: URL) throws {
+        let parentPath = parentURL.path
+        var linkStatus = stat()
+        if lstat(parentPath, &linkStatus) != 0 {
+            throw ExecApprovalsSocketPathGuardError.parentSymlinkTargetInvalid(
+                path: parentPath,
+                message: "symlink lstat failed (errno \(errno))")
+        }
+        guard linkStatus.st_uid == getuid() else {
+            throw ExecApprovalsSocketPathGuardError.parentSymlinkTargetInvalid(
+                path: parentPath,
+                message: "symlink is not owned by the current user")
+        }
+
+        let locationURL = parentURL.deletingLastPathComponent().standardizedFileURL
+        try self.validateNoAdditionalSymlinkTargetHops(
+            in: locationURL.path,
+            reportedPath: parentPath)
+        try self.validateResolvedAncestorChain(
+            for: locationURL.resolvingSymlinksInPath(),
+            reportedPath: parentPath)
     }
 
     private static func symlinkDestinationPath(for parentURL: URL) throws -> String {

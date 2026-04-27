@@ -165,6 +165,38 @@ struct ExecApprovalsSocketPathGuardTests {
     }
 
     @Test
+    func `harden parent directory rejects symlink parent in writable location`() throws {
+        let root = FileManager().temporaryDirectory.resolvingSymlinksInPath()
+            .appendingPathComponent("openclaw-socket-guard-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: root) }
+        let target = root.appendingPathComponent("state-target", isDirectory: true)
+        let sharedParent = root.appendingPathComponent("shared-link-parent", isDirectory: true)
+        let linkedState = sharedParent.appendingPathComponent(".openclaw", isDirectory: true)
+        try FileManager().createDirectory(at: target, withIntermediateDirectories: true)
+        try FileManager().setAttributes([.posixPermissions: 0o700], ofItemAtPath: target.path)
+        try FileManager().createDirectory(at: sharedParent, withIntermediateDirectories: true)
+        try FileManager().setAttributes([.posixPermissions: 0o777], ofItemAtPath: sharedParent.path)
+        try FileManager().createSymbolicLink(at: linkedState, withDestinationURL: target)
+
+        let socketPath = linkedState
+            .appendingPathComponent("exec-approvals.sock", isDirectory: false)
+            .path
+
+        do {
+            try ExecApprovalsSocketPathGuard.hardenParentDirectory(for: socketPath)
+            Issue.record("Expected symlink parent location rejection")
+        } catch let error as ExecApprovalsSocketPathGuardError {
+            switch error {
+            case let .parentSymlinkTargetInvalid(path, message):
+                #expect(path == linkedState.path)
+                #expect(message.contains("ancestor is group/other-writable"))
+            default:
+                Issue.record("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    @Test
     func `remove existing socket rejects symlink path`() throws {
         let root = FileManager().temporaryDirectory.resolvingSymlinksInPath()
             .appendingPathComponent("openclaw-socket-guard-\(UUID().uuidString)", isDirectory: true)

@@ -216,6 +216,16 @@ function emptyExecApprovalsSnapshot(filePath: string): ExecApprovalsSnapshot {
   };
 }
 
+function closedExecApprovalsSnapshot(filePath: string): ExecApprovalsSnapshot {
+  return {
+    path: filePath,
+    exists: false,
+    raw: null,
+    file: closedExecApprovalsFile(),
+    hash: hashExecApprovalsRaw(null),
+  };
+}
+
 function isUnsafeOrMissingApprovalsPathError(err: unknown): boolean {
   return (
     err instanceof UnsafeExecApprovalsPathError || (err as NodeJS.ErrnoException).code === "ENOENT"
@@ -596,25 +606,32 @@ function generateToken(): string {
 
 export function readExecApprovalsSnapshot(): ExecApprovalsSnapshot {
   const filePath = resolveExecApprovalsPath();
-  assertSafeExecApprovalsFilePath(filePath);
-  if (!fs.existsSync(filePath)) {
-    return emptyExecApprovalsSnapshot(filePath);
-  }
-  const raw = fs.readFileSync(filePath, "utf8");
-  let parsed: ExecApprovalsFile | null = null;
   try {
-    parsed = JSON.parse(raw) as ExecApprovalsFile;
-  } catch {
-    parsed = null;
+    assertSafeExecApprovalsFilePath(filePath);
+    if (!fs.existsSync(filePath)) {
+      return emptyExecApprovalsSnapshot(filePath);
+    }
+    const raw = fs.readFileSync(filePath, "utf8");
+    let parsed: ExecApprovalsFile | null = null;
+    try {
+      parsed = JSON.parse(raw) as ExecApprovalsFile;
+    } catch {
+      parsed = null;
+    }
+    const file = parsed?.version === 1 ? normalizeExecApprovals(parsed) : emptyExecApprovalsFile();
+    return {
+      path: filePath,
+      exists: true,
+      raw,
+      file,
+      hash: hashExecApprovalsRaw(raw),
+    };
+  } catch (err) {
+    if (isUnsafeOrMissingApprovalsPathError(err)) {
+      return closedExecApprovalsSnapshot(filePath);
+    }
+    throw err;
   }
-  const file = parsed?.version === 1 ? normalizeExecApprovals(parsed) : emptyExecApprovalsFile();
-  return {
-    path: filePath,
-    exists: true,
-    raw,
-    file,
-    hash: hashExecApprovalsRaw(raw),
-  };
 }
 
 export function loadExecApprovals(): ExecApprovalsFile {

@@ -83,7 +83,7 @@ function readApprovalsFile(homeDir: string): ExecApprovalsFile {
   return JSON.parse(fs.readFileSync(approvalsFilePath(homeDir), "utf8")) as ExecApprovalsFile;
 }
 
-function expectUnsafeApprovalsReadFailsClosed(pattern: RegExp) {
+function expectUnsafeApprovalsReadFailsClosed() {
   const closed = normalizeExecApprovals({
     version: 1,
     defaults: { security: "deny", ask: "always", askFallback: "deny" },
@@ -96,7 +96,11 @@ function expectUnsafeApprovalsReadFailsClosed(pattern: RegExp) {
     ask: "always",
     askFallback: "deny",
   });
-  expect(() => readExecApprovalsSnapshot()).toThrow(pattern);
+  expect(readExecApprovalsSnapshot()).toMatchObject({
+    exists: false,
+    raw: null,
+    file: closed,
+  });
 }
 
 describe("exec approvals store helpers", () => {
@@ -269,9 +273,7 @@ describe("exec approvals store helpers", () => {
       expect(() =>
         saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
       ).toThrow(/group\/other-writable exec approvals \.openclaw symlink target/);
-      expectUnsafeApprovalsReadFailsClosed(
-        /group\/other-writable exec approvals \.openclaw symlink target/,
-      );
+      expectUnsafeApprovalsReadFailsClosed();
       expect(fs.existsSync(path.join(linkedStateTarget, "exec-approvals.json"))).toBe(false);
     },
   );
@@ -290,9 +292,7 @@ describe("exec approvals store helpers", () => {
       expect(() =>
         saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
       ).toThrow(/group\/other-writable exec approvals \.openclaw symlink ancestor/);
-      expectUnsafeApprovalsReadFailsClosed(
-        /group\/other-writable exec approvals \.openclaw symlink ancestor/,
-      );
+      expectUnsafeApprovalsReadFailsClosed();
       expect(fs.existsSync(path.join(linkedStateTarget, "exec-approvals.json"))).toBe(false);
     },
   );
@@ -311,7 +311,7 @@ describe("exec approvals store helpers", () => {
       expect(() =>
         saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
       ).toThrow(/resolves through another symlink/);
-      expectUnsafeApprovalsReadFailsClosed(/resolves through another symlink/);
+      expectUnsafeApprovalsReadFailsClosed();
       expect(fs.existsSync(path.join(linkedStateTarget, "exec-approvals.json"))).toBe(false);
     },
   );
@@ -324,7 +324,7 @@ describe("exec approvals store helpers", () => {
     expect(() =>
       saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
     ).toThrow(/ENOENT|no such file or directory/i);
-    expectUnsafeApprovalsReadFailsClosed(/ENOENT|no such file or directory/i);
+    expectUnsafeApprovalsReadFailsClosed();
     expect(fs.existsSync(path.join(missingTarget, "exec-approvals.json"))).toBe(false);
   });
 
@@ -340,7 +340,7 @@ describe("exec approvals store helpers", () => {
     expect(() =>
       saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
     ).toThrow(/Refusing to use exec approvals via symlink/);
-    expectUnsafeApprovalsReadFailsClosed(/Refusing to use exec approvals via symlink/);
+    expectUnsafeApprovalsReadFailsClosed();
     expect(fs.readFileSync(targetPath, "utf8")).toBe('{"sentinel":true}\n');
   });
 
