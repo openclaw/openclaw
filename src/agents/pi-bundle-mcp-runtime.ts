@@ -18,6 +18,7 @@ import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { loadEmbeddedPiMcpConfig } from "./embedded-pi-mcp.js";
 import { isMcpConfigRecord } from "./mcp-config-shared.js";
+import { createMcpRuntimeGuardrails } from "./mcp-runtime-guardrails.js";
 import { resolveMcpTransport } from "./mcp-transport.js";
 import { sanitizeServerName } from "./pi-bundle-mcp-names.js";
 import type {
@@ -196,6 +197,9 @@ export function createSessionMcpRuntime(params: {
   let catalog: McpToolCatalog | null = null;
   let catalogInFlight: Promise<McpToolCatalog> | undefined;
   const sessions = new Map<string, BundleMcpSession>();
+  const guardrails = createMcpRuntimeGuardrails({
+    cfg: params.cfg?.mcp?.runtimeGuardrails,
+  });
   const failIfDisposed = () => {
     if (disposed) {
       throw createDisposedError(params.sessionId);
@@ -355,10 +359,25 @@ export function createSessionMcpRuntime(params: {
       if (!session) {
         throw new Error(`bundle-mcp server "${serverName}" is not connected`);
       }
-      return (await session.client.callTool({
-        name: toolName,
-        arguments: isMcpConfigRecord(input) ? input : {},
-      })) as CallToolResult;
+
+      const annotation = guardrails.resolveAnnotation(serverName, toolName);
+      guardrails.budgetLedger.beforeCall({ serverName, toolName, annotation });
+      try {
+        const result = (await guardrails.circuitBreaker.run({ serverName, toolName }, () =>
+          session.client.callTool({
+            name: toolName,
+            arguments: isMcpConfigRecord(input) ? input : {},
+          }),
+        )) as CallToolResult;
+        guardrails.budgetLedger.afterCall({ serverName, toolName, annotation, ok: true });
+        return result;
+      } catch (error) {
+        guardrails.budgetLedger.afterCall({ serverName, toolName, annotation, ok: false });
+        throw error;
+      }
+    },
+    getGuardrailSnapshot() {
+      return guardrails.getSnapshot();
     },
     async dispose() {
       if (disposed) {
