@@ -6048,6 +6048,83 @@ module.exports = {
     ).toBe(true);
   });
 
+  it("fails plugin load when non-memory plugins register memory-only legacy surfaces", () => {
+    const scenarios = [
+      {
+        suffix: "prompt-section",
+        registerCall: `api.registerMemoryPromptSection(() => ["bad"]);`,
+        expectedError: "only memory plugins can register a memory prompt section",
+        assertNoSideEffect: () => {
+          expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([]);
+        },
+      },
+      {
+        suffix: "flush-plan",
+        registerCall: `api.registerMemoryFlushPlan(() => ({
+  softThresholdTokens: 1,
+  forceFlushTranscriptBytes: 2,
+  reserveTokensFloor: 3,
+  prompt: "x",
+  systemPrompt: "y",
+  relativePath: "memory/flush.md",
+}));`,
+        expectedError: "only memory plugins can register a memory flush plan",
+        assertNoSideEffect: () => {
+          expect(resolveMemoryFlushPlan({})).toBeNull();
+        },
+      },
+      {
+        suffix: "runtime",
+        registerCall: `api.registerMemoryRuntime({
+  async getMemorySearchManager() {
+    return { manager: null, error: "missing" };
+  },
+  resolveMemoryBackendConfig() {
+    return { backend: "builtin" };
+  },
+});`,
+        expectedError: "only memory plugins can register a memory runtime",
+        assertNoSideEffect: () => {
+          expect(getMemoryRuntime()).toBeUndefined();
+        },
+      },
+    ] as const;
+
+    for (const scenario of scenarios) {
+      clearMemoryPluginState();
+      useNoBundledPlugins();
+      const pluginId = `memory-legacy-wrong-kind-${scenario.suffix}`;
+      const plugin = writePlugin({
+        id: pluginId,
+        filename: `${pluginId}.cjs`,
+        body: `module.exports = { id: "${pluginId}", kind: "provider", register(api) {
+  ${scenario.registerCall}
+} };`,
+      });
+
+      const registry = loadRegistryFromSinglePlugin({
+        plugin,
+        pluginConfig: {
+          allow: [pluginId],
+        },
+      });
+
+      const loaded = registry.plugins.find((entry) => entry.id === pluginId);
+      expect(loaded?.status).toBe("error");
+      expect(loaded?.failurePhase).toBe("register");
+      expect(loaded?.error).toContain(scenario.expectedError);
+      expect(
+        registry.diagnostics.some(
+          (diag) =>
+            diag.pluginId === pluginId &&
+            diag.level === "error" &&
+            diag.message.includes(scenario.expectedError),
+        ),
+      ).toBe(true);
+      scenario.assertNoSideEffect();
+    }
+  });
+
   it("enforces memory slot loading rules", () => {
     const scenarios = [
       {
