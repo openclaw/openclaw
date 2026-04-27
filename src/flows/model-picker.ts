@@ -3,11 +3,11 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { hasUsableCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
-import { formatLiteralProviderPrefixedModelRef } from "../agents/model-ref-shared.js";
 import {
   isModelPickerVisibleModelRef,
   isModelPickerVisibleProvider,
 } from "../agents/model-picker-visibility.js";
+import { formatLiteralProviderPrefixedModelRef } from "../agents/model-ref-shared.js";
 import {
   buildAllowedModelSet,
   buildConfiguredModelCatalog,
@@ -39,6 +39,7 @@ const KEEP_VALUE = "__keep__";
 const MANUAL_VALUE = "__manual__";
 const BROWSE_VALUE = "__browse__";
 const PROVIDER_FILTER_THRESHOLD = 30;
+const EMPTY_LITERAL_PREFIX_PROVIDERS = new Set<string>();
 
 // Internal router models are valid defaults during auth/setup but not manual API targets.
 const HIDDEN_ROUTER_MODELS = new Set(["openrouter/auto"]);
@@ -324,6 +325,7 @@ function addModelKeySelectOption(params: {
   seen: Set<string>;
   aliasIndex: ReturnType<typeof buildModelAliasIndex>;
   hasAuth: (provider: string) => boolean;
+  literalPrefixProviders?: Set<string>;
   fallbackHint: string;
 }) {
   const entry = splitModelKey(params.key);
@@ -337,6 +339,7 @@ function addModelKeySelectOption(params: {
     seen: params.seen,
     aliasIndex: params.aliasIndex,
     hasAuth: params.hasAuth,
+    literalPrefixProviders: params.literalPrefixProviders ?? EMPTY_LITERAL_PREFIX_PROVIDERS,
   });
   if (params.seen.size > before) {
     const option = params.options.at(-1);
