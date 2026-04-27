@@ -43,7 +43,7 @@ describe("pi-tools.policy", () => {
 describe("resolveGroupToolPolicy", () => {
   const cfg = {
     channels: {
-      slack: {
+      whatsapp: {
         groups: {
           "trusted-group": {
             tools: { allow: ["exec", "read", "write", "edit"] },
@@ -59,7 +59,7 @@ describe("resolveGroupToolPolicy", () => {
           },
         },
       },
-      discord: {
+      telegram: {
         groups: {
           "limited-group": {
             tools: { allow: ["exec", "read", "write", "edit"] },
@@ -75,9 +75,9 @@ describe("resolveGroupToolPolicy", () => {
       resolveGroupToolPolicy({
         config: cfg,
         sessionKey: "agent:main:main",
-        messageProvider: "slack",
+        messageProvider: "whatsapp",
         groupId: "trusted-group",
-        groupChannel: "slack",
+        groupChannel: "whatsapp",
       }),
     ).toBeUndefined();
   });
@@ -86,7 +86,7 @@ describe("resolveGroupToolPolicy", () => {
     expect(
       resolveGroupToolPolicy({
         config: cfg,
-        sessionKey: "agent:main:slack:group:trusted-group",
+        sessionKey: "agent:main:whatsapp:group:trusted-group",
       }),
     ).toEqual({ allow: ["exec", "read", "write", "edit"] });
   });
@@ -95,10 +95,10 @@ describe("resolveGroupToolPolicy", () => {
     expect(
       resolveGroupToolPolicy({
         config: cfg,
-        sessionKey: "agent:main:slack:group:limited-group",
-        messageProvider: "slack",
+        sessionKey: "agent:main:whatsapp:group:limited-group",
+        messageProvider: "whatsapp",
         groupId: "trusted-group",
-        groupChannel: "slack",
+        groupChannel: "whatsapp",
       }),
     ).toEqual({ allow: ["read"] });
   });
@@ -107,8 +107,8 @@ describe("resolveGroupToolPolicy", () => {
     expect(
       resolveGroupToolPolicy({
         config: cfg,
-        sessionKey: "agent:main:slack:group:limited-group",
-        messageProvider: "discord",
+        sessionKey: "agent:main:whatsapp:group:limited-group",
+        messageProvider: "telegram",
         groupId: "limited-group",
       }),
     ).toEqual({ allow: ["read"] });
@@ -118,8 +118,8 @@ describe("resolveGroupToolPolicy", () => {
     expect(
       resolveGroupToolPolicy({
         config: cfg,
-        sessionKey: "agent:main:slack:group:topic-parent:topic:alerts",
-        messageProvider: "slack",
+        sessionKey: "agent:main:whatsapp:group:topic-parent:topic:alerts",
+        messageProvider: "whatsapp",
         groupId: "topic-parent",
       }),
     ).toEqual({ allow: ["read"] });
@@ -130,10 +130,10 @@ describe("resolveGroupToolPolicy", () => {
       resolveGroupToolPolicy({
         config: cfg,
         sessionKey: "agent:main:main",
-        spawnedBy: "agent:main:slack:group:trusted-group",
-        messageProvider: "slack",
+        spawnedBy: "agent:main:whatsapp:group:trusted-group",
+        messageProvider: "whatsapp",
         groupId: "trusted-group",
-        groupChannel: "slack",
+        groupChannel: "whatsapp",
       }),
     ).toEqual({ allow: ["exec", "read", "write", "edit"] });
   });
