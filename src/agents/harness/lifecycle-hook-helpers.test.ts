@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  clearAgentHarnessFinalizeRetryBudget,
   runAgentHarnessAgentEndHook,
   runAgentHarnessBeforeAgentFinalizeHook,
   runAgentHarnessLlmInputHook,
@@ -10,7 +11,24 @@ const legacyHookRunner = {
   hasHooks: () => true,
 };
 
+const EVENT = {
+  runId: "run-1",
+  sessionId: "session-1",
+  sessionKey: "agent:main:session-1",
+  turnId: "turn-1",
+  provider: "codex",
+  model: "gpt-5.4",
+  cwd: "/repo",
+  transcriptPath: "/tmp/session.jsonl",
+  stopHookActive: false,
+  lastAssistantMessage: "done",
+};
+
 describe("agent harness lifecycle hook helpers", () => {
+  afterEach(() => {
+    clearAgentHarnessFinalizeRetryBudget();
+  });
+
   it("ignores legacy hook runners that advertise llm_input without a runner method", () => {
     expect(() =>
       runAgentHarnessLlmInputHook({
@@ -49,5 +67,44 @@ describe("agent harness lifecycle hook helpers", () => {
         hookRunner: legacyHookRunner,
       } as never),
     ).resolves.toEqual({ action: "continue" });
+  });
+
+  it("clears finalize retry budgets by run id", async () => {
+    const hookRunner = {
+      hasHooks: () => true,
+      runBeforeAgentFinalize: vi.fn().mockResolvedValue({
+        action: "revise",
+        retry: {
+          instruction: "revise once",
+          idempotencyKey: "stable",
+          maxAttempts: 1,
+        },
+      }),
+    };
+
+    await expect(
+      runAgentHarnessBeforeAgentFinalizeHook({
+        event: EVENT,
+        ctx: { runId: "run-1", sessionKey: "agent:main:session-1" },
+        hookRunner: hookRunner as never,
+      }),
+    ).resolves.toEqual({ action: "revise", reason: "revise once" });
+    await expect(
+      runAgentHarnessBeforeAgentFinalizeHook({
+        event: EVENT,
+        ctx: { runId: "run-1", sessionKey: "agent:main:session-1" },
+        hookRunner: hookRunner as never,
+      }),
+    ).resolves.toEqual({ action: "continue" });
+
+    clearAgentHarnessFinalizeRetryBudget({ runId: "run-1" });
+
+    await expect(
+      runAgentHarnessBeforeAgentFinalizeHook({
+        event: EVENT,
+        ctx: { runId: "run-1", sessionKey: "agent:main:session-1" },
+        hookRunner: hookRunner as never,
+      }),
+    ).resolves.toEqual({ action: "revise", reason: "revise once" });
   });
 });
