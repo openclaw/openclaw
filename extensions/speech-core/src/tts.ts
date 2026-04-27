@@ -1601,10 +1601,18 @@ export async function maybeApplyTtsToPayload(params: {
       ? directives.ttsText.trim()
       : undefined;
   const plainVariantText = hasTtsPlainText
-    ? (plainSpeechDirectives.ttsText?.trim() ?? plainSpeechDirectives.cleanedText.trim())
+    ? (plainSpeechDirectives.ttsText?.trim() ??
+      (plainSpeechDirectives.hasDirective
+        ? plainSpeechDirectives.cleanedText
+        : ttsPlainText
+      ).trim())
     : undefined;
   const expressiveVariantText = hasTtsSourceText
-    ? (expressiveSpeechDirectives.ttsText?.trim() ?? expressiveSpeechDirectives.cleanedText.trim())
+    ? (expressiveSpeechDirectives.ttsText?.trim() ??
+      (expressiveSpeechDirectives.hasDirective
+        ? expressiveSpeechDirectives.cleanedText
+        : ttsSourceText
+      ).trim())
     : undefined;
   // Per-variant text extraction: plain providers prefer ttsPlainText then visible
   // text; tag-aware providers prefer ttsSourceText then visible. Either can fall
@@ -1619,27 +1627,54 @@ export async function maybeApplyTtsToPayload(params: {
   // the initial config so `[[tts:provider=elevenlabs model=eleven_v3]]` is
   // honored by the gate at the pre-flight check too (not just fallback).
   const activePersona = getTtsPersona(config, prefsPath);
-  const initialDirectiveOverride = directives.overrides?.providerOverrides?.[effectiveProvider];
-  const initialProviderConfig: SpeechProviderConfig = (() => {
-    const resolvedProvider = resolveReadySpeechProvider({
-      provider: effectiveProvider,
+  const providerOrder = resolveTtsProviderOrder(effectiveProvider, params.cfg);
+  const resolveProviderConfigForTextRouting = (
+    provider: TtsProvider,
+    resolvedProviderConfig?: SpeechProviderConfig,
+  ): SpeechProviderConfig => {
+    const baseConfig =
+      resolvedProviderConfig ??
+      (() => {
+        const resolvedProvider = resolveReadySpeechProvider({
+          provider,
+          cfg: params.cfg,
+          config,
+          persona: activePersona,
+        });
+        return resolvedProvider.kind === "ready"
+          ? resolvedProvider.providerConfig
+          : getResolvedSpeechProviderConfig(config, provider, params.cfg);
+      })();
+    const directiveOverride = directives.overrides?.providerOverrides?.[provider];
+    return directiveOverride ? { ...baseConfig, ...directiveOverride } : baseConfig;
+  };
+  const resolveRoutedSpeechText = (
+    provider: TtsProvider,
+    expressiveText: string,
+    plainText: string,
+    resolvedProviderConfig?: SpeechProviderConfig,
+  ): string =>
+    resolveSpeechTextForProvider({
+      provider,
       cfg: params.cfg,
-      config,
-      persona: activePersona,
+      providerConfig: resolveProviderConfigForTextRouting(provider, resolvedProviderConfig),
+      expressiveText,
+      plainText,
     });
-    const base =
-      resolvedProvider.kind === "ready"
-        ? resolvedProvider.providerConfig
-        : getResolvedSpeechProviderConfig(config, effectiveProvider, params.cfg);
-    return initialDirectiveOverride ? { ...base, ...initialDirectiveOverride } : base;
-  })();
-  const initialTtsText = resolveSpeechTextForProvider({
-    provider: effectiveProvider,
-    cfg: params.cfg,
-    providerConfig: initialProviderConfig,
-    expressiveText: expressiveSpeechText,
-    plainText: plainSpeechText,
-  });
+  const initialProviderConfig = resolveProviderConfigForTextRouting(effectiveProvider);
+  const resolveFirstRoutableText = (expressiveText: string, plainText: string): string => {
+    const providers = [
+      effectiveProvider,
+      ...providerOrder.filter((provider) => provider !== effectiveProvider),
+    ];
+    for (const provider of providers) {
+      const candidate = resolveRoutedSpeechText(provider, expressiveText, plainText).trim();
+      if (candidate.length >= MIN_TTS_TEXT_LENGTH) {
+        return candidate;
+      }
+    }
+    return "";
+  };
 
   // Per Copilot review on tts.ts:1595 — `{ ...params.payload, text }` creates
   // a NEW object, so the WeakMap-keyed `ReplyPayloadMetadata` (including
@@ -1667,21 +1702,19 @@ export async function maybeApplyTtsToPayload(params: {
     return nextPayload;
   }
 
-  if (!initialTtsText.trim()) {
-    return nextPayload;
-  }
   if (reply.hasMedia) {
     return nextPayload;
   }
   if (text.includes("MEDIA:")) {
     return nextPayload;
   }
-  if (initialTtsText.trim().length < MIN_TTS_TEXT_LENGTH) {
+  const initialTextForAudio = resolveFirstRoutableText(expressiveSpeechText, plainSpeechText);
+  if (!initialTextForAudio) {
     return nextPayload;
   }
 
   const maxLength = getTtsMaxLength(prefsPath);
-  let textForAudio = initialTtsText.trim();
+  let textForAudio = initialTextForAudio;
   let wasSummarized = false;
 
   if (textForAudio.length > maxLength) {
@@ -1751,39 +1784,30 @@ export async function maybeApplyTtsToPayload(params: {
     providerConfig: initialProviderConfig,
     expressiveText: preparedExpressiveText,
     plainText: preparedPlainText,
-  });
-  if (effectiveTextForAudio.length < MIN_TTS_TEXT_LENGTH) {
+  }).trim();
+  const preparedTextForAudio =
+    effectiveTextForAudio.length >= MIN_TTS_TEXT_LENGTH
+      ? effectiveTextForAudio
+      : resolveFirstRoutableText(preparedExpressiveText, preparedPlainText);
+  if (!preparedTextForAudio) {
     return nextPayload;
   }
 
   const ttsStart = Date.now();
   const result = await textToSpeech({
-    text: effectiveTextForAudio,
+    text: preparedTextForAudio,
     cfg: params.cfg,
     prefsPath,
     channel: params.channel,
     overrides: directives.overrides,
     minTextLength: MIN_TTS_TEXT_LENGTH,
     resolveText: (provider, resolvedProviderConfig) => {
-      // Per-fallback-attempt provider config: prefer the persona-merged config
-      // that synthesizeSpeech now hands us (post-`resolveReadySpeechProvider`),
-      // and fall back to the base resolution when called outside that loop
-      // (e.g. the initial pre-flight check). Then merge per-message directive
-      // overrides (`[[tts:provider=elevenlabs model=eleven_v3]]`) so a
-      // directive that switches the model is honored by the capability gate.
-      const baseConfig =
-        resolvedProviderConfig ?? getResolvedSpeechProviderConfig(config, provider, params.cfg);
-      const directiveOverride = directives.overrides?.providerOverrides?.[provider];
-      const providerConfig: SpeechProviderConfig = directiveOverride
-        ? { ...baseConfig, ...directiveOverride }
-        : baseConfig;
-      return resolveSpeechTextForProvider({
+      return resolveRoutedSpeechText(
         provider,
-        cfg: params.cfg,
-        providerConfig,
-        expressiveText: preparedExpressiveText,
-        plainText: preparedPlainText,
-      });
+        preparedExpressiveText,
+        preparedPlainText,
+        resolvedProviderConfig,
+      );
     },
     agentId: params.agentId,
     accountId: params.accountId,

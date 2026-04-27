@@ -81,4 +81,33 @@ describe("sanitizeSessionHistory toolResult details stripping", () => {
       content: [{ type: "text", text: "plain reply" }],
     });
   });
+
+  it("treats missing emotion mode as off for assistant replay text", async () => {
+    const sm = SessionManager.inMemory();
+
+    const sanitized = await sanitizeSessionHistory({
+      messages: [
+        { role: "assistant", content: "[warmly] hi", timestamp: 1 } as unknown as AgentMessage,
+        makeAgentAssistantMessage({
+          content: [{ type: "text", text: "[softly] hello there" }],
+          timestamp: 2,
+        }),
+        { role: "user", content: "continue", timestamp: 3 } satisfies UserMessage,
+      ],
+      modelApi: "openai-responses",
+      provider: "github-copilot",
+      modelId: "gpt-5-mini",
+      sessionManager: sm,
+      sessionId: "test",
+    });
+
+    expect(sanitized[0]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "hi" }],
+    });
+    expect(sanitized[1]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "hello there" }],
+    });
+  });
 });
