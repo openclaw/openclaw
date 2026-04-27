@@ -122,6 +122,68 @@ describe("image-generation runtime", () => {
     expect(seenTimeoutMs).toBe(180_000);
   });
 
+  it("falls back to DEFAULT_IMAGE_GENERATION_TIMEOUT_MS (180s) when no timeout is configured", async () => {
+    let seenTimeoutMs: number | undefined;
+    mocks.resolveAgentModelPrimaryValue.mockReturnValue("image-plugin/img-v1");
+    mocks.getImageGenerationProvider.mockReturnValue({
+      id: "image-plugin",
+      capabilities: { generate: {}, edit: { enabled: false } },
+      async generateImage(req: { timeoutMs?: number }) {
+        seenTimeoutMs = req.timeoutMs;
+        return {
+          images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+          model: "img-v1",
+        };
+      },
+    });
+
+    await generateImage({
+      cfg: {
+        agents: {
+          defaults: {
+            imageGenerationModel: { primary: "image-plugin/img-v1" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "draw a cat",
+    });
+
+    expect(seenTimeoutMs).toBe(180_000);
+  });
+
+  it("per-request timeoutMs takes priority over config and default", async () => {
+    let seenTimeoutMs: number | undefined;
+    mocks.resolveAgentModelPrimaryValue.mockReturnValue("image-plugin/img-v1");
+    mocks.getImageGenerationProvider.mockReturnValue({
+      id: "image-plugin",
+      capabilities: { generate: {}, edit: { enabled: false } },
+      async generateImage(req: { timeoutMs?: number }) {
+        seenTimeoutMs = req.timeoutMs;
+        return {
+          images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+          model: "img-v1",
+        };
+      },
+    });
+
+    await generateImage({
+      cfg: {
+        agents: {
+          defaults: {
+            imageGenerationModel: {
+              primary: "image-plugin/img-v1",
+              timeoutMs: 120_000,
+            },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "draw a cat",
+      timeoutMs: 30_000,
+    });
+
+    expect(seenTimeoutMs).toBe(30_000);
+  });
+
   it("auto-detects and falls through to another configured image-generation provider by default", async () => {
     mocks.getImageGenerationProvider.mockImplementation((providerId: string) => {
       if (providerId === "openai") {

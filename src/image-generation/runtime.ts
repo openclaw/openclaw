@@ -18,6 +18,14 @@ import type { ImageGenerationResult } from "./types.js";
 
 const log = createSubsystemLogger("image-generation");
 
+/**
+ * Default timeout for image generation HTTP requests.
+ * Image generation models (e.g. gpt-image-2) can take 60-90s for complex prompts,
+ * which exceeds the global DEFAULT_GUARDED_HTTP_TIMEOUT_MS (60s).
+ * Using a higher default avoids premature AbortController timeouts.
+ */
+const DEFAULT_IMAGE_GENERATION_TIMEOUT_MS = 180_000;
+
 export type { GenerateImageParams, GenerateImageRuntimeResult } from "./runtime-types.js";
 
 function buildNoImageGenerationModelConfiguredMessage(cfg: OpenClawConfig): string {
@@ -35,9 +43,11 @@ export function listRuntimeImageGenerationProviders(params?: { config?: OpenClaw
 export async function generateImage(
   params: GenerateImageParams,
 ): Promise<GenerateImageRuntimeResult> {
-  const timeoutMs =
+  // Priority: per-request tool param > config-level timeoutMs > built-in default (180s)
+  const effectiveTimeoutMs =
     params.timeoutMs ??
-    resolveAgentModelTimeoutMsValue(params.cfg.agents?.defaults?.imageGenerationModel);
+    resolveAgentModelTimeoutMsValue(params.cfg.agents?.defaults?.imageGenerationModel) ??
+    DEFAULT_IMAGE_GENERATION_TIMEOUT_MS;
   const candidates = resolveCapabilityModelCandidates({
     cfg: params.cfg,
     modelConfig: params.cfg.agents?.defaults?.imageGenerationModel,
@@ -95,7 +105,7 @@ export async function generateImage(
         outputFormat: sanitized.outputFormat,
         background: sanitized.background,
         inputImages: params.inputImages,
-        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+        timeoutMs: effectiveTimeoutMs,
         providerOptions: params.providerOptions,
       });
       if (!Array.isArray(result.images) || result.images.length === 0) {
