@@ -22,6 +22,22 @@ const tinyPngBuffer = Buffer.from(
   "base64",
 );
 
+const providerAliasCases = [
+  ["bedrock", "amazon-bedrock"],
+  ["aws-bedrock", "amazon-bedrock"],
+  ["modelstudio", "qwen"],
+  ["qwencloud", "qwen"],
+  ["z.ai", "zai"],
+  ["z-ai", "zai"],
+  ["kimi", "kimi"],
+  ["kimi-code", "kimi"],
+  ["kimi-coding", "kimi"],
+  ["bytedance", "volcengine"],
+  ["doubao", "volcengine"],
+  ["opencode-zen", "opencode"],
+  ["opencode-go-auth", "opencode-go"],
+] as const;
+
 function collectActionValues(schema: unknown, values: Set<string>): void {
   if (!schema || typeof schema !== "object") {
     return;
@@ -436,6 +452,26 @@ describe("createOpenClawCodingTools", () => {
     });
     expect(cronTools.some((tool) => tool.name === "message")).toBe(true);
   });
+
+  it.each(providerAliasCases)(
+    "applies canonical tools.byProvider deny policy to core tools for alias %s",
+    (alias, canonical) => {
+      const tools = createOpenClawCodingTools({
+        config: {
+          tools: {
+            byProvider: {
+              [canonical]: { deny: ["read"] },
+            },
+          },
+        } as OpenClawConfig,
+        modelProvider: alias,
+      });
+      const names = new Set(tools.map((tool) => tool.name));
+
+      expect(names.has("read")).toBe(false);
+      expect(names.has("write")).toBe(true);
+    },
+  );
 
   it("expands group shorthands in global tool policy", () => {
     const tools = createOpenClawCodingTools({

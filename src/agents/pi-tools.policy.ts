@@ -16,6 +16,7 @@ import {
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig, resolveAgentIdFromSessionKey } from "./agent-scope.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
+import { normalizeProviderId } from "./provider-id.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
 import {
@@ -143,7 +144,14 @@ type ToolPolicyConfig = {
 };
 
 function normalizeProviderKey(value: string): string {
-  return normalizeLowercaseStringOrEmpty(value);
+  const normalized = normalizeLowercaseStringOrEmpty(value);
+  const slashIndex = normalized.indexOf("/");
+  if (slashIndex <= 0) {
+    return normalizeProviderId(normalized);
+  }
+  const provider = normalizeProviderId(normalized.slice(0, slashIndex));
+  const modelId = normalized.slice(slashIndex + 1);
+  return modelId ? `${provider}/${modelId}` : provider;
 }
 
 function collectUniqueStrings(values: Array<string | null | undefined>): string[] {
@@ -262,8 +270,12 @@ function resolveProviderToolPolicy(params: {
 
   const normalizedProvider = normalizeProviderKey(provider);
   const rawModelId = normalizeOptionalLowercaseString(params.modelId);
-  const fullModelId =
-    rawModelId && !rawModelId.includes("/") ? `${normalizedProvider}/${rawModelId}` : rawModelId;
+  let fullModelId: string | undefined;
+  if (rawModelId) {
+    fullModelId = rawModelId.includes("/")
+      ? normalizeProviderKey(rawModelId)
+      : `${normalizedProvider}/${rawModelId}`;
+  }
 
   const candidates = [...(fullModelId ? [fullModelId] : []), normalizedProvider];
 

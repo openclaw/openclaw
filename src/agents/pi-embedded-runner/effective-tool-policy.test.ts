@@ -3,6 +3,22 @@ import { setPluginToolMeta } from "../../plugins/tools.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import { applyFinalEffectiveToolPolicy } from "./effective-tool-policy.js";
 
+const providerAliasCases = [
+  ["bedrock", "amazon-bedrock"],
+  ["aws-bedrock", "amazon-bedrock"],
+  ["modelstudio", "qwen"],
+  ["qwencloud", "qwen"],
+  ["z.ai", "zai"],
+  ["z-ai", "zai"],
+  ["kimi", "kimi"],
+  ["kimi-code", "kimi"],
+  ["kimi-coding", "kimi"],
+  ["bytedance", "volcengine"],
+  ["doubao", "volcengine"],
+  ["opencode-zen", "opencode"],
+  ["opencode-go-auth", "opencode-go"],
+] as const;
+
 function makeTool(name: string, ownerOnly = false): AnyAgentTool {
   return {
     name,
@@ -15,6 +31,26 @@ function makeTool(name: string, ownerOnly = false): AnyAgentTool {
 }
 
 describe("applyFinalEffectiveToolPolicy", () => {
+  it.each(providerAliasCases)(
+    "applies canonical tools.byProvider deny policy to bundled tools for alias %s",
+    (alias, canonical) => {
+      const filtered = applyFinalEffectiveToolPolicy({
+        bundledTools: [makeTool("mcp__bundle__exec"), makeTool("mcp__bundle__read")],
+        config: {
+          tools: {
+            byProvider: {
+              [canonical]: { deny: ["mcp__bundle__exec"] },
+            },
+          },
+        },
+        modelProvider: alias,
+        warn: () => {},
+      });
+
+      expect(filtered.map((tool) => tool.name)).toEqual(["mcp__bundle__read"]);
+    },
+  );
+
   it("filters bundled tools through the configured allowlist", () => {
     const filtered = applyFinalEffectiveToolPolicy({
       bundledTools: [makeTool("mcp__bundle__fs_delete"), makeTool("mcp__bundle__fs_read")],

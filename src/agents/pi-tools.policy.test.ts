@@ -12,6 +12,22 @@ import {
 } from "./pi-tools.policy.js";
 import { createStubTool } from "./test-helpers/pi-tool-stubs.js";
 
+const providerAliasCases = [
+  ["bedrock", "amazon-bedrock"],
+  ["aws-bedrock", "amazon-bedrock"],
+  ["modelstudio", "qwen"],
+  ["qwencloud", "qwen"],
+  ["z.ai", "zai"],
+  ["z-ai", "zai"],
+  ["kimi", "kimi"],
+  ["kimi-code", "kimi"],
+  ["kimi-coding", "kimi"],
+  ["bytedance", "volcengine"],
+  ["doubao", "volcengine"],
+  ["opencode-zen", "opencode"],
+  ["opencode-go-auth", "opencode-go"],
+] as const;
+
 describe("pi-tools.policy", () => {
   it("treats * in allow as allow-all", () => {
     const tools = [createStubTool("read"), createStubTool("exec")];
@@ -240,6 +256,44 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
 });
 
 describe("resolveEffectiveToolPolicy", () => {
+  it.each(providerAliasCases)(
+    "matches provider alias %s to canonical tools.byProvider key %s",
+    (alias, canonical) => {
+      const cfg = {
+        tools: {
+          byProvider: {
+            [canonical]: { deny: ["exec"] },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = resolveEffectiveToolPolicy({ config: cfg, modelProvider: alias });
+
+      expect(result.globalProviderPolicy).toEqual({ deny: ["exec"] });
+    },
+  );
+
+  it.each(providerAliasCases)(
+    "matches provider alias %s to canonical model-scoped tools.byProvider key %s",
+    (alias, canonical) => {
+      const cfg = {
+        tools: {
+          byProvider: {
+            [`${canonical}/claude-sonnet`]: { deny: ["exec"] },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = resolveEffectiveToolPolicy({
+        config: cfg,
+        modelProvider: alias,
+        modelId: "claude-sonnet",
+      });
+
+      expect(result.globalProviderPolicy).toEqual({ deny: ["exec"] });
+    },
+  );
+
   it("implicitly re-exposes exec and process when tools.exec is configured", () => {
     const cfg = {
       tools: {
