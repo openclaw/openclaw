@@ -1,9 +1,9 @@
 import {
   formatThinkingLevels,
-  formatXHighModelHint,
+  isThinkingLevelSupported,
   normalizeThinkLevel,
   normalizeVerboseLevel,
-  supportsXHighThinking,
+  resolveSupportedThinkingLevel,
   type VerboseLevel,
 } from "../auto-reply/thinking.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -58,6 +58,7 @@ import {
   resolveDefaultModelForAgent,
   resolveThinkingDefault,
 } from "./model-selection.js";
+import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { ensureAgentWorkspace } from "./workspace.js";
@@ -247,6 +248,7 @@ async function prepareAgentCommandExecution(
     throw new Error("Message (--message) is required");
   }
   const body = prependInternalEventContext(message, opts.internalEvents);
+  const transcriptBody = opts.transcriptMessage ?? message;
   if (!opts.to && !opts.sessionId && !opts.sessionKey && !opts.agentId) {
     throw new Error("Pass --to <E.164>, --session-id, or --agent to choose a session");
   }
@@ -367,6 +369,7 @@ async function prepareAgentCommandExecution(
 
   return {
     body,
+    transcriptBody,
     cfg,
     normalizedSpawned,
     agentCfg,
@@ -401,6 +404,7 @@ async function agentCommandInternal(
   const prepared = await prepareAgentCommandExecution(opts, runtime);
   const {
     body,
+    transcriptBody,
     cfg,
     normalizedSpawned,
     agentCfg,
@@ -522,6 +526,7 @@ async function agentCommandInternal(
         const { resolveAcpSessionCwd } = await loadAcpSessionIdentifiersRuntime();
         sessionEntry = await attemptExecutionRuntime.persistAcpTurnTranscript({
           body,
+          transcriptBody,
           finalText: finalTextRaw,
           sessionId,
           sessionKey,
@@ -756,7 +761,14 @@ async function agentCommandInternal(
         const entry = sessionEntry;
         const store = ensureAuthProfileStore();
         const profile = store.profiles[authProfileId];
-        if (!profile || profile.provider !== providerForAuthProfileValidation) {
+        const profileAuthProvider = profile
+          ? resolveProviderIdForAuth(profile.provider, { config: cfg, workspaceDir })
+          : undefined;
+        const validationAuthProvider = resolveProviderIdForAuth(providerForAuthProfileValidation, {
+          config: cfg,
+          workspaceDir,
+        });
+        if (!profile || profileAuthProvider !== validationAuthProvider) {
           if (sessionStore && sessionKey) {
             await clearSessionAuthProfileOverride({
               sessionEntry: entry,
@@ -782,22 +794,37 @@ async function agentCommandInternal(
         catalog: catalogForThinking,
       });
     }
-    if (resolvedThinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
+    if (!isThinkingLevelSupported({ provider, model, level: resolvedThinkLevel })) {
       const explicitThink = Boolean(thinkOnce || thinkOverride);
       if (explicitThink) {
-        throw new Error(`Thinking level "xhigh" is only supported for ${formatXHighModelHint()}.`);
+        throw new Error(
+          `Thinking level "${resolvedThinkLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model)}.`,
+        );
       }
-      resolvedThinkLevel = "high";
-      if (sessionEntry && sessionStore && sessionKey && sessionEntry.thinkingLevel === "xhigh") {
-        const entry = sessionEntry;
-        entry.thinkingLevel = "high";
-        entry.updatedAt = Date.now();
-        await persistSessionEntry({
-          sessionStore,
-          sessionKey,
-          storePath,
-          entry,
-        });
+      const fallbackThinkLevel = resolveSupportedThinkingLevel({
+        provider,
+        model,
+        level: resolvedThinkLevel,
+      });
+      if (fallbackThinkLevel !== resolvedThinkLevel) {
+        const previousThinkLevel = resolvedThinkLevel;
+        resolvedThinkLevel = fallbackThinkLevel;
+        if (
+          sessionEntry &&
+          sessionStore &&
+          sessionKey &&
+          sessionEntry.thinkingLevel === previousThinkLevel
+        ) {
+          const entry = sessionEntry;
+          entry.thinkingLevel = fallbackThinkLevel;
+          entry.updatedAt = Date.now();
+          await persistSessionEntry({
+            sessionStore,
+            sessionKey,
+            storePath,
+            entry,
+          });
+        }
       }
     }
     const { resolveSessionTranscriptFile } = await loadTranscriptResolveRuntime();
@@ -891,6 +918,13 @@ async function agentCommandInternal(
               sessionHasHistory:
                 !isNewSession || (await attemptExecutionRuntime.sessionFileHasContent(sessionFile)),
               onAgentEvent: (evt) => {
+                if (evt.stream.startsWith("codex_app_server.")) {
+                  emitAgentEvent({
+                    runId,
+                    stream: evt.stream,
+                    data: evt.data ?? {},
+                  });
+                }
                 if (
                   evt.stream === "lifecycle" &&
                   typeof evt.data?.phase === "string" &&
@@ -1038,6 +1072,7 @@ async function agentCommandInternal(
       try {
         sessionEntry = await attemptExecutionRuntime.persistCliTurnTranscript({
           body,
+          transcriptBody,
           result,
           sessionId,
           sessionKey: sessionKey ?? sessionId,

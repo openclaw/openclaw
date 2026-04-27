@@ -35,6 +35,7 @@ import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../infra/skil
 import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { rawDataToString } from "../../../infra/ws.js";
+import { logRejectedLargePayload } from "../../../logging/diagnostic-payload.js";
 import type { createSubsystemLogger } from "../../../logging/subsystem.js";
 import {
   resolveBootstrapProfileScopesForRole,
@@ -51,7 +52,7 @@ import { resolveRuntimeServiceVersion } from "../../../version.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../../auth.js";
 import type { GatewayAuthResult } from "../../auth.js";
-import { isLocalDirectRequest } from "../../auth.js";
+import { hasForwardedRequestHeaders, isLocalDirectRequest } from "../../auth.js";
 import {
   buildCanvasScopedHostUrl,
   CANVAS_CAPABILITY_TTL_MS,
@@ -66,6 +67,10 @@ import {
   resolveClientIp,
 } from "../../net.js";
 import { reconcileNodePairingOnConnect } from "../../node-connect-reconcile.js";
+import {
+  resolveNodePairingClientIpSource,
+  shouldAutoApproveNodePairingFromTrustedCidrs,
+} from "../../node-pairing-auto-approve.js";
 import { checkBrowserOrigin } from "../../origin-check.js";
 import {
   buildPairingConnectCloseReason,
@@ -267,7 +272,7 @@ export function attachGatewayWsMessageHandler(params: {
   // the connection as local. This prevents auth bypass when running behind a reverse
   // proxy without proper configuration - the proxy's loopback connection would otherwise
   // cause all external requests to be treated as trusted local clients.
-  const hasProxyHeaders = Boolean(forwardedFor || realIp);
+  const hasProxyHeaders = hasForwardedRequestHeaders(upgradeReq);
   const remoteIsTrustedProxy = isTrustedProxyAddress(remoteAddr, trustedProxies);
   const hasUntrustedProxyHeaders = hasProxyHeaders && !remoteIsTrustedProxy;
   const hostIsLocalish = isLocalishHost(requestHost);
@@ -278,6 +283,12 @@ export function attachGatewayWsMessageHandler(params: {
       : clientIp && !isLoopbackAddress(clientIp)
         ? clientIp
         : undefined;
+  const reportedClientIpSource = resolveNodePairingClientIpSource({
+    reportedClientIp,
+    hasProxyHeaders,
+    remoteIsTrustedProxy,
+    remoteIsLoopback: isLoopbackAddress(remoteAddr),
+  });
 
   if (hasUntrustedProxyHeaders) {
     logWsControl.warn(
@@ -316,6 +327,12 @@ export function attachGatewayWsMessageHandler(params: {
 
     const preauthPayloadBytes = !getClient() ? getRawDataByteLength(data) : undefined;
     if (preauthPayloadBytes !== undefined && preauthPayloadBytes > MAX_PREAUTH_PAYLOAD_BYTES) {
+      logRejectedLargePayload({
+        surface: "gateway.ws.preauth",
+        bytes: preauthPayloadBytes,
+        limitBytes: MAX_PREAUTH_PAYLOAD_BYTES,
+        reason: "preauth_frame_limit",
+      });
       setHandshakeState("failed");
       setCloseCause("preauth-payload-too-large", {
         payloadBytes: preauthPayloadBytes,
@@ -916,6 +933,20 @@ export function attachGatewayWsMessageHandler(params: {
               isWebchat,
               reason,
             });
+            const allowSilentTrustedCidrsNodePairing = shouldAutoApproveNodePairingFromTrustedCidrs(
+              {
+                existingPairedDevice: Boolean(existingPairedDevice),
+                role,
+                reason,
+                scopes,
+                hasBrowserOriginHeader,
+                isControlUi,
+                isWebchat,
+                reportedClientIpSource,
+                reportedClientIp,
+                autoApproveCidrs: configSnapshot.gateway?.nodes?.pairing?.autoApproveCidrs,
+              },
+            );
             const allowSilentBootstrapPairing =
               authMethod === "bootstrap-token" &&
               reason === "not-paired" &&
@@ -937,7 +968,9 @@ export function attachGatewayWsMessageHandler(params: {
               silent:
                 reason === "scope-upgrade"
                   ? false
-                  : allowSilentLocalPairing || allowSilentBootstrapPairing,
+                  : allowSilentLocalPairing ||
+                    allowSilentBootstrapPairing ||
+                    allowSilentTrustedCidrsNodePairing,
             });
             const context = buildRequestContext();
             let approved: Awaited<ReturnType<typeof approveDevicePairing>> | undefined;
@@ -1303,6 +1336,7 @@ export function attachGatewayWsMessageHandler(params: {
           socket,
           connect: connectParams,
           connId,
+          isDeviceTokenAuth: authMethod === "device-token",
           usesSharedGatewayAuth,
           sharedGatewaySessionGeneration,
           presenceKey,

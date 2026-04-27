@@ -4,10 +4,16 @@
   "private": true,
   "description": "OpenClaw Anthropic provider plugin",
   "type": "module",
+  "dependencies": {
+    "@mariozechner/pi-ai": "0.70.2"
+  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },
   "openclaw": {
+    "bundle": {
+      "stageRuntimeDependencies": true
+    },
     "extensions": [
       "./index.ts"
     ]

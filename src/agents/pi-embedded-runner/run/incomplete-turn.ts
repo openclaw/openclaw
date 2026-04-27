@@ -1,7 +1,11 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import type { EmbeddedPiExecutionContract } from "../../../config/types.agent-defaults.js";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
-import { isStrictAgenticSupportedProviderModel } from "../../execution-contract.js";
+import {
+  isStrictAgenticSupportedProviderModel,
+  stripProviderPrefix,
+} from "../../execution-contract.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
 import { assessLastAssistantMessage } from "../thinking.js";
 import type { EmbeddedRunLivenessState } from "../types.js";
@@ -9,7 +13,11 @@ import type { EmbeddedRunAttemptResult } from "./types.js";
 
 type ReplayMetadataAttempt = Pick<
   EmbeddedRunAttemptResult,
-  "toolMetas" | "didSendViaMessagingTool" | "successfulCronAdds"
+  | "toolMetas"
+  | "didSendViaMessagingTool"
+  | "messagingToolSentTexts"
+  | "messagingToolSentMediaUrls"
+  | "successfulCronAdds"
 >;
 
 type IncompleteTurnAttempt = Pick<
@@ -19,6 +27,9 @@ type IncompleteTurnAttempt = Pick<
   | "currentAttemptAssistant"
   | "yieldDetected"
   | "didSendDeterministicApprovalPrompt"
+  | "didSendViaMessagingTool"
+  | "messagingToolSentTexts"
+  | "messagingToolSentMediaUrls"
   | "lastToolError"
   | "lastAssistant"
   | "replayMetadata"
@@ -75,6 +86,13 @@ const SINGLE_ACTION_RETRY_SAFE_TOOL_NAMES = new Set([
   "glob",
   "ls",
 ]);
+const GEMINI_INCOMPLETE_TURN_PROVIDER_IDS = new Set([
+  "google",
+  "google-vertex",
+  "google-antigravity",
+  "google-gemini-cli",
+]);
+const GEMINI_INCOMPLETE_TURN_MODEL_ID_PATTERN = /^gemini(?:[.-]|$)/;
 const DEFAULT_PLANNING_ONLY_RETRY_LIMIT = 1;
 const STRICT_AGENTIC_PLANNING_ONLY_RETRY_LIMIT = 2;
 // Allow one immediate continuation plus one follow-up continuation before
@@ -143,12 +161,31 @@ export type PlanningOnlyPlanDetails = {
   steps: string[];
 };
 
+function hasStringEntry(values: readonly unknown[] | undefined): boolean {
+  return (
+    Array.isArray(values) &&
+    values.some((value) => typeof value === "string" && value.trim().length > 0)
+  );
+}
+
+export function hasCommittedUserVisibleToolDelivery(
+  attempt: Pick<EmbeddedRunAttemptResult, "messagingToolSentTexts" | "messagingToolSentMediaUrls">,
+): boolean {
+  return (
+    hasStringEntry(attempt.messagingToolSentTexts) ||
+    hasStringEntry(attempt.messagingToolSentMediaUrls)
+  );
+}
+
 export function buildAttemptReplayMetadata(
   params: ReplayMetadataAttempt,
 ): EmbeddedRunAttemptResult["replayMetadata"] {
   const hadMutatingTools = params.toolMetas.some((t) => isLikelyMutatingToolName(t.toolName));
   const hadPotentialSideEffects =
-    hadMutatingTools || params.didSendViaMessagingTool || (params.successfulCronAdds ?? 0) > 0;
+    hadMutatingTools ||
+    params.didSendViaMessagingTool ||
+    hasCommittedUserVisibleToolDelivery(params) ||
+    (params.successfulCronAdds ?? 0) > 0;
   return {
     hadPotentialSideEffects,
     replaySafe: !hadPotentialSideEffects,
@@ -170,6 +207,14 @@ export function resolveIncompleteTurnPayloadText(params: {
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.lastToolError
   ) {
+    return null;
+  }
+
+  if (hasOnlySilentAssistantReply(params.attempt.assistantTexts)) {
+    return null;
+  }
+
+  if (hasCommittedUserVisibleToolDelivery(params.attempt)) {
     return null;
   }
 
@@ -197,6 +242,14 @@ export function resolveIncompleteTurnPayloadText(params: {
   return params.attempt.replayMetadata.hadPotentialSideEffects
     ? "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying."
     : "⚠️ Agent couldn't generate a response. Please try again.";
+}
+
+function hasOnlySilentAssistantReply(assistantTexts: readonly string[]): boolean {
+  const nonEmptyTexts = assistantTexts.filter((text) => text.trim().length > 0);
+  return (
+    nonEmptyTexts.length > 0 &&
+    nonEmptyTexts.every((text) => isSilentReplyPayloadText(text, SILENT_REPLY_TOKEN))
+  );
 }
 
 export function resolveReplayInvalidFlag(params: {
@@ -294,6 +347,7 @@ function shouldSkipPlanningOnlyRetry(params: {
 export function resolveReasoningOnlyRetryInstruction(params: {
   provider?: string;
   modelId?: string;
+  executionContract?: string;
   aborted: boolean;
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
@@ -306,6 +360,7 @@ export function resolveReasoningOnlyRetryInstruction(params: {
     !shouldApplyPlanningOnlyRetryGuard({
       provider: params.provider,
       modelId: params.modelId,
+      executionContract: params.executionContract,
     })
   ) {
     return null;
@@ -328,6 +383,7 @@ export function resolveReasoningOnlyRetryInstruction(params: {
 export function resolveEmptyResponseRetryInstruction(params: {
   provider?: string;
   modelId?: string;
+  executionContract?: string;
   payloadCount: number;
   aborted: boolean;
   timedOut: boolean;
@@ -341,6 +397,7 @@ export function resolveEmptyResponseRetryInstruction(params: {
     !shouldApplyPlanningOnlyRetryGuard({
       provider: params.provider,
       modelId: params.modelId,
+      executionContract: params.executionContract,
     })
   ) {
     return null;
@@ -361,11 +418,35 @@ export function resolveEmptyResponseRetryInstruction(params: {
 function shouldApplyPlanningOnlyRetryGuard(params: {
   provider?: string;
   modelId?: string;
+  executionContract?: string;
 }): boolean {
-  return isStrictAgenticSupportedProviderModel({
+  if (params.executionContract === "strict-agentic") {
+    return true;
+  }
+  return isIncompleteTurnRecoverySupportedProviderModel({
     provider: params.provider,
     modelId: params.modelId,
   });
+}
+
+function isIncompleteTurnRecoverySupportedProviderModel(params: {
+  provider?: string;
+  modelId?: string;
+}): boolean {
+  if (
+    isStrictAgenticSupportedProviderModel({
+      provider: params.provider,
+      modelId: params.modelId,
+    })
+  ) {
+    return true;
+  }
+  const provider = normalizeLowercaseStringOrEmpty(params.provider ?? "");
+  if (!GEMINI_INCOMPLETE_TURN_PROVIDER_IDS.has(provider)) {
+    return false;
+  }
+  const modelId = typeof params.modelId === "string" ? params.modelId : "";
+  return GEMINI_INCOMPLETE_TURN_MODEL_ID_PATTERN.test(stripProviderPrefix(modelId));
 }
 
 function normalizeAckPrompt(text: string): string {
@@ -518,6 +599,7 @@ export function resolvePlanningOnlyRetryLimit(
 export function resolvePlanningOnlyRetryInstruction(params: {
   provider?: string;
   modelId?: string;
+  executionContract?: string;
   prompt?: string;
   aborted: boolean;
   timedOut: boolean;
@@ -534,6 +616,7 @@ export function resolvePlanningOnlyRetryInstruction(params: {
     !shouldApplyPlanningOnlyRetryGuard({
       provider: params.provider,
       modelId: params.modelId,
+      executionContract: params.executionContract,
     }) ||
     (typeof params.prompt === "string" && !isLikelyActionableUserPrompt(params.prompt)) ||
     params.aborted ||

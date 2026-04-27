@@ -1,15 +1,18 @@
-import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
-} from "openclaw/plugin-sdk/reply-runtime";
+} from "openclaw/plugin-sdk/channel-inbound-debounce";
+import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createNonExitingTypedRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { parseFeishuMessageEvent, type FeishuMessageEvent } from "./bot.js";
 import * as dedup from "./dedup.js";
-import { monitorSingleAccount } from "./monitor.account.js";
-import { resolveReactionSyntheticEvent, type FeishuReactionCreatedEvent } from "./monitor.js";
+import {
+  monitorSingleAccount,
+  resolveReactionSyntheticEvent,
+  type FeishuReactionCreatedEvent,
+} from "./monitor.account.js";
 import { setFeishuRuntime } from "./runtime.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
@@ -648,23 +651,27 @@ describe("Feishu inbound debounce regressions", () => {
   it("uses latest fresh message id when debounce batch ends with stale retry", async () => {
     vi.spyOn(dedup, "tryBeginFeishuMessageProcessing").mockReturnValue(true);
     const recordSpy = vi.spyOn(dedup, "recordProcessedFeishuMessage").mockResolvedValue(true);
-    setStaleRetryMocks();
+    setStaleRetryMocks("om_old_latest_fresh");
     const onMessage = await setupDebounceMonitor();
 
-    await onMessage(createTextEvent({ messageId: "om_new", text: "fresh" }));
+    await onMessage(createTextEvent({ messageId: "om_new_latest_fresh", text: "fresh" }));
     await Promise.resolve();
     await Promise.resolve();
-    await onMessage(createTextEvent({ messageId: "om_old", text: "stale" }));
+    await onMessage(createTextEvent({ messageId: "om_old_latest_fresh", text: "stale" }));
     await Promise.resolve();
     await Promise.resolve();
     await vi.advanceTimersByTimeAsync(25);
 
     const dispatched = expectSingleDispatchedEvent();
-    expect(dispatched.message.message_id).toBe("om_new");
+    expect(dispatched.message.message_id).toBe("om_new_latest_fresh");
     const combined = JSON.parse(dispatched.message.content) as { text?: string };
     expect(combined.text).toBe("fresh");
-    expect(recordSpy).toHaveBeenCalledWith("om_old", "default", expect.any(Function));
-    expect(recordSpy).not.toHaveBeenCalledWith("om_new", "default", expect.any(Function));
+    expect(recordSpy).toHaveBeenCalledWith("om_old_latest_fresh", "default", expect.any(Function));
+    expect(recordSpy).not.toHaveBeenCalledWith(
+      "om_new_latest_fresh",
+      "default",
+      expect.any(Function),
+    );
   });
 
   it("releases early event dedupe when debounced dispatch fails", async () => {

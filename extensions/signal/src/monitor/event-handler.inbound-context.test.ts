@@ -1,6 +1,6 @@
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { expectChannelInboundContextContract as expectInboundContextContract } from "../../../../src/channels/plugins/contracts/test-helpers.js";
 vi.useRealTimers();
 const [
   { createBaseSignalEventHandlerDeps, createSignalReceiveEvent },
@@ -139,11 +139,26 @@ describe("signal createSignalEventHandler inbound context", () => {
       }),
     );
 
-    expect(sendTypingMock).toHaveBeenCalledWith("+15550001111", expect.any(Object));
+    expect(sendTypingMock).toHaveBeenCalledWith(
+      "+15550001111",
+      expect.objectContaining({
+        cfg: expect.objectContaining({
+          channels: expect.objectContaining({
+            signal: expect.objectContaining({ dmPolicy: "open" }),
+          }),
+        }),
+      }),
+    );
     expect(sendReadReceiptMock).toHaveBeenCalledWith(
       "signal:+15550001111",
       1700000000000,
-      expect.any(Object),
+      expect.objectContaining({
+        cfg: expect.objectContaining({
+          channels: expect.objectContaining({
+            signal: expect.objectContaining({ dmPolicy: "open" }),
+          }),
+        }),
+      }),
     );
   });
 
@@ -278,6 +293,37 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(capture.ctx?.MediaPaths).toEqual(["/tmp/a1.dat", "/tmp/a2.dat"]);
     expect(capture.ctx?.MediaUrls).toEqual(["/tmp/a1.dat", "/tmp/a2.dat"]);
     expect(capture.ctx?.MediaTypes).toEqual(["image/jpeg", "application/octet-stream"]);
+  });
+
+  it("threads resolved audio contentType for Signal voice attachments", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        },
+        ignoreAttachments: false,
+        fetchAttachment: async ({ attachment }) => ({
+          path: `/tmp/${String(attachment.id)}.aac`,
+          contentType: "audio/aac",
+        }),
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "",
+          attachments: [{ id: "voice1", contentType: undefined, filename: "voice.aac" }],
+        },
+      }),
+    );
+
+    expect(capture.ctx).toBeTruthy();
+    expect(capture.ctx?.MediaPath).toBe("/tmp/voice1.aac");
+    expect(capture.ctx?.MediaType).toBe("audio/aac");
+    expect(capture.ctx?.MediaTypes).toEqual(["audio/aac"]);
   });
 
   it("drops own UUID inbound messages when only accountUuid is configured", async () => {

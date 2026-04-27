@@ -3,6 +3,7 @@ import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "./events.js";
 
 const BASE_METHODS = [
   "health",
+  "diagnostics.stability",
   "doctor.memory.status",
   "doctor.memory.dreamDiary",
   "doctor.memory.backfillDreamDiary",
@@ -47,6 +48,7 @@ const BASE_METHODS = [
   "wizard.cancel",
   "wizard.status",
   "talk.config",
+  "talk.realtime.session",
   "talk.speak",
   "talk.mode",
   "commands.list",

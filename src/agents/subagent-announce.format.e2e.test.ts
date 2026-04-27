@@ -249,6 +249,17 @@ describe("subagent announce formatting", () => {
       callGateway: async <T = Record<string, unknown>>(
         req: Parameters<typeof gatewayCall.callGateway>[0],
       ) => (await callGatewaySpy(req)) as T,
+      loadConfig: () => configOverride,
+      getRequesterSessionActivity: (requesterSessionKey: string) => {
+        const entry = loadSessionStoreFixture()[requesterSessionKey];
+        const sessionId = entry?.sessionId;
+        return {
+          sessionId,
+          isActive: Boolean(sessionId && embeddedRunMock.isEmbeddedPiRunActive(sessionId)),
+        };
+      },
+      queueEmbeddedPiMessage: (sessionId: string, text: string) =>
+        embeddedRunMock.queueEmbeddedPiMessage(sessionId, text),
     });
     loadSessionStoreSpy.mockReset().mockImplementation(() => loadSessionStoreFixture());
     resolveAgentIdFromSessionKeySpy.mockReset().mockImplementation(() => "main");
@@ -1702,7 +1713,7 @@ describe("subagent announce formatting", () => {
     expect(new Set(idempotencyKeys).size).toBe(2);
   });
 
-  it("prefers direct delivery first for completion-mode and then queues on direct failure", async () => {
+  it("falls back to queued follow-up delivery when an active completion wake cannot be injected", async () => {
     embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
     embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
     sessionStore = {
@@ -1729,14 +1740,10 @@ describe("subagent announce formatting", () => {
 
     expect(didAnnounce).toBe(true);
     expect(sendSpy).not.toHaveBeenCalled();
-    expect(agentSpy).toHaveBeenCalledTimes(2);
+    expect(agentSpy).toHaveBeenCalledTimes(1);
     expect(agentSpy.mock.calls[0]?.[0]).toMatchObject({
       method: "agent",
       params: { sessionKey: "agent:main:main", channel: "whatsapp", to: "+1555", deliver: true },
-    });
-    expect(agentSpy.mock.calls[1]?.[0]).toMatchObject({
-      method: "agent",
-      params: { sessionKey: "agent:main:main" },
     });
   });
 

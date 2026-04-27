@@ -111,7 +111,7 @@ async function finalizeTurn(
 }
 
 describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
-  const sessionKey = "agent:main:discord:channel:test-ctx-engine";
+  const sessionKey = "agent:main:guildchat:channel:test-ctx-engine";
   const tempPaths: string[] = [];
   beforeEach(() => {
     resetEmbeddedAttemptHarness();
@@ -520,6 +520,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(flushMock).toHaveBeenCalledTimes(1);
     expect(disposeMock).toHaveBeenCalledTimes(1);
     expect(releaseMock).toHaveBeenCalledTimes(1);
-    expect(hoisted.releaseWsSessionMock).toHaveBeenCalledWith("embedded-session");
+    expect(hoisted.releaseWsSessionMock).toHaveBeenCalledWith("embedded-session", {
+      allowPool: false,
+    });
   });
 });

@@ -10,6 +10,63 @@ type QaMemorySearchResult = {
   results?: Array<{ snippet?: string; text?: string; path?: string }>;
 };
 
+type QaCronJob = {
+  delivery?: { mode?: string };
+  description?: string;
+  id?: string;
+  name?: string;
+  payload?: { kind?: string; message?: string; text?: string; lightContext?: boolean };
+  sessionTarget?: string;
+  state?: { nextRunAtMs?: number };
+};
+
+const ANSI_ESCAPE_PATTERN = new RegExp(String.raw`\x1B\[[0-?]*[ -/]*[@-~]`, "g");
+const MANAGED_DREAMING_CRON_MARKER = "[managed-by=memory-core.short-term-promotion]";
+const MANAGED_DREAMING_CRON_NAME = "Memory Dreaming Promotion";
+const MANAGED_DREAMING_PROMPT = "__openclaw_memory_core_short_term_promotion_dream__";
+
+function stripAnsiCodes(text: string) {
+  return text.replace(ANSI_ESCAPE_PATTERN, "");
+}
+
+function parseQaCliJsonOutput(text: string) {
+  const cleaned = stripAnsiCodes(text).trim();
+  if (!cleaned) {
+    return {};
+  }
+  try {
+    return JSON.parse(cleaned) as unknown;
+  } catch {
+    // Some startup repair logs are emitted on stdout before command JSON.
+    const lines = cleaned.split(/\r?\n/);
+    for (let index = 0; index < lines.length; index += 1) {
+      const candidate = lines[index].trim();
+      if (!candidate.startsWith("{") && !candidate.startsWith("[")) {
+        continue;
+      }
+      try {
+        return JSON.parse(lines.slice(index).join("\n")) as unknown;
+      } catch {
+        // Keep looking for the actual payload start.
+      }
+    }
+
+    // Keep a line-oriented fallback for compact payloads followed by diagnostics.
+    for (const line of lines.toReversed()) {
+      const candidate = line.trim();
+      if (!candidate.startsWith("{") && !candidate.startsWith("[")) {
+        continue;
+      }
+      try {
+        return JSON.parse(candidate) as unknown;
+      } catch {
+        // Keep looking for the actual payload line.
+      }
+    }
+    throw new Error(`qa cli returned non-JSON stdout: ${cleaned.slice(0, 240)}`);
+  }
+}
+
 async function runQaCli(
   env: Pick<
     QaSuiteRuntimeEnv,
@@ -55,7 +112,7 @@ async function runQaCli(
   if (!opts?.json) {
     return text;
   }
-  return text ? (JSON.parse(text) as unknown) : {};
+  return parseQaCliJsonOutput(text);
 }
 
 async function startAgentRun(
@@ -132,14 +189,32 @@ async function listCronJobs(env: Pick<QaSuiteRuntimeEnv, "gateway">) {
     },
     { timeoutMs: 30_000 },
   )) as {
-    jobs?: Array<{
-      id?: string;
-      name?: string;
-      payload?: { kind?: string; text?: string };
-      state?: { nextRunAtMs?: number };
-    }>;
+    jobs?: QaCronJob[];
   };
   return payload.jobs ?? [];
+}
+
+function isManagedDreamingCronJob(job: QaCronJob) {
+  if (job.description?.includes(MANAGED_DREAMING_CRON_MARKER)) {
+    return true;
+  }
+  if (job.name !== MANAGED_DREAMING_CRON_NAME) {
+    return false;
+  }
+  if (job.payload?.kind === "systemEvent" && job.payload.text === MANAGED_DREAMING_PROMPT) {
+    return true;
+  }
+  return (
+    job.payload?.kind === "agentTurn" &&
+    job.payload.message === MANAGED_DREAMING_PROMPT &&
+    job.payload.lightContext === true &&
+    job.sessionTarget === "isolated" &&
+    job.delivery?.mode === "none"
+  );
+}
+
+function findManagedDreamingCronJob(jobs: readonly QaCronJob[]) {
+  return jobs.find(isManagedDreamingCronJob);
 }
 
 async function readDoctorMemoryStatus(env: Pick<QaSuiteRuntimeEnv, "gateway">) {
@@ -225,6 +300,8 @@ async function runAgentPrompt(
 
 export {
   forceMemoryIndex,
+  findManagedDreamingCronJob,
+  isManagedDreamingCronJob,
   listCronJobs,
   readDoctorMemoryStatus,
   runAgentPrompt,

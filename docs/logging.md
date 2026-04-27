@@ -4,7 +4,7 @@ read_when:
   - You need a beginner-friendly overview of logging
   - You want to configure log levels or formats
   - You are troubleshooting and need to find logs quickly
-title: "Logging Overview"
+title: "Logging overview"
 ---
 
 # Logging
@@ -216,6 +216,12 @@ Queue + session:
 - `run.attempt`: run retry/attempt metadata.
 - `diagnostic.heartbeat`: aggregate counters (webhooks/queue/session).
 
+Exec:
+
+- `exec.process.completed`: terminal exec process outcome, duration, target, mode,
+  exit code, and failure kind. Command text and working directories are not
+  included.
+
 ### Enable diagnostics (no exporter)
 
 Use this if you want diagnostics events available to plugins or custom sinks:
@@ -279,7 +285,15 @@ works with any OpenTelemetry collector/backend that accepts OTLP/HTTP.
       "metrics": true,
       "logs": true,
       "sampleRate": 0.2,
-      "flushIntervalMs": 60000
+      "flushIntervalMs": 60000,
+      "captureContent": {
+        "enabled": false,
+        "inputMessages": false,
+        "outputMessages": false,
+        "toolInputs": false,
+        "toolOutputs": false,
+        "systemPrompt": false
+      }
     }
   }
 }
@@ -293,9 +307,16 @@ Notes:
   counters/histograms (webhooks, queueing, session state, queue depth/wait).
 - Traces/metrics can be toggled with `traces` / `metrics` (default: on). Traces
   include model usage spans plus webhook/message processing spans when enabled.
+- Raw model/tool content is not exported by default. Use
+  `diagnostics.otel.captureContent` only when your collector and retention policy
+  are approved for prompt, response, tool, or system prompt text.
 - Set `headers` when your collector requires auth.
 - Environment variables supported: `OTEL_EXPORTER_OTLP_ENDPOINT`,
   `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_PROTOCOL`.
+- Set `OPENCLAW_OTEL_PRELOADED=1` when another preload or host process already
+  registered the global OpenTelemetry SDK. In that mode the plugin does not start
+  or shut down its own SDK, but it still wires OpenClaw diagnostic listeners and
+  honors `diagnostics.otel.traces`, `metrics`, and `logs`.
 
 ### Exported metrics (names + types)
 
@@ -337,12 +358,30 @@ Queues + sessions:
 - `openclaw.session.stuck_age_ms` (histogram, attrs: `openclaw.state`)
 - `openclaw.run.attempt` (counter, attrs: `openclaw.attempt`)
 
+Exec:
+
+- `openclaw.exec.duration_ms` (histogram, attrs: `openclaw.exec.target`,
+  `openclaw.exec.mode`, `openclaw.outcome`, `openclaw.failureKind`)
+
 ### Exported spans (names + key attributes)
 
 - `openclaw.model.usage`
   - `openclaw.channel`, `openclaw.provider`, `openclaw.model`
-  - `openclaw.sessionKey`, `openclaw.sessionId`
   - `openclaw.tokens.*` (input/output/cache_read/cache_write/total)
+- `openclaw.run`
+  - `openclaw.outcome`, `openclaw.channel`, `openclaw.provider`,
+    `openclaw.model`, `openclaw.errorCategory`
+- `openclaw.model.call`
+  - `gen_ai.system`, `gen_ai.request.model`, `gen_ai.operation.name`,
+    `openclaw.provider`, `openclaw.model`, `openclaw.api`,
+    `openclaw.transport`
+- `openclaw.tool.execution`
+  - `gen_ai.tool.name`, `openclaw.toolName`, `openclaw.errorCategory`,
+    `openclaw.tool.params.*`
+- `openclaw.exec`
+  - `openclaw.exec.target`, `openclaw.exec.mode`, `openclaw.outcome`,
+    `openclaw.failureKind`, `openclaw.exec.command_length`,
+    `openclaw.exec.exit_code`, `openclaw.exec.timed_out`
 - `openclaw.webhook.processed`
   - `openclaw.channel`, `openclaw.webhook`, `openclaw.chatId`
 - `openclaw.webhook.error`
@@ -350,11 +389,13 @@ Queues + sessions:
     `openclaw.error`
 - `openclaw.message.processed`
   - `openclaw.channel`, `openclaw.outcome`, `openclaw.chatId`,
-    `openclaw.messageId`, `openclaw.sessionKey`, `openclaw.sessionId`,
-    `openclaw.reason`
+    `openclaw.messageId`, `openclaw.reason`
 - `openclaw.session.stuck`
-  - `openclaw.state`, `openclaw.ageMs`, `openclaw.queueDepth`,
-    `openclaw.sessionKey`, `openclaw.sessionId`
+  - `openclaw.state`, `openclaw.ageMs`, `openclaw.queueDepth`
+
+When content capture is explicitly enabled, model/tool spans can also include
+bounded, redacted `openclaw.content.*` attributes for the specific content
+classes you opted into.
 
 ### Sampling + flushing
 
@@ -367,6 +408,8 @@ Queues + sessions:
   `OTEL_EXPORTER_OTLP_ENDPOINT`.
 - If the endpoint already contains `/v1/traces` or `/v1/metrics`, it is used as-is.
 - If the endpoint already contains `/v1/logs`, it is used as-is for logs.
+- `OPENCLAW_OTEL_PRELOADED=1` reuses an externally registered OpenTelemetry SDK
+  for traces/metrics instead of starting a plugin-owned NodeSDK.
 - `diagnostics.otel.logs` enables OTLP log export for the main logger output.
 
 ### Log export behavior

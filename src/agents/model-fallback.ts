@@ -133,6 +133,28 @@ type ModelFallbackErrorHandler = (attempt: {
   total: number;
 }) => void | Promise<void>;
 
+export type ModelFallbackResultClassification =
+  | {
+      message: string;
+      reason?: FailoverReason;
+      status?: number;
+      code?: string;
+      rawError?: string;
+    }
+  | {
+      error: unknown;
+    }
+  | null
+  | undefined;
+
+type ModelFallbackResultClassifier<T> = (attempt: {
+  result: T;
+  provider: string;
+  model: string;
+  attempt: number;
+  total: number;
+}) => ModelFallbackResultClassification | Promise<ModelFallbackResultClassification>;
+
 type ModelFallbackRunResult<T> = {
   result: T;
   provider: string;
@@ -197,6 +219,9 @@ async function runFallbackAttempt<T>(params: {
   model: string;
   attempts: FallbackAttempt[];
   options?: ModelFallbackRunOptions;
+  classifyResult?: ModelFallbackResultClassifier<T>;
+  attempt: number;
+  total: number;
 }): Promise<{ success: ModelFallbackRunResult<T> } | { error: unknown }> {
   const runResult = await runFallbackCandidate({
     run: params.run,
@@ -205,6 +230,20 @@ async function runFallbackAttempt<T>(params: {
     options: params.options,
   });
   if (runResult.ok) {
+    const classification = await params.classifyResult?.({
+      result: runResult.result,
+      provider: params.provider,
+      model: params.model,
+      attempt: params.attempt,
+      total: params.total,
+    });
+    const classifiedError = resolveResultClassificationError(classification, {
+      provider: params.provider,
+      model: params.model,
+    });
+    if (classifiedError) {
+      return { error: classifiedError };
+    }
     return {
       success: buildFallbackSuccess({
         result: runResult.result,
@@ -215,6 +254,30 @@ async function runFallbackAttempt<T>(params: {
     };
   }
   return { error: runResult.error };
+}
+
+function resolveResultClassificationError(
+  classification: ModelFallbackResultClassification,
+  params: { provider: string; model: string },
+) {
+  if (!classification) {
+    return null;
+  }
+  if ("error" in classification) {
+    return classification.error;
+  }
+  const message = normalizeOptionalString(classification.message);
+  if (!message) {
+    return null;
+  }
+  return new FailoverError(message, {
+    reason: classification.reason ?? "unknown",
+    provider: params.provider,
+    model: params.model,
+    status: classification.status,
+    code: classification.code,
+    rawError: classification.rawError,
+  });
 }
 
 function sameModelCandidate(a: ModelCandidate, b: ModelCandidate): boolean {
@@ -239,7 +302,7 @@ function recordFailedCandidateAttempt(params: {
   params.attempts.push({
     provider: params.candidate.provider,
     model: params.candidate.model,
-    error: described.message,
+    error: described.rawError ?? described.message,
     reason: described.reason ?? "unknown",
     status: described.status,
     code: described.code,
@@ -255,7 +318,7 @@ function recordFailedCandidateAttempt(params: {
     reason: described.reason,
     status: described.status,
     code: described.code,
-    error: described.message,
+    error: described.rawError ?? described.message,
     nextCandidate: params.nextCandidate,
     isPrimary: params.isPrimary,
     requestedModelMatched: params.requestedModelMatched,
@@ -373,6 +436,25 @@ function resolveImageFallbackCandidates(params: {
   }
 
   return candidates;
+}
+
+function resolveImageFallbackDefaultProvider(cfg: OpenClawConfig | undefined): string {
+  const configuredPrimary = resolveAgentModelPrimaryValue(cfg?.agents?.defaults?.imageModel);
+  if (configuredPrimary?.trim()) {
+    const aliasIndex = buildModelAliasIndex({
+      cfg: cfg ?? {},
+      defaultProvider: DEFAULT_PROVIDER,
+    });
+    const resolved = resolveModelRefFromString({
+      raw: configuredPrimary,
+      defaultProvider: DEFAULT_PROVIDER,
+      aliasIndex,
+    });
+    if (resolved?.ref.provider) {
+      return resolved.ref.provider;
+    }
+  }
+  return DEFAULT_PROVIDER;
 }
 
 function resolveFallbackCandidates(params: {
@@ -640,6 +722,7 @@ export async function runWithModelFallback<T>(params: {
   fallbacksOverride?: string[];
   run: ModelFallbackRunFn<T>;
   onError?: ModelFallbackErrorHandler;
+  classifyResult?: ModelFallbackResultClassifier<T>;
 }): Promise<ModelFallbackRunResult<T>> {
   const candidates = resolveFallbackCandidates({
     cfg: params.cfg,
@@ -784,6 +867,9 @@ export async function runWithModelFallback<T>(params: {
       ...candidate,
       attempts,
       options: runOptions,
+      classifyResult: params.classifyResult,
+      attempt: i + 1,
+      total: candidates.length,
     });
     if ("success" in attemptRun) {
       if (i > 0 || attempts.length > 0 || attemptedDuringCooldown) {
@@ -922,7 +1008,7 @@ export async function runWithImageModelFallback<T>(params: {
 }): Promise<ModelFallbackRunResult<T>> {
   const candidates = resolveImageFallbackCandidates({
     cfg: params.cfg,
-    defaultProvider: DEFAULT_PROVIDER,
+    defaultProvider: resolveImageFallbackDefaultProvider(params.cfg),
     modelOverride: params.modelOverride,
   });
   if (candidates.length === 0) {
@@ -936,7 +1022,13 @@ export async function runWithImageModelFallback<T>(params: {
 
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
-    const attemptRun = await runFallbackAttempt({ run: params.run, ...candidate, attempts });
+    const attemptRun = await runFallbackAttempt({
+      run: params.run,
+      ...candidate,
+      attempts,
+      attempt: i + 1,
+      total: candidates.length,
+    });
     if ("success" in attemptRun) {
       return attemptRun.success;
     }

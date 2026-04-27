@@ -8,7 +8,11 @@ import {
   setFacadeLoaderJitiFactoryForTest,
 } from "./facade-loader.js";
 import { listImportedBundledPluginFacadeIds as listImportedFacadeRuntimeIds } from "./facade-runtime.js";
-import { createPluginSdkTestHarness } from "./test-helpers.js";
+import {
+  createBundledPluginPublicSurfaceFixture,
+  createPluginSdkTestHarness,
+  createThrowingBundledPluginPublicSurfaceFixture,
+} from "./test-helpers.js";
 
 const { createTempDirSync } = createPluginSdkTestHarness();
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -16,25 +20,11 @@ const FACADE_LOADER_GLOBAL = "__openclawTestLoadBundledPluginPublicSurfaceModule
 type FacadeLoaderJitiFactory = NonNullable<Parameters<typeof setFacadeLoaderJitiFactoryForTest>[0]>;
 
 function createBundledPluginDir(prefix: string, marker: string): string {
-  const rootDir = createTempDirSync(prefix);
-  fs.mkdirSync(path.join(rootDir, "demo"), { recursive: true });
-  fs.writeFileSync(
-    path.join(rootDir, "demo", "api.js"),
-    `export const marker = ${JSON.stringify(marker)};\n`,
-    "utf8",
-  );
-  return rootDir;
+  return createBundledPluginPublicSurfaceFixture({ createTempDirSync, marker, prefix });
 }
 
 function createThrowingPluginDir(prefix: string): string {
-  const rootDir = createTempDirSync(prefix);
-  fs.mkdirSync(path.join(rootDir, "bad"), { recursive: true });
-  fs.writeFileSync(
-    path.join(rootDir, "bad", "api.js"),
-    `throw new Error("plugin load failure");\n`,
-    "utf8",
-  );
-  return rootDir;
+  return createThrowingBundledPluginPublicSurfaceFixture({ createTempDirSync, prefix });
 }
 
 function createCircularPluginDir(prefix: string): string {
@@ -118,7 +108,7 @@ describe("plugin-sdk facade loader", () => {
     expect(listImportedFacadeRuntimeIds()).toEqual(["demo"]);
   });
 
-  it("keeps Windows dist facade loads off Jiti native import", () => {
+  it("uses native Jiti import for Windows dist facade loads", () => {
     const dir = createTempDirSync("openclaw-facade-loader-windows-dist-");
     const bundledPluginsDir = path.join(dir, "dist");
     fs.mkdirSync(path.join(bundledPluginsDir, "demo"), { recursive: true });
@@ -149,7 +139,7 @@ describe("plugin-sdk facade loader", () => {
       expect(createJitiCalls[0]?.[0]).toEqual(expect.any(String));
       expect(createJitiCalls[0]?.[1]).toEqual(
         expect.objectContaining({
-          tryNative: false,
+          tryNative: true,
         }),
       );
     } finally {

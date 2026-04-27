@@ -72,8 +72,10 @@ export type CliSessionBinding = {
   sessionId: string;
   authProfileId?: string;
   authEpoch?: string;
+  authEpochVersion?: number;
   extraSystemPromptHash?: string;
   mcpConfigHash?: string;
+  mcpResumeHash?: string;
 };
 
 export type SessionCompactionCheckpointReason =
@@ -174,6 +176,8 @@ export type SessionEntry = {
   responseUsage?: "on" | "off" | "tokens" | "full";
   providerOverride?: string;
   modelOverride?: string;
+  /** Session-scoped agent runtime/harness override selected with the model picker. */
+  agentRuntimeOverride?: string;
   /**
    * Tracks whether the persisted model override came from an explicit user
    * action (`/model`, `sessions.patch`) or from a temporary runtime fallback.
@@ -219,6 +223,12 @@ export type SessionEntry = {
   cacheWrite?: number;
   modelProvider?: string;
   model?: string;
+  /**
+   * Embedded agent harness selected for this session id.
+   * Prevents config/env changes from moving an existing transcript between
+   * incompatible runtime harnesses.
+   */
+  agentHarnessId?: string;
   /**
    * Last selected/runtime model pair for which a fallback notice was emitted.
    * Used to avoid repeating the same fallback notice every turn.

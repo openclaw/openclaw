@@ -5,8 +5,6 @@ read_when: "You want a dedicated explanation of sandboxing or need to tune agent
 status: active
 ---
 
-# Sandboxing
-
 OpenClaw can run **tools inside sandbox backends** to reduce blast radius.
 This is **optional** and controlled by configuration (`agents.defaults.sandbox` or
 `agents.list[].sandbox`). If sandboxing is off, tools run on the host.
@@ -58,7 +56,7 @@ Not sandboxed:
 
 `agents.defaults.sandbox.backend` controls **which runtime** provides the sandbox:
 
-- `"docker"` (default): local Docker-backed sandbox runtime.
+- `"docker"` (default when sandboxing is enabled): local Docker-backed sandbox runtime.
 - `"ssh"`: generic SSH-backed remote sandbox runtime.
 - `"openshell"`: OpenShell-backed sandbox runtime.
 
@@ -79,7 +77,10 @@ OpenShell-specific config lives under `plugins.entries.openshell.config`.
 
 ### Docker backend
 
-The Docker backend is the default runtime, executing tools and sandbox browsers locally via the Docker daemon socket (`/var/run/docker.sock`). Sandbox container isolation is determined by Docker namespaces.
+Sandboxing is off by default. If you enable sandboxing and do not choose a
+backend, OpenClaw uses the Docker backend. It executes tools and sandbox browsers
+locally via the Docker daemon socket (`/var/run/docker.sock`). Sandbox container
+isolation is determined by Docker namespaces.
 
 **Docker-out-of-Docker (DooD) Constraints**:
 If you deploy the OpenClaw Gateway itself as a Docker container, it orchestrates sibling sandbox containers using the host's Docker socket (DooD). This introduces a specific path mapping constraint:
@@ -479,7 +480,7 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
 ## Related docs
 
 - [OpenShell](/gateway/openshell) -- managed sandbox backend setup, workspace modes, and config reference
-- [Sandbox Configuration](/gateway/configuration-reference#agentsdefaultssandbox)
+- [Sandbox Configuration](/gateway/config-agents#agentsdefaultssandbox)
 - [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) -- debugging "why is this blocked?"
 - [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) -- per-agent overrides and precedence
 - [Security](/gateway/security)

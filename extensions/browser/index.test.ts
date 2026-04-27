@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
 import {
@@ -7,6 +9,9 @@ import {
   registerBrowserPlugin,
 } from "./plugin-registration.js";
 import type { OpenClawPluginApi } from "./runtime-api.js";
+import setupPlugin from "./setup-api.js";
+
+type BrowserAutoEnableProbe = Parameters<OpenClawPluginApi["registerAutoEnableProbe"]>[0];
 
 const runtimeApiMocks = vi.hoisted(() => ({
   createBrowserPluginService: vi.fn(() => ({ id: "browser-control", start: vi.fn() })),
@@ -51,6 +56,22 @@ function createApi() {
   return { api, registerCli, registerGatewayMethod, registerService, registerTool };
 }
 
+function registerBrowserAutoEnableProbe(): BrowserAutoEnableProbe {
+  const probes: BrowserAutoEnableProbe[] = [];
+  setupPlugin.register(
+    createTestPluginApi({
+      registerAutoEnableProbe(probe) {
+        probes.push(probe);
+      },
+    }),
+  );
+  const probe = probes[0];
+  if (!probe) {
+    throw new Error("expected browser setup plugin to register an auto-enable probe");
+  }
+  return probe;
+}
+
 describe("browser plugin", () => {
   it("exposes static browser metadata on the plugin definition", () => {
     expect(browserPluginReload).toEqual({ restartPrefixes: ["browser"] });
@@ -61,6 +82,16 @@ describe("browser plugin", () => {
       }),
     ]);
     expect(browserSecurityAuditCollectors).toHaveLength(1);
+  });
+
+  it("bundles the browser automation skill with the plugin", () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(__dirname, "openclaw.plugin.json"), "utf8"),
+    ) as { skills?: string[] };
+    const skillPath = path.join(__dirname, "skills", "browser-automation", "SKILL.md");
+
+    expect(manifest.skills).toEqual(["./skills"]);
+    expect(fs.readFileSync(skillPath, "utf8")).toContain("name: browser-automation");
   });
 
   it("forwards per-session browser options into the tool factory", async () => {
@@ -85,5 +116,30 @@ describe("browser plugin", () => {
       allowHostControl: true,
       agentSessionKey: "agent:main:webchat:direct:123",
     });
+  });
+
+  it("registers browser.request as an admin gateway method", () => {
+    const { api, registerGatewayMethod } = createApi();
+    registerBrowserPlugin(api);
+
+    expect(registerGatewayMethod).toHaveBeenCalledWith(
+      "browser.request",
+      runtimeApiMocks.handleBrowserGatewayRequest,
+      { scope: "operator.admin" },
+    );
+  });
+
+  it("declares setup auto-enable reasons for browser config surfaces", () => {
+    const probe = registerBrowserAutoEnableProbe();
+
+    expect(probe({ config: { browser: { defaultProfile: "openclaw" } }, env: {} })).toBe(
+      "browser configured",
+    );
+    expect(probe({ config: { tools: { alsoAllow: ["browser"] } }, env: {} })).toBe(
+      "browser tool referenced",
+    );
+    expect(
+      probe({ config: { browser: { defaultProfile: "openclaw", enabled: false } }, env: {} }),
+    ).toBeNull();
   });
 });

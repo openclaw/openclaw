@@ -27,7 +27,9 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
       rawConfig: {
         providers: {
           openai: {
+            language: "en",
             model: "gpt-4o-transcribe",
+            prompt: "expect OpenClaw product names",
             silenceDurationMs: 900,
             vadThreshold: 0.45,
           },
@@ -36,9 +38,31 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
     });
 
     expect(resolved).toEqual({
+      language: "en",
       model: "gpt-4o-transcribe",
+      prompt: "expect OpenClaw product names",
       silenceDurationMs: 900,
       vadThreshold: 0.45,
+    });
+  });
+
+  it("preserves explicit zero-valued VAD settings", () => {
+    const provider = buildOpenAIRealtimeTranscriptionProvider();
+    const resolved = provider.resolveConfig?.({
+      cfg: {} as never,
+      rawConfig: {
+        providers: {
+          openai: {
+            silenceDurationMs: 0,
+            vadThreshold: 0,
+          },
+        },
+      },
+    });
+
+    expect(resolved).toMatchObject({
+      silenceDurationMs: 0,
+      vadThreshold: 0,
     });
   });
 

@@ -8,6 +8,15 @@ import {
 const deps: RemoteProfileTestDeps = await loadRemoteProfileTestDeps();
 installRemoteProfileTestLifecycle(deps);
 
+function page(targetId: string, url = `https://${targetId.toLowerCase()}.example`) {
+  return {
+    targetId,
+    title: targetId === "T1" ? "Tab 1" : targetId,
+    url,
+    type: "page" as const,
+  };
+}
+
 describe("browser remote profile tab ops via Playwright", () => {
   it("uses Playwright tab operations when available", async () => {
     const listPagesViaPlaywright = vi.fn(async () => [
@@ -48,6 +57,41 @@ describe("browser remote profile tab ops via Playwright", () => {
       ssrfPolicy: { allowPrivateNetwork: true },
     });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("assigns stable tab ids and resolves labels", async () => {
+    const listPagesViaPlaywright = vi.fn(async () => [
+      page("A", "https://example.com"),
+      page("B", "https://docs.example.com"),
+    ]);
+    const focusPageByTargetIdViaPlaywright = vi.fn(async () => {});
+
+    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({
+      listPagesViaPlaywright,
+      focusPageByTargetIdViaPlaywright,
+    } as unknown as Awaited<ReturnType<typeof deps.pwAiModule.getPwAiModule>>);
+
+    const { remote } = deps.createRemoteRouteHarness();
+
+    const tabs = await remote.listTabs();
+    expect(tabs.map((tab) => [tab.targetId, tab.tabId])).toEqual([
+      ["A", "t1"],
+      ["B", "t2"],
+    ]);
+    expect(tabs.map((tab) => tab.suggestedTargetId)).toEqual(["t1", "t2"]);
+
+    const labeled = await remote.labelTab("t2", "docs");
+    expect(labeled).toMatchObject({
+      targetId: "B",
+      suggestedTargetId: "docs",
+      tabId: "t2",
+      label: "docs",
+    });
+
+    await remote.focusTab("docs");
+    expect(focusPageByTargetIdViaPlaywright).toHaveBeenCalledWith(
+      expect.objectContaining({ targetId: "B" }),
+    );
   });
 
   it("prefers lastTargetId for remote profiles when targetId is omitted", async () => {
@@ -91,10 +135,7 @@ describe("browser remote profile tab ops via Playwright", () => {
   });
 
   it("rejects stale targetId for remote profiles even when only one tab remains", async () => {
-    const responses = [
-      [{ targetId: "T1", title: "Tab 1", url: "https://example.com", type: "page" }],
-      [{ targetId: "T1", title: "Tab 1", url: "https://example.com", type: "page" }],
-    ];
+    const responses = Array.from({ length: 2 }, () => [page("T1", "https://example.com")]);
     const listPagesViaPlaywright = vi.fn(deps.createSequentialPageLister(responses));
 
     vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({
@@ -106,16 +147,7 @@ describe("browser remote profile tab ops via Playwright", () => {
   });
 
   it("keeps rejecting stale targetId for remote profiles when multiple tabs exist", async () => {
-    const responses = [
-      [
-        { targetId: "A", title: "A", url: "https://a.example", type: "page" },
-        { targetId: "B", title: "B", url: "https://b.example", type: "page" },
-      ],
-      [
-        { targetId: "A", title: "A", url: "https://a.example", type: "page" },
-        { targetId: "B", title: "B", url: "https://b.example", type: "page" },
-      ],
-    ];
+    const responses = Array.from({ length: 2 }, () => [page("A"), page("B")]);
     const listPagesViaPlaywright = vi.fn(deps.createSequentialPageLister(responses));
 
     vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({

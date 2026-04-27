@@ -7,12 +7,18 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import {
+  parseBrowserMajorVersion,
+  resolveGoogleChromeExecutableForPlatform,
+} from "./chrome.executables.js";
+import {
+  clearStaleChromeSingletonLocks,
   decorateOpenClawProfile,
   diagnoseChromeCdp,
   ensureProfileCleanExit,
   findChromeExecutableMac,
   findChromeExecutableWindows,
   formatChromeCdpDiagnostic,
+  buildOpenClawChromeLaunchArgs,
   getChromeWebSocketUrl,
   isChromeCdpReady,
   isChromeReachable,
@@ -207,6 +213,55 @@ describe("browser chrome profile decoration", () => {
     const profile = prefs.profile as Record<string, unknown>;
     expect(profile.name).toBe(DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME);
   });
+
+  it("clears stale singleton artifacts when the lock points at another host", async () => {
+    const userDataDir = await createUserDataDir();
+    await fsp.writeFile(path.join(userDataDir, "SingletonCookie"), "cookie");
+    await fsp.writeFile(path.join(userDataDir, "SingletonSocket"), "socket");
+    await fsp.symlink("remote-host-535", path.join(userDataDir, "SingletonLock"));
+
+    expect(clearStaleChromeSingletonLocks(userDataDir, "local-host")).toBe(true);
+    expect(fs.existsSync(path.join(userDataDir, "SingletonLock"))).toBe(false);
+    expect(fs.existsSync(path.join(userDataDir, "SingletonSocket"))).toBe(false);
+    expect(fs.existsSync(path.join(userDataDir, "SingletonCookie"))).toBe(false);
+  });
+
+  it("clears stale singleton artifacts when the lock PID is dead on the current host", async () => {
+    const userDataDir = await createUserDataDir();
+    const deadPid = 2147483646;
+    await fsp.symlink(`${os.hostname()}-${deadPid}`, path.join(userDataDir, "SingletonLock"));
+
+    expect(clearStaleChromeSingletonLocks(userDataDir, os.hostname())).toBe(true);
+    expect(fs.existsSync(path.join(userDataDir, "SingletonLock"))).toBe(false);
+  });
+
+  it("keeps singleton artifacts when the lock points at a current-host live process", async () => {
+    const userDataDir = await createUserDataDir();
+    await fsp.symlink(`${os.hostname()}-${process.pid}`, path.join(userDataDir, "SingletonLock"));
+
+    expect(clearStaleChromeSingletonLocks(userDataDir, os.hostname())).toBe(false);
+    expect(fs.lstatSync(path.join(userDataDir, "SingletonLock")).isSymbolicLink()).toBe(true);
+  });
+
+  it("keeps singleton artifacts when the lock PID exists but cannot be signaled", async () => {
+    const userDataDir = await createUserDataDir();
+    await fsp.symlink(`${os.hostname()}-12345`, path.join(userDataDir, "SingletonLock"));
+    const err = new Error("operation not permitted") as NodeJS.ErrnoException;
+    err.code = "EPERM";
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(((pid, signal) => {
+      if (pid === 12345 && signal === 0) {
+        throw err;
+      }
+      return true;
+    }) as typeof process.kill);
+
+    try {
+      expect(clearStaleChromeSingletonLocks(userDataDir, os.hostname())).toBe(false);
+      expect(fs.lstatSync(path.join(userDataDir, "SingletonLock")).isSymbolicLink()).toBe(true);
+    } finally {
+      killSpy.mockRestore();
+    }
+  });
 });
 
 describe("browser chrome helpers", () => {
@@ -377,7 +432,7 @@ describe("browser chrome helpers", () => {
     try {
       const addr = server.address() as AddressInfo;
       await expect(
-        getChromeWebSocketUrl(`http://127.0.0.1:${addr.port}`, 50, {
+        getChromeWebSocketUrl(`http://127.0.0.1:${addr.port}`, 1000, {
           dangerouslyAllowPrivateNetwork: false,
           allowedHostnames: ["127.0.0.1"],
         }),
@@ -430,7 +485,7 @@ describe("browser chrome helpers", () => {
       // Simulate a stale command channel: WS opens but never responds to commands.
       onConnection: (wss) => wss.on("connection", (_ws) => {}),
       run: async (baseUrl) => {
-        await expect(isChromeCdpReady(baseUrl, 300, 150)).resolves.toBe(false);
+        await expect(isChromeCdpReady(baseUrl, 300, 5)).resolves.toBe(false);
       },
     });
   });
@@ -440,7 +495,7 @@ describe("browser chrome helpers", () => {
       wsPath: "/devtools/browser/stale-diagnostic",
       onConnection: (wss) => wss.on("connection", (_ws) => {}),
       run: async (baseUrl) => {
-        const diagnostic = await diagnoseChromeCdp(baseUrl, 300, 150);
+        const diagnostic = await diagnoseChromeCdp(baseUrl, 300, 50);
         expect(diagnostic).toMatchObject({
           ok: false,
           code: "websocket_health_command_timeout",
@@ -573,5 +628,93 @@ describe("browser chrome helpers", () => {
     await stopChromeWithProc(proc, 1);
     expect(proc.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
     expect(proc.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
+  });
+});
+
+describe("chrome executables", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("parses odd dotted browser version tokens using the last match", () => {
+    expect(parseBrowserMajorVersion("Chromium 3.0/1.2.3")).toBe(1);
+  });
+
+  it("returns null when no dotted version token exists", () => {
+    expect(parseBrowserMajorVersion("no version here")).toBeNull();
+  });
+
+  it("classifies beta Linux Google Chrome builds as canary", () => {
+    vi.spyOn(fs, "existsSync").mockImplementation((candidate) => {
+      return String(candidate) === "/usr/bin/google-chrome-beta";
+    });
+
+    expect(resolveGoogleChromeExecutableForPlatform("linux")).toEqual({
+      kind: "canary",
+      path: "/usr/bin/google-chrome-beta",
+    });
+  });
+
+  it("classifies unstable Linux Google Chrome builds as canary", () => {
+    vi.spyOn(fs, "existsSync").mockImplementation((candidate) => {
+      return String(candidate) === "/usr/bin/google-chrome-unstable";
+    });
+
+    expect(resolveGoogleChromeExecutableForPlatform("linux")).toEqual({
+      kind: "canary",
+      path: "/usr/bin/google-chrome-unstable",
+    });
+  });
+});
+
+describe("browser chrome launch args", () => {
+  it("does not force an about:blank tab at startup", () => {
+    const args = buildOpenClawChromeLaunchArgs({
+      resolved: {
+        enabled: true,
+        controlPort: 18791,
+        cdpProtocol: "http",
+        cdpHost: "127.0.0.1",
+        cdpIsLoopback: true,
+        cdpPortRangeStart: 18800,
+        cdpPortRangeEnd: 18810,
+        evaluateEnabled: false,
+        remoteCdpTimeoutMs: 1500,
+        remoteCdpHandshakeTimeoutMs: 3000,
+        actionTimeoutMs: 60_000,
+        extraArgs: [],
+        color: "#FF4500",
+        headless: false,
+        noSandbox: false,
+        attachOnly: false,
+        ssrfPolicy: { allowPrivateNetwork: true },
+        tabCleanup: {
+          enabled: true,
+          idleMinutes: 120,
+          maxTabsPerSession: 8,
+          sweepMinutes: 5,
+        },
+        defaultProfile: "openclaw",
+        profiles: {
+          openclaw: { cdpPort: 18800, color: "#FF4500" },
+        },
+      },
+      profile: {
+        name: "openclaw",
+        cdpUrl: "http://127.0.0.1:18800",
+        cdpPort: 18800,
+        cdpHost: "127.0.0.1",
+        cdpIsLoopback: true,
+        color: "#FF4500",
+        driver: "openclaw",
+        headless: false,
+        attachOnly: false,
+      },
+      userDataDir: "/tmp/openclaw-test-user-data",
+    });
+
+    expect(args).not.toContain("about:blank");
+    expect(args).toContain("--remote-debugging-port=18800");
+    expect(args).toContain("--user-data-dir=/tmp/openclaw-test-user-data");
   });
 });

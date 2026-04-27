@@ -20,13 +20,14 @@ import {
   normalizeCdpHttpBaseForJsonEndpoints,
   withCdpSocket,
 } from "./cdp.helpers.js";
-import { normalizeCdpWsUrl } from "./cdp.js";
+import { AX_REF_PATTERN, normalizeCdpWsUrl } from "./cdp.js";
 import { getChromeWebSocketUrl } from "./chrome.js";
 import { BrowserTabNotFoundError } from "./errors.js";
 import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationRedirectChainAllowed,
   assertBrowserNavigationResultAllowed,
+  type BrowserNavigationPolicyOptions,
   InvalidBrowserNavigationUrlError,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
@@ -55,13 +56,6 @@ export type BrowserNetworkRequest = {
   status?: number;
   ok?: boolean;
   failureText?: string;
-};
-
-type SnapshotForAIResult = { full: string; incremental?: string };
-type SnapshotForAIOptions = { timeout?: number; track?: string };
-
-export type WithSnapshotForAI = {
-  _snapshotForAI?: (options?: SnapshotForAIOptions) => Promise<SnapshotForAIResult>;
 };
 
 type TargetInfoResponse = {
@@ -127,6 +121,27 @@ const blockedPageRefsByCdpUrl = new Map<string, WeakSet<Page>>();
 
 function normalizeCdpUrl(raw: string) {
   return raw.replace(/\/$/, "");
+}
+
+function hasCachedPlaywrightBrowserConnection(cdpUrl: string): boolean {
+  return cachedByCdpUrl.has(normalizeCdpUrl(cdpUrl));
+}
+
+function isRecoverableStalePageSelectionError(err: unknown, reusedCachedBrowser: boolean): boolean {
+  if (!reusedCachedBrowser) {
+    return false;
+  }
+  if (
+    err instanceof Error &&
+    err.message.includes("No pages available in the connected browser.")
+  ) {
+    return true;
+  }
+  if (err instanceof BrowserTabNotFoundError) {
+    return true;
+  }
+  const message = err instanceof Error ? err.message : formatErrorMessage(err);
+  return message.toLowerCase().includes("tab not found");
 }
 
 function findNetworkRequestById(state: PageState, id: string): BrowserNetworkRequest | undefined {
@@ -631,7 +646,7 @@ async function resolvePageByTargetIdOrThrow(opts: {
   return page;
 }
 
-export async function getPageForTargetId(opts: {
+async function getPageForTargetIdOnce(opts: {
   cdpUrl: string;
   targetId?: string;
   ssrfPolicy?: SsrFPolicy;
@@ -675,6 +690,23 @@ export async function getPageForTargetId(opts: {
     return first;
   }
   throw new BrowserTabNotFoundError();
+}
+
+export async function getPageForTargetId(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  ssrfPolicy?: SsrFPolicy;
+}): Promise<Page> {
+  const reusedCachedBrowser = hasCachedPlaywrightBrowserConnection(opts.cdpUrl);
+  try {
+    return await getPageForTargetIdOnce(opts);
+  } catch (err) {
+    if (!isRecoverableStalePageSelectionError(err, reusedCachedBrowser)) {
+      throw err;
+    }
+    await closePlaywrightBrowserConnection({ cdpUrl: opts.cdpUrl });
+    return await getPageForTargetIdOnce(opts);
+  }
 }
 
 function isTopLevelNavigationRequest(page: Page, request: Request): boolean {
@@ -754,14 +786,17 @@ async function closeBlockedNavigationTarget(opts: {
   await opts.page.close().catch(() => {});
 }
 
-export async function assertPageNavigationCompletedSafely(opts: {
-  cdpUrl: string;
-  page: Page;
-  response: Response | null;
-  ssrfPolicy?: SsrFPolicy;
-  targetId?: string;
-}): Promise<void> {
-  const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy);
+export async function assertPageNavigationCompletedSafely(
+  opts: {
+    cdpUrl: string;
+    page: Page;
+    response: Response | null;
+    targetId?: string;
+  } & BrowserNavigationPolicyOptions,
+): Promise<void> {
+  const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
+    browserProxyMode: opts.browserProxyMode,
+  });
   try {
     await assertBrowserNavigationRedirectChainAllowed({
       request: opts.response?.request(),
@@ -783,15 +818,18 @@ export async function assertPageNavigationCompletedSafely(opts: {
   }
 }
 
-export async function gotoPageWithNavigationGuard(opts: {
-  cdpUrl: string;
-  page: Page;
-  url: string;
-  timeoutMs: number;
-  ssrfPolicy?: SsrFPolicy;
-  targetId?: string;
-}): Promise<Response | null> {
-  const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy);
+export async function gotoPageWithNavigationGuard(
+  opts: {
+    cdpUrl: string;
+    page: Page;
+    url: string;
+    timeoutMs: number;
+    targetId?: string;
+  } & BrowserNavigationPolicyOptions,
+): Promise<Response | null> {
+  const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
+    browserProxyMode: opts.browserProxyMode,
+  });
   let blockedError: unknown = null;
 
   const handler = async (route: Route, request: Request) => {
@@ -882,6 +920,13 @@ export function refLocator(page: Page, ref: string) {
       ? locAny.getByRole(info.role as never, { name: info.name, exact: true })
       : locAny.getByRole(info.role as never);
     return info.nth !== undefined ? locator.nth(info.nth) : locator;
+  }
+
+  if (AX_REF_PATTERN.test(normalized)) {
+    throw new Error(
+      `Ref "${normalized}" comes from a format=aria snapshot and cannot be used with act. ` +
+        `Re-snapshot with format=ai and use the eN refs from that snapshot.`,
+    );
   }
 
   return page.locator(`aria-ref=${normalized}`);
@@ -1102,11 +1147,12 @@ export async function listPagesViaPlaywright(opts: {
  * Used for remote profiles where HTTP-based /json/new is ephemeral.
  * Returns the new page's targetId and metadata.
  */
-export async function createPageViaPlaywright(opts: {
-  cdpUrl: string;
-  url: string;
-  ssrfPolicy?: SsrFPolicy;
-}): Promise<{
+export async function createPageViaPlaywright(
+  opts: {
+    cdpUrl: string;
+    url: string;
+  } & BrowserNavigationPolicyOptions,
+): Promise<{
   targetId: string;
   title: string;
   url: string;
@@ -1125,7 +1171,9 @@ export async function createPageViaPlaywright(opts: {
   // Navigate to the URL
   const targetUrl = opts.url.trim() || "about:blank";
   if (targetUrl !== "about:blank") {
-    const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy);
+    const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
+      browserProxyMode: opts.browserProxyMode,
+    });
     await assertBrowserNavigationAllowed({
       url: targetUrl,
       ...navigationPolicy,
@@ -1138,6 +1186,7 @@ export async function createPageViaPlaywright(opts: {
         url: targetUrl,
         timeoutMs: 30_000,
         ssrfPolicy: opts.ssrfPolicy,
+        browserProxyMode: opts.browserProxyMode,
         targetId: createdTargetId ?? undefined,
       });
     } catch (err) {
@@ -1150,6 +1199,7 @@ export async function createPageViaPlaywright(opts: {
       page,
       response,
       ssrfPolicy: opts.ssrfPolicy,
+      browserProxyMode: opts.browserProxyMode,
       targetId: createdTargetId ?? undefined,
     });
   }

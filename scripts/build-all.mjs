@@ -14,21 +14,6 @@ export const BUILD_ALL_STEPS = [
   { label: "canvas:a2ui:bundle", kind: "pnpm", pnpmArgs: ["canvas:a2ui:bundle"] },
   { label: "tsdown", kind: "node", args: ["scripts/tsdown-build.mjs"] },
   { label: "runtime-postbuild", kind: "node", args: ["scripts/runtime-postbuild.mjs"] },
-  {
-    label: "write-npm-update-compat-sidecars",
-    kind: "node",
-    args: ["--import", "tsx", "scripts/write-npm-update-compat-sidecars.ts"],
-    cache: {
-      inputs: [
-        "scripts/write-npm-update-compat-sidecars.ts",
-        "src/infra/npm-update-compat-sidecars.ts",
-      ],
-      outputs: [
-        "dist/extensions/qa-channel/runtime-api.js",
-        "dist/extensions/qa-lab/runtime-api.js",
-      ],
-    },
-  },
   { label: "build-stamp", kind: "node", args: ["scripts/build-stamp.mjs"] },
   {
     label: "build:plugin-sdk:dts",
@@ -51,14 +36,6 @@ export const BUILD_ALL_STEPS = [
     label: "write-plugin-sdk-entry-dts",
     kind: "node",
     args: ["--import", "tsx", "scripts/write-plugin-sdk-entry-dts.ts"],
-    cache: {
-      inputs: [
-        "scripts/write-plugin-sdk-entry-dts.ts",
-        "scripts/lib/plugin-sdk-entrypoints.json",
-        "dist/plugin-sdk/src/plugin-sdk",
-      ],
-      outputs: ["dist/plugin-sdk", "packages/plugin-sdk/dist/src/plugin-sdk"],
-    },
   },
   {
     label: "check-plugin-sdk-exports",
@@ -78,10 +55,6 @@ export const BUILD_ALL_STEPS = [
     label: "copy-hook-metadata",
     kind: "node",
     args: ["--import", "tsx", "scripts/copy-hook-metadata.ts"],
-    cache: {
-      inputs: ["scripts/copy-hook-metadata.ts", "scripts/lib/copy-assets.ts", "src/hooks/bundled"],
-      outputs: ["dist/bundled"],
-    },
   },
   {
     label: "copy-export-html-templates",
@@ -119,8 +92,10 @@ export const BUILD_ALL_PROFILES = {
     "canvas:a2ui:bundle",
     "tsdown",
     "runtime-postbuild",
-    "write-npm-update-compat-sidecars",
     "build-stamp",
+    "build:plugin-sdk:dts",
+    "write-plugin-sdk-entry-dts",
+    "check-plugin-sdk-exports",
     "canvas-a2ui-copy",
     "copy-hook-metadata",
     "copy-export-html-templates",
@@ -128,6 +103,7 @@ export const BUILD_ALL_PROFILES = {
     "write-cli-startup-metadata",
     "write-cli-compat",
   ],
+  gatewayWatch: ["tsdown", "runtime-postbuild", "build-stamp"],
 };
 
 export function resolveBuildAllSteps(profile = "full") {

@@ -44,6 +44,51 @@ export type SsrFPolicy = {
   hostnameAllowlist?: string[];
 };
 
+function normalizeSsrFPolicyHostnames(values?: string[]): string[] {
+  if (!values || values.length === 0) {
+    return [];
+  }
+  return Array.from(
+    new Set(values.map((value) => normalizeHostname(value)).filter(Boolean)),
+  ).toSorted();
+}
+
+function normalizeSsrFPolicyForComparison(policy?: SsrFPolicy) {
+  if (!policy) {
+    return null;
+  }
+  return {
+    allowPrivateNetwork: policy.allowPrivateNetwork === true,
+    dangerouslyAllowPrivateNetwork: policy.dangerouslyAllowPrivateNetwork === true,
+    allowRfc2544BenchmarkRange: policy.allowRfc2544BenchmarkRange === true,
+    allowedHostnames: normalizeSsrFPolicyHostnames(policy.allowedHostnames),
+    hostnameAllowlist: [...normalizeHostnameAllowlist(policy.hostnameAllowlist)].toSorted(),
+  };
+}
+
+export function isSameSsrFPolicy(a?: SsrFPolicy, b?: SsrFPolicy): boolean {
+  return (
+    JSON.stringify(normalizeSsrFPolicyForComparison(a)) ===
+    JSON.stringify(normalizeSsrFPolicyForComparison(b))
+  );
+}
+
+export function ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl: string): SsrFPolicy | undefined {
+  const trimmed = baseUrl.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return undefined;
+    }
+    return { allowedHostnames: [parsed.hostname] };
+  } catch {
+    return undefined;
+  }
+}
+
 const BLOCKED_HOSTNAMES = new Set([
   "localhost",
   "localhost.localdomain",
@@ -432,34 +477,39 @@ export function createPinnedDispatcher(
   pinned: PinnedHostname,
   policy?: PinnedDispatcherPolicy,
   ssrfPolicy?: SsrFPolicy,
+  timeoutMs?: number,
 ): Dispatcher {
   const lookup = resolvePinnedDispatcherLookup(pinned, policy?.pinnedHostname, ssrfPolicy);
 
   if (!policy || policy.mode === "direct") {
-    return createHttp1Agent({
-      connect: withPinnedLookup(lookup, policy?.connect),
-    });
+    return createHttp1Agent({ connect: withPinnedLookup(lookup, policy?.connect) }, timeoutMs);
   }
 
   if (policy.mode === "env-proxy") {
-    return createHttp1EnvHttpProxyAgent({
-      connect: withPinnedLookup(lookup, policy.connect),
-      ...(policy.proxyTls ? { proxyTls: { ...policy.proxyTls } } : {}),
-    });
+    return createHttp1EnvHttpProxyAgent(
+      {
+        connect: withPinnedLookup(lookup, policy.connect),
+        ...(policy.proxyTls ? { proxyTls: { ...policy.proxyTls } } : {}),
+      },
+      timeoutMs,
+    );
   }
 
   const proxyUrl = policy.proxyUrl.trim();
   const requestTls = withPinnedLookup(lookup, policy.proxyTls);
   if (!requestTls) {
-    return createHttp1ProxyAgent({ uri: proxyUrl });
+    return createHttp1ProxyAgent({ uri: proxyUrl }, timeoutMs);
   }
-  return createHttp1ProxyAgent({
-    uri: proxyUrl,
-    // `PinnedDispatcherPolicy.proxyTls` historically carried target-hop
-    // transport hints for explicit proxies. Translate that to undici's
-    // `requestTls` so HTTPS proxy tunnels keep the pinned DNS lookup.
-    requestTls,
-  });
+  return createHttp1ProxyAgent(
+    {
+      uri: proxyUrl,
+      // `PinnedDispatcherPolicy.proxyTls` historically carried target-hop
+      // transport hints for explicit proxies. Translate that to undici's
+      // `requestTls` so HTTPS proxy tunnels keep the pinned DNS lookup.
+      requestTls,
+    },
+    timeoutMs,
+  );
 }
 
 export async function closeDispatcher(dispatcher?: Dispatcher | null): Promise<void> {

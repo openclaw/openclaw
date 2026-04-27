@@ -7,7 +7,6 @@ import { clearRuntimeAuthProfileStoreSnapshots } from "../../../src/agents/auth-
 import { withFastReplyConfig } from "../../../src/auto-reply/reply/get-reply-fast-path.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import { resetProviderRuntimeHookCacheForTest } from "../../../src/plugins/provider-runtime.js";
-import { resolveRelativeBundledPluginPublicModuleId } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 
 // Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
 type AnyMock = any;
@@ -100,8 +99,8 @@ const modelCatalogMocks = getSharedMocks("openclaw.trigger-handling.model-catalo
       contextWindow: 200000,
     },
     { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 mini" },
-    { provider: "openai", id: "gpt-5.4", name: "GPT-5.2" },
-    { provider: "openai-codex", id: "gpt-5.4", name: "GPT-5.2 (Codex)" },
+    { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
+    { provider: "openai-codex", id: "gpt-5.5", name: "GPT-5.5 (Codex)" },
     { provider: "minimax", id: "MiniMax-M2.7", name: "MiniMax M2.7" },
   ]),
   resetModelCatalogCacheForTest: vi.fn(),
@@ -164,17 +163,16 @@ const webSessionMocks = getSharedMocks("openclaw.trigger-handling.web-session-mo
   readWebSelfId: vi.fn().mockReturnValue({ e164: "+1999" }),
 }));
 
-const whatsappRuntimeApiModuleId = resolveRelativeBundledPluginPublicModuleId({
-  fromModuleUrl: import.meta.url,
-  pluginId: "whatsapp",
-  artifactBasename: "runtime-api.js",
-});
-
 export function getWebSessionMocks(): AnyMocks {
   return webSessionMocks;
 }
 
-const installWebSessionMock = () => vi.doMock(whatsappRuntimeApiModuleId, () => webSessionMocks);
+const installWebSessionMock = () =>
+  vi.doMock("../../../src/plugins/runtime/runtime-web-channel-plugin.js", () => ({
+    webAuthExists: (...args: unknown[]) => webSessionMocks.webAuthExists(...args),
+    getWebAuthAgeMs: (...args: unknown[]) => webSessionMocks.getWebAuthAgeMs(...args),
+    readWebSelfId: (...args: unknown[]) => webSessionMocks.readWebSelfId(...args),
+  }));
 
 installWebSessionMock();
 

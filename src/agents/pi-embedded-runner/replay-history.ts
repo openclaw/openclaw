@@ -227,6 +227,24 @@ function stripStaleAssistantUsageBeforeLatestCompaction(messages: AgentMessage[]
   return touched ? out : messages;
 }
 
+export function normalizeAssistantReplayContent(messages: AgentMessage[]): AgentMessage[] {
+  let touched = false;
+  const out = [...messages];
+  for (let i = 0; i < out.length; i += 1) {
+    const message = out[i];
+    const replayContent = (message as { content?: unknown } | undefined)?.content;
+    if (!message || message.role !== "assistant" || typeof replayContent !== "string") {
+      continue;
+    }
+    out[i] = {
+      ...message,
+      content: [{ type: "text", text: replayContent }],
+    };
+    touched = true;
+  }
+  return touched ? out : messages;
+}
+
 function normalizeAssistantUsageSnapshot(usage: unknown) {
   const normalized = normalizeUsage((usage ?? undefined) as UsageLike | undefined);
   if (!normalized) {
@@ -443,8 +461,19 @@ export async function sanitizeSessionHistory(params: {
     params.modelApi === "openai-responses" ||
     params.modelApi === "openai-codex-responses" ||
     params.modelApi === "azure-openai-responses";
+  const hasSnapshot = Boolean(params.provider || params.modelApi || params.modelId);
+  const priorSnapshot = hasSnapshot ? readLastModelSnapshot(params.sessionManager) : null;
+  const modelChanged = priorSnapshot
+    ? !isSameModelSnapshot(priorSnapshot, {
+        timestamp: 0,
+        provider: params.provider,
+        modelApi: params.modelApi,
+        modelId: params.modelId,
+      })
+    : false;
+  const normalizedAssistantReplay = normalizeAssistantReplayContent(withInterSessionMarkers);
   const sanitizedImages = await sanitizeSessionMessagesImages(
-    withInterSessionMarkers,
+    normalizedAssistantReplay,
     "session:history",
     {
       sanitizeMode: policy.sanitizeMode,
@@ -464,18 +493,24 @@ export async function sanitizeSessionHistory(params: {
     allowedToolNames: params.allowedToolNames,
     allowProviderOwnedThinkingReplay,
   });
-  // OpenAI's fc_* pairing downgrade needs the raw call_id|fc_id separator intact,
-  // but displaced tool results must first be repaired back next to their
-  // assistant turn so the downgrade can rewrite both sides consistently.
+  // OpenAI Responses rejects orphan/missing function_call_output items. Upstream
+  // Codex repairs those gaps with "aborted"; keep that before the fc_* downgrade
+  // so both call and result ids are rewritten together. Covered by unit replay
+  // tests plus live OpenAI/Codex and generic replay-repair model tests.
   const openAIRepairedToolCalls =
     isOpenAIResponsesApi && policy.repairToolUseResultPairing
       ? sanitizeToolUseResultPairing(sanitizedToolCalls, {
           erroredAssistantResultPolicy: "drop",
+          // Match upstream Codex history normalization for OpenAI Responses:
+          // missing function_call_output entries are model-visible "aborted".
+          missingToolResultText: "aborted",
         })
       : sanitizedToolCalls;
   const openAISafeToolCalls = isOpenAIResponsesApi
     ? downgradeOpenAIFunctionCallReasoningPairs(
-        downgradeOpenAIReasoningBlocks(openAIRepairedToolCalls),
+        downgradeOpenAIReasoningBlocks(openAIRepairedToolCalls, {
+          dropReplayableReasoning: modelChanged,
+        }),
       )
     : sanitizedToolCalls;
   const sanitizedToolIds =
@@ -486,6 +521,9 @@ export async function sanitizeSessionHistory(params: {
           allowedToolNames: params.allowedToolNames,
         })
       : openAISafeToolCalls;
+  // Gemini/Anthropic-class providers also require tool results to stay adjacent
+  // to their assistant tool calls. They do not use Codex's "aborted" text, but
+  // the same ordering repair is live-tested with Gemini 3 Flash.
   const repairedTools =
     !isOpenAIResponsesApi && policy.repairToolUseResultPairing
       ? sanitizeToolUseResultPairing(sanitizedToolIds, {
@@ -496,16 +534,6 @@ export async function sanitizeSessionHistory(params: {
   const sanitizedCompactionUsage = ensureAssistantUsageSnapshots(
     stripStaleAssistantUsageBeforeLatestCompaction(sanitizedToolResults),
   );
-  const hasSnapshot = Boolean(params.provider || params.modelApi || params.modelId);
-  const priorSnapshot = hasSnapshot ? readLastModelSnapshot(params.sessionManager) : null;
-  const modelChanged = priorSnapshot
-    ? !isSameModelSnapshot(priorSnapshot, {
-        timestamp: 0,
-        provider: params.provider,
-        modelApi: params.modelApi,
-        modelId: params.modelId,
-      })
-    : false;
   const provider = params.provider?.trim();
   let providerSanitized: AgentMessage[] | undefined;
   if (provider && provider.length > 0) {

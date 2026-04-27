@@ -17,6 +17,7 @@ import type { TypingMode } from "../../config/types.js";
 import { resolveSessionTranscriptCandidates } from "../../gateway/session-utils.fs.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
+import { freezeDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -64,7 +65,7 @@ import {
   type FollowupRun,
   type QueueSettings,
 } from "./queue.js";
-import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
+import { createReplyMediaContext } from "./reply-media-paths.js";
 import {
   createReplyOperation,
   ReplyRunAlreadyActiveError,
@@ -860,6 +861,7 @@ function refreshSessionEntryFromStore(params: {
 
 export async function runReplyAgent(params: {
   commandBody: string;
+  transcriptCommandBody?: string;
   followupRun: FollowupRun;
   queueKey: string;
   resolvedQueue: QueueSettings;
@@ -873,6 +875,7 @@ export async function runReplyAgent(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
+  runtimePolicySessionKey?: string;
   storePath?: string;
   defaultModel: string;
   agentCfgContextTokens?: number;
@@ -890,10 +893,12 @@ export async function runReplyAgent(params: {
   shouldInjectGroupIntro: boolean;
   typingMode: TypingMode;
   resetTriggered?: boolean;
+  replyThreadingOverride?: TemplateContext["ReplyThreading"];
   replyOperation?: ReplyOperation;
 }): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const {
     commandBody,
+    transcriptCommandBody,
     followupRun,
     queueKey,
     resolvedQueue,
@@ -907,6 +912,7 @@ export async function runReplyAgent(params: {
     sessionEntry,
     sessionStore,
     sessionKey,
+    runtimePolicySessionKey,
     storePath,
     defaultModel,
     agentCfgContextTokens,
@@ -919,6 +925,7 @@ export async function runReplyAgent(params: {
     shouldInjectGroupIntro,
     typingMode,
     resetTriggered,
+    replyThreadingOverride,
     replyOperation: providedReplyOperation,
   } = params;
 
@@ -1036,7 +1043,7 @@ export async function runReplyAgent(params: {
   );
   const applyReplyToMode = createReplyToModeFilterForChannel(replyToMode, replyToChannel);
   const cfg = followupRun.run.config;
-  const normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
+  const replyMediaContext = createReplyMediaContext({
     cfg,
     sessionKey,
     workspaceDir: followupRun.run.workspaceDir,
@@ -1105,6 +1112,7 @@ export async function runReplyAgent(params: {
       sessionEntry: activeSessionEntry,
       sessionStore: activeSessionStore,
       sessionKey,
+      runtimePolicySessionKey,
       storePath,
       isHeartbeat,
       replyOperation,
@@ -1124,6 +1132,7 @@ export async function runReplyAgent(params: {
       sessionEntry: activeSessionEntry,
       sessionStore: activeSessionStore,
       sessionKey,
+      runtimePolicySessionKey,
       storePath,
       isHeartbeat,
       replyOperation,
@@ -1191,8 +1200,10 @@ export async function runReplyAgent(params: {
     const runStartedAt = Date.now();
     const runOutcome = await runAgentTurnWithFallback({
       commandBody,
+      transcriptCommandBody,
       followupRun,
       sessionCtx,
+      replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
       replyOperation,
       opts,
       typingSignals,
@@ -1208,10 +1219,12 @@ export async function runReplyAgent(params: {
       resetSessionAfterRoleOrderingConflict,
       isHeartbeat,
       sessionKey,
+      runtimePolicySessionKey,
       getActiveSessionEntry: () => activeSessionEntry,
       activeSessionStore,
       storePath,
       resolvedVerboseLevel,
+      replyMediaContext,
     });
 
     if (runOutcome.kind === "final") {
@@ -1311,7 +1324,14 @@ export async function runReplyAgent(params: {
     const cliSessionBinding = isCliProvider(providerUsed, cfg)
       ? runResult.meta?.agentMeta?.cliSessionBinding
       : undefined;
+    const runtimeContextTokens =
+      typeof runResult.meta?.agentMeta?.contextTokens === "number" &&
+      Number.isFinite(runResult.meta.agentMeta.contextTokens) &&
+      runResult.meta.agentMeta.contextTokens > 0
+        ? Math.floor(runResult.meta.agentMeta.contextTokens)
+        : undefined;
     const contextTokensUsed =
+      runtimeContextTokens ??
       resolveContextTokensForModel({
         cfg,
         provider: providerUsed,
@@ -1319,7 +1339,8 @@ export async function runReplyAgent(params: {
         contextTokensOverride: agentCfgContextTokens,
         fallbackContextTokens: activeSessionEntry?.contextTokens ?? DEFAULT_CONTEXT_TOKENS,
         allowAsyncLoad: false,
-      }) ?? DEFAULT_CONTEXT_TOKENS;
+      }) ??
+      DEFAULT_CONTEXT_TOKENS;
 
     await persistRunSessionUsage({
       storePath,
@@ -1344,6 +1365,7 @@ export async function runReplyAgent(params: {
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
 
+    const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
     const payloadResult = await buildReplyPayloads({
       payloads: payloadArray,
       isHeartbeat,
@@ -1354,8 +1376,8 @@ export async function runReplyAgent(params: {
       directlySentBlockKeys,
       replyToMode,
       replyToChannel,
-      currentMessageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
-      replyThreading: sessionCtx.ReplyThreading,
+      currentMessageId,
+      replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
       messageProvider: followupRun.run.messageProvider,
       messagingToolSentTexts: runResult.messagingToolSentTexts,
       messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
@@ -1366,7 +1388,7 @@ export async function runReplyAgent(params: {
         to: sessionCtx.To,
       }),
       accountId: sessionCtx.AccountId,
-      normalizeMediaPaths: normalizeReplyMediaPaths,
+      normalizeMediaPaths: replyMediaContext.normalizePayload,
     });
     const { replyPayloads } = payloadResult;
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
@@ -1413,6 +1435,9 @@ export async function runReplyAgent(params: {
       const costUsd = estimateUsageCost({ usage, cost: costConfig });
       emitDiagnosticEvent({
         type: "model.usage",
+        ...(runResult.diagnosticTrace
+          ? { trace: freezeDiagnosticTraceContext(runResult.diagnosticTrace) }
+          : {}),
         sessionKey,
         sessionId: followupRun.run.sessionId,
         channel: replyToChannel,

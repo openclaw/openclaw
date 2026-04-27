@@ -5,6 +5,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringifiedOptionalString,
 } from "../shared/string-coerce.js";
+import {
+  SilentReplyPolicyConfigSchema,
+  SilentReplyRewriteConfigSchema,
+} from "./zod-schema.agent-defaults.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, AudioSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
 import { ApprovalsSchema } from "./zod-schema.approvals.js";
@@ -157,6 +161,7 @@ const PluginEntrySchema = z
     hooks: z
       .object({
         allowPromptInjection: z.boolean().optional(),
+        allowConversationAccess: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -226,6 +231,7 @@ const McpServerSchema = z
 const McpConfigSchema = z
   .object({
     servers: z.record(z.string(), McpServerSchema).optional(),
+    sessionIdleTtlMs: z.number().finite().min(0).optional(),
   })
   .strict()
   .optional();
@@ -294,6 +300,21 @@ export const OpenClawSchema = z
             logs: z.boolean().optional(),
             sampleRate: z.number().min(0).max(1).optional(),
             flushIntervalMs: z.number().int().nonnegative().optional(),
+            captureContent: z
+              .union([
+                z.boolean(),
+                z
+                  .object({
+                    enabled: z.boolean().optional(),
+                    inputMessages: z.boolean().optional(),
+                    outputMessages: z.boolean().optional(),
+                    toolInputs: z.boolean().optional(),
+                    toolOutputs: z.boolean().optional(),
+                    systemPrompt: z.boolean().optional(),
+                  })
+                  .strict(),
+              ])
+              .optional(),
           })
           .strict()
           .optional(),
@@ -360,6 +381,7 @@ export const OpenClawSchema = z
         cdpUrl: z.string().optional(),
         remoteCdpTimeoutMs: z.number().int().nonnegative().optional(),
         remoteCdpHandshakeTimeoutMs: z.number().int().nonnegative().optional(),
+        actionTimeoutMs: z.number().int().positive().optional(),
         color: z.string().optional(),
         executablePath: z.string().optional(),
         headless: z.boolean().optional(),
@@ -389,6 +411,8 @@ export const OpenClawSchema = z
                 driver: z
                   .union([z.literal("openclaw"), z.literal("clawd"), z.literal("existing-session")])
                   .optional(),
+                headless: z.boolean().optional(),
+                executablePath: z.string().optional(),
                 attachOnly: z.boolean().optional(),
                 color: HexColorSchema,
               })
@@ -873,6 +897,12 @@ export const OpenClawSchema = z
               })
               .strict()
               .optional(),
+            pairing: z
+              .object({
+                autoApproveCidrs: z.array(z.string()).optional(),
+              })
+              .strict()
+              .optional(),
             allowCommands: z.array(z.string()).optional(),
             denyCommands: z.array(z.string()).optional(),
           })
@@ -963,6 +993,17 @@ export const OpenClawSchema = z
           .optional(),
       })
       .strict()
+      .optional(),
+    surfaces: z
+      .record(
+        z.string(),
+        z
+          .object({
+            silentReply: SilentReplyPolicyConfigSchema.optional(),
+            silentReplyRewrite: SilentReplyRewriteConfigSchema.optional(),
+          })
+          .strict(),
+      )
       .optional(),
   })
   .strict()

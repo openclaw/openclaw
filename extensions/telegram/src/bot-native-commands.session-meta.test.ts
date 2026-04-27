@@ -71,6 +71,36 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
   return {
     ...actual,
     resolveConfiguredBindingRoute: persistentBindingMocks.resolveConfiguredBindingRoute,
+    resolveRuntimeConversationBindingRoute: (
+      params: Parameters<typeof actual.resolveRuntimeConversationBindingRoute>[0],
+    ) => {
+      const conversation =
+        "conversation" in params
+          ? params.conversation
+          : {
+              channel: params.channel,
+              accountId: params.accountId,
+              conversationId: params.conversationId,
+              parentConversationId: params.parentConversationId,
+            };
+      const bindingRecord = sessionBindingMocks.resolveByConversation(conversation);
+      const boundSessionKey = bindingRecord?.targetSessionKey?.trim();
+      if (!bindingRecord || !boundSessionKey) {
+        return { bindingRecord: null, route: params.route };
+      }
+      sessionBindingMocks.touch(bindingRecord.bindingId, undefined);
+      return {
+        bindingRecord,
+        boundSessionKey,
+        boundAgentId: params.route.agentId,
+        route: {
+          ...params.route,
+          sessionKey: boundSessionKey,
+          lastRoutePolicy: boundSessionKey === params.route.mainSessionKey ? "main" : "session",
+          matchedBy: "binding.channel",
+        },
+      };
+    },
     ensureConfiguredBindingRouteReady: persistentBindingMocks.ensureConfiguredBindingRouteReady,
     recordInboundSessionMetaSafe: vi.fn(
       async (params: {
@@ -419,6 +449,9 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     await runPromise;
 
     expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    expect(
+      replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0].dispatcherOptions,
+    ).toEqual(expect.objectContaining({ beforeDeliver: expect.any(Function) }));
   });
 
   it("does not inject approval buttons for native command replies once the monitor owns approvals", async () => {

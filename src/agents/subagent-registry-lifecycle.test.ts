@@ -27,6 +27,10 @@ const browserLifecycleCleanupMocks = vi.hoisted(() => ({
   cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
 }));
 
+const bundleMcpRuntimeMocks = vi.hoisted(() => ({
+  retireSessionMcpRuntimeForSessionKey: vi.fn(async () => true),
+}));
+
 vi.mock("../tasks/detached-task-runtime.js", () => ({
   completeTaskRunByRunId: taskExecutorMocks.completeTaskRunByRunId,
   failTaskRunByRunId: taskExecutorMocks.failTaskRunByRunId,
@@ -40,6 +44,10 @@ vi.mock("../sessions/session-lifecycle-events.js", () => ({
 vi.mock("../browser-lifecycle-cleanup.js", () => ({
   cleanupBrowserSessionsForLifecycleEnd:
     browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd,
+}));
+
+vi.mock("./pi-bundle-mcp-tools.js", () => ({
+  retireSessionMcpRuntimeForSessionKey: bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey,
 }));
 
 vi.mock("../runtime.js", () => ({
@@ -120,6 +128,8 @@ describe("subagent registry lifecycle hardening", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd.mockClear();
+    bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey.mockClear();
+    bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey.mockResolvedValue(true);
   });
 
   it("does not reject completion when task finalization throws", async () => {
@@ -233,6 +243,54 @@ describe("subagent registry lifecycle hardening", () => {
     );
   });
 
+  it("retires bundle MCP runtimes when run-mode cleanup completes", async () => {
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      expectsCompletionMessage: false,
+      spawnMode: "run",
+    });
+
+    const controller = createLifecycleController({ entry });
+
+    await expect(
+      controller.completeSubagentRun({
+        runId: entry.runId,
+        endedAt: 4_000,
+        outcome: { status: "ok" },
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        triggerCleanup: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).toHaveBeenCalledWith({
+      sessionKey: entry.childSessionKey,
+      reason: "subagent-run-cleanup",
+      onError: expect.any(Function),
+    });
+  });
+
+  it("keeps bundle MCP runtimes warm for persistent session-mode cleanup", async () => {
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      expectsCompletionMessage: false,
+      spawnMode: "session",
+    });
+
+    const controller = createLifecycleController({ entry });
+
+    await expect(
+      controller.completeSubagentRun({
+        runId: entry.runId,
+        endedAt: 4_000,
+        outcome: { status: "ok" },
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        triggerCleanup: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).not.toHaveBeenCalled();
+  });
+
   it("enriches registered-run outcomes with persisted timing before cleanup", async () => {
     const persist = vi.fn();
     const runSubagentAnnounceFlow = vi.fn(async () => true);
@@ -328,7 +386,48 @@ describe("subagent registry lifecycle hardening", () => {
 
     expect(captureSubagentCompletionReply).toHaveBeenCalledWith(entry.childSessionKey, {
       waitForReply: false,
+      outcome: {
+        status: "ok",
+        startedAt: 2_000,
+        endedAt: 4_000,
+        elapsedMs: 2_000,
+      },
     });
+  });
+
+  it("does not freeze stale reply text for terminal error outcomes", async () => {
+    const persist = vi.fn();
+    const captureSubagentCompletionReply = vi.fn(async () => "stale assistant text");
+    const entry = createRunEntry({
+      expectsCompletionMessage: true,
+    });
+
+    const controller = createLifecycleController({
+      entry,
+      persist,
+      captureSubagentCompletionReply,
+    });
+
+    await expect(
+      controller.completeSubagentRun({
+        runId: entry.runId,
+        endedAt: 4_000,
+        outcome: { status: "error", error: "All models failed (2): timeout" },
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        triggerCleanup: false,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(captureSubagentCompletionReply).not.toHaveBeenCalled();
+    expect(entry.frozenResultText).toBeNull();
+    expect(taskExecutorMocks.failTaskRunByRunId).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "failed",
+        error: "All models failed (2): timeout",
+        progressSummary: undefined,
+      }),
+    );
+    expect(persist).toHaveBeenCalled();
   });
 
   it("does not re-run announce flow after completion was already delivered", async () => {

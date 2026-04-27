@@ -57,6 +57,39 @@ export type UpdateRunResult = {
   after?: { sha?: string | null; version?: string | null };
   steps: UpdateStepResult[];
   durationMs: number;
+  postUpdate?: {
+    plugins?: {
+      status: "ok" | "skipped" | "error";
+      reason?: string;
+      changed: boolean;
+      sync: {
+        changed: boolean;
+        switchedToBundled: string[];
+        switchedToNpm: string[];
+        warnings: string[];
+        errors: string[];
+      };
+      npm: {
+        changed: boolean;
+        outcomes: Array<{
+          pluginId: string;
+          status: "updated" | "unchanged" | "skipped" | "error";
+          message: string;
+          currentVersion?: string;
+          nextVersion?: string;
+        }>;
+      };
+      integrityDrifts: Array<{
+        pluginId: string;
+        spec: string;
+        expectedIntegrity: string;
+        actualIntegrity: string;
+        resolvedSpec?: string;
+        resolvedVersion?: string;
+        action: "aborted";
+      }>;
+    };
+  };
 };
 
 type CommandRunner = (
@@ -503,6 +536,10 @@ function mergeCommandEnvironments(
   };
 }
 
+function shouldRunDevPreflightLint(): boolean {
+  return process.platform !== "win32";
+}
+
 export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<UpdateRunResult> {
   const startedAt = Date.now();
   const defaultCommandEnv = await createGlobalInstallEnv();
@@ -885,17 +922,19 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
             continue;
           }
 
-          const lintStep = await runStep(
-            step(
-              `preflight lint (${shortSha})`,
-              managerScriptArgs(manager.manager, "lint"),
-              worktreeDir,
-              manager.env,
-            ),
-          );
-          steps.push(lintStep);
-          if (lintStep.exitCode !== 0) {
-            continue;
+          if (shouldRunDevPreflightLint()) {
+            const lintStep = await runStep(
+              step(
+                `preflight lint (${shortSha})`,
+                managerScriptArgs(manager.manager, "lint"),
+                worktreeDir,
+                manager.env,
+              ),
+            );
+            steps.push(lintStep);
+            if (lintStep.exitCode !== 0) {
+              continue;
+            }
           }
 
           selectedSha = sha;

@@ -1,38 +1,28 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { collectWorkspaceSkillSymlinkEscapeFindings } from "./audit-extra.async.js";
+import { AsyncTempCaseFactory } from "./test-temp-cases.js";
 
 const isWindows = process.platform === "win32";
 
 describe("security audit workspace skill path escape findings", () => {
-  let fixtureRoot = "";
-  let caseId = 0;
+  const tempCases = new AsyncTempCaseFactory("openclaw-security-audit-workspace-");
 
   beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-audit-workspace-"));
+    await tempCases.setup();
   });
 
   afterAll(async () => {
-    if (!fixtureRoot) {
-      return;
-    }
-    await fs.rm(fixtureRoot, { recursive: true, force: true }).catch(() => undefined);
+    await tempCases.cleanup();
   });
-
-  const makeTmpDir = async (label: string) => {
-    const dir = path.join(fixtureRoot, `case-${caseId++}-${label}`);
-    await fs.mkdir(dir, { recursive: true });
-    return dir;
-  };
 
   it("evaluates workspace skill path escape findings", async () => {
     const runs = [
       !isWindows
         ? (async () => {
-            const tmp = await makeTmpDir("workspace-skill-symlink-escape");
+            const tmp = await tempCases.makeTmpDir("workspace-skill-symlink-escape");
             const workspaceDir = path.join(tmp, "workspace");
             const outsideDir = path.join(tmp, "outside");
             await fs.mkdir(path.join(workspaceDir, "skills", "leak"), { recursive: true });
@@ -54,7 +44,7 @@ describe("security audit workspace skill path escape findings", () => {
           })()
         : Promise.resolve(),
       (async () => {
-        const tmp = await makeTmpDir("workspace-skill-in-root");
+        const tmp = await tempCases.makeTmpDir("workspace-skill-in-root");
         const workspaceDir = path.join(tmp, "workspace");
         await fs.mkdir(path.join(workspaceDir, "skills", "safe"), { recursive: true });
         await fs.writeFile(
@@ -75,7 +65,7 @@ describe("security audit workspace skill path escape findings", () => {
   });
 
   it("treats an unresolvable realpath (timeout/error simulation) as a potential symlink escape", async () => {
-    const tmp = await makeTmpDir("workspace-skill-realpath-unresolvable");
+    const tmp = await tempCases.makeTmpDir("workspace-skill-realpath-unresolvable");
     const workspaceDir = path.join(tmp, "workspace");
     const skillsDir = path.join(workspaceDir, "skills", "suspect-skill");
     await fs.mkdir(skillsDir, { recursive: true });
@@ -112,20 +102,14 @@ describe("security audit workspace skill path escape findings", () => {
   });
 
   it("surfaces scan_truncated finding when BFS visit cap is hit", async () => {
-    const tmp = await makeTmpDir("workspace-skill-bfs-truncated");
+    const tmp = await tempCases.makeTmpDir("workspace-skill-bfs-truncated");
     const workspaceDir = path.join(tmp, "workspace");
     const skillsRoot = path.join(workspaceDir, "skills");
     await fs.mkdir(skillsRoot, { recursive: true });
 
-    // Strategy: the first readdir (on skillsRoot) returns 41 001 unique subdir
-    // entries, filling the queue beyond the BFS visit cap
-    // (MAX_TOTAL_DIR_VISITS = 2000 * 20 = 40 000). All subsequent readdir calls
-    // return [] so no further queue growth occurs. After 40 000 dequeues the
-    // loop exits with ~1 001 entries still in queue → truncated = true.
-    //
-    // fs.realpath is also mocked to return paths immediately (no real I/O),
-    // keeping the 40 000 iterations fast (pure microtask overhead, <200 ms).
-    const FAKE_DIRS = 41_001;
+    // Use a tiny injected visit cap to exercise the truncation branch without
+    // forcing the test to await tens of thousands of mocked readdir calls.
+    const FAKE_DIRS = 3;
     const fakeDirEntries = Array.from({ length: FAKE_DIRS }, (_, i) => ({
       name: `d${i}`,
       isDirectory: () => true,
@@ -150,6 +134,7 @@ describe("security audit workspace skill path escape findings", () => {
     try {
       const findings = await collectWorkspaceSkillSymlinkEscapeFindings({
         cfg: { agents: { defaults: { workspace: workspaceDir } } } satisfies OpenClawConfig,
+        skillScanLimits: { maxDirVisits: 2 },
       });
       const truncFinding = findings.find((f) => f.checkId === "skills.workspace.scan_truncated");
       expect(truncFinding).toBeDefined();

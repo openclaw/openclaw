@@ -147,6 +147,9 @@ const replyMediaPathMocks = vi.hoisted(() => ({
     (_params?: unknown) => async (payload: ReplyPayload) => payload,
   ),
 }));
+const runtimePluginMocks = vi.hoisted(() => ({
+  ensureRuntimePluginsLoaded: vi.fn(),
+}));
 const threadInfoMocks = vi.hoisted(() => ({
   parseSessionThreadInfo: vi.fn<
     (sessionKey: string | undefined) => {
@@ -247,8 +250,10 @@ vi.mock("./dispatch-from-config.runtime.js", () => ({
 }));
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
+  initializeGlobalHookRunner: vi.fn(),
   getGlobalHookRunner: () => hookMocks.runner,
   getGlobalPluginRegistry: () => hookMocks.registry,
+  resetGlobalHookRunner: vi.fn(),
 }));
 vi.mock("../../acp/runtime/session-meta.js", () => ({
   listAcpSessionEntries: acpMocks.listAcpSessionEntries,
@@ -302,6 +307,7 @@ vi.mock("../../plugins/conversation-binding.js", () => ({
       pluginId?: string;
       pluginName?: string;
       pluginRoot?: string;
+      data?: Record<string, unknown>;
     };
     return {
       bindingId: record.bindingId,
@@ -312,6 +318,7 @@ vi.mock("../../plugins/conversation-binding.js", () => ({
       accountId: record.conversation.accountId,
       conversationId: record.conversation.conversationId,
       parentConversationId: record.conversation.parentConversationId,
+      data: metadata.data,
     };
   },
 }));
@@ -334,6 +341,9 @@ vi.mock("../../tts/tts.runtime.js", () => ({
 vi.mock("./reply-media-paths.runtime.js", () => ({
   createReplyMediaPathNormalizer: (params: unknown) =>
     replyMediaPathMocks.createReplyMediaPathNormalizer(params),
+}));
+vi.mock("../../agents/runtime-plugins.js", () => ({
+  ensureRuntimePluginsLoaded: runtimePluginMocks.ensureRuntimePluginsLoaded,
 }));
 vi.mock("../../tts/status-config.js", () => ({
   resolveStatusTtsSnapshot: () => ({
@@ -655,7 +665,30 @@ describe("dispatchReplyFromConfig", () => {
     replyMediaPathMocks.createReplyMediaPathNormalizer.mockReturnValue(
       async (payload: ReplyPayload) => payload,
     );
+    runtimePluginMocks.ensureRuntimePluginsLoaded.mockClear();
   });
+
+  it("loads runtime plugins before reading inbound hook state", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      SessionKey: "agent:main:main",
+    });
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(runtimePluginMocks.ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
+      config: cfg,
+      workspaceDir: expect.any(String),
+    });
+    expect(runtimePluginMocks.ensureRuntimePluginsLoaded.mock.invocationCallOrder[0]).toBeLessThan(
+      hookMocks.runner.hasHooks.mock.invocationCallOrder[0],
+    );
+  });
+
   it("does not route when Provider matches OriginatingChannel (even if Surface is missing)", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();
@@ -710,6 +743,139 @@ describe("dispatchReplyFromConfig", () => {
         isGroup: true,
         groupId: "telegram:999",
       }),
+    );
+  });
+
+  it("routes exec-event replies using persisted session delivery context when current turn has no originating route", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    sessionStoreMocks.currentEntry = {
+      deliveryContext: {
+        channel: "telegram",
+        to: "telegram:999",
+        accountId: "acc-1",
+      },
+      lastChannel: "telegram",
+      lastTo: "telegram:999",
+      lastAccountId: "acc-1",
+    };
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "exec-event",
+      Surface: "exec-event",
+      SessionKey: "agent:main:main",
+      AccountId: undefined,
+      OriginatingChannel: undefined,
+      OriginatingTo: undefined,
+    });
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:999",
+        accountId: "acc-1",
+      }),
+    );
+    expect(replyMediaPathMocks.createReplyMediaPathNormalizer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageProvider: "telegram",
+        accountId: "acc-1",
+      }),
+    );
+    expect(hookMocks.runner.runReplyDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        shouldRouteToOriginating: true,
+        originatingChannel: "telegram",
+        originatingTo: "telegram:999",
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("routes exec-event replies using last route fields when delivery context is missing", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    sessionStoreMocks.currentEntry = {
+      lastChannel: "discord",
+      lastTo: "channel:123",
+      lastAccountId: "default",
+    };
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "exec-event",
+      Surface: "exec-event",
+      SessionKey: "agent:main:main",
+      AccountId: undefined,
+      OriginatingChannel: undefined,
+      OriginatingTo: undefined,
+    });
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        to: "channel:123",
+        accountId: "default",
+      }),
+    );
+  });
+
+  it("honors sendPolicy deny for recovered exec-event delivery channel", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    sessionStoreMocks.currentEntry = {
+      deliveryContext: {
+        channel: "telegram",
+        to: "telegram:999",
+        accountId: "acc-1",
+      },
+      lastChannel: "telegram",
+      lastTo: "telegram:999",
+      lastAccountId: "acc-1",
+    };
+    const cfg = {
+      session: {
+        sendPolicy: {
+          default: "allow",
+          rules: [{ action: "deny", match: { channel: "telegram" } }],
+        },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "exec-event",
+      Surface: "exec-event",
+      SessionKey: "agent:main:main",
+      AccountId: undefined,
+      OriginatingChannel: undefined,
+      OriginatingTo: undefined,
+    });
+
+    const replyResolver = vi.fn(async () => ({ text: "hi" }) satisfies ReplyPayload);
+    const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(mocks.routeReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(result.queuedFinal).toBe(false);
+    expect(hookMocks.runner.runReplyDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sendPolicy: "deny",
+        suppressUserDelivery: true,
+        shouldRouteToOriginating: true,
+        originatingChannel: "telegram",
+        originatingTo: "telegram:999",
+      }),
+      expect.any(Object),
     );
   });
 
@@ -948,6 +1114,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(mocks.routeReply).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "imessage",
+        policyConversationType: "direct",
         to: "imessage:+15550001111",
       }),
     );
@@ -1316,6 +1483,47 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
+  it("suppresses Slack non-DM verbose progress even when verbose is enabled", async () => {
+    setNoAbort();
+    const cfg = {
+      ...emptyConfig,
+      agents: {
+        defaults: {
+          verboseDefault: "on",
+        },
+      },
+    } satisfies OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      ChatType: "channel",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onPlanUpdate?.({
+        phase: "update",
+        explanation: "Inspect code, patch it, run tests.",
+        steps: ["Inspect code", "Patch code", "Run tests"],
+      });
+      await opts?.onPatchSummary?.({
+        phase: "end",
+        title: "apply patch",
+        summary: "1 added, 2 modified",
+      });
+      return { text: "done" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
+  });
+
   it("suppresses plan and working-status progress when session verbose is off", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
@@ -1364,7 +1572,71 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
-  it("delivers deterministic exec approval tool payloads for native commands", async () => {
+
+  it("suppresses text-only tool summaries when preview tool-progress suppression is enabled", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "direct",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onToolResult?.({ text: "🔧 exec: ls" });
+      return { text: "done" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver,
+      replyOptions: { suppressDefaultToolProgressMessages: true },
+    });
+
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
+  });
+
+  it("still delivers media-only tool payloads when preview tool-progress suppression is enabled", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "direct",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onToolResult?.({ mediaUrl: "https://example.com/tts-preview.opus" });
+      return { text: "done" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver,
+      replyOptions: { suppressDefaultToolProgressMessages: true },
+    });
+
+    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({ mediaUrl: "https://example.com/tts-preview.opus" }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
+  });
+
+  it("delivers deterministic exec approval tool payloads for native commands with progress suppression", async () => {
     setNoAbort();
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
@@ -1391,7 +1663,13 @@ describe("dispatchReplyFromConfig", () => {
       return { text: "NO_REPLY" } satisfies ReplyPayload;
     };
 
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver,
+      replyOptions: { suppressDefaultToolProgressMessages: true },
+    });
 
     expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
     expect(firstToolResultPayload(dispatcher)).toEqual(
@@ -2348,6 +2626,12 @@ describe("dispatchReplyFromConfig", () => {
         pluginBindingOwner: "plugin",
         pluginId: "openclaw-codex-app-server",
         pluginRoot: "/Users/huntharo/github/openclaw-app-server",
+        data: {
+          kind: "codex-app-server-session",
+          version: 1,
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/workspace/openclaw",
+        },
       },
     } satisfies SessionBindingRecord);
     const cfg = emptyConfig;
@@ -2387,9 +2671,71 @@ describe("dispatchReplyFromConfig", () => {
         channelId: "discord",
         accountId: "default",
         conversationId: "channel:1481858418548412579",
+        pluginBinding: expect.objectContaining({
+          data: expect.objectContaining({
+            kind: "codex-app-server-session",
+            sessionFile: "/tmp/session.jsonl",
+          }),
+        }),
       }),
     );
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
+    expect(replyResolver).not.toHaveBeenCalled();
+  });
+
+  it("delivers plugin-owned binding replies returned by the owning inbound claim hook", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) =>
+        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
+    );
+    hookMocks.registry.plugins = [{ id: "codex", status: "loaded" }];
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+      status: "handled",
+      result: { handled: true, reply: { text: "Codex native reply" } },
+    });
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "binding-reply-1",
+      targetSessionKey: "plugin-binding:codex:reply123",
+      targetKind: "session",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:1481858418548412579",
+      },
+      status: "active",
+      boundAt: 1710000000000,
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "codex",
+        pluginRoot: "/plugins/codex",
+      },
+    } satisfies SessionBindingRecord);
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "discord:channel:1481858418548412579",
+      To: "discord:channel:1481858418548412579",
+      AccountId: "default",
+      SenderId: "user-9",
+      SenderUsername: "ada",
+      CommandAuthorized: true,
+      WasMentioned: false,
+      CommandBody: "who are you",
+      RawBody: "who are you",
+      Body: "who are you",
+      MessageSid: "msg-claim-plugin-reply",
+      SessionKey: "agent:main:discord:channel:1481858418548412579",
+    });
+    const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
+
+    const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "Codex native reply" });
     expect(replyResolver).not.toHaveBeenCalled();
   });
 

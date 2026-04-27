@@ -1,6 +1,7 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { describe, expect, it } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
 import {
   createOutboundPayloadPlan,
@@ -12,7 +13,9 @@ import {
   projectOutboundPayloadPlanForJson,
   projectOutboundPayloadPlanForMirror,
   projectOutboundPayloadPlanForOutbound,
+  summarizeOutboundPayloadForTransport,
 } from "./payloads.js";
+import { registerPendingSpawnedChildrenQuery } from "./pending-spawn-query.js";
 
 function resolveMirrorProjection(payloads: readonly ReplyPayload[]) {
   const normalized = normalizeReplyPayloadsForDelivery(payloads);
@@ -45,7 +48,7 @@ describe("normalizeReplyPayloadsForDelivery", () => {
         mediaUrls: ["https://x.test/a.png", "https://x.test/b.png"],
         replyToId: "123",
         replyToTag: true,
-        replyToCurrent: false,
+        replyToCurrent: undefined,
         audioAsVoice: true,
       },
     ]);
@@ -64,7 +67,7 @@ describe("normalizeReplyPayloadsForDelivery", () => {
         mediaUrls: undefined,
         mediaUrl: undefined,
         replyToId: undefined,
-        replyToCurrent: false,
+        replyToCurrent: undefined,
         replyToTag: false,
         audioAsVoice: false,
       },
@@ -98,7 +101,7 @@ describe("normalizeReplyPayloadsForDelivery", () => {
         mediaUrls: undefined,
         mediaUrl: undefined,
         replyToId: undefined,
-        replyToCurrent: false,
+        replyToCurrent: undefined,
         replyToTag: false,
         audioAsVoice: false,
       },
@@ -123,7 +126,7 @@ describe("normalizeReplyPayloadsForDelivery", () => {
         mediaUrls: undefined,
         mediaUrl: undefined,
         replyToId: undefined,
-        replyToCurrent: false,
+        replyToCurrent: undefined,
         replyToTag: false,
         audioAsVoice: false,
       },
@@ -143,7 +146,7 @@ describe("normalizeReplyPayloadsForDelivery", () => {
         mediaUrls: undefined,
         mediaUrl: undefined,
         replyToId: undefined,
-        replyToCurrent: false,
+        replyToCurrent: undefined,
         replyToTag: false,
         audioAsVoice: false,
       },
@@ -152,7 +155,7 @@ describe("normalizeReplyPayloadsForDelivery", () => {
         mediaUrls: undefined,
         mediaUrl: undefined,
         replyToId: undefined,
-        replyToCurrent: false,
+        replyToCurrent: undefined,
         replyToTag: false,
         audioAsVoice: false,
       },
@@ -171,7 +174,7 @@ describe("normalizeReplyPayloadsForDelivery", () => {
         mediaUrls: ["https://x.test/one.png"],
         mediaUrl: "https://x.test/one.png",
         replyToId: undefined,
-        replyToCurrent: false,
+        replyToCurrent: undefined,
         replyToTag: false,
         audioAsVoice: false,
       },
@@ -180,10 +183,166 @@ describe("normalizeReplyPayloadsForDelivery", () => {
         mediaUrls: ["https://x.test/two.png"],
         mediaUrl: undefined,
         replyToId: undefined,
-        replyToCurrent: false,
+        replyToCurrent: undefined,
         replyToTag: false,
         audioAsVoice: false,
       },
+    ]);
+  });
+
+  it("rewrites bare silent replies for direct conversations where silence is disallowed", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          silentReply: {
+            direct: "disallow",
+            group: "allow",
+            internal: "allow",
+          },
+        },
+      },
+    };
+
+    const sessionKey = "agent:main:telegram:direct:123";
+    const projected = projectOutboundPayloadPlanForDelivery(
+      createOutboundPayloadPlan([{ text: "NO_REPLY" }], {
+        cfg,
+        sessionKey,
+        surface: "telegram",
+      }),
+    );
+    expect(projected).toHaveLength(1);
+    expect(projected[0]?.text?.trim()).toBeTruthy();
+    expect(projected[0]?.text?.trim()).not.toBe("NO_REPLY");
+  });
+
+  it("drops bare silent replies for groups when policy allows silence", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          silentReply: {
+            direct: "disallow",
+            group: "allow",
+            internal: "allow",
+          },
+        },
+      },
+    };
+
+    expect(
+      projectOutboundPayloadPlanForDelivery(
+        createOutboundPayloadPlan([{ text: "NO_REPLY" }], {
+          cfg,
+          sessionKey: "agent:main:telegram:group:123",
+          surface: "telegram",
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it("does not add silent-reply chatter when visible content is already being delivered", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          silentReply: {
+            direct: "disallow",
+            group: "allow",
+            internal: "allow",
+          },
+        },
+      },
+    };
+
+    expect(
+      projectOutboundPayloadPlanForDelivery(
+        createOutboundPayloadPlan([{ text: "NO_REPLY" }, { text: "visible reply" }], {
+          cfg,
+          sessionKey: "agent:main:telegram:direct:123",
+          surface: "telegram",
+        }),
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        text: "visible reply",
+      }),
+    ]);
+  });
+
+  describe("pending spawned subagent children", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          silentReply: { direct: "disallow", group: "allow", internal: "allow" },
+        },
+      },
+    };
+    const planSilent = (sessionKey: string, hasPendingSpawnedChildren?: boolean) =>
+      projectOutboundPayloadPlanForDelivery(
+        createOutboundPayloadPlan([{ text: "NO_REPLY" }], {
+          cfg,
+          sessionKey,
+          surface: "telegram",
+          hasPendingSpawnedChildren,
+        }),
+      );
+
+    it("drops bare silent replies when the context flag is set", () => {
+      expect(planSilent("agent:main:telegram:direct:123", true)).toEqual([]);
+    });
+
+    it("drops bare silent replies via the registered runtime query", () => {
+      const sessionKey = "agent:main:telegram:direct:456";
+      const previousQuery = registerPendingSpawnedChildrenQuery((key) => key === sessionKey);
+      try {
+        expect(planSilent(sessionKey)).toEqual([]);
+      } finally {
+        registerPendingSpawnedChildrenQuery(previousQuery);
+      }
+    });
+
+    it("falls back to the visible rewrite path when the query throws", () => {
+      const previousQuery = registerPendingSpawnedChildrenQuery(() => {
+        throw new Error("registry unavailable");
+      });
+      try {
+        const delivery = planSilent("agent:main:telegram:direct:789");
+        expect(delivery).toHaveLength(1);
+        expect(delivery[0]?.text).toBeTruthy();
+        expect(delivery[0]?.text).not.toBe("NO_REPLY");
+      } finally {
+        registerPendingSpawnedChildrenQuery(previousQuery);
+      }
+    });
+  });
+
+  it("keeps bare NO_REPLY visible when silence is disallowed and rewrite is disabled", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          silentReply: {
+            direct: "disallow",
+            group: "allow",
+            internal: "allow",
+          },
+          silentReplyRewrite: {
+            direct: false,
+          },
+        },
+      },
+    };
+
+    expect(
+      projectOutboundPayloadPlanForDelivery(
+        createOutboundPayloadPlan([{ text: "NO_REPLY" }], {
+          cfg,
+          sessionKey: "agent:main:telegram:direct:123",
+          surface: "telegram",
+        }),
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        text: "NO_REPLY",
+      }),
     ]);
   });
 
@@ -224,7 +383,7 @@ describe("normalizeReplyPayloadsForDelivery", () => {
           "audioAsVoice": false,
           "mediaUrl": undefined,
           "mediaUrls": undefined,
-          "replyToCurrent": false,
+          "replyToCurrent": undefined,
           "replyToId": undefined,
           "replyToTag": false,
           "text": "NO_REPLY with details",
@@ -233,7 +392,7 @@ describe("normalizeReplyPayloadsForDelivery", () => {
           "audioAsVoice": false,
           "mediaUrl": undefined,
           "mediaUrls": undefined,
-          "replyToCurrent": false,
+          "replyToCurrent": undefined,
           "replyToId": undefined,
           "replyToTag": false,
           "text": "{"action":"NO_REPLY","note":"keep"}",
@@ -244,7 +403,7 @@ describe("normalizeReplyPayloadsForDelivery", () => {
           "mediaUrls": [
             "https://x.test/m1.png",
           ],
-          "replyToCurrent": false,
+          "replyToCurrent": undefined,
           "replyToId": undefined,
           "replyToTag": false,
           "text": "",
@@ -255,7 +414,7 @@ describe("normalizeReplyPayloadsForDelivery", () => {
           "mediaUrls": [
             "https://x.test/m2.png",
           ],
-          "replyToCurrent": false,
+          "replyToCurrent": undefined,
           "replyToId": "444",
           "replyToTag": true,
           "text": "hi",
@@ -267,7 +426,7 @@ describe("normalizeReplyPayloadsForDelivery", () => {
           },
           "mediaUrl": undefined,
           "mediaUrls": undefined,
-          "replyToCurrent": false,
+          "replyToCurrent": undefined,
           "replyToId": undefined,
           "replyToTag": false,
           "text": "BTW
@@ -282,7 +441,7 @@ describe("normalizeReplyPayloadsForDelivery", () => {
           },
           "mediaUrl": undefined,
           "mediaUrls": undefined,
-          "replyToCurrent": false,
+          "replyToCurrent": undefined,
           "replyToId": undefined,
           "replyToTag": false,
           "text": "",
@@ -516,5 +675,40 @@ describe("formatOutboundPayloadLog", () => {
         mediaUrls: [...input.mediaUrls],
       }),
     ).toBe(expected);
+  });
+});
+
+describe("summarizeOutboundPayloadForTransport", () => {
+  it("keeps visible text as channel text and does not expose hook-only content", () => {
+    const summary = summarizeOutboundPayloadForTransport({
+      text: "visible",
+      spokenText: "hidden transcript",
+    });
+
+    expect(summary.text).toBe("visible");
+    expect(summary.hookContent).toBeUndefined();
+  });
+
+  it("surfaces spokenText only as hook content for audio-only payloads", () => {
+    const summary = summarizeOutboundPayloadForTransport({
+      mediaUrl: "/tmp/reply.opus",
+      audioAsVoice: true,
+      spokenText: "Hi Ivy, good morning.",
+    });
+
+    expect(summary.text).toBe("");
+    expect(summary.hookContent).toBe("Hi Ivy, good morning.");
+    expect(summary.mediaUrls).toEqual(["/tmp/reply.opus"]);
+    expect(summary.audioAsVoice).toBe(true);
+  });
+
+  it("ignores blank spokenText", () => {
+    const summary = summarizeOutboundPayloadForTransport({
+      mediaUrl: "/tmp/reply.opus",
+      spokenText: "   ",
+    });
+
+    expect(summary.text).toBe("");
+    expect(summary.hookContent).toBeUndefined();
   });
 });

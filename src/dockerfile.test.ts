@@ -15,15 +15,15 @@ describe("Dockerfile", () => {
   it("uses shared multi-arch base image refs for all root Node stages", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     expect(dockerfile).toContain(
-      'ARG OPENCLAW_NODE_BOOKWORM_IMAGE="node:24-bookworm@sha256:3a09aa6354567619221ef6c45a5051b671f953f0a1924d1f819ffb236e520e6b"',
+      'ARG OPENCLAW_NODE_TRIXIE_IMAGE="node:24-trixie@sha256:135dc9a66aef366e09958c18dab705081d77fb31eccffe8c3865fac9d3e42a1d"',
     );
     expect(dockerfile).toContain(
-      'ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="node:24-bookworm-slim@sha256:e8e2e91b1378f83c5b2dd15f0247f34110e2fe895f6ca7719dbb780f929368eb"',
+      'ARG OPENCLAW_NODE_TRIXIE_SLIM_IMAGE="node:24-trixie-slim@sha256:735dd688da64d22ebd9dd374b3e7e5a874635668fd2a6ec20ca1f99264294086"',
     );
-    expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS ext-deps");
-    expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS build");
-    expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS base-default");
-    expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-slim");
+    expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_TRIXIE_IMAGE} AS ext-deps");
+    expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_TRIXIE_IMAGE} AS build");
+    expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_TRIXIE_IMAGE} AS base-default");
+    expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_TRIXIE_SLIM_IMAGE} AS base-slim");
     expect(dockerfile).toContain("current multi-arch manifest list entry");
     expect(dockerfile).not.toContain("current amd64 entry");
   });

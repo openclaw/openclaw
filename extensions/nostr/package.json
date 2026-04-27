@@ -4,7 +4,8 @@
   "description": "OpenClaw Nostr channel plugin for NIP-04 encrypted DMs",
   "type": "module",
   "dependencies": {
-    "nostr-tools": "^2.23.3"
+    "nostr-tools": "^2.23.3",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
@@ -31,7 +32,17 @@
       "docsLabel": "nostr",
       "blurb": "Decentralized protocol; encrypted DMs via NIP-04.",
       "order": 55,
-      "quickstartAllowFrom": true
+      "quickstartAllowFrom": true,
+      "cliAddOptions": [
+        {
+          "flags": "--private-key <key>",
+          "description": "Nostr private key (nsec... or hex)"
+        },
+        {
+          "flags": "--relay-urls <list>",
+          "description": "Nostr relay URLs (comma-separated)"
+        }
+      ]
     },
     "install": {
       "npmSpec": "@openclaw/nostr",

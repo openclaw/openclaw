@@ -22,7 +22,7 @@ vi.mock("./src/cli.js", () => {
 });
 
 vi.mock("./plugin-entry.handlers.runtime.js", () => runtimeMocks);
-vi.mock("./runtime-api.js", () => ({ setMatrixRuntime: runtimeMocks.setMatrixRuntime }));
+vi.mock("./runtime-setter-api.js", () => ({ setMatrixRuntime: runtimeMocks.setMatrixRuntime }));
 
 describe("matrix plugin", () => {
   it("registers matrix CLI through a descriptor-backed lazy registrar", async () => {
@@ -66,6 +66,38 @@ describe("matrix plugin", () => {
     expect(entry.kind).toBe("bundled-channel-entry");
     expect(entry.id).toBe("matrix");
     expect(entry.name).toBe("Matrix");
+    expect(entry.setChannelRuntime).toEqual(expect.any(Function));
+  });
+
+  it("registers CLI metadata during discovery registration", () => {
+    const registerChannel = vi.fn();
+    const registerCli = vi.fn();
+    const registerGatewayMethod = vi.fn();
+    const api = createTestPluginApi({
+      id: "matrix",
+      name: "Matrix",
+      source: "test",
+      config: {},
+      runtime: {} as never,
+      registrationMode: "discovery",
+      registerChannel,
+      registerCli,
+      registerGatewayMethod,
+    });
+
+    entry.register(api);
+
+    expect(registerChannel).toHaveBeenCalledTimes(1);
+    expect(registerCli).toHaveBeenCalledWith(expect.any(Function), {
+      descriptors: [
+        {
+          name: "matrix",
+          description: "Manage Matrix accounts, verification, devices, and profile state",
+          hasSubcommands: true,
+        },
+      ],
+    });
+    expect(registerGatewayMethod).not.toHaveBeenCalled();
   });
 
   it("registers subagent lifecycle hooks during full runtime registration", () => {

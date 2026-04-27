@@ -280,8 +280,11 @@ export abstract class MemoryManagerSyncOps {
     }
   }
 
-  protected buildSourceFilter(alias?: string): { sql: string; params: MemorySource[] } {
-    const sources = Array.from(this.sources);
+  protected buildSourceFilter(
+    alias?: string,
+    sourcesOverride?: MemorySource[],
+  ): { sql: string; params: MemorySource[] } {
+    const sources = sourcesOverride ?? Array.from(this.sources);
     if (sources.length === 0) {
       return { sql: "", params: [] };
     }
@@ -370,7 +373,6 @@ export abstract class MemoryManagerSyncOps {
     }
     const watchPaths = new Set<string>([
       path.join(this.workspaceDir, "MEMORY.md"),
-      path.join(this.workspaceDir, "memory.md"),
       path.join(this.workspaceDir, "memory"),
     ]);
     const additionalPaths = normalizeExtraMemoryPaths(this.workspaceDir, this.settings.extraPaths);

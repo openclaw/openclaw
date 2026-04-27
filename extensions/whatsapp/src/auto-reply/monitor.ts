@@ -1,5 +1,5 @@
 import { resolveAccountEntry } from "openclaw/plugin-sdk/account-core";
-import { resolveInboundDebounceMs } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveInboundDebounceMs } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { drainPendingDeliveries } from "openclaw/plugin-sdk/infra-runtime";
@@ -247,6 +247,7 @@ export async function monitorWebChannel(
             });
 
             return (await (listenerFactory ?? attachWebInboxToSocket)({
+              cfg,
               verbose,
               accountId: account.accountId,
               authDir: account.authDir,

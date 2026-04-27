@@ -4,10 +4,8 @@ read_when:
   - You want background/parallel work via the agent
   - You are changing sessions_spawn or sub-agent tool policy
   - You are implementing or troubleshooting thread-bound subagent sessions
-title: "Sub-Agents"
+title: "Sub-agents"
 ---
-
-# Sub-agents
 
 Sub-agents are background agent runs spawned from an existing agent run. They run in their own session (`agent:<agentId>:subagent:<uuid>`) and, when finished, **announce** their result back to the requester chat channel. Each sub-agent run is tracked as a [background task](/automation/tasks).
 
@@ -55,14 +53,14 @@ transcript path on disk when you need the raw full transcript.
   - thread-bound or conversation-bound completion routes win when available
   - if the completion origin only provides a channel, OpenClaw fills the missing target/account from the requester session's resolved route (`lastChannel` / `lastTo` / `lastAccountId`) so direct delivery still works
 - The completion handoff to the requester session is runtime-generated internal context (not user-authored text) and includes:
-  - `Result` (latest visible `assistant` reply text, otherwise sanitized latest tool/toolResult text)
+  - `Result` (latest visible `assistant` reply text, otherwise sanitized latest tool/toolResult text; terminal failed runs do not reuse captured reply text)
   - `Status` (`completed successfully` / `failed` / `timed out` / `unknown`)
   - compact runtime/token stats
   - a delivery instruction telling the requester agent to rewrite in normal assistant voice (not forward raw internal metadata)
 - `--model` and `--thinking` override defaults for that specific run.
 - Use `info`/`log` to inspect details and output after completion.
 - `/subagents spawn` is one-shot mode (`mode: "run"`). For persistent thread-bound sessions, use `sessions_spawn` with `thread: true` and `mode: "session"`.
-- For ACP harness sessions (Codex, Claude Code, Gemini CLI), use `sessions_spawn` with `runtime: "acp"` and see [ACP Agents](/tools/acp-agents).
+- For ACP harness sessions (Codex, Claude Code, Gemini CLI), use `sessions_spawn` with `runtime: "acp"` and see [ACP Agents](/tools/acp-agents), especially the [ACP delivery model](/tools/acp-agents#delivery-model) when debugging completions or agent-to-agent loops.
 
 Primary goals:
 
@@ -71,9 +69,24 @@ Primary goals:
 - Keep the tool surface hard to misuse: sub-agents do **not** get session tools by default.
 - Support configurable nesting depth for orchestrator patterns.
 
-Cost note: each sub-agent has its **own** context and token usage. For heavy or repetitive
-tasks, set a cheaper model for sub-agents and keep your main agent on a higher-quality model.
-You can configure this via `agents.defaults.subagents.model` or per-agent overrides.
+Cost note: each sub-agent has its **own** context and token usage by default. For heavy or
+repetitive tasks, set a cheaper model for sub-agents and keep your main agent on a
+higher-quality model. You can configure this via `agents.defaults.subagents.model` or per-agent
+overrides. When a child genuinely needs the requester's current transcript, the agent can request
+`context: "fork"` on that one spawn.
+
+## Context modes
+
+Native sub-agents start isolated unless the caller explicitly asks to fork the
+current transcript.
+
+| Mode       | When to use it                                                                                                                         | Behavior                                                                          |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `isolated` | Fresh research, independent implementation, slow tool work, or anything that can be briefed in the task text                           | Creates a clean child transcript. This is the default and keeps token use lower.  |
+| `fork`     | Work that depends on the current conversation, prior tool results, or nuanced instructions already present in the requester transcript | Branches the requester transcript into the child session before the child starts. |
+
+Use `fork` sparingly. It is for context-sensitive delegation, not a replacement
+for writing a clear task prompt.
 
 ## Tool
 
@@ -100,6 +113,10 @@ Tool params:
   - `mode: "session"` requires `thread: true`
 - `cleanup?` (`delete|keep`, default `keep`)
 - `sandbox?` (`inherit|require`, default `inherit`; `require` rejects spawn unless target child runtime is sandboxed)
+- `context?` (`isolated|fork`, default `isolated`; native sub-agents only)
+  - `isolated` creates a clean child transcript and is the default.
+  - `fork` branches the requester's current transcript into the child session so the child starts with the same conversation context.
+  - Use `fork` only when the child needs the current transcript. For scoped work, omit `context`.
 - `sessions_spawn` does **not** accept channel-delivery params (`target`, `channel`, `to`, `threadId`, `replyTo`, `transport`). For delivery, use `message`/`sessions_send` from the spawned run.
 
 ## Thread-bound sessions
@@ -153,7 +170,7 @@ Auto-archive:
 - Auto-archive applies equally to depth-1 and depth-2 sessions.
 - Browser cleanup is separate from archive cleanup: tracked browser tabs/processes are best-effort closed when the run finishes, even if the transcript/session record is kept.
 
-## Nested Sub-Agents
+## Nested sub-agents
 
 By default, sub-agents cannot spawn their own sub-agents (`maxSpawnDepth: 1`). You can enable one level of nesting by setting `maxSpawnDepth: 2`, which allows the **orchestrator pattern**: main → orchestrator sub-agent → worker sub-sub-agents.
 
@@ -197,6 +214,11 @@ Operational guidance:
 - Start child work once and wait for completion events instead of building poll
   loops around `sessions_list`, `sessions_history`, `/subagents list`, or
   `exec` sleep commands.
+- `sessions_list` and `/subagents list` keep child-session relationships focused
+  on live work: live children remain attached, ended children stay visible for a
+  short recent window, and stale store-only child links are ignored after their
+  freshness window. This prevents old `spawnedBy` / `parentSessionKey` metadata
+  from resurrecting ghost children after restart.
 - If a child completion event arrives after you already sent the final answer,
   the correct follow-up is the exact silent token `NO_REPLY` / `no_reply`.
 
@@ -249,7 +271,7 @@ Sub-agents report back via an announce step:
   - child session key/id
   - announce type + task label
   - status line derived from runtime outcome (`success`, `error`, `timeout`, or `unknown`)
-  - result content selected from the latest visible assistant text, otherwise sanitized latest tool/toolResult text
+  - result content selected from the latest visible assistant text, otherwise sanitized latest tool/toolResult text; terminal failed runs report failure status without replaying captured reply text
   - a follow-up instruction describing when to reply vs. stay silent
 - `Status` is not inferred from model output; it comes from runtime outcome signals.
 - On timeout, if the child only got through tool calls, announce can collapse that history into a short partial-progress summary instead of replaying raw tool output.
@@ -326,6 +348,18 @@ Sub-agents use a dedicated in-process queue lane:
 - Lane name: `subagent`
 - Concurrency: `agents.defaults.subagents.maxConcurrent` (default `8`)
 
+## Liveness and recovery
+
+OpenClaw does not treat `endedAt` absence as permanent proof that a sub-agent
+is still alive. Unended runs older than the stale-run window stop counting as
+active/pending in `/subagents list`, status summaries, descendant completion
+gating, and per-session concurrency checks.
+
+After a gateway restart, stale unended restored runs are pruned unless their
+child session is marked `abortedLastRun: true`. Those restart-aborted child
+sessions remain recoverable through the sub-agent orphan recovery flow, which
+sends a synthetic resume message before clearing the aborted marker.
+
 ## Stopping
 
 - Sending `/stop` in the requester chat aborts the requester session and stops any active sub-agent runs spawned from it, cascading to nested children.
@@ -339,3 +373,9 @@ Sub-agents use a dedicated in-process queue lane:
 - Sub-agent context only injects `AGENTS.md` + `TOOLS.md` (no `SOUL.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, or `BOOTSTRAP.md`).
 - Maximum nesting depth is 5 (`maxSpawnDepth` range: 1–5). Depth 2 is recommended for most use cases.
 - `maxChildrenPerAgent` caps active children per session (default: 5, range: 1–20).
+
+## Related
+
+- [ACP agents](/tools/acp-agents)
+- [Multi-agent sandbox tools](/tools/multi-agent-sandbox-tools)
+- [Agent send](/tools/agent-send)

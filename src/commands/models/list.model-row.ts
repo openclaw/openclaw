@@ -1,9 +1,18 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { modelKey } from "../../agents/model-ref-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isLocalBaseUrl } from "./list.local-url.js";
 import type { ModelRow } from "./list.types.js";
+
+export type ListRowModel = {
+  id: string;
+  name: string;
+  provider: string;
+  input: Array<"text" | "image">;
+  baseUrl?: string;
+  contextWindow?: number | null;
+  contextTokens?: number | null;
+};
 
 export type ModelAuthAvailabilityResolver = (params: {
   provider: string;
@@ -18,7 +27,7 @@ function authStoreHasProviderProfile(authStore: AuthProfileStore, provider: stri
 }
 
 export function toModelRow(params: {
-  model?: Model<Api>;
+  model?: ListRowModel;
   key: string;
   tags: string[];
   aliases?: string[];
@@ -52,7 +61,7 @@ export function toModelRow(params: {
   }
 
   const input = model.input.join("+") || "text";
-  const local = isLocalBaseUrl(model.baseUrl);
+  const local = isLocalBaseUrl(model.baseUrl ?? "");
   const modelIsAvailable = availableKeys?.has(modelKey(model.provider, model.id)) ?? false;
   // Prefer model-level registry availability when present.
   // Fall back to provider-level auth heuristics only if registry availability isn't available,
@@ -89,6 +98,7 @@ export function toModelRow(params: {
     name: model.name || model.id,
     input,
     contextWindow: model.contextWindow ?? null,
+    ...(typeof model.contextTokens === "number" ? { contextTokens: model.contextTokens } : {}),
     local,
     available,
     tags: Array.from(mergedTags),

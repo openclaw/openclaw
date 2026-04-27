@@ -103,6 +103,7 @@ describe("prepareCliBundleMcpConfig", () => {
     };
     expect(raw.mcpServers?.bundleProbe?.args).toEqual([await fs.realpath(bundleProbeServerPath)]);
     expect(prepared.mcpConfigHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(prepared.mcpResumeHash).toMatch(/^[0-9a-f]{64}$/);
 
     await prepared.cleanup?.();
   });
@@ -189,6 +190,296 @@ describe("prepareCliBundleMcpConfig", () => {
     await prepared.cleanup?.();
   });
 
+  it("merges user-configured mcp.servers from OpenClaw config", async () => {
+    const workspaceDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-user-servers-");
+
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: {
+        command: "node",
+        args: ["./fake-claude.mjs"],
+      },
+      workspaceDir,
+      config: {
+        plugins: { enabled: false },
+        mcp: {
+          servers: {
+            omi: {
+              type: "sse",
+              url: "https://api.omi.me/v1/mcp/sse",
+              headers: { Authorization: "Bearer test-token" },
+            },
+          },
+        },
+      },
+    });
+
+    const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
+    expect(configFlagIndex).toBeGreaterThanOrEqual(0);
+    const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
+      mcpServers?: Record<string, { type?: string; url?: string }>;
+    };
+    expect(raw.mcpServers?.omi?.type).toBe("sse");
+    expect(raw.mcpServers?.omi?.url).toBe("https://api.omi.me/v1/mcp/sse");
+
+    await prepared.cleanup?.();
+  });
+
+  it("normalizes OpenClaw MCP server keys before writing Claude config files", async () => {
+    const workspaceDir = await tempHarness.createTempDir(
+      "openclaw-cli-bundle-mcp-claude-normalize-",
+    );
+
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: {
+        command: "node",
+        args: ["./fake-claude.mjs"],
+      },
+      workspaceDir,
+      config: {
+        plugins: { enabled: false },
+        mcp: {
+          servers: {
+            gitnexus: {
+              url: "http://openclaw-gitnexus-mcp:4748/mcp",
+              transport: "streamable-http",
+              connectionTimeoutMs: 60_000,
+              headers: { "x-openclaw": "enabled" },
+            },
+          },
+        },
+      },
+    });
+
+    const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
+    expect(configFlagIndex).toBeGreaterThanOrEqual(0);
+    const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
+      mcpServers?: Record<
+        string,
+        {
+          type?: string;
+          url?: string;
+          transport?: string;
+          connectionTimeoutMs?: number;
+          headers?: Record<string, string>;
+        }
+      >;
+    };
+    expect(raw.mcpServers?.gitnexus).toEqual({
+      type: "http",
+      url: "http://openclaw-gitnexus-mcp:4748/mcp",
+      headers: { "x-openclaw": "enabled" },
+    });
+    expect(raw.mcpServers?.gitnexus?.transport).toBeUndefined();
+    expect(raw.mcpServers?.gitnexus?.connectionTimeoutMs).toBeUndefined();
+
+    await prepared.cleanup?.();
+  });
+
+  it("user mcp.servers do not override the loopback additionalConfig", async () => {
+    const workspaceDir = await tempHarness.createTempDir(
+      "openclaw-cli-bundle-mcp-user-servers-loopback-",
+    );
+
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: {
+        command: "node",
+        args: ["./fake-claude.mjs"],
+      },
+      workspaceDir,
+      config: {
+        plugins: { enabled: false },
+        mcp: {
+          servers: {
+            openclaw: {
+              type: "http",
+              url: "https://example.com/malicious",
+            },
+          },
+        },
+      },
+      additionalConfig: {
+        mcpServers: {
+          openclaw: {
+            type: "http",
+            url: "http://127.0.0.1:23119/mcp",
+            headers: { Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}" },
+          },
+        },
+      },
+    });
+
+    const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
+    expect(configFlagIndex).toBeGreaterThanOrEqual(0);
+    const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
+      mcpServers?: Record<string, { url?: string }>;
+    };
+    expect(raw.mcpServers?.openclaw?.url).toBe("http://127.0.0.1:23119/mcp");
+
+    await prepared.cleanup?.();
+  });
+
+  it("replaces overlapping bundle server entries with user-configured mcp.servers", async () => {
+    const workspaceDir = await tempHarness.createTempDir(
+      "openclaw-cli-bundle-mcp-user-servers-replace-",
+    );
+    await writeClaudeBundleManifest({
+      homeDir: bundleProbeHomeDir,
+      pluginId: "omi",
+      manifest: { name: "omi" },
+    });
+    const pluginDir = path.join(bundleProbeHomeDir, ".openclaw", "extensions", "omi");
+    await fs.writeFile(
+      path.join(pluginDir, ".mcp.json"),
+      `${JSON.stringify(
+        {
+          mcpServers: {
+            omi: {
+              command: process.execPath,
+              args: [bundleProbeServerPath],
+              env: { BUNDLE_ONLY: "true" },
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+
+    const env = captureEnv(["HOME"]);
+    try {
+      process.env.HOME = bundleProbeHomeDir;
+      const prepared = await prepareCliBundleMcpConfig({
+        enabled: true,
+        mode: "claude-config-file",
+        backend: {
+          command: "node",
+          args: ["./fake-claude.mjs"],
+        },
+        workspaceDir,
+        config: {
+          plugins: {
+            entries: {
+              omi: { enabled: true },
+            },
+          },
+          mcp: {
+            servers: {
+              omi: {
+                type: "sse",
+                url: "https://api.omi.me/v1/mcp/sse",
+                headers: { Authorization: "Bearer test-token" },
+              },
+            },
+          },
+        },
+      });
+
+      const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
+      expect(configFlagIndex).toBeGreaterThanOrEqual(0);
+      const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
+      const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
+        mcpServers?: Record<
+          string,
+          {
+            type?: string;
+            url?: string;
+            command?: string;
+            args?: string[];
+            env?: Record<string, string>;
+          }
+        >;
+      };
+      expect(raw.mcpServers?.omi?.type).toBe("sse");
+      expect(raw.mcpServers?.omi?.url).toBe("https://api.omi.me/v1/mcp/sse");
+      expect(raw.mcpServers?.omi?.command).toBeUndefined();
+      expect(raw.mcpServers?.omi?.args).toBeUndefined();
+      expect(raw.mcpServers?.omi?.env).toBeUndefined();
+
+      await prepared.cleanup?.();
+    } finally {
+      env.restore();
+    }
+  });
+
+  it("stabilizes the resume hash when only the OpenClaw loopback port changes", async () => {
+    const first = await prepareBundleProbeCliConfig({
+      additionalConfig: {
+        mcpServers: {
+          openclaw: {
+            type: "http",
+            url: "http://127.0.0.1:23119/mcp",
+            headers: {
+              Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
+            },
+          },
+        },
+      },
+    });
+    const second = await prepareBundleProbeCliConfig({
+      additionalConfig: {
+        mcpServers: {
+          openclaw: {
+            type: "http",
+            url: "http://127.0.0.1:24567/mcp",
+            headers: {
+              Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
+            },
+          },
+        },
+      },
+    });
+
+    expect(first.mcpConfigHash).not.toBe(second.mcpConfigHash);
+    expect(first.mcpResumeHash).toBe(second.mcpResumeHash);
+
+    await first.cleanup?.();
+    await second.cleanup?.();
+  });
+
+  it("changes the resume hash when stable MCP semantics change", async () => {
+    const first = await prepareBundleProbeCliConfig({
+      additionalConfig: {
+        mcpServers: {
+          openclaw: {
+            type: "http",
+            url: "http://127.0.0.1:23119/mcp",
+            headers: {
+              Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
+            },
+          },
+        },
+      },
+    });
+    const second = await prepareBundleProbeCliConfig({
+      additionalConfig: {
+        mcpServers: {
+          openclaw: {
+            type: "http",
+            url: "http://127.0.0.1:23119/other",
+            headers: {
+              Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
+            },
+          },
+        },
+      },
+    });
+
+    expect(first.mcpResumeHash).not.toBe(second.mcpResumeHash);
+
+    await first.cleanup?.();
+    await second.cleanup?.();
+  });
+
   it("preserves extra env values alongside generated MCP config", async () => {
     const workspaceDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-env-");
 
@@ -204,14 +495,12 @@ describe("prepareCliBundleMcpConfig", () => {
       env: {
         OPENCLAW_MCP_TOKEN: "loopback-token-123",
         OPENCLAW_MCP_SESSION_KEY: "agent:main:telegram:group:chat123",
-        OPENCLAW_MCP_SENDER_IS_OWNER: "false",
       },
     });
 
     expect(prepared.env).toEqual({
       OPENCLAW_MCP_TOKEN: "loopback-token-123",
       OPENCLAW_MCP_SESSION_KEY: "agent:main:telegram:group:chat123",
-      OPENCLAW_MCP_SENDER_IS_OWNER: "false",
     });
 
     await prepared.cleanup?.();
@@ -250,7 +539,6 @@ describe("prepareCliBundleMcpConfig", () => {
             headers: {
               Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
               "x-session-key": "${OPENCLAW_MCP_SESSION_KEY}",
-              "x-openclaw-sender-is-owner": "${OPENCLAW_MCP_SENDER_IS_OWNER}",
             },
           },
         },
@@ -261,14 +549,14 @@ describe("prepareCliBundleMcpConfig", () => {
       "exec",
       "--json",
       "-c",
-      'mcp_servers={ openclaw = { url = "http://127.0.0.1:23119/mcp", bearer_token_env_var = "OPENCLAW_MCP_TOKEN", env_http_headers = { x-session-key = "OPENCLAW_MCP_SESSION_KEY", x-openclaw-sender-is-owner = "OPENCLAW_MCP_SENDER_IS_OWNER" } } }',
+      'mcp_servers={ openclaw = { url = "http://127.0.0.1:23119/mcp", default_tools_approval_mode = "approve", bearer_token_env_var = "OPENCLAW_MCP_TOKEN", env_http_headers = { x-session-key = "OPENCLAW_MCP_SESSION_KEY" } } }',
     ]);
     expect(prepared.backend.resumeArgs).toEqual([
       "exec",
       "resume",
       "{sessionId}",
       "-c",
-      'mcp_servers={ openclaw = { url = "http://127.0.0.1:23119/mcp", bearer_token_env_var = "OPENCLAW_MCP_TOKEN", env_http_headers = { x-session-key = "OPENCLAW_MCP_SESSION_KEY", x-openclaw-sender-is-owner = "OPENCLAW_MCP_SENDER_IS_OWNER" } } }',
+      'mcp_servers={ openclaw = { url = "http://127.0.0.1:23119/mcp", default_tools_approval_mode = "approve", bearer_token_env_var = "OPENCLAW_MCP_TOKEN", env_http_headers = { x-session-key = "OPENCLAW_MCP_SESSION_KEY" } } }',
     ]);
     expect(prepared.cleanup).toBeUndefined();
   });

@@ -699,6 +699,35 @@ describe("plugin sdk alias helpers", () => {
     });
   });
 
+  it("falls back to source plugin-sdk subpath aliases when dist chunks are stale", () => {
+    const fixture = createPluginSdkAliasFixture({
+      srcFile: "provider-entry.ts",
+      distFile: "provider-entry.js",
+      distBody: 'import { entry } from "../missing-provider-entry-chunk.js";\nexport { entry };\n',
+      packageExports: {
+        "./plugin-sdk/provider-entry": { default: "./dist/plugin-sdk/provider-entry.js" },
+      },
+    });
+    const sourceProviderEntryPath = path.join(
+      fixture.root,
+      "src",
+      "plugin-sdk",
+      "provider-entry.ts",
+    );
+    const sourcePluginEntry = writePluginEntry(
+      fixture.root,
+      bundledPluginFile("demo", "src/index.ts"),
+    );
+
+    const distAliases = withEnv({ NODE_ENV: undefined }, () =>
+      buildPluginLoaderAliasMap(sourcePluginEntry, undefined, undefined, "dist"),
+    );
+
+    expect(fs.realpathSync(distAliases["openclaw/plugin-sdk/provider-entry"] ?? "")).toBe(
+      fs.realpathSync(sourceProviderEntryPath),
+    );
+  });
+
   it("builds source plugin-sdk subpath aliases through the wider source extension family", () => {
     const { fixture, sourceRootAlias, sourceChannelRuntimePath } =
       createPluginSdkAliasTargetFixture({
@@ -841,7 +870,7 @@ describe("plugin sdk alias helpers", () => {
     }
   });
 
-  it("disables native Jiti loads on Windows even for built JavaScript entries", () => {
+  it("prefers native Jiti loads on Windows for built JavaScript entries", () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, "platform", {
       configurable: true,
@@ -849,9 +878,9 @@ describe("plugin sdk alias helpers", () => {
     });
 
     try {
-      expect(shouldPreferNativeJiti("/repo/dist/plugins/runtime/index.js")).toBe(false);
+      expect(shouldPreferNativeJiti("/repo/dist/plugins/runtime/index.js")).toBe(true);
       expect(shouldPreferNativeJiti(`/repo/${bundledDistPluginFile("browser", "index.js")}`)).toBe(
-        false,
+        true,
       );
     } finally {
       Object.defineProperty(process, "platform", {
@@ -861,7 +890,7 @@ describe("plugin sdk alias helpers", () => {
     }
   });
 
-  it("keeps plugin loader dist shortcuts off on Windows", () => {
+  it("keeps plugin loader dist shortcuts native on Windows", () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, "platform", {
       configurable: true,
@@ -873,7 +902,7 @@ describe("plugin sdk alias helpers", () => {
         resolvePluginLoaderJitiTryNative(`/repo/${bundledDistPluginFile("browser", "index.js")}`, {
           preferBuiltDist: true,
         }),
-      ).toBe(false);
+      ).toBe(true);
       expect(
         resolvePluginLoaderJitiTryNative(`/repo/${bundledDistPluginFile("browser", "helper.ts")}`, {
           preferBuiltDist: true,
@@ -887,12 +916,16 @@ describe("plugin sdk alias helpers", () => {
     }
   });
 
-  it("keeps bundled plugin dist modules on the aliased Jiti path", () => {
+  it("prefers native jiti for bundled plugin dist .js modules, keeps .ts on aliased path", () => {
+    // Built .js/.mjs/.cjs files under dist/extensions/ should now delegate
+    // to shouldPreferNativeJiti() — which returns true on Node for
+    // compiled artifacts, avoiding the slow jiti transform path.
     expect(
       resolvePluginLoaderJitiTryNative(`/repo/${bundledDistPluginFile("browser", "index.js")}`, {
         preferBuiltDist: true,
       }),
-    ).toBe(false);
+    ).toBe(true);
+    // TypeScript source files still need jiti's transform pipeline.
     expect(
       resolvePluginLoaderJitiTryNative(`/repo/${bundledDistPluginFile("browser", "helper.ts")}`, {
         preferBuiltDist: true,
@@ -939,7 +972,45 @@ describe("plugin sdk alias helpers", () => {
       preferBuiltDist: true,
     });
 
-    expect(second).toEqual(first);
+    expect(second).toBe(first);
+  });
+
+  it("scopes plugin loader Jiti config by plugin-sdk resolution", () => {
+    const { fixture, sourceRootAlias, distRootAlias } = createPluginSdkAliasTargetFixture();
+    const sourcePluginEntry = writePluginEntry(
+      fixture.root,
+      bundledPluginFile("demo", "src/index.ts"),
+    );
+
+    const { auto, dist, distAgain } = withEnv({ NODE_ENV: undefined }, () => ({
+      auto: resolvePluginLoaderJitiConfig({
+        modulePath: sourcePluginEntry,
+        argv1: path.join(fixture.root, "openclaw.mjs"),
+        moduleUrl: pathToFileURL(path.join(fixture.root, "src/plugins/loader.ts")).href,
+        pluginSdkResolution: "auto",
+      }),
+      dist: resolvePluginLoaderJitiConfig({
+        modulePath: sourcePluginEntry,
+        argv1: path.join(fixture.root, "openclaw.mjs"),
+        moduleUrl: pathToFileURL(path.join(fixture.root, "src/plugins/loader.ts")).href,
+        pluginSdkResolution: "dist",
+      }),
+      distAgain: resolvePluginLoaderJitiConfig({
+        modulePath: sourcePluginEntry,
+        argv1: path.join(fixture.root, "openclaw.mjs"),
+        moduleUrl: pathToFileURL(path.join(fixture.root, "src/plugins/loader.ts")).href,
+        pluginSdkResolution: "dist",
+      }),
+    }));
+
+    expect(distAgain).toBe(dist);
+    expect(auto).not.toBe(dist);
+    expect(fs.realpathSync(auto.aliasMap["openclaw/plugin-sdk"] ?? "")).toBe(
+      fs.realpathSync(sourceRootAlias),
+    );
+    expect(fs.realpathSync(dist.aliasMap["openclaw/plugin-sdk"] ?? "")).toBe(
+      fs.realpathSync(distRootAlias),
+    );
   });
 
   it("detects bundled plugin extension paths across source and dist roots", () => {
@@ -1194,5 +1265,39 @@ describe("buildPluginLoaderAliasMap memoization", () => {
     expect(second).toEqual(first);
     // Same key set
     expect(Object.keys(second).toSorted()).toEqual(Object.keys(first).toSorted());
+  });
+});
+
+describe("buildPluginLoaderJitiOptions", () => {
+  it("pre-normalizes and marks alias maps for Jiti", () => {
+    const marker = Symbol.for("pathe:normalizedAlias");
+    const aliasMap = {
+      "openclaw/plugin-sdk/core": "/repo/src/plugin-sdk/core.ts",
+      "openclaw/plugin-sdk": "/repo/src/plugin-sdk/root-alias.cjs",
+      "@openclaw/plugin-sdk": "/repo/src/plugin-sdk/root-alias.cjs",
+    };
+
+    const first = buildPluginLoaderJitiOptions(aliasMap).alias as Record<string, string>;
+    const second = buildPluginLoaderJitiOptions({ ...aliasMap }).alias as Record<string, string>;
+
+    expect(second).toBe(first);
+    expect((first as Record<symbol, unknown>)[marker]).toBe(true);
+    expect(Object.prototype.propertyIsEnumerable.call(first, marker)).toBe(false);
+  });
+
+  it("applies Jiti alias-target normalization before caching", () => {
+    const aliasMap = {
+      alpha: "/repo/alpha",
+      beta: "alpha/sub",
+    };
+
+    const alias = buildPluginLoaderJitiOptions(aliasMap).alias as Record<string, string>;
+
+    expect(alias).not.toBe(aliasMap);
+    expect(alias.beta).toBe("/repo/alpha/sub");
+  });
+
+  it("does not attach an empty alias map", () => {
+    expect(buildPluginLoaderJitiOptions({})).not.toHaveProperty("alias");
   });
 });

@@ -49,6 +49,35 @@ function normalizeAgentWaitResult(
   };
 }
 
+const RECOVERABLE_AGENT_WAIT_ERROR_PATTERNS: readonly RegExp[] = [
+  /gateway closed \(1006/i,
+  /transport close/i,
+  /connection loss/i,
+  /connection closed/i,
+  /gateway not connected/i,
+  /no active .* listener/i,
+  /socket hang up/i,
+  /\b(ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|EHOSTUNREACH|ENETUNREACH)\b/i,
+];
+
+const UPDATED_REPLY_POLL_INTERVAL_MS = 100;
+const UPDATED_REPLY_POLL_TIMEOUT_MS = 2_000;
+
+async function delay(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export function isRecoverableAgentWaitError(error: string | undefined): boolean {
+  const message = error?.trim();
+  if (!message) {
+    return false;
+  }
+  if (message.includes("gateway timeout")) {
+    return false;
+  }
+  return RECOVERABLE_AGENT_WAIT_ERROR_PATTERNS.some((pattern) => pattern.test(message));
+}
+
 function normalizePendingRunIds(runIds: Iterable<string>): string[] {
   const seen = new Set<string>();
   for (const runId of runIds) {
@@ -172,10 +201,26 @@ export async function waitForAgentRunAndReadUpdatedAssistantReply(params: {
     callGateway: params.callGateway,
   });
   const baselineFingerprint = params.baseline?.fingerprint;
-  const replyText =
+  let replyText =
     latestReply.text && (!baselineFingerprint || latestReply.fingerprint !== baselineFingerprint)
       ? latestReply.text
       : undefined;
+  if (!replyText) {
+    const deadline = Date.now() + UPDATED_REPLY_POLL_TIMEOUT_MS;
+    while (Date.now() < deadline && !replyText) {
+      await delay(UPDATED_REPLY_POLL_INTERVAL_MS);
+      const polledReply = await readLatestAssistantReplySnapshot({
+        sessionKey: params.sessionKey,
+        limit: params.limit,
+        callGateway: params.callGateway,
+      });
+      replyText =
+        polledReply.text &&
+        (!baselineFingerprint || polledReply.fingerprint !== baselineFingerprint)
+          ? polledReply.text
+          : undefined;
+    }
+  }
   return {
     status: "ok",
     replyText,

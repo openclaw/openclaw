@@ -11,7 +11,7 @@ import {
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth-native";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
-import { isDangerousNameMatchingEnabled, loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
 import type { SessionBindingRecord } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { enqueueSystemEvent, recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
 import {
@@ -32,7 +32,7 @@ import {
   resolveDiscordShouldRequireMention,
   resolveGroupDmAllow,
 } from "./allow-list.js";
-import { resolveDiscordChannelNameSafe } from "./channel-access.js";
+import { resolveDiscordChannelInfoSafe, resolveDiscordChannelNameSafe } from "./channel-access.js";
 import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
 import { handleDiscordDmCommandDecision } from "./dm-command-decision.js";
 import {
@@ -324,15 +324,29 @@ function mergeFetchedDiscordMessage(base: Message, fetched: APIMessage): Message
   }) as unknown as Message;
 }
 
-async function hydrateDiscordMessageIfEmpty(params: {
+function shouldHydrateDiscordMessage(params: { message: Message }) {
+  const currentText = resolveDiscordMessageText(params.message, {
+    includeForwarded: true,
+  });
+  if (!currentText) {
+    return true;
+  }
+  const hasMentionMetadata =
+    (params.message.mentionedUsers?.length ?? 0) > 0 ||
+    (params.message.mentionedRoles?.length ?? 0) > 0 ||
+    params.message.mentionedEveryone;
+  if (hasMentionMetadata) {
+    return false;
+  }
+  return /<@!?\d+>|<@&\d+>|@everyone|@here/u.test(currentText);
+}
+
+async function hydrateDiscordMessageIfNeeded(params: {
   client: DiscordMessagePreflightParams["client"];
   message: Message;
   messageChannelId: string;
 }): Promise<Message> {
-  const currentText = resolveDiscordMessageText(params.message, {
-    includeForwarded: true,
-  });
-  if (currentText) {
+  if (!shouldHydrateDiscordMessage({ message: params.message })) {
     return params.message;
   }
   const rest = params.client.rest as { get?: (route: string) => Promise<unknown> } | undefined;
@@ -346,7 +360,7 @@ async function hydrateDiscordMessageIfEmpty(params: {
     if (!fetched) {
       return params.message;
     }
-    logVerbose(`discord: hydrated empty inbound payload via REST for ${params.message.id}`);
+    logVerbose(`discord: hydrated inbound payload via REST for ${params.message.id}`);
     return mergeFetchedDiscordMessage(params.message, fetched);
   } catch (err) {
     logVerbose(`discord: failed to hydrate message ${params.message.id}: ${String(err)}`);
@@ -383,7 +397,7 @@ export async function preflightDiscordMessage(
     return null;
   }
 
-  message = await hydrateDiscordMessageIfEmpty({
+  message = await hydrateDiscordMessageIfNeeded({
     client: params.client,
     message,
     messageChannelId,
@@ -536,6 +550,7 @@ export async function preflightDiscordMessage(
                 code,
               }),
               {
+                cfg: params.cfg,
                 token: params.token,
                 rest: params.client.rest,
                 accountId: params.accountId,
@@ -606,12 +621,11 @@ export async function preflightDiscordMessage(
     earlyThreadParentType = parentInfo.type;
   }
 
-  // Use the active runtime snapshot for bindings lookup; routing inputs are
-  // still payload-derived, but this path should not reparse config from disk.
+  // Routing inputs are payload-derived, but config must come from the boundary
+  // snapshot already threaded into the monitor path.
   const memberRoleIds = Array.isArray(params.data.rawMember?.roles)
     ? params.data.rawMember.roles
     : [];
-  const freshCfg = loadConfig();
   const conversationRuntime = await loadConversationRuntime();
   // Resolve role-mention override before route call so resolveAgentRoute can use it.
   // Multiple matched agents → no override (ambiguous); DMs excluded.
@@ -619,7 +633,7 @@ export async function preflightDiscordMessage(
     if (isDirectMessage) {
       return undefined;
     }
-    const agents = freshCfg.agents?.list;
+    const agents = params.cfg.agents?.list;
     if (!Array.isArray(agents)) {
       return undefined;
     }
@@ -641,7 +655,7 @@ export async function preflightDiscordMessage(
     return matched[0];
   })();
   const route = resolveDiscordConversationRoute({
-    cfg: freshCfg,
+    cfg: params.cfg,
     accountId: params.accountId,
     guildId: params.data.guild_id ?? undefined,
     memberRoleIds,
@@ -662,17 +676,20 @@ export async function preflightDiscordMessage(
       }) ?? `user:${author.id}`)
     : messageChannelId;
   let threadBinding: SessionBindingRecord | undefined;
-  threadBinding =
-    conversationRuntime.getSessionBindingService().resolveByConversation({
+  const runtimeRoute = conversationRuntime.resolveRuntimeConversationBindingRoute({
+    route,
+    conversation: {
       channel: "discord",
       accountId: params.accountId,
       conversationId: bindingConversationId,
       parentConversationId: earlyThreadParentId,
-    }) ?? undefined;
+    },
+  });
+  threadBinding = runtimeRoute.bindingRecord ?? undefined;
   const configuredRoute =
     threadBinding == null
       ? conversationRuntime.resolveConfiguredBindingRoute({
-          cfg: freshCfg,
+          cfg: params.cfg,
           route,
           conversation: {
             channel: "discord",
@@ -699,14 +716,16 @@ export async function preflightDiscordMessage(
   }
   const boundSessionKey = conversationRuntime.isPluginOwnedSessionBindingRecord(threadBinding)
     ? ""
-    : threadBinding?.targetSessionKey?.trim();
-  const effectiveRoute = resolveDiscordEffectiveRoute({
-    route,
-    boundSessionKey,
-    configuredRoute,
-    matchedBy: "binding.channel",
-    mentionedRoleAgentId,
-  });
+    : (runtimeRoute.boundSessionKey ?? threadBinding?.targetSessionKey?.trim());
+  const effectiveRoute = runtimeRoute.boundSessionKey
+    ? runtimeRoute.route
+    : resolveDiscordEffectiveRoute({
+        route,
+        boundSessionKey,
+        configuredRoute,
+        matchedBy: "binding.channel",
+        mentionedRoleAgentId,
+      });
   const boundAgentId = boundSessionKey ? effectiveRoute.agentId : undefined;
   // Suppress self-mention: compare against the channel's natural/pre-mention
   // agent (configuredRoute), not effectiveRoute which already reflects the
@@ -888,7 +907,9 @@ export async function preflightDiscordMessage(
         } satisfies HistoryEntry)
       : undefined;
 
-  const threadOwnerId = threadChannel ? (threadChannel.ownerId ?? channelInfo?.ownerId) : undefined;
+  const threadOwnerId = threadChannel
+    ? (resolveDiscordChannelInfoSafe(threadChannel).ownerId ?? channelInfo?.ownerId)
+    : undefined;
   const shouldRequireMentionByConfig = resolveDiscordShouldRequireMention({
     isGuildMessage,
     isThread: Boolean(threadChannel),
@@ -1087,7 +1108,7 @@ export async function preflightDiscordMessage(
   }
   if (configuredBinding) {
     const ensured = await conversationRuntime.ensureConfiguredBindingRouteReady({
-      cfg: freshCfg,
+      cfg: params.cfg,
       bindingResolution: configuredBinding,
     });
     if (!ensured.ok) {

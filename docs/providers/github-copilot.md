@@ -6,8 +6,6 @@ read_when:
 title: "GitHub Copilot"
 ---
 
-# GitHub Copilot
-
 GitHub Copilot is GitHub's AI coding assistant. It provides access to Copilot
 models for your GitHub account and plan. OpenClaw can use Copilot as a model
 provider in two different ways.
@@ -31,7 +29,7 @@ provider in two different ways.
       </Step>
       <Step title="Set a default model">
         ```bash
-        openclaw models set github-copilot/claude-opus-4.6
+        openclaw models set github-copilot/claude-opus-4.7
         ```
 
         Or in config:
@@ -39,7 +37,7 @@ provider in two different ways.
         ```json5
         {
           agents: {
-            defaults: { model: { primary: "github-copilot/claude-opus-4.6" } },
+            defaults: { model: { primary: "github-copilot/claude-opus-4.7" } },
           },
         }
         ```
@@ -90,6 +88,13 @@ openclaw models auth login --provider github-copilot --method device --set-defau
     Claude model IDs use the Anthropic Messages transport automatically. GPT,
     o-series, and Gemini models keep the OpenAI Responses transport. OpenClaw
     selects the correct transport based on the model ref.
+  </Accordion>
+
+  <Accordion title="Request compatibility">
+    OpenClaw sends Copilot IDE-style request headers on Copilot transports,
+    including built-in compaction, tool-result, and image follow-up turns. It
+    does not enable provider-level Responses continuation for Copilot unless
+    that behavior has been verified against Copilot's API.
   </Accordion>
 
   <Accordion title="Environment variable resolution order">

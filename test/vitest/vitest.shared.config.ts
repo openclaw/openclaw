@@ -76,7 +76,43 @@ const localScheduling = resolveLocalVitestScheduling(
   detectVitestHostInfo(),
   defaultPool,
 );
-const ciWorkers = isWindows ? 2 : 3;
+
+function hasWorkerOverride(env: Record<string, string | undefined>): boolean {
+  return Boolean((env.OPENCLAW_VITEST_MAX_WORKERS ?? env.OPENCLAW_TEST_WORKERS)?.trim());
+}
+
+export function resolveSharedVitestWorkerConfig(params: {
+  env?: Record<string, string | undefined>;
+  isCI?: boolean;
+  isWindows?: boolean;
+  localScheduling?: LocalVitestScheduling;
+}): Pick<LocalVitestScheduling, "fileParallelism" | "maxWorkers"> {
+  const env = params.env ?? process.env;
+  const local = params.localScheduling ?? localScheduling;
+  if (hasWorkerOverride(env)) {
+    return {
+      fileParallelism: local.fileParallelism,
+      maxWorkers: local.maxWorkers,
+    };
+  }
+  if (params.isCI ?? isCI) {
+    return {
+      fileParallelism: true,
+      maxWorkers: (params.isWindows ?? isWindows) ? 2 : 3,
+    };
+  }
+  return {
+    fileParallelism: local.fileParallelism,
+    maxWorkers: local.maxWorkers,
+  };
+}
+
+const workerConfig = resolveSharedVitestWorkerConfig({
+  env: process.env,
+  isCI,
+  isWindows,
+  localScheduling,
+});
 
 if (!isCI && localScheduling.throttledBySystem && shouldPrintVitestThrottle(process.env)) {
   console.error(
@@ -118,8 +154,8 @@ export const sharedVitestConfig = {
     isolate: false,
     pool: defaultPool,
     runner: nonIsolatedRunnerPath,
-    maxWorkers: isCI ? ciWorkers : localScheduling.maxWorkers,
-    fileParallelism: isCI ? true : localScheduling.fileParallelism,
+    maxWorkers: workerConfig.maxWorkers,
+    fileParallelism: workerConfig.fileParallelism,
     forceRerunTriggers: [
       "package.json",
       "pnpm-lock.yaml",
@@ -134,7 +170,12 @@ export const sharedVitestConfig = {
       "test/vitest/vitest.bundled.config.ts",
       "test/vitest/vitest.cli.config.ts",
       "vitest.config.ts",
-      "test/vitest/vitest.contracts.config.ts",
+      "test/vitest/vitest.contracts-shared.ts",
+      "test/vitest/vitest.contracts-channel-surface.config.ts",
+      "test/vitest/vitest.contracts-channel-config.config.ts",
+      "test/vitest/vitest.contracts-channel-registry.config.ts",
+      "test/vitest/vitest.contracts-channel-session.config.ts",
+      "test/vitest/vitest.contracts-plugin.config.ts",
       "test/vitest/vitest.cron.config.ts",
       "test/vitest/vitest.daemon.config.ts",
       "test/vitest/vitest.e2e.config.ts",
@@ -142,13 +183,18 @@ export const sharedVitestConfig = {
       "test/vitest/vitest.extension-acpx.config.ts",
       "test/vitest/vitest.extension-bluebubbles-paths.mjs",
       "test/vitest/vitest.extension-bluebubbles.config.ts",
+      "test/vitest/vitest.extension-channel-single-config.ts",
+      "test/vitest/vitest.extension-channel-split-paths.mjs",
       "test/vitest/vitest.extension-channels.config.ts",
       "test/vitest/vitest.extension-diffs-paths.mjs",
       "test/vitest/vitest.extension-diffs.config.ts",
+      "test/vitest/vitest.extension-discord.config.ts",
       "test/vitest/vitest.extension-feishu-paths.mjs",
       "test/vitest/vitest.extension-feishu.config.ts",
+      "test/vitest/vitest.extension-imessage.config.ts",
       "test/vitest/vitest.extension-irc-paths.mjs",
       "test/vitest/vitest.extension-irc.config.ts",
+      "test/vitest/vitest.extension-line.config.ts",
       "test/vitest/vitest.extension-mattermost-paths.mjs",
       "test/vitest/vitest.extension-mattermost.config.ts",
       "test/vitest/vitest.extension-matrix-paths.mjs",
@@ -195,7 +241,10 @@ export const sharedVitestConfig = {
       "test/vitest/vitest.extension-zalo-paths.mjs",
       "test/vitest/vitest.extension-zalo.config.ts",
       "test/vitest/vitest.extension-provider-paths.mjs",
+      "test/vitest/vitest.extension-provider-openai.config.ts",
       "test/vitest/vitest.extension-providers.config.ts",
+      "test/vitest/vitest.extension-signal.config.ts",
+      "test/vitest/vitest.extension-slack.config.ts",
       "test/vitest/vitest.logging.config.ts",
       "test/vitest/vitest.process.config.ts",
       "test/vitest/vitest.tasks.config.ts",
@@ -246,7 +295,6 @@ export const sharedVitestConfig = {
         branches: 55,
         statements: 70,
       },
-      include: ["./src/**/*.ts"],
       exclude: [
         `${BUNDLED_PLUGIN_ROOT_DIR}/**`,
         "apps/**",

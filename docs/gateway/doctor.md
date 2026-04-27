@@ -6,8 +6,6 @@ read_when:
 title: "Doctor"
 ---
 
-# Doctor
-
 `openclaw doctor` is the repair + migration tool for OpenClaw. It fixes stale
 config/state, checks health, and provides actionable repair steps.
 
@@ -174,9 +172,11 @@ Current migrations:
 - `routing.agentToAgent` → `tools.agentToAgent`
 - `routing.transcribeAudio` → `tools.media.audio.models`
 - `messages.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`) → `messages.tts.providers.<provider>`
+- `messages.tts.provider: "edge"` and `messages.tts.providers.edge` → `messages.tts.provider: "microsoft"` and `messages.tts.providers.microsoft`
 - `channels.discord.voice.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`) → `channels.discord.voice.tts.providers.<provider>`
 - `channels.discord.accounts.<id>.voice.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`) → `channels.discord.accounts.<id>.voice.tts.providers.<provider>`
 - `plugins.entries.voice-call.config.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`) → `plugins.entries.voice-call.config.tts.providers.<provider>`
+- `plugins.entries.voice-call.config.tts.provider: "edge"` and `plugins.entries.voice-call.config.tts.providers.edge` → `provider: "microsoft"` and `providers.microsoft`
 - `plugins.entries.voice-call.config.provider: "log"` → `"mock"`
 - `plugins.entries.voice-call.config.twilio.from` → `plugins.entries.voice-call.config.fromNumber`
 - `plugins.entries.voice-call.config.streaming.sttProvider` → `plugins.entries.voice-call.config.streaming.provider`
@@ -380,10 +380,20 @@ switch to legacy names if the current image is missing.
 
 ### 7b) Bundled plugin runtime deps
 
-Doctor verifies that bundled plugin runtime dependencies (for example the
-Discord plugin runtime packages) are present in the OpenClaw install root.
-If any are missing, doctor reports the packages and installs them in
-`openclaw doctor --fix` / `openclaw doctor --repair` mode.
+Doctor verifies runtime dependencies only for bundled plugins that are active in
+the current config or enabled by their bundled manifest default, for example
+`plugins.entries.discord.enabled: true`, legacy
+`channels.discord.enabled: true`, or a default-enabled bundled provider. If any
+are missing, doctor reports the packages and installs them in
+`openclaw doctor --fix` / `openclaw doctor --repair` mode. External plugins still
+use `openclaw plugins install` / `openclaw plugins update`; doctor does not
+install dependencies for arbitrary plugin paths.
+
+The Gateway and local CLI can also repair active bundled plugin runtime
+dependencies on demand before importing a bundled plugin. These installs are
+scoped to the plugin runtime install root, run with scripts disabled, do not
+write a package lock, and are guarded by an install-root lock so concurrent CLI
+or Gateway starts do not mutate the same `node_modules` tree at the same time.
 
 ### 8) Gateway service migrations and cleanup hints
 
@@ -571,3 +581,8 @@ if the workspace is not already under git.
 
 See [/concepts/agent-workspace](/concepts/agent-workspace) for a full guide to
 workspace structure and git backup (recommended private GitHub or GitLab).
+
+## Related
+
+- [Gateway troubleshooting](/gateway/troubleshooting)
+- [Gateway runbook](/gateway)

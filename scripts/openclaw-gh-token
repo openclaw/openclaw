@@ -1,0 +1,284 @@
+#!/usr/bin/env bash
+# Mint a GitHub App installation access token from mounted Docker secrets.
+#
+# Usage:
+#   openclaw-gh-token [--repo owner/repo] [--installation outta|personal] [--probe] [--export]
+#
+# Repo resolution order:
+#   1. --repo / -R
+#   2. GH_REPO
+#   3. GITHUB_REPOSITORY
+#   4. git remote origin
+#
+# When a repo is available and no installation alias is forced, the script
+# resolves the correct GitHub App installation with
+# GET /repos/{owner}/{repo}/installation and then creates a repo-scoped
+# installation token. A forced installation alias only uses explicit repo
+# context (--repo, GH_REPO, or GITHUB_REPOSITORY), so the current directory's git
+# remote cannot accidentally scope a personal token to an Outta repo. Without
+# repo context, it falls back to the primary Outta-Bounds/OpenClaw installation.
+set -euo pipefail
+
+SECRETS_DIR="${OPENCLAW_GH_APP_SECRETS_DIR:-/run/secrets}"
+EXPORT_FORMAT=0
+PROBE=0
+REPO=""
+INSTALLATION_ID=""
+INSTALLATION_ALIAS=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --export) EXPORT_FORMAT=1; shift ;;
+    --secrets-dir) SECRETS_DIR="$2"; shift 2 ;;
+    --repo|-R) REPO="$2"; shift 2 ;;
+    --repo=*) REPO="${1#--repo=}"; shift ;;
+    -R*) REPO="${1#-R}"; shift ;;
+    --installation|--install) INSTALLATION_ALIAS="$2"; shift 2 ;;
+    --installation=*|--install=*) INSTALLATION_ALIAS="${1#*=}"; shift ;;
+    --installation-id) INSTALLATION_ID="$2"; shift 2 ;;
+    --installation-id=*) INSTALLATION_ID="${1#--installation-id=}"; shift ;;
+    --probe) PROBE=1; shift ;;
+    -h|--help)
+      awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } NF == 0 { print; next } { exit }' "$0"
+      exit 0
+      ;;
+    *) echo "openclaw-gh-token: unknown arg: $1" >&2; exit 2 ;;
+  esac
+done
+
+PEM_FILE="${SECRETS_DIR}/github_app_private_key"
+APP_ID_FILE="${SECRETS_DIR}/github_app_id"
+
+for f in "$PEM_FILE" "$APP_ID_FILE"; do
+  [[ -r "$f" ]] || { echo "openclaw-gh-token: cannot read $f" >&2; exit 1; }
+done
+
+APP_ID="$(<"$APP_ID_FILE")"
+
+b64url() { base64 -w0 | tr -d '=' | tr '/+' '_-'; }
+
+read_secret_value() {
+  local name="$1"
+  local path="${SECRETS_DIR}/${name}"
+  local config_path="${OPENCLAW_CONFIG_DIR:-${HOME:-}/.openclaw}/secrets/${name}"
+
+  if [[ -r "$path" ]]; then
+    tr -d '[:space:]' < "$path"
+    return 0
+  fi
+  if [[ -r "$config_path" ]]; then
+    tr -d '[:space:]' < "$config_path"
+    return 0
+  fi
+  return 1
+}
+
+normalize_repo() {
+  python3 - "$1" <<'PY'
+import re
+import sys
+
+value = (sys.argv[1] if len(sys.argv) > 1 else "").strip()
+if not value:
+    sys.exit(0)
+
+value = re.sub(r"^[a-z]+://", "", value, flags=re.I)
+value = re.sub(r"^(?:[^@/]+@)?github\.com[:/]", "", value, flags=re.I)
+value = re.sub(r"\.git$", "", value, flags=re.I).strip("/")
+parts = [part for part in value.split("/") if part]
+if len(parts) < 2:
+    sys.exit(0)
+print(f"{parts[-2]}/{parts[-1]}")
+PY
+}
+
+resolve_repo() {
+  local include_git_remote="${1:-1}"
+  local candidate=""
+  for candidate in "$REPO" "${GH_REPO:-}" "${GITHUB_REPOSITORY:-}"; do
+    candidate="$(normalize_repo "$candidate")"
+    if [[ -n "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  if [[ "$include_git_remote" != "1" ]]; then
+    return 0
+  fi
+
+  if candidate="$(git config --get remote.origin.url 2>/dev/null)"; then
+    candidate="$(normalize_repo "$candidate")"
+    if [[ -n "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  fi
+}
+
+resolve_installation_alias() {
+  local alias="$1"
+  local normalized
+  normalized="$(printf '%s' "$alias" | tr '[:upper:]' '[:lower:]' | tr '_' '-')"
+
+  if [[ "$normalized" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$normalized"
+    return 0
+  fi
+
+  case "$normalized" in
+    primary|outta|outta-bounds|openclaw|agents)
+      if [[ -n "${OPENCLAW_GITHUB_APP_INSTALLATION_OUTTA_ID:-}" ]]; then
+        printf '%s\n' "$OPENCLAW_GITHUB_APP_INSTALLATION_OUTTA_ID"
+      elif read_secret_value github_app_installation_outta_id; then
+        :
+      elif read_secret_value github_app_installation_id; then
+        :
+      else
+        echo "openclaw-gh-token: missing Outta/OpenClaw installation id" >&2
+        return 1
+      fi
+      ;;
+    secondary|personal|sebbyyyywebbyyy)
+      if [[ -n "${OPENCLAW_GITHUB_APP_INSTALLATION_PERSONAL_ID:-}" ]]; then
+        printf '%s\n' "$OPENCLAW_GITHUB_APP_INSTALLATION_PERSONAL_ID"
+      elif read_secret_value github_app_installation_personal_id; then
+        :
+      else
+        echo "openclaw-gh-token: missing personal installation id" >&2
+        return 1
+      fi
+      ;;
+    *)
+      echo "openclaw-gh-token: unknown installation alias: $alias" >&2
+      return 1
+      ;;
+  esac
+}
+
+github_request() {
+  local method="$1"
+  local url="$2"
+  local body="${3:-}"
+  local resp http payload
+  local args=(
+    -sS
+    -X "$method"
+    -H "Accept: application/vnd.github+json"
+    -H "Authorization: Bearer $JWT"
+    -H "X-GitHub-Api-Version: 2022-11-28"
+    -w $'\n%{http_code}'
+  )
+  if [[ -n "$body" ]]; then
+    args+=(-H "Content-Type: application/json" -d "$body")
+  fi
+
+  resp="$(curl "${args[@]}" "$url" 2>&1)" \
+    || { echo "openclaw-gh-token: curl failed: $resp" >&2; exit 1; }
+
+  http="$(printf '%s\n' "$resp" | tail -n 1)"
+  payload="$(printf '%s\n' "$resp" | sed '$d')"
+  case "$http" in
+    2*) printf '%s' "$payload" ;;
+    *) echo "openclaw-gh-token: $method $url failed (HTTP $http): $payload" >&2; exit 1 ;;
+  esac
+}
+
+json_field() {
+  local field="$1"
+  python3 -c '
+import json
+import sys
+
+field = sys.argv[1]
+try:
+    data = json.load(sys.stdin)
+    value = data.get(field)
+    if value is None:
+        sys.exit(1)
+    print(value)
+except Exception:
+    sys.exit(1)
+' "$field"
+}
+
+NOW=$(date +%s)
+IAT=$((NOW - 60))
+EXP=$((NOW + 540))
+
+HEADER_B64=$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | b64url)
+PAYLOAD_B64=$(printf '{"iat":%d,"exp":%d,"iss":"%s"}' "$IAT" "$EXP" "$APP_ID" | b64url)
+SIG_B64=$(printf '%s.%s' "$HEADER_B64" "$PAYLOAD_B64" \
+  | openssl dgst -sha256 -binary -sign "$PEM_FILE" \
+  | b64url)
+JWT="${HEADER_B64}.${PAYLOAD_B64}.${SIG_B64}"
+
+if [[ -n "$INSTALLATION_ALIAS" ]]; then
+  REPO="$(resolve_repo 0 || true)"
+else
+  REPO="$(resolve_repo 1 || true)"
+fi
+if [[ -n "$INSTALLATION_ALIAS" ]]; then
+  INSTALLATION_ID="$(resolve_installation_alias "$INSTALLATION_ALIAS")" || exit 1
+elif [[ -n "$INSTALLATION_ID" ]]; then
+  :
+elif [[ -n "$REPO" ]]; then
+  INSTALLATION_RESP="$(github_request GET "https://api.github.com/repos/${REPO}/installation")"
+  INSTALLATION_ID="$(printf '%s' "$INSTALLATION_RESP" | json_field id)" \
+    || { echo "openclaw-gh-token: GitHub installation response did not include an id" >&2; exit 1; }
+elif INSTALLATION_ID="$(resolve_installation_alias outta)"; then
+  :
+else
+  echo "openclaw-gh-token: missing repo context and no primary installation id" >&2
+  exit 1
+fi
+
+TOKEN_BODY=""
+if [[ -n "$REPO" ]]; then
+  REPO_NAME="${REPO##*/}"
+  TOKEN_BODY="$(python3 - "$REPO_NAME" <<'PY'
+import json
+import sys
+
+print(json.dumps({"repositories": [sys.argv[1]]}))
+PY
+)"
+fi
+
+RESP="$(github_request POST "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens" "$TOKEN_BODY")"
+
+TOKEN=$(printf '%s' "$RESP" | python3 -c '
+import sys, json
+try:
+  d = json.load(sys.stdin)
+  if "token" not in d:
+    sys.stderr.write("openclaw-gh-token: GitHub response did not include a token: " + json.dumps(d) + "\n")
+    sys.exit(1)
+  print(d["token"])
+except Exception as e:
+  sys.stderr.write("openclaw-gh-token: failed to parse GitHub response: " + str(e) + "\n")
+  sys.exit(1)
+') || exit 1
+
+if [[ "$PROBE" -eq 1 ]]; then
+  if [[ -n "$REPO" ]]; then
+    PROBE_URL="https://api.github.com/repos/${REPO}"
+  else
+    PROBE_URL="https://api.github.com/installation/repositories?per_page=1"
+  fi
+  PROBE_OUT=$(curl -sS -o /dev/null -w '%{http_code}' \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Accept: application/vnd.github+json" \
+    -H "X-GitHub-Api-Version: 2022-11-28" \
+    "$PROBE_URL") || true
+  if [[ "$PROBE_OUT" != "200" ]]; then
+    echo "openclaw-gh-token: probe failed (HTTP $PROBE_OUT)" >&2
+    exit 1
+  fi
+fi
+
+if [[ "$EXPORT_FORMAT" -eq 1 ]]; then
+  printf 'export GH_TOKEN=%q\nexport GITHUB_TOKEN=%q\n' "$TOKEN" "$TOKEN"
+else
+  printf '%s\n' "$TOKEN"
+fi

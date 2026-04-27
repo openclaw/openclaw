@@ -120,6 +120,11 @@ function resolveRepo(args: string[]): string | null {
     return fromEnv;
   }
 
+  const fromGithubRepository = normalizeRepo(process.env.GITHUB_REPOSITORY);
+  if (fromGithubRepository) {
+    return fromGithubRepository;
+  }
+
   try {
     const remote = execFileSync("git", ["config", "--get", "remote.origin.url"], {
       encoding: "utf8",

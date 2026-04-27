@@ -51,7 +51,7 @@ The full stack starts automatically on reboot via `docker compose up -d --remove
 
 ### Routing
 
-`LINEAR_PDF_OCR_ROUTE_MAP` is set in both gateway and pdf-pipeline environments:
+`OPENCLAW_PDF_OCR_ROUTE_MAP` is set in both gateway and pdf-pipeline environments:
 
 ```
 {"*":{"hybrid":"docling-fast","hybrid_url":"http://pdf-hybrid:5002"}}

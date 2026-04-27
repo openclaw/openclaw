@@ -213,6 +213,30 @@ export async function applyInlineDirectiveOverrides(params: {
     };
   }
 
+  const directivePersistenceContext = {
+    directives,
+    effectiveModelDirective,
+    cfg,
+    agentDir,
+    sessionEntry,
+    sessionStore,
+    sessionKey,
+    storePath,
+    elevatedEnabled,
+    elevatedAllowed,
+    defaultProvider,
+    defaultModel,
+    aliasIndex,
+    allowedModelKeys: modelState.allowedModelKeys,
+    initialModelLabel,
+    formatModelSwitchEvent,
+    agentCfg,
+    messageProvider: ctx.Provider,
+    surface: ctx.Surface,
+    gatewayClientScopes: ctx.GatewayClientScopes,
+    senderIsOwner: command.senderIsOwner,
+  };
+
   if (
     isDirectiveOnly({
       directives,
@@ -248,37 +272,20 @@ export async function applyInlineDirectiveOverrides(params: {
       }
       const modelSelection = modelResolution.modelSelection;
       if (modelSelection) {
-        await (
+        const persisted = await (
           await loadDirectivePersist()
         ).persistInlineDirectives({
-          directives,
-          effectiveModelDirective,
-          cfg,
-          agentDir,
-          sessionEntry,
-          sessionStore,
-          sessionKey,
-          storePath,
-          elevatedEnabled,
-          elevatedAllowed,
-          defaultProvider,
-          defaultModel,
-          aliasIndex,
-          allowedModelKeys: modelState.allowedModelKeys,
+          ...directivePersistenceContext,
           provider,
           model,
-          initialModelLabel,
-          formatModelSwitchEvent,
-          agentCfg,
-          messageProvider: ctx.Provider,
-          surface: ctx.Surface,
-          gatewayClientScopes: ctx.GatewayClientScopes,
-          senderIsOwner: command.senderIsOwner,
           markLiveSwitchPending: true,
         });
         const label = `${modelSelection.provider}/${modelSelection.model}`;
         const labelWithAlias = modelSelection.alias ? `${modelSelection.alias} (${label})` : label;
         const parts = [
+          persisted.thinkingRemap
+            ? `Thinking level set to ${persisted.thinkingRemap.to} (${persisted.thinkingRemap.from} not supported for ${persisted.thinkingRemap.provider}/${persisted.thinkingRemap.model}).`
+            : undefined,
           modelSelection.isDefault
             ? `Model reset to default (${labelWithAlias}).`
             : `Model set to ${labelWithAlias}.`,
@@ -314,6 +321,7 @@ export async function applyInlineDirectiveOverrides(params: {
       currentVerboseLevel,
       currentReasoningLevel,
       currentElevatedLevel,
+      ctx,
       messageProvider: ctx.Provider,
       surface: ctx.Surface,
       gatewayClientScopes: ctx.GatewayClientScopes,
@@ -395,29 +403,9 @@ export async function applyInlineDirectiveOverrides(params: {
   const persisted = await (
     await loadDirectivePersist()
   ).persistInlineDirectives({
-    directives,
-    effectiveModelDirective,
-    cfg,
-    agentDir,
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    elevatedEnabled,
-    elevatedAllowed,
-    defaultProvider,
-    defaultModel,
-    aliasIndex,
-    allowedModelKeys: modelState.allowedModelKeys,
+    ...directivePersistenceContext,
     provider,
     model,
-    initialModelLabel,
-    formatModelSwitchEvent,
-    agentCfg,
-    messageProvider: ctx.Provider,
-    surface: ctx.Surface,
-    gatewayClientScopes: ctx.GatewayClientScopes,
-    senderIsOwner: command.senderIsOwner,
   });
   provider = persisted.provider;
   model = persisted.model;

@@ -4,10 +4,8 @@ read_when:
   - Pairing or reconnecting the Android node
   - Debugging Android gateway discovery or auth
   - Verifying chat history parity across clients
-title: "Android App"
+title: "Android app"
 ---
-
-# Android App (Node)
 
 > **Note:** The Android app has not been publicly released yet. The source code is available in the [OpenClaw repository](https://github.com/openclaw/openclaw) under `apps/android`. You can build it yourself using Java 17 and the Android SDK (`./gradlew :app:assemblePlayDebug`). See [apps/android/README.md](https://github.com/openclaw/openclaw/blob/main/apps/android/README.md) for build instructions.
 
@@ -118,6 +116,25 @@ openclaw devices reject <requestId>
 ```
 
 Pairing details: [Pairing](/channels/pairing).
+
+Optional: if the Android node always connects from a tightly controlled subnet,
+you can opt in to first-time node auto-approval with explicit CIDRs or exact IPs:
+
+```json5
+{
+  gateway: {
+    nodes: {
+      pairing: {
+        autoApproveCidrs: ["192.168.1.0/24"],
+      },
+    },
+  },
+}
+```
+
+This is disabled by default. It applies only to fresh `role: node` pairing with
+no requested scopes. Operator/browser pairing and any role, scope, metadata, or
+public-key change still require manual approval.
 
 ### 5) Verify the node is connected
 
@@ -242,3 +259,9 @@ Example configuration:
 <Note>
 Notification forwarding requires the Android Notification Listener permission. The app prompts for this during setup.
 </Note>
+
+## Related
+
+- [iOS app](/platforms/ios)
+- [Nodes](/nodes)
+- [Android node troubleshooting](/nodes/troubleshooting)

@@ -4,10 +4,8 @@ read_when:
   - You want to understand `openclaw.ai/install.sh`
   - You want to automate installs (CI / headless)
   - You want to install from a GitHub checkout
-title: "Installer Internals"
+title: "Installer internals"
 ---
-
-# Installer internals
 
 OpenClaw ships three installer scripts, served from `openclaw.ai`.
 
@@ -441,3 +439,9 @@ Use non-interactive flags/env vars for predictable runs.
     Usually a PATH issue. See [Node.js troubleshooting](/install/node#troubleshooting).
   </Accordion>
 </AccordionGroup>
+
+## Related
+
+- [Install overview](/install)
+- [Updating](/install/updating)
+- [Uninstall](/install/uninstall)
