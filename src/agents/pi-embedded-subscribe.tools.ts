@@ -141,20 +141,17 @@ export function sanitizeToolResult(result: unknown): unknown {
     return result;
   }
   const record = result as Record<string, unknown>;
-  const out: Record<string, unknown> = { ...record };
-  const content = Array.isArray(record.content) ? record.content : null;
-  if (content) {
-    out.content = content.map((item) => {
+  // Strip image data first so the deep redaction pass doesn't waste work
+  // scanning base64 payloads (and so we capture the original byte counts).
+  const preCleaned: Record<string, unknown> = { ...record };
+  const originalContent = Array.isArray(record.content) ? record.content : null;
+  if (originalContent) {
+    preCleaned.content = originalContent.map((item) => {
       if (!item || typeof item !== "object") {
         return item;
       }
       const entry = item as Record<string, unknown>;
-      const type = readStringValue(entry.type);
-      if (type === "text" && typeof entry.text === "string") {
-        const redacted = redactToolPayloadText(entry.text);
-        return Object.assign({}, entry, { text: truncateToolText(redacted) });
-      }
-      if (type === "image") {
+      if (readStringValue(entry.type) === "image") {
         const data = readStringValue(entry.data);
         const bytes = data ? data.length : undefined;
         const cleaned = { ...entry };
@@ -164,8 +161,22 @@ export function sanitizeToolResult(result: unknown): unknown {
       return entry;
     });
   }
-  if (record.details !== undefined) {
-    out.details = redactStringsDeep(record.details);
+  // Deep-redact the entire result so any top-level or nested string is
+  // protected, not just `details` and text content blocks.
+  const baseline = redactStringsDeep(preCleaned) as Record<string, unknown>;
+  const out: Record<string, unknown> = { ...baseline };
+  const content = Array.isArray(baseline.content) ? baseline.content : null;
+  if (content) {
+    out.content = content.map((item) => {
+      if (!item || typeof item !== "object") {
+        return item;
+      }
+      const entry = item as Record<string, unknown>;
+      if (readStringValue(entry.type) === "text" && typeof entry.text === "string") {
+        return Object.assign({}, entry, { text: truncateToolText(entry.text) });
+      }
+      return entry;
+    });
   }
   return out;
 }

@@ -114,6 +114,26 @@ describe("sanitizeToolResult", () => {
     expect(sanitized.details.cwd).toBe("/tmp/work");
   });
 
+  it("redacts secrets at the top level outside content/details", () => {
+    const result = {
+      output: "OPENROUTER_API_KEY=sk-or-v1-abcdef0123456789",
+      metadata: {
+        token: "ghp_abcdefghij1234567890ABCDEF",
+        nested: { auth: "Bearer abcdef0123456789QWERTY=" },
+      },
+      summary: "ok",
+    };
+    const sanitized = sanitizeToolResult(result) as {
+      output: string;
+      metadata: { token: string; nested: { auth: string } };
+      summary: string;
+    };
+    expect(sanitized.output).not.toContain("sk-or-v1-abcdef0123456789");
+    expect(sanitized.metadata.token).not.toContain("ghp_abcdefghij1234567890ABCDEF");
+    expect(sanitized.metadata.nested.auth).not.toContain("abcdef0123456789QWERTY=");
+    expect(sanitized.summary).toBe("ok");
+  });
+
   it("redacts a details-only result with no content array", () => {
     const result = {
       details: {
