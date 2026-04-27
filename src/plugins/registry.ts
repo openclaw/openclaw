@@ -1416,21 +1416,22 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     const namespace = normalizeHostHookString(extension.namespace);
     const description = normalizeHostHookString(extension.description);
     const project = extension.project;
-    if (
-      !namespace ||
-      !description ||
-      (project !== undefined &&
-        (typeof project !== "function" || project.constructor?.name === "AsyncFunction")) ||
-      (extension.cleanup !== undefined && typeof extension.cleanup !== "function")
-    ) {
+    let invalidMessage: string | undefined;
+    if (!namespace || !description) {
+      invalidMessage = "session extension registration requires namespace and description";
+    } else if (project !== undefined && typeof project !== "function") {
+      invalidMessage = "session extension projector must be a function";
+    } else if (project?.constructor?.name === "AsyncFunction") {
+      invalidMessage = "session extension projector must be synchronous";
+    } else if (extension.cleanup !== undefined && typeof extension.cleanup !== "function") {
+      invalidMessage = "session extension cleanup must be a function";
+    }
+    if (invalidMessage) {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
         source: record.source,
-        message:
-          project?.constructor?.name === "AsyncFunction"
-            ? "session extension projector must be synchronous"
-            : "session extension registration requires namespace and description",
+        message: invalidMessage,
       });
       return;
     }

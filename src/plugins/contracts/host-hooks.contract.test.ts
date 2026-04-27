@@ -430,6 +430,44 @@ describe("host-hook fixture plugin contract", () => {
     );
   });
 
+  it("reports specific diagnostics for malformed session extension callbacks", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "bad-session-extension-fixture",
+        name: "Bad Session Extension Fixture",
+      }),
+      register(api) {
+        api.registerSessionExtension({
+          namespace: "projector",
+          description: "Bad projector",
+          project: "not-a-function" as never,
+        });
+        api.registerSessionExtension({
+          namespace: "cleanup",
+          description: "Bad cleanup",
+          cleanup: "not-a-function" as never,
+        });
+      },
+    });
+
+    expect(registry.registry.sessionExtensions ?? []).toHaveLength(0);
+    expect(registry.registry.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: "bad-session-extension-fixture",
+          message: "session extension projector must be a function",
+        }),
+        expect.objectContaining({
+          pluginId: "bad-session-extension-fixture",
+          message: "session extension cleanup must be a function",
+        }),
+      ]),
+    );
+  });
+
   it("defensively ignores promise-like session projections from untyped plugins", async () => {
     const { config, registry } = createPluginRegistryFixture();
     registerTestPlugin({
@@ -709,6 +747,41 @@ describe("host-hook fixture plugin contract", () => {
     });
 
     expect(queuedContext).toEqual({ appendContext: "approval workflow resumed" });
+  });
+
+  it("rejects malformed next-turn injection input before persisting records", async () => {
+    await expect(
+      enqueuePluginNextTurnInjection({
+        pluginId: "approval-fixture",
+        injection: {
+          sessionKey: "agent:main:main",
+          text: "invalid placement",
+          placement: "middle_context",
+        } as never,
+      }),
+    ).resolves.toEqual({ enqueued: false, id: "", sessionKey: "agent:main:main" });
+
+    await expect(
+      enqueuePluginNextTurnInjection({
+        pluginId: "approval-fixture",
+        injection: {
+          sessionKey: "agent:main:main",
+          text: "invalid ttl",
+          ttlMs: Number.POSITIVE_INFINITY,
+        },
+      }),
+    ).resolves.toEqual({ enqueued: false, id: "", sessionKey: "agent:main:main" });
+
+    await expect(
+      enqueuePluginNextTurnInjection({
+        pluginId: "approval-fixture",
+        injection: {
+          sessionKey: "agent:main:main",
+          text: "negative ttl",
+          ttlMs: -1,
+        },
+      }),
+    ).resolves.toEqual({ enqueued: false, id: "", sessionKey: "agent:main:main" });
   });
 
   it("reports duplicate next-turn injections as not newly enqueued", async () => {

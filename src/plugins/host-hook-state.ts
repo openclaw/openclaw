@@ -50,6 +50,12 @@ function isExpired(entry: Pick<PluginNextTurnInjectionRecord, "createdAt" | "ttl
   return typeof entry.ttlMs === "number" && entry.ttlMs >= 0 && now - entry.createdAt > entry.ttlMs;
 }
 
+function isPluginNextTurnInjectionPlacement(
+  value: unknown,
+): value is PluginNextTurnInjectionRecord["placement"] {
+  return value === "prepend_context" || value === "append_context";
+}
+
 function findStoreKeysIgnoreCase(store: Record<string, unknown>, targetKey: string): string[] {
   const lowered = normalizeLowercaseStringOrEmpty(targetKey);
   const matches: string[] = [];
@@ -198,8 +204,14 @@ export async function enqueuePluginNextTurnInjection(params: {
   injection: PluginNextTurnInjection;
   now?: number;
 }): Promise<PluginNextTurnInjectionEnqueueResult> {
+  if (typeof params.injection.sessionKey !== "string") {
+    return { enqueued: false, id: "", sessionKey: "" };
+  }
   const sessionKey = params.injection.sessionKey.trim();
   if (!sessionKey) {
+    return { enqueued: false, id: "", sessionKey };
+  }
+  if (typeof params.injection.text !== "string") {
     return { enqueued: false, id: "", sessionKey };
   }
   const text = params.injection.text.trim();
@@ -210,6 +222,18 @@ export async function enqueuePluginNextTurnInjection(params: {
     return { enqueued: false, id: "", sessionKey };
   }
   if (params.injection.metadata !== undefined && !isPluginJsonValue(params.injection.metadata)) {
+    return { enqueued: false, id: "", sessionKey };
+  }
+  if (
+    params.injection.placement !== undefined &&
+    !isPluginNextTurnInjectionPlacement(params.injection.placement)
+  ) {
+    return { enqueued: false, id: "", sessionKey };
+  }
+  if (
+    params.injection.ttlMs !== undefined &&
+    (!Number.isFinite(params.injection.ttlMs) || params.injection.ttlMs < 0)
+  ) {
     return { enqueued: false, id: "", sessionKey };
   }
   const loaded = loadPluginHostHookSessionEntry(sessionKey);
