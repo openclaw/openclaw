@@ -1,0 +1,32 @@
+{
+  "id": "telnyx-embeddings",
+  "enabledByDefault": true,
+  "providers": ["telnyx"],
+  "providerAuthEnvVars": {
+    "telnyx": ["TELNYX_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "telnyx",
+      "method": "api-key",
+      "choiceId": "telnyx-api-key",
+      "choiceLabel": "Telnyx API Key",
+      "assistantPriority": -50,
+      "groupId": "telnyx",
+      "groupLabel": "Telnyx",
+      "groupHint": "Telnyx AI API key",
+      "optionKey": "telnyxApiKey",
+      "cliFlag": "--telnyx-api-key",
+      "cliOption": "--telnyx-api-key <key>",
+      "cliDescription": "Telnyx API Key"
+    }
+  ],
+  "contracts": {
+    "memoryEmbeddingProviders": ["telnyx"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
