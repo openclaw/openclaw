@@ -78,14 +78,19 @@ function buildManifestSuppressionError(params: {
 }
 
 function normalizeBaseUrlHost(baseUrl: string | null | undefined): string {
-  if (!baseUrl?.trim()) {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
     return "";
   }
   try {
-    return new URL(baseUrl).hostname.toLowerCase();
+    return normalizeSuppressionHost(new URL(trimmed).hostname);
   } catch {
     return "";
   }
+}
+
+function normalizeSuppressionHost(host: string): string {
+  return normalizeLowercaseStringOrEmpty(host).replace(/\.+$/, "");
 }
 
 function resolveConfiguredProviderValue(params: {
@@ -133,7 +138,7 @@ function manifestSuppressionMatchesConditions(params: {
     if (!baseUrlHost) {
       return false;
     }
-    const allowedHosts = new Set(when.baseUrlHosts.map(normalizeLowercaseStringOrEmpty));
+    const allowedHosts = new Set(when.baseUrlHosts.map(normalizeSuppressionHost));
     if (!allowedHosts.has(baseUrlHost)) {
       return false;
     }

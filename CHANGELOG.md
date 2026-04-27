@@ -66,11 +66,9 @@ Docs: https://docs.openclaw.ai
 - Agents/failover: classify CJK provider transport, quota, billing, auth, and overload error text so Chinese-language provider failures trigger fallback and user-facing transport copy instead of surfacing as unclassified raw errors. (#56242) Thanks @tomcatzh.
 - Agents/failover: seed non-claude-cli fallback prompts with Claude Code session context when a claude-cli attempt fails, so fallback models do not restart cold after billing or quota failover. (#72069) Thanks @stainlu.
 - Agents/CLI runner: transfer bundle-MCP tempDir cleanup from the per-turn runner finally to the Claude live-session lifecycle, so persistent Claude CLI sessions keep their `--mcp-config` directory until the live subprocess closes. Fixes #73244. Thanks @edwin-rivera-dev.
-
-### Fixes
-
 - Gateway/nodes: allow Windows companion nodes to use safe declared commands such as canvas, camera list, location, device info, and screen snapshot by default while keeping dangerous media commands opt-in. (#71884) Thanks @shanselman.
 - Agents/cron: clarify agent-tool and CLI cron timezone guidance so supplied `tz` values use local wall-clock cron fields and omitted cron `tz` falls back to the Gateway host local timezone. Fixes #53669; carries forward #46177. (#73372) Thanks @chen-zhang-cs-code and @maranello-o.
+- Providers/Qwen: allow explicitly configured `qwen/qwen3.6-plus` to resolve on Qwen Coding Plan endpoints while keeping the built-in catalog from advertising it there. Fixes #63654; carries forward #63987. Thanks @jepson-liu.
 
 ## 2026.4.27
 
