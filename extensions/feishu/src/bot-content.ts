@@ -265,7 +265,7 @@ export function checkBotMentioned(event: FeishuMessageLike, botOpenId?: string):
 export function normalizeMentions(
   text: string,
   mentions?: FeishuMention[],
-  botStripId?: string,
+  _botStripId?: string, // eslint-disable-line @typescript-eslint/no-unused-vars
 ): string {
   if (!mentions || mentions.length === 0) {
     return text;
@@ -275,12 +275,12 @@ export function normalizeMentions(
   let result = text;
   for (const mention of mentions) {
     const mentionId = mention.id.open_id;
-    const replacement =
-      botStripId && mentionId === botStripId
-        ? ""
-        : mentionId
-          ? `<at user_id="${mentionId}">${escapeName(mention.name)}</at>`
-          : `@${mention.name}`;
+    // Preserve ALL <at> tags including the bot's own mention.
+    // The model needs to see the complete @ context to correctly interpret
+    // who was mentioned and decide whether to respond.
+    const replacement = mentionId
+      ? `<at user_id="${mentionId}">${escapeName(mention.name)}</at>`
+      : `@${mention.name}`;
     result = result.replace(new RegExp(escaped(mention.key), "g"), () => replacement).trim();
   }
   return result;
