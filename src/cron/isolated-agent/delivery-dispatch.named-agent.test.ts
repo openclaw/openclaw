@@ -79,6 +79,15 @@ describe("matchesMessagingToolDeliveryTarget", () => {
     ).toBe(false);
   });
 
+  it("matches channel formatted current target ids for threaded delivery", () => {
+    expect(
+      matchesMessagingToolDeliveryTarget(
+        { provider: "topicchat", to: "room#42", threadId: "42" },
+        { channel: "topicchat", to: "room", threadId: 42 },
+      ),
+    ).toBe(true);
+  });
+
   it("matches when provider is 'message' (generic)", () => {
     expect(
       matchesMessagingToolDeliveryTarget(

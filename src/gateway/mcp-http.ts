@@ -97,7 +97,13 @@ function recordMcpMessagingToolSend(params: {
     return;
   }
   const action = readStringField(params.args, "action") ?? "send";
-  if (action !== "send" && action !== "thread-reply") {
+  if (
+    action !== "send" &&
+    action !== "thread-reply" &&
+    action !== "reply" &&
+    action !== "sendAttachment" &&
+    action !== "upload-file"
+  ) {
     return;
   }
   const provider =

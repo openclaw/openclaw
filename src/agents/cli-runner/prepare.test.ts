@@ -560,6 +560,108 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
+  it("resets bundled MCP CLI sessions when owner scope changes", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      setCliRunnerPrepareTestDeps({
+        getActiveMcpLoopbackRuntime: vi.fn(() => ({
+          port: 3210,
+          ownerToken: "owner-token",
+          nonOwnerToken: "agent-token",
+        })),
+        ensureMcpLoopbackServer: vi.fn(async () => undefined),
+        createMcpLoopbackServerConfig: vi.fn(() => ({
+          mcpServers: {
+            openclaw: {
+              url: "http://127.0.0.1:3210/mcp",
+            },
+          },
+        })),
+      });
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "test-cli",
+            config: {
+              command: "test-cli",
+              args: ["--print"],
+              systemPromptArg: "--system-prompt",
+              systemPromptWhen: "first",
+              sessionMode: "existing",
+              output: "text",
+              input: "arg",
+            },
+            bundleMcp: true,
+            bundleMcpMode: "claude-config-file",
+          },
+        ],
+      });
+
+      const ownerContext = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-owner-mcp",
+        senderIsOwner: true,
+        config: {
+          agents: {
+            defaults: {
+              cliBackends: {
+                "test-cli": {
+                  command: "test-cli",
+                  bundleMcp: true,
+                  bundleMcpMode: "claude-config-file",
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+      });
+      const nonOwnerContext = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-non-owner-mcp",
+        senderIsOwner: false,
+        cliSessionBinding: {
+          sessionId: "cli-session",
+          mcpRoutingHash: ownerContext.mcpRoutingHash,
+        },
+        config: {
+          agents: {
+            defaults: {
+              cliBackends: {
+                "test-cli": {
+                  command: "test-cli",
+                  bundleMcp: true,
+                  bundleMcpMode: "claude-config-file",
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+      });
+
+      expect(ownerContext.mcpRoutingHash).toBeTruthy();
+      expect(nonOwnerContext.mcpRoutingHash).toBeTruthy();
+      expect(nonOwnerContext.mcpRoutingHash).not.toBe(ownerContext.mcpRoutingHash);
+      expect(nonOwnerContext.reusableCliSession).toEqual({ invalidatedReason: "mcp" });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("applies direct-run prepend system context helpers on the CLI path", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {

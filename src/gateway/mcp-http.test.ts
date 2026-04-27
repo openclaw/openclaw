@@ -519,6 +519,55 @@ describe("mcp loopback server", () => {
     });
   });
 
+  it("records attachment-style message tool sends for CLI duplicate suppression", async () => {
+    resolveGatewayScopedToolsMock.mockReturnValue({
+      agentId: "main",
+      tools: [
+        {
+          name: "message",
+          description: "send a message",
+          parameters: { type: "object", properties: {} },
+          execute: vi.fn(async () => ({
+            content: [{ type: "text", text: "uploaded" }],
+          })),
+        },
+      ],
+    });
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime ? resolveMcpLoopbackBearerToken(runtime, false) : undefined,
+      headers: {
+        "content-type": "application/json",
+        "x-session-key": "agent:main:telegram:chat123",
+        "x-openclaw-message-channel": "telegram",
+        "x-openclaw-message-to": "chat123",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "message",
+          arguments: {
+            action: "upload-file",
+            target: "chat123",
+            path: "file:///tmp/out.png",
+          },
+        },
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(drainCliMessagingToolSends("agent:main:telegram:chat123")).toEqual({
+      targets: [{ tool: "message", provider: "telegram", to: "chat123" }],
+      texts: [],
+      mediaUrls: ["file:///tmp/out.png"],
+    });
+  });
+
   it("forwards the request abort signal to loopback tool execution", async () => {
     const execute = vi.fn(async () => ({
       content: [{ type: "text", text: "EXECUTED" }],

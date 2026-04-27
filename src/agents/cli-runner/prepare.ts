@@ -174,6 +174,7 @@ export async function prepareCliRunContext(
           messageTo: params.messageTo ?? "",
           threadId: params.messageThreadId == null ? "" : String(params.messageThreadId),
           currentChannelId: params.currentChannelId ?? params.messageTo ?? "",
+          senderIsOwner: params.senderIsOwner === true,
         }),
       )
     : undefined;

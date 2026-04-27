@@ -4,6 +4,13 @@ import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 const CORE_MESSAGING_TOOLS = new Set(["sessions_send", "message"]);
+const MESSAGE_TOOL_SEND_ACTIONS = new Set([
+  "send",
+  "thread-reply",
+  "reply",
+  "sendAttachment",
+  "upload-file",
+]);
 
 // Provider docking: any plugin with `actions` opts into messaging tool handling.
 export function isMessagingTool(toolName: string): boolean {
@@ -23,7 +30,7 @@ export function isMessagingToolSendAction(
     return true;
   }
   if (toolName === "message") {
-    return action === "send" || action === "thread-reply";
+    return MESSAGE_TOOL_SEND_ACTIONS.has(action);
   }
   const providerId = normalizeChannelId(toolName);
   if (!providerId) {

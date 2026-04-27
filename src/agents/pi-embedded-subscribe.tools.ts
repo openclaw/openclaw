@@ -518,7 +518,13 @@ export function extractMessagingToolSend(
   const action = normalizeOptionalString(args.action) ?? "";
   const accountId = normalizeOptionalString(args.accountId);
   if (toolName === "message") {
-    if (action !== "send" && action !== "thread-reply") {
+    if (
+      action !== "send" &&
+      action !== "thread-reply" &&
+      action !== "reply" &&
+      action !== "sendAttachment" &&
+      action !== "upload-file"
+    ) {
       return undefined;
     }
     const toRaw = resolveMessageToolTarget(args);

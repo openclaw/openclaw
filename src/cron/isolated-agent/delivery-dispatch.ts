@@ -37,6 +37,21 @@ function normalizeDeliveryTarget(channel: string, to: string): string {
   return normalizeTargetForProvider(channel, toTrimmed) ?? toTrimmed;
 }
 
+function targetLooksLikeThreadedDelivery(params: {
+  target: string;
+  base: string;
+  threadId: string;
+}): boolean {
+  if (!params.target.startsWith(params.base)) {
+    return false;
+  }
+  const suffix = params.target.slice(params.base.length);
+  return (
+    suffix.includes(params.threadId) &&
+    (/^[:#]/.test(suffix) || params.base.endsWith(params.threadId))
+  );
+}
+
 type NormalizedSilentReplyText = {
   text: string | undefined;
   strippedTrailingSilentToken: boolean;
@@ -96,7 +111,14 @@ export function matchesMessagingToolDeliveryTarget(
   const normalizedTargetTo = normalizeDeliveryTarget(channel, target.to.replace(/:topic:\d+$/, ""));
   const normalizedDeliveryTo = normalizeDeliveryTarget(channel, delivery.to);
   if (normalizedTargetTo !== normalizedDeliveryTo) {
-    return false;
+    return Boolean(
+      deliveryThreadId &&
+      targetLooksLikeThreadedDelivery({
+        target: normalizedTargetTo,
+        base: normalizedDeliveryTo,
+        threadId: deliveryThreadId,
+      }),
+    );
   }
   return (
     !deliveryThreadId || Boolean(targetThreadId) || target.to.includes(String(delivery.threadId))
