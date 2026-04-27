@@ -16,6 +16,23 @@ const LEGACY_INTERNAL_EVENT_SEPARATOR = "\n\n---\n\n";
 const LEGACY_UNTRUSTED_RESULT_BEGIN = "<<<BEGIN_UNTRUSTED_CHILD_RESULT>>>";
 const LEGACY_UNTRUSTED_RESULT_END = "<<<END_UNTRUSTED_CHILD_RESULT>>>";
 
+// Headers used by `buildRuntimeContextMessageContent` in
+// src/agents/pi-embedded-runner/run/runtime-context-prompt.ts. The Pi runtime
+// converts the resulting custom-message into a user-role LLM turn, so any
+// model that ignores the privacy notice can echo these lines verbatim into
+// its visible reply. Strip them on outbound the same way we strip the
+// legacy `OpenClaw runtime context (internal):` header.
+const RUNTIME_CONTEXT_NEXT_TURN_PREFACE_HEADER =
+  "OpenClaw runtime context for the immediately preceding user message.";
+const RUNTIME_CONTEXT_RUNTIME_EVENT_PREFACE_HEADER = "OpenClaw runtime event.";
+const RUNTIME_CONTEXT_PREFACE_NOTICE_LINE =
+  "This context is runtime-generated, not user-authored. Keep internal details private.";
+
+const RUNTIME_CONTEXT_PREFACE_HEADERS: readonly string[] = [
+  RUNTIME_CONTEXT_NEXT_TURN_PREFACE_HEADER,
+  RUNTIME_CONTEXT_RUNTIME_EVENT_PREFACE_HEADER,
+];
+
 export function escapeInternalRuntimeContextDelimiters(value: string): string {
   return value
     .replaceAll(INTERNAL_RUNTIME_CONTEXT_BEGIN, ESCAPED_INTERNAL_RUNTIME_CONTEXT_BEGIN)
@@ -154,6 +171,85 @@ function stripLegacyInternalRuntimeContext(text: string): string {
   }
 }
 
+// Returns the index of the first line-start occurrence of `header` at or
+// after `from`, where "line-start" means either the very beginning of the
+// string or immediately after a newline. Returns -1 if no such occurrence
+// exists.
+function findLineStartIndex(text: string, header: string, from: number): number {
+  let cursor = Math.max(0, from);
+  for (;;) {
+    const idx = text.indexOf(header, cursor);
+    if (idx === -1) {
+      return -1;
+    }
+    if (idx === 0 || text.charCodeAt(idx - 1) === 0x0a /* \n */) {
+      return idx;
+    }
+    cursor = idx + 1;
+  }
+}
+
+// Returns the byte offset just past the privacy-notice line that follows
+// `headerIdx`, or null if the header isn't immediately followed by a newline
+// + the exact privacy-notice line. Tolerates an optional `\r` before the
+// newline that joins header → notice.
+function findRuntimeContextPrefaceEnd(text: string, headerIdx: number, header: string): number | null {
+  let cursor = headerIdx + header.length;
+  if (text.charCodeAt(cursor) === 0x0d /* \r */) {
+    cursor += 1;
+  }
+  if (text.charCodeAt(cursor) !== 0x0a /* \n */) {
+    return null;
+  }
+  cursor += 1;
+  if (text.slice(cursor, cursor + RUNTIME_CONTEXT_PREFACE_NOTICE_LINE.length) !==
+      RUNTIME_CONTEXT_PREFACE_NOTICE_LINE) {
+    return null;
+  }
+  return cursor + RUNTIME_CONTEXT_PREFACE_NOTICE_LINE.length;
+}
+
+function hasRuntimeContextPreface(text: string): boolean {
+  for (const header of RUNTIME_CONTEXT_PREFACE_HEADERS) {
+    let cursor = 0;
+    for (;;) {
+      const headerIdx = findLineStartIndex(text, header, cursor);
+      if (headerIdx === -1) {
+        break;
+      }
+      if (findRuntimeContextPrefaceEnd(text, headerIdx, header) !== null) {
+        return true;
+      }
+      cursor = headerIdx + header.length;
+    }
+  }
+  return false;
+}
+
+function stripRuntimeContextPreface(text: string): string {
+  let next = text;
+  for (const header of RUNTIME_CONTEXT_PREFACE_HEADERS) {
+    let searchFrom = 0;
+    for (;;) {
+      const headerIdx = findLineStartIndex(next, header, searchFrom);
+      if (headerIdx === -1) {
+        break;
+      }
+      const blockEnd = findRuntimeContextPrefaceEnd(next, headerIdx, header);
+      if (blockEnd === null) {
+        searchFrom = headerIdx + header.length;
+        continue;
+      }
+      const before = next.slice(0, headerIdx).replace(/[ \t]*\r?\n+$/g, "");
+      const after = next.slice(blockEnd).replace(/^\r?\n+[ \t]*/g, "");
+      const joiner = before && after ? "\n\n" : "";
+      next = `${before}${joiner}${after}`;
+      searchFrom = before.length;
+    }
+  }
+  return next;
+}
+
 export function stripInternalRuntimeContext(text: string): string {
   if (!text) {
     return text;
@@ -163,7 +259,8 @@ export function stripInternalRuntimeContext(text: string): string {
     INTERNAL_RUNTIME_CONTEXT_BEGIN,
     INTERNAL_RUNTIME_CONTEXT_END,
   );
-  return stripLegacyInternalRuntimeContext(withoutDelimitedBlocks);
+  const withoutLegacyHeader = stripLegacyInternalRuntimeContext(withoutDelimitedBlocks);
+  return stripRuntimeContextPreface(withoutLegacyHeader);
 }
 
 export function hasInternalRuntimeContext(text: string): boolean {
@@ -172,6 +269,7 @@ export function hasInternalRuntimeContext(text: string): boolean {
   }
   return (
     findDelimitedTokenIndex(text, INTERNAL_RUNTIME_CONTEXT_BEGIN, 0) !== -1 ||
-    text.includes(LEGACY_INTERNAL_CONTEXT_HEADER)
+    text.includes(LEGACY_INTERNAL_CONTEXT_HEADER) ||
+    hasRuntimeContextPreface(text)
   );
 }
