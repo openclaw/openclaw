@@ -333,6 +333,7 @@ async function writeRunSummary(logDir, summary) {
         process.env.GITHUB_SERVER_URL && process.env.GITHUB_REPOSITORY && process.env.GITHUB_RUN_ID
           ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`
           : undefined,
+      selectedSha: process.env.OPENCLAW_DOCKER_E2E_SELECTED_SHA || undefined,
       sha: process.env.GITHUB_SHA || undefined,
       workflow: process.env.GITHUB_WORKFLOW || undefined,
     },
@@ -344,7 +345,13 @@ async function writeRunSummary(logDir, summary) {
 }
 
 async function writeFailureIndex(logDir, summary) {
-  const ref = summary.github?.sha || summary.github?.ref || process.env.GITHUB_SHA || "HEAD";
+  const ref =
+    summary.github?.selectedSha ||
+    process.env.OPENCLAW_DOCKER_E2E_SELECTED_SHA ||
+    summary.github?.sha ||
+    summary.github?.ref ||
+    process.env.GITHUB_SHA ||
+    "HEAD";
   const failures = Array.isArray(summary.failures)
     ? summary.failures
     : (summary.lanes ?? []).filter((lane) => lane.status !== 0);

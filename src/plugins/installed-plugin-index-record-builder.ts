@@ -43,6 +43,7 @@ function hasRuntimeContractSurface(record: PluginManifestRecord): boolean {
     record.contracts?.webContentExtractors?.length ||
     record.contracts?.webFetchProviders?.length ||
     record.contracts?.webSearchProviders?.length ||
+    record.contracts?.migrationProviders?.length ||
     record.contracts?.memoryEmbeddingProviders?.length ||
     hasKind(record.kind, "memory"),
   );

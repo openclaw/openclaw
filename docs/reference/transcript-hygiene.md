@@ -118,6 +118,13 @@ external end-user instructions.
 - Missing OpenAI Responses-family tool outputs are synthesized as `aborted` to match Codex replay normalization.
 - No thought signature stripping.
 
+**OpenAI-compatible Gemma 4**
+
+- Historical assistant thinking/reasoning blocks are stripped before replay so local
+  OpenAI-compatible Gemma 4 servers do not receive prior-turn reasoning content.
+- Current same-turn tool-call continuations keep the assistant reasoning block
+  attached to the tool call until the tool result has been replayed.
+
 **Google (Generative AI / Gemini CLI / Antigravity)**
 
 - Tool call id sanitization: strict alphanumeric.

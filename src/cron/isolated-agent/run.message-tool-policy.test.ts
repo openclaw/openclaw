@@ -354,7 +354,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       error: undefined,
     });
 
-    await runCronIsolatedAgentTurn({
+    const result = await runCronIsolatedAgentTurn({
       ...makeParams(),
       job: {
         id: "message-tool-policy",
@@ -374,6 +374,18 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       messageThreadId: 42,
       currentChannelId: "room#42",
     });
+    expect(result.delivery).toEqual(
+      expect.objectContaining({
+        intended: { channel: "topicchat", to: "room#42", threadId: 42, source: "explicit" },
+        resolved: {
+          ok: true,
+          channel: "topicchat",
+          to: "room#42",
+          threadId: 42,
+          source: "explicit",
+        },
+      }),
+    );
   });
 
   it('does not resolve implicit "last" context for bare delivery.mode none', async () => {
@@ -731,6 +743,15 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     );
     expect(result.delivered).toBe(false);
     expect(result.deliveryAttempted).toBe(false);
+    expect(result.delivery).toEqual(
+      expect.objectContaining({
+        intended: { channel: "last", to: null, source: "last" },
+        messageToolSentTo: [{ channel: "messagechat", to: "123" }],
+        fallbackUsed: false,
+        delivered: false,
+      }),
+    );
+    expect(result.delivery).not.toHaveProperty("resolved");
   });
 });
 

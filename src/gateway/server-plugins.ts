@@ -3,9 +3,9 @@ import { normalizeModelRef, parseModelRef } from "../agents/model-selection.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { BundledRuntimeDepsInstallParams } from "../plugins/bundled-runtime-deps.js";
-import { resolveGatewayStartupPluginIds } from "../plugins/channel-plugin-ids.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
+import { loadPluginLookUpTable, type PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -447,6 +447,7 @@ export function loadGatewayPlugins(params: {
   coreGatewayMethodNames?: readonly string[];
   baseMethods: string[];
   pluginIds?: string[];
+  pluginLookUpTable?: PluginLookUpTable;
   preferSetupRuntimeForChannelPlugins?: boolean;
   suppressPluginInfoLogs?: boolean;
   bundledRuntimeDepsInstaller?: (params: BundledRuntimeDepsInstallParams) => void;
@@ -456,6 +457,9 @@ export function loadGatewayPlugins(params: {
       ? applyPluginAutoEnable({
           config: params.activationSourceConfig,
           env: process.env,
+          ...(params.pluginLookUpTable?.manifestRegistry
+            ? { manifestRegistry: params.pluginLookUpTable.manifestRegistry }
+            : {}),
         })
       : undefined;
   const autoEnabled =
@@ -475,16 +479,22 @@ export function loadGatewayPlugins(params: {
         : applyPluginAutoEnable({
             config: params.cfg,
             env: process.env,
+            ...(params.pluginLookUpTable?.manifestRegistry
+              ? { manifestRegistry: params.pluginLookUpTable.manifestRegistry }
+              : {}),
           });
   const resolvedConfig = autoEnabled.config;
-  const pluginIds =
-    params.pluginIds ??
-    resolveGatewayStartupPluginIds({
-      config: resolvedConfig,
-      activationSourceConfig: params.activationSourceConfig,
-      workspaceDir: params.workspaceDir,
-      env: process.env,
-    });
+  const pluginIds = params.pluginIds ?? [
+    ...(
+      params.pluginLookUpTable ??
+      loadPluginLookUpTable({
+        config: resolvedConfig,
+        activationSourceConfig: params.activationSourceConfig,
+        workspaceDir: params.workspaceDir,
+        env: process.env,
+      })
+    ).startup.pluginIds,
+  ];
   if (pluginIds.length === 0) {
     const pluginRegistry = createEmptyPluginRegistry();
     setActivePluginRegistry(pluginRegistry, undefined, "gateway-bindable", params.workspaceDir);

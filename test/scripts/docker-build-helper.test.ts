@@ -3,8 +3,11 @@ import { describe, expect, it } from "vitest";
 
 const HELPER_PATH = "scripts/lib/docker-build.sh";
 const DOCKER_ALL_SCHEDULER_PATH = "scripts/test-docker-all.mjs";
+const DOCKER_E2E_IMAGE_HELPER_PATH = "scripts/lib/docker-e2e-image.sh";
 const DOCKER_E2E_SCENARIOS_PATH = "scripts/lib/docker-e2e-scenarios.mjs";
 const INSTALL_E2E_RUNNER_PATH = "scripts/docker/install-sh-e2e/run.sh";
+const LIVE_CLI_BACKEND_DOCKER_PATH = "scripts/test-live-cli-backend-docker.sh";
+const LIVE_BUILD_DOCKER_PATH = "scripts/test-live-build-docker.sh";
 const OPENAI_WEB_SEARCH_MINIMAL_E2E_PATH = "scripts/e2e/openai-web-search-minimal-docker.sh";
 const PLUGINS_DOCKER_E2E_PATH = "scripts/e2e/plugins-docker.sh";
 const PLUGIN_UPDATE_DOCKER_E2E_PATH = "scripts/e2e/plugin-update-unchanged-docker.sh";
@@ -42,6 +45,26 @@ describe("docker build helper", () => {
       expect(script, path).not.toMatch(/\bdocker build\b/);
       expect(script, path).not.toMatch(/run_logged\s+\S+\s+docker\s+build/);
     }
+  });
+
+  it("lets Testbox fall back to building when a reused Docker image is missing", () => {
+    const helper = readFileSync(HELPER_PATH, "utf8");
+    const e2eImageHelper = readFileSync(DOCKER_E2E_IMAGE_HELPER_PATH, "utf8");
+    const liveBuild = readFileSync(LIVE_BUILD_DOCKER_PATH, "utf8");
+    const liveCliBackend = readFileSync(LIVE_CLI_BACKEND_DOCKER_PATH, "utf8");
+
+    expect(helper).toContain("docker_build_on_missing_enabled()");
+    expect(helper).toContain("OPENCLAW_DOCKER_BUILD_ON_MISSING");
+    expect(helper).toContain("OPENCLAW_TESTBOX");
+    expect(e2eImageHelper).toContain("docker_build_on_missing_enabled");
+    expect(e2eImageHelper).toContain("Docker image not available; building");
+    expect(liveBuild).toContain("docker image inspect");
+    expect(liveBuild).toContain("docker pull");
+    expect(liveBuild).toContain("Live-test image not available; building");
+    expect(liveCliBackend).toContain('"$ROOT_DIR/scripts/test-live-build-docker.sh"');
+    expect(liveCliBackend).not.toContain(
+      'echo "==> Reuse live-test image: $LIVE_IMAGE_NAME (OPENCLAW_SKIP_DOCKER_BUILD=1)"',
+    );
   });
 
   it("preserves pnpm lookup paths for scheduled Docker child lanes", () => {

@@ -540,7 +540,12 @@ describe("update-cli", () => {
     expect(spawnSync).toHaveBeenCalledWith(
       expect.any(String),
       [path.join(root, "openclaw.mjs"), "completion", "--write-state"],
-      expect.objectContaining({ timeout: 30_000 }),
+      expect.objectContaining({
+        env: expect.objectContaining({
+          OPENCLAW_COMPLETION_SKIP_PLUGIN_COMMANDS: "1",
+        }),
+        timeout: 30_000,
+      }),
     );
   });
 

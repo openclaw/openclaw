@@ -121,6 +121,41 @@ describe("model-pricing-cache", () => {
     expect(refs).toContain("tavily/search-preview");
   });
 
+  it("skips remote pricing catalogs for local-only model providers", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "ollama/llama3.2:latest" },
+        },
+      },
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://127.0.0.1:11434",
+            api: "ollama",
+            models: [{ id: "llama3.2:latest" }],
+          },
+          vllm: {
+            baseUrl: "http://192.168.1.25:8000/v1",
+            api: "openai-completions",
+            models: [{ id: "qwen2.5-coder:7b" }],
+          },
+        },
+      },
+      tools: {
+        subagents: { model: { primary: "vllm/qwen2.5-coder:7b" } },
+      },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = vi.fn<typeof fetch>();
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(
+      getCachedGatewayModelPricing({ provider: "ollama", model: "llama3.2:latest" }),
+    ).toBeUndefined();
+  });
+
   it("loads openrouter pricing and maps provider aliases, wrappers, and anthropic dotted ids", async () => {
     const config = {
       agents: {

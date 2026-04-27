@@ -3,7 +3,7 @@ import {
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
 } from "./server-chat-state.js";
-import { safeParseJson } from "./server-methods/nodes.helpers.js";
+import { safeParseJson } from "./server-json.js";
 import { hasConnectedMobileNode } from "./server-mobile-nodes.js";
 import { createNodeSubscriptionManager } from "./server-node-subscriptions.js";
 

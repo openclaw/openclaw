@@ -758,7 +758,7 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
   <Accordion title="Context windows">
     For auto-discovered models, OpenClaw uses the context window reported by Ollama when available, including larger `PARAMETER num_ctx` values from custom Modelfiles. Otherwise it falls back to the default Ollama context window used by OpenClaw.
 
-    You can set provider-level `contextWindow`, `contextTokens`, and `maxTokens` defaults for every model under that Ollama provider, then override them per model when needed. To cap Ollama's per-request runtime context without rebuilding a Modelfile, set `params.num_ctx`; OpenClaw sends it as `options.num_ctx` for both native Ollama and the OpenAI-compatible Ollama adapter. Invalid, zero, negative, and non-finite values are ignored and fall back to `contextWindow`.
+    You can set provider-level `contextWindow`, `contextTokens`, and `maxTokens` defaults for every model under that Ollama provider, then override them per model when needed. `contextWindow` is OpenClaw's prompt and compaction budget. Native Ollama requests leave `options.num_ctx` unset unless you explicitly configure `params.num_ctx`, so Ollama can apply its own model, `OLLAMA_CONTEXT_LENGTH`, or VRAM-based default. To cap or force Ollama's per-request runtime context without rebuilding a Modelfile, set `params.num_ctx`; invalid, zero, negative, and non-finite values are ignored. The OpenAI-compatible Ollama adapter still injects `options.num_ctx` by default from the configured `params.num_ctx` or `contextWindow`; disable that with `injectNumCtxForOpenAICompat: false` if your upstream rejects `options`.
 
     Native Ollama model entries also accept the common Ollama runtime options under `params`, including `temperature`, `top_p`, `top_k`, `min_p`, `num_predict`, `stop`, `repeat_penalty`, `num_batch`, `num_thread`, and `use_mmap`. OpenClaw forwards only Ollama request keys, so OpenClaw runtime params such as `streaming` are not leaked to Ollama. Use `params.think` or `params.thinking` to send top-level Ollama `think`; `false` disables API-level thinking for Qwen-style thinking models.
 
@@ -999,7 +999,7 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
   </Accordion>
 
   <Accordion title="Large-context model is too slow or runs out of memory">
-    Many Ollama models advertise contexts that are larger than your hardware can run comfortably. Cap both OpenClaw's budget and Ollama's request context:
+    Many Ollama models advertise contexts that are larger than your hardware can run comfortably. Native Ollama uses Ollama's own runtime context default unless you set `params.num_ctx`. Cap both OpenClaw's budget and Ollama's request context when you want predictable first-token latency:
 
     ```json5
     {
@@ -1021,7 +1021,7 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
     }
     ```
 
-    Lower `contextWindow` first if the prompt ingestion phase is slow. Lower `maxTokens` if generation runs too long.
+    Lower `contextWindow` first if OpenClaw is sending too much prompt. Lower `params.num_ctx` if Ollama is loading a runtime context that is too large for the machine. Lower `maxTokens` if generation runs too long.
 
   </Accordion>
 </AccordionGroup>

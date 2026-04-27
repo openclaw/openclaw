@@ -114,7 +114,7 @@ teams app doctor <teamsAppId>
 
 This runs diagnostics across bot registration, AAD app config, manifest validity, and SSO setup.
 
-For production deployments, consider using [federated authentication](#federated-authentication-certificate--managed-identity) (certificate or managed identity) instead of client secrets.
+For production deployments, consider using [federated authentication](/channels/msteams#federated-authentication-certificate-plus-managed-identity) (certificate or managed identity) instead of client secrets.
 
 <Note>
 Group chats are blocked by default (`channels.msteams.groupPolicy: "allowlist"`). To allow group replies, set `channels.msteams.groupAllowFrom`, or use `groupPolicy: "open"` to allow any member (mention-gated).
@@ -283,7 +283,7 @@ The Teams channel starts automatically when the plugin is available and `msteams
 
 </details>
 
-## Federated Authentication (Certificate + Managed Identity)
+## Federated authentication (certificate plus managed identity)
 
 > Added in 2026.3.24
 
@@ -425,7 +425,7 @@ For AKS deployments using workload identity:
 
 **Default behavior:** When `authType` is not set, OpenClaw defaults to client secret authentication. Existing configurations continue to work without changes.
 
-## Local Development (Tunneling)
+## Local development (tunneling)
 
 Teams can't reach `localhost`. Use a persistent dev tunnel so your URL stays the same across sessions:
 
@@ -495,7 +495,7 @@ The action is gated by `channels.msteams.actions.memberInfo` (default: enabled w
 - In other words, allowlists gate who can trigger the agent; only specific supplemental context paths are filtered today.
 - DM history can be limited with `channels.msteams.dmHistoryLimit` (user turns). Per-user overrides: `channels.msteams.dms["<user_id>"].historyLimit`.
 
-## Current Teams RSC Permissions (Manifest)
+## Current Teams RSC permissions (manifest)
 
 These are the **existing resourceSpecific permissions** in our Teams app manifest. They only apply inside the team/chat where the app is installed.
 
@@ -519,7 +519,7 @@ To add RSC permissions via the Teams CLI:
 teams app rsc add <teamsAppId> ChannelMessage.Read.Group --type Application
 ```
 
-## Example Teams Manifest (redacted)
+## Example Teams manifest (redacted)
 
 Minimal, valid example with the required fields. Replace IDs and URLs.
 
@@ -651,7 +651,7 @@ If you need images/files in **channels** or want to fetch **message history**, y
 
 **Additional permission for user mentions:** User @mentions work out of the box for users in the conversation. However, if you want to dynamically search and mention users who are **not in the current conversation**, add `User.Read.All` (Application) permission and grant admin consent.
 
-## Known Limitations
+## Known limitations
 
 ### Webhook timeouts
 
@@ -714,7 +714,7 @@ Key settings (see `/gateway/configuration` for shared channel patterns):
     - `agent:<agentId>:msteams:channel:<conversationId>`
     - `agent:<agentId>:msteams:group:<conversationId>`
 
-## Reply Style: Threads vs Posts
+## Reply style: threads vs posts
 
 Teams recently introduced two channel UI styles over the same underlying data model:
 
@@ -841,7 +841,7 @@ OpenClaw sends Teams polls as Adaptive Cards (there is no native Teams poll API)
 - The gateway must stay online to record votes.
 - Polls do not auto-post result summaries yet (inspect the store file if needed).
 
-## Presentation Cards
+## Presentation cards
 
 Send semantic presentation payloads to Teams users or conversations using the `message` tool or CLI. OpenClaw renders them as Teams Adaptive Cards from the generic presentation contract.
 
@@ -957,7 +957,7 @@ https://teams.microsoft.com/l/channel/19%3A15bc...%40thread.tacv2/ChannelName?gr
 - Channel ID = path segment after `/channel/` (URL-decoded)
 - **Ignore** the `groupId` query parameter
 
-## Private Channels
+## Private channels
 
 Bots have limited support in private channels:
 

@@ -227,6 +227,31 @@ openclaw_package_dir="/npm-global/lib/node_modules/openclaw"
 # point those imports at the installed package without copying source into the test image.
 rm -rf /app/node_modules/openclaw
 ln -sfnT "$openclaw_package_dir" /app/node_modules/openclaw
+rm -rf /app/dist
+ln -sfnT "$openclaw_package_dir/dist" /app/dist
+cp "$openclaw_package_dir/package.json" /app/package.json
+rm -rf "$openclaw_package_dir/extensions"
+ln -sfnT /app/extensions "$openclaw_package_dir/extensions"
+node --input-type=module <<'NODE'
+import fs from "node:fs";
+
+for (const packageJsonPath of [
+  "/app/package.json",
+  "/app/node_modules/openclaw/package.json",
+]) {
+  const pkg = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+  pkg.exports = pkg.exports && typeof pkg.exports === "object" ? pkg.exports : {};
+  pkg.exports["./plugin-sdk/qa-channel"] = {
+    types: "./extensions/qa-channel/api.ts",
+    default: "./extensions/qa-channel/api.ts",
+  };
+  pkg.exports["./plugin-sdk/qa-channel-protocol"] = {
+    types: "./extensions/qa-channel/src/protocol.ts",
+    default: "./extensions/qa-channel/src/protocol.ts",
+  };
+  fs.writeFileSync(packageJsonPath, `${JSON.stringify(pkg, null, 2)}\n`);
+}
+NODE
 for deps_dir in "$openclaw_package_dir/node_modules" /npm-global/lib/node_modules; do
   [ -d "$deps_dir" ] || continue
   for dependency_dir in "$deps_dir"/*; do
@@ -252,6 +277,27 @@ for deps_dir in "$openclaw_package_dir/node_modules" /npm-global/lib/node_module
         ;;
     esac
   done
+done
+
+link_installed_package_dependency() {
+  local name="$1"
+  local source="/npm-global/lib/node_modules/openclaw/node_modules/$name"
+  local target="/app/node_modules/$name"
+  if [ ! -e "$source" ]; then
+    echo "Installed package dependency is missing: $name" >&2
+    return 1
+  fi
+  mkdir -p "$(dirname "$target")"
+  ln -sfn "$source" "$target"
+}
+
+# QA Lab is intentionally mounted as harness source, so its package-local
+# runtime imports must resolve from the installed package dependency tree.
+for dependency in \
+  @modelcontextprotocol/sdk \
+  yaml \
+  zod; do
+  link_installed_package_dependency "$dependency"
 done
 
 echo "Running installed-package onboarding recovery hot path..."

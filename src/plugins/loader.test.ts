@@ -1816,6 +1816,19 @@ module.exports = {
     expect(actualInstallRoot).not.toBe("");
     expect(registry.plugins.find((entry) => entry.id === "browser")?.status).toBe("loaded");
     expect(fs.lstatSync(stagedMirrorChunk).isSymbolicLink()).toBe(false);
+
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(actualInstallRoot, "dist", "extensions");
+    const reloadedRegistry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          enabled: true,
+        },
+      },
+    });
+
+    expect(reloadedRegistry.plugins.find((entry) => entry.id === "browser")?.status).toBe("loaded");
+    expect(fs.existsSync(stagedMirrorChunk)).toBe(true);
   });
 
   it("loads bundled plugins with plugin-sdk imports from an external stage dir", () => {
@@ -7324,6 +7337,9 @@ export const runtimeValue = helperValue;`,
     try {
       expect(__testing.toSafeImportPath("C:\\Users\\alice\\plugin\\index.mjs")).toBe(
         "file:///C:/Users/alice/plugin/index.mjs",
+      );
+      expect(__testing.toSafeImportPath("C:\\Users\\alice\\plugin folder\\x#y.mjs")).toBe(
+        "file:///C:/Users/alice/plugin%20folder/x%23y.mjs",
       );
       expect(__testing.toSafeImportPath("\\\\server\\share\\plugin\\index.mjs")).toBe(
         "file://server/share/plugin/index.mjs",

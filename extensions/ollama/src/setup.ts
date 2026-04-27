@@ -23,6 +23,7 @@ import {
 import {
   OLLAMA_CLOUD_BASE_URL,
   OLLAMA_DEFAULT_BASE_URL,
+  OLLAMA_DOCKER_HOST_BASE_URL,
   OLLAMA_DEFAULT_MODEL,
 } from "./defaults.js";
 import { readProviderBaseUrl } from "./provider-base-url.js";
@@ -55,6 +56,16 @@ type OllamaSetupResult = {
   credential: SecretInput;
   credentialMode?: SecretInputMode;
 };
+
+function isTruthyEnvValue(value: string | undefined): boolean {
+  return ["1", "true", "yes", "on"].includes(value?.trim().toLowerCase() ?? "");
+}
+
+function resolveOllamaSetupDefaultBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
+  return isTruthyEnvValue(env.OPENCLAW_DOCKER_SETUP)
+    ? OLLAMA_DOCKER_HOST_BASE_URL
+    : OLLAMA_DEFAULT_BASE_URL;
+}
 
 type OllamaInteractiveMode = "cloud-local" | "cloud-only" | "local-only";
 type HostBackedOllamaInteractiveMode = Exclude<OllamaInteractiveMode, "cloud-only">;
@@ -457,14 +468,18 @@ async function storeOllamaCredential(agentDir?: string): Promise<void> {
   });
 }
 
-async function promptForOllamaBaseUrl(prompter: WizardPrompter): Promise<string> {
+async function promptForOllamaBaseUrl(
+  prompter: WizardPrompter,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<string> {
+  const defaultBaseUrl = resolveOllamaSetupDefaultBaseUrl(env);
   const baseUrlRaw = await prompter.text({
     message: "Ollama base URL",
-    initialValue: OLLAMA_DEFAULT_BASE_URL,
-    placeholder: OLLAMA_DEFAULT_BASE_URL,
+    initialValue: defaultBaseUrl,
+    placeholder: defaultBaseUrl,
     validate: (value) => (value?.trim() ? undefined : "Required"),
   });
-  return resolveOllamaApiBase((baseUrlRaw ?? "").trim().replace(/\/+$/, ""));
+  return resolveOllamaApiBase((baseUrlRaw ?? defaultBaseUrl).trim().replace(/\/+$/, ""));
 }
 
 async function resolveHostBackedSuggestedModelNames(params: {
@@ -493,8 +508,9 @@ async function promptAndConfigureHostBackedOllama(params: {
   cfg: OpenClawConfig;
   mode: HostBackedOllamaInteractiveMode;
   prompter: WizardPrompter;
+  env?: NodeJS.ProcessEnv;
 }): Promise<OllamaSetupResult> {
-  const baseUrl = await promptForOllamaBaseUrl(params.prompter);
+  const baseUrl = await promptForOllamaBaseUrl(params.prompter, params.env);
   const { reachable, models } = await fetchOllamaModels(baseUrl);
 
   if (!reachable) {
@@ -586,6 +602,7 @@ export async function promptAndConfigureOllama(params: {
     cfg: params.cfg,
     mode,
     prompter: params.prompter,
+    env: params.env,
   });
 }
 
@@ -596,7 +613,7 @@ export async function configureOllamaNonInteractive(params: {
   agentDir?: string;
 }): Promise<OpenClawConfig> {
   const baseUrl = resolveOllamaApiBase(
-    (params.opts.customBaseUrl?.trim() || OLLAMA_DEFAULT_BASE_URL).replace(/\/+$/, ""),
+    (params.opts.customBaseUrl?.trim() || resolveOllamaSetupDefaultBaseUrl()).replace(/\/+$/, ""),
   );
   const { reachable, models } = await fetchOllamaModels(baseUrl);
   const explicitModel = normalizeOllamaModelName(params.opts.customModelId);

@@ -160,7 +160,7 @@ type ChannelManagerOptions = {
    * a channel account actually starts. The resolved value must be a real
    * `createPluginRuntime().channel` surface.
    */
-  resolveChannelRuntime?: () => ChannelRuntimeSurface;
+  resolveChannelRuntime?: () => ChannelRuntimeSurface | Promise<ChannelRuntimeSurface>;
 };
 
 type StartChannelOptions = {
@@ -278,8 +278,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     return next;
   };
 
-  const getChannelRuntime = (): ChannelRuntimeSurface | undefined => {
-    return channelRuntime ?? resolveChannelRuntime?.();
+  const getChannelRuntime = async (): Promise<ChannelRuntimeSurface | undefined> => {
+    return channelRuntime ?? (await resolveChannelRuntime?.());
   };
 
   const evictStaleChannelAccountState = (
@@ -368,10 +368,6 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         };
 
         try {
-          scopedChannelRuntime = createTaskScopedChannelRuntime({
-            channelRuntime: getChannelRuntime(),
-          });
-          channelRuntimeForTask = scopedChannelRuntime.channelRuntime;
           const account = plugin.config.resolveAccount(cfg, id);
           const enabled = plugin.config.isEnabled
             ? plugin.config.isEnabled(account, cfg)
@@ -418,6 +414,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             });
             return;
           }
+
+          scopedChannelRuntime = createTaskScopedChannelRuntime({
+            channelRuntime: await getChannelRuntime(),
+          });
+          channelRuntimeForTask = scopedChannelRuntime.channelRuntime;
 
           if (!preserveRestartAttempts) {
             restartAttempts.delete(rKey);

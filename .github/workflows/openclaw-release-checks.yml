@@ -158,6 +158,7 @@ jobs:
   live_and_e2e_release_checks:
     needs: [resolve_target]
     permissions:
+      actions: read
       contents: read
       packages: write
       pull-requests: read

@@ -58,6 +58,8 @@ const WRAPPER_PROVIDERS = new Set([
   "openrouter",
   "vercel-ai-gateway",
 ]);
+const LOCAL_MODEL_PROVIDER_APIS = new Set(["ollama"]);
+const LOCAL_MODEL_PROVIDER_IDS = new Set(["lmstudio", "ollama", "sglang", "vllm"]);
 const log = createSubsystemLogger("gateway").child("model-pricing");
 
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -422,6 +424,60 @@ function addConfiguredWebSearchPluginModels(params: {
   }
 }
 
+function isPrivateOrLoopbackHost(hostname: string): boolean {
+  const host = hostname
+    .trim()
+    .toLowerCase()
+    .replace(/^\[|\]$/g, "");
+  if (
+    host === "localhost" ||
+    host === "localhost.localdomain" ||
+    host.endsWith(".localhost") ||
+    host.endsWith(".local")
+  ) {
+    return true;
+  }
+  if (host === "::1" || host === "0:0:0:0:0:0:0:1" || host.startsWith("fe80:")) {
+    return true;
+  }
+  if (host.startsWith("fc") || host.startsWith("fd")) {
+    return true;
+  }
+  if (host.startsWith("127.") || host.startsWith("10.") || host.startsWith("192.168.")) {
+    return true;
+  }
+  return /^172\.(1[6-9]|2\d|3[0-1])\./u.test(host) || host.startsWith("169.254.");
+}
+
+function isPrivateOrLoopbackBaseUrl(baseUrl: string | undefined): boolean {
+  if (!baseUrl) {
+    return false;
+  }
+  try {
+    return isPrivateOrLoopbackHost(new URL(baseUrl).hostname);
+  } catch {
+    return false;
+  }
+}
+
+function shouldFetchExternalPricingForRef(config: OpenClawConfig, ref: ModelRef): boolean {
+  const providerConfig = config.models?.providers?.[ref.provider];
+  if (providerConfig?.api && LOCAL_MODEL_PROVIDER_APIS.has(providerConfig.api)) {
+    return false;
+  }
+  if (LOCAL_MODEL_PROVIDER_IDS.has(ref.provider)) {
+    return false;
+  }
+  if (isPrivateOrLoopbackBaseUrl(providerConfig?.baseUrl)) {
+    return false;
+  }
+  return true;
+}
+
+function filterExternalPricingRefs(config: OpenClawConfig, refs: ModelRef[]): ModelRef[] {
+  return refs.filter((ref) => shouldFetchExternalPricingForRef(config, ref));
+}
+
 export function collectConfiguredModelPricingRefs(config: OpenClawConfig): ModelRef[] {
   const refs = new Map<string, ModelRef>();
   const aliasIndex = buildModelAliasIndex({
@@ -547,7 +603,10 @@ export async function refreshGatewayModelPricingCache(params: {
   }
   const fetchImpl = params.fetchImpl ?? fetch;
   inFlightRefresh = (async () => {
-    const refs = collectConfiguredModelPricingRefs(params.config);
+    const refs = filterExternalPricingRefs(
+      params.config,
+      collectConfiguredModelPricingRefs(params.config),
+    );
     if (refs.length === 0) {
       replaceGatewayModelPricingCache(new Map());
       clearRefreshTimer();

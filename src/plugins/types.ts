@@ -702,6 +702,7 @@ export type ProviderReplayPolicy = {
     includeCamelCase?: boolean;
   };
   dropThinkingBlocks?: boolean;
+  dropReasoningFromHistory?: boolean;
   repairToolUseResultPairing?: boolean;
   applyAssistantFirstOrderingFix?: boolean;
   validateGeminiTurns?: boolean;
@@ -2048,6 +2049,100 @@ export type PluginConfigMigration = (config: OpenClawConfig) =>
   | null
   | undefined;
 
+export type MigrationItemStatus = "planned" | "migrated" | "skipped" | "conflict" | "error";
+export type MigrationItemKind =
+  | "config"
+  | "secret"
+  | "memory"
+  | "skill"
+  | "workspace"
+  | "session"
+  | "file"
+  | "archive"
+  | "manual";
+export type MigrationItemAction =
+  | "copy"
+  | "create"
+  | "update"
+  | "merge"
+  | "append"
+  | "archive"
+  | "skip"
+  | "manual";
+
+export type MigrationItem = {
+  id: string;
+  kind: MigrationItemKind | (string & {});
+  action: MigrationItemAction | (string & {});
+  status: MigrationItemStatus;
+  source?: string;
+  target?: string;
+  message?: string;
+  reason?: string;
+  sensitive?: boolean;
+  details?: Record<string, unknown>;
+};
+
+export type MigrationSummary = {
+  total: number;
+  planned: number;
+  migrated: number;
+  skipped: number;
+  conflicts: number;
+  errors: number;
+  sensitive: number;
+};
+
+export type MigrationDetection = {
+  found: boolean;
+  source?: string;
+  label?: string;
+  confidence?: "low" | "medium" | "high";
+  message?: string;
+};
+
+export type MigrationPlan = {
+  providerId: string;
+  source: string;
+  target?: string;
+  summary: MigrationSummary;
+  items: MigrationItem[];
+  warnings?: string[];
+  nextSteps?: string[];
+  metadata?: Record<string, unknown>;
+};
+
+export type MigrationApplyResult = MigrationPlan & {
+  backupPath?: string;
+  reportDir?: string;
+};
+
+export type MigrationProviderContext = {
+  config: OpenClawConfig;
+  runtime?: PluginRuntime;
+  logger: PluginLogger;
+  stateDir: string;
+  source?: string;
+  includeSecrets?: boolean;
+  overwrite?: boolean;
+  backupPath?: string;
+  reportDir?: string;
+  signal?: AbortSignal;
+};
+
+/** Migration source implemented by a plugin and orchestrated by `openclaw migrate`. */
+export type MigrationProviderPlugin = {
+  id: string;
+  label: string;
+  description?: string;
+  detect?: (ctx: MigrationProviderContext) => MigrationDetection | Promise<MigrationDetection>;
+  plan: (ctx: MigrationProviderContext) => MigrationPlan | Promise<MigrationPlan>;
+  apply: (
+    ctx: MigrationProviderContext,
+    plan?: MigrationPlan,
+  ) => MigrationApplyResult | Promise<MigrationApplyResult>;
+};
+
 export type PluginSetupAutoEnableContext = {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -2127,6 +2222,8 @@ export type OpenClawPluginApi = {
   registerTextTransforms: (transforms: PluginTextTransformRegistration) => void;
   /** Register a lightweight config migration that can run before plugin runtime loads. */
   registerConfigMigration: (migrate: PluginConfigMigration) => void;
+  /** Register an importer for `openclaw migrate` (migration capability). */
+  registerMigrationProvider: (provider: MigrationProviderPlugin) => void;
   /** Register a lightweight config probe that can auto-enable this plugin generically. */
   registerAutoEnableProbe: (probe: PluginSetupAutoEnableProbe) => void;
   /** Register a native model/provider plugin (text inference capability). */

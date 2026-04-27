@@ -60,7 +60,7 @@ For the Gateway runtime, Node remains the recommended path.
 
 ## Troubleshooting
 
-### Build Fails: Toolchain or SDK Mismatch
+### Build fails: toolchain or SDK mismatch
 
 The macOS app build expects the latest macOS SDK and Swift 6.2 toolchain.
 
@@ -78,7 +78,7 @@ xcrun swift --version
 
 If versions don’t match, update macOS/Xcode and re-run the build.
 
-### App Crashes on Permission Grant
+### App crashes on permission grant
 
 If the app crashes when you try to allow **Speech Recognition** or **Microphone** access, it may be due to a corrupted TCC cache or signature mismatch.
 

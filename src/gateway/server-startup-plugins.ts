@@ -9,10 +9,7 @@ import {
   resolveBundledRuntimeDependencyPackageInstallRoot,
   scanBundledPluginRuntimeDeps,
 } from "../plugins/bundled-runtime-deps.js";
-import {
-  resolveConfiguredDeferredChannelPluginIds,
-  resolveGatewayStartupPluginIds,
-} from "../plugins/channel-plugin-ids.js";
+import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { listGatewayMethods } from "./server-methods-list.js";
@@ -139,21 +136,18 @@ export async function prepareGatewayPluginBootstrap(params: {
       }).config;
   const defaultAgentId = resolveDefaultAgentId(gatewayPluginConfigAtStart);
   const defaultWorkspaceDir = resolveAgentWorkspaceDir(gatewayPluginConfigAtStart, defaultAgentId);
-  const deferredConfiguredChannelPluginIds = params.minimalTestGateway
-    ? []
-    : resolveConfiguredDeferredChannelPluginIds({
-        config: gatewayPluginConfigAtStart,
-        workspaceDir: defaultWorkspaceDir,
-        env: process.env,
-      });
-  const startupPluginIds = params.minimalTestGateway
-    ? []
-    : resolveGatewayStartupPluginIds({
+  const pluginLookUpTable = params.minimalTestGateway
+    ? undefined
+    : loadPluginLookUpTable({
         config: gatewayPluginConfigAtStart,
         activationSourceConfig: params.cfgAtStart,
         workspaceDir: defaultWorkspaceDir,
         env: process.env,
       });
+  const deferredConfiguredChannelPluginIds = [
+    ...(pluginLookUpTable?.startup.configuredDeferredChannelPluginIds ?? []),
+  ];
+  const startupPluginIds = [...(pluginLookUpTable?.startup.pluginIds ?? [])];
 
   const baseMethods = listGatewayMethods();
   const emptyPluginRegistry = createEmptyPluginRegistry();
@@ -174,6 +168,7 @@ export async function prepareGatewayPluginBootstrap(params: {
       coreGatewayMethodNames: baseMethods,
       baseMethods,
       pluginIds: startupPluginIds,
+      pluginLookUpTable,
       preferSetupRuntimeForChannelPlugins: deferredConfiguredChannelPluginIds.length > 0,
       suppressPluginInfoLogs: deferredConfiguredChannelPluginIds.length > 0,
     }));
@@ -187,6 +182,7 @@ export async function prepareGatewayPluginBootstrap(params: {
     defaultWorkspaceDir,
     deferredConfiguredChannelPluginIds,
     startupPluginIds,
+    pluginLookUpTable,
     baseMethods,
     pluginRegistry,
     baseGatewayMethods,

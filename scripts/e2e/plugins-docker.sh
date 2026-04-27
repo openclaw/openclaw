@@ -946,15 +946,17 @@ if (installRecords[pluginId]) {
   throw new Error(`ClawHub install record still present after uninstall: ${pluginId}`);
 }
 
-const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
-const config = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, "utf8")) : {};
-if (config.plugins?.entries?.[pluginId]) {
+const configAfterUninstallPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
+const configAfterUninstall = fs.existsSync(configAfterUninstallPath)
+  ? JSON.parse(fs.readFileSync(configAfterUninstallPath, "utf8"))
+  : {};
+if (configAfterUninstall.plugins?.entries?.[pluginId]) {
   throw new Error(`ClawHub config entry still present after uninstall: ${pluginId}`);
 }
-if ((config.plugins?.allow || []).includes(pluginId)) {
+if ((configAfterUninstall.plugins?.allow || []).includes(pluginId)) {
   throw new Error(`ClawHub allowlist entry still present after uninstall: ${pluginId}`);
 }
-if ((config.plugins?.deny || []).includes(pluginId)) {
+if ((configAfterUninstall.plugins?.deny || []).includes(pluginId)) {
   throw new Error(`ClawHub denylist entry still present after uninstall: ${pluginId}`);
 }
 if (fs.existsSync(installPath)) {

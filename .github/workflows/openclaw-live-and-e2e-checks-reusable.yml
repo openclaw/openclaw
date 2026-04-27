@@ -231,10 +231,9 @@ jobs:
       selected_sha: ${{ steps.validate.outputs.selected_sha }}
       trusted_reason: ${{ steps.validate.outputs.trusted_reason }}
     steps:
-      - name: Checkout selected ref
+      - name: Checkout workflow repository
         uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.ref }}
           fetch-depth: 0
 
       - name: Validate selected ref
@@ -244,11 +243,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          selected_sha="$(git rev-parse HEAD)"
           trusted_reason=""
 
           git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
           git fetch --tags origin '+refs/tags/*:refs/tags/*'
+
+          # Resolve here instead of in actions/checkout so short SHAs work too.
+          if ! selected_sha="$(git rev-parse --verify "${INPUT_REF}^{commit}")"; then
+            echo "Ref '${INPUT_REF}' could not be resolved to a commit." >&2
+            exit 1
+          fi
 
           if git merge-base --is-ancestor "$selected_sha" refs/remotes/origin/main; then
             trusted_reason="main-ancestor"
@@ -483,6 +487,7 @@ jobs:
       OPENCLAW_DOCKER_E2E_BARE_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.bare_image }}
       OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.functional_image }}
       OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
+      OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       OPENCLAW_CURRENT_PACKAGE_TGZ: .artifacts/docker-e2e-package/openclaw-current.tgz
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
       INCLUDE_OPENWEBUI: ${{ inputs.include_openwebui }}
@@ -611,6 +616,7 @@ jobs:
       OPENCLAW_DOCKER_E2E_BARE_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.bare_image }}
       OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.functional_image }}
       OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
+      OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       OPENCLAW_CURRENT_PACKAGE_TGZ: .artifacts/docker-e2e-package/openclaw-current.tgz
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
       INCLUDE_OPENWEBUI: ${{ inputs.include_openwebui }}
@@ -698,6 +704,7 @@ jobs:
       OPENCLAW_DOCKER_E2E_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.image }}
       OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.functional_image }}
       OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
+      OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       OPENCLAW_CURRENT_PACKAGE_TGZ: .artifacts/docker-e2e-package/openclaw-current.tgz
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
     steps:

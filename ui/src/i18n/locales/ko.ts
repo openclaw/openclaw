@@ -349,6 +349,15 @@ export const ko: TranslationMap = {
       on: "드리밍 켜짐",
       off: "드리밍 꺼짐",
     },
+    restartConfirmation: {
+      title: "Restart Gateway to Apply Change",
+      subtitle: "Changing Dreaming mode restarts the gateway.",
+      warning:
+        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      confirm: "Confirm Restart",
+      restarting: "Restarting…",
+      failed: "Could not apply change. Check your connection and try again.",
+    },
     status: {
       active: "드리밍 활성",
       idle: "드리밍 유휴",

@@ -321,7 +321,7 @@ Documented exceptions:
 
 See [Tailscale](/gateway/tailscale) for HTTPS setup guidance.
 
-## Content Security Policy
+## Content security policy
 
 The Control UI ships with a tight `img-src` policy: only **same-origin** assets, `data:` URLs, and locally generated `blob:` URLs are allowed. Remote `http(s)` and protocol-relative image URLs are rejected by the browser and do not issue network fetches.
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_LIVE_RETRIES,
   RELEASE_PATH_PROFILE,
+  parseLaneSelection,
   resolveDockerE2ePlan,
 } from "../../scripts/lib/docker-e2e-plan.mjs";
 
@@ -42,6 +43,9 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.credentials).toEqual(["anthropic", "openai"]);
     expect(plan.lanes.map((lane) => lane.name)).toContain("install-e2e");
     expect(plan.lanes.map((lane) => lane.name)).toContain("mcp-channels");
+    expect(plan.lanes.map((lane) => lane.name)).toContain("bundled-channel-feishu");
+    expect(plan.lanes.map((lane) => lane.name)).toContain("bundled-channel-update-acpx");
+    expect(plan.lanes.map((lane) => lane.name)).not.toContain("bundled-channel-deps");
     expect(plan.lanes.map((lane) => lane.name)).not.toContain("openwebui");
   });
 
@@ -92,6 +96,19 @@ describe("scripts/lib/docker-e2e-plan", () => {
       functionalImage: true,
       package: true,
     });
+  });
+
+  it("maps the legacy bundled channel deps lane to the split compat lane", () => {
+    const selectedLaneNames = parseLaneSelection("bundled-channel-deps");
+    const plan = planFor({ selectedLaneNames });
+
+    expect(selectedLaneNames).toEqual(["bundled-channel-deps-compat"]);
+    expect(plan.lanes).toEqual([
+      expect.objectContaining({
+        imageKind: "bare",
+        name: "bundled-channel-deps-compat",
+      }),
+    ]);
   });
 
   it("rejects unknown selected lanes with the available lane names", () => {

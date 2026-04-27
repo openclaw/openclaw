@@ -2887,6 +2887,33 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it("finalizes explicit failed-action replies without a standalone warning delivery", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Let me update that file." });
+        await dispatcherOptions.deliver(
+          { text: "I couldn't update the file, so no changes were applied." },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "block" });
+
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      999,
+      "I couldn't update the file, so no changes were applied.",
+      expect.any(Object),
+    );
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(draftStream.clear).not.toHaveBeenCalled();
+  });
+
   it("clears preview for error-only finals", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);

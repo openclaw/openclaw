@@ -79,7 +79,8 @@ export type PluginManifestContractListKey =
   | "memoryEmbeddingProviders"
   | "webContentExtractors"
   | "webFetchProviders"
-  | "webSearchProviders";
+  | "webSearchProviders"
+  | "migrationProviders";
 
 type SeenIdEntry = {
   candidate: PluginCandidate;

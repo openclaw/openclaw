@@ -248,7 +248,7 @@ Browser settings live in `~/.openclaw/openclaw.json`.
 
 </AccordionGroup>
 
-## Use Brave (or another Chromium-based browser)
+## Use Brave or another Chromium-based browser
 
 If your **system default** browser is Chromium-based (Chrome/Brave/Edge/etc),
 OpenClaw uses it automatically. Set `browser.executablePath` to override

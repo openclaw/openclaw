@@ -90,7 +90,7 @@ Both show up under `openclaw plugins list`. See [Plugin Bundles](/plugins/bundle
 If you are writing a native plugin, start with [Building Plugins](/plugins/building-plugins)
 and the [Plugin SDK Overview](/plugins/sdk-overview).
 
-## Package Entrypoints
+## Package entrypoints
 
 Native plugin npm packages must declare `openclaw.extensions` in `package.json`.
 Each entry must stay inside the package directory and resolve to a readable

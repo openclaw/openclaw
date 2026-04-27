@@ -877,6 +877,19 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/migrate-hermes:
+    dependencies:
+      yaml:
+        specifier: ^2.8.3
+        version: 2.8.3
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/microsoft:
     dependencies:
       node-edge-tts:
