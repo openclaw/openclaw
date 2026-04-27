@@ -86,4 +86,15 @@ describe("createCovenClient", () => {
       },
     );
   });
+
+  it("revalidates socket paths before connecting", async () => {
+    const covenHome = path.join(tmpDir, ".coven");
+    await fs.mkdir(covenHome);
+    const socketPath = path.join(covenHome, "coven.sock");
+    await fs.symlink("/var/run/docker.sock", socketPath);
+
+    await expect(createCovenClient(socketPath, { socketRoot: covenHome }).health()).rejects.toThrow(
+      /must not be a symlink/,
+    );
+  });
 });
