@@ -22,7 +22,7 @@ function getFinalizeRetryBudget(): Map<string, number> {
 
 function pruneFinalizeRetryBudget(budget: Map<string, number>): void {
   while (budget.size > FINALIZE_RETRY_BUDGET_MAX_ENTRIES) {
-    const oldest = budget.keys().next().value as string | undefined;
+    const oldest = budget.keys().next().value;
     if (oldest === undefined) {
       return;
     }
@@ -37,7 +37,7 @@ export function clearAgentHarnessFinalizeRetryBudget(params?: { runId?: string }
     return;
   }
   const prefix = `${params.runId}:`;
-  for (const key of [...budget.keys()]) {
+  for (const key of budget.keys()) {
     if (key.startsWith(prefix)) {
       budget.delete(key);
     }

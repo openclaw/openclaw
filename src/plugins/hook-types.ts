@@ -399,6 +399,7 @@ export type PluginHookToolContext = {
   trace?: DiagnosticTraceContext;
   toolName: string;
   toolCallId?: string;
+  // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Plugin callers type JSON reads by namespace.
   getSessionExtension?: <T extends PluginJsonValue = PluginJsonValue>(
     namespace: string,
   ) => T | undefined;

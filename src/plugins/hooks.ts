@@ -993,6 +993,7 @@ export function createHookRunner(
         terminalLabel: "block=true",
         mapContext: (baseCtx, reg) => ({
           ...baseCtx,
+          // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Plugin callers type JSON reads by namespace.
           getSessionExtension: <T extends PluginJsonValue = PluginJsonValue>(namespace: string) =>
             getPluginSessionExtensionSync<T>({
               pluginId: reg.pluginId,
