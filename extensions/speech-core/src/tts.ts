@@ -1179,6 +1179,11 @@ export async function synthesizeSpeech(params: {
         logVerbose(`TTS: provider ${provider} skipped (${resolvedProvider.message})`);
         continue;
       }
+      const attemptTimeoutMs = resolveProviderAttemptTimeoutMs({
+        explicitTimeoutMs: timeoutMs,
+        providerConfig: resolvedProvider.providerConfig,
+        defaultTimeoutMs: config.timeoutMs,
+      });
       const prepared = await prepareSpeechSynthesis({
         provider: resolvedProvider.provider,
         text: params.text,
@@ -1188,16 +1193,7 @@ export async function synthesizeSpeech(params: {
         persona: resolvedProvider.synthesisPersona,
         personaProviderConfig: resolvedProvider.personaProviderConfig,
         target,
-        timeoutMs: resolveProviderAttemptTimeoutMs({
-          explicitTimeoutMs: timeoutMs,
-          providerConfig: resolvedProvider.providerConfig,
-          defaultTimeoutMs: config.timeoutMs,
-        }),
-      });
-      const providerTimeoutMs = resolveProviderAttemptTimeoutMs({
-        explicitTimeoutMs: timeoutMs,
-        providerConfig: prepared.providerConfig,
-        defaultTimeoutMs: config.timeoutMs,
+        timeoutMs: attemptTimeoutMs,
       });
       const synthesis = await resolvedProvider.provider.synthesize({
         text: prepared.text,
@@ -1205,7 +1201,7 @@ export async function synthesizeSpeech(params: {
         providerConfig: prepared.providerConfig,
         target,
         providerOverrides: prepared.providerOverrides,
-        timeoutMs: providerTimeoutMs,
+        timeoutMs: attemptTimeoutMs,
       });
       const latencyMs = Date.now() - providerStart;
       attempts.push({
