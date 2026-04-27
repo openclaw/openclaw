@@ -175,7 +175,6 @@ import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.
 import { startRunLifecycleDiagnostics } from "./attempt-lifecycle.js";
 import { createEmbeddedAgentSessionWithResourceLoader } from "./attempt-session.js";
 export { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
-import { shouldStripBootstrapFromEmbeddedContext } from "./attempt-bootstrap-routing.js";
 export { shouldStripBootstrapFromEmbeddedContext } from "./attempt-bootstrap-routing.js";
 import {
   rotateTranscriptAfterCompaction,
