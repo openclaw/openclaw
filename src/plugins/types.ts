@@ -2347,7 +2347,11 @@ export type OpenClawPluginApi = {
    * before-tool-call policy tier.
    */
   registerTrustedToolPolicy: (policy: PluginTrustedToolPolicyRegistration) => void;
-  /** Register display/policy metadata for a plugin-owned or core tool. */
+  /**
+   * Register display/policy metadata for a plugin-owned tool. Metadata is
+   * scoped to the (pluginId, toolName) pair at projection time, so plugins
+   * cannot decorate other plugins' tools or core tools through this surface.
+   */
   registerToolMetadata: (metadata: PluginToolMetadataRegistration) => void;
   /** Register a generic Control UI contribution descriptor. */
   registerControlUiDescriptor: (descriptor: PluginControlUiDescriptor) => void;

@@ -1,7 +1,10 @@
 import { onAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { cleanupReplacedPluginHostRegistry } from "./host-hook-cleanup.js";
-import { dispatchPluginAgentEventSubscriptions } from "./host-hook-runtime.js";
+import {
+  clearPluginHostRuntimeState,
+  dispatchPluginAgentEventSubscriptions,
+} from "./host-hook-runtime.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry-types.js";
 import {
@@ -266,4 +269,9 @@ export function resetPluginRuntimeStateForTest(): void {
   state.runtimeSubagentMode = "default";
   state.importedPluginIds.clear();
   syncPluginAgentEventBridge(null);
+  // Also clear the plugin host-hook runtime singleton (run context map,
+  // scheduler-job records, pending agent-event handlers, closedRunIds set).
+  // Otherwise per-test bleed-over of those globals can cause flaky behavior
+  // since this helper is widely used across plugin/agent tests.
+  clearPluginHostRuntimeState();
 }

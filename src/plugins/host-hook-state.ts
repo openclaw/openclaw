@@ -566,10 +566,11 @@ export function projectPluginSessionExtensionsSync(params: {
       discardUnexpectedPromiseProjection(projected);
       continue;
     }
-    if (
-      projected === undefined ||
-      (registration.extension.project !== undefined && !isPluginJsonValue(projected))
-    ) {
+    if (projected === undefined || !isPluginJsonValue(projected)) {
+      // Validate the projection regardless of whether the extension has a
+      // `project` function: with a projector the value can be arbitrary;
+      // without one the persisted state could be hand-edited or malformed.
+      // Either way the size + shape check should run before projection.
       continue;
     }
     projections.push({
