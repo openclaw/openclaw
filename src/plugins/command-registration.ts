@@ -134,7 +134,9 @@ export function validatePluginCommandDefinition(
       (scope) => !isOperatorScope(scope),
     );
     if (unknownScope) {
-      return "Command requiredScopes contains unknown operator scope";
+      return typeof unknownScope === "string"
+        ? `Command requiredScopes contains unknown operator scope: ${unknownScope}`
+        : "Command requiredScopes contains unknown operator scope";
     }
   }
   const nameError = validateCommandName(command.name.trim(), opts);
@@ -145,7 +147,7 @@ export function validatePluginCommandDefinition(
     if (typeof alias !== "string") {
       continue;
     }
-    const aliasError = validateCommandName(alias.trim(), opts);
+    const aliasError = validateCommandName(alias.trim());
     if (aliasError) {
       return `Native command alias "${label}" invalid: ${aliasError}`;
     }
