@@ -205,6 +205,18 @@ describe("systemd availability", () => {
     await expect(isSystemdUserServiceAvailable({ SUDO_USER: "ai" })).resolves.toBe(false);
     expect(execFileMock).toHaveBeenCalledTimes(1);
   });
+
+  it("does not let stale SUDO_USER override a sudo-u target user scope", async () => {
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      assertUserSystemctlArgs(args, "status");
+      cb(null, "", "");
+    });
+
+    await expect(
+      isSystemdUserServiceAvailable({ USER: "openclaw", SUDO_USER: "admin" }),
+    ).resolves.toBe(true);
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("isSystemdServiceEnabled", () => {
@@ -886,6 +898,51 @@ describe("systemd service install and uninstall", () => {
         })
         .mockImplementationOnce((_cmd, args, _opts, cb) => {
           assertMachineUserSystemctlArgs(args, "debian", "enable", NODE_SERVICE);
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "restart", NODE_SERVICE);
+          cb(null, "", "");
+        });
+
+      await installSystemdService({
+        env: installEnv,
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        programArguments: ["/usr/bin/openclaw", "node", "run"],
+        workingDirectory: "/tmp",
+        environment: {
+          OPENCLAW_SYSTEMD_UNIT: "openclaw-node",
+        },
+      });
+
+      expect(execFileMock).toHaveBeenCalledTimes(5);
+    });
+  });
+
+  it("uses the sudo-u target user for install activation machine-scope retry", async () => {
+    await withNodeSystemdFixture(async ({ env }) => {
+      const installEnv = { ...env, USER: "openclaw", SUDO_USER: "admin" };
+      execFileMock
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "status");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "daemon-reload");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "enable", NODE_SERVICE);
+          cb(
+            createExecFileError("Failed to connect to bus: No medium found", {
+              stderr: "Failed to connect to bus: No medium found",
+            }),
+            "",
+            "",
+          );
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertMachineUserSystemctlArgs(args, "openclaw", "enable", NODE_SERVICE);
           cb(null, "", "");
         })
         .mockImplementationOnce((_cmd, args, _opts, cb) => {

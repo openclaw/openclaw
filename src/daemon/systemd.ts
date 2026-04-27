@@ -342,20 +342,38 @@ function resolveSystemctlDirectUserScopeArgs(): string[] {
   return ["--user"];
 }
 
-function resolveSystemctlMachineScopeUser(env: GatewayServiceEnv): string | null {
-  const sudoUser = env.SUDO_USER?.trim();
-  if (sudoUser && sudoUser !== "root") {
-    return sudoUser;
-  }
-  const fromEnv = env.USER?.trim() || env.LOGNAME?.trim();
-  if (fromEnv) {
-    return fromEnv;
-  }
+function readSystemctlEnvUser(env: GatewayServiceEnv): string | null {
+  return env.USER?.trim() || env.LOGNAME?.trim() || null;
+}
+
+function readSystemctlEffectiveUser(): string | null {
   try {
     return os.userInfo().username;
   } catch {
     return null;
   }
+}
+
+function isNonRootUser(user: string | null): user is string {
+  return Boolean(user && user !== "root");
+}
+
+function resolveSystemctlUserScope(env: GatewayServiceEnv): {
+  machineUser: string | null;
+  preferMachineScope: boolean;
+} {
+  const sudoUser = env.SUDO_USER?.trim() || null;
+  const envUser = readSystemctlEnvUser(env);
+  const effectiveUser = readSystemctlEffectiveUser();
+  const machineUser = isNonRootUser(envUser)
+    ? envUser
+    : isNonRootUser(sudoUser)
+      ? sudoUser
+      : effectiveUser || envUser || sudoUser || null;
+  return {
+    machineUser,
+    preferMachineScope: isNonRootUser(sudoUser) && !isNonRootUser(envUser),
+  };
 }
 
 function resolveSystemctlMachineUserScopeArgs(user: string): string[] {
@@ -380,11 +398,10 @@ async function execSystemctlUser(
   env: GatewayServiceEnv,
   args: string[],
 ): Promise<{ stdout: string; stderr: string; code: number }> {
-  const machineUser = resolveSystemctlMachineScopeUser(env);
-  const sudoUser = env.SUDO_USER?.trim();
+  const { machineUser, preferMachineScope } = resolveSystemctlUserScope(env);
 
-  // Under sudo, prefer the invoking non-root user's scope directly via machine scope.
-  if (sudoUser && sudoUser !== "root" && machineUser) {
+  // Under sudo-to-root, prefer the invoking non-root user's scope directly via machine scope.
+  if (preferMachineScope && machineUser) {
     const machineScopeArgs = resolveSystemctlMachineUserScopeArgs(machineUser);
     if (machineScopeArgs.length > 0) {
       // Do not fall through to bare --user: under sudo that can target root's user manager.
