@@ -15,6 +15,7 @@ export type BuildChatItemsProps = {
   stream: string | null;
   streamStartedAt: number | null;
   showToolCalls: boolean;
+  isRunning?: boolean;
   searchOpen?: boolean;
   searchQuery?: string;
 };
@@ -301,6 +302,11 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     } else {
       items.push({ kind: "reading-indicator", key });
     }
+  } else if (props.isRunning) {
+    items.push({
+      kind: "reading-indicator",
+      key: `stream:${props.sessionKey}:${props.streamStartedAt ?? "running"}`,
+    });
   }
 
   return groupMessages(items);

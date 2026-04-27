@@ -768,6 +768,7 @@ export function renderChat(props: ChatProps) {
     stream: props.stream,
     streamStartedAt: props.streamStartedAt,
     showToolCalls: props.showToolCalls,
+    isRunning: !props.loading && (props.canAbort || props.sending),
     searchOpen: vs.searchOpen,
     searchQuery: vs.searchQuery,
   });
