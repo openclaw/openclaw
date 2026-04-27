@@ -389,6 +389,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
       await applyCodexAppServerAuthProfile({
         client: { request } as never,
         agentDir,
+        startOptions: createStartOptions(),
       });
 
       expect(request).toHaveBeenNthCalledWith(1, "account/read", { refreshToken: false });
@@ -415,6 +416,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
       await applyCodexAppServerAuthProfile({
         client: { request } as never,
         agentDir,
+        startOptions: createStartOptions(),
       });
 
       expect(request).toHaveBeenNthCalledWith(1, "account/read", { refreshToken: false });
@@ -443,6 +445,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
       await applyCodexAppServerAuthProfile({
         client: { request } as never,
         agentDir,
+        startOptions: createStartOptions(),
       });
 
       expect(request).toHaveBeenCalledTimes(1);
@@ -465,10 +468,37 @@ describe("bridgeCodexAppServerStartOptions", () => {
       await applyCodexAppServerAuthProfile({
         client: { request } as never,
         agentDir,
+        startOptions: createStartOptions(),
       });
 
       expect(request).toHaveBeenCalledTimes(1);
       expect(request).toHaveBeenCalledWith("account/read", { refreshToken: false });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not send env API-key fallback to websocket app-server connections", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const request = vi.fn(async (method: string) => {
+      if (method === "account/read") {
+        return { account: null, requiresOpenaiAuth: true };
+      }
+      return { type: "apiKey" };
+    });
+    vi.stubEnv("CODEX_API_KEY", "codex-env-api-key");
+    vi.stubEnv("OPENAI_API_KEY", "openai-env-api-key");
+    try {
+      await applyCodexAppServerAuthProfile({
+        client: { request } as never,
+        agentDir,
+        startOptions: createStartOptions({
+          transport: "websocket",
+          url: "ws://127.0.0.1:1455",
+        }),
+      });
+
+      expect(request).not.toHaveBeenCalled();
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }

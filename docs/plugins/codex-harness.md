@@ -185,9 +185,9 @@ Codex after changing config.
 The plugin blocks older or unversioned app-server handshakes. That keeps
 OpenClaw on the protocol surface it has been tested against.
 
-For live and Docker smoke tests, auth usually comes from the Codex CLI account,
-an OpenClaw `openai-codex` auth profile, or `CODEX_API_KEY` /
-`OPENAI_API_KEY` as a fallback when no account is present.
+For live and Docker smoke tests, auth usually comes from the Codex CLI account
+or an OpenClaw `openai-codex` auth profile. Local stdio app-server launches can
+also fall back to `CODEX_API_KEY` / `OPENAI_API_KEY` when no account is present.
 
 ## Minimal config
 
@@ -514,15 +514,18 @@ order:
 
 1. An explicit OpenClaw Codex auth profile for the agent.
 2. The app-server's existing account, such as a local Codex CLI ChatGPT sign-in.
-3. `CODEX_API_KEY`, then `OPENAI_API_KEY`, only when no app-server account is
-   present and OpenAI auth is still required.
+3. For local stdio app-server launches only, `CODEX_API_KEY`, then
+   `OPENAI_API_KEY`, when no app-server account is present and OpenAI auth is
+   still required.
 
 When OpenClaw sees a ChatGPT subscription-style Codex auth profile, it removes
 `CODEX_API_KEY` and `OPENAI_API_KEY` from the spawned Codex child process. That
 keeps Gateway-level API keys available for embeddings or direct OpenAI models
 without making native Codex app-server turns bill through the API by accident.
-Explicit Codex API-key profiles and env-key fallback use app-server login
-instead of inherited child-process env.
+Explicit Codex API-key profiles and local stdio env-key fallback use app-server
+login instead of inherited child-process env. WebSocket app-server connections
+do not receive Gateway env API-key fallback; use an explicit auth profile or the
+remote app-server's own account.
 
 If a deployment needs additional environment isolation, add those variables to
 `appServer.clearEnv`:

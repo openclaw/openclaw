@@ -41,12 +41,16 @@ export async function applyCodexAppServerAuthProfile(params: {
   client: CodexAppServerClient;
   agentDir: string;
   authProfileId?: string;
+  startOptions?: CodexAppServerStartOptions;
 }): Promise<void> {
   const loginParams = await resolveCodexAppServerAuthProfileLoginParams({
     agentDir: params.agentDir,
     authProfileId: params.authProfileId,
   });
   if (!loginParams) {
+    if (params.startOptions?.transport !== "stdio") {
+      return;
+    }
     const fallbackLoginParams = await resolveCodexAppServerEnvApiKeyLoginParams({
       client: params.client,
       env: process.env,

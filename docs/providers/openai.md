@@ -293,15 +293,17 @@ selects auth in this order:
 
 1. An explicit OpenClaw `openai-codex` auth profile bound to the agent.
 2. The app-server's existing account, such as a local Codex CLI ChatGPT sign-in.
-3. `CODEX_API_KEY`, then `OPENAI_API_KEY`, only when the app-server reports no
-   account and still requires OpenAI auth.
+3. For local stdio app-server launches only, `CODEX_API_KEY`, then
+   `OPENAI_API_KEY`, when the app-server reports no account and still requires
+   OpenAI auth.
 
 That means a local ChatGPT/Codex subscription sign-in is not replaced just
 because the gateway process also has `OPENAI_API_KEY` for direct OpenAI models
-or embeddings. API-key fallback is only the no-account path. When a
-subscription-style Codex profile is selected, OpenClaw also keeps
-`CODEX_API_KEY` and `OPENAI_API_KEY` out of the spawned stdio app-server child
-and sends the selected credentials through the app-server login RPC.
+or embeddings. Env API-key fallback is only the local stdio no-account path; it
+is not sent to WebSocket app-server connections. When a subscription-style Codex
+profile is selected, OpenClaw also keeps `CODEX_API_KEY` and `OPENAI_API_KEY`
+out of the spawned stdio app-server child and sends the selected credentials
+through the app-server login RPC.
 
 ## Image generation
 

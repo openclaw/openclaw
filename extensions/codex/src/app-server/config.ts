@@ -1,6 +1,8 @@
-import { createHash } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import { z } from "zod";
 import type { CodexSandboxPolicy, CodexServiceTier } from "./protocol.js";
+
+const START_OPTIONS_KEY_SECRET = randomBytes(32);
 
 export type CodexAppServerTransportMode = "stdio" | "websocket";
 export type CodexAppServerPolicyMode = "yolo" | "guardian";
@@ -300,13 +302,13 @@ export function codexAppServerStartOptionsKey(
     commandSource: options.commandSource ?? null,
     args: options.args,
     url: options.url ?? null,
-    authToken: hashSecretForKey(options.authToken),
+    authToken: hashSecretForKey(options.authToken, "authToken"),
     headers: Object.entries(options.headers).toSorted(([left], [right]) =>
       left.localeCompare(right),
     ),
     env: Object.entries(options.env ?? {})
       .toSorted(([left], [right]) => left.localeCompare(right))
-      .map(([key, value]) => [key, hashSecretForKey(value)]),
+      .map(([key, value]) => [key, hashSecretForKey(value, `env:${key}`)]),
     clearEnv: [...(options.clearEnv ?? [])].toSorted(),
     authProfileId: params.authProfileId ?? null,
   });
@@ -431,11 +433,15 @@ function readNonEmptyString(value: unknown): string | undefined {
   return trimmed || undefined;
 }
 
-function hashSecretForKey(value: string | undefined): string | null {
+function hashSecretForKey(value: string | undefined, label: string): string | null {
   if (!value) {
     return null;
   }
-  return createHash("sha256").update(value).digest("hex");
+  return createHmac("sha256", START_OPTIONS_KEY_SECRET)
+    .update(label)
+    .update("\0")
+    .update(value)
+    .digest("hex");
 }
 
 function splitShellWords(value: string): string[] {

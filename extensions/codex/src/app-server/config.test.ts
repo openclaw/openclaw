@@ -311,6 +311,16 @@ describe("Codex app-server config", () => {
     });
 
     expect(first).not.toEqual(second);
+    expect(
+      codexAppServerStartOptionsKey({
+        transport: "websocket",
+        command: "codex",
+        args: [],
+        url: "ws://127.0.0.1:39175",
+        authToken: "tok_first",
+        headers: {},
+      }),
+    ).toEqual(first);
     expect(first).not.toContain("tok_first");
     expect(second).not.toContain("tok_second");
   });
@@ -332,6 +342,15 @@ describe("Codex app-server config", () => {
     });
 
     expect(first).not.toEqual(second);
+    expect(
+      codexAppServerStartOptionsKey({
+        transport: "stdio",
+        command: "codex",
+        args: ["app-server"],
+        headers: {},
+        env: { OPENAI_API_KEY: "sk-first" },
+      }),
+    ).toEqual(first);
     expect(first).not.toContain("sk-first");
     expect(second).not.toContain("sk-second");
   });
