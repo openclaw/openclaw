@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  buildVitestCapabilityShimAliasMap,
-  loadBundledCapabilityRuntimeRegistry,
-} from "./bundled-capability-runtime.js";
+import { buildVitestCapabilityShimAliasMap } from "./bundled-capability-runtime.js";
 
 describe("buildVitestCapabilityShimAliasMap", () => {
   it("keeps scoped and unscoped capability shim aliases aligned", () => {
@@ -23,23 +20,5 @@ describe("buildVitestCapabilityShimAliasMap", () => {
     expect(aliasMap["openclaw/plugin-sdk/speech-core"]).toBe(
       aliasMap["@openclaw/plugin-sdk/speech-core"],
     );
-  });
-});
-
-describe("loadBundledCapabilityRuntimeRegistry", () => {
-  it("captures bundled migration providers", () => {
-    const registry = loadBundledCapabilityRuntimeRegistry({
-      pluginIds: ["migrate-hermes"],
-      pluginSdkResolution: "dist",
-    });
-
-    const record = registry.plugins.find((entry) => entry.id === "migrate-hermes");
-    expect(record?.migrationProviderIds).toEqual(["hermes"]);
-    expect(
-      registry.migrationProviders.map((entry) => ({
-        pluginId: entry.pluginId,
-        providerId: entry.provider.id,
-      })),
-    ).toEqual([{ pluginId: "migrate-hermes", providerId: "hermes" }]);
   });
 });

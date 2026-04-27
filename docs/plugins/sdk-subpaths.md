@@ -16,14 +16,14 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
 
 ## Plugin entry
 
-| Subpath                        | Key exports                                                                                                                            |
-| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `plugin-sdk/plugin-entry`      | `definePluginEntry`                                                                                                                    |
-| `plugin-sdk/core`              | `defineChannelPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase`, `defineSetupPluginEntry`, `buildChannelConfigSchema` |
-| `plugin-sdk/config-schema`     | `OpenClawSchema`                                                                                                                       |
-| `plugin-sdk/provider-entry`    | `defineSingleProviderPluginEntry`                                                                                                      |
+| Subpath                        | Key exports                                                                                                                                            |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `plugin-sdk/plugin-entry`      | `definePluginEntry`                                                                                                                                    |
+| `plugin-sdk/core`              | `defineChannelPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase`, `defineSetupPluginEntry`, `buildChannelConfigSchema`                 |
+| `plugin-sdk/config-schema`     | `OpenClawSchema`                                                                                                                                       |
+| `plugin-sdk/provider-entry`    | `defineSingleProviderPluginEntry`                                                                                                                      |
 | `plugin-sdk/migration`         | Migration provider item helpers such as `createMigrationItem`, reason constants, item status markers, redaction helpers, and `summarizeMigrationItems` |
-| `plugin-sdk/migration-runtime` | Runtime migration helpers such as `copyMigrationFileItem` and `writeMigrationReport`                                                   |
+| `plugin-sdk/migration-runtime` | Runtime migration helpers such as `copyMigrationFileItem` and `writeMigrationReport`                                                                   |
 
 <AccordionGroup>
   <Accordion title="Channel subpaths">

@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type { MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 const tempRoots = new Set<string>();
 
@@ -14,7 +14,9 @@ export const logger = {
 };
 
 export async function makeTempRoot() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-migrate-hermes-"));
+  const root = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-migrate-hermes-"),
+  );
   tempRoots.add(root);
   return root;
 }

@@ -94,6 +94,7 @@ This writes `models.providers.lmstudio` and sets the default model to
 `lmstudio:default` auth profile.
 
 Interactive setup can prompt for an optional preferred load context length and applies it across the discovered LM Studio models it saves into config.
+LM Studio plugin config trusts the configured LM Studio endpoint for model requests, including loopback, LAN, and tailnet hosts. You can opt out by setting `models.providers.lmstudio.request.allowPrivateNetwork: false`.
 
 ## Configuration
 
@@ -168,6 +169,27 @@ If setup reports HTTP 401, verify your API key:
 ### Just-in-time model loading
 
 LM Studio supports just-in-time (JIT) model loading, where models are loaded on first request. Make sure you have this enabled to avoid 'Model not loaded' errors.
+
+### LAN or tailnet LM Studio host
+
+Use the LM Studio host's reachable address, keep `/v1`, and make sure LM Studio is bound beyond loopback on that machine:
+
+```json5
+{
+  models: {
+    providers: {
+      lmstudio: {
+        baseUrl: "http://gpu-box.local:1234/v1",
+        apiKey: "lmstudio",
+        api: "openai-completions",
+        models: [{ id: "qwen/qwen3.5-9b" }],
+      },
+    },
+  },
+}
+```
+
+Unlike generic OpenAI-compatible providers, `lmstudio` automatically trusts its configured local/private endpoint for guarded model requests. If you use a custom provider id instead of `lmstudio`, set `models.providers.<id>.request.allowPrivateNetwork: true` explicitly.
 
 ## Related
 

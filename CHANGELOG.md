@@ -13,9 +13,11 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI/plugins: stop security-blocked plugin installs from retrying as hook packs, so normal plugin packages report the scanner failure without a misleading "not a valid hook pack" follow-up. Fixes #61175; supersedes #64102. Thanks @KonsultDigital and @ziyincody.
 - CLI/update: keep the automatic post-update completion refresh on the core-command tree so it no longer stages bundled plugin runtime deps before the Gateway restart path, avoiding `.24` update hangs and 1006 disconnect cascades. Fixes #72665. Thanks @sakalaboator and @He-Pin.
 - Agents/Bedrock: stop heartbeat runs from persisting blank user transcript turns and repair existing blank user text messages before replay, preventing AWS Bedrock `ContentBlock` blank-text validation failures. Fixes #72640 and #72622. Thanks @goldzulu.
 - Agents/LM Studio: promote standalone bracketed local-model tool requests into registered tool calls and hide unsupported bracket blocks from visible replies, so MemPalace MCP lookups do not print raw `[tool]` JSON scaffolding in chat. Fixes #66178. Thanks @detroit357.
+- LM Studio: trust configured LM Studio loopback, LAN, and tailnet endpoints for guarded model requests by default, preserving explicit private-network opt-outs. Refs #60994. Thanks @tnowakow.
 - Docker/setup: route Docker onboarding defaults for host-side LM Studio and Ollama through `host.docker.internal` and add the Linux host-gateway mapping to the bundled Compose file, so containerized gateways can reach local providers without using container loopback. Fixes #68684; supersedes #68702. Thanks @safrano9999 and @skolez.
 - Agents/LM Studio: strip prior-turn Gemma 4 reasoning from OpenAI-compatible replay while preserving active tool-call continuation reasoning. Fixes #68704. Thanks @chip-snomo and @Kailigithub.
 - LM Studio: allow interactive onboarding to leave the API key blank for unauthenticated local servers, using local synthetic auth while clearing stale LM Studio auth profiles. Fixes #66937. Thanks @olamedia.
@@ -32,6 +34,7 @@ Docs: https://docs.openclaw.ai
 - Build/plugins: preserve active bundled runtime-dependency staging temp directories owned by live build processes so overlapping postbuild runs no longer delete each other's staged deps mid-prune. Supersedes #72220. Thanks @VACInc.
 - Plugins/install: hide bundled runtime-dependency npm child windows on Windows across Gateway startup, postinstall, and packaged staging paths so Telegram/Anthropic dependency repair no longer flashes shell windows. Fixes #72315. Thanks @athuljayaram and @joshfeng.
 - Plugins/Windows: normalize lazy plugin service override imports before Node ESM loading so drive-letter browser-control module paths no longer fail with `ERR_UNSUPPORTED_ESM_URL_SCHEME`. Fixes #72573; supersedes #72599 and #72582. Thanks @llzzww316, @feineryonah-byte, and @WuKongAI-CMU.
+- Browser/plugins: load `playwright-core` through the browser runtime shim so packaged installs can run Playwright actions from staged plugin runtime deps after doctor/startup repair. Fixes #72168; supersedes #72238. Thanks @zdg1110 and @yetval.
 - Plugins/install: stage bundled plugin runtime dependencies before Gateway startup, drain update restarts, and materialize plugin-owned root chunks in external mirrors so staged deps resolve under native ESM. Fixes #72058; supersedes #72084. Thanks @amnesia106 and @drvoss.
 - TTS/SecretRef: resolve `messages.tts.providers.*.apiKey` from the active runtime snapshot so SecretRef-backed MiniMax and other TTS provider keys work in runtime reply/audio paths. Fixes #68690. Thanks @joshavant.
 - Gateway/install: surface systemd user-bus recovery hints during Linux service activation and retry via the machine user scope when `systemctl --user` reports no-medium bus failures. Fixes #39673; refs #44417 and #63561. Thanks @Arbor4, @myrsu, and @mssteuer.
