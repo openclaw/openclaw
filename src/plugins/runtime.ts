@@ -1,3 +1,4 @@
+import { getRuntimeConfig } from "../config/config.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { cleanupReplacedPluginHostRegistry } from "./host-hook-cleanup.js";
@@ -111,6 +112,7 @@ export function setActivePluginRegistry(
   state.runtimeSubagentMode = runtimeSubagentMode;
   syncPluginAgentEventBridge(registry);
   void cleanupReplacedPluginHostRegistry({
+    cfg: getRuntimeConfig(),
     previousRegistry,
     nextRegistry: registry,
   }).catch((error) => {

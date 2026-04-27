@@ -89,6 +89,7 @@ export function forgetPromptBuildDrainCacheForRun(runId: string | undefined): vo
 }
 
 export async function resolvePromptBuildHookResult(params: {
+  config: OpenClawConfig;
   prompt: string;
   messages: unknown[];
   hookCtx: PluginHookAgentContext;
@@ -103,6 +104,7 @@ export async function resolvePromptBuildHookResult(params: {
         ...buildPluginAgentTurnPrepareContext({ queuedInjections: cachedInjections }),
       }
     : await drainPluginNextTurnInjectionContext({
+        cfg: params.config,
         sessionKey: params.hookCtx.sessionKey,
       });
   if (runId && !cachedInjections) {

@@ -1,8 +1,8 @@
 import fs from "node:fs";
-import { loadConfig } from "../config/config.js";
 import { updateSessionStore } from "../config/sessions/store.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { cleanupPluginSessionSchedulerJobs, clearPluginRunContext } from "./host-hook-runtime.js";
 import type { PluginHostCleanupReason } from "./host-hooks.js";
@@ -66,15 +66,15 @@ function matchesCleanupSession(
 }
 
 async function clearPluginOwnedSessionStores(params: {
+  cfg: OpenClawConfig;
   pluginId?: string;
   sessionKey?: string;
 }): Promise<number> {
   if (!params.pluginId && !params.sessionKey) {
     return 0;
   }
-  const cfg = loadConfig();
   const storePaths = new Set(
-    resolveAllAgentSessionStoreTargetsSync(cfg)
+    resolveAllAgentSessionStoreTargetsSync(params.cfg)
       .map((target) => target.storePath)
       .filter((storePath) => fs.existsSync(storePath)),
   );
@@ -101,6 +101,7 @@ async function clearPluginOwnedSessionStores(params: {
 }
 
 export async function runPluginHostCleanup(params: {
+  cfg: OpenClawConfig;
   registry?: PluginRegistry | null;
   pluginId?: string;
   reason: PluginHostCleanupReason;
@@ -112,6 +113,7 @@ export async function runPluginHostCleanup(params: {
     params.reason === "restart"
       ? 0
       : await clearPluginOwnedSessionStores({
+          cfg: params.cfg,
           pluginId: params.pluginId,
           sessionKey: params.sessionKey,
         });
@@ -220,6 +222,7 @@ function collectSchedulerJobIds(
 }
 
 export async function cleanupReplacedPluginHostRegistry(params: {
+  cfg: OpenClawConfig;
   previousRegistry?: PluginRegistry | null;
   nextRegistry?: PluginRegistry | null;
 }): Promise<PluginHostCleanupResult> {
@@ -239,6 +242,7 @@ export async function cleanupReplacedPluginHostRegistry(params: {
   for (const pluginId of previousPluginIds) {
     const restarted = nextPluginIds.has(pluginId);
     const result = await runPluginHostCleanup({
+      cfg: params.cfg,
       registry: previousRegistry,
       pluginId,
       reason: restarted ? "restart" : "disable",

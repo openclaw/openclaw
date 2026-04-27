@@ -415,6 +415,7 @@ export async function cleanupSessionBeforeMutation(params: {
     return cleanupError;
   }
   const pluginCleanup = await runPluginHostCleanup({
+    cfg: params.cfg,
     registry: getActivePluginRegistry(),
     reason: params.reason === "session-reset" ? "reset" : "delete",
     sessionKey: params.target.canonicalKey ?? params.key,

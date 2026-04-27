@@ -1,3 +1,4 @@
+import { getRuntimeConfig } from "../../config/config.js";
 import { ensureMcpLoopbackServer } from "../../gateway/mcp-http.js";
 import {
   createMcpLoopbackServerConfig,
@@ -327,6 +328,7 @@ export async function prepareCliRunContext(
   const hookRunner = getGlobalHookRunner();
   try {
     const hookResult = await resolvePromptBuildHookResult({
+      config: params.config ?? getRuntimeConfig(),
       prompt: params.prompt,
       messages: loadOpenClawHistoryMessages(),
       hookCtx: {

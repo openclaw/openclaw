@@ -1435,6 +1435,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const patched = await patchPluginSessionExtension({
+      cfg: context.getRuntimeConfig(),
       sessionKey: key,
       pluginId,
       namespace,

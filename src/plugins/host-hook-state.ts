@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { loadConfig } from "../config/config.js";
 import { loadSessionStore, updateSessionStore, type SessionEntry } from "../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
@@ -7,6 +6,7 @@ import {
   resolveAllAgentSessionStoreTargetsSync,
   type SessionStoreTarget,
 } from "../config/sessions/targets.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveSessionStoreAgentId,
   resolveSessionStoreKey,
@@ -116,7 +116,7 @@ function findFreshestStoreMatch(
 }
 
 function resolveSessionStoreCandidates(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   agentId: string;
 }): SessionStoreTarget[] {
   const storeConfig = params.cfg.session?.store;
@@ -138,7 +138,7 @@ function resolveSessionStoreCandidates(params: {
 }
 
 function buildSessionStoreScanTargets(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   key: string;
   canonicalKey: string;
   agentId: string;
@@ -163,14 +163,14 @@ function buildSessionStoreScanTargets(params: {
   return [...targets];
 }
 
-function loadPluginHostHookSessionEntry(sessionKey: string): {
+function loadPluginHostHookSessionEntry(params: { cfg: OpenClawConfig; sessionKey: string }): {
   storePath: string;
   entry?: SessionEntry;
   canonicalKey: string;
   storeKey: string;
 } {
-  const cfg = loadConfig();
-  const key = normalizeOptionalString(sessionKey) ?? "";
+  const key = normalizeOptionalString(params.sessionKey) ?? "";
+  const cfg = params.cfg;
   const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey: key });
   const agentId = resolveSessionStoreAgentId(cfg, canonicalKey);
   const scanTargets = buildSessionStoreScanTargets({ cfg, key, canonicalKey, agentId });
@@ -203,8 +203,8 @@ function loadPluginHostHookSessionEntry(sessionKey: string): {
   };
 }
 
-function isPluginPromptInjectionEnabled(pluginId: string): boolean {
-  const entry = loadConfig().plugins?.entries?.[pluginId];
+function isPluginPromptInjectionEnabled(cfg: OpenClawConfig, pluginId: string): boolean {
+  const entry = cfg.plugins?.entries?.[pluginId];
   return entry?.hooks?.allowPromptInjection !== false;
 }
 
@@ -228,6 +228,7 @@ function toPluginNextTurnInjectionRecord(params: {
 }
 
 export async function enqueuePluginNextTurnInjection(params: {
+  cfg: OpenClawConfig;
   pluginId: string;
   pluginName?: string;
   injection: PluginNextTurnInjection;
@@ -274,7 +275,7 @@ export async function enqueuePluginNextTurnInjection(params: {
   ) {
     return { enqueued: false, id: "", sessionKey };
   }
-  const loaded = loadPluginHostHookSessionEntry(sessionKey);
+  const loaded = loadPluginHostHookSessionEntry({ cfg: params.cfg, sessionKey });
   if (!loaded.entry) {
     return { enqueued: false, id: "", sessionKey };
   }
@@ -323,6 +324,7 @@ export async function enqueuePluginNextTurnInjection(params: {
 }
 
 export async function drainPluginNextTurnInjections(params: {
+  cfg: OpenClawConfig;
   sessionKey?: string;
   now?: number;
 }): Promise<PluginNextTurnInjectionRecord[]> {
@@ -330,7 +332,7 @@ export async function drainPluginNextTurnInjections(params: {
   if (!sessionKey) {
     return [];
   }
-  const loaded = loadPluginHostHookSessionEntry(sessionKey);
+  const loaded = loadPluginHostHookSessionEntry({ cfg: params.cfg, sessionKey });
   if (!loaded.entry) {
     return [];
   }
@@ -357,7 +359,7 @@ export async function drainPluginNextTurnInjections(params: {
     );
     const drained: PluginNextTurnInjectionRecord[] = [];
     for (const [pluginId, entries] of Object.entries(entry.pluginNextTurnInjections)) {
-      if (!activePluginIds.has(pluginId) || !isPluginPromptInjectionEnabled(pluginId)) {
+      if (!activePluginIds.has(pluginId) || !isPluginPromptInjectionEnabled(params.cfg, pluginId)) {
         continue;
       }
       // Guard against malformed/hand-edited persisted state — a non-array value
@@ -382,6 +384,7 @@ export async function drainPluginNextTurnInjections(params: {
 }
 
 export async function drainPluginNextTurnInjectionContext(params: {
+  cfg: OpenClawConfig;
   sessionKey?: string;
   now?: number;
 }): Promise<PluginAgentTurnPrepareResult & { queuedInjections: PluginNextTurnInjectionRecord[] }> {
@@ -393,6 +396,7 @@ export async function drainPluginNextTurnInjectionContext(params: {
 }
 
 export async function patchPluginSessionExtension(params: {
+  cfg: OpenClawConfig;
   sessionKey: string;
   pluginId: string;
   namespace: string;
@@ -421,7 +425,7 @@ export async function patchPluginSessionExtension(params: {
   if (!registered) {
     return { ok: false, error: `unknown plugin session extension: ${pluginId}/${namespace}` };
   }
-  const loaded = loadPluginHostHookSessionEntry(params.sessionKey);
+  const loaded = loadPluginHostHookSessionEntry({ cfg: params.cfg, sessionKey: params.sessionKey });
   if (!loaded.entry) {
     return { ok: false, error: `unknown session key: ${params.sessionKey}` };
   }
