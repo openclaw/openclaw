@@ -481,3 +481,11 @@ yuweuii
 yxjsxy
 zijiess
 clawtributors:hidden:end -->
+
+## 💰 Bounty Contribution
+
+- **Task:** Feature Request: Skill-Driven Plugin Context Visibility (activates.plugins)
+- **Reward:** $1000
+- **Source:** GitHub-Paid
+- **Date:** 2026-04-27
+
