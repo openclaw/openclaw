@@ -14,4 +14,10 @@ describe("nvidia provider catalog", () => {
       "z-ai/glm5",
     ]);
   });
+
+  it("declares NVIDIA_API_KEY env var as the apiKey marker", () => {
+    const provider = buildNvidiaProvider();
+
+    expect(provider.apiKey).toBe("NVIDIA_API_KEY");
+  });
 });
