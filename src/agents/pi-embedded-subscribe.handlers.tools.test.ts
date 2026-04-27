@@ -1044,4 +1044,35 @@ describe("control UI credential redaction (issue #72283)", () => {
     expect(lastOutput?.data?.output).not.toContain("ghp_abcdefghij1234567890");
     expect(lastOutput?.data?.output).toContain("OPENROUTER_API_KEY=");
   });
+
+  it("redacts details-only results before emitting the tool result event", async () => {
+    const events: Array<{ stream?: string; data?: Record<string, unknown> }> = [];
+    registerAgentEventListener((evt) => {
+      events.push(evt as never);
+    });
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "gateway",
+        toolCallId: "tool-details-secret",
+        isError: false,
+        result: {
+          details: {
+            config: { apiKey: "sk-1234567890abcdefXYZ", model: "gpt-4" },
+          },
+        },
+      } as never,
+    );
+
+    const resultEvent = events.find(
+      (evt) => evt.stream === "tool" && (evt.data as { phase?: string })?.phase === "result",
+    );
+    expect(resultEvent).toBeDefined();
+    const serialized = JSON.stringify(resultEvent?.data?.result);
+    expect(serialized).not.toContain("sk-1234567890abcdefXYZ");
+    expect(serialized).toContain("gpt-4");
+  });
 });
