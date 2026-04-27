@@ -66,6 +66,11 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: false,
   },
   {
+    name: "agent-exec",
+    description: "Run a structured headless agent execution against a coordination job",
+    hasSubcommands: false,
+  },
+  {
     name: "agents",
     description: "Manage isolated agents (workspaces, auth, routing)",
     hasSubcommands: true,

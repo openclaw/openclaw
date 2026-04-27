@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { agentExecCommand } from "../../commands/agent-exec.js";
 import { agentCliCommand } from "../../commands/agent-via-gateway.js";
 import {
   agentsAddCommand,
@@ -77,10 +78,44 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
       const verboseLevel =
         typeof opts.verbose === "string" ? normalizeLowercaseStringOrEmpty(opts.verbose) : "";
       setVerbose(verboseLevel === "on");
-      // Build default deps (keeps parity with other commands; future-proofing).
       const deps = createDefaultDeps();
       await runCommandWithRuntime(defaultRuntime, async () => {
         await agentCliCommand(opts, defaultRuntime, deps);
+      });
+    });
+
+  program
+    .command("agent-exec")
+    .description(
+      "Run a structured headless agent execution against a coordination job (--force-rerun bypasses safe refusal for intentional retries)",
+    )
+    .requiredOption("--agent <id>", "Agent id to execute")
+    .requiredOption("--job-id <id>", "Coordination job id")
+    .requiredOption("--job-path <path>", "Path to the coordination job artifact (job.json)")
+    .option("--timeout <seconds>", "Override execution timeout (seconds, default 300)")
+    .option("--json", "Output result as JSON", false)
+    .option("--force-rerun", "Bypass safe refusal for proof-ready or terminal jobs", false)
+    .addHelpText(
+      "after",
+      () =>
+        `
+${theme.heading("Examples:")}
+${formatHelpExamples([
+  [
+    "openclaw agent-exec --agent klaus --job-id dom-v2-headless-executor-proof-001 --job-path /path/to/job.json --timeout 300",
+    "Run a structured execution envelope against a coordination job.",
+  ],
+  [
+    "openclaw agent-exec --agent klaus --job-id dom-v2-headless-executor-proof-001 --job-path /path/to/job.json --force-rerun",
+    "Intentionally bypass terminal/proof-ready early refusal for a controlled rerun.",
+  ],
+])}
+`,
+    )
+    .action(async (opts) => {
+      const deps = createDefaultDeps();
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await agentExecCommand(opts, defaultRuntime, deps);
       });
     });
 

@@ -4,6 +4,7 @@ import { registerAgentCommands } from "./register.agent.js";
 
 const mocks = vi.hoisted(() => ({
   agentCliCommandMock: vi.fn(),
+  agentExecCommandMock: vi.fn(),
   agentsAddCommandMock: vi.fn(),
   agentsBindingsCommandMock: vi.fn(),
   agentsBindCommandMock: vi.fn(),
@@ -21,6 +22,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 const agentCliCommandMock = mocks.agentCliCommandMock;
+const agentExecCommandMock = mocks.agentExecCommandMock;
 const agentsAddCommandMock = mocks.agentsAddCommandMock;
 const agentsBindingsCommandMock = mocks.agentsBindingsCommandMock;
 const agentsBindCommandMock = mocks.agentsBindCommandMock;
@@ -34,6 +36,10 @@ const runtime = mocks.runtime;
 
 vi.mock("../../commands/agent-via-gateway.js", () => ({
   agentCliCommand: mocks.agentCliCommandMock,
+}));
+
+vi.mock("../../commands/agent-exec.js", () => ({
+  agentExecCommand: mocks.agentExecCommandMock,
 }));
 
 vi.mock("../../commands/agents.js", () => ({
@@ -69,6 +75,7 @@ describe("registerAgentCommands", () => {
     vi.clearAllMocks();
     runtime.exit.mockImplementation(() => {});
     agentCliCommandMock.mockResolvedValue(undefined);
+    agentExecCommandMock.mockResolvedValue(undefined);
     agentsAddCommandMock.mockResolvedValue(undefined);
     agentsBindingsCommandMock.mockResolvedValue(undefined);
     agentsBindCommandMock.mockResolvedValue(undefined);
@@ -93,6 +100,44 @@ describe("registerAgentCommands", () => {
       runtime,
       { deps: true },
     );
+  });
+
+  it("runs agent-exec with deps", async () => {
+    await runCli([
+      "agent-exec",
+      "--agent",
+      "klaus",
+      "--job-id",
+      "job-1",
+      "--job-path",
+      "/tmp/job.json",
+      "--timeout",
+      "300",
+      "--json",
+      "--force-rerun",
+    ]);
+
+    expect(createDefaultDepsMock).toHaveBeenCalledTimes(1);
+    expect(agentExecCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: "klaus",
+        jobId: "job-1",
+        jobPath: "/tmp/job.json",
+        timeout: "300",
+        json: true,
+        forceRerun: true,
+      }),
+      runtime,
+      { deps: true },
+    );
+  });
+
+  it("includes agent-exec in root help text", () => {
+    const program = new Command();
+    registerAgentCommands(program, { agentChannelOptions: "last|telegram|discord" });
+    const help = program.helpInformation();
+    expect(help).toContain("agent-exec");
+    expect(help).toContain("force-rerun");
   });
 
   it("runs agent command with verbose disabled for --verbose off", async () => {

@@ -31,6 +31,7 @@ export type CliCommandCatalogEntry = {
 
 export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   { commandPath: ["agent"], policy: { loadPlugins: "always" } },
+  { commandPath: ["agent-exec"], policy: { loadPlugins: "always" } },
   { commandPath: ["message"], policy: { loadPlugins: "always" } },
   { commandPath: ["channels"], policy: { loadPlugins: "always" } },
   { commandPath: ["directory"], policy: { loadPlugins: "always" } },

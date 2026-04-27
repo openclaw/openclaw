@@ -317,7 +317,7 @@ export function shouldMigrateStateFromPath(path: string[]): boolean {
   if (primary === "models" && (secondary === "list" || secondary === "status")) {
     return false;
   }
-  if (primary === "agent") {
+  if (primary === "agent" || primary === "agent-exec") {
     return false;
   }
   return true;

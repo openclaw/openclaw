@@ -100,7 +100,7 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<
     ]),
   ),
   defineImportedCommandGroupSpec(
-    ["agent", "agents"],
+    ["agent", "agent-exec", "agents"],
     () => import("./register.agent.js"),
     (mod, { program, ctx }) => {
       mod.registerAgentCommands(program, {
