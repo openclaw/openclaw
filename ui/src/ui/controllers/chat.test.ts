@@ -4,6 +4,7 @@ import {
   abortChatRun,
   handleChatEvent,
   loadChatHistory,
+  loadOlderChatHistory,
   sendChatMessage,
   type ChatEventPayload,
   type ChatState,
@@ -12,7 +13,10 @@ import {
 function createState(overrides: Partial<ChatState> = {}): ChatState {
   return {
     chatAttachments: [],
+    chatCursor: null,
+    chatHasMore: false,
     chatLoading: false,
+    chatLoadingOlder: false,
     chatMessage: "",
     chatMessages: [],
     chatRunId: null,
@@ -475,6 +479,43 @@ describe("handleChatEvent", () => {
     expect(state.chatMessages).toEqual([]);
   });
 
+  it("does not persist partial NO_REPLY stream text on final without message", () => {
+    // Streaming sends incremental snapshots; partial deltas ("NO_") don't match
+    // isSilentReplyStream but must not be committed when they are a NO_REPLY prefix.
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "NO_",
+      chatStreamStartedAt: 100,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([]);
+  });
+
+  it("does not persist partial NO_REPLY stream text on abort", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "NO_",
+      chatStreamStartedAt: 100,
+    });
+    const payload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "aborted",
+      message: "not-an-assistant-message",
+    } as unknown as ChatEventPayload;
+
+    expect(handleChatEvent(state, payload)).toBe("aborted");
+    expect(state.chatMessages).toEqual([]);
+  });
+
   it("keeps user messages containing NO_REPLY text", () => {
     const state = createState({
       sessionKey: "main",
@@ -922,6 +963,45 @@ describe("loadChatHistory", () => {
     expect(state.chatMessages).toEqual([historyUser, historyAssistant]);
   });
 
+  it("stores cursor and hasMore from response", async () => {
+    const request = vi.fn().mockResolvedValue({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "hello" }] }],
+      thinkingLevel: "low",
+      cursor: 50,
+      hasMore: true,
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatCursor).toBe(50);
+    expect(state.chatHasMore).toBe(true);
+  });
+
+  it("resets cursor and hasMore on unauthorized error", async () => {
+    const request = vi.fn().mockRejectedValue(
+      new GatewayRequestError({
+        code: "PERMISSION_DENIED",
+        message: "not allowed",
+        details: { code: "AUTH_UNAUTHORIZED" },
+      }),
+    );
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatCursor: 100,
+      chatHasMore: true,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatCursor).toBeNull();
+    expect(state.chatHasMore).toBe(false);
+  });
+
   it("shows a targeted message when chat history is unauthorized", async () => {
     const request = vi.fn().mockRejectedValue(
       new GatewayRequestError({
@@ -990,5 +1070,152 @@ describe("loadChatHistory", () => {
       { role: "assistant", content: [{ type: "text", text: "other history" }] },
     ]);
     expect(state.chatThinkingLevel).toBe("low");
+  });
+});
+
+describe("loadOlderChatHistory", () => {
+  const older = { role: "assistant", content: [{ type: "text", text: "older" }] };
+  const current = { role: "assistant", content: [{ type: "text", text: "current" }] };
+
+  it("prepends older messages and updates cursor and hasMore", async () => {
+    const request = vi.fn().mockResolvedValue({
+      messages: [older],
+      cursor: 0,
+      hasMore: false,
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [current],
+      chatCursor: 1,
+      chatHasMore: true,
+    });
+
+    const result = await loadOlderChatHistory(state);
+
+    expect(request).toHaveBeenCalledWith("chat.history", {
+      sessionKey: "main",
+      limit: 200,
+      before: 1,
+    });
+    expect(state.chatMessages).toEqual([older, current]);
+    expect(state.chatCursor).toBe(0);
+    expect(state.chatHasMore).toBe(false);
+    expect(state.chatLoadingOlder).toBe(false);
+    expect(result).toEqual({ prepended: 1 });
+  });
+
+  it("returns { prepended: 0 } and skips fetch when chatHasMore is false", async () => {
+    const request = vi.fn();
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatHasMore: false,
+      chatCursor: 10,
+    });
+
+    const result = await loadOlderChatHistory(state);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(result).toEqual({ prepended: 0 });
+  });
+
+  it("returns { prepended: 0 } and skips fetch when chatCursor is null", async () => {
+    const request = vi.fn();
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatHasMore: true,
+      chatCursor: null,
+    });
+
+    const result = await loadOlderChatHistory(state);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(result).toEqual({ prepended: 0 });
+  });
+
+  it("returns { prepended: 0 } and skips fetch when already loading older", async () => {
+    const request = vi.fn();
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatHasMore: true,
+      chatCursor: 10,
+      chatLoadingOlder: true,
+    });
+
+    const result = await loadOlderChatHistory(state);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(result).toEqual({ prepended: 0 });
+  });
+
+  it("returns { prepended: 0 } when session changes mid-request", async () => {
+    const deferred = createDeferred<{ messages: unknown[]; cursor: number; hasMore: boolean }>();
+    const request = vi.fn().mockReturnValue(deferred.promise);
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [current],
+      chatCursor: 1,
+      chatHasMore: true,
+    });
+
+    const load = loadOlderChatHistory(state);
+    state.sessionKey = "other";
+    deferred.resolve({ messages: [older], cursor: 0, hasMore: false });
+    const result = await load;
+
+    expect(state.chatMessages).toEqual([current]);
+    expect(result).toEqual({ prepended: 0 });
+    expect(state.chatLoadingOlder).toBe(false);
+  });
+
+  it("returns { prepended: 0 } and sets lastError on fetch failure", async () => {
+    const request = vi.fn().mockRejectedValue(new Error("network error"));
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatCursor: 10,
+      chatHasMore: true,
+    });
+
+    const result = await loadOlderChatHistory(state);
+
+    expect(result).toEqual({ prepended: 0 });
+    expect(state.lastError).toContain("network error");
+    expect(state.chatLoadingOlder).toBe(false);
+  });
+
+  it("applies 500ms cooldown after completion, blocking immediate re-entry", async () => {
+    vi.useFakeTimers();
+    try {
+      const request = vi.fn().mockResolvedValue({ messages: [older], cursor: 0, hasMore: false });
+      const state = createState({
+        connected: true,
+        client: { request } as unknown as ChatState["client"],
+        chatCursor: 1,
+        chatHasMore: true,
+      });
+
+      await loadOlderChatHistory(state);
+      expect(request).toHaveBeenCalledTimes(1);
+
+      // Re-enable hasMore so the guard doesn't block for a different reason
+      state.chatHasMore = true;
+      state.chatCursor = 1;
+
+      // Immediate re-entry is blocked by cooldown
+      await loadOlderChatHistory(state);
+      expect(request).toHaveBeenCalledTimes(1);
+
+      // After cooldown expires, the next call goes through
+      await vi.advanceTimersByTimeAsync(500);
+      await loadOlderChatHistory(state);
+      expect(request).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

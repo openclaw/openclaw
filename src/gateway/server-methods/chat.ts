@@ -1046,6 +1046,14 @@ export function replaceOversizedChatHistoryMessages(params: {
   return { messages: replacedCount > 0 ? next : messages, replacedCount };
 }
 
+export function computeHistoryCursor(params: { firstRawIndex: number }): {
+  cursor: number;
+  hasMore: boolean;
+} {
+  const { firstRawIndex } = params;
+  return { cursor: firstRawIndex, hasMore: firstRawIndex > 0 };
+}
+
 export function enforceChatHistoryFinalBudget(params: { messages: unknown[]; maxBytes: number }): {
   messages: unknown[];
   placeholderCount: number;
@@ -1487,10 +1495,11 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const { sessionKey, limit, maxChars } = params as {
+    const { sessionKey, limit, maxChars, before } = params as {
       sessionKey: string;
       limit?: number;
       maxChars?: number;
+      before?: number;
     };
     const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
     const sessionId = entry?.sessionId;
@@ -1508,6 +1517,12 @@ export const chatHandlers: GatewayRequestHandlers = {
     const requested = typeof limit === "number" ? limit : defaultLimit;
     const max = Math.min(hardMax, requested);
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg, maxChars);
+    // Cursor stability relies on rawMessages being append-only between requests.
+    // CLI-imported messages sort by timestamp and new turns always arrive with the
+    // latest timestamp, so they append to the tail and don't shift existing indices.
+    const end =
+      typeof before === "number" ? Math.min(before, rawMessages.length) : rawMessages.length;
+    const start = Math.max(0, end - max);
     const normalized = augmentChatHistoryWithCanvasBlocks(
       projectRecentChatDisplayMessages(rawMessages, {
         maxChars: effectiveMaxChars,
@@ -1523,6 +1538,14 @@ export const chatHandlers: GatewayRequestHandlers = {
     scheduleChatHistoryManagedImageCleanup({ sessionKey, context });
     const capped = capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
     const bounded = enforceChatHistoryFinalBudget({ messages: capped, maxBytes: maxHistoryBytes });
+    const firstBounded = bounded.messages[0];
+    const rawIdx =
+      firstBounded != null
+        ? rawMessages.indexOf(firstBounded as (typeof rawMessages)[number], start)
+        : -1;
+    const { cursor, hasMore } = computeHistoryCursor({
+      firstRawIndex: rawIdx >= 0 ? rawIdx : start,
+    });
     const placeholderCount = replaced.replacedCount + bounded.placeholderCount;
     if (placeholderCount > 0) {
       chatHistoryPlaceholderEmitCount += placeholderCount;
@@ -1556,6 +1579,8 @@ export const chatHandlers: GatewayRequestHandlers = {
       thinkingLevel,
       fastMode: entry?.fastMode,
       verboseLevel,
+      cursor,
+      hasMore,
     });
   },
   "chat.abort": ({ params, respond, context, client }) => {

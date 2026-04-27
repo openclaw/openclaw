@@ -16,6 +16,7 @@ import {
 } from "./app-channels.ts";
 import {
   handleAbortChat as handleAbortChatInternal,
+  handleLoadOlderChat as handleLoadOlderChatInternal,
   handleSendChat as handleSendChatInternal,
   removeQueuedMessage as removeQueuedMessageInternal,
   steerQueuedChatMessage as steerQueuedChatMessageInternal,
@@ -31,6 +32,8 @@ import {
 } from "./app-lifecycle.ts";
 import { renderApp } from "./app-render.ts";
 import {
+  captureChatScrollHeight as captureChatScrollHeightInternal,
+  compensateChatScrollForPrepend as compensateChatScrollForPrependInternal,
   exportLogs as exportLogsInternal,
   handleChatScroll as handleChatScrollInternal,
   handleLogsScroll as handleLogsScrollInternal,
@@ -186,6 +189,9 @@ export class OpenClawApp extends LitElement {
 
   @state() sessionKey = this.settings.sessionKey;
   @state() chatLoading = false;
+  @state() chatLoadingOlder = false;
+  @state() chatCursor: number | null = null;
+  @state() chatHasMore = false;
   @state() chatSending = false;
   @state() chatMessage = "";
   @state() chatMessages: unknown[] = [];
@@ -771,6 +777,14 @@ export class OpenClawApp extends LitElement {
 
   async handleAbortChat() {
     await handleAbortChatInternal(this as unknown as Parameters<typeof handleAbortChatInternal>[0]);
+  }
+
+  async handleLoadOlderChat() {
+    const prevScrollHeight = captureChatScrollHeightInternal(this);
+    const { prepended } = await handleLoadOlderChatInternal(
+      this as unknown as Parameters<typeof handleLoadOlderChatInternal>[0],
+    );
+    await compensateChatScrollForPrependInternal(this, prevScrollHeight, prepended);
   }
 
   removeQueuedMessage(id: string) {

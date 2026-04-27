@@ -95,6 +95,9 @@ export type ChatProps = {
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
   showNewMessages?: boolean;
   onScrollToBottom?: () => void;
+  hasMore?: boolean;
+  loadingOlder?: boolean;
+  onLoadOlder?: () => void;
   onRefresh: () => void;
   onToggleFocusMode: () => void;
   getDraft?: () => string;
@@ -822,6 +825,20 @@ export function renderChat(props: ChatProps) {
                     </div>
                   </div>
                 </div>
+              </div>
+            `
+          : nothing}
+        ${props.hasMore && props.onLoadOlder
+          ? html`
+              <div class="chat-load-older">
+                <button
+                  class="btn btn--ghost"
+                  type="button"
+                  ?disabled=${props.loadingOlder}
+                  @click=${props.onLoadOlder}
+                >
+                  ${props.loadingOlder ? "Loading..." : "Load older messages"}
+                </button>
               </div>
             `
           : nothing}

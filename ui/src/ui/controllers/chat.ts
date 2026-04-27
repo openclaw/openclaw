@@ -18,7 +18,9 @@ const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
 const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS = 500;
 const STARTUP_CHAT_HISTORY_MAX_RETRY_MS = 5_000;
+const LOAD_OLDER_COOLDOWN_MS = 500;
 const chatHistoryRequestVersions = new WeakMap<object, number>();
+const loadOlderCooldowns = new WeakMap<object, number>();
 
 function beginChatHistoryRequest(state: ChatState): number {
   const key = state as object;
@@ -43,6 +45,12 @@ function isSilentReplyStream(text: string): boolean {
   return SILENT_REPLY_PATTERN.test(text);
 }
 
+// Guards against partial NO_REPLY deltas ("N", "NO", "NO_", "NO_REPL") leaking
+// into chat history when the stream resolves to a silent reply.
+function isPartialSilentReply(text: string): boolean {
+  const t = text.trim();
+  return t.length > 0 && "NO_REPLY".startsWith(t);
+}
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -339,8 +347,11 @@ export type ChatState = {
   connected: boolean;
   sessionKey: string;
   chatLoading: boolean;
+  chatLoadingOlder: boolean;
   chatMessages: unknown[];
   chatThinkingLevel: string | null;
+  chatCursor: number | null;
+  chatHasMore: boolean;
   chatSending: boolean;
   chatMessage: string;
   chatAttachments: ChatAttachment[];
@@ -381,16 +392,23 @@ export async function loadChatHistory(state: ChatState) {
   state.chatLoading = true;
   state.lastError = null;
   try {
-    let res: { messages?: Array<unknown>; thinkingLevel?: string };
+    let res: {
+      messages?: Array<unknown>;
+      thinkingLevel?: string;
+      cursor?: number;
+      hasMore?: boolean;
+    };
     for (;;) {
       try {
-        res = await state.client.request<{ messages?: Array<unknown>; thinkingLevel?: string }>(
-          "chat.history",
-          {
-            sessionKey,
-            limit: 200,
-          },
-        );
+        res = await state.client.request<{
+          messages?: Array<unknown>;
+          thinkingLevel?: string;
+          cursor?: number;
+          hasMore?: boolean;
+        }>("chat.history", {
+          sessionKey,
+          limit: 200,
+        });
         break;
       } catch (err) {
         if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey)) {
@@ -415,6 +433,8 @@ export async function loadChatHistory(state: ChatState) {
     const visibleMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
     state.chatMessages = preserveOptimisticTailMessages(visibleMessages, previousMessages);
     state.chatThinkingLevel = res.thinkingLevel ?? null;
+    state.chatCursor = typeof res.cursor === "number" ? res.cursor : null;
+    state.chatHasMore = res.hasMore === true;
     // Clear all streaming state — history includes tool results and text
     // inline, so keeping streaming artifacts would cause duplicates.
     maybeResetToolStream(state);
@@ -427,6 +447,8 @@ export async function loadChatHistory(state: ChatState) {
     if (isMissingOperatorReadScopeError(err)) {
       state.chatMessages = [];
       state.chatThinkingLevel = null;
+      state.chatCursor = null;
+      state.chatHasMore = false;
       state.lastError = formatMissingOperatorReadScopeMessage("existing chat history");
     } else {
       state.lastError = String(err);
@@ -435,6 +457,47 @@ export async function loadChatHistory(state: ChatState) {
     if (isLatestChatHistoryRequest(state, requestVersion)) {
       state.chatLoading = false;
     }
+  }
+}
+
+export async function loadOlderChatHistory(state: ChatState): Promise<{ prepended: number }> {
+  const now = Date.now();
+  if (
+    !state.client ||
+    !state.connected ||
+    !state.chatHasMore ||
+    state.chatCursor === null ||
+    state.chatLoadingOlder ||
+    now < (loadOlderCooldowns.get(state as object) ?? 0)
+  ) {
+    return { prepended: 0 };
+  }
+  const sessionKey = state.sessionKey;
+  const before = state.chatCursor;
+  state.chatLoadingOlder = true;
+  try {
+    const res = await state.client.request<{
+      messages?: Array<unknown>;
+      cursor?: number;
+      hasMore?: boolean;
+    }>("chat.history", { sessionKey, limit: 200, before });
+    if (state.sessionKey !== sessionKey || state.chatCursor !== before) {
+      return { prepended: 0 };
+    }
+    const messages = Array.isArray(res.messages) ? res.messages : [];
+    const visibleMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
+    state.chatMessages = [...visibleMessages, ...state.chatMessages];
+    state.chatCursor = typeof res.cursor === "number" ? res.cursor : null;
+    state.chatHasMore = res.hasMore === true;
+    return { prepended: visibleMessages.length };
+  } catch (err) {
+    if (state.sessionKey === sessionKey) {
+      state.lastError = String(err);
+    }
+    return { prepended: 0 };
+  } finally {
+    loadOlderCooldowns.set(state as object, Date.now() + LOAD_OLDER_COOLDOWN_MS);
+    state.chatLoadingOlder = false;
   }
 }
 
@@ -716,7 +779,11 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
     if (finalMessage && !isAssistantSilentReply(finalMessage)) {
       state.chatMessages = [...state.chatMessages, finalMessage];
-    } else if (state.chatStream?.trim() && !isSilentReplyStream(state.chatStream)) {
+    } else if (
+      state.chatStream?.trim() &&
+      !isSilentReplyStream(state.chatStream) &&
+      !isPartialSilentReply(state.chatStream)
+    ) {
       state.chatMessages = [
         ...state.chatMessages,
         {
@@ -735,7 +802,11 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       state.chatMessages = [...state.chatMessages, normalizedMessage];
     } else {
       const streamedText = state.chatStream ?? "";
-      if (streamedText.trim() && !isSilentReplyStream(streamedText)) {
+      if (
+        streamedText.trim() &&
+        !isSilentReplyStream(streamedText) &&
+        !isPartialSilentReply(streamedText)
+      ) {
         state.chatMessages = [
           ...state.chatMessages,
           {

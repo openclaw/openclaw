@@ -84,6 +84,9 @@ export type AppViewState = {
   allowExternalEmbedUrls: boolean;
   sessionKey: string;
   chatLoading: boolean;
+  chatLoadingOlder: boolean;
+  chatCursor: number | null;
+  chatHasMore: boolean;
   chatSending: boolean;
   chatMessage: string;
   chatAttachments: ChatAttachment[];
@@ -450,6 +453,7 @@ export type AppViewState = {
     toggleRealtimeTalk: () => Promise<void>;
     steerQueuedChatMessage: (id: string) => Promise<void>;
     handleAbortChat: () => Promise<void>;
+    handleLoadOlderChat: () => Promise<void>;
     removeQueuedMessage: (id: string) => void;
     handleChatScroll: (event: Event) => void;
     resetToolStream: () => void;

@@ -8,6 +8,7 @@ import { resolveControlUiAuthHeader } from "./control-ui-auth.ts";
 import {
   abortChatRun,
   loadChatHistory,
+  loadOlderChatHistory,
   sendChatMessage,
   sendDetachedChatMessage,
   sendSteerChatMessage,
@@ -29,6 +30,9 @@ export type ChatHost = {
   client: GatewayBrowserClient | null;
   chatMessages: unknown[];
   chatStream: string | null;
+  chatCursor?: number | null;
+  chatHasMore?: boolean;
+  chatLoadingOlder?: boolean;
   connected: boolean;
   chatMessage: string;
   chatAttachments: ChatAttachment[];
@@ -96,6 +100,10 @@ function isChatResetCommand(text: string) {
 
 function isBtwCommand(text: string) {
   return /^\/btw(?::|\s|$)/i.test(text.trim());
+}
+
+export async function handleLoadOlderChat(host: ChatHost): Promise<{ prepended: number }> {
+  return loadOlderChatHistory(host as unknown as ChatState);
 }
 
 export async function handleAbortChat(host: ChatHost) {

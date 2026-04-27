@@ -355,6 +355,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `sessions.reset`, `sessions.delete`, and `sessions.compact` perform session maintenance.
     - `sessions.get` returns the full stored session row.
     - Chat execution still uses `chat.history`, `chat.send`, `chat.abort`, and `chat.inject`. `chat.history` is display-normalized for UI clients: inline directive tags are stripped from visible text, plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks) and leaked ASCII/full-width model control tokens are stripped, pure silent-token assistant rows such as exact `NO_REPLY` / `no_reply` are omitted, and oversized rows can be replaced with placeholders.
+    - `chat.history` params: `sessionKey` (required), `limit` (integer, default 200, max 1000), `maxChars` (integer, max 500000), `before` (integer cursor — index into the raw message array; omit for the latest page). Response includes `messages`, `cursor` (raw-array index of the first returned message, use as `before` on the next call), and `hasMore` (true when older messages exist before `cursor`). Byte-budget enforcement can trim leading messages from a page; `cursor` always reflects the first message actually returned after trimming.
   </Accordion>
 
   <Accordion title="Device pairing and device tokens">

@@ -5,8 +5,6 @@ import { normalizeRoleForGrouping } from "./role-normalizer.ts";
 import { messageMatchesSearchQuery } from "./search-match.ts";
 import { extractToolCards, extractToolPreview } from "./tool-cards.ts";
 
-const CHAT_HISTORY_RENDER_LIMIT = 200;
-
 export type BuildChatItemsProps = {
   sessionKey: string;
   messages: unknown[];
@@ -199,19 +197,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   const items: ChatItem[] = [];
   const history = Array.isArray(props.messages) ? props.messages : [];
   const tools = Array.isArray(props.toolMessages) ? props.toolMessages : [];
-  const historyStart = Math.max(0, history.length - CHAT_HISTORY_RENDER_LIMIT);
-  if (historyStart > 0) {
-    items.push({
-      kind: "message",
-      key: "chat:history:notice",
-      message: {
-        role: "system",
-        content: `Showing last ${CHAT_HISTORY_RENDER_LIMIT} messages (${historyStart} hidden).`,
-        timestamp: Date.now(),
-      },
-    });
-  }
-  for (let i = historyStart; i < history.length; i++) {
+  for (let i = 0; i < history.length; i++) {
     const msg = history[i];
     const normalized = normalizeMessage(msg);
     const raw = msg as Record<string, unknown>;

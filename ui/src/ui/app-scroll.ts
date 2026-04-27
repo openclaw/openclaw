@@ -151,6 +151,30 @@ export function resetChatScroll(host: ScrollHost) {
   host.chatNewMessagesBelow = false;
 }
 
+export function captureChatScrollHeight(host: Pick<ScrollHost, "querySelector">): number {
+  const container = queryHost(host, ".chat-thread") as HTMLElement | null;
+  return container?.scrollHeight ?? 0;
+}
+
+export async function compensateChatScrollForPrepend(
+  host: Pick<ScrollHost, "updateComplete" | "querySelector">,
+  prevScrollHeight: number,
+  prepended: number,
+): Promise<void> {
+  if (prepended === 0) {
+    return;
+  }
+  await host.updateComplete;
+  const container = queryHost(host, ".chat-thread") as HTMLElement | null;
+  if (!container) {
+    return;
+  }
+  const delta = container.scrollHeight - prevScrollHeight;
+  if (delta > 0) {
+    container.scrollTop += delta;
+  }
+}
+
 export function exportLogs(lines: string[], label: string) {
   if (lines.length === 0) {
     return;
