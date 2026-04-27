@@ -201,6 +201,8 @@ export class GatewayClient {
   private pendingDeviceTokenRetry = false;
   private deviceTokenRetryBudgetUsed = false;
   private pendingConnectErrorDetailCode: string | null = null;
+  private helloOkReceived = false;
+  private suppressNextConnectError = false;
   // Track last tick to detect silent stalls.
   private lastTick: number | null = null;
   private tickIntervalMs = 30_000;
@@ -311,6 +313,10 @@ export class GatewayClient {
     ws.on("message", (data) => this.handleMessage(rawDataToString(data)));
     ws.on("close", (code, reason) => {
       const reasonText = rawDataToString(reason);
+      const isTransientPrehelloNormalClose =
+        !this.closed && !this.helloOkReceived && code === 1000 && reasonText.trim().length === 0;
+      this.suppressNextConnectError = isTransientPrehelloNormalClose;
+
       const connectErrorDetailCode = this.pendingConnectErrorDetailCode;
       this.pendingConnectErrorDetailCode = null;
       if (this.ws === ws) {
@@ -341,16 +347,20 @@ export class GatewayClient {
       }
       this.flushPendingErrors(new Error(`gateway closed (${code}): ${reasonText}`));
       if (this.shouldPauseReconnectAfterAuthFailure(connectErrorDetailCode)) {
-        this.opts.onReconnectPaused?.({
-          code,
-          reason: reasonText,
-          detailCode: connectErrorDetailCode,
-        });
-        this.opts.onClose?.(code, reasonText);
+        if (!isTransientPrehelloNormalClose) {
+          this.opts.onReconnectPaused?.({
+            code,
+            reason: reasonText,
+            detailCode: connectErrorDetailCode,
+          });
+          this.opts.onClose?.(code, reasonText);
+        }
         return;
       }
       this.scheduleReconnect();
-      this.opts.onClose?.(code, reasonText);
+      if (!isTransientPrehelloNormalClose) {
+        this.opts.onClose?.(code, reasonText);
+      }
     });
     ws.on("error", (err) => {
       logDebug(`gateway client error: ${String(err)}`);
@@ -542,6 +552,8 @@ export class GatewayClient {
 
     void this.request<HelloOk>("connect", params)
       .then((helloOk) => {
+        this.helloOkReceived = true;
+        this.suppressNextConnectError = false;
         this.pendingDeviceTokenRetry = false;
         this.deviceTokenRetryBudgetUsed = false;
         this.pendingConnectErrorDetailCode = null;
@@ -564,6 +576,10 @@ export class GatewayClient {
         this.opts.onHelloOk?.(helloOk);
       })
       .catch((err) => {
+        if (this.suppressNextConnectError) {
+          this.suppressNextConnectError = false;
+          return;
+        }
         this.pendingConnectErrorDetailCode =
           err instanceof GatewayClientRequestError ? readConnectErrorDetailCode(err.details) : null;
         const shouldRetryWithDeviceToken = this.shouldRetryWithStoredDeviceToken({
@@ -814,6 +830,8 @@ export class GatewayClient {
   }
 
   private beginPreauthHandshake() {
+    this.helloOkReceived = false;
+    this.suppressNextConnectError = false;
     if (this.connectSent) {
       return;
     }

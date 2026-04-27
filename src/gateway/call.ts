@@ -518,6 +518,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
   return await new Promise<T>((resolve, reject) => {
     let settled = false;
     let ignoreClose = false;
+    let helloOk = false;
     const stop = (err?: Error, value?: T) => {
       if (settled) {
         return;
@@ -553,6 +554,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       minProtocol: opts.minProtocol ?? PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
       onHelloOk: async (hello) => {
+        helloOk = true;
         try {
           ensureGatewaySupportsRequiredMethods({
             requiredMethods: opts.requiredMethods,
@@ -572,6 +574,13 @@ async function executeGatewayRequestWithScopes<T>(params: {
       },
       onClose: (code, reason) => {
         if (settled || ignoreClose) {
+          return;
+        }
+        // Some gateways can transiently close a socket during the initial handshake
+        // (before hello-ok) while reconnect succeeds immediately after. Treat a
+        // normal close with an empty reason as a pre-hello transient and keep
+        // waiting for hello-ok or timeout.
+        if (!helloOk && code === 1000 && reason.trim().length === 0) {
           return;
         }
         ignoreClose = true;

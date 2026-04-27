@@ -40,7 +40,7 @@ let lastRequestOptions: {
   params?: unknown;
   opts?: { expectFinal?: boolean; timeoutMs?: number | null };
 } | null = null;
-type StartMode = "hello" | "close" | "silent";
+type StartMode = "hello" | "close" | "silent" | "close-then-hello";
 let startMode: StartMode = "hello";
 let closeCode = 1006;
 let closeReason = "";
@@ -127,6 +127,13 @@ class StubGatewayClient {
       });
     } else if (startMode === "close") {
       lastClientOptions?.onClose?.(closeCode, closeReason);
+    } else if (startMode === "close-then-hello") {
+      lastClientOptions?.onClose?.(closeCode, closeReason);
+      void lastClientOptions?.onHelloOk?.({
+        features: {
+          methods: helloMethods,
+        },
+      });
     }
   }
   stop() {}
@@ -809,6 +816,15 @@ describe("callGateway error details", () => {
     expect(err?.message).toContain("Gateway target: ws://127.0.0.1:18789");
     expect(err?.message).toContain("Source: local loopback");
     expect(err?.message).toContain("Bind: loopback");
+  });
+
+  it("waits through a transient pre-hello close when the client later completes hello", async () => {
+    startMode = "close-then-hello";
+    closeCode = 1000;
+    closeReason = "";
+    setLocalLoopbackGatewayConfig();
+
+    await expect(callGateway({ method: "health" })).resolves.toEqual({ ok: true });
   });
 
   it("includes connection details on timeout", async () => {
