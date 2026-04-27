@@ -54,10 +54,9 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - Formatting: use `oxfmt`, not Prettier. Prefer `pnpm format:check` / `pnpm format`; for targeted files use `pnpm exec oxfmt --check --threads=1 <files...>` or `pnpm exec oxfmt --write --threads=1 <files...>`.
 - Linting: use repo wrappers (`pnpm lint:*`, `scripts/run-oxlint.mjs`); do not invoke generic JS formatters/lints unless a repo script uses them.
 - Heavy checks: `OPENCLAW_LOCAL_CHECK=1`, mode `OPENCLAW_LOCAL_CHECK_MODE=throttled|full`; CI/shared use `OPENCLAW_LOCAL_CHECK=0`.
-- Default contributor path: local repo `pnpm` lanes first. Maintainer-only Testbox path: when Blacksmith access is configured and `OPENCLAW_TESTBOX=1` or personal rules request Testbox-first, use Blacksmith for broad, slow, Docker, live, E2E, full-suite, or CI-parity validation. `OPENCLAW_LOCAL_CHECK_MODE=throttled` is the local escape hatch.
-- Testbox pre-warm: for long-ish OpenClaw tasks in Testbox mode, run from repo root early: `blacksmith testbox warmup ci-check-testbox.yml --idle-timeout 90`. Use `240`, `720`, or `1440` only for multi-hour, all-day, or overnight work; above `1440` requires explicit user intent. Save the returned `tbx_...` and reuse it for every `blacksmith testbox run --id <ID> ...` in that task unless the box expires, the workflow/ref/env must change, or the user asks for a fresh box.
-- Testbox cleanup: track every created `tbx_...`; use `blacksmith testbox list` to inspect active boxes and `blacksmith testbox stop --id <ID>` to stop boxes from the current task. Do not stop pre-existing boxes unless they are clearly yours or the user asks.
-- Testbox cache seed: `--ref <branch|tag|sha>` may point at the current branch/SHA for correctness or a latest `beta`/`latest` SHA for warm cache state. A seeded box is not proof by itself; still run the build/check after local sync.
+- Maintainer Testbox mode: if `OPENCLAW_TESTBOX=1` is present in env or standing user rules, use Blacksmith Testbox for `pnpm` gates, e2e, broad suites, and long/heavy validation. This is maintainers-only and requires Blacksmith access.
+- Testbox escape hatch: if `OPENCLAW_TESTBOX=1` is set but `OPENCLAW_LOCAL_CHECK_MODE=throttled|full` is explicitly set for the task/command, use the local repo `pnpm` lane instead.
+- Testbox warmup: start from repo root, save/reuse the returned ID for every run in the same task. Use `ci-check-testbox.yml` for normal checks; use `ci-build-artifacts-testbox.yml` when build artifacts, e2e, or package-like proof benefits from seeded `dist/`/`dist-runtime/` caches.
 
 ## GitHub / CI
 

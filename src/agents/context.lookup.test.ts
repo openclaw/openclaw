@@ -203,6 +203,10 @@ describe("lookupContextTokens", () => {
     expect(shouldEagerWarmContextWindowCache(["node", "openclaw", "chat"])).toBe(true);
     expect(shouldEagerWarmContextWindowCache(["node", "openclaw", "chat", "--help"])).toBe(false);
     expect(
+      shouldEagerWarmContextWindowCache(["node", "openclaw", "matrix", "encryption", "help"]),
+    ).toBe(false);
+    expect(shouldEagerWarmContextWindowCache(["node", "openclaw", "help", "matrix"])).toBe(false);
+    expect(
       shouldEagerWarmContextWindowCache(["node", "openclaw", "browser", "status", "--help"]),
     ).toBe(false);
     expect(

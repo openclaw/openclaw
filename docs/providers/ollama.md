@@ -15,11 +15,26 @@ OpenClaw integrates with Ollama's native API (`/api/chat`) for hosted cloud mode
 
 Ollama provider config uses `baseUrl` as the canonical key. OpenClaw also accepts `baseURL` for compatibility with OpenAI SDK-style examples, but new config should prefer `baseUrl`.
 
-Local and LAN Ollama hosts do not need a real bearer token; OpenClaw uses the local `ollama-local` marker only for loopback, private-network, `.local`, and bare-hostname Ollama base URLs. Remote public hosts and Ollama Cloud (`https://ollama.com`) require a real credential through `OLLAMA_API_KEY`, an auth profile, or the provider's `apiKey`.
+### Auth rules
 
-Custom provider ids that set `api: "ollama"` use the same auth rules. For example, an `ollama-remote` provider that points at a private LAN Ollama host can use `apiKey: "ollama-local"` and sub-agents will resolve that marker through the Ollama provider hook instead of treating it as a missing credential.
+<AccordionGroup>
+  <Accordion title="Local and LAN hosts">
+    Local and LAN Ollama hosts do not need a real bearer token. OpenClaw uses the local `ollama-local` marker only for loopback, private-network, `.local`, and bare-hostname Ollama base URLs.
+  </Accordion>
+  <Accordion title="Remote and Ollama Cloud hosts">
+    Remote public hosts and Ollama Cloud (`https://ollama.com`) require a real credential through `OLLAMA_API_KEY`, an auth profile, or the provider's `apiKey`.
+  </Accordion>
+  <Accordion title="Custom provider ids">
+    Custom provider ids that set `api: "ollama"` follow the same rules. For example, an `ollama-remote` provider that points at a private LAN Ollama host can use `apiKey: "ollama-local"` and sub-agents will resolve that marker through the Ollama provider hook instead of treating it as a missing credential.
+  </Accordion>
+  <Accordion title="Memory embedding scope">
+    When Ollama is used for memory embeddings, bearer auth is scoped to the host where it was declared:
 
-When Ollama is used for memory embeddings, bearer auth is scoped to the host where it was declared. A provider-level key is sent only to that provider's Ollama host; `agents.*.memorySearch.remote.apiKey` is sent only to its remote embedding host; and a pure `OLLAMA_API_KEY` env value is treated as the Ollama Cloud convention rather than being sent to local/self-hosted hosts by default.
+    - A provider-level key is sent only to that provider's Ollama host.
+    - `agents.*.memorySearch.remote.apiKey` is sent only to its remote embedding host.
+    - A pure `OLLAMA_API_KEY` env value is treated as the Ollama Cloud convention, not sent to local or self-hosted hosts by default.
+  </Accordion>
+</AccordionGroup>
 
 ## Getting started
 
@@ -485,7 +500,7 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
     ollama pull deepseek-r1:32b
     ```
 
-    No additional configuration is needed -- OpenClaw marks them automatically.
+    No additional configuration is needed. OpenClaw marks them automatically.
 
   </Accordion>
 
@@ -607,7 +622,7 @@ More help: [Troubleshooting](/help/troubleshooting) and [FAQ](/help/faq).
 ## Related
 
 <CardGroup cols={2}>
-  <Card title="Model selection" href="/concepts/model-providers" icon="layers">
+  <Card title="Model providers" href="/concepts/model-providers" icon="layers">
     Overview of all providers, model refs, and failover behavior.
   </Card>
   <Card title="Model selection" href="/concepts/models" icon="brain">

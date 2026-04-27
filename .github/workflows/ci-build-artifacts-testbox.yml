@@ -135,7 +135,7 @@ jobs:
 
       - name: Restore dist build cache
         id: dist-cache
-        uses: actions/cache@v5
+        uses: actions/cache/restore@v5
         with:
           path: |
             .artifacts/build-all-cache/
@@ -165,6 +165,16 @@ jobs:
           fi
           test -f dist/build-info.json
           test -f dist/control-ui/index.html
+
+      - name: Save dist build cache
+        if: steps.dist-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            .artifacts/build-all-cache/
+            dist/
+            dist-runtime/
+          key: ${{ runner.os }}-dist-build-${{ github.sha }}
 
       - name: Prepare Testbox shell
         shell: bash

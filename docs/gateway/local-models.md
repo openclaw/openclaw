@@ -124,6 +124,7 @@ vLLM, LiteLLM, OAI-proxy, or custom gateways work if they expose an OpenAI-style
         baseUrl: "http://127.0.0.1:8000/v1",
         apiKey: "sk-local",
         api: "openai-responses",
+        timeoutSeconds: 300,
         models: [
           {
             id: "my-local-model",
@@ -142,6 +143,10 @@ vLLM, LiteLLM, OAI-proxy, or custom gateways work if they expose an OpenAI-style
 ```
 
 Keep `models.mode: "merge"` so hosted models stay available as fallbacks.
+Use `models.providers.<id>.timeoutSeconds` for slow local or remote model
+servers before raising `agents.defaults.timeoutSeconds`. The provider timeout
+applies only to model HTTP requests, including connect, headers, body streaming,
+and the total guarded-fetch abort.
 
 Behavior note for local/proxied `/v1` backends:
 

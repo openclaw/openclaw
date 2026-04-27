@@ -66,9 +66,9 @@ the maintainer-only release runbook.
 6. Run `OpenClaw NPM Release` with `preflight_only=true`. Before a tag exists,
    a full 40-character release-branch SHA is allowed for validation-only
    preflight. Save the successful `preflight_run_id`.
-7. Run `Full Release Validation` for the release branch, tag, or full commit
-   SHA. This is the umbrella run for the four big release test boxes: Vitest,
-   Docker, QA Lab, and Package.
+7. Kick off all pre-release tests with `Full Release Validation` for the
+   release branch, tag, or full commit SHA. This is the one manual entrypoint
+   for the four big release test boxes: Vitest, Docker, QA Lab, and Package.
 8. If validation fails, fix on the release branch and rerun the smallest failed
    file, lane, workflow job, package profile, provider, or model allowlist that
    proves the fix. Rerun the full umbrella only when the changed surface makes
@@ -82,10 +82,11 @@ the maintainer-only release runbook.
     preflight artifact via `preflight_run_id`; stable macOS release readiness
     also requires the packaged `.zip`, `.dmg`, `.dSYM.zip`, and updated
     `appcast.xml` on `main`.
-11. After publish, run the npm post-publish verifier, optional published-npm
-    Telegram E2E, dist-tag promotion when needed, GitHub release/prerelease
-    notes from the complete matching `CHANGELOG.md` section, and the release
-    announcement steps.
+11. After publish, run the npm post-publish verifier, optional standalone
+    published-npm Telegram E2E when you need post-publish channel proof,
+    dist-tag promotion when needed, GitHub release/prerelease notes from the
+    complete matching `CHANGELOG.md` section, and the release announcement
+    steps.
 
 ## Release preflight
 
@@ -96,15 +97,14 @@ the maintainer-only release runbook.
 - Run `pnpm build && pnpm ui:build` before `pnpm release:check` so the expected
   `dist/*` release artifacts and Control UI bundle exist for the pack
   validation step
-- Run the manual `Full Release Validation` workflow before release approval
-  when you need the whole release validation suite from one entrypoint. It
-  accepts a branch, tag, or full commit SHA, dispatches manual `CI`, and
-  dispatches `OpenClaw Release Checks` for install smoke, package acceptance,
-  Docker release-path suites, live/E2E, OpenWebUI, QA Lab parity, Matrix, and
-  Telegram lanes.
-  Provide `npm_telegram_package_spec` only after a package has been published
-  and the post-publish Telegram E2E should run too.
-  Example: `gh workflow run full-release-validation.yml --ref main -f ref=release/YYYY.M.D`
+- Run the manual `Full Release Validation` workflow before release approval to
+  kick off all pre-release test boxes from one entrypoint. It accepts a branch,
+  tag, or full commit SHA, dispatches manual `CI`, and dispatches
+  `OpenClaw Release Checks` for install smoke, package acceptance, Docker
+  release-path suites, live/E2E, OpenWebUI, QA Lab parity, Matrix, and Telegram
+  lanes. Provide `npm_telegram_package_spec` only after a package has been
+  published and the post-publish Telegram E2E should run too. Example:
+  `gh workflow run full-release-validation.yml --ref main -f ref=release/YYYY.M.D`
 - Run the manual `Package Acceptance` workflow when you want side-channel proof
   for a package candidate while release work continues. Use `source=npm` for
   `openclaw@beta`, `openclaw@latest`, or an exact release version; `source=ref`
@@ -113,8 +113,9 @@ the maintainer-only release runbook.
   SHA-256; or `source=artifact` for a tarball uploaded by another GitHub
   Actions run. The workflow resolves the candidate to
   `package-under-test`, reuses the Docker E2E release scheduler against that
-  tarball, and can optionally run published-npm Telegram QA.
-  Example: `gh workflow run package-acceptance.yml --ref main -f workflow_ref=main -f source=npm -f package_spec=openclaw@beta -f suite_profile=product`
+  tarball, and can run Telegram QA against the same tarball with
+  `telegram_mode=mock-openai` or `telegram_mode=live-frontier`.
+  Example: `gh workflow run package-acceptance.yml --ref main -f workflow_ref=main -f source=npm -f package_spec=openclaw@beta -f suite_profile=product -f telegram_mode=mock-openai`
   Common profiles:
   - `smoke`: install/channel/agent, gateway network, and config reload lanes
   - `package`: package/update/plugin lanes without OpenWebUI
@@ -221,8 +222,9 @@ Validation` or from the `main`/release workflow ref so workflow logic and
 
 ## Release test boxes
 
-`Full Release Validation` is the manual umbrella that operators use when they
-want all release validation from one entrypoint:
+`Full Release Validation` is how operators kick off all pre-release tests from
+one entrypoint. Run it from the trusted `main` workflow ref and pass the release
+branch, tag, or full commit SHA as `ref`:
 
 ```bash
 gh workflow run full-release-validation.yml \
@@ -235,10 +237,49 @@ gh workflow run full-release-validation.yml \
 
 The workflow resolves the target ref, dispatches manual `CI` with
 `target_ref=<release-ref>`, dispatches `OpenClaw Release Checks`, and
-optionally dispatches post-publish Telegram E2E when
-`npm_telegram_package_spec` is set. A full run is only acceptable when both
-child workflows succeed or an intentionally skipped optional child is recorded
-in the summary.
+optionally dispatches standalone post-publish Telegram E2E when
+`npm_telegram_package_spec` is set. `OpenClaw Release Checks` then fans out
+install smoke, cross-OS release checks, live/E2E Docker release-path coverage,
+Package Acceptance with Telegram package QA, QA Lab parity, live Matrix, and
+live Telegram. A full run is only acceptable when the `Full Release Validation`
+summary shows `normal_ci` and `release_checks` as successful, and any optional
+`npm_telegram` child is either successful or intentionally skipped.
+
+Use these variants depending on release stage:
+
+```bash
+# Validate an unpublished release candidate branch.
+gh workflow run full-release-validation.yml \
+  --ref main \
+  -f ref=release/YYYY.M.D \
+  -f workflow_ref=main \
+  -f provider=openai \
+  -f mode=both
+
+# Validate an exact pushed commit.
+gh workflow run full-release-validation.yml \
+  --ref main \
+  -f ref=<40-char-sha> \
+  -f workflow_ref=main \
+  -f provider=openai \
+  -f mode=both
+
+# After publishing a beta, add published-package Telegram E2E.
+gh workflow run full-release-validation.yml \
+  --ref main \
+  -f ref=release/YYYY.M.D \
+  -f workflow_ref=main \
+  -f provider=openai \
+  -f mode=both \
+  -f npm_telegram_package_spec=openclaw@YYYY.M.D-beta.N \
+  -f npm_telegram_provider_mode=mock-openai
+```
+
+Do not use the full umbrella as the first rerun after a focused fix. If one box
+fails, use the failed child workflow, job, Docker lane, package profile, model
+provider, or QA lane for the next proof. Run the full umbrella again only when
+the fix changed shared release orchestration or made earlier all-box evidence
+stale.
 
 ### Vitest
 
@@ -324,12 +365,13 @@ Supported candidate sources:
 - `source=artifact`: reuse a `.tgz` uploaded by another GitHub Actions run
 
 `OpenClaw Release Checks` runs Package Acceptance with `source=ref`,
-`package_ref=<release-ref>`, and `suite_profile=package`. That profile covers
-install, update, and plugin package contracts and is the GitHub-native
-replacement for most of the package/update coverage that previously required
-Parallels. Cross-OS release checks still matter for OS-specific onboarding,
-installer, and platform behavior, but package/update product validation should
-prefer Package Acceptance.
+`package_ref=<release-ref>`, `suite_profile=package`, and
+`telegram_mode=mock-openai`. That profile covers install, update, plugin
+package contracts, and Telegram package QA against the same resolved tarball,
+and is the GitHub-native replacement for most of the package/update coverage
+that previously required Parallels. Cross-OS release checks still matter for
+OS-specific onboarding, installer, and platform behavior, but package/update
+product validation should prefer Package Acceptance.
 
 Use broader Package Acceptance profiles when the release question is about an
 actual installable package:
@@ -354,10 +396,10 @@ Common package profiles:
 - `full`: Docker release-path chunks with OpenWebUI
 - `custom`: exact `docker_lanes` list for focused reruns
 
-For post-publish beta proof, use `source=npm` with the exact beta package or
-`openclaw@beta`. Enable `telegram_mode=mock-openai` or
-`telegram_mode=live-frontier` only for published npm packages, because that
-path reuses the published-npm Telegram E2E workflow.
+For package-candidate Telegram proof, enable `telegram_mode=mock-openai` or
+`telegram_mode=live-frontier` on Package Acceptance. The workflow passes the
+resolved `package-under-test` tarball into the Telegram lane; the standalone
+Telegram workflow still accepts a published npm spec for post-publish checks.
 
 ## NPM workflow inputs
 

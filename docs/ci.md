@@ -23,8 +23,122 @@ published npm spec, a trusted `package_ref` built with the selected
 from another GitHub Actions run, uploads it as `package-under-test`, then reuses
 the Docker release/E2E scheduler with that tarball instead of repacking the
 workflow checkout. Profiles cover smoke, package, product, full, and custom
-Docker lane selections. The optional Telegram lane is published-npm only and
-reuses the `NPM Telegram Beta E2E` workflow.
+Docker lane selections. The optional Telegram lane reuses the
+`package-under-test` artifact in the `NPM Telegram Beta E2E` workflow, with the
+published npm spec path kept for standalone dispatches.
+
+## Package Acceptance
+
+Use `Package Acceptance` when the question is "does this installable OpenClaw
+package work as a product?" It is different from normal CI: normal CI validates
+the source tree, while package acceptance validates a single tarball through the
+same Docker E2E harness users exercise after install or update.
+
+The workflow has four jobs:
+
+1. `resolve_package` checks out `workflow_ref`, resolves one package candidate,
+   writes `.artifacts/docker-e2e-package/openclaw-current.tgz`, writes
+   `.artifacts/docker-e2e-package/package-candidate.json`, uploads both as the
+   `package-under-test` artifact, and prints the source, workflow ref, package
+   ref, version, SHA-256, and profile in the GitHub step summary.
+2. `docker_acceptance` calls
+   `openclaw-live-and-e2e-checks-reusable.yml` with `ref=workflow_ref` and
+   `package_artifact_name=package-under-test`. The reusable workflow downloads
+   that artifact, validates the tarball inventory, prepares package-digest
+   Docker images when needed, and runs the selected Docker lanes against that
+   package instead of packing the workflow checkout.
+3. `package_telegram` optionally calls `NPM Telegram Beta E2E`. It runs when
+   `telegram_mode` is not `none` and installs the same `package-under-test`
+   artifact when Package Acceptance resolved one; standalone Telegram dispatch
+   can still install a published npm spec.
+4. `summary` fails the workflow if package resolution, Docker acceptance, or
+   the optional Telegram lane failed.
+
+Candidate sources:
+
+- `source=npm`: accepts only `openclaw@beta`, `openclaw@latest`, or an exact
+  OpenClaw release version such as `openclaw@2026.4.27-beta.2`. Use this for
+  published beta/stable acceptance.
+- `source=ref`: packs a trusted `package_ref` branch, tag, or full commit SHA.
+  The resolver fetches OpenClaw branches/tags, verifies the selected commit is
+  reachable from repository branch history or a release tag, installs deps in a
+  detached worktree, and packs it with `scripts/package-openclaw-for-docker.mjs`.
+- `source=url`: downloads an HTTPS `.tgz`; `package_sha256` is required.
+- `source=artifact`: downloads one `.tgz` from `artifact_run_id` and
+  `artifact_name`; `package_sha256` is optional but should be supplied for
+  externally shared artifacts.
+
+Keep `workflow_ref` and `package_ref` separate. `workflow_ref` is the trusted
+workflow/harness code that runs the test. `package_ref` is the source commit
+that gets packed when `source=ref`. This lets the current test harness validate
+older trusted source commits without running old workflow logic.
+
+Profiles map to Docker coverage:
+
+- `smoke`: `npm-onboard-channel-agent`, `gateway-network`, `config-reload`
+- `package`: `install-e2e`, `npm-onboard-channel-agent`, `doctor-switch`,
+  `update-channel-switch`, `bundled-channel-deps`, `plugins`, `plugin-update`
+- `product`: `package` plus `mcp-channels`, `cron-mcp-cleanup`,
+  `openai-web-search-minimal`, `openwebui`
+- `full`: full Docker release-path chunks with OpenWebUI
+- `custom`: exact `docker_lanes`; required when `suite_profile=custom`
+
+Release checks call Package Acceptance with `source=ref`,
+`package_ref=<release-ref>`, `workflow_ref=<release workflow ref>`,
+`suite_profile=package`, and `telegram_mode=mock-openai`. That profile is the
+GitHub-native replacement for most Parallels package/update validation, with
+Telegram proving the same package artifact through the QA live transport.
+Cross-OS release checks still cover OS-specific onboarding, installer, and
+platform behavior; package/update product validation should start with Package
+Acceptance.
+
+Examples:
+
+```bash
+# Validate the current beta package with product-level coverage.
+gh workflow run package-acceptance.yml \
+  --ref main \
+  -f workflow_ref=main \
+  -f source=npm \
+  -f package_spec=openclaw@beta \
+  -f suite_profile=product \
+  -f telegram_mode=mock-openai
+
+# Pack and validate a release branch with the current harness.
+gh workflow run package-acceptance.yml \
+  --ref main \
+  -f workflow_ref=main \
+  -f source=ref \
+  -f package_ref=release/YYYY.M.D \
+  -f suite_profile=package \
+  -f telegram_mode=mock-openai
+
+# Validate a tarball URL. SHA-256 is mandatory for source=url.
+gh workflow run package-acceptance.yml \
+  --ref main \
+  -f workflow_ref=main \
+  -f source=url \
+  -f package_url=https://example.com/openclaw-current.tgz \
+  -f package_sha256=<64-char-sha256> \
+  -f suite_profile=smoke
+
+# Reuse a tarball uploaded by another Actions run.
+gh workflow run package-acceptance.yml \
+  --ref main \
+  -f workflow_ref=main \
+  -f source=artifact \
+  -f artifact_run_id=<run-id> \
+  -f artifact_name=package-under-test \
+  -f suite_profile=custom \
+  -f docker_lanes='install-e2e plugin-update'
+```
+
+When debugging a failed package acceptance run, start at the `resolve_package`
+summary to confirm the package source, version, and SHA-256. Then inspect the
+`docker_acceptance` child run and its Docker artifacts:
+`.artifacts/docker-tests/**/summary.json`, `failures.json`, lane logs, phase
+timings, and rerun commands. Prefer rerunning the failed package profile or
+exact Docker lanes instead of rerunning full release validation.
 
 QA Lab has dedicated CI lanes outside the main smart-scoped workflow. The
 `Parity gate` workflow runs on matching PR changes and manual dispatch; it

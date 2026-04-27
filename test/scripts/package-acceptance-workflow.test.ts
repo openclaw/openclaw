@@ -34,15 +34,21 @@ describe("package acceptance workflow", () => {
     );
   });
 
-  it("offers bounded product profiles and keeps Telegram published-npm only", () => {
+  it("offers bounded product profiles and can run Telegram against the resolved artifact", () => {
     const workflow = readFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, "utf8");
 
     expect(workflow).toContain("suite_profile:");
     expect(workflow).toContain("npm-onboard-channel-agent gateway-network config-reload");
     expect(workflow).toContain("install-e2e npm-onboard-channel-agent doctor-switch");
     expect(workflow).toContain("include_release_path_suites=true");
-    expect(workflow).toContain("telegram_mode requires source=npm");
+    expect(workflow).not.toContain("telegram_mode requires source=npm");
     expect(workflow).toContain("uses: ./.github/workflows/npm-telegram-beta-e2e.yml");
+    expect(workflow).toContain(
+      "package_artifact_name: ${{ needs.resolve_package.outputs.package_artifact_name }}",
+    );
+    expect(workflow).toContain(
+      "package_label: openclaw@${{ needs.resolve_package.outputs.package_version }}",
+    );
   });
 });
 
@@ -62,12 +68,16 @@ describe("package artifact reuse", () => {
     expect(action).toContain("name: ${{ inputs.package-artifact-name }}");
   });
 
-  it("allows the npm Telegram lane to run from reusable package acceptance", () => {
+  it("allows the Telegram lane to run from reusable package acceptance artifacts", () => {
     const workflow = readFileSync(NPM_TELEGRAM_WORKFLOW, "utf8");
 
     expect(workflow).toContain("workflow_call:");
+    expect(workflow).toContain("package_artifact_name:");
+    expect(workflow).toContain("Download package-under-test artifact");
+    expect(workflow).toContain("OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ");
     expect(workflow).toContain("provider_mode:");
     expect(workflow).toContain("provider_mode must be mock-openai or live-frontier");
+    expect(workflow).toContain("run_package_telegram_e2e:");
   });
 
   it("includes package acceptance in release checks", () => {
@@ -77,5 +87,22 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("uses: ./.github/workflows/package-acceptance.yml");
     expect(workflow).toContain("package_ref: ${{ needs.resolve_target.outputs.ref }}");
     expect(workflow).toContain("suite_profile: package");
+    expect(workflow).toContain("telegram_mode: mock-openai");
+    expect(workflow).toContain(
+      "OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}",
+    );
+    expect(workflow).toContain(
+      "OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}",
+    );
+  });
+
+  it("names package acceptance Telegram as artifact-backed package validation", () => {
+    const workflow = readFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, "utf8");
+
+    expect(workflow).toContain("package_telegram:");
+    expect(workflow).toContain("needs: [resolve_package, docker_acceptance, package_telegram]");
+    expect(workflow).toContain("PACKAGE_TELEGRAM_RESULT:");
+    expect(workflow).toContain("package_telegram=${PACKAGE_TELEGRAM_RESULT}");
+    expect(workflow).not.toContain("npm_telegram:");
   });
 });

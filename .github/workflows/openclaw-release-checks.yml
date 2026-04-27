@@ -228,7 +228,11 @@ jobs:
       source: ref
       package_ref: ${{ needs.resolve_target.outputs.ref }}
       suite_profile: package
-      telegram_mode: none
+      telegram_mode: mock-openai
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+      OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
 
   qa_lab_parity_release_checks:
     name: Run QA Lab parity gate
