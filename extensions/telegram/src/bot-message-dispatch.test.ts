@@ -765,7 +765,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
-  it("keeps default tool progress messages when answer preview streaming is off", async () => {
+  it("suppresses default tool progress messages when answer preview streaming is off", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
       await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
       await replyOptions?.onItemEvent?.({ progressText: "exec ls ~/Desktop" });
@@ -778,7 +778,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
       expect.objectContaining({
         replyOptions: expect.objectContaining({
-          suppressDefaultToolProgressMessages: false,
+          suppressDefaultToolProgressMessages: true,
         }),
       }),
     );
