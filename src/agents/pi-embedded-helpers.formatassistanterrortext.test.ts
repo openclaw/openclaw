@@ -369,10 +369,24 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
-  it("sanitizes 'Unexpected token' JSON parse errors (#59076)", () => {
-    const msg = makeAssistantError("Unexpected token < in JSON at position 0");
+  it("sanitizes context-proven streaming 'Unexpected token' JSON parse errors (#59076)", () => {
+    const msg = makeAssistantError(
+      'Could not parse Anthropic SSE event content_block_delta: Unexpected token } in JSON at position 14; data={"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"}"},"index":1}',
+    );
     expect(formatAssistantErrorText(msg)).toBe(
       "LLM streaming response contained a malformed fragment. Please try again.",
+    );
+  });
+
+  it("does not broadly rewrite non-streaming 'Unexpected token' JSON parse errors", () => {
+    const msg = makeAssistantError("Unexpected token < in JSON at position 0");
+    expect(formatAssistantErrorText(msg)).toBe("Unexpected token < in JSON at position 0");
+  });
+
+  it("does not rewrite non-streaming provider JSON request-validation diagnostics", () => {
+    const msg = makeAssistantError("Expected value in JSON at position 12 for messages.0.content");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "Expected value in JSON at position 12 for messages.0.content",
     );
   });
 

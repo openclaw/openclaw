@@ -213,7 +213,19 @@ export function isStreamingJsonParseError(raw: string): boolean {
   if (!raw) {
     return false;
   }
-  return /\b(?:expected|unexpected)\b.+\bin json\b.+\bposition\b/i.test(raw);
+  const trimmed = raw.trim();
+  if (
+    /\bcould not parse anthropic sse event\b/i.test(trimmed) &&
+    /\b(?:content_block_delta|input_json_delta|partial_json|tool_use)\b/i.test(trimmed) &&
+    (/\b(?:expected|unexpected|unterminated)\b.+\bin json\b.+\bposition\b/i.test(trimmed) ||
+      /\bunexpected end of json input\b/i.test(trimmed))
+  ) {
+    return true;
+  }
+
+  return /^(?:Expected (?:',' or '\}' after property value|double-quoted property name|':' after property name|',' or '\]' after array element)|Unterminated string) in JSON at position \d+(?: \(line \d+ column \d+\))?$/i.test(
+    trimmed,
+  );
 }
 
 function hasRateLimitTpmHint(raw: string): boolean {
