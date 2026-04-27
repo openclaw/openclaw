@@ -187,7 +187,9 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
     // Match the shared runner semantics: trim empty reply IDs away before
     // falling back from replyToId to replyTo on direct plugin calls.
     const replyToId =
-      normalizeOptionalString(params.replyToId) ?? normalizeOptionalString(params.replyTo);
+      normalizeOptionalString(params.replyToId) ??
+      normalizeOptionalString(params.threadId) ??
+      normalizeOptionalString(params.replyTo);
     const resolvedAccountId = accountId || undefined;
 
     const mediaUrl =
