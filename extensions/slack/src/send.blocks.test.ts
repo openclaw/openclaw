@@ -1,8 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSlackSendTestClient, installSlackBlockTestMocks } from "./blocks.test-helpers.js";
 
 installSlackBlockTestMocks();
 const { sendMessageSlack } = await import("./send.js");
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
 const SLACK_TEXT_LIMIT = 8000;
 
@@ -91,6 +95,31 @@ describe("sendMessageSlack chunking", () => {
     expect(postedTexts).toHaveLength(2);
     expect(postedTexts.every((text) => typeof text === "string" && text.length <= 8000)).toBe(true);
     expect(postedTexts.join("")).toBe(message);
+  });
+});
+
+describe("sendMessageSlack transient delivery retry", () => {
+  it("retries socket not-ready send failures before surfacing delivery failure", async () => {
+    vi.useFakeTimers();
+    const client = createSlackSendTestClient();
+    client.chat.postMessage
+      .mockRejectedValueOnce(
+        new Error("Failed to send a WebSocket message as the client is not ready"),
+      )
+      .mockResolvedValueOnce({ ts: "171234.568" });
+
+    const sendPromise = sendMessageSlack("channel:C123", "hello", {
+      cfg: {},
+      token: "xoxb-test",
+      client,
+    });
+    await vi.advanceTimersByTimeAsync(500);
+
+    await expect(sendPromise).resolves.toEqual({
+      messageId: "171234.568",
+      channelId: "C123",
+    });
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
   });
 });
 

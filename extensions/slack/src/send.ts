@@ -34,6 +34,7 @@ const SLACK_UPLOAD_SSRF_POLICY = {
 const SLACK_DM_CHANNEL_CACHE_MAX = 1024;
 const slackDmChannelCache = new Map<string, string>();
 const slackSendQueues = new Map<string, Promise<void>>();
+const SLACK_TRANSIENT_SEND_RETRY_DELAYS_MS = [500, 1500, 3000] as const;
 
 type SlackRecipient =
   | {
@@ -100,6 +101,65 @@ function isSlackCustomizeScopeError(err: unknown): boolean {
   return scopes.includes("chat:write.customize");
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getErrorCode(err: unknown): string | undefined {
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+  const code = (err as { code?: unknown }).code;
+  return typeof code === "string" ? code : undefined;
+}
+
+function classifyTransientSlackSendError(err: unknown): string | undefined {
+  const code = getErrorCode(err);
+  if (
+    code === "EPIPE" ||
+    code === "ECONNRESET" ||
+    code === "ETIMEDOUT" ||
+    code === "ECONNABORTED"
+  ) {
+    return code;
+  }
+
+  const message = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+  if (message.includes("client has no active connection")) {
+    return "socket_no_active_connection";
+  }
+  if (message.includes("client is not ready")) {
+    return "socket_client_not_ready";
+  }
+  if (message.includes("websocket message")) {
+    return "socket_websocket_message";
+  }
+  return undefined;
+}
+
+async function postSlackMessageWithTransientRetry<T>(
+  post: () => Promise<T>,
+  context: { channelId: string; threadTs?: string },
+): Promise<T> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await post();
+    } catch (err) {
+      const reason = classifyTransientSlackSendError(err);
+      const delayMs = SLACK_TRANSIENT_SEND_RETRY_DELAYS_MS[attempt];
+      if (!reason || delayMs == null) {
+        throw err;
+      }
+      logVerbose(
+        `slack send: transient delivery failure reason=${reason} channel=${context.channelId}${
+          context.threadTs ? ` thread=${context.threadTs}` : ""
+        } retry=${attempt + 1}/${SLACK_TRANSIENT_SEND_RETRY_DELAYS_MS.length} delayMs=${delayMs}`,
+      );
+      await sleep(delayMs);
+    }
+  }
+}
+
 async function postSlackMessageBestEffort(params: {
   client: WebClient;
   channelId: string;
@@ -114,34 +174,50 @@ async function postSlackMessageBestEffort(params: {
     thread_ts: params.threadTs,
     ...(params.blocks?.length ? { blocks: params.blocks } : {}),
   };
+  const identity = params.identity;
   const postChatMessage = params.client.chat.postMessage.bind(params.client.chat);
   try {
     // Slack Web API types model icon_url and icon_emoji as mutually exclusive.
     // Build payloads in explicit branches so TS and runtime stay aligned.
-    if (params.identity?.iconUrl) {
-      return await postChatMessage({
-        ...basePayload,
-        ...(params.identity.username ? { username: params.identity.username } : {}),
-        icon_url: params.identity.iconUrl,
-      });
+    if (identity?.iconUrl) {
+      return await postSlackMessageWithTransientRetry(
+        () =>
+          postChatMessage({
+            ...basePayload,
+            ...(identity.username ? { username: identity.username } : {}),
+            icon_url: identity.iconUrl,
+          }),
+        { channelId: params.channelId, threadTs: params.threadTs },
+      );
     }
-    if (params.identity?.iconEmoji) {
-      return await postChatMessage({
-        ...basePayload,
-        ...(params.identity.username ? { username: params.identity.username } : {}),
-        icon_emoji: params.identity.iconEmoji,
-      });
+    if (identity?.iconEmoji) {
+      return await postSlackMessageWithTransientRetry(
+        () =>
+          postChatMessage({
+            ...basePayload,
+            ...(identity.username ? { username: identity.username } : {}),
+            icon_emoji: identity.iconEmoji,
+          }),
+        { channelId: params.channelId, threadTs: params.threadTs },
+      );
     }
-    return await postChatMessage({
-      ...basePayload,
-      ...(params.identity?.username ? { username: params.identity.username } : {}),
-    });
+    return await postSlackMessageWithTransientRetry(
+      () =>
+        postChatMessage({
+          ...basePayload,
+          ...(identity?.username ? { username: identity.username } : {}),
+        }),
+      { channelId: params.channelId, threadTs: params.threadTs },
+    );
   } catch (err) {
     if (!hasCustomIdentity(params.identity) || !isSlackCustomizeScopeError(err)) {
       throw err;
     }
     logVerbose("slack send: missing chat:write.customize, retrying without custom identity");
-    return postChatMessage(basePayload);
+    return postSlackMessageWithTransientRetry(() => postChatMessage(basePayload), {
+      channelId: params.channelId,
+      threadTs: params.threadTs,
+    });
   }
 }
 

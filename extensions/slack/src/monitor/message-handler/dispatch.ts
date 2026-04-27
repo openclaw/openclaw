@@ -76,6 +76,19 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+type ReplyDeliveryCountSnapshot = {
+  final?: number;
+  block?: number;
+};
+
+function deliveredCount(
+  counts: ReplyDeliveryCountSnapshot,
+  failedCounts: ReplyDeliveryCountSnapshot,
+  kind: keyof ReplyDeliveryCountSnapshot,
+): number {
+  return Math.max(0, (counts[kind] ?? 0) - (failedCounts[kind] ?? 0));
+}
+
 // Slack reactions.add/remove expect shortcode names, not raw unicode emoji.
 const UNICODE_TO_SLACK: Record<string, string> = {
   "👀": "eyes",
@@ -986,6 +999,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   let dispatchError: unknown;
   let queuedFinal = false;
   let counts: { final?: number; block?: number } = {};
+  let failedCounts: { final?: number; block?: number } = {};
   let dispatchSettledBeforeStart = false;
   try {
     const turnResult = await runInboundReplyTurn({
@@ -1099,6 +1113,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     dispatchError = err;
   } finally {
     await draftStream?.discardPending();
+    failedCounts = dispatcher.getFailedCounts();
     if (!dispatchSettledBeforeStart) {
       markDispatchIdle();
     }
@@ -1121,8 +1136,16 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     }
   }
 
+  const deliveredBlockCount = deliveredCount(counts, failedCounts, "block");
+  const deliveredFinalCount = deliveredCount(counts, failedCounts, "final");
+  // queuedFinal is only counted as delivered when the dispatcher did not record
+  // a failed final delivery — otherwise the reply was queued but not sent.
+  const queuedFinalDelivered = queuedFinal && (failedCounts.final ?? 0) === 0;
   const anyReplyDelivered = hasVisibleInboundReplyDispatch(
-    { queuedFinal, counts },
+    {
+      queuedFinal: queuedFinalDelivered,
+      counts: { block: deliveredBlockCount, final: deliveredFinalCount },
+    },
     {
       observedReplyDelivery,
       fallbackDelivered: streamFallbackDelivered,
@@ -1188,7 +1211,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   }
 
   if (shouldLogVerbose()) {
-    const finalCount = counts.final;
+    const finalCount = deliveredFinalCount;
     logVerbose(
       `slack: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${prepared.replyTarget}`,
     );
