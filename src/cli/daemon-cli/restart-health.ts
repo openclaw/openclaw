@@ -83,8 +83,14 @@ function looksLikeAuthClose(code: number | undefined, reason: string | undefined
     return false;
   }
   const normalized = normalizeLowercaseStringOrEmpty(reason);
+  if (!normalized) {
+    return false;
+  }
   return (
     normalized.includes("auth") ||
+    normalized.includes("connect") ||
+    normalized.includes("device") ||
+    normalized.includes("pairing") ||
     normalized.includes("token") ||
     normalized.includes("password") ||
     normalized.includes("scope") ||

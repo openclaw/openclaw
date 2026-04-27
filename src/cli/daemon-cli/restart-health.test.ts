@@ -241,14 +241,38 @@ describe("inspectGatewayRestart", () => {
     expect(snapshot.staleGatewayPids).toEqual([]);
   });
 
-  it("treats auth-closed probe as healthy gateway reachability", async () => {
-    const snapshot = await inspectAmbiguousOwnershipWithProbe({
-      ok: false,
-      close: { code: 1008, reason: "auth required" },
-    });
+  it.each([
+    "auth required",
+    "connect failed",
+    "device required",
+    "pairing required",
+    "token expired",
+    "password required",
+    "missing scope: operator.admin",
+    "role denied",
+  ])(
+    "treats local policy-close probe reason %s as healthy gateway reachability",
+    async (reason) => {
+      const snapshot = await inspectAmbiguousOwnershipWithProbe({
+        ok: false,
+        close: { code: 1008, reason },
+      });
 
-    expect(snapshot.healthy).toBe(true);
-  });
+      expect(snapshot.healthy).toBe(true);
+    },
+  );
+
+  it.each(["", " ", "repair required"])(
+    "does not treat ambiguous 1008 close reason %s as healthy gateway reachability",
+    async (reason) => {
+      const snapshot = await inspectAmbiguousOwnershipWithProbe({
+        ok: false,
+        close: { code: 1008, reason },
+      });
+
+      expect(snapshot.healthy).toBe(false);
+    },
+  );
 
   it("requires the expected gateway version when provided", async () => {
     probeGateway.mockResolvedValue({
