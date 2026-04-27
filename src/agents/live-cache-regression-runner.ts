@@ -51,6 +51,7 @@ type LaneResult = {
 export type LiveCacheRegressionResult = {
   regressions: string[];
   summary: Record<string, Record<string, unknown>>;
+  warnings: string[];
 };
 
 const NOOP_TOOL: Tool = {
@@ -358,8 +359,16 @@ function assertAgainstBaseline(params: {
   provider: ProviderKey;
   result: LaneResult;
   regressions: string[];
+  warnings: string[];
 }) {
   const floor = resolveBaselineFloor(params.provider, params.lane);
+  const recordRegression = (message: string) => {
+    if (floor?.warnOnly) {
+      params.warnings.push(message);
+    } else {
+      params.regressions.push(message);
+    }
+  };
   if (!floor) {
     params.regressions.push(`${params.provider}:${params.lane} missing baseline entry`);
     return;
@@ -370,17 +379,17 @@ function assertAgainstBaseline(params: {
     if (floor.minCacheReadOrWrite !== undefined) {
       const cacheReadOrWrite = Math.max(usage.cacheRead ?? 0, usage.cacheWrite ?? 0);
       if (cacheReadOrWrite < floor.minCacheReadOrWrite) {
-        params.regressions.push(
+        recordRegression(
           `${params.provider}:${params.lane} cacheReadOrWrite=${cacheReadOrWrite} < min=${floor.minCacheReadOrWrite}`,
         );
       }
     } else if ((usage.cacheRead ?? 0) < (floor.minCacheRead ?? 0)) {
-      params.regressions.push(
+      recordRegression(
         `${params.provider}:${params.lane} cacheRead=${usage.cacheRead ?? 0} < min=${floor.minCacheRead}`,
       );
     }
     if (params.result.best.hitRate < (floor.minHitRate ?? 0)) {
-      params.regressions.push(
+      recordRegression(
         `${params.provider}:${params.lane} hitRate=${params.result.best.hitRate.toFixed(3)} < min=${floor.minHitRate?.toFixed(3)}`,
       );
     }
@@ -389,7 +398,7 @@ function assertAgainstBaseline(params: {
   if (params.result.warmup) {
     const warmupUsage = params.result.warmup.usage;
     if ((warmupUsage.cacheWrite ?? 0) < (floor.minCacheWrite ?? 0)) {
-      params.regressions.push(
+      recordRegression(
         `${params.provider}:${params.lane} warmup cacheWrite=${warmupUsage.cacheWrite ?? 0} < min=${floor.minCacheWrite}`,
       );
     }
@@ -398,17 +407,21 @@ function assertAgainstBaseline(params: {
   if (params.result.disabled) {
     const usage = params.result.disabled.usage;
     if ((usage.cacheRead ?? 0) > (floor.maxCacheRead ?? Number.POSITIVE_INFINITY)) {
-      params.regressions.push(
+      recordRegression(
         `${params.provider}:${params.lane} cacheRead=${usage.cacheRead ?? 0} > max=${floor.maxCacheRead}`,
       );
     }
     if ((usage.cacheWrite ?? 0) > (floor.maxCacheWrite ?? Number.POSITIVE_INFINITY)) {
-      params.regressions.push(
+      recordRegression(
         `${params.provider}:${params.lane} cacheWrite=${usage.cacheWrite ?? 0} > max=${floor.maxCacheWrite}`,
       );
     }
   }
 }
+
+export const __testing = {
+  assertAgainstBaseline,
+};
 
 export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResult> {
   const pngBase64 = (await fs.readFile(LIVE_TEST_PNG_URL)).toString("base64");
@@ -427,6 +440,7 @@ export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResul
   });
 
   const regressions: string[] = [];
+  const warnings: string[] = [];
   const summary: Record<string, Record<string, unknown>> = {
     anthropic: {},
     openai: {},
@@ -457,6 +471,7 @@ export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResul
       provider: "openai",
       result: openaiResult,
       regressions,
+      warnings,
     });
 
     const anthropicResult = await runRepeatedLane({
@@ -483,6 +498,7 @@ export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResul
       provider: "anthropic",
       result: anthropicResult,
       regressions,
+      warnings,
     });
   }
 
@@ -500,8 +516,12 @@ export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResul
     provider: "anthropic",
     result: disabled,
     regressions,
+    warnings,
   });
 
   logLiveCache(`cache regression summary ${JSON.stringify(summary)}`);
-  return { regressions, summary };
+  if (warnings.length > 0) {
+    logLiveCache(`cache regression warnings ${JSON.stringify(warnings)}`);
+  }
+  return { regressions, summary, warnings };
 }

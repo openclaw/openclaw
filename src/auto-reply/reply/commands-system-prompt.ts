@@ -15,7 +15,7 @@ import { buildAgentSystemPrompt } from "../../agents/system-prompt.js";
 import type { WorkspaceBootstrapFile } from "../../agents/workspace.js";
 import { normalizeEmotionMode } from "../../emotion-mode.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
-import { listRegisteredPluginCommands } from "../../plugins/command-registry-state.js";
+import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
@@ -174,7 +174,7 @@ export async function resolveCommandsSystemPromptBundle(
       config: params.cfg,
       sandboxed: sandboxRuntime.sandboxed,
     }),
-    nativeCommandNames: listRegisteredPluginCommands().map((command) => command.name),
+    nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance(),
     runtimeInfo,
     sandboxInfo,
     memoryCitationsMode: params.cfg?.memory?.citations,

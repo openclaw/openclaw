@@ -39,6 +39,77 @@ const GATEWAY_STOP_TIMEOUT_MS = 1_500;
 const GATEWAY_CONNECT_STATUS_TIMEOUT_MS = 2_000;
 const GATEWAY_NODE_STATUS_TIMEOUT_MS = 4_000;
 const GATEWAY_NODE_STATUS_POLL_MS = 20;
+const GATEWAY_HOME_REMOVE_RETRIES = 5;
+const GATEWAY_HOME_REMOVE_RETRY_DELAY_MS = 100;
+const GATEWAY_ENTRYPOINT_PREPARE_TIMEOUT_MS = 120_000;
+
+let gatewayEntrypointPromise: Promise<string[]> | null = null;
+
+async function resolveBuiltGatewayEntrypoint(cwd: string): Promise<string[] | null> {
+  const buildStampPath = path.join(cwd, "dist", ".buildstamp");
+  const runtimePostBuildStampPath = path.join(cwd, "dist", ".runtime-postbuildstamp");
+  for (const entrypoint of ["dist/index.js", "dist/index.mjs"]) {
+    try {
+      await Promise.all([
+        fs.access(path.join(cwd, entrypoint)),
+        fs.access(buildStampPath),
+        fs.access(runtimePostBuildStampPath),
+      ]);
+      return [entrypoint];
+    } catch {
+      // try the next built entrypoint
+    }
+  }
+  return null;
+}
+
+async function prepareGatewayEntrypoint(cwd: string): Promise<string[]> {
+  const builtEntrypoint = await resolveBuiltGatewayEntrypoint(cwd);
+  if (builtEntrypoint) {
+    return builtEntrypoint;
+  }
+
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const child = spawn("node", ["scripts/run-node.mjs", "--help"], {
+    cwd,
+    env: { ...process.env, VITEST: "1" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  child.stdout?.setEncoding("utf8");
+  child.stderr?.setEncoding("utf8");
+  child.stdout?.on("data", (d) => stdout.push(String(d)));
+  child.stderr?.on("data", (d) => stderr.push(String(d)));
+
+  const completed = await Promise.race([
+    new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("exit", (code, signal) => resolve({ code, signal }));
+    }),
+    sleep(GATEWAY_ENTRYPOINT_PREPARE_TIMEOUT_MS).then(() => null),
+  ]);
+
+  if (completed === null) {
+    child.kill("SIGKILL");
+    throw new Error(
+      `timeout preparing gateway entrypoint\n--- stdout ---\n${stdout.join("")}\n--- stderr ---\n${stderr.join("")}`,
+    );
+  }
+  if (completed.code !== 0) {
+    throw new Error(
+      `failed preparing gateway entrypoint (code=${String(completed.code)} signal=${String(
+        completed.signal,
+      )})\n--- stdout ---\n${stdout.join("")}\n--- stderr ---\n${stderr.join("")}`,
+    );
+  }
+
+  return (await resolveBuiltGatewayEntrypoint(cwd)) ?? ["scripts/run-node.mjs"];
+}
+
+async function resolveGatewayEntrypoint(cwd: string): Promise<string[]> {
+  gatewayEntrypointPromise ??= prepareGatewayEntrypoint(cwd);
+  return await gatewayEntrypointPromise;
+}
 
 const getFreePort = async () => {
   const srv = net.createServer();
@@ -97,6 +168,30 @@ async function waitForPortOpen(
   );
 }
 
+async function waitForGatewayExit(
+  child: ChildProcessWithoutNullStreams,
+  timeoutMs: number,
+): Promise<boolean> {
+  return await Promise.race([
+    new Promise<boolean>((resolve) => {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        return resolve(true);
+      }
+      child.once("exit", () => resolve(true));
+    }),
+    sleep(timeoutMs).then(() => false),
+  ]);
+}
+
+async function removeGatewayHome(homeDir: string) {
+  await fs.rm(homeDir, {
+    recursive: true,
+    force: true,
+    maxRetries: GATEWAY_HOME_REMOVE_RETRIES,
+    retryDelay: GATEWAY_HOME_REMOVE_RETRY_DELAY_MS,
+  });
+}
+
 export async function spawnGatewayInstance(name: string): Promise<GatewayInstance> {
   const port = await getFreePort();
   const hookToken = `token-${name}-${randomUUID()}`;
@@ -121,10 +216,12 @@ export async function spawnGatewayInstance(name: string): Promise<GatewayInstanc
   let child: ChildProcessWithoutNullStreams | null = null;
 
   try {
+    const cwd = process.cwd();
+    const entrypoint = await resolveGatewayEntrypoint(cwd);
     child = spawn(
       "node",
       [
-        "dist/index.js",
+        ...entrypoint,
         "gateway",
         "--port",
         String(port),
@@ -133,7 +230,7 @@ export async function spawnGatewayInstance(name: string): Promise<GatewayInstanc
         "--allow-unconfigured",
       ],
       {
-        cwd: process.cwd(),
+        cwd,
         env: {
           ...process.env,
           HOME: homeDir,
@@ -180,8 +277,9 @@ export async function spawnGatewayInstance(name: string): Promise<GatewayInstanc
       } catch {
         // ignore
       }
+      await waitForGatewayExit(child, GATEWAY_STOP_TIMEOUT_MS);
     }
-    await fs.rm(homeDir, { recursive: true, force: true });
+    await removeGatewayHome(homeDir);
     throw err;
   }
 }
@@ -194,23 +292,16 @@ export async function stopGatewayInstance(inst: GatewayInstance) {
       // ignore
     }
   }
-  const exited = await Promise.race([
-    new Promise<boolean>((resolve) => {
-      if (inst.child.exitCode !== null) {
-        return resolve(true);
-      }
-      inst.child.once("exit", () => resolve(true));
-    }),
-    sleep(GATEWAY_STOP_TIMEOUT_MS).then(() => false),
-  ]);
+  let exited = await waitForGatewayExit(inst.child, GATEWAY_STOP_TIMEOUT_MS);
   if (!exited && inst.child.exitCode === null && !inst.child.killed) {
     try {
       inst.child.kill("SIGKILL");
     } catch {
       // ignore
     }
+    await waitForGatewayExit(inst.child, GATEWAY_STOP_TIMEOUT_MS);
   }
-  await fs.rm(inst.homeDir, { recursive: true, force: true });
+  await removeGatewayHome(inst.homeDir);
 }
 
 export async function postJson(

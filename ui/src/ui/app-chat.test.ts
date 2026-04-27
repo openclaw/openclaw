@@ -14,6 +14,7 @@ vi.mock("./app-last-active-session.ts", () => ({
 
 let handleSendChat: typeof import("./app-chat.ts").handleSendChat;
 let steerQueuedChatMessage: typeof import("./app-chat.ts").steerQueuedChatMessage;
+let navigateChatInputHistory: typeof import("./app-chat.ts").navigateChatInputHistory;
 let handleAbortChat: typeof import("./app-chat.ts").handleAbortChat;
 let refreshChatAvatar: typeof import("./app-chat.ts").refreshChatAvatar;
 let clearPendingQueueItemsForRun: typeof import("./app-chat.ts").clearPendingQueueItemsForRun;
@@ -22,6 +23,7 @@ async function loadChatHelpers(): Promise<void> {
   ({
     handleSendChat,
     steerQueuedChatMessage,
+    navigateChatInputHistory,
     handleAbortChat,
     refreshChatAvatar,
     clearPendingQueueItemsForRun,
@@ -44,7 +46,13 @@ function makeHost(overrides?: Partial<ChatHost>): ChatHost {
     chatMessages: [],
     chatStream: null,
     connected: true,
+    chatLoading: false,
     chatMessage: "",
+    chatLocalInputHistoryBySession: {},
+    chatInputHistorySessionKey: null,
+    chatInputHistoryItems: null,
+    chatInputHistoryIndex: -1,
+    chatDraftBeforeHistory: null,
     chatAttachments: [],
     chatQueue: [],
     chatRunId: null,
@@ -493,6 +501,8 @@ describe("handleSendChat", () => {
     expect(host.chatStream).toBe("Working...");
     expect(host.chatMessages).toEqual([]);
     expect(host.chatMessage).toBe("");
+    expect(navigateChatInputHistory(host, "up")).toBe(true);
+    expect(host.chatMessage).toBe("/btw what changed?");
   });
 
   it("sends /btw without adopting a main chat run when idle", async () => {
@@ -519,6 +529,23 @@ describe("handleSendChat", () => {
     expect(host.chatRunId).toBeNull();
     expect(host.chatMessages).toEqual([]);
     expect(host.chatMessage).toBe("");
+    expect(navigateChatInputHistory(host, "up")).toBe(true);
+    expect(host.chatMessage).toBe("/btw summarize this");
+  });
+
+  it("keeps queued normal messages recallable before transcript history catches up", async () => {
+    const host = makeHost({
+      chatMessage: "queued while busy",
+      chatRunId: "run-1",
+    });
+
+    await handleSendChat(host);
+
+    expect(host.chatQueue).toHaveLength(1);
+    expect(host.chatQueue[0]?.text).toBe("queued while busy");
+    expect(host.chatMessage).toBe("");
+    expect(navigateChatInputHistory(host, "up")).toBe(true);
+    expect(host.chatMessage).toBe("queued while busy");
   });
 
   it("restores the BTW draft when detached send fails", async () => {

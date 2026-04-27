@@ -54,7 +54,7 @@ async function deliverSlackThreadAnnouncement(params: {
       sessionId: params.sessionId,
       isActive: params.isActive,
     }),
-    loadConfig: () => ({}) as never,
+    getRuntimeConfig: () => ({}) as never,
     ...(params.queueEmbeddedPiMessage
       ? { queueEmbeddedPiMessage: params.queueEmbeddedPiMessage }
       : {}),
@@ -94,7 +94,7 @@ async function deliverDiscordDirectMessageCompletion(params: {
       sessionId: "requester-session-dm",
       isActive: false,
     }),
-    loadConfig: () => ({}) as never,
+    getRuntimeConfig: () => ({}) as never,
     ...(params.sendMessage ? { sendMessage: params.sendMessage } : {}),
   });
 
@@ -133,7 +133,7 @@ async function deliverTelegramDirectMessageCompletion(params: {
       sessionId: "requester-session-telegram",
       isActive: params.isActive === true,
     }),
-    loadConfig: () => ({}) as never,
+    getRuntimeConfig: () => ({}) as never,
     ...(params.queueEmbeddedPiMessage
       ? { queueEmbeddedPiMessage: params.queueEmbeddedPiMessage }
       : {}),
@@ -185,7 +185,7 @@ async function deliverSlackChannelAnnouncement(params: {
       sessionId: params.sessionId,
       isActive: params.isActive,
     }),
-    loadConfig: () => ({}) as never,
+    getRuntimeConfig: () => ({}) as never,
     ...(params.queueEmbeddedPiMessage
       ? { queueEmbeddedPiMessage: params.queueEmbeddedPiMessage }
       : {}),
@@ -287,7 +287,7 @@ describe("deliverSubagentAnnouncement queued delivery", () => {
         sessionId: "paperclip-session",
         isActive: activityChecks++ === 0,
       }),
-      loadConfig: () =>
+      getRuntimeConfig: () =>
         ({
           messages: {
             queue: {

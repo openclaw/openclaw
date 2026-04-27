@@ -235,7 +235,7 @@ function registerAndResolveCommandHandlerBase(params: {
   const commandHandlers = new Map<string, TelegramCommandHandler>();
   const sendMessage = vi.fn().mockResolvedValue(undefined);
   const telegramDeps: TelegramNativeCommandDeps = {
-    loadConfig: vi.fn(() => cfg),
+    getRuntimeConfig: vi.fn(() => cfg),
     readChannelAllowFromStore: vi.fn(async () => []),
     dispatchReplyWithBufferedBlockDispatcher:
       replyMocks.dispatchReplyWithBufferedBlockDispatcher as TelegramNativeCommandDeps["dispatchReplyWithBufferedBlockDispatcher"],

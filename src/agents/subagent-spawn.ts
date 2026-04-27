@@ -5,7 +5,7 @@ import { isAcpRuntimeSpawnAvailable } from "../acp/runtime/availability.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SubagentSpawnPreparation } from "../context-engine/types.js";
-import { listRegisteredPluginCommands } from "../plugins/command-registry-state.js";
+import { listRegisteredPluginAgentPromptGuidance } from "../plugins/command-registry-state.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import { isValidAgentId, normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import {
@@ -49,7 +49,7 @@ import {
   emitSessionLifecycleEvent,
   forkSessionFromParent,
   getGlobalHookRunner,
-  loadConfig,
+  getRuntimeConfig,
   mergeSessionEntry,
   mergeDeliveryContext,
   normalizeDeliveryContext,
@@ -91,7 +91,7 @@ type SubagentSpawnDeps = {
   callGateway: typeof callGateway;
   forkSessionFromParent: typeof forkSessionFromParent;
   getGlobalHookRunner: () => SubagentLifecycleHookRunner | null;
-  loadConfig: typeof loadConfig;
+  getRuntimeConfig: typeof getRuntimeConfig;
   resolveContextEngine: typeof resolveContextEngine;
   resolveParentForkMaxTokens: typeof resolveParentForkMaxTokens;
   updateSessionStore: typeof updateSessionStore;
@@ -101,7 +101,7 @@ const defaultSubagentSpawnDeps: SubagentSpawnDeps = {
   callGateway,
   forkSessionFromParent,
   getGlobalHookRunner,
-  loadConfig,
+  getRuntimeConfig,
   resolveContextEngine,
   resolveParentForkMaxTokens,
   updateSessionStore,
@@ -251,7 +251,7 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
 }
 
 function loadSubagentConfig() {
-  return subagentSpawnDeps.loadConfig();
+  return subagentSpawnDeps.getRuntimeConfig();
 }
 
 async function persistInitialChildSessionRuntimeModel(params: {
@@ -931,7 +931,7 @@ export async function spawnSubagentDirect(
       config: cfg,
       sandboxed: childRuntime.sandboxed,
     }),
-    nativeCommandNames: listRegisteredPluginCommands().map((command) => command.name),
+    nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance(),
     childDepth,
     maxSpawnDepth,
   });

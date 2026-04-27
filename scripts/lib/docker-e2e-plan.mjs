@@ -2,6 +2,7 @@
 // This module turns the scenario catalog plus env-driven inputs into a concrete
 // lane plan. It intentionally does not define scenario commands.
 import {
+  BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS,
   DEFAULT_LIVE_RETRIES,
   allReleasePathLanes,
   mainLanes,
@@ -34,14 +35,23 @@ export function parseLaneSelection(raw) {
   if (!raw) {
     return [];
   }
-  const laneAliases = new Map([["bundled-channel-deps", "bundled-channel-deps-compat"]]);
+  const laneAliases = new Map([
+    ["bundled-channel-deps", ["bundled-channel-deps-compat"]],
+    [
+      "bundled-plugin-install-uninstall",
+      Array.from(
+        { length: BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS },
+        (_, index) => `bundled-plugin-install-uninstall-${index}`,
+      ),
+    ],
+  ]);
   return [
     ...new Set(
       String(raw)
         .split(/[,\s]+/u)
         .map((token) => token.trim())
         .filter(Boolean)
-        .map((token) => laneAliases.get(token) ?? token),
+        .flatMap((token) => laneAliases.get(token) ?? [token]),
     ),
   ];
 }

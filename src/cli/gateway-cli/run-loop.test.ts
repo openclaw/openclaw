@@ -105,6 +105,7 @@ vi.mock("../../agents/pi-embedded-runner/runs.js", () => ({
 }));
 
 vi.mock("../../config/config.js", () => ({
+  getRuntimeConfig: () => loadConfig(),
   loadConfig: () => loadConfig(),
 }));
 

@@ -18,7 +18,7 @@ import {
   resolveNativeCommandSessionTargets,
 } from "openclaw/plugin-sdk/command-auth-native";
 import { resolveDirectStatusReplyForSession } from "openclaw/plugin-sdk/command-status-runtime";
-import type { OpenClawConfig, loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { buildPairingReply } from "openclaw/plugin-sdk/conversation-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
@@ -199,7 +199,7 @@ function resolveDiscordNativeCommandAllowlistAccess(params: {
 }
 
 function resolveDiscordGuildNativeCommandAuthorized(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   discordConfig: DiscordConfig;
   useAccessGroups: boolean;
   commandsAllowFromAccess: ReturnType<typeof resolveDiscordNativeCommandAllowlistAccess>;
@@ -261,7 +261,7 @@ function resolveDiscordGuildNativeCommandAuthorized(params: {
 
 function buildDiscordCommandOptions(params: {
   command: ChatCommandDefinition;
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   authorizeChoiceContext?: (interaction: AutocompleteInteraction) => Promise<boolean>;
   resolveChoiceContext?: (
     interaction: AutocompleteInteraction,
@@ -397,7 +397,7 @@ function resolveDiscordNativeGroupDmAccess(params: {
 
 async function resolveDiscordNativeAutocompleteAuthorized(params: {
   interaction: AutocompleteInteraction;
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   discordConfig: DiscordConfig;
   accountId: string;
 }): Promise<boolean> {
@@ -633,7 +633,7 @@ function createNativeCommandDefinition(command: NativeCommandSpec): ChatCommandD
 
 export function createDiscordNativeCommand(params: {
   command: NativeCommandSpec;
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   discordConfig: DiscordConfig;
   accountId: string;
   sessionPrefix: string;
@@ -741,7 +741,7 @@ async function dispatchDiscordCommandInteraction(params: {
   prompt: string;
   command: ChatCommandDefinition;
   commandArgs?: DiscordCommandArgs;
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   discordConfig: DiscordConfig;
   accountId: string;
   sessionPrefix: string;

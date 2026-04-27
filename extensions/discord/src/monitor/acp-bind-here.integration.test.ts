@@ -9,7 +9,7 @@ vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
   );
   return {
     ...actual,
-    loadConfig: () => loadConfigMock(),
+    getRuntimeConfig: () => loadConfigMock(),
   };
 });
 

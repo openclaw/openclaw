@@ -1981,6 +1981,7 @@ export async function runEmbeddedPiAgent(
             : resolveReasoningOnlyRetryInstruction({
                 provider: activeErrorContext.provider,
                 modelId: activeErrorContext.model,
+                modelApi: effectiveModel.api,
                 executionContract,
                 aborted,
                 timedOut,
@@ -1991,6 +1992,7 @@ export async function runEmbeddedPiAgent(
             : resolveEmptyResponseRetryInstruction({
                 provider: activeErrorContext.provider,
                 modelId: activeErrorContext.model,
+                modelApi: effectiveModel.api,
                 executionContract,
                 payloadCount,
                 aborted,

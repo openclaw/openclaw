@@ -16,7 +16,7 @@ const noPluginToolMeta = () => undefined;
 const noWarnLog = () => {};
 
 vi.mock("../config/config.js", () => ({
-  loadConfig: () => cfg,
+  getRuntimeConfig: () => cfg,
 }));
 
 vi.mock("../config/sessions.js", () => ({

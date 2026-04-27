@@ -190,6 +190,17 @@ describe("memory watcher config", () => {
     ).toBe(false);
   });
 
+  it("does not start watchers for one-shot CLI managers", async () => {
+    await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+    const cfg = createWatcherConfig();
+
+    const result = await getMemorySearchManager({ cfg, agentId: "main", purpose: "cli" });
+    expect(result.manager).not.toBeNull();
+    manager = result.manager as unknown as MemoryIndexManager;
+
+    expect(watchMock).not.toHaveBeenCalled();
+  });
+
   it("watches multimodal extra directories with filtered extensions", async () => {
     await setupWatcherWorkspace({ name: "PHOTO.PNG", contents: "png" });
     const cfg = createWatcherConfig({

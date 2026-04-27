@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { loadConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import {
   DEFAULT_AGENT_ID,
   normalizeAgentId,
@@ -34,7 +34,7 @@ function normalizeRuntimeValue(value: unknown): string | undefined {
 }
 
 function resolveAgentRuntimeMetadata(
-  cfg: ReturnType<typeof loadConfig>,
+  cfg: ReturnType<typeof getRuntimeConfig>,
   agentId: string,
 ): NonNullable<AgentListEntry["agentRuntime"]> {
   const envRuntime = normalizeRuntimeValue(process.env.OPENCLAW_AGENT_RUNTIME);
@@ -84,7 +84,7 @@ export function createAgentsListTool(opts?: {
       'List OpenClaw agent ids you can target with `sessions_spawn` when `runtime="subagent"` (based on subagent allowlists).',
     parameters: AgentsListToolSchema,
     execute: async () => {
-      const cfg = loadConfig();
+      const cfg = getRuntimeConfig();
       const { mainKey, alias } = resolveMainSessionAlias(cfg);
       const requesterInternalKey =
         typeof opts?.agentSessionKey === "string" && opts.agentSessionKey.trim()

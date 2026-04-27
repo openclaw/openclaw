@@ -425,7 +425,7 @@ describe("openai transport stream", () => {
   });
 
   it("streams OpenAI-compatible loopback requests with the configured SDK timeout", async () => {
-    let captured: { path?: string; timeout?: string; roles?: string[] } = {};
+    let captured: { path?: string; timeout?: string; model?: string; roles?: string[] } = {};
     const server = createServer((req, res) => {
       let body = "";
       req.setEncoding("utf8");
@@ -433,12 +433,16 @@ describe("openai transport stream", () => {
         body += chunk;
       });
       req.on("end", () => {
-        const parsed = JSON.parse(body) as { messages?: Array<{ role?: string }> };
+        const parsed = JSON.parse(body) as {
+          model?: string;
+          messages?: Array<{ role?: string }>;
+        };
         captured = {
           path: req.url,
           timeout: Array.isArray(req.headers["x-stainless-timeout"])
             ? req.headers["x-stainless-timeout"][0]
             : req.headers["x-stainless-timeout"],
+          model: parsed.model,
           roles: parsed.messages?.map((message) => message.role ?? ""),
         };
         res.writeHead(200, {
@@ -452,7 +456,7 @@ describe("openai transport stream", () => {
             id: "chatcmpl-timeout-proof",
             object: "chat.completion.chunk",
             created,
-            model: "slow-local",
+            model: "mlx-community/Qwen3-30B-A3B-6bit",
             choices: [
               {
                 index: 0,
@@ -467,7 +471,7 @@ describe("openai transport stream", () => {
             id: "chatcmpl-timeout-proof",
             object: "chat.completion.chunk",
             created,
-            model: "slow-local",
+            model: "mlx-community/Qwen3-30B-A3B-6bit",
             choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
             usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
           })}\n\n`,
@@ -484,10 +488,10 @@ describe("openai transport stream", () => {
         throw new Error("Missing loopback server address");
       }
       const baseModel = {
-        id: "slow-local",
-        name: "Slow Local",
+        id: "mlx-community/Qwen3-30B-A3B-6bit",
+        name: "Qwen3 MLX",
         api: "openai-completions",
-        provider: "custom-openai-compatible",
+        provider: "mlx",
         baseUrl: `http://127.0.0.1:${address.port}/v1`,
         reasoning: false,
         input: ["text"],
@@ -496,9 +500,8 @@ describe("openai transport stream", () => {
         maxTokens: 256,
         requestTimeoutMs: 900_000,
       } satisfies Model<"openai-completions"> & { requestTimeoutMs: number };
-      const model = attachModelProviderRequestTransport(baseModel, { allowPrivateNetwork: true });
       const stream = createOpenAICompletionsTransportStreamFn()(
-        model,
+        baseModel,
         {
           systemPrompt: "system",
           messages: [{ role: "user", content: "Reply OK", timestamp: Date.now() }],
@@ -524,6 +527,7 @@ describe("openai transport stream", () => {
 
       expect(captured.path).toBe("/v1/chat/completions");
       expect(captured.timeout).toBe("900");
+      expect(captured.model).toBe("mlx-community/Qwen3-30B-A3B-6bit");
       expect(captured.roles).toEqual(["system", "user"]);
       expect(doneReason).toBe("stop");
       expect(text).toBe("OK");

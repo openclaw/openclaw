@@ -290,6 +290,8 @@ function getLastDispatchCtx():
       CommandBody?: string;
       MediaTranscribedIndexes?: number[];
       MessageThreadId?: string | number;
+      ModelParentSessionKey?: string;
+      ParentSessionKey?: string;
       SessionKey?: string;
       Transcript?: string;
     }
@@ -302,6 +304,8 @@ function getLastDispatchCtx():
           CommandBody?: string;
           MediaTranscribedIndexes?: number[];
           MessageThreadId?: string | number;
+          ModelParentSessionKey?: string;
+          ParentSessionKey?: string;
           SessionKey?: string;
           Transcript?: string;
         };
@@ -787,6 +791,35 @@ describe("processDiscordMessage session routing", () => {
       to: "channel:thread-1",
       accountId: "default",
     });
+  });
+
+  it("passes Discord thread parent only for model inheritance when transcript inheritance is off", async () => {
+    const ctx = await createBaseContext({
+      baseSessionKey: "agent:main:discord:channel:thread-1",
+      route: {
+        ...BASE_CHANNEL_ROUTE,
+        sessionKey: "agent:main:discord:channel:thread-1",
+      },
+      messageChannelId: "thread-1",
+      message: {
+        id: "m1",
+        channelId: "thread-1",
+        timestamp: new Date().toISOString(),
+        attachments: [],
+      },
+      threadChannel: { id: "thread-1", name: "child-thread" },
+      threadParentId: "parent-1",
+      discordConfig: { thread: { inheritParent: false } },
+    });
+
+    await processDiscordMessage(ctx as any);
+
+    expect(getLastDispatchCtx()).toMatchObject({
+      SessionKey: "agent:main:discord:channel:thread-1",
+      MessageThreadId: "thread-1",
+      ModelParentSessionKey: "agent:main:discord:channel:parent-1",
+    });
+    expect(getLastDispatchCtx()?.ParentSessionKey).toBeUndefined();
   });
 });
 

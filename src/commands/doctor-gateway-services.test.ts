@@ -27,7 +27,7 @@ const mocks = vi.hoisted(() => ({
   readCommand: vi.fn(),
   stage: vi.fn(),
   install: vi.fn(),
-  writeConfigFile: vi.fn().mockResolvedValue(undefined),
+  replaceConfigFile: vi.fn().mockResolvedValue(undefined),
   auditGatewayServiceConfig: vi.fn(),
   buildGatewayInstallPlan: vi.fn(),
   resolveGatewayAuthTokenForService: vi.fn(),
@@ -48,7 +48,7 @@ vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
-    writeConfigFile: mocks.writeConfigFile,
+    replaceConfigFile: mocks.replaceConfigFile,
   };
 });
 
@@ -69,6 +69,7 @@ vi.mock("../daemon/service-audit.js", () => ({
   SERVICE_AUDIT_CODES: {
     gatewayEntrypointMismatch: testServiceAuditCodes.gatewayEntrypointMismatch,
     gatewayManagedEnvEmbedded: testServiceAuditCodes.gatewayManagedEnvEmbedded,
+    gatewayProxyEnvEmbedded: testServiceAuditCodes.gatewayProxyEnvEmbedded,
     gatewayTokenMismatch: testServiceAuditCodes.gatewayTokenMismatch,
   },
 }));
@@ -279,7 +280,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
         }),
       }),
     );
-    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
     expect(mocks.stage).not.toHaveBeenCalled();
     expect(mocks.install).toHaveBeenCalledTimes(1);
   });
@@ -321,6 +322,44 @@ describe("maybeRepairGatewayServiceConfig", () => {
     expect(mocks.install).toHaveBeenCalledTimes(1);
   });
 
+  it("repairs gateway services with embedded proxy environment values", async () => {
+    mocks.readCommand.mockResolvedValue({
+      programArguments: gatewayProgramArguments,
+      environment: {
+        HTTP_PROXY: "http://proxy.local:7890",
+        HTTPS_PROXY: "https://proxy.local:7890",
+      },
+    });
+    mocks.buildGatewayInstallPlan.mockResolvedValue({
+      programArguments: gatewayProgramArguments,
+      workingDirectory: "/tmp",
+      environment: {},
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: false,
+      issues: [
+        {
+          code: "gateway-proxy-env-embedded",
+          message: "Gateway service embeds proxy environment values that should not be persisted.",
+          detail: "inline keys: HTTP_PROXY, HTTPS_PROXY",
+          level: "recommended",
+        },
+      ],
+    });
+    mocks.install.mockResolvedValue(undefined);
+
+    await runRepair({ gateway: {} });
+
+    expect(mocks.install).toHaveBeenCalledWith(
+      expect.objectContaining({
+        environment: expect.not.objectContaining({
+          HTTP_PROXY: expect.any(String),
+          HTTPS_PROXY: expect.any(String),
+        }),
+      }),
+    );
+  });
+
   it("uses OPENCLAW_GATEWAY_TOKEN when config token is missing", async () => {
     await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "env-token" }, async () => {
       setupGatewayTokenRepairScenario();
@@ -347,13 +386,16 @@ describe("maybeRepairGatewayServiceConfig", () => {
           }),
         }),
       );
-      expect(mocks.writeConfigFile).toHaveBeenCalledWith(
+      expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
         expect.objectContaining({
-          gateway: expect.objectContaining({
-            auth: expect.objectContaining({
-              token: "env-token",
+          nextConfig: expect.objectContaining({
+            gateway: expect.objectContaining({
+              auth: expect.objectContaining({
+                token: "env-token",
+              }),
             }),
           }),
+          afterWrite: { mode: "auto" },
         }),
       );
       expect(mocks.stage).not.toHaveBeenCalled();
@@ -570,13 +612,16 @@ describe("maybeRepairGatewayServiceConfig", () => {
             expectedGatewayToken: undefined,
           }),
         );
-        expect(mocks.writeConfigFile).toHaveBeenCalledWith(
+        expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
           expect.objectContaining({
-            gateway: expect.objectContaining({
-              auth: expect.objectContaining({
-                token: "stale-token",
+            nextConfig: expect.objectContaining({
+              gateway: expect.objectContaining({
+                auth: expect.objectContaining({
+                  token: "stale-token",
+                }),
               }),
             }),
+            afterWrite: { mode: "auto" },
           }),
         );
         expect(mocks.buildGatewayInstallPlan).toHaveBeenCalledWith(
@@ -627,7 +672,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
           }),
         );
 
-        expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+        expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
         expect(mocks.stage).toHaveBeenCalledTimes(1);
         expect(mocks.install).not.toHaveBeenCalled();
       },
@@ -666,7 +711,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
 
         await runRepair(cfg);
 
-        expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+        expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
         expect(mocks.buildGatewayInstallPlan).toHaveBeenCalledWith(
           expect.objectContaining({
             config: cfg,
@@ -696,7 +741,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
         EXTERNAL_SERVICE_REPAIR_NOTE,
         "Gateway service config",
       );
-      expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
       expect(mocks.stage).not.toHaveBeenCalled();
       expect(mocks.install).not.toHaveBeenCalled();
     });

@@ -62,6 +62,12 @@ describe("parseDiscordTarget", () => {
       );
     }
   });
+
+  it("guides ambiguous numeric recipients with all supported explicit formats", () => {
+    expect(() => parseDiscordTarget("123456789")).toThrow(
+      'Ambiguous Discord recipient "123456789". For DMs use "user:123456789" or "<@123456789>"; for channels use "channel:123456789".',
+    );
+  });
 });
 
 describe("resolveDiscordChannelId", () => {

@@ -848,6 +848,7 @@ async function finalizeCronRun(params: {
     deliveryPayloadHasStructuredContent,
     hasFatalErrorPayload,
     embeddedRunError,
+    pendingPresentationWarningError,
   } = resolveCronPayloadOutcome({
     payloads,
     runLevelError: finalRunResult.meta?.error,
@@ -874,6 +875,12 @@ async function finalizeCronRun(params: {
       delivery: result?.delivery,
       ...telemetry,
     });
+  const failPendingPresentationWarningUnlessDelivered = (delivered?: boolean) => {
+    if (pendingPresentationWarningError && delivered !== true) {
+      hasFatalErrorPayload = true;
+      embeddedRunError = pendingPresentationWarningError;
+    }
+  };
 
   const skipHeartbeatDelivery =
     prepared.deliveryRequested &&
@@ -944,6 +951,9 @@ async function finalizeCronRun(params: {
         deliveryResult.result.deliveryAttempted ?? deliveryResult.deliveryAttempted,
       delivery: deliveryTrace,
     };
+    failPendingPresentationWarningUnlessDelivered(
+      resultWithDeliveryMeta.delivered ?? deliveryResult.delivered,
+    );
     if (!hasFatalErrorPayload || deliveryResult.result.status !== "ok") {
       return resultWithDeliveryMeta;
     }
@@ -955,6 +965,7 @@ async function finalizeCronRun(params: {
   }
   summary = deliveryResult.summary;
   outputText = deliveryResult.outputText;
+  failPendingPresentationWarningUnlessDelivered(deliveryResult.delivered);
   return resolveRunOutcome({
     delivered: deliveryResult.delivered,
     deliveryAttempted: deliveryResult.deliveryAttempted,

@@ -82,7 +82,9 @@ agents alternate messages (up to 5 turns). The target agent can reply
 or another visible session. It reports usage, time, model/runtime state, and
 linked background-task context when present. Like `/status`, it can backfill
 sparse token/cache counters from the latest transcript usage entry, and
-`model=default` clears a per-session override.
+`model=default` clears a per-session override. Use `sessionKey="current"` for
+the caller's current session; visible client labels such as `openclaw-tui` are
+not session keys.
 
 `sessions_yield` intentionally ends the current turn so the next message can be
 the follow-up event you are waiting for. Use it after spawning sub-agents when

@@ -158,18 +158,22 @@ async function setupCronTestRun(params: {
 type DirectCronState = {
   cron: { stop: () => void };
   storePath: string;
+  getRuntimeConfig: () => import("../config/types.openclaw.js").OpenClawConfig;
 };
 
 async function createDirectCronState(): Promise<DirectCronState> {
-  const [{ loadConfig }, { buildGatewayCronService }] = await Promise.all([
+  const [{ getRuntimeConfig }, { buildGatewayCronService }] = await Promise.all([
     import("../config/config.js"),
     import("./server-cron.js"),
   ]);
-  return buildGatewayCronService({
-    cfg: loadConfig(),
-    deps: {} as never,
-    broadcast: vi.fn(),
-  });
+  return {
+    ...buildGatewayCronService({
+      cfg: getRuntimeConfig(),
+      deps: {} as never,
+      broadcast: vi.fn(),
+    }),
+    getRuntimeConfig: getRuntimeConfig,
+  };
 }
 
 async function directCronReq(
@@ -199,6 +203,7 @@ async function directCronReq(
         warn: vi.fn(),
         error: vi.fn(),
       },
+      getRuntimeConfig: cronState.getRuntimeConfig,
     } as never,
     client: null,
     isWebchatConnect: () => false,

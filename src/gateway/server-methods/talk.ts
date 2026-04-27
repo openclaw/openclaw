@@ -1,4 +1,4 @@
-import { loadConfig, readConfigFileSnapshot } from "../../config/config.js";
+import { readConfigFileSnapshot } from "../../config/config.js";
 import { redactConfigObject } from "../../config/redact-snapshot.js";
 import {
   buildTalkConfigResponse,
@@ -349,7 +349,7 @@ function resolveTalkResponseFromConfig(params: {
 }
 
 export const talkHandlers: GatewayRequestHandlers = {
-  "talk.config": async ({ params, respond, client }) => {
+  "talk.config": async ({ params, respond, client, context }) => {
     if (!validateTalkConfigParams(params)) {
       respond(
         false,
@@ -373,7 +373,7 @@ export const talkHandlers: GatewayRequestHandlers = {
     }
 
     const snapshot = await readConfigFileSnapshot();
-    const runtimeConfig = loadConfig();
+    const runtimeConfig = context.getRuntimeConfig();
     const configPayload: Record<string, unknown> = {};
 
     const talk = resolveTalkResponseFromConfig({
@@ -397,7 +397,7 @@ export const talkHandlers: GatewayRequestHandlers = {
 
     respond(true, { config: configPayload }, undefined);
   },
-  "talk.realtime.session": async ({ params, respond }) => {
+  "talk.realtime.session": async ({ params, respond, context }) => {
     if (!validateTalkRealtimeSessionParams(params)) {
       respond(
         false,
@@ -415,7 +415,7 @@ export const talkHandlers: GatewayRequestHandlers = {
       voice?: string;
     };
     try {
-      const runtimeConfig = loadConfig();
+      const runtimeConfig = context.getRuntimeConfig();
       const realtimeConfig = buildTalkRealtimeConfig(runtimeConfig, typedParams.provider);
       const resolution = resolveConfiguredRealtimeVoiceProvider({
         configuredProviderId: realtimeConfig.provider,
@@ -457,7 +457,7 @@ export const talkHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
   },
-  "talk.speak": async ({ params, respond }) => {
+  "talk.speak": async ({ params, respond, context }) => {
     if (!validateTalkSpeakParams(params)) {
       respond(
         false,
@@ -494,7 +494,7 @@ export const talkHandlers: GatewayRequestHandlers = {
     }
 
     try {
-      const runtimeConfig = loadConfig();
+      const runtimeConfig = context.getRuntimeConfig();
       const setup = buildTalkTtsConfig(runtimeConfig);
       if ("error" in setup) {
         respond(false, undefined, talkSpeakError(setup.reason, setup.error));

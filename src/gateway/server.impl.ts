@@ -10,12 +10,11 @@ import {
   applyConfigOverrides,
   getRuntimeConfig,
   isNixMode,
-  loadConfig,
   promoteConfigSnapshotToLastKnownGood,
   readConfigFileSnapshot,
   recoverConfigFromLastKnownGood,
   registerConfigWriteListener,
-  writeConfigFile,
+  replaceConfigFile,
 } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
@@ -379,7 +378,12 @@ export async function startGatewayServer(
     : await startupTrace.measure("control-ui.seed", () =>
         maybeSeedControlUiAllowedOriginsAtStartup({
           config: cfgAtStart,
-          writeConfig: writeConfigFile,
+          writeConfig: async (nextConfig) => {
+            await replaceConfigFile({
+              nextConfig,
+              afterWrite: { mode: "auto" },
+            });
+          },
           log,
           runtimeBind: opts.bind,
           runtimePort: port,
@@ -536,9 +540,9 @@ export async function startGatewayServer(
   const serverStartedAt = Date.now();
   let startupSidecarsReady = minimalTestGateway;
   const channelManager = createChannelManager({
-    loadConfig: () =>
+    getRuntimeConfig: () =>
       applyPluginAutoEnable({
-        config: loadConfig(),
+        config: getRuntimeConfig(),
         env: process.env,
       }).config,
     channelLogs,
@@ -725,7 +729,7 @@ export async function startGatewayServer(
         setSkillsRefreshTimer: (timer) => {
           runtimeState.skillsRefreshTimer = timer;
         },
-        loadConfig,
+        getRuntimeConfig,
       }),
     );
     runtimeState.bonjourStop = earlyRuntime.bonjourStop;
@@ -784,6 +788,7 @@ export async function startGatewayServer(
     const gatewayRequestContext = createGatewayRequestContext({
       deps,
       runtimeState,
+      getRuntimeConfig,
       execApprovalManager,
       pluginApprovalManager,
       loadGatewayModelCatalog,

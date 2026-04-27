@@ -965,7 +965,10 @@ export const telegramPlugin = createChatChannelPlugin({
         });
         const loggedOut = resolved.tokenSource === "none";
         if (changed) {
-          await getTelegramRuntime().config.writeConfigFile(nextCfg);
+          await getTelegramRuntime().config.replaceConfigFile({
+            nextConfig: nextCfg,
+            afterWrite: { mode: "auto" },
+          });
         }
         return { cleared, envToken: Boolean(envToken), loggedOut };
       },
