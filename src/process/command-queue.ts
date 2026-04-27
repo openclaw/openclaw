@@ -69,6 +69,13 @@ export function setSessionLaneConcurrency(configOrValue: OpenClawConfig | number
   } else {
     state.defaultSessionLaneMaxConcurrent = resolveSessionLaneMaxConcurrent(configOrValue);
   }
+  // Propagate to already-created session lanes so hot-reload takes effect immediately.
+  for (const [lane, laneState] of state.lanes) {
+    if (lane.startsWith("session:")) {
+      laneState.maxConcurrent = state.defaultSessionLaneMaxConcurrent;
+      drainLane(lane);
+    }
+  }
 }
 
 /**
@@ -338,6 +345,7 @@ export function resetCommandQueueStateForTest(): void {
     resolveActiveTaskWaiter(waiter, { drained: true });
   }
   queueState.nextTaskId = 1;
+  queueState.defaultSessionLaneMaxConcurrent = DEFAULT_SESSION_LANE_MAX_CONCURRENT;
 }
 
 /**
