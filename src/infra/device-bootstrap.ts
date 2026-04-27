@@ -1,7 +1,9 @@
 import path from "node:path";
 import {
+  normalizeDeviceBootstrapHandoffProfile,
   normalizeDeviceBootstrapProfile,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  resolveBootstrapProfileScopesForRole,
   type DeviceBootstrapProfile,
   type DeviceBootstrapProfileInput,
 } from "../shared/device-bootstrap-profile.js";
@@ -57,10 +59,10 @@ function resolveIssuedBootstrapProfile(params: {
   scopes?: readonly string[];
 }): DeviceBootstrapProfile {
   if (params.profile) {
-    return normalizeDeviceBootstrapProfile(params.profile);
+    return normalizeDeviceBootstrapHandoffProfile(params.profile);
   }
   if (params.roles || params.scopes) {
-    return normalizeDeviceBootstrapProfile({
+    return normalizeDeviceBootstrapHandoffProfile({
       roles: params.roles,
       scopes: params.scopes,
     });
@@ -83,13 +85,6 @@ function bootstrapProfileAllowsRequest(params: {
   );
 }
 
-function resolveBootstrapProfileScopes(role: string, scopes: readonly string[]): string[] {
-  if (role === "operator") {
-    return scopes.filter((scope) => scope.startsWith("operator."));
-  }
-  return scopes.filter((scope) => !scope.startsWith("operator."));
-}
-
 function bootstrapProfileSatisfiesProfile(params: {
   actualProfile: DeviceBootstrapProfile;
   requiredProfile: DeviceBootstrapProfile;
@@ -98,7 +93,7 @@ function bootstrapProfileSatisfiesProfile(params: {
     if (!params.actualProfile.roles.includes(requiredRole)) {
       return false;
     }
-    const requiredScopes = resolveBootstrapProfileScopes(
+    const requiredScopes = resolveBootstrapProfileScopesForRole(
       requiredRole,
       params.requiredProfile.scopes,
     );
@@ -276,7 +271,7 @@ export async function redeemDeviceBootstrapTokenProfile(params: {
       roles: [...resolvePersistedRedeemedProfile(record).roles, params.role],
       scopes: [
         ...resolvePersistedRedeemedProfile(record).scopes,
-        ...resolveBootstrapProfileScopes(params.role, params.scopes),
+        ...resolveBootstrapProfileScopesForRole(params.role, params.scopes),
       ],
     });
     state[tokenKey] = {
