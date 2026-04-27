@@ -430,10 +430,12 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
         continue;
       }
       const preserveJob = params.preserveJobIds?.has(jobId) ?? false;
-      if (
-        preserveJob &&
-        (record.generation === undefined || liveGeneration === record.generation)
-      ) {
+      if (preserveJob) {
+        // preserveJobIds means "do not run cleanup at all" — even across
+        // generation mismatches. The generation-matched deletion below would
+        // otherwise still call the OLD cleanup callback, which can remove
+        // external scheduled jobs (e.g. cron.remove) and break the live
+        // newer-generation registration that took over this jobId.
         continue;
       }
       // A newer generation may already own this id. The old cleanup callback can
