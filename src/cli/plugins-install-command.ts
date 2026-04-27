@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import { collectChannelDoctorStaleConfigMutations } from "../commands/doctor/shared/channel-doctor.js";
 import { readConfigFileSnapshot } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginEntryConfig } from "../config/types.plugins.js";
 import { installHooksFromNpmSpec, installHooksFromPath } from "../hooks/install.js";
 import { resolveArchiveKind } from "../infra/archive.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub.js";
@@ -92,7 +94,7 @@ function prepareConfigForDisabledBundledInstall(
 ): OpenClawConfig {
   const entries = config.plugins?.entries ?? {};
   const existingEntry = entries[pluginId];
-  const nextEntry = {
+  const nextEntry: PluginEntryConfig = {
     ...(isRecord(existingEntry) ? existingEntry : {}),
     enabled: false,
   };
