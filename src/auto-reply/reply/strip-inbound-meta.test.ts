@@ -164,6 +164,11 @@ Real user content`;
     expect(stripInboundMetadata(input)).toBe(input);
   });
 
+  it("does not strip user text that only resembles compact direct metadata", () => {
+    const input = "Direct message context (untrusted metadata): what does this mean?";
+    expect(stripInboundMetadata(input)).toBe(input);
+  });
+
   it("does not strip sentinel text when json fence is missing", () => {
     const input = `Sender (untrusted metadata):
 name: test

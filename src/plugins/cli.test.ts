@@ -415,6 +415,52 @@ describe("registerPluginCliCommands", () => {
     );
   });
 
+  it("includes default memory slot plugin when primary command is wiki", async () => {
+    const program = createProgram();
+    program.exitOverride();
+    mocks.resolveManifestActivationPluginIds.mockReturnValue(["memory-wiki"]);
+
+    await registerPluginCliCommands(program, {} as OpenClawConfig, undefined, undefined, {
+      mode: "lazy",
+      primary: "wiki",
+    });
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["memory-core", "memory-wiki"],
+      }),
+    );
+  });
+
+  it("does not include memory slot plugin for unrelated primary commands", async () => {
+    const program = createProgram();
+    program.exitOverride();
+    mocks.resolveManifestActivationPluginIds.mockReturnValue(["browser"]);
+
+    await registerPluginCliCommands(
+      program,
+      {
+        plugins: {
+          slots: {
+            memory: "memory-core",
+          },
+        },
+      } as OpenClawConfig,
+      undefined,
+      undefined,
+      {
+        mode: "lazy",
+        primary: "browser",
+      },
+    );
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["browser"],
+      }),
+    );
+  });
+
   it("does not append memory slot when slot is none", async () => {
     const program = createProgram();
     program.exitOverride();

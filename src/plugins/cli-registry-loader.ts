@@ -1,8 +1,8 @@
 import { collectUniqueCommandDescriptors } from "../cli/program/command-descriptor-utils.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
 import { createPluginCliGatewayNodesRuntime } from "./cli-gateway-nodes-runtime.js";
+import { normalizePluginsConfig } from "./config-state.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadOpenClawPluginCliRegistry, loadOpenClawPlugins } from "./loader.js";
 import type { PluginRegistry } from "./registry.js";
@@ -65,7 +65,7 @@ function resolvePrimaryCommandPluginIds(
   context: PluginCliLoadContext,
   primaryCommand: string | undefined,
 ): string[] {
-  const normalizedPrimary = primaryCommand?.trim();
+  const normalizedPrimary = primaryCommand?.trim().toLowerCase();
   if (!normalizedPrimary) {
     return [];
   }
@@ -78,15 +78,23 @@ function resolvePrimaryCommandPluginIds(
     workspaceDir: context.workspaceDir,
     env: context.env,
   });
-  return withPrimaryMemorySlotPluginId(plannedPluginIds, context.activationSourceConfig);
+  return withPrimaryMemorySlotPluginId(
+    plannedPluginIds,
+    context.activationSourceConfig,
+    normalizedPrimary,
+  );
 }
 
 function withPrimaryMemorySlotPluginId(
   pluginIds: readonly string[],
   config: OpenClawConfig,
+  primaryCommand: string,
 ): string[] {
   if (pluginIds.length === 0) {
     return [];
+  }
+  if (!shouldLoadMemorySlotForPrimary(primaryCommand)) {
+    return [...pluginIds];
   }
   const memorySlotPluginId = resolveConfiguredMemorySlotPluginId(config);
   if (!memorySlotPluginId) {
@@ -98,11 +106,14 @@ function withPrimaryMemorySlotPluginId(
 }
 
 function resolveConfiguredMemorySlotPluginId(config: OpenClawConfig): string | null {
-  const memorySlotPluginId = normalizeOptionalLowercaseString(config.plugins?.slots?.memory);
-  if (!memorySlotPluginId || memorySlotPluginId === "none") {
-    return null;
+  return normalizePluginsConfig(config.plugins).slots.memory ?? null;
+}
+
+function shouldLoadMemorySlotForPrimary(primaryCommand: string): boolean {
+  if (primaryCommand === "wiki" || primaryCommand === "memory") {
+    return true;
   }
-  return memorySlotPluginId;
+  return false;
 }
 
 export function resolvePluginCliLoadContext(params: {
