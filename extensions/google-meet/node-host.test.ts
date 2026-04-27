@@ -40,6 +40,75 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 describe("google-meet node host bridge sessions", () => {
+  it("clears output playback without closing the active bridge when the old output exits", async () => {
+    const { handleGoogleMeetNodeHostCommand } = await import("./src/node-host.js");
+    const originalPlatform = process.platform;
+    children.length = 0;
+
+    Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
+    try {
+      const start = JSON.parse(
+        await handleGoogleMeetNodeHostCommand(
+          JSON.stringify({
+            action: "start",
+            url: "https://meet.google.com/abc-defg-hij",
+            mode: "realtime",
+            launch: false,
+            audioInputCommand: ["mock-rec"],
+            audioOutputCommand: ["mock-play"],
+          }),
+        ),
+      );
+
+      expect(children).toHaveLength(2);
+      const firstOutput = children[0];
+
+      const cleared = JSON.parse(
+        await handleGoogleMeetNodeHostCommand(
+          JSON.stringify({
+            action: "clearAudio",
+            bridgeId: start.bridgeId,
+          }),
+        ),
+      );
+
+      expect(cleared).toEqual({ bridgeId: start.bridgeId, ok: true, clearCount: 1 });
+      expect(children).toHaveLength(3);
+      expect(firstOutput?.kill).toHaveBeenCalledWith("SIGTERM");
+
+      firstOutput?.emit("error", new Error("stale output failed after clear"));
+
+      const status = JSON.parse(
+        await handleGoogleMeetNodeHostCommand(
+          JSON.stringify({
+            action: "status",
+            bridgeId: start.bridgeId,
+          }),
+        ),
+      );
+
+      expect(status.bridge).toMatchObject({
+        bridgeId: start.bridgeId,
+        closed: false,
+        clearCount: 1,
+      });
+
+      const audio = Buffer.from([1, 2, 3]);
+      await handleGoogleMeetNodeHostCommand(
+        JSON.stringify({
+          action: "pushAudio",
+          bridgeId: start.bridgeId,
+          base64: audio.toString("base64"),
+        }),
+      );
+
+      expect(children[2]?.stdin?.write).toHaveBeenCalledWith(audio);
+      expect(firstOutput?.stdin?.write).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+    }
+  });
+
   it("lists active bridge sessions and hides closed sessions", async () => {
     const { handleGoogleMeetNodeHostCommand } = await import("./src/node-host.js");
     const originalPlatform = process.platform;

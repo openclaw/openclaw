@@ -217,6 +217,7 @@ type TestBridgeProcess = {
   killed: boolean;
   kill: ReturnType<typeof vi.fn>;
   on: EventEmitter["on"];
+  emit: EventEmitter["emit"];
 };
 
 describe("google-meet plugin", () => {
@@ -1881,6 +1882,7 @@ describe("google-meet plugin", () => {
     let callbacks:
       | {
           onAudio: (audio: Buffer) => void;
+          onClearAudio: () => void;
           onMark?: (markName: string) => void;
           onToolCall?: (event: {
             itemId: string;
@@ -1916,6 +1918,7 @@ describe("google-meet plugin", () => {
     };
     const inputStdout = new PassThrough();
     const outputStdinWrites: Buffer[] = [];
+    const replacementOutputStdinWrites: Buffer[] = [];
     const makeProcess = (stdio: {
       stdin?: { write(chunk: unknown): unknown } | null;
       stdout?: { on(event: "data", listener: (chunk: unknown) => void): unknown } | null;
@@ -1937,9 +1940,20 @@ describe("google-meet plugin", () => {
         done();
       },
     });
+    const replacementOutputStdin = new Writable({
+      write(chunk, _encoding, done) {
+        replacementOutputStdinWrites.push(Buffer.from(chunk));
+        done();
+      },
+    });
     const inputProcess = makeProcess({ stdout: inputStdout, stdin: null });
     const outputProcess = makeProcess({ stdin: outputStdin, stdout: null });
-    const spawnMock = vi.fn().mockReturnValueOnce(outputProcess).mockReturnValueOnce(inputProcess);
+    const replacementOutputProcess = makeProcess({ stdin: replacementOutputStdin, stdout: null });
+    const spawnMock = vi
+      .fn()
+      .mockReturnValueOnce(outputProcess)
+      .mockReturnValueOnce(inputProcess)
+      .mockReturnValueOnce(replacementOutputProcess);
     const sessionStore: Record<string, unknown> = {};
     const runtime = {
       agent: {
@@ -1977,6 +1991,8 @@ describe("google-meet plugin", () => {
     inputStdout.write(Buffer.from([1, 2, 3]));
     callbacks?.onAudio(Buffer.from([4, 5]));
     callbacks?.onMark?.("mark-1");
+    callbacks?.onClearAudio();
+    callbacks?.onAudio(Buffer.from([6, 7]));
     callbacks?.onReady?.();
     callbacks?.onToolCall?.({
       itemId: "item-1",
@@ -1993,6 +2009,10 @@ describe("google-meet plugin", () => {
     });
     expect(sendAudio).toHaveBeenCalledWith(Buffer.from([1, 2, 3]));
     expect(outputStdinWrites).toEqual([Buffer.from([4, 5])]);
+    expect(outputProcess.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(replacementOutputStdinWrites).toEqual([Buffer.from([6, 7])]);
+    outputProcess.emit("error", new Error("stale output process failed after clear"));
+    expect(bridge.close).not.toHaveBeenCalled();
     expect(bridge.acknowledgeMark).toHaveBeenCalled();
     expect(bridge.triggerGreeting).not.toHaveBeenCalled();
     handle.speak("Say exactly: hello from the meeting.");
@@ -2003,7 +2023,8 @@ describe("google-meet plugin", () => {
       audioInputActive: true,
       audioOutputActive: true,
       lastInputBytes: 3,
-      lastOutputBytes: 2,
+      lastOutputBytes: 4,
+      clearCount: 1,
     });
     expect(callbacks).toMatchObject({
       tools: [
@@ -2035,6 +2056,7 @@ describe("google-meet plugin", () => {
     let callbacks:
       | {
           onAudio: (audio: Buffer) => void;
+          onClearAudio: () => void;
           onToolCall?: (event: {
             itemId: string;
             callId: string;
@@ -2114,6 +2136,7 @@ describe("google-meet plugin", () => {
     });
 
     callbacks?.onAudio(Buffer.from([1, 2, 3]));
+    callbacks?.onClearAudio();
     callbacks?.onReady?.();
     callbacks?.onToolCall?.({
       itemId: "item-1",
@@ -2135,6 +2158,19 @@ describe("google-meet plugin", () => {
             bridgeId: "bridge-1",
             base64: Buffer.from([1, 2, 3]).toString("base64"),
           }),
+        }),
+      );
+    });
+    await vi.waitFor(() => {
+      expect(runtime.nodes.invoke).toHaveBeenCalledWith(
+        expect.objectContaining({
+          nodeId: "node-1",
+          command: "googlemeet.chrome",
+          params: {
+            action: "clearAudio",
+            bridgeId: "bridge-1",
+          },
+          timeoutMs: 5_000,
         }),
       );
     });
@@ -2166,6 +2202,7 @@ describe("google-meet plugin", () => {
       audioOutputActive: true,
       lastInputBytes: 3,
       lastOutputBytes: 3,
+      clearCount: 1,
     });
 
     await handle.stop();

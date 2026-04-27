@@ -15,6 +15,7 @@ type NodeBridgeSession = {
   id: string;
   url?: string;
   mode?: string;
+  outputCommand: { command: string; args: string[] };
   input?: ChildProcess;
   output?: ChildProcess;
   chunks: Buffer[];
@@ -23,9 +24,11 @@ type NodeBridgeSession = {
   createdAt: string;
   lastInputAt?: string;
   lastOutputAt?: string;
+  lastClearAt?: string;
   lastInputBytes: number;
   lastOutputBytes: number;
   closedAt?: string;
+  clearCount: number;
 };
 
 const sessions = new Map<string, NodeBridgeSession>();
@@ -110,6 +113,25 @@ function stopSession(session: NodeBridgeSession) {
   wake(session);
 }
 
+function attachOutputProcessHandlers(session: NodeBridgeSession, outputProcess: ChildProcess) {
+  outputProcess.on("exit", () => {
+    if (session.output === outputProcess) {
+      stopSession(session);
+    }
+  });
+  outputProcess.on("error", () => {
+    if (session.output === outputProcess) {
+      stopSession(session);
+    }
+  });
+}
+
+function startOutputProcess(command: { command: string; args: string[] }) {
+  return spawn(command.command, command.args, {
+    stdio: ["pipe", "ignore", "pipe"],
+  });
+}
+
 function startCommandPair(params: {
   inputCommand: string[];
   outputCommand: string[];
@@ -122,16 +144,16 @@ function startCommandPair(params: {
     id: `meet_node_${randomUUID()}`,
     url: params.url,
     mode: params.mode,
+    outputCommand: output,
     chunks: [],
     waiters: [],
     closed: false,
     createdAt: new Date().toISOString(),
     lastInputBytes: 0,
     lastOutputBytes: 0,
+    clearCount: 0,
   };
-  const outputProcess = spawn(output.command, output.args, {
-    stdio: ["pipe", "ignore", "pipe"],
-  });
+  const outputProcess = startOutputProcess(output);
   const inputProcess = spawn(input.command, input.args, {
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -148,9 +170,8 @@ function startCommandPair(params: {
     wake(session);
   });
   inputProcess.on("exit", () => stopSession(session));
-  outputProcess.on("exit", () => stopSession(session));
+  attachOutputProcessHandlers(session, outputProcess);
   inputProcess.on("error", () => stopSession(session));
-  outputProcess.on("error", () => stopSession(session));
   sessions.set(session.id, session);
   return session;
 }
@@ -222,6 +243,25 @@ function pushAudio(params: Record<string, unknown>) {
   session.lastOutputBytes += audio.byteLength;
   session.output?.stdin?.write(audio);
   return { bridgeId, ok: true };
+}
+
+function clearAudio(params: Record<string, unknown>) {
+  const bridgeId = readString(params.bridgeId);
+  if (!bridgeId) {
+    throw new Error("bridgeId required");
+  }
+  const session = sessions.get(bridgeId);
+  if (!session || session.closed) {
+    throw new Error(`bridge is not open: ${bridgeId}`);
+  }
+  const previousOutput = session.output;
+  const outputProcess = startOutputProcess(session.outputCommand);
+  session.output = outputProcess;
+  attachOutputProcessHandlers(session, outputProcess);
+  session.clearCount += 1;
+  session.lastClearAt = new Date().toISOString();
+  terminateChild(previousOutput);
+  return { bridgeId, ok: true, clearCount: session.clearCount };
 }
 
 function startChrome(params: Record<string, unknown>) {
@@ -317,8 +357,11 @@ function bridgeStatus(params: Record<string, unknown>) {
           createdAt: session.createdAt,
           lastInputAt: session.lastInputAt,
           lastOutputAt: session.lastOutputAt,
+          lastClearAt: session.lastClearAt,
           lastInputBytes: session.lastInputBytes,
           lastOutputBytes: session.lastOutputBytes,
+          clearCount: session.clearCount,
+          queuedInputChunks: session.chunks.length,
         }
       : bridgeId
         ? { bridgeId, closed: true }
@@ -437,6 +480,9 @@ export async function handleGoogleMeetNodeHostCommand(paramsJSON?: string | null
       break;
     case "pushAudio":
       result = pushAudio(params);
+      break;
+    case "clearAudio":
+      result = clearAudio(params);
       break;
     case "stop":
       result = stopChrome(params);
