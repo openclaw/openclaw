@@ -462,7 +462,7 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
   <Accordion title="Context windows">
     For auto-discovered models, OpenClaw uses the context window reported by Ollama when available, including larger `PARAMETER num_ctx` values from custom Modelfiles. Otherwise it falls back to the default Ollama context window used by OpenClaw.
 
-    You can override `contextWindow` and `maxTokens` in explicit provider config. To cap Ollama's per-request runtime context without rebuilding a Modelfile, set `params.num_ctx`; OpenClaw sends it as `options.num_ctx` for both native Ollama and the OpenAI-compatible Ollama adapter. Invalid, zero, negative, and non-finite values are ignored and fall back to `contextWindow`.
+    You can set provider-level `contextWindow`, `contextTokens`, and `maxTokens` defaults for every model under that Ollama provider, then override them per model when needed. To cap Ollama's per-request runtime context without rebuilding a Modelfile, set `params.num_ctx`; OpenClaw sends it as `options.num_ctx` for both native Ollama and the OpenAI-compatible Ollama adapter. Invalid, zero, negative, and non-finite values are ignored and fall back to `contextWindow`.
 
     Native Ollama model entries also accept the common Ollama runtime options under `params`, including `temperature`, `top_p`, `top_k`, `min_p`, `num_predict`, `stop`, `repeat_penalty`, `num_batch`, `num_thread`, and `use_mmap`. OpenClaw forwards only Ollama request keys, so OpenClaw runtime params such as `streaming` are not leaked to Ollama. Use `params.think` or `params.thinking` to send top-level Ollama `think`; `false` disables API-level thinking for Qwen-style thinking models.
 
@@ -471,6 +471,7 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
       models: {
         providers: {
           ollama: {
+            contextWindow: 32768,
             models: [
               {
                 id: "llama3.3",
