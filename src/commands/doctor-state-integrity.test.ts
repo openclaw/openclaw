@@ -341,7 +341,7 @@ describe("doctor state integrity oauth dir checks", () => {
         expect(fs.readdirSync(sessionsDir).some((name) => name.includes(".deleted."))).toBe(false);
         expect(stateIntegrityText()).not.toContain("These .jsonl files are no longer referenced");
       } finally {
-        fs.rmSync(symlinkHome, { force: true });
+        fs.rmSync(symlinkHome, { force: true, recursive: true });
       }
     },
   );

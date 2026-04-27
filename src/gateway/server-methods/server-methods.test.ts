@@ -11,6 +11,7 @@ import {
   buildSystemRunApprovalEnvBinding,
 } from "../../infra/system-run-approval-binding.js";
 import { resetLogger, setLoggerOverride } from "../../logging.js";
+import { projectRecentChatDisplayMessages } from "../chat-display-projection.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { validateExecApprovalRequestParams } from "../protocol/index.js";
 import { waitForAgentJob } from "./agent-job.js";
@@ -453,6 +454,22 @@ describe("sanitizeChatHistoryMessages", () => {
         timestamp: 3,
       },
     ]);
+  });
+});
+
+describe("projectRecentChatDisplayMessages", () => {
+  it("applies history limits after dropping display-hidden messages", () => {
+    const result = projectRecentChatDisplayMessages(
+      [
+        { role: "user", content: "older visible", timestamp: 1 },
+        { role: "assistant", content: "older answer", timestamp: 2 },
+        { role: "assistant", content: "NO_REPLY", timestamp: 3 },
+        { role: "assistant", content: "ANNOUNCE_SKIP", timestamp: 4 },
+      ],
+      { maxMessages: 1 },
+    );
+
+    expect(result).toEqual([{ role: "assistant", content: "older answer", timestamp: 2 }]);
   });
 });
 

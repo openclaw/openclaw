@@ -69,6 +69,7 @@ function expectTranscriptRendered(
   expect(ctx?.ctxPayload?.BodyForAgent).toBe(framed);
   expect(ctx?.ctxPayload?.Body).toContain(framed);
   expect(ctx?.ctxPayload?.Body).not.toContain("<media:audio>");
+  expect(ctx?.ctxPayload?.MediaTranscribedIndexes).toEqual([0]);
 }
 
 function expectAudioPlaceholderRendered(ctx: Awaited<ReturnType<typeof buildGroupVoiceContext>>) {

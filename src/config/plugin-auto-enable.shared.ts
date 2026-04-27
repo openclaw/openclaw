@@ -6,11 +6,10 @@ import {
 } from "../channels/config-presence.js";
 import { getChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
 import {
-  loadPluginManifestRegistry,
-  resolveManifestContractOwnerPluginId,
   type PluginManifestRecord,
   type PluginManifestRegistry,
 } from "../plugins/manifest-registry.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
 import { resolveOwningPluginIdsForModelRef } from "../plugins/providers.js";
 import { resolvePluginSetupAutoEnableReasons } from "../plugins/setup-registry.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
@@ -114,7 +113,7 @@ function resolveAgentHarnessOwnerPluginIds(
   }
   return registry.plugins
     .filter((plugin) =>
-      (plugin.activation?.onAgentHarnesses ?? []).some(
+      [...(plugin.activation?.onAgentHarnesses ?? []), ...(plugin.cliBackends ?? [])].some(
         (entry) => normalizeOptionalLowercaseString(entry) === normalizedRuntime,
       ),
     )
@@ -211,12 +210,20 @@ function resolvePluginIdForConfiguredWebFetchProvider(
   providerId: string | undefined,
   env: NodeJS.ProcessEnv,
 ): string | undefined {
-  return resolveManifestContractOwnerPluginId({
-    contract: "webFetchProviders",
-    value: normalizeOptionalLowercaseString(providerId) ?? "",
-    origin: "bundled",
+  const normalizedProviderId = normalizeOptionalLowercaseString(providerId);
+  if (!normalizedProviderId) {
+    return undefined;
+  }
+  return loadPluginManifestRegistryForPluginRegistry({
     env,
-  });
+    includeDisabled: true,
+  }).plugins.find(
+    (plugin) =>
+      plugin.origin === "bundled" &&
+      (plugin.contracts?.webFetchProviders ?? []).some(
+        (candidate) => normalizeOptionalLowercaseString(candidate) === normalizedProviderId,
+      ),
+  )?.id;
 }
 
 function normalizeManifestChannelId(channelId: string): string {
@@ -469,7 +476,7 @@ export function resolvePluginAutoEnableCandidateReason(
     case "provider-model-configured":
       return `${candidate.modelRef} model configured`;
     case "agent-harness-runtime-configured":
-      return `${candidate.runtime} agent harness runtime configured`;
+      return `${candidate.runtime} agent runtime configured`;
     case "web-fetch-provider-selected":
       return `${candidate.providerId} web fetch provider selected`;
     case "plugin-web-search-configured":
@@ -785,7 +792,11 @@ export function resolvePluginAutoEnableManifestRegistry(params: {
   return (
     params.manifestRegistry ??
     (configMayNeedPluginManifestRegistry(params.config, params.env)
-      ? loadPluginManifestRegistry({ config: params.config, env: params.env })
+      ? loadPluginManifestRegistryForPluginRegistry({
+          config: params.config,
+          env: params.env,
+          includeDisabled: true,
+        })
       : EMPTY_PLUGIN_MANIFEST_REGISTRY)
   );
 }

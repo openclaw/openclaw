@@ -24,6 +24,26 @@ async function loadDefaultEdgeTTSDeps(): Promise<EdgeTTSDeps> {
   return { EdgeTTS };
 }
 
+function isMissingOutputFileError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "ENOENT"
+  );
+}
+
+function readOutputSize(outputPath: string): number {
+  try {
+    return statSync(outputPath).size;
+  } catch (error) {
+    if (isMissingOutputFileError(error)) {
+      return 0;
+    }
+    throw error;
+  }
+}
+
 export function inferEdgeExtension(outputFormat: string): string {
   const normalized = normalizeLowercaseStringOrEmpty(outputFormat);
   if (normalized.includes("webm")) {
@@ -61,6 +81,10 @@ export async function edgeTTS(
   deps?: EdgeTTSDeps,
 ): Promise<void> {
   const { text, outputPath, config, timeoutMs } = params;
+  if (text.trim().length === 0) {
+    throw new Error("Microsoft TTS text cannot be empty");
+  }
+
   const resolvedDeps = deps ?? (await loadDefaultEdgeTTSDeps());
   const tts = new resolvedDeps.EdgeTTS({
     voice: config.voice,
@@ -73,10 +97,12 @@ export async function edgeTTS(
     volume: config.volume,
     timeout: config.timeoutMs ?? timeoutMs,
   });
-  await tts.ttsPromise(text, outputPath);
 
-  const { size } = statSync(outputPath);
-  if (size === 0) {
-    throw new Error("Edge TTS produced empty audio file");
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await tts.ttsPromise(text, outputPath);
+    if (readOutputSize(outputPath) > 0) {
+      return;
+    }
   }
+  throw new Error("Edge TTS produced empty audio file after retry");
 }

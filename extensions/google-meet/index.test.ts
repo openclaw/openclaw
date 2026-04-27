@@ -25,6 +25,7 @@ import { startNodeRealtimeAudioBridge } from "./src/realtime-node.js";
 import { startCommandRealtimeAudioBridge } from "./src/realtime.js";
 import { normalizeMeetUrl } from "./src/runtime.js";
 import { noopLogger, setupGoogleMeetPlugin } from "./src/test-support/plugin-harness.js";
+import { __testing as chromeTransportTesting } from "./src/transports/chrome.js";
 import { buildMeetDtmfSequence, normalizeDialInNumber } from "./src/transports/twilio.js";
 
 const voiceCallMocks = vi.hoisted(() => ({
@@ -224,6 +225,7 @@ describe("google-meet plugin", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    chromeTransportTesting.setDepsForTest(null);
   });
 
   it("defaults to chrome realtime with safe read-only tools", () => {
@@ -1605,6 +1607,76 @@ describe("google-meet plugin", () => {
         params: expect.objectContaining({ path: "/tabs/open" }),
       }),
     );
+  });
+
+  it("recovers and inspects an existing local Chrome Meet tab", async () => {
+    const callGatewayFromCli = vi.fn(
+      async (
+        _method: string,
+        _opts: unknown,
+        params?: unknown,
+        _extra?: unknown,
+      ): Promise<Record<string, unknown>> => {
+        const request = params as { path?: string; body?: { targetId?: string } };
+        if (request.path === "/tabs") {
+          return {
+            tabs: [
+              {
+                targetId: "local-meet-tab",
+                title: "Meet",
+                url: "https://meet.google.com/abc-defg-hij?authuser=me@example.com",
+              },
+            ],
+          };
+        }
+        if (request.path === "/tabs/focus") {
+          return { ok: true };
+        }
+        if (request.path === "/act") {
+          return {
+            result: JSON.stringify({
+              inCall: false,
+              manualActionRequired: true,
+              manualActionReason: "meet-admission-required",
+              manualActionMessage: "Admit the OpenClaw browser participant in Google Meet.",
+              title: "Meet",
+              url: "https://meet.google.com/abc-defg-hij?authuser=me@example.com",
+            }),
+          };
+        }
+        throw new Error(`unexpected browser request path ${request.path}`);
+      },
+    );
+    chromeTransportTesting.setDepsForTest({ callGatewayFromCli });
+    const { tools, nodesInvoke } = setup({ defaultTransport: "chrome" });
+    const tool = tools[0] as {
+      execute: (
+        id: string,
+        params: unknown,
+      ) => Promise<{ details: { transport?: string; found?: boolean; browser?: unknown } }>;
+    };
+
+    const result = await tool.execute("id", {
+      action: "recover_current_tab",
+      url: "https://meet.google.com/abc-defg-hij",
+    });
+
+    expect(result.details).toMatchObject({
+      transport: "chrome",
+      found: true,
+      targetId: "local-meet-tab",
+      browser: {
+        manualActionRequired: true,
+        manualActionReason: "meet-admission-required",
+      },
+    });
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "browser.request",
+      expect.any(Object),
+      expect.objectContaining({ method: "POST", path: "/tabs/focus" }),
+      { progress: false },
+    );
+    expect(nodesInvoke).not.toHaveBeenCalled();
   });
 
   it("exposes a test-speech action that joins the requested meeting", async () => {

@@ -91,6 +91,7 @@ const SESSION_INGESTION_MAX_MESSAGES_PER_FILE = 80;
 const SESSION_INGESTION_MIN_MESSAGES_PER_FILE = 12;
 const SESSION_INGESTION_MAX_TRACKED_MESSAGES_PER_SESSION = 4096;
 const SESSION_INGESTION_MAX_TRACKED_SCOPES = 2048;
+const SESSION_CHECKPOINT_TRANSCRIPT_FILENAME_RE = /\.checkpoint\..+\.jsonl$/i;
 const GENERIC_DAY_HEADING_RE =
   /^(?:(?:mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)(?:,\s+)?)?(?:(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}[/-]\d{2}[/-]\d{2})$/i;
 const MANAGED_DAILY_DREAMING_BLOCKS = [
@@ -613,6 +614,10 @@ function buildSessionStateKey(agentId: string, absolutePath: string): string {
   return `${agentId}:${sessionPathForFile(absolutePath)}`;
 }
 
+function isCheckpointSessionTranscriptPath(absolutePath: string): boolean {
+  return SESSION_CHECKPOINT_TRANSCRIPT_FILENAME_RE.test(path.basename(absolutePath));
+}
+
 function buildSessionRenderedLine(params: {
   agentId: string;
   sessionPath: string;
@@ -726,6 +731,9 @@ async function collectSessionIngestionBatches(params: {
             cronRunTranscriptPaths: new Set<string>(),
           };
     for (const absolutePath of files) {
+      if (isCheckpointSessionTranscriptPath(absolutePath)) {
+        continue;
+      }
       const normalizedPath = normalizeSessionTranscriptPathForComparison(absolutePath);
       sessionFiles.push({
         agentId,

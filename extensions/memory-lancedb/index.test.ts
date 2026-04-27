@@ -386,6 +386,7 @@ describe("memory plugin e2e", () => {
       expect(embeddingsCreate).toHaveBeenCalledWith({
         model: "text-embedding-3-small",
         input: "what editor should i use?",
+        encoding_format: "float",
       });
       expect(vectorSearch).toHaveBeenCalledWith([0.1, 0.2, 0.3]);
       expect(limit).toHaveBeenCalledWith(3);
@@ -535,6 +536,7 @@ describe("memory plugin e2e", () => {
       expect(embeddingsCreate).toHaveBeenCalledWith({
         model: "text-embedding-3-small",
         input: "what editor should i use?",
+        encoding_format: "float",
       });
       expect(result).toMatchObject({
         prependContext: expect.stringContaining("I prefer Helix for editing code."),
@@ -871,6 +873,7 @@ describe("memory plugin e2e", () => {
       expect(embeddingsCreate).toHaveBeenCalledWith({
         model: "text-embedding-3-small",
         input: "I prefer Helix for editing code every day.",
+        encoding_format: "float",
       });
       expect(vectorSearch).toHaveBeenCalledTimes(1);
       expect(add).toHaveBeenCalledTimes(1);
@@ -1012,6 +1015,7 @@ describe("memory plugin e2e", () => {
       expect(embeddingsCreate).toHaveBeenCalledWith({
         model: "text-embedding-3-small",
         input: "I prefer Helix for editing code every day.",
+        encoding_format: "float",
       });
       expect(add).toHaveBeenCalledWith([
         expect.objectContaining({
@@ -1349,6 +1353,7 @@ describe("memory plugin e2e", () => {
       expect(embeddingsCreate).toHaveBeenCalledWith({
         model: "text-embedding-3-small",
         input: "hello dimensions",
+        encoding_format: "float",
         dimensions: 1024,
       });
     } finally {

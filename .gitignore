@@ -97,6 +97,38 @@ USER.md
 # local tooling
 .serena/
 
+# Local project-agent skill installs. Only repo-owned skills are visible by
+# default; promoting a new repo skill should require an intentional `git add -f`.
+.agents/skills/*
+!.agents/skills/blacksmith-testbox/
+!.agents/skills/blacksmith-testbox/**
+!.agents/skills/openclaw-ghsa-maintainer/
+!.agents/skills/openclaw-ghsa-maintainer/**
+!.agents/skills/openclaw-parallels-smoke/
+!.agents/skills/openclaw-parallels-smoke/**
+!.agents/skills/openclaw-pr-maintainer/
+!.agents/skills/openclaw-pr-maintainer/**
+!.agents/skills/openclaw-qa-testing/
+!.agents/skills/openclaw-qa-testing/**
+!.agents/skills/openclaw-release-maintainer/
+!.agents/skills/openclaw-release-maintainer/**
+!.agents/skills/openclaw-secret-scanning-maintainer/
+!.agents/skills/openclaw-secret-scanning-maintainer/**
+!.agents/skills/openclaw-test-heap-leaks/
+!.agents/skills/openclaw-test-heap-leaks/**
+!.agents/skills/openclaw-test-performance/
+!.agents/skills/openclaw-test-performance/**
+!.agents/skills/openclaw-testing/
+!.agents/skills/openclaw-testing/**
+!.agents/skills/optimizetests/
+!.agents/skills/optimizetests/**
+!.agents/skills/parallels-discord-roundtrip/
+!.agents/skills/parallels-discord-roundtrip/**
+!.agents/skills/security-triage/
+!.agents/skills/security-triage/**
+!.agents/skills/tag-duplicate-prs-issues/
+!.agents/skills/tag-duplicate-prs-issues/**
+
 # Agent credentials and memory (NEVER COMMIT)
 /memory/
 .agent/*.json

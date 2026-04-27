@@ -298,8 +298,8 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     For text-only replies:
 
-    - DM: OpenClaw keeps the same preview message and performs a final edit in place (no second message)
-    - group/topic: OpenClaw keeps the same preview message and performs a final edit in place (no second message)
+    - short DM/group/topic previews: OpenClaw keeps the same preview message and performs a final edit in place
+    - previews older than about one minute: OpenClaw sends the completed reply as a fresh final message and then cleans up the preview, so Telegram's visible timestamp reflects completion time instead of the preview creation time
 
     For complex replies (for example media payloads), OpenClaw falls back to normal final delivery and then cleans up the preview message.
 
@@ -488,6 +488,8 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - `off` (default)
     - `first`
     - `all`
+
+    When reply threading is enabled and the original Telegram text or caption is available, OpenClaw includes a native Telegram quote excerpt automatically. Telegram caps native quote text at 1024 UTF-16 code units, so longer messages are quoted from the start and fall back to a plain reply if Telegram rejects the quote.
 
     Note: `off` disables implicit reply threading. Explicit `[[reply_to_*]]` tags are still honored.
 
