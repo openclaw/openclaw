@@ -24,6 +24,7 @@ import {
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
   resolvePersistedSelectedModelRef,
+  resolveSubagentConfiguredModelSelection,
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
 import {
@@ -1329,7 +1330,15 @@ export function resolveSessionModelRef(
   cfg: OpenClawConfig,
   entry?:
     | SessionEntry
-    | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride">,
+    | Pick<
+        SessionEntry,
+        | "model"
+        | "modelProvider"
+        | "modelOverride"
+        | "providerOverride"
+        | "spawnDepth"
+        | "subagentRole"
+      >,
   agentId?: string,
   options?: { allowPluginNormalization?: boolean },
 ): { provider: string; model: string } {
@@ -1375,6 +1384,26 @@ export function resolveSessionModelRef(
   if (persisted) {
     return persisted;
   }
+
+  // Subagent runtime fallback: when entry.model is empty (race between the
+  // spawn-side write and the gateway-side read), fall back to the configured
+  // subagent default for this agent so we never silently run a child on the
+  // parent's primary model.
+  if (agentId) {
+    const isSubagent =
+      (typeof entry?.spawnDepth === "number" && entry.spawnDepth >= 1) ||
+      Boolean(entry?.subagentRole);
+    if (isSubagent) {
+      const subagentSelection = resolveSubagentConfiguredModelSelection({ cfg, agentId });
+      const subagentRef = subagentSelection
+        ? parseModelRef(subagentSelection, resolved.provider || DEFAULT_PROVIDER)
+        : null;
+      if (subagentRef) {
+        return { provider: subagentRef.provider, model: subagentRef.model };
+      }
+    }
+  }
+
   return resolved;
 }
 
