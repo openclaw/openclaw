@@ -9,7 +9,6 @@ import { sanitizeForLog } from "../terminal/ansi.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { loadBundleManifest } from "./bundle-manifest.js";
-import { collectBundledChannelConfigs } from "./bundled-channel-config-metadata.js";
 import {
   normalizePluginsConfigWithResolver,
   type NormalizedPluginsConfig,
@@ -159,6 +158,12 @@ export type PluginManifestRegistry = {
   diagnostics: PluginDiagnostic[];
 };
 
+export type BundledChannelConfigCollector = (params: {
+  pluginDir: string;
+  manifest: PluginManifest;
+  packageManifest?: OpenClawPackageManifest;
+}) => Record<string, PluginManifestChannelConfig> | undefined;
+
 const registryCache = pluginManifestRegistryCache as Map<
   string,
   { expiresAt: number; registry: PluginManifestRegistry }
@@ -294,10 +299,11 @@ function buildRecord(params: {
   manifestPath: string;
   schemaCacheKey?: string;
   configSchema?: Record<string, unknown>;
+  bundledChannelConfigCollector?: BundledChannelConfigCollector;
 }): PluginManifestRecord {
   const manifestChannelConfigs =
-    params.candidate.origin === "bundled"
-      ? collectBundledChannelConfigs({
+    params.candidate.origin === "bundled" && params.bundledChannelConfigCollector
+      ? params.bundledChannelConfigCollector({
           pluginDir: params.candidate.packageDir ?? params.candidate.rootDir,
           manifest: params.manifest,
           packageManifest: params.candidate.packageManifest,
@@ -551,6 +557,7 @@ export function loadPluginManifestRegistry(
     candidates?: PluginCandidate[];
     diagnostics?: PluginDiagnostic[];
     installRecords?: Record<string, PluginInstallRecord>;
+    bundledChannelConfigCollector?: BundledChannelConfigCollector;
   } = {},
 ): PluginManifestRegistry {
   const config = params.config ?? {};
@@ -558,7 +565,10 @@ export function loadPluginManifestRegistry(
   const env = params.env ?? process.env;
   const cacheKey = buildCacheKey({ workspaceDir: params.workspaceDir, plugins: normalized, env });
   const cacheEnabled =
-    params.cache !== false && !params.installRecords && shouldUseManifestCache(env);
+    params.cache !== false &&
+    !params.installRecords &&
+    !params.bundledChannelConfigCollector &&
+    shouldUseManifestCache(env);
   if (cacheEnabled) {
     const cached = registryCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) {
@@ -668,6 +678,9 @@ export function loadPluginManifestRegistry(
           manifestPath: manifestRes.manifestPath,
           schemaCacheKey,
           configSchema,
+          ...(params.bundledChannelConfigCollector
+            ? { bundledChannelConfigCollector: params.bundledChannelConfigCollector }
+            : {}),
         });
 
     const existing = seenIds.get(manifest.id);

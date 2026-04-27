@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { collectChannelSchemaMetadata } from "../config/channel-config-metadata.js";
+import { collectBundledChannelConfigs } from "./bundled-channel-config-metadata.js";
 import type { PluginCandidate } from "./discovery.js";
 import {
   clearPluginManifestRegistryCache,
@@ -671,21 +672,31 @@ describe("loadPluginManifestRegistry", () => {
       ].join("\n"),
     );
 
-    const registry = loadRegistry([
-      createPluginCandidate({
-        idHint: "alpha",
-        rootDir: dir,
-        origin: "bundled",
-        packageDir: dir,
-        packageManifest: {
-          channel: {
-            id: "alpha",
-            label: "Alpha",
-            blurb: "Alpha channel",
-          },
+    const candidate = createPluginCandidate({
+      idHint: "alpha",
+      rootDir: dir,
+      origin: "bundled",
+      packageDir: dir,
+      packageManifest: {
+        channel: {
+          id: "alpha",
+          label: "Alpha",
+          blurb: "Alpha channel",
         },
-      }),
-    ]);
+      },
+    });
+    expect(loadRegistry([candidate]).plugins[0]?.channelConfigs?.alpha?.schema).toEqual({
+      type: "object",
+      properties: {
+        manifestOnly: { type: "boolean" },
+      },
+    });
+
+    const registry = loadPluginManifestRegistry({
+      cache: false,
+      bundledChannelConfigCollector: collectBundledChannelConfigs,
+      candidates: [candidate],
+    });
 
     expect(registry.plugins[0]?.channelConfigs?.alpha).toEqual({
       schema: {

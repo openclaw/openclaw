@@ -7,6 +7,7 @@ import {
 import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
 import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import type {
+  BundledChannelConfigCollector,
   PluginManifestContractListKey,
   PluginManifestRecord,
   PluginManifestRegistry,
@@ -25,6 +26,7 @@ export type PluginRegistryContributionOptions = LoadPluginRegistryParams & {
 export type LoadPluginRegistryManifestParams = LoadPluginRegistryParams & {
   includeDisabled?: boolean;
   pluginIds?: readonly string[];
+  bundledChannelConfigCollector?: BundledChannelConfigCollector;
 };
 
 export type PluginRegistryContributionKey =
@@ -201,6 +203,9 @@ export function loadPluginManifestRegistryForPluginRegistry(
     env: params.env,
     pluginIds: params.pluginIds,
     includeDisabled: params.includeDisabled,
+    ...(params.bundledChannelConfigCollector
+      ? { bundledChannelConfigCollector: params.bundledChannelConfigCollector }
+      : {}),
   });
 }
 
