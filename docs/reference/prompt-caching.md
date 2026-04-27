@@ -147,9 +147,19 @@ stops injecting those OpenRouter-specific Anthropic cache markers.
 ### DeepSeek direct API
 
 - `prompt_cache_key` is supported for `deepseek/deepseek-v4-flash` and `deepseek/deepseek-v4-pro` via the OpenAI-compatible transport when a session ID is present.
+- **Configuration required**: Add `compat.supportsPromptCacheKey: true` to the model config for DeepSeek V4 models. Without this, `prompt_cache_key` is silently not injected. Example:
+  ```yaml
+  agents:
+    defaults:
+      models:
+        "deepseek/deepseek-v4-flash":
+          compat:
+            supportsPromptCacheKey: true
+  ```
 - Live testing on `deepseek-v4-flash` shows **72–92% cache hit rates** on system prompts of ~1287 tokens within the same session, with cache hits appearing as early as Turn 1.
 - Cache hit rate improves with session continuity: Turn 1 ~72%, Turns 2–4 ~87–92% of prompt tokens served from cache.
 - `cacheRetention` settings (`none`/`short`/`long`) are respected; set to `none` to suppress `prompt_cache_key` injection.
+- DeepSeek does not expose a separate cache-write token counter, so `cacheWrite` stays `0` even when the provider is warming a cache.
 
 ### Other providers
 
