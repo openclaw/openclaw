@@ -28,6 +28,7 @@ import {
   type AuthRateLimiter,
 } from "./auth-rate-limit.js";
 import { authorizeHttpGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
+import { resolveChatAttachmentMaxBytes } from "./chat-attachments.js";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   type ControlUiBootstrapConfig,
@@ -797,6 +798,7 @@ export async function handleControlUiHttpRequest(
       assistantAvatarReason: avatarMeta.avatarReason,
       assistantAgentId: identity.agentId,
       serverVersion: resolveRuntimeServiceVersion(process.env),
+      chatAttachmentMaxBytes: resolveChatAttachmentMaxBytes(config ?? {}),
       localMediaPreviewRoots: [...getAgentScopedMediaLocalRoots(config ?? {}, identity.agentId)],
       embedSandbox:
         config?.gateway?.controlUi?.embedSandbox === "trusted"

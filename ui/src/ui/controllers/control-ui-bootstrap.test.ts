@@ -17,6 +17,7 @@ describe("loadControlUiBootstrapConfig", () => {
         assistantAvatarReason: "missing",
         assistantAgentId: "main",
         serverVersion: "2026.3.7",
+        chatAttachmentMaxBytes: 7 * 1024 * 1024,
         localMediaPreviewRoots: ["/tmp/openclaw"],
         embedSandbox: "scripts",
         allowExternalEmbedUrls: true,
@@ -32,6 +33,7 @@ describe("loadControlUiBootstrapConfig", () => {
       assistantAvatarStatus: null,
       assistantAvatarReason: null,
       assistantAgentId: null,
+      chatAttachmentMaxBytes: null,
       localMediaPreviewRoots: [],
       embedSandboxMode: "scripts" as const,
       allowExternalEmbedUrls: false,
@@ -51,6 +53,7 @@ describe("loadControlUiBootstrapConfig", () => {
     expect(state.assistantAvatarReason).toBe("missing");
     expect(state.assistantAgentId).toBe("main");
     expect(state.serverVersion).toBe("2026.3.7");
+    expect(state.chatAttachmentMaxBytes).toBe(7 * 1024 * 1024);
     expect(state.localMediaPreviewRoots).toEqual(["/tmp/openclaw"]);
     expect(state.embedSandboxMode).toBe("scripts");
     expect(state.allowExternalEmbedUrls).toBe(true);

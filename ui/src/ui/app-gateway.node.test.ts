@@ -157,6 +157,7 @@ function createHost(): TestGatewayHost {
     assistantName: "OpenClaw",
     assistantAvatar: null,
     assistantAgentId: null,
+    chatAttachmentMaxBytes: null,
     localMediaPreviewRoots: [],
     serverVersion: null,
     pendingUpdateExpectedVersion: null,

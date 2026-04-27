@@ -36,6 +36,7 @@ describe("handleControlUiHttpRequest", () => {
       assistantName: string;
       assistantAvatar: string;
       assistantAgentId: string;
+      chatAttachmentMaxBytes?: number;
       localMediaPreviewRoots?: string[];
     };
   }
@@ -593,7 +594,7 @@ describe("handleControlUiHttpRequest", () => {
           {
             root: { kind: "resolved", path: tmp },
             config: {
-              agents: { defaults: { workspace: tmp } },
+              agents: { defaults: { workspace: tmp, mediaMaxMb: 7 } },
               ui: { assistant: { name: "</script><script>alert(1)//", avatar: "</script>.png" } },
             },
           },
@@ -604,6 +605,7 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.assistantName).toBe("</script><script>alert(1)//");
         expect(parsed.assistantAvatar).toBe("/avatar/main");
         expect(parsed.assistantAgentId).toBe("main");
+        expect(parsed.chatAttachmentMaxBytes).toBe(7 * 1024 * 1024);
         expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
       },
     });

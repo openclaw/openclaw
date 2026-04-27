@@ -1,5 +1,5 @@
-import type { EventLogEntry } from "./app-events.ts";
 import type { ChatSendOptions } from "./app-chat.ts";
+import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./chat/input-history.ts";
 import type { RealtimeTalkStatus } from "./chat/realtime-talk.ts";
@@ -81,6 +81,7 @@ export type AppViewState = {
   assistantAgentId: string | null;
   userName?: string | null;
   userAvatar?: string | null;
+  chatAttachmentMaxBytes: number | null;
   localMediaPreviewRoots: string[];
   embedSandboxMode: EmbedSandboxMode;
   allowExternalEmbedUrls: boolean;

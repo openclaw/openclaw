@@ -12,6 +12,7 @@ function createHost() {
     assistantName: "OpenClaw",
     assistantAvatar: null,
     assistantAgentId: null,
+    chatAttachmentMaxBytes: null,
     localMediaPreviewRoots: [],
     chatHasAutoScrolled: false,
     chatManualRefreshInFlight: false,

@@ -31,6 +31,7 @@ type LifecycleHost = {
   assistantAvatarReason?: string | null;
   assistantAgentId: string | null;
   serverVersion: string | null;
+  chatAttachmentMaxBytes?: number | null;
   localMediaPreviewRoots: string[];
   embedSandboxMode: "strict" | "scripts" | "trusted";
   allowExternalEmbedUrls: boolean;

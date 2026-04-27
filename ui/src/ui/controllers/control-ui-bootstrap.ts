@@ -19,6 +19,7 @@ export type ControlUiBootstrapState = {
   assistantAvatarReason?: string | null;
   assistantAgentId: string | null;
   serverVersion: string | null;
+  chatAttachmentMaxBytes?: number | null;
   localMediaPreviewRoots: string[];
   embedSandboxMode: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls: boolean;
@@ -120,6 +121,12 @@ export async function loadControlUiBootstrapConfig(
       applyLocalAssistantAvatarOverride(state);
     }
     state.serverVersion = parsed.serverVersion ?? null;
+    state.chatAttachmentMaxBytes =
+      typeof parsed.chatAttachmentMaxBytes === "number" &&
+      Number.isFinite(parsed.chatAttachmentMaxBytes) &&
+      parsed.chatAttachmentMaxBytes > 0
+        ? Math.floor(parsed.chatAttachmentMaxBytes)
+        : null;
     state.localMediaPreviewRoots = Array.isArray(parsed.localMediaPreviewRoots)
       ? parsed.localMediaPreviewRoots.filter((value): value is string => typeof value === "string")
       : [];

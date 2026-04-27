@@ -11,6 +11,7 @@ export type ControlUiBootstrapConfig = {
   assistantAvatarReason?: string | null;
   assistantAgentId: string;
   serverVersion?: string;
+  chatAttachmentMaxBytes?: number;
   localMediaPreviewRoots?: string[];
   embedSandbox?: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;

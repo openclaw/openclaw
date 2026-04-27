@@ -483,6 +483,123 @@ describe("chat attachment picker", () => {
     expect(preview.textContent).toContain("brief.pdf");
   });
 
+  it("appends concurrent file selections without overwriting earlier attachments", async () => {
+    const attachments: ChatQueueItem["attachments"] = [];
+    const onAttachmentsAppend = vi.fn((next: NonNullable<ChatQueueItem["attachments"]>) => {
+      attachments.push(...next);
+    });
+    const container = renderChatView({ onAttachmentsAppend });
+    const input = container.querySelector<HTMLInputElement>(".agent-chat__file-input");
+    const first = new File(["first"], "first.txt", { type: "text/plain" });
+    const second = new File(["second"], "second.txt", { type: "text/plain" });
+
+    expect(input).not.toBeNull();
+    Object.defineProperty(input!, "files", {
+      configurable: true,
+      value: [first],
+    });
+    input?.dispatchEvent(new Event("change", { bubbles: true }));
+    Object.defineProperty(input!, "files", {
+      configurable: true,
+      value: [second],
+    });
+    input?.dispatchEvent(new Event("change", { bubbles: true }));
+
+    await vi.waitFor(() => {
+      expect(
+        attachments
+          .map((att) => att.fileName)
+          .toSorted((a, b) => String(a).localeCompare(String(b))),
+      ).toEqual(["first.txt", "second.txt"]);
+    });
+    expect(onAttachmentsAppend).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects oversized files before reading them", async () => {
+    const onAttachmentsAppend = vi.fn();
+    const onAttachmentError = vi.fn();
+    const container = renderChatView({ onAttachmentsAppend, onAttachmentError });
+    const input = container.querySelector<HTMLInputElement>(".agent-chat__file-input");
+    const file = new File(["small contents"], "huge.pdf", { type: "application/pdf" });
+    Object.defineProperty(file, "size", {
+      configurable: true,
+      value: 20 * 1024 * 1024 + 1,
+    });
+
+    expect(input).not.toBeNull();
+    Object.defineProperty(input!, "files", {
+      configurable: true,
+      value: [file],
+    });
+    input?.dispatchEvent(new Event("change", { bubbles: true }));
+
+    await vi.waitFor(() => {
+      expect(onAttachmentError).toHaveBeenCalledWith(expect.stringContaining("exceeds 20 MB"));
+    });
+    expect(onAttachmentsAppend).not.toHaveBeenCalled();
+  });
+
+  it("uses the gateway-provided attachment limit when available", async () => {
+    const onAttachmentsAppend = vi.fn();
+    const onAttachmentError = vi.fn();
+    const container = renderChatView({
+      chatAttachmentMaxBytes: 60 * 1024 * 1024,
+      onAttachmentsAppend,
+      onAttachmentError,
+    });
+    const input = container.querySelector<HTMLInputElement>(".agent-chat__file-input");
+    const file = new File(["small contents"], "configured-limit.pdf", {
+      type: "application/pdf",
+    });
+    Object.defineProperty(file, "size", {
+      configurable: true,
+      value: 50 * 1024 * 1024 + 1,
+    });
+
+    expect(input).not.toBeNull();
+    Object.defineProperty(input!, "files", {
+      configurable: true,
+      value: [file],
+    });
+    input?.dispatchEvent(new Event("change", { bubbles: true }));
+
+    await vi.waitFor(() => {
+      expect(onAttachmentsAppend).toHaveBeenCalledWith([
+        expect.objectContaining({ fileName: "configured-limit.pdf" }),
+      ]);
+    });
+    expect(onAttachmentError).not.toHaveBeenCalled();
+  });
+
+  it("reports all oversized file errors without Error prefixes", async () => {
+    const onAttachmentsAppend = vi.fn();
+    const onAttachmentError = vi.fn();
+    const container = renderChatView({ onAttachmentsAppend, onAttachmentError });
+    const input = container.querySelector<HTMLInputElement>(".agent-chat__file-input");
+    const first = new File(["small contents"], "huge-one.pdf", { type: "application/pdf" });
+    const second = new File(["small contents"], "huge-two.pdf", { type: "application/pdf" });
+    for (const file of [first, second]) {
+      Object.defineProperty(file, "size", {
+        configurable: true,
+        value: 20 * 1024 * 1024 + 1,
+      });
+    }
+
+    expect(input).not.toBeNull();
+    Object.defineProperty(input!, "files", {
+      configurable: true,
+      value: [first, second],
+    });
+    input?.dispatchEvent(new Event("change", { bubbles: true }));
+
+    await vi.waitFor(() => {
+      expect(onAttachmentError).toHaveBeenCalledWith(
+        'File "huge-one.pdf" exceeds 20 MB.\nFile "huge-two.pdf" exceeds 20 MB.',
+      );
+    });
+    expect(onAttachmentsAppend).not.toHaveBeenCalled();
+  });
+
   it("filters video file attachments", () => {
     const onAttachmentsChange = vi.fn();
     const container = renderChatView({ onAttachmentsChange });

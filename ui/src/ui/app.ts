@@ -185,6 +185,7 @@ export class OpenClawApp extends LitElement {
   @state() assistantAgentId = bootAssistantIdentity.agentId ?? null;
   @state() userName = bootLocalUserIdentity.name;
   @state() userAvatar = bootLocalUserIdentity.avatar;
+  @state() chatAttachmentMaxBytes: number | null = null;
   @state() localMediaPreviewRoots: string[] = [];
   @state() embedSandboxMode: "strict" | "scripts" | "trusted" = "scripts";
   @state() allowExternalEmbedUrls = false;

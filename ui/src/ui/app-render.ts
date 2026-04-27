@@ -2347,6 +2347,12 @@ export function renderApp(state: AppViewState) {
               onHistoryKeydown: (input) => state.handleChatInputHistoryKey(input),
               attachments: state.chatAttachments,
               onAttachmentsChange: (next) => (state.chatAttachments = next),
+              onAttachmentsAppend: (next) => {
+                state.chatAttachments = [...state.chatAttachments, ...next];
+              },
+              onAttachmentError: (message) => {
+                state.lastError = message;
+              },
               onSend: () => state.handleSendChat(),
               onCompact: () => state.handleSendChat("/compact", { restoreDraft: true }),
               onToggleRealtimeTalk: () => state.toggleRealtimeTalk(),
@@ -2401,6 +2407,7 @@ export function renderApp(state: AppViewState) {
               assistantAvatar: effectiveAssistantAvatar,
               userName: state.userName ?? null,
               userAvatar: state.userAvatar ?? null,
+              chatAttachmentMaxBytes: state.chatAttachmentMaxBytes,
               localMediaPreviewRoots: state.localMediaPreviewRoots,
               embedSandboxMode: state.embedSandboxMode,
               allowExternalEmbedUrls: state.allowExternalEmbedUrls,
