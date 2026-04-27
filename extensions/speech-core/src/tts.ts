@@ -1716,13 +1716,13 @@ export async function maybeApplyTtsToPayload(params: {
       (() => {
         const resolvedProvider = resolveReadySpeechProvider({
           provider,
-          cfg: params.cfg,
+          cfg,
           config,
           persona: activePersona,
         });
         return resolvedProvider.kind === "ready"
           ? resolvedProvider.providerConfig
-          : getResolvedSpeechProviderConfig(config, provider, params.cfg);
+          : getResolvedSpeechProviderConfig(config, provider, cfg);
       })();
     const directiveOverride = directives.overrides?.providerOverrides?.[provider];
     return directiveOverride ? { ...baseConfig, ...directiveOverride } : baseConfig;
@@ -1735,7 +1735,7 @@ export async function maybeApplyTtsToPayload(params: {
   ): string =>
     resolveSpeechTextForProvider({
       provider,
-      cfg: params.cfg,
+      cfg,
       providerConfig: resolveProviderConfigForTextRouting(provider, resolvedProviderConfig),
       expressiveText,
       plainText,
@@ -1884,7 +1884,7 @@ export async function maybeApplyTtsToPayload(params: {
     : enforceMaxLength(stripMarkdown(expressiveSpeechText).trim()) || preparedPlainText;
   const effectiveTextForAudio = resolveSpeechTextForProvider({
     provider: effectiveProvider,
-    cfg: params.cfg,
+    cfg,
     providerConfig: initialProviderConfig,
     expressiveText: preparedExpressiveText,
     plainText: preparedPlainText,
