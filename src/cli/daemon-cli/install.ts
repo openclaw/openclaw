@@ -135,10 +135,8 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       return;
     }
   }
-  if (loaded) {
-    existingServiceCommand = await service.readCommand(process.env).catch(() => null);
-    existingServiceEnv = existingServiceCommand?.environment;
-  }
+  existingServiceCommand = await service.readCommand(process.env).catch(() => null);
+  existingServiceEnv = existingServiceCommand?.environment;
   const installEnv = mergeInstallInvocationEnv({
     env: process.env,
     existingServiceEnv,
@@ -293,6 +291,15 @@ async function getGatewayServiceAutoRefreshMessage(params: {
         currentCommand.programArguments.join("\u0000")
       ) {
         return "Gateway service command differs from the current wrapper install plan; refreshing the install.";
+      }
+      const plannedWrapperPath = normalizeOptionalString(
+        plannedInstall.environment[OPENCLAW_WRAPPER_ENV_KEY],
+      );
+      const currentWrapperPath = normalizeOptionalString(
+        currentCommand.environment?.[OPENCLAW_WRAPPER_ENV_KEY],
+      );
+      if (plannedWrapperPath !== currentWrapperPath) {
+        return `Gateway service ${OPENCLAW_WRAPPER_ENV_KEY} differs from the current wrapper install plan; refreshing the install.`;
       }
     }
     const currentExecPath = currentCommand.programArguments[0]?.trim();
