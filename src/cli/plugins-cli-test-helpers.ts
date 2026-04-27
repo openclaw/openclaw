@@ -479,8 +479,6 @@ vi.mock("../plugins/clawhub.js", () => ({
       installPluginFromClawHub,
       ...args,
     )) as (typeof import("../plugins/clawhub.js"))["installPluginFromClawHub"],
-  formatClawHubSpecifier: ({ name, version }: { name: string; version?: string }) =>
-    `clawhub:${name}${version ? `@${version}` : ""}`,
 }));
 
 vi.mock("../infra/clawhub.js", () => ({

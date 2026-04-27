@@ -24,7 +24,11 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
-import { defaultGatewayBindMode, isContainerEnvironment } from "../../gateway/net.js";
+import {
+  defaultGatewayBindMode,
+  isContainerEnvironment,
+  resolveGatewayBindHost,
+} from "../../gateway/net.js";
 import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
@@ -680,6 +684,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     await runGatewayLoop({
       runtime: defaultRuntime,
       lockPort: port,
+      healthHost: await resolveGatewayBindHost(bind, cfg.gateway?.customBindHost),
       start: async ({ startupStartedAt } = {}) =>
         await startGatewayServer(port, {
           bind,
