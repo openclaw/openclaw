@@ -32,7 +32,7 @@ export function createRemoteEmbeddingProvider(params: {
       headers: client.headers,
       ssrfPolicy: client.ssrfPolicy,
       fetchImpl: client.fetchImpl,
-      body: { model: client.model, input },
+      body: { model: client.model, input, encoding_format: "float" },
       errorPrefix: params.errorPrefix,
     });
   };
