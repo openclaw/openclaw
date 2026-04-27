@@ -347,56 +347,43 @@ describe("slash-http cfg threading", () => {
     expect(mockState.sendMessageMattermost).not.toHaveBeenCalled();
   });
 
-  it("throttles repeated unknown-token validation lookups before calling Mattermost", async () => {
-    mockState.getMattermostCommand.mockImplementation(async () => ({
-      id: "cmd-1",
-      token: "valid-token",
+  it("rejects unknown tokens before calling Mattermost", async () => {
+    mockState.parseSlashCommandPayload.mockReturnValueOnce({
+      token: "unknown-token",
+      command: "/oc_models",
+      text: "models",
+      channel_id: "chan-1",
+      user_id: "user-1",
+      user_name: "alice",
       team_id: "team-1",
-      trigger: "oc_models",
-      method: "P",
-      url: callbackUrlFixture,
-      delete_at: 0,
-    }));
+    });
+    const handler = createSlashCommandHttpHandler({
+      account: accountFixture,
+      cfg: {} as OpenClawConfig,
+      runtime: {} as RuntimeEnv,
+      commandTokens: new Set(["valid-token"]),
+      registeredCommands: [
+        {
+          id: "cmd-1",
+          teamId: "team-1",
+          trigger: "oc_models",
+          token: "valid-token",
+          url: callbackUrlFixture,
+          managed: false,
+        },
+      ],
+    });
+    const response = createResponse();
 
-    for (let index = 0; index < 6; index += 1) {
-      mockState.parseSlashCommandPayload.mockReturnValueOnce({
-        token: `unknown-token-${index}`,
-        command: "/oc_models",
-        text: "models",
-        channel_id: "chan-1",
-        user_id: "user-1",
-        user_name: "alice",
-        team_id: "team-1",
-      });
-      const handler = createSlashCommandHttpHandler({
-        account: accountFixture,
-        cfg: {} as OpenClawConfig,
-        runtime: {} as RuntimeEnv,
-        commandTokens: new Set(["valid-token"]),
-        registeredCommands: [
-          {
-            id: "cmd-1",
-            teamId: "team-1",
-            trigger: "oc_models",
-            token: "valid-token",
-            url: callbackUrlFixture,
-            managed: false,
-          },
-        ],
-      });
-      const response = createResponse();
+    await handler(createRequest("token=unknown-token"), response.res);
 
-      await handler(createRequest(`token=unknown-token-${index}`), response.res);
-
-      expect(response.res.statusCode).toBe(401);
-    }
-
-    expect(mockState.getMattermostCommand).toHaveBeenCalledTimes(1);
+    expect(response.res.statusCode).toBe(401);
+    expect(mockState.getMattermostCommand).not.toHaveBeenCalled();
     expect(mockState.fetchMattermostChannel).not.toHaveBeenCalled();
     expect(mockState.sendMessageMattermost).not.toHaveBeenCalled();
   });
 
-  it("accepts a callback token refreshed from the current Mattermost command", async () => {
+  it("rejects a refreshed callback token before Mattermost lookup until local state updates", async () => {
     mockState.parseSlashCommandPayload.mockReturnValueOnce({
       token: "new-token",
       command: "/oc_models",
@@ -437,10 +424,11 @@ describe("slash-http cfg threading", () => {
 
     await handler(createRequest("token=new-token"), response.res);
 
-    expect(response.res.statusCode).toBe(200);
-    expect(response.getBody()).toContain("Processing");
-    expect(commandTokens.has("new-token")).toBe(true);
-    expect(mockState.fetchMattermostChannel).toHaveBeenCalled();
-    expect(mockState.sendMessageMattermost).toHaveBeenCalled();
+    expect(response.res.statusCode).toBe(401);
+    expect(response.getBody()).toContain("Unauthorized: invalid command token.");
+    expect(commandTokens.has("new-token")).toBe(false);
+    expect(mockState.getMattermostCommand).not.toHaveBeenCalled();
+    expect(mockState.fetchMattermostChannel).not.toHaveBeenCalled();
+    expect(mockState.sendMessageMattermost).not.toHaveBeenCalled();
   });
 });

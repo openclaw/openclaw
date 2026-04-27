@@ -71,14 +71,16 @@ const BODY_READ_TIMEOUT_MS = 5_000;
 const COMMAND_LOOKUP_TIMEOUT_MS = 1_000;
 const COMMAND_LOOKUP_CACHE_SUCCESS_MS = 5_000;
 const COMMAND_LOOKUP_CACHE_FAILURE_MS = 5_000;
-const UNKNOWN_TOKEN_VALIDATION_THROTTLE_MS = 1_000;
-const UNKNOWN_TOKEN_VALIDATION_MAX_KEYS = 10_000;
-const commandLookupInflight = new Map<string, Promise<MattermostCommandResponse | null>>();
+const COMMAND_LOOKUP_CACHE_MAX_KEYS = 2_000;
+type CommandLookupInflightEntry = {
+  accountId: string;
+  promise: Promise<MattermostCommandResponse | null>;
+};
+const commandLookupInflight = new Map<string, CommandLookupInflightEntry>();
 const commandLookupCache = new Map<
   string,
-  { command: MattermostCommandResponse | null; expiresAt: number }
+  { accountId: string; command: MattermostCommandResponse | null; expiresAt: number }
 >();
-const unknownTokenValidationNextAllowed = new Map<string, number>();
 
 /**
  * Read the full request body as a string.
@@ -161,30 +163,34 @@ function commandLookupKey(
 export function resetMattermostSlashCommandValidationCacheForTests(): void {
   commandLookupInflight.clear();
   commandLookupCache.clear();
-  unknownTokenValidationNextAllowed.clear();
 }
 
-function consumeUnknownTokenValidationBudget(params: {
-  accountId: string;
-  registered: MattermostRegisteredCommand;
-}): boolean {
-  const key = `${params.accountId}:${params.registered.teamId}:${params.registered.id}`;
-  const now = Date.now();
-  const nextAllowed = unknownTokenValidationNextAllowed.get(key) ?? 0;
-  if (nextAllowed > now) {
-    return false;
-  }
-  if (
-    !unknownTokenValidationNextAllowed.has(key) &&
-    unknownTokenValidationNextAllowed.size >= UNKNOWN_TOKEN_VALIDATION_MAX_KEYS
-  ) {
-    const oldestKey = unknownTokenValidationNextAllowed.keys().next().value;
-    if (oldestKey) {
-      unknownTokenValidationNextAllowed.delete(oldestKey);
+export function clearMattermostSlashCommandValidationCacheForAccount(accountId: string): void {
+  for (const [key, entry] of commandLookupCache) {
+    if (entry.accountId === accountId) {
+      commandLookupCache.delete(key);
     }
   }
-  unknownTokenValidationNextAllowed.set(key, now + UNKNOWN_TOKEN_VALIDATION_THROTTLE_MS);
-  return true;
+  for (const [key, entry] of commandLookupInflight) {
+    if (entry.accountId === accountId) {
+      commandLookupInflight.delete(key);
+    }
+  }
+}
+
+function sweepCommandLookupCache(now = Date.now()): void {
+  for (const [key, entry] of commandLookupCache) {
+    if (entry.expiresAt <= now) {
+      commandLookupCache.delete(key);
+    }
+  }
+  while (commandLookupCache.size > COMMAND_LOOKUP_CACHE_MAX_KEYS) {
+    const oldestKey = commandLookupCache.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+    commandLookupCache.delete(oldestKey);
+  }
 }
 
 async function fetchCurrentMattermostCommandUncached(params: {
@@ -230,6 +236,7 @@ async function fetchCurrentMattermostCommand(params: {
   log?: (msg: string) => void;
 }): Promise<MattermostCommandResponse | null> {
   const key = commandLookupKey(params.client, params.registered, params.accountId);
+  sweepCommandLookupCache();
   const cached = commandLookupCache.get(key);
   if (cached) {
     if (cached.expiresAt > Date.now()) {
@@ -240,12 +247,14 @@ async function fetchCurrentMattermostCommand(params: {
 
   const existing = commandLookupInflight.get(key);
   if (existing) {
-    return await existing;
+    return await existing.promise;
   }
 
   const lookup = fetchCurrentMattermostCommandUncached(params)
     .then((command) => {
+      sweepCommandLookupCache();
       commandLookupCache.set(key, {
+        accountId: params.accountId,
         command,
         expiresAt:
           Date.now() +
@@ -256,7 +265,7 @@ async function fetchCurrentMattermostCommand(params: {
     .finally(() => {
       commandLookupInflight.delete(key);
     });
-  commandLookupInflight.set(key, lookup);
+  commandLookupInflight.set(key, { accountId: params.accountId, promise: lookup });
   return await lookup;
 }
 
@@ -467,20 +476,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
 
     // Validate token — fail closed: reject when no commands are registered
     // (e.g. registration failed or startup was partial).
-    if (registeredCommands.length === 0 || !registeredCommand) {
-      sendJsonResponse(res, 401, {
-        response_type: "ephemeral",
-        text: "Unauthorized: invalid command token.",
-      });
-      return;
-    }
-    if (
-      !startupTokenMatches &&
-      !consumeUnknownTokenValidationBudget({
-        accountId: account.accountId,
-        registered: registeredCommand,
-      })
-    ) {
+    if (registeredCommands.length === 0 || !registeredCommand || !startupTokenMatches) {
       sendJsonResponse(res, 401, {
         response_type: "ephemeral",
         text: "Unauthorized: invalid command token.",
@@ -508,9 +504,6 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
         text: "Unauthorized: invalid command token.",
       });
       return;
-    }
-    if (!startupTokenMatches) {
-      commandTokens.add(payload.token);
     }
 
     // Extract command info

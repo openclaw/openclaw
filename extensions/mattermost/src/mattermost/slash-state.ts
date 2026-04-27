@@ -21,7 +21,10 @@ import {
   resolveSlashCommandConfig,
   type MattermostRegisteredCommand,
 } from "./slash-commands.js";
-import { createSlashCommandHttpHandler } from "./slash-http.js";
+import {
+  clearMattermostSlashCommandValidationCacheForAccount,
+  createSlashCommandHttpHandler,
+} from "./slash-http.js";
 
 // ─── Per-account state ───────────────────────────────────────────────────────
 
@@ -169,14 +172,16 @@ export function deactivateSlashCommands(accountId?: string) {
       state.commandTokens.clear();
       state.registeredCommands = [];
       state.handler = null;
+      clearMattermostSlashCommandValidationCacheForAccount(accountId);
       accountStates.delete(accountId);
     }
   } else {
     // Deactivate all accounts (full shutdown)
-    for (const [, state] of accountStates) {
+    for (const [stateAccountId, state] of accountStates) {
       state.commandTokens.clear();
       state.registeredCommands = [];
       state.handler = null;
+      clearMattermostSlashCommandValidationCacheForAccount(stateAccountId);
     }
     accountStates.clear();
   }
