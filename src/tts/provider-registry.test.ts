@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
 
@@ -31,20 +31,20 @@ function createSpeechProvider(id: string, aliases?: string[]): SpeechProviderPlu
 }
 
 describe("speech provider registry", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
+    // Ensure this suite never reuses a cached provider-registry module that was
+    // imported earlier by another test file before our capability-runtime mock.
+    vi.resetModules();
+    resolvePluginCapabilityProviderMock.mockReset();
+    resolvePluginCapabilityProviderMock.mockReturnValue(undefined);
+    resolvePluginCapabilityProvidersMock.mockReset();
+    resolvePluginCapabilityProvidersMock.mockReturnValue([]);
     ({
       getSpeechProvider,
       listSpeechProviders,
       canonicalizeSpeechProviderId,
       normalizeSpeechProviderId,
     } = await import("./provider-registry.js"));
-  });
-
-  beforeEach(() => {
-    resolvePluginCapabilityProviderMock.mockReset();
-    resolvePluginCapabilityProviderMock.mockReturnValue(undefined);
-    resolvePluginCapabilityProvidersMock.mockReset();
-    resolvePluginCapabilityProvidersMock.mockReturnValue([]);
   });
 
   it("lists providers from the speech capability runtime", () => {
