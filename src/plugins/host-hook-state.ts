@@ -404,6 +404,9 @@ export async function patchPluginSessionExtension(params: {
   if (!pluginId || !namespace) {
     return { ok: false, error: "pluginId and namespace are required" };
   }
+  if (params.unset === true && params.value !== undefined) {
+    return { ok: false, error: "plugin session extension cannot specify both unset and value" };
+  }
   if (params.value !== undefined && !isPluginJsonValue(params.value)) {
     return { ok: false, error: "plugin session extension value must be JSON-compatible" };
   }

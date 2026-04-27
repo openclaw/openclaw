@@ -51,6 +51,23 @@ const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
 const LOOP_WARNING_BUCKET_SIZE = 10;
 const MAX_LOOP_WARNING_KEYS = 256;
 
+/**
+ * Error used when before_tool_call intentionally vetoes a tool call.
+ */
+export class BeforeToolCallBlockedError extends Error {
+  constructor(readonly reason: string) {
+    super(reason);
+    this.name = "BeforeToolCallBlockedError";
+  }
+}
+
+/**
+ * Returns true when an error represents an intentional before_tool_call veto.
+ */
+export function isBeforeToolCallBlockedError(err: unknown): err is BeforeToolCallBlockedError {
+  return err instanceof BeforeToolCallBlockedError;
+}
+
 const loadBeforeToolCallRuntime = createLazyRuntimeSurface(
   () => import("./pi-tools.before-tool-call.runtime.js"),
   ({ beforeToolCallRuntime }) => beforeToolCallRuntime,
@@ -512,7 +529,7 @@ export function wrapToolWithBeforeToolCallHook(
         signal,
       });
       if (outcome.blocked) {
-        throw new Error(outcome.reason);
+        throw new BeforeToolCallBlockedError(outcome.reason);
       }
       if (toolCallId) {
         const adjustedParamsKey = buildAdjustedParamsKey({ runId: ctx?.runId, toolCallId });

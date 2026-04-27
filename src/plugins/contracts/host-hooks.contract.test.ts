@@ -716,6 +716,23 @@ describe("host-hook fixture plugin contract", () => {
               sessionKey: "agent:main:main",
               pluginId: "patch-fixture",
               namespace: "workflow",
+              value: { state: "ambiguous" },
+              unset: true,
+            }),
+          ).resolves.toEqual({
+            ok: false,
+            error: "plugin session extension cannot specify both unset and value",
+          });
+          expect(
+            loadSessionStore(storePath)["agent:main:main"]?.pluginExtensions?.["patch-fixture"]
+              ?.workflow,
+          ).toEqual({ state: "waiting" });
+
+          await expect(
+            patchPluginSessionExtension({
+              sessionKey: "agent:main:main",
+              pluginId: "patch-fixture",
+              namespace: "workflow",
               value: { state: "approved" },
             }),
           ).resolves.toEqual({

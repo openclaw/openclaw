@@ -1412,6 +1412,17 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    if (params.unset === true && params.value !== undefined) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "sessions.pluginPatch cannot specify both unset and value",
+        ),
+      );
+      return;
+    }
     if (params.value !== undefined && !isPluginJsonValue(params.value)) {
       respond(
         false,

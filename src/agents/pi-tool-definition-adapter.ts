@@ -11,7 +11,9 @@ import { sanitizeForConsole } from "./console-sanitize.js";
 import type { ClientToolDefinition } from "./pi-embedded-runner/run/params.js";
 import type { HookContext } from "./pi-tools.before-tool-call.js";
 import {
+  BeforeToolCallBlockedError,
   isToolWrappedWithBeforeToolCallHook,
+  isBeforeToolCallBlockedError,
   runBeforeToolCallHook,
 } from "./pi-tools.before-tool-call.js";
 import { normalizeToolName } from "./tool-policy.js";
@@ -234,7 +236,7 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
               toolCallId,
             });
             if (hookOutcome.blocked) {
-              throw new Error(hookOutcome.reason);
+              throw new BeforeToolCallBlockedError(hookOutcome.reason);
             }
             executeParams = hookOutcome.params;
           }
@@ -254,6 +256,13 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
               : "";
           if (name === "AbortError") {
             throw err;
+          }
+          if (isBeforeToolCallBlockedError(err)) {
+            logDebug(`tools: ${normalizedName} blocked by before_tool_call: ${err.reason}`);
+            return buildToolExecutionErrorResult({
+              toolName: normalizedName,
+              message: err.reason,
+            });
           }
           const described = describeToolExecutionError(err);
           if (described.stack && described.stack !== described.message) {
@@ -331,7 +340,7 @@ export function toClientToolDefinitions(
           ctx: hookContext,
         });
         if (outcome.blocked) {
-          throw new Error(outcome.reason);
+          throw new BeforeToolCallBlockedError(outcome.reason);
         }
         const adjustedParams = outcome.params;
         const paramsRecord = coerceParamsRecord(adjustedParams);
