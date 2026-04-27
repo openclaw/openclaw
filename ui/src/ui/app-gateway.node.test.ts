@@ -315,6 +315,7 @@ describe("connectGateway", () => {
       type: "hello-ok",
       protocol: 3,
       server: { version: "2.0.0" },
+      auth: { role: "operator", scopes: [] },
       snapshot: {},
     });
 
@@ -350,6 +351,7 @@ describe("connectGateway", () => {
       type: "hello-ok",
       protocol: 3,
       server: { version: "1.0.0" },
+      auth: { role: "operator", scopes: [] },
       snapshot: {},
     });
 
@@ -388,6 +390,7 @@ describe("connectGateway", () => {
       type: "hello-ok",
       protocol: 3,
       server: { version: "1.0.0" },
+      auth: { role: "operator", scopes: [] },
       snapshot: {},
     });
 
