@@ -22,7 +22,24 @@ vi.mock("./send.js", () => ({
   sendMessageFeishu: sendMessageFeishuMock,
   sendMarkdownCardFeishu: sendMarkdownCardFeishuMock,
   sendStructuredCardFeishu: sendStructuredCardFeishuMock,
-  resolveFeishuCardTemplate: (template?: string) => template,
+  resolveFeishuCardTemplate: (template?: string) =>
+    new Set([
+      "blue",
+      "green",
+      "red",
+      "orange",
+      "purple",
+      "indigo",
+      "wathet",
+      "turquoise",
+      "yellow",
+      "grey",
+      "carmine",
+      "violet",
+      "lime",
+    ]).has(template ?? "")
+      ? template
+      : undefined,
 }));
 
 vi.mock("./runtime.js", () => ({
@@ -383,6 +400,112 @@ describe("feishuOutbound.sendPayload native cards", () => {
     expect(result).toEqual(
       expect.objectContaining({ channel: "feishu", messageId: "native_card_msg" }),
     );
+  });
+
+  it("escapes generated markdown card text and drops unsafe button URLs", async () => {
+    await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "Choose <at id=\"ou_1\">",
+      accountId: "main",
+      payload: {
+        text: "Choose <at id=\"ou_1\">",
+        presentation: {
+          blocks: [
+            { type: "context", text: "</font><at id=\"ou_2\">Injected</at>" },
+            {
+              type: "buttons",
+              buttons: [
+                { label: "Open", url: "https://example.com/path" },
+                { label: "Bad", url: "javascript:alert(1)" },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    const card = sendCardFeishuMock.mock.calls[0][0].card;
+    expect(card.body.elements).toEqual(
+      expect.arrayContaining([
+        { tag: "markdown", content: "Choose &lt;at id=\"ou_1\"&gt;" },
+        {
+          tag: "markdown",
+          content: "<font color='grey'>&lt;/font&gt;&lt;at id=\"ou_2\"&gt;Injected&lt;/at&gt;</font>",
+        },
+        {
+          tag: "action",
+          actions: [
+            expect.objectContaining({
+              text: { tag: "plain_text", content: "Open" },
+              url: "https://example.com/path",
+            }),
+          ],
+        },
+      ]),
+    );
+    expect(JSON.stringify(card)).not.toContain("javascript:");
+  });
+
+  it("normalizes caller-supplied native Feishu cards before sending", async () => {
+    await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "fallback",
+      accountId: "main",
+      payload: {
+        text: "fallback",
+        channelData: {
+          feishu: {
+            card: {
+              schema: "2.0",
+              header: {
+                title: { tag: "plain_text", content: "Unsafe card" },
+                template: "not-a-template",
+              },
+              body: {
+                elements: [
+                  { tag: "img", img_key: "image-secret" },
+                  { tag: "markdown", content: "<at id=\"ou_1\">ping</at>" },
+                  {
+                    tag: "action",
+                    actions: [
+                      {
+                        tag: "button",
+                        text: { tag: "plain_text", content: "Bad link" },
+                        url: "file:///etc/passwd",
+                      },
+                      {
+                        tag: "button",
+                        text: { tag: "plain_text", content: "Good link" },
+                        url: "https://example.com",
+                      },
+                    ],
+                  },
+                ],
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const card = sendCardFeishuMock.mock.calls[0][0].card;
+    expect(card.header.template).toBe("blue");
+    expect(card.body.elements).toEqual([
+      { tag: "markdown", content: "&lt;at id=\"ou_1\"&gt;ping&lt;/at&gt;" },
+      {
+        tag: "action",
+        actions: [
+          expect.objectContaining({
+            text: { tag: "plain_text", content: "Good link" },
+            url: "https://example.com",
+          }),
+        ],
+      },
+    ]);
+    expect(JSON.stringify(card)).not.toContain("file://");
+    expect(JSON.stringify(card)).not.toContain("image-secret");
   });
 
   it("sends payload media before final native cards", async () => {
