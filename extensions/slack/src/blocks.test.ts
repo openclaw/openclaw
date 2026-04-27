@@ -5,6 +5,7 @@ import {
   encodeSlackModalPrivateMetadata,
   parseSlackModalPrivateMetadata,
 } from "./modal-metadata.js";
+import { resolveSlackReplyBlocks } from "./reply-blocks.js";
 
 describe("buildSlackBlocksFallbackText", () => {
   it("prefers header text", () => {
@@ -87,6 +88,50 @@ describe("parseSlackBlocksInput", () => {
         testCase.expectedMessage,
       );
     }
+  });
+});
+
+describe("resolveSlackReplyBlocks", () => {
+  it("renders shared presentation buttons for monitor reply delivery", () => {
+    const blocks = resolveSlackReplyBlocks({
+      text: "Choose an action",
+      presentation: {
+        blocks: [
+          { type: "text", text: "Choose an action" },
+          {
+            type: "buttons",
+            buttons: [
+              { label: "Retry", value: "retry" },
+              { label: "Cancel", value: "cancel", style: "danger" },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(blocks).toEqual([
+      {
+        type: "section",
+        text: { type: "mrkdwn", text: "Choose an action" },
+      },
+      {
+        type: "actions",
+        block_id: "openclaw_reply_buttons_1",
+        elements: [
+          expect.objectContaining({
+            type: "button",
+            text: { type: "plain_text", text: "Retry", emoji: true },
+            value: "retry",
+          }),
+          expect.objectContaining({
+            type: "button",
+            text: { type: "plain_text", text: "Cancel", emoji: true },
+            value: "cancel",
+            style: "danger",
+          }),
+        ],
+      },
+    ]);
   });
 });
 

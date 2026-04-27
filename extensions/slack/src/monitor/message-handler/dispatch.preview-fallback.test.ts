@@ -40,12 +40,30 @@ let mockedDispatchSequence: Array<{
     isReasoning?: boolean;
     mediaUrl?: string;
     mediaUrls?: string[];
+    presentation?: {
+      blocks?: Array<{
+        type: string;
+        text?: string;
+        buttons?: Array<{ label: string; value: string }>;
+      }>;
+    };
   };
 }> = [];
 let mockedProgressEvents: string[] = [];
 
 const noop = () => {};
 const noopAsync = async () => {};
+
+type MockSlackBlock =
+  | { type: "section"; text: { type: "mrkdwn"; text: string } }
+  | {
+      type: "actions";
+      elements: Array<{
+        type: "button";
+        text: { type: "plain_text"; text: string; emoji: true };
+        value: string;
+      }>;
+    };
 
 function createDraftStreamStub() {
   return {
@@ -272,7 +290,34 @@ vi.mock("../replies.js", () => ({
     markSent: () => {},
   }),
   deliverReplies: deliverRepliesMock,
-  readSlackReplyBlocks: () => undefined,
+  readSlackReplyBlocks: (payload: {
+    presentation?: {
+      blocks?: Array<{
+        type: string;
+        text?: string;
+        buttons?: Array<{ label: string; value: string }>;
+      }>;
+    };
+  }) => {
+    const rendered: MockSlackBlock[] = [];
+    for (const block of payload.presentation?.blocks ?? []) {
+      if (block.type === "text" && block.text?.trim()) {
+        rendered.push({ type: "section", text: { type: "mrkdwn", text: block.text.trim() } });
+        continue;
+      }
+      if (block.type === "buttons" && block.buttons?.length) {
+        rendered.push({
+          type: "actions",
+          elements: block.buttons.map((button) => ({
+            type: "button",
+            text: { type: "plain_text", text: button.label, emoji: true },
+            value: button.value,
+          })),
+        });
+      }
+    }
+    return rendered.length ? rendered : undefined;
+  },
   resolveDeliveredSlackReplyThreadTs: (params: {
     replyToMode: "off" | "first" | "all" | "batched";
     payloadReplyToId?: string;
@@ -400,6 +445,61 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
         channelId: "C123",
         messageId: "171234.567",
         text: "✅",
+      }),
+    );
+    expect(deliverRepliesMock).not.toHaveBeenCalled();
+    expect(draftStream.clear).not.toHaveBeenCalled();
+  });
+
+  it("includes presentation button blocks when finalizing draft preview edits", async () => {
+    const draftStream = {
+      ...createDraftStreamStub(),
+      flush: vi.fn(noopAsync),
+      clear: vi.fn(noopAsync),
+      discardPending: vi.fn(noopAsync),
+      seal: vi.fn(noopAsync),
+    };
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
+    mockedDispatchSequence = [
+      {
+        kind: "final",
+        payload: {
+          text: "Choose an action",
+          presentation: {
+            blocks: [
+              { type: "text", text: "Choose an action" },
+              {
+                type: "buttons",
+                buttons: [{ label: "Retry", value: "retry" }],
+              },
+            ],
+          },
+        },
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(finalizeSlackPreviewEditMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Choose an action",
+        blocks: [
+          {
+            type: "section",
+            text: { type: "mrkdwn", text: "Choose an action" },
+          },
+          {
+            type: "actions",
+            elements: [
+              {
+                type: "button",
+                text: { type: "plain_text", text: "Retry", emoji: true },
+                value: "retry",
+              },
+            ],
+          },
+        ],
       }),
     );
     expect(deliverRepliesMock).not.toHaveBeenCalled();
