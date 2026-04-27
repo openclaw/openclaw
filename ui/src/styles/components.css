@@ -5579,31 +5579,31 @@ details[open] > .ov-expandable-toggle::after {
   left: 0;
   right: 0;
   height: 100%;
-  display: flex;
 }
 
+/* Absolute-positioned per-tick so fractional zoomStart (Now±3h) renders ticks at true hour offsets. */
 .cron-timeline-grid-line {
-  flex: 1;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
   border-right: 1px solid var(--grid-line);
 }
 
-.cron-timeline-grid-line:last-child {
-  border-right: none;
-}
-
 .cron-timeline-labels {
-  display: flex;
-  justify-content: space-between;
+  position: relative;
+  height: 14px;
   margin-top: 6px;
 }
 
 .cron-timeline-label {
+  position: absolute;
   font-size: 10px;
   font-family: var(--mono);
   color: var(--muted-strong);
-  width: 0;
   text-align: center;
   user-select: none;
+  transform: translateX(-50%);
 }
 
 .cron-timeline-now {
