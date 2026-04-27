@@ -21,6 +21,13 @@ export {
   handleCompactionStart,
 } from "./pi-embedded-subscribe.handlers.compaction.js";
 
+// Plugin agent_error hooks must not block lifecycle event emission or
+// compaction retry resolution. The fallback path in agent-command.ts emits a
+// synthetic phase: "end" if no lifecycle terminal event is observed in time,
+// so unbounded plugin latency could let clients see a false "end" before the
+// real "error". Two seconds is generous for a text-replacement hook.
+const AGENT_ERROR_HOOK_TIMEOUT_MS = 2000;
+
 export function handleAgentStart(ctx: EmbeddedPiSubscribeContext) {
   ctx.log.debug(`embedded run agent start: runId=${ctx.params.runId}`);
   emitAgentEvent({
@@ -78,18 +85,27 @@ export async function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): Promise<v
 
     // Allow plugins to replace the error text before it is broadcast.
     // This lets plugins swap raw provider errors for localised friendly messages.
+    // Bounded by a timeout so a slow/hung hook can't delay lifecycle emission
+    // or compaction retry resolution beyond AGENT_ERROR_HOOK_TIMEOUT_MS.
     const hookRunner = ctx.hookRunner ?? getGlobalHookRunner();
     if (hookRunner?.hasHooks("agent_error")) {
+      let hookTimeoutId: ReturnType<typeof setTimeout> | undefined;
       try {
-        const hookResult = await hookRunner.runAgentError(
-          { error: errorText },
-          { sessionKey: ctx.params.sessionKey },
-        );
+        const hookResult = await Promise.race([
+          hookRunner.runAgentError({ error: errorText }, { sessionKey: ctx.params.sessionKey }),
+          new Promise<undefined>((resolve) => {
+            hookTimeoutId = setTimeout(() => resolve(undefined), AGENT_ERROR_HOOK_TIMEOUT_MS);
+          }),
+        ]);
         if (typeof hookResult?.message === "string") {
           errorText = hookResult.message;
         }
       } catch {
         // Don't block delivery on hook failure.
+      } finally {
+        if (hookTimeoutId) {
+          clearTimeout(hookTimeoutId);
+        }
       }
     }
 

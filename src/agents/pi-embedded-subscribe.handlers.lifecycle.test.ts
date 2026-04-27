@@ -678,5 +678,42 @@ describe("handleAgentEnd", () => {
         }),
       );
     });
+
+    it("broadcasts original error when hook hangs past the timeout", async () => {
+      vi.useFakeTimers();
+      try {
+        const onAgentEvent = vi.fn();
+        const ctx = createContext(
+          {
+            role: "assistant",
+            stopReason: "error",
+            errorMessage: "connection refused",
+            content: [{ type: "text", text: "" }],
+          },
+          {
+            onAgentEvent,
+            hookRunner: {
+              hasHooks: vi.fn(() => true),
+              runAgentError: vi.fn(() => new Promise(() => {})),
+            } as unknown as EmbeddedPiSubscribeContext["hookRunner"],
+          },
+        );
+
+        const endPromise = handleAgentEnd(ctx);
+        await vi.advanceTimersByTimeAsync(2000);
+        await endPromise;
+
+        expect(onAgentEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({
+              phase: "error",
+              error: expect.stringContaining("connection refused"),
+            }),
+          }),
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });
