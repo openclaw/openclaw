@@ -92,6 +92,31 @@ function hasGatewayAllowlistMiss(params: {
   );
 }
 
+function stripAggregatedPrefix(reason: string, aggregated: string) {
+  if (!aggregated) {
+    return reason;
+  }
+  if (reason === aggregated) {
+    return "";
+  }
+  if (reason.startsWith(aggregated)) {
+    return reason.slice(aggregated.length).trim();
+  }
+  return reason;
+}
+
+function formatGatewayFollowupText(value: string) {
+  return normalizeNotifyOutput(tail(value || "", DEFAULT_NOTIFY_TAIL_CHARS));
+}
+
+function formatGatewayReasonText(value: string) {
+  const normalized = normalizeNotifyOutput(value);
+  if (normalized.length <= DEFAULT_NOTIFY_TAIL_CHARS) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(0, DEFAULT_NOTIFY_TAIL_CHARS - 3))}...`;
+}
+
 export async function processGatewayAllowlist(
   params: ProcessGatewayAllowlistParams,
 ): Promise<ProcessGatewayAllowlistResult> {
@@ -398,9 +423,12 @@ export async function processGatewayAllowlist(
       markBackgrounded(run.session);
 
       const outcome = await run.promise;
-      const outcomeText =
-        outcome.status === "failed" && outcome.timedOut ? outcome.reason : outcome.aggregated;
-      const output = normalizeNotifyOutput(tail(outcomeText || "", DEFAULT_NOTIFY_TAIL_CHARS));
+      const outputTail = formatGatewayFollowupText(outcome.aggregated);
+      const timeoutReason =
+        outcome.status === "failed" && outcome.timedOut
+          ? formatGatewayReasonText(stripAggregatedPrefix(outcome.reason, outcome.aggregated))
+          : "";
+      const output = [outputTail, timeoutReason].filter(Boolean).join("\n");
       const exitLabel = outcome.timedOut ? "timeout" : `code ${outcome.exitCode ?? "?"}`;
       const summary = output
         ? `Exec finished (gateway id=${approvalId}, session=${run.session.id}, ${exitLabel})\n${output}`

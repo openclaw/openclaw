@@ -116,7 +116,9 @@ vi.mock("./bash-tools.exec-runtime.js", () => ({
 
 vi.mock("./bash-process-registry.js", () => ({
   markBackgrounded: vi.fn(),
-  tail: vi.fn((value) => value),
+  tail: vi.fn((value: string, max = 2000) =>
+    value.length <= max ? value : value.slice(value.length - max),
+  ),
 }));
 
 vi.mock("../infra/exec-inline-eval.js", () => ({
@@ -341,6 +343,48 @@ describe("processGatewayAllowlist", () => {
       expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
         null,
         expect.stringContaining("Exec finished (gateway id=req-1, session=sess_timeout, timeout)"),
+      );
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
+        null,
+        expect.stringContaining("Command timed out after 30 seconds"),
+      );
+    });
+  });
+
+  it("preserves command output tail in approved timeout followups", async () => {
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+    const aggregated = `${"x".repeat(1200)}\nimportant-output`;
+    const timeoutGuidance = `Command timed out after 30 seconds. ${"increase timeout ".repeat(100)}`;
+    runExecProcessMock.mockResolvedValue({
+      session: { id: "sess_timeout_output" },
+      startedAt: Date.now(),
+      pid: 123,
+      promise: Promise.resolve({
+        status: "failed" as const,
+        exitCode: null,
+        exitSignal: "SIGKILL",
+        durationMs: 30_000,
+        aggregated,
+        timedOut: true,
+        failureKind: "overall-timeout" as const,
+        reason: `${aggregated}\n\n${timeoutGuidance}`,
+      }),
+      kill: vi.fn(),
+    });
+
+    await runGatewayAllowlist({
+      command: "sleep 999",
+    });
+
+    await vi.waitFor(() => {
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
+        null,
+        expect.stringContaining("important-output"),
       );
       expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
         null,
