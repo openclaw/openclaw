@@ -40,8 +40,20 @@ import type { TypingController } from "./typing.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 
-function isLikelyConversationalFreeformBody(body: string): boolean {
-  const trimmed = normalizeOptionalString(body)?.trim() ?? "";
+// 履歴scaffolding込みのbodyから「今返信すべき現在ターン分」だけを切り出す。
+// CURRENT_MESSAGE_MARKER 以降があればその範囲を、無ければbody全体を返す。
+function extractCurrentMessageSegment(body: string): string {
+  const markerIndex = body.indexOf(CURRENT_MESSAGE_MARKER);
+  if (markerIndex < 0) {
+    return body;
+  }
+  return body.slice(markerIndex + CURRENT_MESSAGE_MARKER.length);
+}
+
+export function isLikelyConversationalFreeformBody(body: string): boolean {
+  // 履歴/contextラッパーが混じった全文ではなく、現在ターンのメッセージだけで判定する
+  const segment = extractCurrentMessageSegment(body);
+  const trimmed = normalizeOptionalString(segment)?.trim() ?? "";
   if (!trimmed) {
     return false;
   }

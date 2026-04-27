@@ -35,7 +35,10 @@ export function buildReplyPromptBodies(params: {
   const prefixedBody = [params.threadContextNote, prefixedBodyWithEvents]
     .filter(Boolean)
     .join("\n\n");
-  const queueBodyBase = [params.threadContextNote, bodyWithEvents].filter(Boolean).join("\n\n");
+  // active-run中のフォローアップターンで使う queuedBody にも同じconversationalヒントを付与し、
+  // 即時ターンとキューイング経由ターンで返信整形が一貫するようにする
+  const queueBodyWithHint = [conversationalHint, bodyWithEvents].filter(Boolean).join("\n\n");
+  const queueBodyBase = [params.threadContextNote, queueBodyWithHint].filter(Boolean).join("\n\n");
   const mediaNote = buildInboundMediaNote(params.ctx);
   const mediaReplyHint = mediaNote ? REPLY_MEDIA_HINT : undefined;
   const queuedBody = mediaNote

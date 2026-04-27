@@ -143,6 +143,8 @@ export function registerGetReplyRuntimeOverrides(handles: {
 }): void {
   vi.doMock("./get-reply-directives.js", () => ({
     resolveReplyDirectives: (...args: unknown[]) => handles.resolveReplyDirectives(...args),
+    // mock経由でも runPreparedReply 直前の再判定で参照されるので、軽量な実体を返す
+    isLikelyConversationalFreeformBody: (_body?: string) => false,
   }));
   vi.doMock("./get-reply-inline-actions.js", () => ({
     handleInlineActions:
