@@ -481,3 +481,11 @@ yuweuii
 yxjsxy
 zijiess
 clawtributors:hidden:end -->
+
+## 💰 Bounty Contribution
+
+- **Task:** Feature Request: Custom TUI Footer Fields for Cost/Balance/Rate Limit Status
+- **Reward:** $19
+- **Source:** GitHub-Paid
+- **Date:** 2026-04-27
+
