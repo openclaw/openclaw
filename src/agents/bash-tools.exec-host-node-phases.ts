@@ -28,6 +28,7 @@ export type NodeExecutionTarget = {
   argv: string[];
   env: Record<string, string> | undefined;
   invokeTimeoutMs: number;
+  runTimeoutSec: number;
   supportsSystemRunPrepare: boolean;
 };
 
@@ -124,17 +125,16 @@ export async function resolveNodeExecutionTarget(
     );
   }
 
+  const runTimeoutSec =
+    typeof params.timeoutSec === "number" ? params.timeoutSec : params.defaultTimeoutSec;
+  const invokeBaseTimeoutSec = runTimeoutSec > 0 ? runTimeoutSec : params.defaultTimeoutSec;
   return {
     nodeId,
     platform: nodeInfo?.platform,
     argv: buildNodeShellCommand(params.command, nodeInfo?.platform),
     env: params.requestedEnv ? { ...params.requestedEnv } : undefined,
-    invokeTimeoutMs: Math.max(
-      10_000,
-      (typeof params.timeoutSec === "number" ? params.timeoutSec : params.defaultTimeoutSec) *
-        1000 +
-        5_000,
-    ),
+    invokeTimeoutMs: Math.max(10_000, invokeBaseTimeoutSec * 1000 + 5_000),
+    runTimeoutSec,
     supportsSystemRunPrepare: declaredCommands.includes("system.run.prepare"),
   };
 }
@@ -144,7 +144,6 @@ export function buildNodeSystemRunInvoke(params: {
   command: string[];
   rawCommand: string;
   cwd: string | undefined;
-  timeoutSec: number | undefined;
   agentId: string | undefined;
   sessionKey: string | undefined;
   approved?: boolean;
@@ -154,6 +153,8 @@ export function buildNodeSystemRunInvoke(params: {
   notifyOnExit?: boolean;
   systemRunPlan?: SystemRunApprovalPlan;
 }): Record<string, unknown> {
+  const timeoutMs =
+    params.target.runTimeoutSec > 0 ? Math.floor(params.target.runTimeoutSec * 1000) : 0;
   return {
     nodeId: params.target.nodeId,
     command: "system.run",
@@ -163,7 +164,7 @@ export function buildNodeSystemRunInvoke(params: {
       ...(params.systemRunPlan ? { systemRunPlan: params.systemRunPlan } : {}),
       ...(params.cwd != null ? { cwd: params.cwd } : {}),
       env: params.target.env,
-      timeoutMs: typeof params.timeoutSec === "number" ? params.timeoutSec * 1000 : undefined,
+      timeoutMs,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       approved: params.approved,
@@ -189,7 +190,6 @@ export async function invokeNodeSystemRunDirect(params: {
       command: params.target.argv,
       rawCommand: params.request.command,
       cwd: params.request.workdir,
-      timeoutSec: params.request.timeoutSec,
       agentId: params.request.agentId,
       sessionKey: params.request.sessionKey,
       notifyOnExit: params.request.notifyOnExit,

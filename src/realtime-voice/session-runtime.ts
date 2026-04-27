@@ -6,6 +6,7 @@ import type {
   RealtimeVoiceRole,
   RealtimeVoiceTool,
   RealtimeVoiceToolCallEvent,
+  RealtimeVoiceToolResultOptions,
 } from "./provider-types.js";
 
 export type RealtimeVoiceAudioSink = {
@@ -25,7 +26,7 @@ export type RealtimeVoiceBridgeSession = {
   sendAudio(audio: Buffer): void;
   sendUserMessage(text: string): void;
   setMediaTimestamp(ts: number): void;
-  submitToolResult(callId: string, result: unknown): void;
+  submitToolResult(callId: string, result: unknown, options?: RealtimeVoiceToolResultOptions): void;
   triggerGreeting(instructions?: string): void;
 };
 
@@ -65,7 +66,8 @@ export function createRealtimeVoiceBridgeSession(
     sendAudio: (audio) => requireBridge().sendAudio(audio),
     sendUserMessage: (text) => requireBridge().sendUserMessage?.(text),
     setMediaTimestamp: (ts) => requireBridge().setMediaTimestamp(ts),
-    submitToolResult: (callId, result) => requireBridge().submitToolResult(callId, result),
+    submitToolResult: (callId, result, options) =>
+      requireBridge().submitToolResult(callId, result, options),
     triggerGreeting: (instructions) => requireBridge().triggerGreeting?.(instructions),
   };
   const canSendAudio = () => params.audioSink.isOpen?.() ?? true;

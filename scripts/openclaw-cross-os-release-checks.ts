@@ -17,7 +17,7 @@ import { createServer } from "node:http";
 import { createConnection as createNetConnection, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, win32 as pathWin32 } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { assertNoBundledRuntimeDepsStagingDebris } from "../src/infra/package-dist-inventory.ts";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
@@ -2228,10 +2228,12 @@ export function shouldRunWindowsInstalledBrowserOverrideImportSmoke(platform = p
   return platform === "win32";
 }
 
-export function buildInstalledBrowserOverrideImportProbeScript() {
+export function buildInstalledBrowserOverrideImportProbeScript(
+  runtimeModuleSpecifier = "openclaw/plugin-sdk/browser-node-runtime",
+) {
   return `
 import { existsSync } from "node:fs";
-import { startLazyPluginServiceModule } from "openclaw/plugin-sdk/browser-node-runtime";
+import { startLazyPluginServiceModule } from ${JSON.stringify(runtimeModuleSpecifier)};
 
 const startedPath = process.env.OPENCLAW_BROWSER_OVERRIDE_STARTED_PATH;
 const stoppedPath = process.env.OPENCLAW_BROWSER_OVERRIDE_STOPPED_PATH;
@@ -2295,12 +2297,21 @@ async function runInstalledBrowserOverrideImportSmoke(params) {
   const probePath = join(probeDir, "run browser override probe.mjs");
   const startedPath = join(probeDir, "started.txt");
   const stoppedPath = join(probeDir, "stopped.txt");
+  const packageRoot = installedPackageRoot(params.prefixDir);
+  const runtimeModulePath = join(packageRoot, "dist", "plugin-sdk", "browser-node-runtime.js");
+  if (!existsSync(runtimeModulePath)) {
+    throw new Error(`Installed browser runtime module not found: ${runtimeModulePath}`);
+  }
 
   writeFileSync(overridePath, `${buildBrowserOverrideProbeServiceModule()}\n`, "utf8");
-  writeFileSync(probePath, `${buildInstalledBrowserOverrideImportProbeScript()}\n`, "utf8");
+  writeFileSync(
+    probePath,
+    `${buildInstalledBrowserOverrideImportProbeScript(pathToFileURL(runtimeModulePath).href)}\n`,
+    "utf8",
+  );
 
   await runCommand(process.execPath, [probePath], {
-    cwd: installedPackageRoot(params.prefixDir),
+    cwd: packageRoot,
     env: {
       ...params.env,
       OPENCLAW_BROWSER_CONTROL_MODULE: overridePath,

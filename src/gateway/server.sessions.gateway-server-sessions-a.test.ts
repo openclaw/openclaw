@@ -2500,6 +2500,60 @@ describe("gateway server sessions", () => {
     });
   });
 
+  test("sessions.delete limits plugin-runtime cleanup to sessions owned by that plugin", async () => {
+    const { dir } = await createSessionStoreDir();
+    await writeSingleLineSession(dir, "sess-owned", "owned");
+    await writeSingleLineSession(dir, "sess-foreign", "foreign");
+
+    await writeSessionStore({
+      entries: {
+        "agent:main:dreaming-narrative-owned": {
+          sessionId: "sess-owned",
+          updatedAt: Date.now(),
+          pluginOwnerId: "memory-core",
+        },
+        "agent:main:dreaming-narrative-foreign": {
+          sessionId: "sess-foreign",
+          updatedAt: Date.now(),
+          pluginOwnerId: "other-plugin",
+        },
+      },
+    });
+
+    const pluginClient = {
+      connect: {
+        scopes: ["operator.admin"],
+      },
+      internal: {
+        pluginRuntimeOwnerId: "memory-core",
+      },
+    } as never;
+
+    const denied = await directSessionReq(
+      "sessions.delete",
+      {
+        key: "agent:main:dreaming-narrative-foreign",
+      },
+      {
+        client: pluginClient,
+      },
+    );
+    expect(denied.ok).toBe(false);
+    expect(denied.error?.message).toContain("did not create it");
+
+    const deleted = await directSessionReq<{ ok: true; deleted: boolean }>(
+      "sessions.delete",
+      {
+        key: "agent:main:dreaming-narrative-owned",
+      },
+      {
+        client: pluginClient,
+      },
+    );
+    expect(deleted.ok).toBe(true);
+    expect(deleted.payload?.deleted).toBe(true);
+  });
+
   test("sessions.delete closes ACP runtime handles before removing ACP sessions", async () => {
     const { dir } = await createSessionStoreDir();
     await writeSingleLineSession(dir, "sess-main", "hello");

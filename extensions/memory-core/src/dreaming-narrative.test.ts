@@ -596,6 +596,7 @@ describe("generateAndAppendDreamNarrative", () => {
       },
       nowMs,
       timezone: "UTC",
+      model: "anthropic/claude-sonnet-4-6",
       logger,
     });
 
@@ -606,6 +607,7 @@ describe("generateAndAppendDreamNarrative", () => {
       lane: `dreaming-narrative:${expectedSessionKey}`,
       lightContext: true,
       deliver: false,
+      model: "anthropic/claude-sonnet-4-6",
     });
     expect(subagent.waitForRun).toHaveBeenCalledOnce();
     expect(subagent.deleteSession).toHaveBeenCalledOnce();
@@ -719,9 +721,13 @@ describe("generateAndAppendDreamNarrative", () => {
 
     const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
     expect(content).toContain("API endpoints need authentication");
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("request-scoped"));
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("request-scoped"));
+    expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining("request-scoped"));
     expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining(workspaceDir));
-    expect(subagent.deleteSession).toHaveBeenCalledOnce();
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("narrative session cleanup failed"),
+    );
+    expect(subagent.deleteSession).not.toHaveBeenCalled();
   });
 
   it("falls back when the request-scoped runtime error is detected by stable code", async () => {
@@ -746,6 +752,9 @@ describe("generateAndAppendDreamNarrative", () => {
 
     const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
     expect(content).toContain("A durable candidate surfaced.");
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("request-scoped"));
+    expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining("request-scoped"));
+    expect(subagent.deleteSession).not.toHaveBeenCalled();
   });
 
   it("does not fall back for non-Error objects that only spoof the stable code", async () => {

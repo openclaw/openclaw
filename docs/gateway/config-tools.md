@@ -475,7 +475,9 @@ OpenClaw uses the built-in model catalog. Add custom providers via `models.provi
 ### Provider examples
 
 <AccordionGroup>
-  <Accordion title="Cerebras (GLM 4.6 / 4.7)">
+  <Accordion title="Cerebras (GLM 4.7 / GPT OSS)">
+    The bundled `cerebras` provider plugin can configure this via `openclaw onboard --auth-choice cerebras-api-key`. Use explicit provider config only when overriding defaults.
+
     ```json5
     {
       env: { CEREBRAS_API_KEY: "sk-..." },
@@ -483,11 +485,11 @@ OpenClaw uses the built-in model catalog. Add custom providers via `models.provi
         defaults: {
           model: {
             primary: "cerebras/zai-glm-4.7",
-            fallbacks: ["cerebras/zai-glm-4.6"],
+            fallbacks: ["cerebras/gpt-oss-120b"],
           },
           models: {
             "cerebras/zai-glm-4.7": { alias: "GLM 4.7 (Cerebras)" },
-            "cerebras/zai-glm-4.6": { alias: "GLM 4.6 (Cerebras)" },
+            "cerebras/gpt-oss-120b": { alias: "GPT OSS 120B (Cerebras)" },
           },
         },
       },
@@ -500,7 +502,7 @@ OpenClaw uses the built-in model catalog. Add custom providers via `models.provi
             api: "openai-completions",
             models: [
               { id: "zai-glm-4.7", name: "GLM 4.7 (Cerebras)" },
-              { id: "zai-glm-4.6", name: "GLM 4.6 (Cerebras)" },
+              { id: "gpt-oss-120b", name: "GPT OSS 120B (Cerebras)" },
             ],
           },
         },

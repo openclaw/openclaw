@@ -1482,6 +1482,11 @@ export function renderApp(state: AppViewState) {
         </aside>
       </div>
       <main class="content ${isChat ? "content--chat" : ""}">
+        ${state.updateStatusBanner
+          ? html`<div class="callout ${state.updateStatusBanner.tone}" role="alert">
+              ${state.updateStatusBanner.text}
+            </div>`
+          : nothing}
         ${state.updateAvailable &&
         state.updateAvailable.latestVersion !== state.updateAvailable.currentVersion &&
         !isUpdateBannerDismissed(state.updateAvailable)
@@ -1667,6 +1672,7 @@ export function renderApp(state: AppViewState) {
                 includeUnknown: state.sessionsIncludeUnknown,
                 basePath: state.basePath,
                 searchQuery: state.sessionsSearchQuery,
+                agentIdentityById: state.agentIdentityById,
                 sortColumn: state.sessionsSortColumn,
                 sortDir: state.sessionsSortDir,
                 page: state.sessionsPage,

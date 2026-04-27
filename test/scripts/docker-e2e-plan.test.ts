@@ -111,6 +111,23 @@ describe("scripts/lib/docker-e2e-plan", () => {
     ]);
   });
 
+  it("plans bundled plugin install/uninstall as package-backed plugin coverage", () => {
+    const plan = planFor({ selectedLaneNames: ["bundled-plugin-install-uninstall"] });
+
+    expect(plan.lanes).toEqual([
+      expect.objectContaining({
+        imageKind: "functional",
+        live: false,
+        name: "bundled-plugin-install-uninstall",
+        resources: expect.arrayContaining(["docker", "npm"]),
+      }),
+    ]);
+    expect(plan.needs).toMatchObject({
+      functionalImage: true,
+      package: true,
+    });
+  });
+
   it("rejects unknown selected lanes with the available lane names", () => {
     expect(() => planFor({ selectedLaneNames: ["missing-lane"] })).toThrow(
       /OPENCLAW_DOCKER_ALL_LANES unknown lane\(s\): missing-lane/u,

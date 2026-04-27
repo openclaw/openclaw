@@ -761,6 +761,7 @@ export async function startGatewayServer(
         cfgAtStart,
         channelManager,
         log,
+        pluginLookUpTable,
       }),
     );
 

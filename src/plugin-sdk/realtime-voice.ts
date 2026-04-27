@@ -13,10 +13,12 @@ export type {
   RealtimeVoiceRole,
   RealtimeVoiceTool,
   RealtimeVoiceToolCallEvent,
+  RealtimeVoiceToolResultOptions,
 } from "../realtime-voice/provider-types.js";
 export {
   buildRealtimeVoiceAgentConsultChatMessage,
   buildRealtimeVoiceAgentConsultPrompt,
+  buildRealtimeVoiceAgentConsultWorkingResponse,
   collectRealtimeVoiceAgentConsultVisibleText,
   isRealtimeVoiceAgentConsultToolPolicy,
   parseRealtimeVoiceAgentConsultArgs,

@@ -2,6 +2,16 @@
   "id": "vllm",
   "enabledByDefault": true,
   "providers": ["vllm"],
+  "providerRequest": {
+    "providers": {
+      "vllm": {
+        "family": "vllm",
+        "openAICompletions": {
+          "supportsStreamingUsage": true
+        }
+      }
+    }
+  },
   "modelPricing": {
     "providers": {
       "vllm": {

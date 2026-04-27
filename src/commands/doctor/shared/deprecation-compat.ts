@@ -58,6 +58,18 @@ function deprecatedCompatRecord<Code extends string>(
 // architecture because ownership and config footprint can shift during rollout.
 export const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
   deprecatedCompatRecord({
+    code: "doctor-agent-llm-timeout",
+    owner: "agent-runtime",
+    introduced: "2026-04-27",
+    source: "agents.defaults.llm.idleTimeoutSeconds",
+    migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts",
+    replacement: "models.providers.<id>.timeoutSeconds",
+    docsPath: "/gateway/config-agents",
+    tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
+    notes:
+      "The old agent-level idle timeout knob was collapsed into provider request timeout handling.",
+  }),
+  deprecatedCompatRecord({
     code: "doctor-agent-runtime-embedded-harness",
     owner: "agent-runtime",
     introduced: "2026-04-25",

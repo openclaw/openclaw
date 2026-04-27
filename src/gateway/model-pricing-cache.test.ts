@@ -3,15 +3,36 @@ import { modelKey } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { normalizeProviderModelIdWithPlugin } from "../plugins/provider-runtime.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 
 const normalizeProviderModelIdWithPluginMock = vi.hoisted(() =>
   vi.fn<typeof normalizeProviderModelIdWithPlugin>(({ context }) => context.modelId),
 );
+const pluginManifestRegistryMocks = vi.hoisted(() => ({
+  manifestRegistry: undefined as PluginManifestRegistry | undefined,
+  loadPluginManifestRegistryForInstalledIndex: vi.fn(),
+}));
 
 vi.mock("../plugins/provider-runtime.js", () => {
   return { normalizeProviderModelIdWithPlugin: normalizeProviderModelIdWithPluginMock };
+});
+
+vi.mock("../plugins/manifest-registry-installed.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/manifest-registry-installed.js")>();
+  return {
+    ...actual,
+    loadPluginManifestRegistryForInstalledIndex: (
+      params: Parameters<typeof actual.loadPluginManifestRegistryForInstalledIndex>[0],
+    ) => {
+      pluginManifestRegistryMocks.loadPluginManifestRegistryForInstalledIndex(params);
+      return (
+        pluginManifestRegistryMocks.manifestRegistry ??
+        actual.loadPluginManifestRegistryForInstalledIndex(params)
+      );
+    },
+  };
 });
 
 import {
@@ -25,6 +46,8 @@ import {
 describe("model-pricing-cache", () => {
   beforeEach(() => {
     __resetGatewayModelPricingCacheForTest();
+    pluginManifestRegistryMocks.manifestRegistry = undefined;
+    pluginManifestRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockClear();
   });
 
   afterEach(() => {
@@ -119,6 +142,48 @@ describe("model-pricing-cache", () => {
     } as OpenClawConfig).map((ref) => modelKey(ref.provider, ref.model));
 
     expect(refs).toContain("tavily/search-preview");
+  });
+
+  it("uses one installed manifest pass for pricing policies and configured web-search refs", async () => {
+    pluginManifestRegistryMocks.manifestRegistry = {
+      diagnostics: [],
+      plugins: [
+        createManifestRecord({
+          id: "search-plugin",
+          contracts: { webSearchProviders: ["search-plugin"] },
+        }),
+      ],
+    };
+    const config = {
+      plugins: {
+        entries: {
+          "search-plugin": {
+            config: {
+              webSearch: {
+                model: "local-search/search-model",
+              },
+            },
+          },
+        },
+      },
+      models: {
+        providers: {
+          "local-search": {
+            baseUrl: "http://127.0.0.1:43210/v1",
+            api: "openai-completions",
+            models: [{ id: "search-model" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = vi.fn<typeof fetch>();
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    expect(
+      pluginManifestRegistryMocks.loadPluginManifestRegistryForInstalledIndex,
+    ).toHaveBeenCalledOnce();
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it("skips remote pricing catalogs for local-only model providers", async () => {
@@ -717,3 +782,19 @@ describe("model-pricing-cache", () => {
     });
   });
 });
+
+function createManifestRecord(overrides: Partial<PluginManifestRecord>): PluginManifestRecord {
+  return {
+    id: "plugin",
+    channels: [],
+    providers: [],
+    cliBackends: [],
+    skills: [],
+    hooks: [],
+    origin: "global",
+    rootDir: "/tmp/plugin",
+    source: "/tmp/plugin/index.js",
+    manifestPath: "/tmp/plugin/openclaw.plugin.json",
+    ...overrides,
+  };
+}

@@ -164,6 +164,7 @@ The auto-updater is off by default. Enable it in `~/.openclaw/openclaw.json`:
 | `dev`    | No automatic apply. Use `openclaw update` manually.                                                           |
 
 The gateway also logs an update hint on startup (disable with `update.checkOnStart: false`).
+For downgrade or incident recovery, set `OPENCLAW_NO_AUTO_UPDATE=1` in the gateway environment to block automatic applies even when `update.auto.enabled` is configured. Startup update hints can still run unless `update.checkOnStart` is also disabled.
 
 ## After updating
 

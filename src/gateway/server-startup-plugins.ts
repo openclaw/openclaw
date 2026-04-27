@@ -128,21 +128,21 @@ export async function prepareGatewayPluginBootstrap(params: {
 
   initSubagentRegistry();
 
-  const gatewayPluginConfigAtStart = params.minimalTestGateway
+  const gatewayPluginConfig = params.minimalTestGateway
     ? params.cfgAtStart
     : applyPluginAutoEnable({
         config: params.cfgAtStart,
         env: process.env,
       }).config;
-  const defaultAgentId = resolveDefaultAgentId(gatewayPluginConfigAtStart);
-  const defaultWorkspaceDir = resolveAgentWorkspaceDir(gatewayPluginConfigAtStart, defaultAgentId);
+  const defaultAgentId = resolveDefaultAgentId(gatewayPluginConfig);
+  const defaultWorkspaceDir = resolveAgentWorkspaceDir(gatewayPluginConfig, defaultAgentId);
   const pluginLookUpTable = params.minimalTestGateway
     ? undefined
     : loadPluginLookUpTable({
-        config: gatewayPluginConfigAtStart,
-        activationSourceConfig: params.cfgAtStart,
+        config: gatewayPluginConfig,
         workspaceDir: defaultWorkspaceDir,
         env: process.env,
+        activationSourceConfig: params.cfgAtStart,
       });
   const deferredConfiguredChannelPluginIds = [
     ...(pluginLookUpTable?.startup.configuredDeferredChannelPluginIds ?? []),
@@ -156,12 +156,12 @@ export async function prepareGatewayPluginBootstrap(params: {
 
   if (!params.minimalTestGateway) {
     await prestageGatewayBundledRuntimeDeps({
-      cfg: gatewayPluginConfigAtStart,
+      cfg: gatewayPluginConfig,
       pluginIds: startupPluginIds,
       log: params.log,
     });
     ({ pluginRegistry, gatewayMethods: baseGatewayMethods } = loadGatewayStartupPlugins({
-      cfg: gatewayPluginConfigAtStart,
+      cfg: gatewayPluginConfig,
       activationSourceConfig: params.cfgAtStart,
       workspaceDir: defaultWorkspaceDir,
       log: params.log,
@@ -178,7 +178,7 @@ export async function prepareGatewayPluginBootstrap(params: {
   }
 
   return {
-    gatewayPluginConfigAtStart,
+    gatewayPluginConfigAtStart: gatewayPluginConfig,
     defaultWorkspaceDir,
     deferredConfiguredChannelPluginIds,
     startupPluginIds,

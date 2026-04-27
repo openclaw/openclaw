@@ -3,8 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const applyPluginAutoEnable = vi.hoisted(() =>
   vi.fn((params: { config: unknown }) => ({
     config: params.config,
-    changes: [],
-    autoEnabledReasons: {},
+    changes: [] as string[],
+    autoEnabledReasons: {} as Record<string, string[]>,
   })),
 );
 const initSubagentRegistry = vi.hoisted(() => vi.fn());

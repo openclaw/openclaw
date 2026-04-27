@@ -302,6 +302,13 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(script).toContain("startBrowserControlService");
     expect(script).toContain("stopBrowserControlService");
     expect(script).toContain("Browser control override start sentinel was not written.");
+
+    const installedScript = buildInstalledBrowserOverrideImportProbeScript(
+      "file:///C:/Users/runner/AppData/Roaming/npm/node_modules/openclaw/dist/plugin-sdk/browser-node-runtime.js",
+    );
+    expect(installedScript).toContain(
+      'from "file:///C:/Users/runner/AppData/Roaming/npm/node_modules/openclaw/dist/plugin-sdk/browser-node-runtime.js"',
+    );
   });
 
   it("normalizes Windows installed CLI paths to the cmd shim", () => {

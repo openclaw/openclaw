@@ -12,14 +12,18 @@ import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { planManifestModelCatalogRows, type ModelCatalogCost } from "../model-catalog/index.js";
+import { isInstalledPluginEnabled } from "../plugins/installed-plugin-index.js";
+import { loadPluginManifestRegistryForInstalledIndex } from "../plugins/manifest-registry-installed.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type {
   PluginManifestModelPricingModelIdTransform,
   PluginManifestModelPricingProvider,
   PluginManifestModelPricingSource,
 } from "../plugins/manifest.js";
+import type { PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import {
-  loadPluginManifestRegistryForPluginRegistry,
-  resolveManifestContractPluginIds,
+  loadPluginRegistrySnapshot,
+  type PluginRegistrySnapshot,
 } from "../plugins/plugin-registry.js";
 import { normalizeProviderModelIdWithPlugin } from "../plugins/provider-runtime.js";
 import { normalizeOptionalString, resolvePrimaryStringValue } from "../shared/string-coerce.js";
@@ -38,6 +42,11 @@ type OpenRouterPricingEntry = {
 };
 
 type ModelListLike = string | { primary?: string; fallbacks?: string[] } | undefined;
+
+type ModelPricingManifestMetadata = {
+  allRegistry: PluginManifestRegistry;
+  activeRegistry: PluginManifestRegistry;
+};
 
 type OpenRouterModelPayload = {
   id?: unknown;
@@ -361,11 +370,60 @@ function normalizeExternalPricingPolicy(
   };
 }
 
-function loadManifestPricingContext(config: OpenClawConfig): {
+function filterActiveManifestRegistry(params: {
+  registry: PluginManifestRegistry;
+  index: PluginRegistrySnapshot;
+  config: OpenClawConfig;
+}): PluginManifestRegistry {
+  return {
+    diagnostics: params.registry.diagnostics,
+    plugins: params.registry.plugins.filter((plugin) =>
+      isInstalledPluginEnabled(params.index, plugin.id, params.config),
+    ),
+  };
+}
+
+function resolveModelPricingManifestMetadata(params: {
+  config: OpenClawConfig;
+  pluginLookUpTable?: Pick<PluginLookUpTable, "index" | "manifestRegistry">;
+  manifestRegistry?: PluginManifestRegistry;
+}): ModelPricingManifestMetadata {
+  if (params.pluginLookUpTable) {
+    return {
+      allRegistry: params.pluginLookUpTable.manifestRegistry,
+      activeRegistry: filterActiveManifestRegistry({
+        registry: params.pluginLookUpTable.manifestRegistry,
+        index: params.pluginLookUpTable.index,
+        config: params.config,
+      }),
+    };
+  }
+  if (params.manifestRegistry) {
+    return {
+      allRegistry: params.manifestRegistry,
+      activeRegistry: params.manifestRegistry,
+    };
+  }
+  const index = loadPluginRegistrySnapshot({ config: params.config });
+  const allRegistry = loadPluginManifestRegistryForInstalledIndex({
+    index,
+    config: params.config,
+    includeDisabled: true,
+  });
+  return {
+    allRegistry,
+    activeRegistry: filterActiveManifestRegistry({
+      registry: allRegistry,
+      index,
+      config: params.config,
+    }),
+  };
+}
+
+function loadManifestPricingContext(registry: PluginManifestRegistry): {
   policies: Map<string, ExternalPricingPolicy>;
   catalogPricing: Map<string, CachedModelPricing>;
 } {
-  const registry = loadPluginManifestRegistryForPluginRegistry({ config });
   const policies = new Map<string, ExternalPricingPolicy>();
   for (const plugin of registry.plugins) {
     for (const [provider, rawPolicy] of Object.entries(plugin.modelPricing?.providers ?? {})) {
@@ -549,11 +607,12 @@ function addConfiguredWebSearchPluginModels(params: {
   config: OpenClawConfig;
   aliasIndex: ReturnType<typeof buildModelAliasIndex>;
   refs: Map<string, ModelRef>;
+  manifestRegistry: PluginManifestRegistry;
 }): void {
-  for (const pluginId of resolveManifestContractPluginIds({
-    contract: "webSearchProviders",
-    config: params.config,
-  })) {
+  for (const pluginId of params.manifestRegistry.plugins
+    .filter((plugin) => (plugin.contracts?.webSearchProviders ?? []).length > 0)
+    .map((plugin) => plugin.id)
+    .toSorted((left, right) => left.localeCompare(right))) {
     addResolvedModelRef({
       raw: resolvePluginWebSearchConfig(params.config, pluginId)?.model as string | undefined,
       aliasIndex: params.aliasIndex,
@@ -659,7 +718,12 @@ function filterExternalPricingRefs(params: {
   );
 }
 
-export function collectConfiguredModelPricingRefs(config: OpenClawConfig): ModelRef[] {
+export function collectConfiguredModelPricingRefs(
+  config: OpenClawConfig,
+  options: { manifestRegistry?: PluginManifestRegistry } = {},
+): ModelRef[] {
+  const manifestRegistry =
+    options.manifestRegistry ?? resolveModelPricingManifestMetadata({ config }).allRegistry;
   const refs = new Map<string, ModelRef>();
   const aliasIndex = buildModelAliasIndex({
     cfg: config,
@@ -698,7 +762,7 @@ export function collectConfiguredModelPricingRefs(config: OpenClawConfig): Model
     }
   }
 
-  addConfiguredWebSearchPluginModels({ config, aliasIndex, refs });
+  addConfiguredWebSearchPluginModels({ config, aliasIndex, refs, manifestRegistry });
 
   for (const entry of config.tools?.media?.models ?? []) {
     addProviderModelPair({ provider: entry.provider, model: entry.model, refs });
@@ -823,14 +887,23 @@ function collectSeededPricing(params: {
 export async function refreshGatewayModelPricingCache(params: {
   config: OpenClawConfig;
   fetchImpl?: typeof fetch;
+  pluginLookUpTable?: Pick<PluginLookUpTable, "index" | "manifestRegistry">;
+  manifestRegistry?: PluginManifestRegistry;
 }): Promise<void> {
   if (inFlightRefresh) {
     return await inFlightRefresh;
   }
   const fetchImpl = params.fetchImpl ?? fetch;
   inFlightRefresh = (async () => {
-    const pricingContext = loadManifestPricingContext(params.config);
-    const allRefs = collectConfiguredModelPricingRefs(params.config);
+    const manifestMetadata = resolveModelPricingManifestMetadata({
+      config: params.config,
+      pluginLookUpTable: params.pluginLookUpTable,
+      manifestRegistry: params.manifestRegistry,
+    });
+    const pricingContext = loadManifestPricingContext(manifestMetadata.activeRegistry);
+    const allRefs = collectConfiguredModelPricingRefs(params.config, {
+      manifestRegistry: manifestMetadata.allRegistry,
+    });
     const seededPricing = collectSeededPricing({
       config: params.config,
       refs: allRefs,
@@ -950,6 +1023,8 @@ export async function refreshGatewayModelPricingCache(params: {
 export function startGatewayModelPricingRefresh(params: {
   config: OpenClawConfig;
   fetchImpl?: typeof fetch;
+  pluginLookUpTable?: Pick<PluginLookUpTable, "index" | "manifestRegistry">;
+  manifestRegistry?: PluginManifestRegistry;
 }): () => void {
   let stopped = false;
   queueMicrotask(() => {

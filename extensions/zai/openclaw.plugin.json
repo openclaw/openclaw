@@ -2,6 +2,19 @@
   "id": "zai",
   "enabledByDefault": true,
   "providers": ["zai"],
+  "providerEndpoints": [
+    {
+      "endpointClass": "zai-native",
+      "hosts": ["api.z.ai"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "zai": {
+        "family": "zai"
+      }
+    }
+  },
   "modelPricing": {
     "providers": {
       "zai": {

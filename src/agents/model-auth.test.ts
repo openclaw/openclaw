@@ -823,6 +823,17 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
     expect(auth.source).toContain("synthetic local key");
   });
 
+  it("synthesizes a local auth marker for private LAN custom providers with no apiKey", async () => {
+    const auth = await resolveCustomProviderAuth(
+      "custom-192-168-0-222-11434",
+      "http://192.168.0.222:11434/v1",
+      "qwen3.5:9b",
+      "Qwen 3.5 9B",
+    );
+    expect(auth.apiKey).toBe(CUSTOM_LOCAL_AUTH_MARKER);
+    expect(auth.source).toContain("synthetic local key");
+  });
+
   it("synthesizes a local auth marker for localhost custom providers", async () => {
     const auth = await resolveCustomProviderAuth("my-local", "http://localhost:11434/v1");
     expect(auth.apiKey).toBe(CUSTOM_LOCAL_AUTH_MARKER);
@@ -910,6 +921,72 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
       source: "models.providers.ollama-remote (synthetic local key)",
       mode: "api-key",
     });
+  });
+
+  it("accepts non-secret local markers for private LAN custom OpenAI-compatible providers", async () => {
+    const auth = await resolveApiKeyForProvider({
+      provider: "custom-192-168-0-222-11434",
+      cfg: {
+        models: {
+          providers: {
+            "custom-192-168-0-222-11434": {
+              baseUrl: "http://192.168.0.222:11434/v1",
+              api: "openai-completions",
+              apiKey: "ollama-local",
+              models: [
+                {
+                  id: "qwen3.5:9b",
+                  name: "Qwen 3.5 9B",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 8192,
+                  maxTokens: 4096,
+                },
+              ],
+            },
+          },
+        },
+      },
+      store: { version: 1, profiles: {} },
+    });
+
+    expect(auth).toMatchObject({
+      apiKey: CUSTOM_LOCAL_AUTH_MARKER,
+      source: "models.json (local marker)",
+      mode: "api-key",
+    });
+  });
+
+  it("does not accept non-secret local markers for remote custom providers", async () => {
+    await expect(
+      resolveApiKeyForProvider({
+        provider: "custom-remote",
+        cfg: {
+          models: {
+            providers: {
+              "custom-remote": {
+                baseUrl: "https://api.example.com/v1",
+                api: "openai-completions",
+                apiKey: "ollama-local",
+                models: [
+                  {
+                    id: "qwen3.5:9b",
+                    name: "Qwen 3.5 9B",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 8192,
+                    maxTokens: 4096,
+                  },
+                ],
+              },
+            },
+          },
+        },
+        store: { version: 1, profiles: {} },
+      }),
+    ).rejects.toThrow('No API key found for provider "custom-remote"');
   });
 
   it("does not synthesize local auth when apiKey is explicitly configured but unresolved", async () => {

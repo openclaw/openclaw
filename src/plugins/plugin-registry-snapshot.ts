@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import {
   inspectPersistedInstalledPluginIndex,
   readPersistedInstalledPluginIndexSync,
@@ -25,7 +26,8 @@ export type PluginRegistrySnapshotSource = "provided" | "persisted" | "derived";
 export type PluginRegistrySnapshotDiagnosticCode =
   | "persisted-registry-disabled"
   | "persisted-registry-missing"
-  | "persisted-registry-stale-policy";
+  | "persisted-registry-stale-policy"
+  | "persisted-registry-stale-source";
 
 export type PluginRegistrySnapshotDiagnostic = {
   level: "info" | "warn";
@@ -60,6 +62,20 @@ function hasEnvFlag(env: NodeJS.ProcessEnv, name: string): boolean {
   return Boolean(value && value !== "0" && value !== "false" && value !== "no");
 }
 
+function hasMissingPersistedPluginSource(index: InstalledPluginIndex): boolean {
+  return index.plugins.some((plugin) => {
+    if (!plugin.enabled) {
+      return false;
+    }
+    return (
+      !fs.existsSync(plugin.rootDir) ||
+      !fs.existsSync(plugin.manifestPath) ||
+      (plugin.source ? !fs.existsSync(plugin.source) : false) ||
+      (plugin.setupSource ? !fs.existsSync(plugin.setupSource) : false)
+    );
+  });
+}
+
 export function loadPluginRegistrySnapshotWithMetadata(
   params: LoadPluginRegistryParams = {},
 ): PluginRegistrySnapshotResult {
@@ -90,6 +106,13 @@ export function loadPluginRegistrySnapshotWithMetadata(
           code: "persisted-registry-stale-policy",
           message:
             "Persisted plugin registry policy does not match current config; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
+        });
+      } else if (hasMissingPersistedPluginSource(persistedIndex)) {
+        diagnostics.push({
+          level: "warn",
+          code: "persisted-registry-stale-source",
+          message:
+            "Persisted plugin registry points at missing plugin files; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
         });
       } else {
         return {

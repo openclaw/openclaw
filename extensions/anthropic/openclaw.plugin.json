@@ -6,12 +6,37 @@
   "modelSupport": {
     "modelPrefixes": ["claude-"]
   },
+  "modelIdNormalization": {
+    "providers": {
+      "anthropic": {
+        "aliases": {
+          "opus-4.6": "claude-opus-4-6",
+          "opus-4.5": "claude-opus-4-5",
+          "sonnet-4.6": "claude-sonnet-4-6",
+          "sonnet-4.5": "claude-sonnet-4-5"
+        }
+      }
+    }
+  },
   "modelPricing": {
     "providers": {
       "anthropic": {
         "openRouter": {
           "modelIdTransforms": ["version-dots"]
         }
+      }
+    }
+  },
+  "providerEndpoints": [
+    {
+      "endpointClass": "anthropic-public",
+      "hosts": ["api.anthropic.com"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "anthropic": {
+        "family": "anthropic"
       }
     }
   },

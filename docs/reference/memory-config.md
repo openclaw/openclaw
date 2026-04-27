@@ -511,10 +511,11 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
 
 ### User settings
 
-| Key         | Type      | Default     | Description                                       |
-| ----------- | --------- | ----------- | ------------------------------------------------- |
-| `enabled`   | `boolean` | `false`     | Enable or disable dreaming entirely               |
-| `frequency` | `string`  | `0 3 * * *` | Optional cron cadence for the full dreaming sweep |
+| Key         | Type      | Default       | Description                                       |
+| ----------- | --------- | ------------- | ------------------------------------------------- |
+| `enabled`   | `boolean` | `false`       | Enable or disable dreaming entirely               |
+| `frequency` | `string`  | `0 3 * * *`   | Optional cron cadence for the full dreaming sweep |
+| `model`     | `string`  | default model | Optional Dream Diary subagent model override      |
 
 ### Example
 
@@ -523,10 +524,15 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
   plugins: {
     entries: {
       "memory-core": {
+        subagent: {
+          allowModelOverride: true,
+          allowedModels: ["anthropic/claude-sonnet-4-6"],
+        },
         config: {
           dreaming: {
             enabled: true,
             frequency: "0 3 * * *",
+            model: "anthropic/claude-sonnet-4-6",
           },
         },
       },
@@ -538,6 +544,7 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
 <Note>
 - Dreaming writes machine state to `memory/.dreams/`.
 - Dreaming writes human-readable narrative output to `DREAMS.md` (or existing `dreams.md`).
+- `dreaming.model` uses the existing plugin subagent trust gate; set `plugins.entries.memory-core.subagent.allowModelOverride: true` before enabling it.
 - The light/deep/REM phase policy and thresholds are internal behavior, not user-facing config.
 </Note>
 

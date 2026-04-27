@@ -103,7 +103,7 @@ export type ResolveManifestContractPluginIdsByCompatibilityRuntimePathParams =
 
 export type PluginRegistryIdNormalizerOptions = {
   manifestRegistry?: PluginManifestRegistry;
-  lookUpTable?: PluginLookUpTable;
+  lookUpTable?: Pick<PluginLookUpTable, "manifestRegistry">;
 };
 
 function normalizeContributionId(value: string): string {

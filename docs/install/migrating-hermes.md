@@ -130,6 +130,8 @@ Rerun with `--overwrite` only when replacing the existing target is intentional.
 
 For a fresh OpenClaw install, conflicts are unusual. They typically appear when you re-run the import on a setup that already has user edits.
 
+If a conflict surfaces mid-apply (for example, an unexpected race on a config file), Hermes marks remaining dependent config items as `skipped` with reason `blocked by earlier apply conflict` instead of writing them partially. The migration report records each blocked item so you can resolve the original conflict and rerun the import.
+
 ## Secrets
 
 Secrets are never imported by default.

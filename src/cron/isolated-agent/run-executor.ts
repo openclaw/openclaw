@@ -156,7 +156,7 @@ export function createCronPromptExecutor(params: {
           );
           return result;
         }
-        const { resolveFastModeState, resolveNestedAgentLane, runEmbeddedPiAgent } =
+        const { resolveCronAgentLane, resolveFastModeState, runEmbeddedPiAgent } =
           await loadCronEmbeddedRuntime();
         const currentChannelId = await resolveCurrentChannelTarget({
           channel: params.messageChannel,
@@ -183,7 +183,7 @@ export function createCronPromptExecutor(params: {
           config: params.cfgWithAgentDefaults,
           skillsSnapshot: params.skillsSnapshot,
           prompt: promptText,
-          lane: resolveNestedAgentLane(params.lane),
+          lane: resolveCronAgentLane(params.lane),
           provider: providerOverride,
           model: modelOverride,
           authProfileId: params.liveSelection.authProfileId,

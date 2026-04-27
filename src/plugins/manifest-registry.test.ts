@@ -421,9 +421,50 @@ describe("loadPluginManifestRegistry", () => {
         {
           endpointClass: "openai-public",
           hosts: ["API.OPENAI.COM", ""],
+          hostSuffixes: [".openai.azure.com"],
           baseUrls: ["https://api.openai.com/v1"],
+          googleVertexRegion: "global",
+          googleVertexRegionHostSuffix: "-aiplatform.googleapis.com",
         },
       ],
+      modelIdNormalization: {
+        providers: {
+          openai: {
+            aliases: {
+              "gpt-latest": "gpt-5.4",
+            },
+            stripPrefixes: ["openai/"],
+            prefixWhenBare: "openai",
+            prefixWhenBareAfterAliasStartsWith: [
+              {
+                modelPrefix: "gpt-",
+                prefix: "openai",
+              },
+              {
+                modelPrefix: "",
+                prefix: "ignored",
+              },
+            ],
+          },
+          ignored: {
+            prefixWhenBare: "ignored",
+          },
+        },
+      },
+      providerRequest: {
+        providers: {
+          openai: {
+            family: "openai-family",
+            compatibilityFamily: "moonshot",
+            openAICompletions: {
+              supportsStreamingUsage: true,
+            },
+          },
+          ignored: {
+            family: "ignored",
+          },
+        },
+      },
       syntheticAuthRefs: ["openai-cli"],
       nonSecretAuthMarkers: ["openai-cli"],
       providerAuthAliases: {
@@ -455,9 +496,40 @@ describe("loadPluginManifestRegistry", () => {
       {
         endpointClass: "openai-public",
         hosts: ["api.openai.com"],
+        hostSuffixes: [".openai.azure.com"],
         baseUrls: ["https://api.openai.com/v1"],
+        googleVertexRegion: "global",
+        googleVertexRegionHostSuffix: "-aiplatform.googleapis.com",
       },
     ]);
+    expect(registry.plugins[0]?.modelIdNormalization).toEqual({
+      providers: {
+        openai: {
+          aliases: {
+            "gpt-latest": "gpt-5.4",
+          },
+          stripPrefixes: ["openai/"],
+          prefixWhenBare: "openai",
+          prefixWhenBareAfterAliasStartsWith: [
+            {
+              modelPrefix: "gpt-",
+              prefix: "openai",
+            },
+          ],
+        },
+      },
+    });
+    expect(registry.plugins[0]?.providerRequest).toEqual({
+      providers: {
+        openai: {
+          family: "openai-family",
+          compatibilityFamily: "moonshot",
+          openAICompletions: {
+            supportsStreamingUsage: true,
+          },
+        },
+      },
+    });
     expect(registry.plugins[0]?.syntheticAuthRefs).toEqual(["openai-cli"]);
     expect(registry.plugins[0]?.nonSecretAuthMarkers).toEqual(["openai-cli"]);
     expect(registry.plugins[0]?.providerAuthAliases).toEqual({
@@ -991,6 +1063,7 @@ describe("loadPluginManifestRegistry", () => {
         onCommands: ["models"],
         onChannels: ["web"],
         onRoutes: ["gateway-webhook"],
+        onConfigPaths: ["browser"],
         onCapabilities: ["provider", "tool"],
       },
       setup: {
@@ -1019,6 +1092,7 @@ describe("loadPluginManifestRegistry", () => {
       onCommands: ["models"],
       onChannels: ["web"],
       onRoutes: ["gateway-webhook"],
+      onConfigPaths: ["browser"],
       onCapabilities: ["provider", "tool"],
     });
     expect(registry.plugins[0]?.setup).toEqual({

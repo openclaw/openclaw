@@ -5,7 +5,7 @@ import { isAcpRuntimeSpawnAvailable } from "../acp/runtime/availability.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SubagentSpawnPreparation } from "../context-engine/types.js";
-import { listRegisteredPluginCommands } from "../plugins/command-registry-state.js";
+import { listRegisteredPluginAgentPromptGuidance } from "../plugins/command-registry-state.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import { isValidAgentId, normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import {
@@ -931,7 +931,7 @@ export async function spawnSubagentDirect(
       config: cfg,
       sandboxed: childRuntime.sandboxed,
     }),
-    nativeCommandNames: listRegisteredPluginCommands().map((command) => command.name),
+    nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance(),
     childDepth,
     maxSpawnDepth,
   });

@@ -43,6 +43,9 @@ vi.mock("./gateway.ts", async (importOriginal) => {
     readonly start = vi.fn();
     readonly stop = vi.fn();
     readonly request = vi.fn(async (method: string) => {
+      if (method === "update.status") {
+        return { sentinel: null };
+      }
       if (method === "models.authStatus") {
         return { ts: 0, providers: [] };
       }
@@ -154,6 +157,8 @@ function createHost(): TestGatewayHost {
     assistantAgentId: null,
     localMediaPreviewRoots: [],
     serverVersion: null,
+    pendingUpdateExpectedVersion: null,
+    updateStatusBanner: null,
     sessionKey: "main",
     chatMessages: [],
     chatQueue: [],
@@ -280,6 +285,117 @@ describe("connectGateway", () => {
       currentVersion: "1.0.0",
       latestVersion: "2.0.0",
       channel: "latest",
+    });
+  });
+
+  it("clears pending update verification when the restarted version matches", async () => {
+    const host = createHost();
+    host.pendingUpdateExpectedVersion = "2.0.0";
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "update.status") {
+        return {
+          sentinel: {
+            kind: "update",
+            status: "ok",
+            stats: {
+              after: { version: "2.0.0" },
+            },
+          },
+        };
+      }
+      return {};
+    });
+
+    client.emitHello({
+      type: "hello-ok",
+      protocol: 3,
+      server: { version: "2.0.0" },
+      snapshot: {},
+    });
+
+    await vi.waitFor(() => {
+      expect(host.pendingUpdateExpectedVersion).toBeNull();
+    });
+    expect(host.updateStatusBanner).toBeNull();
+  });
+
+  it("shows a hard error when the restarted version does not match the expected update", async () => {
+    const host = createHost();
+    host.pendingUpdateExpectedVersion = "2.0.0";
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "update.status") {
+        return {
+          sentinel: {
+            kind: "update",
+            status: "ok",
+            stats: {
+              after: { version: "1.0.0" },
+            },
+          },
+        };
+      }
+      return {};
+    });
+
+    client.emitHello({
+      type: "hello-ok",
+      protocol: 3,
+      server: { version: "1.0.0" },
+      snapshot: {},
+    });
+
+    await vi.waitFor(() => {
+      expect(host.pendingUpdateExpectedVersion).toBeNull();
+      expect(host.updateStatusBanner?.text).toContain(
+        "Update installed but running version did not change",
+      );
+    });
+  });
+
+  it("surfaces post-restart sentinel failures after reconnect", async () => {
+    const host = createHost();
+    host.pendingUpdateExpectedVersion = "2.0.0";
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "update.status") {
+        return {
+          sentinel: {
+            kind: "update",
+            status: "error",
+            stats: {
+              reason: "restart-unhealthy",
+              after: { version: "1.0.0" },
+            },
+          },
+        };
+      }
+      return {};
+    });
+
+    client.emitHello({
+      type: "hello-ok",
+      protocol: 3,
+      server: { version: "1.0.0" },
+      snapshot: {},
+    });
+
+    await vi.waitFor(() => {
+      expect(host.pendingUpdateExpectedVersion).toBeNull();
+      expect(host.updateStatusBanner).toEqual({
+        tone: "danger",
+        text: "Update error: restart-unhealthy. The replacement process never became healthy and the previous process stayed up.",
+      });
     });
   });
 

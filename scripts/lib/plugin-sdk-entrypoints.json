@@ -144,6 +144,7 @@
   "channel-config-writes",
   "channel-config-primitives",
   "channel-config-schema",
+  "channel-config-schema-legacy",
   "channel-actions",
   "channel-plugin-common",
   "channel-core",

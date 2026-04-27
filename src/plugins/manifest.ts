@@ -91,6 +91,22 @@ export type PluginManifestModelPricing = {
   providers?: Record<string, PluginManifestModelPricingProvider>;
 };
 
+export type PluginManifestModelIdPrefixRule = {
+  modelPrefix: string;
+  prefix: string;
+};
+
+export type PluginManifestModelIdNormalizationProvider = {
+  aliases?: Record<string, string>;
+  stripPrefixes?: string[];
+  prefixWhenBare?: string;
+  prefixWhenBareAfterAliasStartsWith?: PluginManifestModelIdPrefixRule[];
+};
+
+export type PluginManifestModelIdNormalization = {
+  providers?: Record<string, PluginManifestModelIdNormalizationProvider>;
+};
+
 export type PluginManifestProviderEndpoint = {
   /**
    * Core endpoint class this plugin-owned endpoint should map to. Core must
@@ -99,8 +115,26 @@ export type PluginManifestProviderEndpoint = {
   endpointClass: string;
   /** Hostnames that should resolve to this endpoint class. */
   hosts?: string[];
+  /** Host suffixes that should resolve to this endpoint class. */
+  hostSuffixes?: string[];
   /** Exact normalized base URLs that should resolve to this endpoint class. */
   baseUrls?: string[];
+  /** Static Google Vertex region metadata for exact global hosts. */
+  googleVertexRegion?: string;
+  /** Host suffix whose prefix should be exposed as the Google Vertex region. */
+  googleVertexRegionHostSuffix?: string;
+};
+
+export type PluginManifestProviderRequestProvider = {
+  family?: string;
+  compatibilityFamily?: "moonshot";
+  openAICompletions?: {
+    supportsStreamingUsage?: boolean;
+  };
+};
+
+export type PluginManifestProviderRequest = {
+  providers?: Record<string, PluginManifestProviderRequestProvider>;
 };
 
 export type PluginManifestActivationCapability = "provider" | "channel" | "tool" | "hook";
@@ -119,6 +153,8 @@ export type PluginManifestActivation = {
   onChannels?: string[];
   /** Route kinds that should include this plugin in activation/load plans. */
   onRoutes?: string[];
+  /** Root-relative config paths that should include this plugin in startup/load plans. */
+  onConfigPaths?: string[];
   /** Broad capability hints for activation/load plans. Prefer narrower ownership metadata. */
   onCapabilities?: PluginManifestActivationCapability[];
 };
@@ -232,8 +268,12 @@ export type PluginManifest = {
   modelCatalog?: PluginManifestModelCatalog;
   /** Manifest-owned external pricing lookup policy for provider refs. */
   modelPricing?: PluginManifestModelPricing;
+  /** Manifest-owned model-id normalization used before provider runtime loads. */
+  modelIdNormalization?: PluginManifestModelIdNormalization;
   /** Cheap provider endpoint metadata used before provider runtime loads. */
   providerEndpoints?: PluginManifestProviderEndpoint[];
+  /** Cheap provider request metadata used before provider runtime loads. */
+  providerRequest?: PluginManifestProviderRequest;
   /** Cheap startup activation lookup for plugin-owned CLI inference backends. */
   cliBackends?: string[];
   /**
@@ -699,6 +739,85 @@ function normalizeManifestModelPricing(
   return Object.keys(providers).length > 0 ? { providers } : undefined;
 }
 
+function normalizeManifestModelIdPrefixRules(
+  value: unknown,
+): PluginManifestModelIdPrefixRule[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const rules: PluginManifestModelIdPrefixRule[] = [];
+  for (const rawRule of value) {
+    if (!isRecord(rawRule)) {
+      continue;
+    }
+    const modelPrefix = normalizeOptionalString(rawRule.modelPrefix);
+    const prefix = normalizeOptionalString(rawRule.prefix);
+    if (!modelPrefix || !prefix) {
+      continue;
+    }
+    rules.push({ modelPrefix, prefix });
+  }
+  return rules.length > 0 ? rules : undefined;
+}
+
+function normalizeManifestModelIdNormalizationProvider(
+  value: unknown,
+): PluginManifestModelIdNormalizationProvider | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const aliases: Record<string, string> = {};
+  if (isRecord(value.aliases)) {
+    for (const [rawAlias, rawCanonical] of Object.entries(value.aliases)) {
+      const alias = normalizeModelCatalogProviderId(rawAlias);
+      const canonical = normalizeOptionalString(rawCanonical);
+      if (alias && canonical) {
+        aliases[alias] = canonical;
+      }
+    }
+  }
+  const stripPrefixes = normalizeTrimmedStringList(value.stripPrefixes);
+  const prefixWhenBare = normalizeOptionalString(value.prefixWhenBare);
+  const prefixWhenBareAfterAliasStartsWith = normalizeManifestModelIdPrefixRules(
+    value.prefixWhenBareAfterAliasStartsWith,
+  );
+  const normalization = {
+    ...(Object.keys(aliases).length > 0 ? { aliases } : {}),
+    ...(stripPrefixes.length > 0 ? { stripPrefixes } : {}),
+    ...(prefixWhenBare ? { prefixWhenBare } : {}),
+    ...(prefixWhenBareAfterAliasStartsWith ? { prefixWhenBareAfterAliasStartsWith } : {}),
+  } satisfies PluginManifestModelIdNormalizationProvider;
+
+  return Object.keys(normalization).length > 0 ? normalization : undefined;
+}
+
+function normalizeManifestModelIdNormalization(
+  value: unknown,
+  params: { ownedProviders: ReadonlySet<string> },
+): PluginManifestModelIdNormalization | undefined {
+  if (!isRecord(value) || !isRecord(value.providers)) {
+    return undefined;
+  }
+  const ownedProviders = new Set(
+    [...params.ownedProviders]
+      .map((provider) => normalizeModelCatalogProviderId(provider))
+      .filter(Boolean),
+  );
+  const providers: Record<string, PluginManifestModelIdNormalizationProvider> = {};
+  for (const [rawProviderId, rawPolicy] of Object.entries(value.providers)) {
+    const providerId = normalizeModelCatalogProviderId(rawProviderId);
+    if (!providerId || !ownedProviders.has(providerId)) {
+      continue;
+    }
+    const policy = normalizeManifestModelIdNormalizationProvider(rawPolicy);
+    if (policy) {
+      providers[providerId] = policy;
+    }
+  }
+  return Object.keys(providers).length > 0 ? { providers } : undefined;
+}
+
 function normalizeManifestProviderEndpoints(
   value: unknown,
 ): PluginManifestProviderEndpoint[] | undefined {
@@ -716,18 +835,78 @@ function normalizeManifestProviderEndpoints(
       continue;
     }
     const hosts = normalizeTrimmedStringList(rawEndpoint.hosts).map((host) => host.toLowerCase());
+    const hostSuffixes = normalizeTrimmedStringList(rawEndpoint.hostSuffixes).map((host) =>
+      host.toLowerCase(),
+    );
     const baseUrls = normalizeTrimmedStringList(rawEndpoint.baseUrls);
-    if (hosts.length === 0 && baseUrls.length === 0) {
+    const googleVertexRegion = normalizeOptionalString(rawEndpoint.googleVertexRegion);
+    const googleVertexRegionHostSuffix = normalizeOptionalString(
+      rawEndpoint.googleVertexRegionHostSuffix,
+    )?.toLowerCase();
+    if (hosts.length === 0 && hostSuffixes.length === 0 && baseUrls.length === 0) {
       continue;
     }
     endpoints.push({
       endpointClass,
       ...(hosts.length > 0 ? { hosts } : {}),
+      ...(hostSuffixes.length > 0 ? { hostSuffixes } : {}),
       ...(baseUrls.length > 0 ? { baseUrls } : {}),
+      ...(googleVertexRegion ? { googleVertexRegion } : {}),
+      ...(googleVertexRegionHostSuffix ? { googleVertexRegionHostSuffix } : {}),
     });
   }
 
   return endpoints.length > 0 ? endpoints : undefined;
+}
+
+function normalizeManifestProviderRequestProvider(
+  value: unknown,
+): PluginManifestProviderRequestProvider | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const family = normalizeOptionalString(value.family);
+  const compatibilityFamily =
+    normalizeOptionalString(value.compatibilityFamily) === "moonshot" ? "moonshot" : undefined;
+  const supportsStreamingUsage = isRecord(value.openAICompletions)
+    ? value.openAICompletions.supportsStreamingUsage
+    : undefined;
+  const openAICompletions =
+    typeof supportsStreamingUsage === "boolean" ? { supportsStreamingUsage } : undefined;
+  const providerRequest = {
+    ...(family ? { family } : {}),
+    ...(compatibilityFamily ? { compatibilityFamily } : {}),
+    ...(openAICompletions && Object.keys(openAICompletions).length > 0
+      ? { openAICompletions }
+      : {}),
+  } satisfies PluginManifestProviderRequestProvider;
+  return Object.keys(providerRequest).length > 0 ? providerRequest : undefined;
+}
+
+function normalizeManifestProviderRequest(
+  value: unknown,
+  params: { ownedProviders: ReadonlySet<string> },
+): PluginManifestProviderRequest | undefined {
+  if (!isRecord(value) || !isRecord(value.providers)) {
+    return undefined;
+  }
+  const ownedProviders = new Set(
+    [...params.ownedProviders]
+      .map((provider) => normalizeModelCatalogProviderId(provider))
+      .filter(Boolean),
+  );
+  const providers: Record<string, PluginManifestProviderRequestProvider> = {};
+  for (const [rawProviderId, rawPolicy] of Object.entries(value.providers)) {
+    const providerId = normalizeModelCatalogProviderId(rawProviderId);
+    if (!providerId || !ownedProviders.has(providerId)) {
+      continue;
+    }
+    const policy = normalizeManifestProviderRequestProvider(rawPolicy);
+    if (policy) {
+      providers[providerId] = policy;
+    }
+  }
+  return Object.keys(providers).length > 0 ? { providers } : undefined;
 }
 
 function normalizeManifestActivation(value: unknown): PluginManifestActivation | undefined {
@@ -740,6 +919,7 @@ function normalizeManifestActivation(value: unknown): PluginManifestActivation |
   const onCommands = normalizeTrimmedStringList(value.onCommands);
   const onChannels = normalizeTrimmedStringList(value.onChannels);
   const onRoutes = normalizeTrimmedStringList(value.onRoutes);
+  const onConfigPaths = normalizeTrimmedStringList(value.onConfigPaths);
   const onCapabilities = normalizeTrimmedStringList(value.onCapabilities).filter(
     (capability): capability is PluginManifestActivationCapability =>
       capability === "provider" ||
@@ -754,6 +934,7 @@ function normalizeManifestActivation(value: unknown): PluginManifestActivation |
     ...(onCommands.length > 0 ? { onCommands } : {}),
     ...(onChannels.length > 0 ? { onChannels } : {}),
     ...(onRoutes.length > 0 ? { onRoutes } : {}),
+    ...(onConfigPaths.length > 0 ? { onConfigPaths } : {}),
     ...(onCapabilities.length > 0 ? { onCapabilities } : {}),
   } satisfies PluginManifestActivation;
 
@@ -1036,7 +1217,13 @@ export function loadPluginManifest(
   const modelPricing = normalizeManifestModelPricing(raw.modelPricing, {
     ownedProviders: new Set(providers),
   });
+  const modelIdNormalization = normalizeManifestModelIdNormalization(raw.modelIdNormalization, {
+    ownedProviders: new Set(providers),
+  });
   const providerEndpoints = normalizeManifestProviderEndpoints(raw.providerEndpoints);
+  const providerRequest = normalizeManifestProviderRequest(raw.providerRequest, {
+    ownedProviders: new Set(providers),
+  });
   const cliBackends = normalizeTrimmedStringList(raw.cliBackends);
   const syntheticAuthRefs = normalizeTrimmedStringList(raw.syntheticAuthRefs);
   const nonSecretAuthMarkers = normalizeTrimmedStringList(raw.nonSecretAuthMarkers);
@@ -1078,7 +1265,9 @@ export function loadPluginManifest(
       modelSupport,
       modelCatalog,
       modelPricing,
+      modelIdNormalization,
       providerEndpoints,
+      providerRequest,
       cliBackends,
       syntheticAuthRefs,
       nonSecretAuthMarkers,

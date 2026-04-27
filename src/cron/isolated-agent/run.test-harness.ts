@@ -73,7 +73,7 @@ export const retireSessionMcpRuntimeMock = createMock();
 
 const resolveBootstrapWarningSignaturesSeenMock = createMock();
 const resolveCronStyleNowMock = createMock();
-const resolveNestedAgentLaneMock = createMock();
+const resolveCronAgentLaneMock = createMock();
 const resolveAgentTimeoutMsMock = createMock();
 const deriveSessionTotalTokensMock = createMock();
 const hasNonzeroUsageMock = createMock();
@@ -165,7 +165,7 @@ vi.mock("./run-execution.runtime.js", () => ({
   getCliSessionId: getCliSessionIdMock,
   runCliAgent: runCliAgentMock,
   resolveFastModeState: resolveFastModeStateMock,
-  resolveNestedAgentLane: resolveNestedAgentLaneMock,
+  resolveCronAgentLane: resolveCronAgentLaneMock,
   LiveSessionModelSwitchError,
   runWithModelFallback: runWithModelFallbackMock,
   isCliProvider: isCliProviderMock,
@@ -184,7 +184,7 @@ vi.mock("./run-auth-profile.runtime.js", () => ({
 
 vi.mock("./run-embedded.runtime.js", () => ({
   resolveFastModeState: resolveFastModeStateMock,
-  resolveNestedAgentLane: resolveNestedAgentLaneMock,
+  resolveCronAgentLane: resolveCronAgentLaneMock,
   runEmbeddedPiAgent: runEmbeddedPiAgentMock,
 }));
 
@@ -339,7 +339,7 @@ function resetRunExecutionMocks(): void {
   isCliProviderMock.mockReturnValue(false);
   resolveBootstrapWarningSignaturesSeenMock.mockReturnValue(new Set());
   resolveFastModeStateMock.mockImplementation((params) => resolveFastModeStateImpl(params));
-  resolveNestedAgentLaneMock.mockReturnValue(undefined);
+  resolveCronAgentLaneMock.mockReturnValue(undefined);
   normalizeVerboseLevelMock.mockImplementation((value: unknown) => value ?? "off");
   resolveSessionTranscriptPathMock.mockReturnValue("/tmp/transcript.jsonl");
   registerAgentRunContextMock.mockReturnValue(undefined);

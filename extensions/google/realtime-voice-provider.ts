@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import {
   ActivityHandling,
+  Behavior,
   EndSensitivity,
+  FunctionResponseScheduling,
   Modality,
   StartSensitivity,
   TurnCoverage,
@@ -20,8 +22,14 @@ import type {
   RealtimeVoiceProviderConfig,
   RealtimeVoiceProviderPlugin,
   RealtimeVoiceTool,
+  RealtimeVoiceToolResultOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
-import { convertPcmToMulaw8k, mulawToPcm, resamplePcm } from "openclaw/plugin-sdk/realtime-voice";
+import {
+  convertPcmToMulaw8k,
+  mulawToPcm,
+  REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+  resamplePcm,
+} from "openclaw/plugin-sdk/realtime-voice";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { createGoogleGenAI } from "./google-genai-runtime.js";
@@ -288,11 +296,17 @@ function buildRealtimeInputConfig(
 }
 
 function buildFunctionDeclarations(tools: RealtimeVoiceTool[] | undefined): FunctionDeclaration[] {
-  return (tools ?? []).map((tool) => ({
-    name: tool.name,
-    description: tool.description,
-    parametersJsonSchema: tool.parameters,
-  }));
+  return (tools ?? []).map((tool) => {
+    const declaration: FunctionDeclaration = {
+      name: tool.name,
+      description: tool.description,
+      parametersJsonSchema: tool.parameters,
+    };
+    if (tool.name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
+      declaration.behavior = Behavior.NON_BLOCKING;
+    }
+    return declaration;
+  });
 }
 
 function parsePcmSampleRate(mimeType: string | undefined): number {
@@ -306,6 +320,8 @@ function isMulawSilence(audio: Buffer): boolean {
 }
 
 class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
+  readonly supportsToolResultContinuation = true;
+
   private session: GoogleLiveSession | null = null;
   private connected = false;
   private sessionConfigured = false;
@@ -314,6 +330,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private sessionReadyFired = false;
   private consecutiveSilenceMs = 0;
   private audioStreamEnded = false;
+  private pendingFunctionNames = new Map<string, string>();
 
   constructor(private readonly config: GoogleRealtimeVoiceBridgeConfig) {}
 
@@ -323,6 +340,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.sessionReadyFired = false;
     this.consecutiveSilenceMs = 0;
     this.audioStreamEnded = false;
+    this.pendingFunctionNames.clear();
 
     const ai = createGoogleGenAI({
       apiKey: this.config.apiKey,
@@ -375,6 +393,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
         onclose: () => {
           this.connected = false;
           this.sessionConfigured = false;
+          this.pendingFunctionNames.clear();
           const reason = this.intentionallyClosed ? "completed" : "error";
           this.session = null;
           this.config.onClose?.(reason);
@@ -445,21 +464,57 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.sendUserMessage(greetingPrompt);
   }
 
-  submitToolResult(callId: string, result: unknown): void {
+  submitToolResult(
+    callId: string,
+    result: unknown,
+    options?: RealtimeVoiceToolResultOptions,
+  ): void {
     if (!this.session) {
       return;
     }
-    this.session.sendToolResponse({
-      functionResponses: [
-        {
-          id: callId,
-          response:
-            result && typeof result === "object"
-              ? (result as Record<string, unknown>)
-              : { output: result },
-        },
-      ],
-    });
+    const name = this.pendingFunctionNames.get(callId);
+    if (!name) {
+      this.config.onError?.(
+        new Error(
+          `Google Live function response is missing a matching function call for ${callId}`,
+        ),
+      );
+      return;
+    }
+    try {
+      const isConsultTool = name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME;
+      const functionResponse: FunctionResponse = {
+        id: callId,
+        name,
+        response:
+          result && typeof result === "object" && !Array.isArray(result)
+            ? (result as Record<string, unknown>)
+            : { output: result },
+      };
+      if (isConsultTool) {
+        functionResponse.scheduling = FunctionResponseScheduling.WHEN_IDLE;
+        if (options?.willContinue === true) {
+          functionResponse.willContinue = true;
+        }
+      } else if (options?.willContinue === true) {
+        this.config.onError?.(
+          new Error(
+            `Google Live continuation is only supported for ${REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME}`,
+          ),
+        );
+        return;
+      }
+      this.session.sendToolResponse({
+        functionResponses: [functionResponse],
+      });
+      if (options?.willContinue !== true) {
+        this.pendingFunctionNames.delete(callId);
+      }
+    } catch (error) {
+      this.config.onError?.(
+        error instanceof Error ? error : new Error("Failed to send Google Live function response"),
+      );
+    }
   }
 
   acknowledgeMark(): void {}
@@ -471,6 +526,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.pendingAudio = [];
     this.consecutiveSilenceMs = 0;
     this.audioStreamEnded = false;
+    this.pendingFunctionNames.clear();
     const session = this.session;
     this.session = null;
     session?.close();
@@ -557,6 +613,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
         continue;
       }
       const callId = call.id?.trim() || `google-live-${randomUUID()}`;
+      this.pendingFunctionNames.set(callId, name);
       this.config.onToolCall?.({
         itemId: callId,
         callId,

@@ -109,6 +109,7 @@ function createIndex(
   pluginId = "demo",
   overrides: Partial<InstalledPluginIndex> = {},
 ): InstalledPluginIndex {
+  const pluginRoot = overrides.plugins?.[0]?.rootDir ?? `/plugins/${pluginId}`;
   return {
     version: 1,
     hostContractVersion: "2026.4.25",
@@ -120,9 +121,9 @@ function createIndex(
     plugins: [
       {
         pluginId,
-        manifestPath: `/plugins/${pluginId}/openclaw.plugin.json`,
+        manifestPath: path.join(pluginRoot, "openclaw.plugin.json"),
         manifestHash: "manifest-hash",
-        rootDir: `/plugins/${pluginId}`,
+        rootDir: pluginRoot,
         origin: "global",
         enabled: true,
         startup: {
@@ -361,6 +362,47 @@ describe("plugin registry facade", () => {
   it("reads the persisted registry before deriving from discovered candidates", async () => {
     const stateDir = makeTempDir();
     const rootDir = makeTempDir();
+    const persistedRootDir = makeTempDir();
+    const candidate = createCandidate(rootDir);
+    const config = {} as const;
+    fs.writeFileSync(path.join(persistedRootDir, "index.ts"), "", "utf8");
+    fs.writeFileSync(
+      path.join(persistedRootDir, "openclaw.plugin.json"),
+      JSON.stringify({ id: "persisted", configSchema: { type: "object" } }),
+      "utf8",
+    );
+    await writePersistedInstalledPluginIndex(
+      createIndex("persisted", {
+        policyHash: resolveInstalledPluginIndexPolicyHash(config),
+        plugins: [
+          {
+            ...createIndex("persisted").plugins[0],
+            manifestPath: path.join(persistedRootDir, "openclaw.plugin.json"),
+            source: path.join(persistedRootDir, "index.ts"),
+            rootDir: persistedRootDir,
+          },
+        ],
+      }),
+      { stateDir },
+    );
+
+    const result = loadPluginRegistrySnapshotWithMetadata({
+      stateDir,
+      candidates: [candidate],
+      config,
+      env: hermeticEnv(),
+    });
+
+    expect(result.source).toBe("persisted");
+    expect(result.diagnostics).toEqual([]);
+    expect(listPluginRecords({ index: result.snapshot }).map((plugin) => plugin.pluginId)).toEqual([
+      "persisted",
+    ]);
+  });
+
+  it("falls back to the derived registry when persisted source paths are missing", async () => {
+    const stateDir = makeTempDir();
+    const rootDir = makeTempDir();
     const candidate = createCandidate(rootDir);
     const config = {} as const;
     await writePersistedInstalledPluginIndex(
@@ -377,10 +419,12 @@ describe("plugin registry facade", () => {
       env: hermeticEnv(),
     });
 
-    expect(result.source).toBe("persisted");
-    expect(result.diagnostics).toEqual([]);
+    expect(result.source).toBe("derived");
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({ code: "persisted-registry-stale-source" }),
+    ]);
     expect(listPluginRecords({ index: result.snapshot }).map((plugin) => plugin.pluginId)).toEqual([
-      "persisted",
+      "demo",
     ]);
   });
 

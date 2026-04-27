@@ -1078,6 +1078,30 @@ describe("update-cli", () => {
     ).toContain("Low disk space near");
   });
 
+  it("refuses package updates from inside the gateway service process", async () => {
+    mockPackageInstallStatus(createCaseDir("openclaw-update"));
+
+    await withEnvAsync(
+      {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      },
+      async () => {
+        await updateCommand({ yes: true });
+      },
+    );
+
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Package updates cannot run from inside the gateway service process."),
+    );
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expect(runCommandWithTimeout).not.toHaveBeenCalledWith(
+      ["npm", "i", "-g", "openclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"],
+      expect.any(Object),
+    );
+  });
+
   it("blocks package updates when the target requires a newer Node runtime", async () => {
     mockPackageInstallStatus(createCaseDir("openclaw-update"));
     vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue({

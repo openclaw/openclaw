@@ -81,6 +81,10 @@ function assertMachineUserSystemctlArgs(args: string[], user: string, ...command
   expect(args).toEqual(["--machine", `${user}@`, "--user", ...command]);
 }
 
+function mockEffectiveUid(uid: number) {
+  vi.spyOn(process, "geteuid").mockReturnValue(uid);
+}
+
 async function readManagedServiceEnabled(env: NodeJS.ProcessEnv = { HOME: TEST_MANAGED_HOME }) {
   vi.spyOn(fs, "access").mockResolvedValue(undefined);
   return isSystemdServiceEnabled({ env });
@@ -190,6 +194,7 @@ describe("systemd availability", () => {
   });
 
   it("does not fall back to direct --user when machine scope fails under sudo", async () => {
+    mockEffectiveUid(0);
     execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
       assertMachineUserSystemctlArgs(args, "ai", "status");
       cb(
@@ -203,6 +208,36 @@ describe("systemd availability", () => {
     });
 
     await expect(isSystemdUserServiceAvailable({ SUDO_USER: "ai" })).resolves.toBe(false);
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let preserved USER suppress sudo-to-root machine scope", async () => {
+    mockEffectiveUid(0);
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      assertMachineUserSystemctlArgs(args, "debian", "status");
+      cb(null, "", "");
+    });
+
+    await expect(
+      isSystemdUserServiceAvailable({
+        SUDO_USER: "debian",
+        USER: "root-env-stale",
+        LOGNAME: "root-env-stale",
+      }),
+    ).resolves.toBe(true);
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let stale SUDO_USER override a sudo-u target user scope", async () => {
+    mockEffectiveUid(1000);
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      assertUserSystemctlArgs(args, "status");
+      cb(null, "", "");
+    });
+
+    await expect(
+      isSystemdUserServiceAvailable({ USER: "openclaw", SUDO_USER: "admin" }),
+    ).resolves.toBe(true);
     expect(execFileMock).toHaveBeenCalledTimes(1);
   });
 });
@@ -543,7 +578,7 @@ describe("readSystemdServiceExecStart", () => {
 
     const command = await readSystemdServiceExecStart({ HOME: TEST_SERVICE_HOME });
     expect(command?.environment?.OPENCLAW_GATEWAY_TOKEN).toBe("env-file-token");
-    expect(command?.environmentValueSources?.OPENCLAW_GATEWAY_TOKEN).toBe("file");
+    expect(command?.environmentValueSources?.OPENCLAW_GATEWAY_TOKEN).toBe("inline-and-file");
   });
 
   it("ignores missing optional EnvironmentFile entries", async () => {
@@ -907,6 +942,51 @@ describe("systemd service install and uninstall", () => {
     });
   });
 
+  it("uses the sudo-u target user for install activation machine-scope retry", async () => {
+    await withNodeSystemdFixture(async ({ env }) => {
+      const installEnv = { ...env, USER: "openclaw", SUDO_USER: "admin" };
+      execFileMock
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "status");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "daemon-reload");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "enable", NODE_SERVICE);
+          cb(
+            createExecFileError("Failed to connect to bus: No medium found", {
+              stderr: "Failed to connect to bus: No medium found",
+            }),
+            "",
+            "",
+          );
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertMachineUserSystemctlArgs(args, "openclaw", "enable", NODE_SERVICE);
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "restart", NODE_SERVICE);
+          cb(null, "", "");
+        });
+
+      await installSystemdService({
+        env: installEnv,
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        programArguments: ["/usr/bin/openclaw", "node", "run"],
+        workingDirectory: "/tmp",
+        environment: {
+          OPENCLAW_SYSTEMD_UNIT: "openclaw-node",
+        },
+      });
+
+      expect(execFileMock).toHaveBeenCalledTimes(5);
+    });
+  });
+
   it("surfaces install activation user-bus failures as systemd unavailable errors", async () => {
     await withNodeSystemdFixture(async ({ env }) => {
       vi.spyOn(os, "userInfo").mockImplementation(() => {
@@ -1066,6 +1146,7 @@ describe("systemd service control", () => {
   });
 
   it("targets the sudo caller's user scope when SUDO_USER is set", async () => {
+    mockEffectiveUid(0);
     execFileMock
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
         assertMachineUserSystemctlArgs(args, "debian", "status");

@@ -220,6 +220,7 @@ describe("short-term dreaming config", () => {
           timezone: "UTC",
           verboseLogging: true,
           frequency: "5 1 * * *",
+          model: "anthropic/claude-haiku-4-5",
           phases: {
             deep: {
               limit: 7,
@@ -247,6 +248,9 @@ describe("short-term dreaming config", () => {
       storage: {
         mode: "separate",
         separateReports: false,
+      },
+      execution: {
+        model: "anthropic/claude-haiku-4-5",
       },
     });
   });
@@ -1880,7 +1884,7 @@ describe("short-term dreaming trigger", () => {
     });
 
     const subagent = {
-      run: vi.fn(async () => ({ runId: "narrative-run-1" })),
+      run: vi.fn(async (_params: { model?: string }) => ({ runId: "narrative-run-1" })),
       waitForRun: vi.fn(async () => ({ status: "ok" })),
       getSessionMessages: vi.fn(async () => ({
         messages: [{ role: "assistant", content: "A diary entry." }],
@@ -1901,6 +1905,9 @@ describe("short-term dreaming trigger", () => {
         minUniqueQueries: 0,
         recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
         verboseLogging: false,
+        execution: {
+          model: "anthropic/claude-sonnet-4-6",
+        },
       },
       logger,
       subagent,
@@ -1908,6 +1915,9 @@ describe("short-term dreaming trigger", () => {
 
     expect(result?.handled).toBe(true);
     expect(subagent.run).toHaveBeenCalled();
+    expect(subagent.run.mock.calls[0]?.[0]).toMatchObject({
+      model: "anthropic/claude-sonnet-4-6",
+    });
     const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
     expect(memoryText).toContain("Move backups to S3 Glacier.");
     await vi.waitFor(async () => {

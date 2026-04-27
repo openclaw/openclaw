@@ -95,7 +95,7 @@ jobs:
             echo "- Target ref: \`${TARGET_REF}\`"
             echo "- Target SHA: \`${TARGET_SHA}\`"
             echo "- Child workflow ref: \`${WORKFLOW_REF}\`"
-            echo "- Normal CI: \`CI\` with \`target_ref=${TARGET_REF}\`"
+            echo "- Normal CI: \`CI\` with \`target_ref=${TARGET_SHA}\`"
             echo "- Release/live/Docker/package/QA: \`OpenClaw Release Checks\`"
             if [[ -n "${NPM_TELEGRAM_PACKAGE_SPEC// }" ]]; then
               echo "- Post-publish Telegram E2E: \`${NPM_TELEGRAM_PACKAGE_SPEC}\`"
@@ -171,7 +171,7 @@ jobs:
             echo "- Target SHA: \`${TARGET_SHA}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-          dispatch_and_wait ci.yml "$WORKFLOW_REF" -f target_ref="$TARGET_REF"
+          dispatch_and_wait ci.yml "$WORKFLOW_REF" -f target_ref="$TARGET_SHA"
 
   release_checks:
     name: Run release/live/Docker/QA validation
@@ -245,7 +245,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
           dispatch_and_wait openclaw-release-checks.yml "$WORKFLOW_REF" \
-            -f ref="$TARGET_REF" \
+            -f ref="$TARGET_SHA" \
             -f provider="$PROVIDER" \
             -f mode="$MODE"
 

@@ -78,12 +78,26 @@ or npm install metadata. Those belong in your plugin code and `package.json`.
   "modelSupport": {
     "modelPrefixes": ["router-"]
   },
+  "modelIdNormalization": {
+    "providers": {
+      "openrouter": {
+        "prefixWhenBare": "openrouter"
+      }
+    }
+  },
   "providerEndpoints": [
     {
-      "endpointClass": "xai-native",
-      "hosts": ["api.x.ai"]
+      "endpointClass": "openrouter",
+      "hostSuffixes": ["openrouter.ai"]
     }
   ],
+  "providerRequest": {
+    "providers": {
+      "openrouter": {
+        "family": "openrouter"
+      }
+    }
+  },
   "cliBackends": ["openrouter-cli"],
   "syntheticAuthRefs": ["openrouter-cli"],
   "providerAuthEnvVars": {
@@ -145,7 +159,9 @@ or npm install metadata. Those belong in your plugin code and `package.json`.
 | `modelSupport`                       | No       | `object`                         | Manifest-owned shorthand model-family metadata used to auto-load the plugin before runtime.                                                                                                                                       |
 | `modelCatalog`                       | No       | `object`                         | Declarative model catalog metadata for providers owned by this plugin. This is the control-plane contract for future read-only listing, onboarding, model pickers, aliases, and suppression without loading plugin runtime.       |
 | `modelPricing`                       | No       | `object`                         | Provider-owned external pricing lookup policy. Use it to opt local/self-hosted providers out of remote pricing catalogs or map provider refs to OpenRouter/LiteLLM catalog ids without hardcoding provider ids in core.           |
+| `modelIdNormalization`               | No       | `object`                         | Provider-owned model-id alias/prefix cleanup that must run before provider runtime loads.                                                                                                                                         |
 | `providerEndpoints`                  | No       | `object[]`                       | Manifest-owned endpoint host/baseUrl metadata for provider routes that core must classify before provider runtime loads.                                                                                                          |
+| `providerRequest`                    | No       | `object`                         | Cheap provider-family and request-compatibility metadata used by generic request policy before provider runtime loads.                                                                                                            |
 | `cliBackends`                        | No       | `string[]`                       | CLI inference backend ids owned by this plugin. Used for startup auto-activation from explicit config refs.                                                                                                                       |
 | `syntheticAuthRefs`                  | No       | `string[]`                       | Provider or CLI backend refs whose plugin-owned synthetic auth hook should be probed during cold model discovery before runtime loads.                                                                                            |
 | `nonSecretAuthMarkers`               | No       | `string[]`                       | Bundled-plugin-owned placeholder API key values that represent non-secret local, OAuth, or ambient credential state.                                                                                                              |
@@ -249,6 +265,7 @@ change correctness while legacy manifest ownership fallbacks still exist.
     "onCommands": ["models"],
     "onChannels": ["web"],
     "onRoutes": ["gateway-webhook"],
+    "onConfigPaths": ["browser"],
     "onCapabilities": ["provider", "tool"]
   }
 }
@@ -261,6 +278,7 @@ change correctness while legacy manifest ownership fallbacks still exist.
 | `onCommands`       | No       | `string[]`                                           | Command ids that should include this plugin in activation/load plans.                                                                             |
 | `onChannels`       | No       | `string[]`                                           | Channel ids that should include this plugin in activation/load plans.                                                                             |
 | `onRoutes`         | No       | `string[]`                                           | Route kinds that should include this plugin in activation/load plans.                                                                             |
+| `onConfigPaths`    | No       | `string[]`                                           | Root-relative config paths that should include this plugin in startup/load plans when the path is present and not explicitly disabled.            |
 | `onCapabilities`   | No       | `Array<"provider" \| "channel" \| "tool" \| "hook">` | Broad capability hints used by control-plane activation planning. Prefer narrower fields when possible.                                           |
 
 Current live consumers:
@@ -271,6 +289,8 @@ Current live consumers:
   embedded harnesses and top-level `cliBackends[]` for CLI runtime aliases
 - channel-triggered setup/channel planning falls back to legacy `channels[]`
   ownership when explicit channel activation metadata is missing
+- startup plugin planning uses `activation.onConfigPaths` for non-channel root
+  config surfaces such as the bundled browser plugin's `browser` block
 - provider-triggered setup/runtime planning falls back to legacy
   `providers[]` and top-level `cliBackends[]` ownership when explicit provider
   activation metadata is missing
@@ -744,6 +764,87 @@ Model fields:
 Do not put runtime-only data in `modelCatalog`. If a provider needs account
 state, an API request, or local process discovery to know the complete model
 set, declare that provider as `refreshable` or `runtime` in `discovery`.
+
+## modelIdNormalization reference
+
+Use `modelIdNormalization` for cheap provider-owned model-id cleanup that must
+happen before provider runtime loads. This keeps aliases such as short model
+names, provider-local legacy ids, and proxy prefix rules in the owning plugin
+manifest instead of in core model-selection tables.
+
+```json
+{
+  "providers": ["anthropic", "openrouter"],
+  "modelIdNormalization": {
+    "providers": {
+      "anthropic": {
+        "aliases": {
+          "sonnet-4.6": "claude-sonnet-4-6"
+        }
+      },
+      "openrouter": {
+        "prefixWhenBare": "openrouter"
+      }
+    }
+  }
+}
+```
+
+Provider fields:
+
+| Field                                | Type                    | What it means                                                                             |
+| ------------------------------------ | ----------------------- | ----------------------------------------------------------------------------------------- |
+| `aliases`                            | `Record<string,string>` | Case-insensitive exact model-id aliases. Values are returned as written.                  |
+| `stripPrefixes`                      | `string[]`              | Prefixes to remove before alias lookup, useful for legacy provider/model duplication.     |
+| `prefixWhenBare`                     | `string`                | Prefix to add when the normalized model id does not already contain `/`.                  |
+| `prefixWhenBareAfterAliasStartsWith` | `object[]`              | Conditional bare-id prefix rules after alias lookup, keyed by `modelPrefix` and `prefix`. |
+
+## providerEndpoints reference
+
+Use `providerEndpoints` for endpoint classification that generic request policy
+must know before provider runtime loads. Core still owns the meaning of each
+`endpointClass`; plugin manifests own the host and base URL metadata.
+
+Endpoint fields:
+
+| Field                          | Type       | What it means                                                                                  |
+| ------------------------------ | ---------- | ---------------------------------------------------------------------------------------------- |
+| `endpointClass`                | `string`   | Known core endpoint class, such as `openrouter`, `moonshot-native`, or `google-vertex`.        |
+| `hosts`                        | `string[]` | Exact hostnames that map to the endpoint class.                                                |
+| `hostSuffixes`                 | `string[]` | Host suffixes that map to the endpoint class. Prefix with `.` for domain suffix-only matching. |
+| `baseUrls`                     | `string[]` | Exact normalized HTTP(S) base URLs that map to the endpoint class.                             |
+| `googleVertexRegion`           | `string`   | Static Google Vertex region for exact global hosts.                                            |
+| `googleVertexRegionHostSuffix` | `string`   | Suffix to strip from matching hosts to expose the Google Vertex region prefix.                 |
+
+## providerRequest reference
+
+Use `providerRequest` for cheap request-compatibility metadata that generic
+request policy needs without loading provider runtime. Keep behavior-specific
+payload rewriting in provider runtime hooks or shared provider-family helpers.
+
+```json
+{
+  "providers": ["vllm"],
+  "providerRequest": {
+    "providers": {
+      "vllm": {
+        "family": "vllm",
+        "openAICompletions": {
+          "supportsStreamingUsage": true
+        }
+      }
+    }
+  }
+}
+```
+
+Provider fields:
+
+| Field                 | Type         | What it means                                                                          |
+| --------------------- | ------------ | -------------------------------------------------------------------------------------- |
+| `family`              | `string`     | Provider family label used by generic request compatibility decisions and diagnostics. |
+| `compatibilityFamily` | `"moonshot"` | Optional provider-family compatibility bucket for shared request helpers.              |
+| `openAICompletions`   | `object`     | OpenAI-compatible completions request flags, currently `supportsStreamingUsage`.       |
 
 ## modelPricing reference
 
