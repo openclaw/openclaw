@@ -2,6 +2,7 @@ import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-s
 import { resolveCopilotTransportApi } from "./models.js";
 
 const DEFAULT_CONTEXT_WINDOW = 128_000;
+const ONE_MILLION_CONTEXT_WINDOW = 1_000_000;
 const DEFAULT_MAX_TOKENS = 8192;
 
 // Copilot model ids vary by plan/org and can change.
@@ -12,6 +13,7 @@ const DEFAULT_MODEL_IDS = [
   "claude-opus-4.5",
   "claude-opus-4.6",
   "claude-opus-4.7",
+  "claude-opus-4.7-1m-internal",
   "claude-sonnet-4",
   "claude-sonnet-4.6",
   "claude-sonnet-4.5",
@@ -26,10 +28,17 @@ const DEFAULT_MODEL_IDS = [
   "gpt-5.4",
   "gpt-5.4-mini",
   "gpt-5.4-nano",
+  "gpt-5.5",
   "grok-code-fast-1",
   "raptor-mini",
   "goldeneye",
 ] as const;
+
+function resolveCopilotContextWindow(id: string): number {
+  return id.endsWith("-1m") || id.endsWith("-1m-internal")
+    ? ONE_MILLION_CONTEXT_WINDOW
+    : DEFAULT_CONTEXT_WINDOW;
+}
 
 export function getDefaultCopilotModelIds(): string[] {
   return [...DEFAULT_MODEL_IDS];
@@ -47,7 +56,7 @@ export function buildCopilotModelDefinition(modelId: string): ModelDefinitionCon
     reasoning: false,
     input: ["text", "image"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: DEFAULT_CONTEXT_WINDOW,
+    contextWindow: resolveCopilotContextWindow(id),
     maxTokens: DEFAULT_MAX_TOKENS,
   };
 }
