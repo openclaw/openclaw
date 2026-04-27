@@ -220,26 +220,27 @@ export async function readWebAuthSnapshotBestEffort(authDir: string = resolveDef
   } as const;
 }
 
-async function clearLegacyBaileysAuthState(authDir: string) {
+function isBaileysAuthFileName(name: string): boolean {
+  if (name === "oauth.json") {
+    return false;
+  }
+  if (name === "creds.json" || name === "creds.json.bak") {
+    return true;
+  }
+  if (!name.endsWith(".json")) {
+    return false;
+  }
+  return /^(app-state-sync|session|sender-key|pre-key)-/.test(name);
+}
+
+async function clearBaileysAuthFiles(authDir: string) {
   const entries = await fs.readdir(authDir, { withFileTypes: true });
-  const shouldDelete = (name: string) => {
-    if (name === "oauth.json") {
-      return false;
-    }
-    if (name === "creds.json" || name === "creds.json.bak") {
-      return true;
-    }
-    if (!name.endsWith(".json")) {
-      return false;
-    }
-    return /^(app-state-sync|session|sender-key|pre-key)-/.test(name);
-  };
   await Promise.all(
     entries.map(async (entry) => {
       if (!entry.isFile()) {
         return;
       }
-      if (!shouldDelete(entry.name)) {
+      if (!isBaileysAuthFileName(entry.name)) {
         return;
       }
       await fs.rm(path.join(authDir, entry.name), { force: true });
@@ -259,15 +260,7 @@ async function shouldClearOnLogout(authDir: string, isLegacyAuthDir: boolean): P
         if (!entry.isFile()) {
           return false;
         }
-        if (entry.name === "oauth.json") {
-          return false;
-        }
-        if (entry.name === "creds.json" || entry.name === "creds.json.bak") {
-          return true;
-        }
-        return entry.name.endsWith(".json")
-          ? /^(app-state-sync|session|sender-key|pre-key)-/.test(entry.name)
-          : false;
+        return isBaileysAuthFileName(entry.name);
       });
     }
     const credsStats = await fs.stat(resolveWebCredsPath(authDir)).catch(() => null);
@@ -284,6 +277,16 @@ async function shouldClearOnLogout(authDir: string, isLegacyAuthDir: boolean): P
     const code = typeof codeValue === "string" ? codeValue : "";
     return code !== "ENOENT";
   }
+}
+
+function isPathInsideDirectory(baseDir: string, targetPath: string): boolean {
+  const relativePath = path.relative(baseDir, targetPath);
+  return relativePath !== "" && !relativePath.startsWith("..") && !path.isAbsolute(relativePath);
+}
+
+function isAppOwnedWebAuthDir(authDir: string): boolean {
+  const whatsappAuthBase = path.resolve(resolveOAuthDir(), "whatsapp");
+  return isPathInsideDirectory(whatsappAuthBase, path.resolve(authDir));
 }
 
 export async function logoutWeb(params: {
@@ -304,9 +307,11 @@ export async function logoutWeb(params: {
     return false;
   }
   if (params.isLegacyAuthDir) {
-    await clearLegacyBaileysAuthState(resolvedAuthDir);
-  } else {
+    await clearBaileysAuthFiles(resolvedAuthDir);
+  } else if (isAppOwnedWebAuthDir(resolvedAuthDir)) {
     await fs.rm(resolvedAuthDir, { recursive: true, force: true });
+  } else {
+    await clearBaileysAuthFiles(resolvedAuthDir);
   }
   runtime.log(success("Cleared WhatsApp Web credentials."));
   return true;

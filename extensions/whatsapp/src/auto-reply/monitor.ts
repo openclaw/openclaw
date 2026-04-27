@@ -27,7 +27,7 @@ import {
   resolveReconnectPolicy,
   sleepWithAbort,
 } from "../reconnect.js";
-import { formatError, getWebAuthAgeMs, readWebSelfId } from "../session.js";
+import { formatError, getWebAuthAgeMs, logoutWeb, readWebSelfId } from "../session.js";
 import { getRuntimeConfig, getRuntimeConfigSourceSnapshot } from "./config.runtime.js";
 import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
 import { buildMentionConfig } from "./mentions.js";
@@ -94,6 +94,44 @@ function isRetryableAuthUnstableError(error: unknown): error is WhatsAppAuthUnst
       "code" in error &&
       (error as { code?: unknown }).code === WHATSAPP_AUTH_UNSTABLE_CODE)
   );
+}
+
+async function clearTerminalWebAuthState(params: {
+  account: ReturnType<typeof resolveWhatsAppAccount>;
+  runtime: RuntimeEnv;
+  statusLabel: number | "unknown";
+  healthState: "logged-out" | "conflict";
+  log: ReturnType<typeof getChildLogger>;
+}) {
+  try {
+    const cleared = await logoutWeb({
+      authDir: params.account.authDir,
+      isLegacyAuthDir: params.account.isLegacyAuthDir,
+      runtime: params.runtime,
+    });
+    params.log.warn(
+      {
+        accountId: params.account.accountId,
+        cleared,
+        healthState: params.healthState,
+        status: params.statusLabel,
+      },
+      "web reconnect: cleared cached auth after terminal close",
+    );
+  } catch (error) {
+    params.log.warn(
+      {
+        accountId: params.account.accountId,
+        error: formatError(error),
+        healthState: params.healthState,
+        status: params.statusLabel,
+      },
+      "web reconnect: failed clearing cached auth after terminal close",
+    );
+    params.runtime.error(
+      `WhatsApp Web cleanup failed after terminal close (status ${params.statusLabel}). Run \`${formatCliCommand("openclaw channels logout --channel whatsapp")}\`, then relink with \`${formatCliCommand("openclaw channels login --channel whatsapp")}\`.`,
+    );
+  }
 }
 
 export async function monitorWebChannel(
@@ -459,6 +497,7 @@ export async function monitorWebChannel(
       );
 
       if (decision.action === "stop") {
+        await controller.closeCurrentConnection();
         statusController.noteClose({
           statusCode: decision.normalized.statusCode,
           loggedOut: decision.normalized.isLoggedOut,
@@ -468,10 +507,24 @@ export async function monitorWebChannel(
         });
 
         if (decision.healthState === "logged-out") {
+          await clearTerminalWebAuthState({
+            account,
+            runtime,
+            statusLabel: decision.normalized.statusLabel,
+            healthState: decision.healthState,
+            log: reconnectLogger,
+          });
           runtime.error(
-            `WhatsApp session logged out. Run \`${formatCliCommand("openclaw channels login --channel web")}\` to relink.`,
+            `WhatsApp session logged out. Run \`${formatCliCommand("openclaw channels login --channel whatsapp")}\` to relink.`,
           );
         } else if (decision.healthState === "conflict") {
+          await clearTerminalWebAuthState({
+            account,
+            runtime,
+            statusLabel: decision.normalized.statusLabel,
+            healthState: decision.healthState,
+            log: reconnectLogger,
+          });
           reconnectLogger.warn(
             {
               connectionId: connection.connectionId,
@@ -481,7 +534,7 @@ export async function monitorWebChannel(
             "web reconnect: non-retryable close status; stopping monitor",
           );
           runtime.error(
-            `WhatsApp Web connection closed (status ${decision.normalized.statusLabel}: session conflict). Resolve conflicting WhatsApp Web sessions, then relink with \`${formatCliCommand("openclaw channels login --channel web")}\`. Stopping web monitoring.`,
+            `WhatsApp Web connection closed (status ${decision.normalized.statusLabel}: session conflict). Resolve conflicting WhatsApp Web sessions, then relink with \`${formatCliCommand("openclaw channels login --channel whatsapp")}\`. Stopping web monitoring.`,
           );
         } else {
           reconnectLogger.warn(

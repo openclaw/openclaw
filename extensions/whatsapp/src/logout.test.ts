@@ -13,20 +13,34 @@ const WEB_LOGOUT_TEST_TIMEOUT_MS = 15_000;
 
 describe("web logout", () => {
   let fixtureRoot = "";
+  let previousOAuthDir: string | undefined;
   let caseId = 0;
   let logoutWeb: typeof import("./auth-store.js").logoutWeb;
 
   beforeAll(async () => {
     fixtureRoot = await fsPromises.mkdtemp(path.join(os.tmpdir(), "openclaw-test-web-logout-"));
+    previousOAuthDir = process.env.OPENCLAW_OAUTH_DIR;
+    process.env.OPENCLAW_OAUTH_DIR = path.join(fixtureRoot, "oauth");
     ({ logoutWeb } = await import("./auth-store.js"));
   });
 
   afterAll(async () => {
+    if (previousOAuthDir === undefined) {
+      delete process.env.OPENCLAW_OAUTH_DIR;
+    } else {
+      process.env.OPENCLAW_OAUTH_DIR = previousOAuthDir;
+    }
     await fsPromises.rm(fixtureRoot, { recursive: true, force: true });
   });
 
   const makeCaseDir = async () => {
-    const dir = path.join(fixtureRoot, `case-${caseId++}`);
+    const dir = path.join(fixtureRoot, "oauth", "whatsapp", `case-${caseId++}`);
+    await fsPromises.mkdir(dir, { recursive: true });
+    return dir;
+  };
+
+  const makeExternalCaseDir = async () => {
+    const dir = path.join(fixtureRoot, "external", `case-${caseId++}`);
     await fsPromises.mkdir(dir, { recursive: true });
     return dir;
   };
@@ -94,5 +108,22 @@ describe("web logout", () => {
     expect(fs.existsSync(path.join(credsDir, "oauth.json"))).toBe(true);
     expect(fs.existsSync(path.join(credsDir, "creds.json"))).toBe(false);
     expect(fs.existsSync(path.join(credsDir, "session-abc.json"))).toBe(false);
+  });
+
+  it("does not recursively delete custom auth directories outside the OpenClaw auth root", async () => {
+    const authDir = await makeExternalCaseDir();
+    await fsPromises.mkdir(path.join(authDir, "nested"));
+    await fsPromises.writeFile(path.join(authDir, "creds.json"), "{}", "utf-8");
+    await fsPromises.writeFile(path.join(authDir, "oauth.json"), '{"token":true}', "utf-8");
+    await fsPromises.writeFile(path.join(authDir, "notes.txt"), "keep", "utf-8");
+    await fsPromises.writeFile(path.join(authDir, "nested", "session-abc.json"), "keep", "utf-8");
+
+    const result = await logoutWeb({ authDir, runtime: runtime as never });
+    expect(result).toBe(true);
+    expect(fs.existsSync(authDir)).toBe(true);
+    expect(fs.existsSync(path.join(authDir, "creds.json"))).toBe(false);
+    expect(fs.existsSync(path.join(authDir, "oauth.json"))).toBe(true);
+    expect(fs.existsSync(path.join(authDir, "notes.txt"))).toBe(true);
+    expect(fs.existsSync(path.join(authDir, "nested", "session-abc.json"))).toBe(true);
   });
 });

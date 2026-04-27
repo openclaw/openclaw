@@ -35,6 +35,25 @@ function createTempAuthDir(prefix: string) {
   );
 }
 
+function withOwnedOAuthAuthDir<T>(
+  prefix: string,
+  run: (authDir: string) => Promise<T>,
+): Promise<T> {
+  const previousOAuthDir = process.env.OPENCLAW_OAUTH_DIR;
+  const oauthDir = createTempAuthDir(`${prefix}-oauth`);
+  const authDir = path.join(oauthDir, "whatsapp", "default");
+  fsSync.mkdirSync(authDir, { recursive: true });
+  process.env.OPENCLAW_OAUTH_DIR = oauthDir;
+  return run(authDir).finally(() => {
+    if (previousOAuthDir === undefined) {
+      delete process.env.OPENCLAW_OAUTH_DIR;
+    } else {
+      process.env.OPENCLAW_OAUTH_DIR = previousOAuthDir;
+    }
+    fsSync.rmSync(oauthDir, { recursive: true, force: true });
+  });
+}
+
 describe("auth-store", () => {
   beforeEach(() => {
     hoisted.waitForCredsSaveQueueWithTimeout.mockReset().mockResolvedValue("drained");
@@ -115,22 +134,23 @@ describe("auth-store", () => {
   });
 
   it("clears unreadable auth state on explicit logout", async () => {
-    const authDir = createTempAuthDir("openclaw-wa-auth-logout");
-    fsSync.writeFileSync(path.join(authDir, "creds.json"), "{", "utf-8");
-    fsSync.writeFileSync(
-      path.join(authDir, "creds.json.bak"),
-      JSON.stringify({ me: { id: "123@s.whatsapp.net" } }),
-      "utf-8",
-    );
+    await withOwnedOAuthAuthDir("openclaw-wa-auth-logout", async (authDir) => {
+      fsSync.writeFileSync(path.join(authDir, "creds.json"), "{", "utf-8");
+      fsSync.writeFileSync(
+        path.join(authDir, "creds.json.bak"),
+        JSON.stringify({ me: { id: "123@s.whatsapp.net" } }),
+        "utf-8",
+      );
 
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
 
-    await expect(logoutWeb({ authDir, runtime: runtime as never })).resolves.toBe(true);
-    expect(fsSync.existsSync(authDir)).toBe(false);
+      await expect(logoutWeb({ authDir, runtime: runtime as never })).resolves.toBe(true);
+      expect(fsSync.existsSync(authDir)).toBe(false);
+    });
   });
 
   it("does not delete the whole legacy auth root when targeted cleanup fails", async () => {
@@ -160,11 +180,30 @@ describe("auth-store", () => {
   });
 
   it("clears auth state even when directory enumeration fails", async () => {
-    const authDir = createTempAuthDir("openclaw-wa-auth-readdir");
+    await withOwnedOAuthAuthDir("openclaw-wa-auth-readdir", async (authDir) => {
+      fsSync.writeFileSync(path.join(authDir, "creds.json"), "{}", "utf-8");
+      const readdirSpy = vi
+        .spyOn(fs, "readdir")
+        .mockRejectedValueOnce(Object.assign(new Error("EACCES"), { code: "EACCES" }));
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+
+      await expect(logoutWeb({ authDir, runtime: runtime as never })).resolves.toBe(true);
+      expect(fsSync.existsSync(authDir)).toBe(false);
+      readdirSpy.mockRestore();
+    });
+  });
+
+  it("does not recursively delete custom auth directories outside the OpenClaw auth root", async () => {
+    const authDir = createTempAuthDir("openclaw-wa-auth-custom");
+    const nestedDir = path.join(authDir, "nested");
+    fsSync.mkdirSync(nestedDir);
     fsSync.writeFileSync(path.join(authDir, "creds.json"), "{}", "utf-8");
-    const readdirSpy = vi
-      .spyOn(fs, "readdir")
-      .mockRejectedValueOnce(Object.assign(new Error("EACCES"), { code: "EACCES" }));
+    fsSync.writeFileSync(path.join(authDir, "notes.txt"), "keep me", "utf-8");
+    fsSync.writeFileSync(path.join(nestedDir, "session-abc.json"), "keep me", "utf-8");
     const runtime = {
       log: vi.fn(),
       error: vi.fn(),
@@ -172,8 +211,10 @@ describe("auth-store", () => {
     };
 
     await expect(logoutWeb({ authDir, runtime: runtime as never })).resolves.toBe(true);
-    expect(fsSync.existsSync(authDir)).toBe(false);
-    readdirSpy.mockRestore();
+    expect(fsSync.existsSync(authDir)).toBe(true);
+    expect(fsSync.existsSync(path.join(authDir, "creds.json"))).toBe(false);
+    expect(fsSync.existsSync(path.join(authDir, "notes.txt"))).toBe(true);
+    expect(fsSync.existsSync(path.join(nestedDir, "session-abc.json"))).toBe(true);
   });
 
   it("does not delete unrelated non-empty directories on logout", async () => {
