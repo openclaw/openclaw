@@ -10,12 +10,18 @@ describe("normalizeTelnyxModel", () => {
     expect(normalizeTelnyxModel("   ")).toBe(DEFAULT_TELNYX_EMBEDDING_MODEL);
   });
 
-  it("strips telnyx/ prefix", () => {
-    expect(normalizeTelnyxModel("telnyx/gte-large")).toBe("gte-large");
+  it("passes through fully-qualified models unchanged", () => {
+    expect(normalizeTelnyxModel("thenlper/gte-large")).toBe("thenlper/gte-large");
   });
 
-  it("passes through other models unchanged", () => {
-    expect(normalizeTelnyxModel("thenlper/gte-large")).toBe("thenlper/gte-large");
+  it("passes through multilingual model unchanged", () => {
+    expect(normalizeTelnyxModel("intfloat/multilingual-e5-large")).toBe(
+      "intfloat/multilingual-e5-large",
+    );
+  });
+
+  it("passes through Qwen model unchanged", () => {
+    expect(normalizeTelnyxModel("Qwen/Qwen3-Embedding-8B")).toBe("Qwen/Qwen3-Embedding-8B");
   });
 
   it("trims whitespace", () => {

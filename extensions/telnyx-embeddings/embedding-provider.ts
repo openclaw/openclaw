@@ -10,7 +10,6 @@ export type TelnyxEmbeddingClient = {
   baseUrl: string;
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
-  fetchImpl?: typeof fetch;
   model: string;
 };
 
@@ -19,6 +18,8 @@ export const DEFAULT_TELNYX_EMBEDDING_MODEL = "thenlper/gte-large";
 
 const TELNYX_MODEL_DIMENSIONS: Record<string, number> = {
   "thenlper/gte-large": 1024,
+  "intfloat/multilingual-e5-large": 1024,
+  "Qwen/Qwen3-Embedding-8B": 4096,
 };
 
 export function normalizeTelnyxModel(model: string): string {
@@ -26,7 +27,7 @@ export function normalizeTelnyxModel(model: string): string {
   if (!trimmed) {
     return DEFAULT_TELNYX_EMBEDDING_MODEL;
   }
-  return trimmed.startsWith("telnyx/") ? trimmed.slice("telnyx/".length) : trimmed;
+  return trimmed;
 }
 
 export async function createTelnyxEmbeddingProvider(
@@ -43,7 +44,6 @@ export async function createTelnyxEmbeddingProvider(
       url,
       headers: client.headers,
       ssrfPolicy: client.ssrfPolicy,
-      fetchImpl: client.fetchImpl,
       body: {
         model: client.model,
         input,
