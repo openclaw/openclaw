@@ -86,10 +86,19 @@ function normalizeFollowupPayloadForDelivery(
   return [nextPayload];
 }
 
-function finalizeFollowupPayloadEmotionMetadata(payload: ReplyPayload): ReplyPayload {
+function finalizeFollowupPayloadEmotionMetadata(
+  payload: ReplyPayload,
+  emotionMode: EmotionMode | undefined,
+): ReplyPayload {
   const taggedPayload = payload as FollowupEmotionTaggedPayload;
   const rawEmotionTtsText = taggedPayload[FOLLOWUP_EMOTION_RAW_TTS_TEXT_KEY];
+  // Always strip the marker so it does not leak forward, but only honor its
+  // value when emotion mode is enabled — the key is a normal string property
+  // and untrusted upstream payloads (plugin/tool/LLM) could spoof it.
   delete taggedPayload[FOLLOWUP_EMOTION_RAW_TTS_TEXT_KEY];
+  if (!isEmotionModeEnabled(emotionMode)) {
+    return taggedPayload;
+  }
   if (typeof rawEmotionTtsText !== "string" || rawEmotionTtsText.trim().length === 0) {
     return taggedPayload;
   }
@@ -500,7 +509,7 @@ export function createFollowupRunner(params: {
         sentMediaUrls: runResult.messagingToolSentMediaUrls,
         sentTargets: runResult.messagingToolSentTargets,
         sentTexts: runResult.messagingToolSentTexts,
-      }).map(finalizeFollowupPayloadEmotionMetadata);
+      }).map((payload) => finalizeFollowupPayloadEmotionMetadata(payload, run.emotionMode));
 
       if (finalPayloads.length === 0) {
         return;
