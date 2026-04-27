@@ -22,9 +22,11 @@ export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 export type { GroupToolPolicyConfig } from "openclaw/plugin-sdk/config-types";
 export {
   DEFAULT_ACCOUNT_ID,
+  basenameFromUntrustedFilename,
   buildChannelConfigSchema,
   createActionGate,
   createDedupeCache,
+  recoverLatin1Utf8Mojibake,
 } from "openclaw/plugin-sdk/core";
 export {
   PAIRING_APPROVED_MESSAGE,

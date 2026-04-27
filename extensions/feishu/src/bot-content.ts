@@ -1,3 +1,4 @@
+import { basenameFromUntrustedFilename, recoverLatin1Utf8Mojibake } from "../runtime-api.js";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { buildFeishuConversationId } from "./conversation-id.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
@@ -40,6 +41,17 @@ type FeishuMessageLike = {
 export type GroupSessionScope = "group" | "group_sender" | "group_topic" | "group_topic_sender";
 
 type FeishuLogger = (...args: unknown[]) => void;
+
+function normalizeFeishuFileName(fileName: unknown): string | undefined {
+  if (typeof fileName !== "string") {
+    return undefined;
+  }
+  const trimmed = fileName.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return basenameFromUntrustedFilename(recoverLatin1Utf8Mojibake(trimmed));
+}
 
 export type ResolvedFeishuGroupSession = {
   peerId: string;
@@ -309,14 +321,14 @@ export function parseMediaKeys(
     const fileKey = normalizeFeishuExternalKey(parsed.file_key);
     switch (messageType) {
       case "image":
-        return { imageKey, fileName: parsed.file_name };
+        return { imageKey, fileName: normalizeFeishuFileName(parsed.file_name) };
       case "file":
       case "audio":
       case "sticker":
-        return { fileKey, fileName: parsed.file_name };
+        return { fileKey, fileName: normalizeFeishuFileName(parsed.file_name) };
       case "video":
       case "media":
-        return { fileKey, imageKey, fileName: parsed.file_name };
+        return { fileKey, imageKey, fileName: normalizeFeishuFileName(parsed.file_name) };
       default:
         return {};
     }
@@ -393,6 +405,7 @@ export async function resolveFeishuMediaList(params: {
           contentType,
           "inbound",
           maxBytes,
+          normalizeFeishuFileName(result.fileName),
         );
         out.push({
           path: saved.path,
@@ -421,6 +434,7 @@ export async function resolveFeishuMediaList(params: {
           contentType,
           "inbound",
           maxBytes,
+          normalizeFeishuFileName(result.fileName) || normalizeFeishuFileName(media.fileName),
         );
         out.push({
           path: saved.path,
@@ -459,7 +473,7 @@ export async function resolveFeishuMediaList(params: {
       contentType,
       "inbound",
       maxBytes,
-      result.fileName || mediaKeys.fileName,
+      normalizeFeishuFileName(result.fileName) || mediaKeys.fileName,
     );
     out.push({
       path: saved.path,

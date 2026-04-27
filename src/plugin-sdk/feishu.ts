@@ -65,6 +65,7 @@ export {
 export { createDedupeCache } from "../infra/dedupe.js";
 export { installRequestBodyLimitGuard, readJsonBodyWithLimit } from "../infra/http-body.js";
 export { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+export { basenameFromUntrustedFilename, recoverLatin1Utf8Mojibake } from "../media/filename.js";
 export { resolveAgentOutboundIdentity } from "../infra/outbound/identity.js";
 export type { OutboundIdentity } from "../infra/outbound/identity.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
