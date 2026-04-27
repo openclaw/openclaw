@@ -84,7 +84,11 @@ export function registerCronAddCommand(cron: Command) {
       )
       .option("--every <duration>", "Run every duration (e.g. 10m, 1h)")
       .option("--cron <expr>", "Cron expression (5-field or 6-field with seconds)")
-      .option("--tz <iana>", "Timezone for cron expressions (IANA)", "")
+      .option(
+        "--tz <iana>",
+        "Timezone for interpreting --cron expressions and offset-less --at datetime strings (IANA, default: UTC)",
+        "",
+      )
       .option("--stagger <duration>", "Cron stagger window (e.g. 30s, 5m)")
       .option("--exact", "Disable cron staggering (set stagger to 0)", false)
       .option("--system-event <text>", "System event payload (main session)")
