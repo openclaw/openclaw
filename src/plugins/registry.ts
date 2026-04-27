@@ -413,6 +413,12 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     const entry = opts?.entry ?? null;
     const name = entry?.hook.name ?? opts?.name?.trim();
     if (!name) {
+      pushDiagnostic({
+        level: "warn",
+        pluginId: record.id,
+        source: record.source,
+        message: "hook registration missing name",
+      });
       throw new Error("hook registration missing name");
     }
     const existingHook = registry.hooks.find((entry) => entry.entry.hook.name === name);
@@ -1553,6 +1559,12 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               },
               registerMemoryCapability: (capability) => {
                 if (!hasKind(record.kind, "memory")) {
+                  pushDiagnostic({
+                    level: "error",
+                    pluginId: record.id,
+                    source: record.source,
+                    message: "only memory plugins can register a memory capability",
+                  });
                   throw new Error("only memory plugins can register a memory capability");
                 }
                 if (
@@ -1573,6 +1585,12 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               },
               registerMemoryPromptSection: (builder) => {
                 if (!hasKind(record.kind, "memory")) {
+                  pushDiagnostic({
+                    level: "error",
+                    pluginId: record.id,
+                    source: record.source,
+                    message: "only memory plugins can register a memory prompt section",
+                  });
                   throw new Error("only memory plugins can register a memory prompt section");
                 }
                 if (
@@ -1599,6 +1617,12 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               },
               registerMemoryFlushPlan: (resolver) => {
                 if (!hasKind(record.kind, "memory")) {
+                  pushDiagnostic({
+                    level: "error",
+                    pluginId: record.id,
+                    source: record.source,
+                    message: "only memory plugins can register a memory flush plan",
+                  });
                   throw new Error("only memory plugins can register a memory flush plan");
                 }
                 if (
@@ -1619,6 +1643,12 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               },
               registerMemoryRuntime: (runtime) => {
                 if (!hasKind(record.kind, "memory")) {
+                  pushDiagnostic({
+                    level: "error",
+                    pluginId: record.id,
+                    source: record.source,
+                    message: "only memory plugins can register a memory runtime",
+                  });
                   throw new Error("only memory plugins can register a memory runtime");
                 }
                 if (
