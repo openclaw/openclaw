@@ -71,6 +71,7 @@ type MatrixPrepareTargetParams = {
 export type MatrixApprovalHandlerDeps = {
   nowMs?: () => number;
   sendMessage?: typeof sendMessageMatrix;
+  sendSingleTextMessage?: typeof sendSingleTextMessageMatrix;
   reactMessage?: typeof reactMatrixMessage;
   editMessage?: typeof editMatrixMessage;
   deleteMessage?: typeof deleteMatrixMessage;
@@ -110,6 +111,10 @@ function normalizeReactionTargetRef(params: ReactionTargetRef): ReactionTargetRe
 function normalizeThreadId(value?: string | number | null): string | undefined {
   const trimmed = value == null ? "" : String(value).trim();
   return trimmed || undefined;
+}
+
+function isSingleMatrixMessageLimitError(error: unknown): boolean {
+  return error instanceof Error && error.message.includes("Matrix single-message text exceeds limit");
 }
 
 async function prepareTarget(
@@ -355,22 +360,30 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
       if (!resolved) {
         return null;
       }
-      const sendMessage = resolved.context.deps?.sendMessage;
+      const sendSingleTextMessage =
+        resolved.context.deps?.sendSingleTextMessage ?? sendSingleTextMessageMatrix;
       const reactMessage = resolved.context.deps?.reactMessage ?? reactMatrixMessage;
-      const result = sendMessage
-        ? await sendMessage(preparedTarget.to, pendingPayload.text, {
-            cfg: cfg as CoreConfig,
-            accountId: resolved.accountId,
-            client: resolved.context.client,
-            threadId: preparedTarget.threadId,
-          })
-        : await sendSingleTextMessageMatrix(preparedTarget.to, pendingPayload.text, {
-            cfg: cfg as CoreConfig,
-            accountId: resolved.accountId,
-            client: resolved.context.client,
-            threadId: preparedTarget.threadId,
-            extraContent: pendingPayload.extraContent,
-          });
+      let result;
+      try {
+        result = await sendSingleTextMessage(preparedTarget.to, pendingPayload.text, {
+          cfg: cfg as CoreConfig,
+          accountId: resolved.accountId,
+          client: resolved.context.client,
+          threadId: preparedTarget.threadId,
+          extraContent: pendingPayload.extraContent,
+        });
+      } catch (error) {
+        if (!isSingleMatrixMessageLimitError(error)) {
+          throw error;
+        }
+        const sendMessage = resolved.context.deps?.sendMessage ?? sendMessageMatrix;
+        result = await sendMessage(preparedTarget.to, pendingPayload.text, {
+          cfg: cfg as CoreConfig,
+          accountId: resolved.accountId,
+          client: resolved.context.client,
+          threadId: preparedTarget.threadId,
+        });
+      }
       const messageIds = Array.from(
         new Set(
           (result.messageIds ?? [result.messageId])
