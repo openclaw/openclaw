@@ -344,4 +344,52 @@ describe("slash-http cfg threading", () => {
     expect(mockState.fetchMattermostChannel).not.toHaveBeenCalled();
     expect(mockState.sendMessageMattermost).not.toHaveBeenCalled();
   });
+
+  it("accepts a callback token refreshed from the current Mattermost command", async () => {
+    mockState.parseSlashCommandPayload.mockReturnValueOnce({
+      token: "new-token",
+      command: "/oc_models",
+      text: "models",
+      channel_id: "chan-1",
+      user_id: "user-1",
+      user_name: "alice",
+      team_id: "team-1",
+    });
+    mockState.getMattermostCommand.mockResolvedValueOnce({
+      id: "cmd-1",
+      token: "new-token",
+      team_id: "team-1",
+      trigger: "oc_models",
+      method: "P",
+      url: "https://gateway.example.com/slash",
+      delete_at: 0,
+    });
+    const commandTokens = new Set(["old-token"]);
+
+    const handler = createSlashCommandHttpHandler({
+      account: accountFixture,
+      cfg: {} as OpenClawConfig,
+      runtime: {} as RuntimeEnv,
+      commandTokens,
+      registeredCommands: [
+        {
+          id: "cmd-1",
+          teamId: "team-1",
+          trigger: "oc_models",
+          token: "old-token",
+          url: "https://gateway.example.com/slash",
+          managed: false,
+        },
+      ],
+    });
+    const response = createResponse();
+
+    await handler(createRequest("token=new-token"), response.res);
+
+    expect(response.res.statusCode).toBe(200);
+    expect(response.getBody()).toContain("Processing");
+    expect(commandTokens.has("new-token")).toBe(true);
+    expect(mockState.fetchMattermostChannel).toHaveBeenCalled();
+    expect(mockState.sendMessageMattermost).toHaveBeenCalled();
+  });
 });

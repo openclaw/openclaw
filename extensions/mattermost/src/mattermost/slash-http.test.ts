@@ -192,11 +192,11 @@ describe("slash-http", () => {
     expect(response.getBody()).toContain("Unauthorized: invalid command token.");
   });
 
-  it("rejects unknown command tokens", async () => {
+  it("rejects unknown slash commands before upstream validation", async () => {
     const response = await runSlashRequest({
       commandTokens: new Set(["known-token"]),
       registeredCommands: [createRegisteredCommand({ token: "known-token" })],
-      body: "token=unknown&team_id=t1&channel_id=c1&user_id=u1&command=%2Foc_status&text=",
+      body: "token=unknown&team_id=t1&channel_id=c1&user_id=u1&command=%2Foc_unknown&text=",
     });
 
     expect(response.res.statusCode).toBe(401);
@@ -238,6 +238,7 @@ describe("slash-http", () => {
 
     await expect(
       validateMattermostSlashCommandToken({
+        accountId: "default",
         client,
         registeredCommand,
         payload: {
@@ -271,6 +272,7 @@ describe("slash-http", () => {
 
     await expect(
       validateMattermostSlashCommandToken({
+        accountId: "default",
         client,
         registeredCommand,
         payload: {
@@ -309,10 +311,20 @@ describe("slash-http", () => {
     };
 
     await expect(
-      validateMattermostSlashCommandToken({ client, registeredCommand, payload }),
+      validateMattermostSlashCommandToken({
+        accountId: "default",
+        client,
+        registeredCommand,
+        payload,
+      }),
     ).resolves.toBe(true);
     await expect(
-      validateMattermostSlashCommandToken({ client, registeredCommand, payload }),
+      validateMattermostSlashCommandToken({
+        accountId: "default",
+        client,
+        registeredCommand,
+        payload,
+      }),
     ).resolves.toBe(true);
 
     expect(client.requests).toEqual(["/commands/cmd-1"]);
@@ -342,13 +354,85 @@ describe("slash-http", () => {
     };
 
     await expect(
-      validateMattermostSlashCommandToken({ client, registeredCommand, payload }),
+      validateMattermostSlashCommandToken({
+        accountId: "default",
+        client,
+        registeredCommand,
+        payload,
+      }),
     ).resolves.toBe(false);
     await expect(
-      validateMattermostSlashCommandToken({ client, registeredCommand, payload }),
+      validateMattermostSlashCommandToken({
+        accountId: "default",
+        client,
+        registeredCommand,
+        payload,
+      }),
     ).resolves.toBe(false);
 
     expect(client.requests).toEqual(["/commands/cmd-1"]);
+  });
+
+  it("scopes validation cache entries by account", async () => {
+    const registeredCommand = createRegisteredCommand();
+    const clientA = createCommandLookupClient({
+      command: {
+        id: "cmd-1",
+        token: "token-a",
+        team_id: "t1",
+        trigger: "oc_status",
+        method: MATTERMOST_SLASH_POST_METHOD,
+        url: "https://gateway.example.com/slash",
+        auto_complete: true,
+        delete_at: 0,
+      },
+    });
+    const clientB = createCommandLookupClient({
+      command: {
+        id: "cmd-1",
+        token: "token-b",
+        team_id: "t1",
+        trigger: "oc_status",
+        method: MATTERMOST_SLASH_POST_METHOD,
+        url: "https://gateway.example.com/slash",
+        auto_complete: true,
+        delete_at: 0,
+      },
+    });
+
+    await expect(
+      validateMattermostSlashCommandToken({
+        accountId: "a1",
+        client: clientA,
+        registeredCommand,
+        payload: {
+          token: "token-a",
+          team_id: "t1",
+          channel_id: "c1",
+          user_id: "u1",
+          command: "/oc_status",
+          text: "",
+        },
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      validateMattermostSlashCommandToken({
+        accountId: "a2",
+        client: clientB,
+        registeredCommand,
+        payload: {
+          token: "token-b",
+          team_id: "t1",
+          channel_id: "c1",
+          user_id: "u1",
+          command: "/oc_status",
+          text: "",
+        },
+      }),
+    ).resolves.toBe(true);
+
+    expect(clientA.requests).toEqual(["/commands/cmd-1"]);
+    expect(clientB.requests).toEqual(["/commands/cmd-1"]);
   });
 
   it("rejects a command that Mattermost reports as deleted", async () => {
@@ -368,6 +452,7 @@ describe("slash-http", () => {
 
     await expect(
       validateMattermostSlashCommandToken({
+        accountId: "default",
         client,
         registeredCommand,
         payload: {
@@ -380,6 +465,51 @@ describe("slash-http", () => {
         },
       }),
     ).resolves.toBe(false);
+  });
+
+  it("accepts a regenerated command when the current trigger and URL match", async () => {
+    const registeredCommand = createRegisteredCommand({ token: "old-token" });
+    const oldDeletedCommand = {
+      id: "cmd-1",
+      token: "old-token",
+      team_id: "t1",
+      trigger: "oc_status",
+      method: MATTERMOST_SLASH_POST_METHOD,
+      url: "https://gateway.example.com/slash",
+      auto_complete: true,
+      delete_at: 123,
+    };
+    const newCommand = {
+      id: "cmd-2",
+      token: "new-token",
+      team_id: "t1",
+      trigger: "oc_status",
+      method: MATTERMOST_SLASH_POST_METHOD,
+      url: "https://gateway.example.com/slash",
+      auto_complete: true,
+      delete_at: 0,
+    };
+    const client = createCommandLookupClient({
+      command: oldDeletedCommand,
+      listCommands: [oldDeletedCommand, newCommand],
+    });
+
+    await expect(
+      validateMattermostSlashCommandToken({
+        accountId: "default",
+        client,
+        registeredCommand,
+        payload: {
+          token: "new-token",
+          team_id: "t1",
+          channel_id: "c1",
+          user_id: "u1",
+          command: "/oc_status",
+          text: "",
+        },
+      }),
+    ).resolves.toBe(true);
+    expect(client.requests).toEqual(["/commands/cmd-1", "/commands?team_id=t1&custom_only=true"]);
   });
 
   it("rejects current commands with a mismatched method or callback URL", async () => {
@@ -411,6 +541,7 @@ describe("slash-http", () => {
 
       await expect(
         validateMattermostSlashCommandToken({
+          accountId: "default",
           client,
           registeredCommand,
           payload: {
@@ -445,6 +576,7 @@ describe("slash-http", () => {
 
     await expect(
       validateMattermostSlashCommandToken({
+        accountId: "default",
         client,
         registeredCommand,
         payload: {
@@ -470,6 +602,7 @@ describe("slash-http", () => {
 
     await expect(
       validateMattermostSlashCommandToken({
+        accountId: "default",
         client,
         registeredCommand,
         payload: {

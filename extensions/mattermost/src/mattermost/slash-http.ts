@@ -56,7 +56,7 @@ type SlashHttpHandlerParams = {
   account: ResolvedMattermostAccount;
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
-  /** Expected token from registered commands (for validation). */
+  /** Tokens learned from registered/current commands, used for fast matching and routing. */
   commandTokens: Set<string>;
   /** Commands registered or reconciled during monitor startup. */
   registeredCommands: readonly MattermostRegisteredCommand[];
@@ -101,10 +101,7 @@ function sendJsonResponse(
   res.end(JSON.stringify(body));
 }
 
-function matchesRegisteredCommandToken(
-  commandTokens: ReadonlySet<string>,
-  candidate: string,
-): boolean {
+function matchesRegisteredCommandToken(commandTokens: ReadonlySet<string>, candidate: string) {
   for (const token of commandTokens) {
     if (safeEqualSecret(candidate, token)) {
       return true;
@@ -136,6 +133,10 @@ function sanitizeCommandLookupError(error: unknown): string {
     .slice(0, 300);
 }
 
+function sanitizeMattermostLogValue(value: string): string {
+  return value.replace(/[\r\n\t]/gu, " ").slice(0, 200);
+}
+
 async function withCommandLookupTimeout<T>(task: (signal: AbortSignal) => Promise<T>): Promise<T> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), COMMAND_LOOKUP_TIMEOUT_MS);
@@ -149,8 +150,9 @@ async function withCommandLookupTimeout<T>(task: (signal: AbortSignal) => Promis
 function commandLookupKey(
   client: ReturnType<typeof createMattermostClient>,
   registered: MattermostRegisteredCommand,
+  accountId: string,
 ): string {
-  return `${client.apiBaseUrl}:${registered.teamId}:${registered.id}`;
+  return `${client.apiBaseUrl}:${accountId}:${registered.teamId}:${registered.id}`;
 }
 
 export function resetMattermostSlashCommandValidationCacheForTests(): void {
@@ -163,11 +165,15 @@ async function fetchCurrentMattermostCommandUncached(params: {
   registered: MattermostRegisteredCommand;
   log?: (msg: string) => void;
 }): Promise<MattermostCommandResponse | null> {
+  let commandLookupResult: MattermostCommandResponse | null = null;
   let commandLookupError: unknown;
   try {
-    return await withCommandLookupTimeout((signal) =>
+    commandLookupResult = await withCommandLookupTimeout((signal) =>
       getMattermostCommand(params.client, params.registered.id, { signal }),
     );
+    if (!isDeletedMattermostCommand(commandLookupResult)) {
+      return commandLookupResult;
+    }
   } catch (err) {
     commandLookupError = err;
     // Older Mattermost servers may not expose GET /commands/{id}; fall back to
@@ -178,7 +184,21 @@ async function fetchCurrentMattermostCommandUncached(params: {
     const currentCommands = await withCommandLookupTimeout((signal) =>
       listMattermostCommands(params.client, params.registered.teamId, { signal }),
     );
-    return currentCommands.find((cmd) => cmd.id === params.registered.id) ?? null;
+    const currentById = currentCommands.find((cmd) => cmd.id === params.registered.id);
+    if (currentById && !isDeletedMattermostCommand(currentById)) {
+      return currentById;
+    }
+    return (
+      currentCommands.find(
+        (cmd) =>
+          !isDeletedMattermostCommand(cmd) &&
+          cmd.team_id === params.registered.teamId &&
+          cmd.trigger === params.registered.trigger &&
+          cmd.url === params.registered.url,
+      ) ??
+      currentById ??
+      commandLookupResult
+    );
   } catch (err) {
     const primaryDetail = commandLookupError
       ? `; command lookup: ${sanitizeCommandLookupError(commandLookupError)}`
@@ -191,11 +211,12 @@ async function fetchCurrentMattermostCommandUncached(params: {
 }
 
 async function fetchCurrentMattermostCommand(params: {
+  accountId: string;
   client: ReturnType<typeof createMattermostClient>;
   registered: MattermostRegisteredCommand;
   log?: (msg: string) => void;
 }): Promise<MattermostCommandResponse | null> {
-  const key = commandLookupKey(params.client, params.registered);
+  const key = commandLookupKey(params.client, params.registered, params.accountId);
   const cached = commandLookupCache.get(key);
   if (cached) {
     if (cached.expiresAt > Date.now()) {
@@ -227,12 +248,14 @@ async function fetchCurrentMattermostCommand(params: {
 }
 
 export async function validateMattermostSlashCommandToken(params: {
+  accountId: string;
   client: ReturnType<typeof createMattermostClient>;
   registeredCommand: MattermostRegisteredCommand;
   payload: MattermostSlashCommandPayload;
   log?: (msg: string) => void;
 }): Promise<boolean> {
   const current = await fetchCurrentMattermostCommand({
+    accountId: params.accountId,
     client: params.client,
     registered: params.registeredCommand,
     log: params.log,
@@ -426,14 +449,11 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
     }
 
     const registeredCommand = findRegisteredCommandForPayload({ registeredCommands, payload });
+    const startupTokenMatches = matchesRegisteredCommandToken(commandTokens, payload.token);
 
     // Validate token — fail closed: reject when no commands are registered
     // (e.g. registration failed or startup was partial).
-    if (
-      commandTokens.size === 0 ||
-      !registeredCommand ||
-      !matchesRegisteredCommandToken(commandTokens, payload.token)
-    ) {
+    if (registeredCommands.length === 0 || !registeredCommand) {
       sendJsonResponse(res, 401, {
         response_type: "ephemeral",
         text: "Unauthorized: invalid command token.",
@@ -449,6 +469,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
     });
 
     const tokenIsCurrent = await validateMattermostSlashCommandToken({
+      accountId: account.accountId,
       client,
       registeredCommand,
       payload,
@@ -460,6 +481,9 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
         text: "Unauthorized: invalid command token.",
       });
       return;
+    }
+    if (!startupTokenMatches) {
+      commandTokens.add(payload.token);
     }
 
     // Extract command info
@@ -489,7 +513,9 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
       return;
     }
 
-    log?.(`mattermost: slash command /${trigger} from ${senderName} in ${channelId}`);
+    log?.(
+      `mattermost: slash command /${sanitizeMattermostLogValue(trigger)} from ${sanitizeMattermostLogValue(senderName)} in ${sanitizeMattermostLogValue(channelId)}`,
+    );
 
     // Acknowledge immediately — we'll send the actual reply asynchronously
     sendJsonResponse(res, 200, {
