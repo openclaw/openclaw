@@ -471,6 +471,18 @@ describe("projectRecentChatDisplayMessages", () => {
 
     expect(result).toEqual([{ role: "assistant", content: "older answer", timestamp: 2 }]);
   });
+
+  it("drops empty user transcript placeholders before applying history limits", () => {
+    const result = projectRecentChatDisplayMessages(
+      [
+        { role: "user", content: [{ type: "text", text: "   " }], timestamp: 1 },
+        { role: "assistant", content: "Startup complete.", timestamp: 2 },
+      ],
+      { maxMessages: 1 },
+    );
+
+    expect(result).toEqual([{ role: "assistant", content: "Startup complete.", timestamp: 2 }]);
+  });
 });
 
 describe("resolveEffectiveChatHistoryMaxChars", () => {

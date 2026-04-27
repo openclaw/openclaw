@@ -6,6 +6,7 @@ import {
 } from "../../agents/pi-embedded-runner/runs.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { createReplyOperation } from "./reply-run-registry.js";
+import { BARE_SESSION_RESET_PROMPT } from "./session-reset-prompt.js";
 
 vi.mock("../../agents/auth-profiles/session-override.js", () => ({
   resolveSessionAuthProfileOverride: vi.fn().mockResolvedValue(undefined),
@@ -1017,6 +1018,75 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.transcriptCommandBody).toBe("[OpenClaw heartbeat poll]");
     expect(call?.followupRun.transcriptPrompt).toBe("[OpenClaw heartbeat poll]");
   });
+
+  it("keeps bare session reset startup prompts out of visible transcript prompt", async () => {
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "/new",
+          RawBody: "/new",
+          CommandBody: "/new",
+          Provider: "webchat",
+          Surface: "webchat",
+          ChatType: "direct",
+        },
+        sessionCtx: {
+          Body: "/new",
+          BodyStripped: "/new",
+          Provider: "webchat",
+          Surface: "webchat",
+          ChatType: "direct",
+        },
+        command: {
+          ...(baseParams().command as unknown as Record<string, unknown>),
+          rawBodyNormalized: "/new",
+          commandBodyNormalized: "/new",
+        } as never,
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    expect(call?.commandBody).toContain(BARE_SESSION_RESET_PROMPT);
+    expect(call?.followupRun.prompt).toContain(BARE_SESSION_RESET_PROMPT);
+    expect(call?.transcriptCommandBody).toBe("");
+    expect(call?.followupRun.transcriptPrompt).toBe("");
+  });
+
+  it("keeps reset user notes visible while hiding startup instructions", async () => {
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "/reset keep this note",
+          RawBody: "/reset keep this note",
+          CommandBody: "/reset keep this note",
+          Provider: "webchat",
+          Surface: "webchat",
+          ChatType: "direct",
+        },
+        sessionCtx: {
+          Body: "/reset keep this note",
+          BodyStripped: "/reset keep this note",
+          Provider: "webchat",
+          Surface: "webchat",
+          ChatType: "direct",
+        },
+        command: {
+          ...(baseParams().command as unknown as Record<string, unknown>),
+          rawBodyNormalized: "/reset keep this note",
+          commandBodyNormalized: "/reset keep this note",
+          softResetTriggered: true,
+          softResetTail: "keep this note",
+        } as never,
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    expect(call?.commandBody).toContain(BARE_SESSION_RESET_PROMPT);
+    expect(call?.commandBody).toContain("User note for this reset turn");
+    expect(call?.transcriptCommandBody).toBe("keep this note");
+    expect(call?.followupRun.transcriptPrompt).toBe("keep this note");
+  });
+
   it("uses inbound origin channel for run messageProvider", async () => {
     await runPreparedReply(
       baseParams({

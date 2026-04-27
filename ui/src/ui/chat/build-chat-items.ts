@@ -148,6 +148,14 @@ function findNearestAssistantMessageIndex(
   return assistantEntries[assistantEntries.length - 1]?.index ?? null;
 }
 
+function isEmptyUserTextMessage(message: unknown): boolean {
+  const normalized = normalizeMessage(message);
+  if (normalized.role.toLowerCase() !== "user") {
+    return false;
+  }
+  return normalized.content.every((item) => item.type === "text" && !item.text?.trim());
+}
+
 function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
   const result: Array<ChatItem | MessageGroup> = [];
   let currentGroup: MessageGroup | null = null;
@@ -230,6 +238,10 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     }
 
     if (!props.showToolCalls && normalized.role.toLowerCase() === "toolresult") {
+      continue;
+    }
+
+    if (isEmptyUserTextMessage(msg)) {
       continue;
     }
 

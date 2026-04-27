@@ -47,6 +47,26 @@ describe("buildChatItems", () => {
     expect(groups.map((group) => group.senderLabel)).toEqual(["Iris", "Joaquin De Rojas"]);
   });
 
+  it("drops empty user transcript placeholders before grouping", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "   " }],
+          timestamp: 999,
+        },
+        {
+          role: "assistant",
+          content: "Ready.",
+          timestamp: 1000,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.role).toBe("assistant");
+  });
+
   it("attaches lifted canvas previews to the nearest assistant turn", () => {
     const groups = messageGroups({
       messages: [
