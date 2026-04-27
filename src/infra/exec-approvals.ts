@@ -345,6 +345,7 @@ function resolveTrustedOpenClawSymlink(linkPath: string): string {
     );
   }
   const currentUid = getuid.call(process);
+  assertStableOpenClawSymlinkLocation(linkPath, currentUid);
   assertNoAdditionalOpenClawSymlinkTargetHops(targetPath, linkPath, currentUid);
   const realPath = fs.realpathSync(linkPath);
   const targetStat = fs.statSync(realPath);
@@ -370,6 +371,17 @@ function resolveTrustedOpenClawSymlink(linkPath: string): string {
 function resolveOpenClawSymlinkDestinationPath(linkPath: string): string {
   const destination = fs.readlinkSync(linkPath);
   return path.resolve(path.dirname(linkPath), destination);
+}
+
+function assertStableOpenClawSymlinkLocation(linkPath: string, currentUid: number): void {
+  const linkStat = fs.lstatSync(linkPath);
+  if (linkStat.uid !== currentUid) {
+    throw new UnsafeExecApprovalsPathError(
+      `Refusing to use exec approvals .openclaw symlink not owned by current user: ${linkPath}`,
+    );
+  }
+  const parentRealPath = fs.realpathSync(path.dirname(linkPath));
+  assertStableResolvedOpenClawSymlinkTarget(parentRealPath, linkPath, currentUid);
 }
 
 function assertNoAdditionalOpenClawSymlinkTargetHops(

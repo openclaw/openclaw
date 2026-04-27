@@ -104,6 +104,40 @@ struct ExecApprovalsSocketPathGuardTests {
     }
 
     @Test
+    func `harden parent directory rejects deeper symlink below state directory`() throws {
+        let root = FileManager().temporaryDirectory.resolvingSymlinksInPath()
+            .appendingPathComponent("openclaw-socket-guard-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: root) }
+        let target = root.appendingPathComponent("state-target", isDirectory: true)
+        let release = target.appendingPathComponent("release-123", isDirectory: true)
+        let linkedState = root.appendingPathComponent(".openclaw", isDirectory: true)
+        let current = target.appendingPathComponent("current", isDirectory: true)
+        try FileManager().createDirectory(at: release, withIntermediateDirectories: true)
+        try FileManager().setAttributes([.posixPermissions: 0o700], ofItemAtPath: target.path)
+        try FileManager().setAttributes([.posixPermissions: 0o700], ofItemAtPath: release.path)
+        try FileManager().createSymbolicLink(at: linkedState, withDestinationURL: target)
+        try FileManager().createSymbolicLink(at: current, withDestinationURL: release)
+
+        let socketPath = linkedState
+            .appendingPathComponent("current", isDirectory: true)
+            .appendingPathComponent("exec-approvals.sock", isDirectory: false)
+            .path
+
+        do {
+            try ExecApprovalsSocketPathGuard.hardenParentDirectory(for: socketPath)
+            Issue.record("Expected deeper symlink rejection")
+        } catch let error as ExecApprovalsSocketPathGuardError {
+            switch error {
+            case let .parentPathInvalid(path, kind):
+                #expect(path == linkedState.appendingPathComponent("current", isDirectory: true).path)
+                #expect(kind == .symlink)
+            default:
+                Issue.record("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    @Test
     func `harden parent directory accepts secure symlink parent under system tmp path`() throws {
         let root = FileManager().temporaryDirectory.resolvingSymlinksInPath()
             .appendingPathComponent("openclaw-socket-guard-\(UUID().uuidString)", isDirectory: true)

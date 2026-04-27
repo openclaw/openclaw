@@ -678,6 +678,7 @@ enum ExecApprovalsSocketPathGuard {
 
         var rawURL = URL(fileURLWithPath: components[0], isDirectory: true)
         var hardenedURL = rawURL
+        var acceptedStateSymlink = false
 
         for component in components.dropFirst() {
             rawURL.appendPathComponent(component, isDirectory: true)
@@ -686,6 +687,12 @@ enum ExecApprovalsSocketPathGuard {
             case .missing, .directory:
                 hardenedURL = nextHardenedURL
             case .symlink:
+                guard component == ".openclaw" && !acceptedStateSymlink else {
+                    throw ExecApprovalsSocketPathGuardError.parentPathInvalid(
+                        path: rawURL.path,
+                        kind: .symlink)
+                }
+                acceptedStateSymlink = true
                 hardenedURL = try self.trustedParentSymlinkTarget(for: rawURL)
             case let kind:
                 throw ExecApprovalsSocketPathGuardError.parentPathInvalid(

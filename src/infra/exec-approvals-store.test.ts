@@ -298,6 +298,26 @@ describe("exec approvals store helpers", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "refuses a first-level .openclaw symlink in a writable location",
+    () => {
+      const dir = createHomeDir();
+      const targetRoot = fs.realpathSync(makeTempDir());
+      tempDirs.push(targetRoot);
+      const linkedStateTarget = path.join(targetRoot, "state-target");
+      fs.mkdirSync(linkedStateTarget, { recursive: true, mode: 0o700 });
+      fs.chmodSync(linkedStateTarget, 0o700);
+      fs.chmodSync(dir, 0o777);
+      fs.symlinkSync(linkedStateTarget, path.join(dir, ".openclaw"), "dir");
+
+      expect(() =>
+        saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
+      ).toThrow(/group\/other-writable exec approvals \.openclaw symlink ancestor/);
+      expectUnsafeApprovalsReadFailsClosed();
+      expect(fs.existsSync(path.join(linkedStateTarget, "exec-approvals.json"))).toBe(false);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "refuses a first-level .openclaw symlink target that resolves through another symlink",
     () => {
       const dir = createHomeDir();
