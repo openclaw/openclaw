@@ -154,7 +154,7 @@ function createSessionsSpawnToolSchema(params: { acpAvailable: boolean }) {
           resumeSessionId: Type.Optional(
             Type.String({
               description:
-                'Resume an existing agent session by its ID (e.g. a Codex session UUID from ~/.codex/sessions/). Requires runtime="acp". The agent replays conversation history via session/load instead of starting fresh.',
+                'ACP-only resume target. Only meaningful with runtime="acp"; ignored for runtime="subagent". Use an existing agent session ID (e.g. a Codex session UUID from ~/.codex/sessions/) so the ACP backend replays conversation history via session/load instead of starting fresh.',
             }),
           ),
           streamTo: optionalStringEnum(SESSIONS_SPAWN_ACP_STREAM_TARGETS, {
