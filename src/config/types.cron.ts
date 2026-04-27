@@ -48,6 +48,11 @@ export type CronConfig = {
    */
   sessionRetention?: string | false;
   /**
+   * Warn when a main-session systemEvent next-heartbeat handoff finishes faster than this.
+   * Set to 0 to disable the warning. Default: 50ms.
+   */
+  ghostRunWarningThresholdMs?: number;
+  /**
    * Run-log pruning controls for `cron/runs/<jobId>.jsonl`.
    * Defaults: `maxBytes=2_000_000`, `keepLines=2000`.
    */
