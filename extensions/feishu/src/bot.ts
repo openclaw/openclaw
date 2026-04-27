@@ -141,11 +141,11 @@ export function parseFeishuMessageEvent(
   const rawContent = parseMessageContent(event.message.content, event.message.message_type);
   const mentionedBot = checkBotMentioned(event, botOpenId);
   const hasAnyMention = (event.message.mentions?.length ?? 0) > 0;
-  // Strip the bot's own mention so slash commands like @Bot /help retain
-  // the leading /. This applies in both p2p *and* group contexts — the
-  // mentionedBot flag already captures whether the bot was addressed, so
-  // keeping the mention tag in content only breaks command detection (#35994).
-  // Non-bot mentions (e.g. mention-forward targets) are still normalized to <at> tags.
+  // Preserve ALL <at> tags including the bot's own mention.
+  // The botStripId parameter is kept for backward compatibility but is now a no-op.
+  // LLM needs to see the complete @ context to correctly interpret who was mentioned.
+  // Note: command detection uses `normalizeFeishuCommandProbeBody` which strips all <at>
+  // tags before command parsing, so slash commands (e.g. @Bot /help) still work correctly.
   const content = normalizeMentions(rawContent, event.message.mentions, botOpenId);
   const senderOpenId = event.sender.sender_id.open_id?.trim();
   const senderUserId = event.sender.sender_id.user_id?.trim();
