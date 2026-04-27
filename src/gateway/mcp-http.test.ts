@@ -519,6 +519,64 @@ describe("mcp loopback server", () => {
     });
   });
 
+  it("keeps message tool sends isolated per CLI run id", async () => {
+    resolveGatewayScopedToolsMock.mockReturnValue({
+      agentId: "main",
+      tools: [
+        {
+          name: "message",
+          description: "send a message",
+          parameters: { type: "object", properties: {} },
+          execute: vi.fn(async () => ({
+            content: [{ type: "text", text: "sent" }],
+          })),
+        },
+      ],
+    });
+    server = await startMcpLoopbackServer(0);
+    const activeServer = server;
+    const runtime = getActiveMcpLoopbackRuntime();
+
+    const sendMessage = async (runId: string, message: string) =>
+      sendRaw({
+        port: activeServer.port,
+        token: runtime ? resolveMcpLoopbackBearerToken(runtime, false) : undefined,
+        headers: {
+          "content-type": "application/json",
+          "x-session-key": "agent:main:telegram:chat123",
+          "x-openclaw-run-id": runId,
+          "x-openclaw-message-channel": "telegram",
+          "x-openclaw-message-to": "chat123",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: runId,
+          method: "tools/call",
+          params: {
+            name: "message",
+            arguments: {
+              action: "send",
+              message,
+            },
+          },
+        }),
+      });
+
+    expect((await sendMessage("run-a", "from a")).status).toBe(200);
+    expect((await sendMessage("run-b", "from b")).status).toBe(200);
+
+    expect(drainCliMessagingToolSends("agent:main:telegram:chat123", "run-a")).toEqual({
+      targets: [{ tool: "message", provider: "telegram", to: "chat123" }],
+      texts: ["from a"],
+      mediaUrls: [],
+    });
+    expect(drainCliMessagingToolSends("agent:main:telegram:chat123", "run-b")).toEqual({
+      targets: [{ tool: "message", provider: "telegram", to: "chat123" }],
+      texts: ["from b"],
+      mediaUrls: [],
+    });
+  });
+
   it("records attachment-style message tool sends for CLI duplicate suppression", async () => {
     resolveGatewayScopedToolsMock.mockReturnValue({
       agentId: "main",
@@ -754,6 +812,9 @@ describe("createMcpLoopbackServerConfig", () => {
     expect(config.mcpServers?.openclaw?.url).toBe("http://127.0.0.1:23119/mcp");
     expect(config.mcpServers?.openclaw?.headers?.Authorization).toBe(
       "Bearer ${OPENCLAW_MCP_TOKEN}",
+    );
+    expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-run-id"]).toBe(
+      "${OPENCLAW_MCP_RUN_ID}",
     );
     expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-message-channel"]).toBe(
       "${OPENCLAW_MCP_MESSAGE_CHANNEL}",

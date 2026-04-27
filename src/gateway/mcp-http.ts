@@ -115,6 +115,7 @@ function recordMcpMessagingToolSend(params: {
   const threadId = readStringField(params.args, "threadId") ?? params.requestContext.agentThreadId;
   recordCliMessagingToolSend({
     sessionKey: params.requestContext.sessionKey,
+    runId: params.requestContext.runId,
     target: {
       tool: params.toolName,
       provider,

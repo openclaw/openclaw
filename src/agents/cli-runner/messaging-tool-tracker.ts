@@ -6,7 +6,7 @@ type CliMessagingToolSends = {
   mediaUrls: string[];
 };
 
-const sendsBySessionKey = new Map<string, CliMessagingToolSends>();
+const sendsByRunKey = new Map<string, CliMessagingToolSends>();
 
 function createEmptySends(): CliMessagingToolSends {
   return { targets: [], texts: [], mediaUrls: [] };
@@ -17,17 +17,27 @@ function normalizeSessionKey(sessionKey?: string): string | undefined {
   return trimmed || undefined;
 }
 
+function buildTrackingKey(sessionKey?: string, runId?: string): string | undefined {
+  const normalizedSessionKey = normalizeSessionKey(sessionKey);
+  if (!normalizedSessionKey) {
+    return undefined;
+  }
+  const normalizedRunId = runId?.trim();
+  return normalizedRunId ? `${normalizedSessionKey}\0${normalizedRunId}` : normalizedSessionKey;
+}
+
 export function recordCliMessagingToolSend(params: {
   sessionKey?: string;
+  runId?: string;
   target?: MessagingToolSend;
   text?: string;
   mediaUrls?: string[];
 }): void {
-  const sessionKey = normalizeSessionKey(params.sessionKey);
-  if (!sessionKey) {
+  const trackingKey = buildTrackingKey(params.sessionKey, params.runId);
+  if (!trackingKey) {
     return;
   }
-  const existing = sendsBySessionKey.get(sessionKey) ?? createEmptySends();
+  const existing = sendsByRunKey.get(trackingKey) ?? createEmptySends();
   if (params.target) {
     existing.targets.push(params.target);
   }
@@ -41,19 +51,22 @@ export function recordCliMessagingToolSend(params: {
       existing.mediaUrls.push(trimmed);
     }
   }
-  sendsBySessionKey.set(sessionKey, existing);
+  sendsByRunKey.set(trackingKey, existing);
 }
 
-export function drainCliMessagingToolSends(sessionKey?: string): CliMessagingToolSends {
-  const normalized = normalizeSessionKey(sessionKey);
-  if (!normalized) {
+export function drainCliMessagingToolSends(
+  sessionKey?: string,
+  runId?: string,
+): CliMessagingToolSends {
+  const trackingKey = buildTrackingKey(sessionKey, runId);
+  if (!trackingKey) {
     return createEmptySends();
   }
-  const existing = sendsBySessionKey.get(normalized);
-  sendsBySessionKey.delete(normalized);
+  const existing = sendsByRunKey.get(trackingKey);
+  sendsByRunKey.delete(trackingKey);
   return existing ?? createEmptySends();
 }
 
 export function resetCliMessagingToolSendsForTest(): void {
-  sendsBySessionKey.clear();
+  sendsByRunKey.clear();
 }

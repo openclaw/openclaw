@@ -124,7 +124,7 @@ export async function runPreparedCliAgent(
 ): Promise<EmbeddedPiRunResult> {
   const { executePreparedCliRun } = await import("./cli-runner/execute.runtime.js");
   const { params } = context;
-  drainCliMessagingToolSends(params.sessionKey);
+  drainCliMessagingToolSends(params.sessionKey, params.runId);
   const hookRunner = getGlobalHookRunner();
   const hasLlmInputHooks = hookRunner?.hasHooks("llm_input") === true;
   const hasLlmOutputHooks = hookRunner?.hasHooks("llm_output") === true;
@@ -235,7 +235,7 @@ export async function runPreparedCliAgent(
     const text = resultParams.output.text?.trim();
     const rawText = resultParams.output.rawText?.trim();
     const payloads = text ? [{ text }] : undefined;
-    const messagingToolSends = drainCliMessagingToolSends(params.sessionKey);
+    const messagingToolSends = drainCliMessagingToolSends(params.sessionKey, params.runId);
 
     return {
       payloads,

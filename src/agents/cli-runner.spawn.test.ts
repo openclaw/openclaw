@@ -611,6 +611,7 @@ describe("runCliAgent spawn path", () => {
     supervisorSpawnMock.mockImplementationOnce(async () => {
       recordCliMessagingToolSend({
         sessionKey: "agent:main:telegram:chat123",
+        runId: "run-cli-message-tool",
         target: { tool: "message", provider: "telegram", to: "chat123" },
         text: "sent from tool",
         mediaUrls: ["file:///tmp/out.png"],
