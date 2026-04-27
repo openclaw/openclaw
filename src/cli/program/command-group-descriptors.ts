@@ -1,11 +1,8 @@
 import type { Command } from "commander";
+import type { NamedCommandDescriptor } from "./command-descriptor-types.js";
 import type { CommandGroupEntry } from "./register-command-groups.js";
 
-export type NamedCommandDescriptor = {
-  name: string;
-  description: string;
-  hasSubcommands: boolean;
-};
+export type { NamedCommandDescriptor };
 
 export type CommandGroupDescriptorSpec<TRegister> = {
   commandNames: readonly string[];

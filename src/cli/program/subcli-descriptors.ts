@@ -1,5 +1,5 @@
+import type { NamedCommandDescriptor } from "./command-descriptor-types.js";
 import { defineCommandDescriptorCatalog } from "./command-descriptor-utils.js";
-import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
 import { isPrivateQaCliEnabled } from "./private-qa-cli.js";
 
 export type SubCliDescriptor = NamedCommandDescriptor;
