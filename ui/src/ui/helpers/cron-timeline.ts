@@ -1,3 +1,4 @@
+import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
 import type { CronJob, CronSchedule } from "../types.ts";
 
 // --- Types ---
@@ -52,24 +53,18 @@ function jobColor(index: number): string {
 }
 
 function scheduleLabel(schedule: CronSchedule): string {
-  switch (schedule.kind) {
-    case "cron":
-      return schedule.expr;
-    case "every":
-      return `every ${formatEveryMs(schedule.everyMs)}`;
-    case "at":
-      return `at ${schedule.at}`;
+  if (schedule.kind === "cron") {
+    return schedule.expr;
   }
+  if (schedule.kind === "every") {
+    return `every ${formatEveryMs(schedule.everyMs)}`;
+  }
+  return `at ${schedule.at}`;
 }
 
 function formatEveryMs(ms: number): string {
-  if (ms < 60_000) {
-    return `${Math.round(ms / 1000)}s`;
-  }
-  if (ms < 3_600_000) {
-    return `${Math.round(ms / 60_000)}m`;
-  }
-  return `${Math.round(ms / 3_600_000)}h`;
+  // 用复合单位保留精度（90m 而不是 2h，1m30s 而不是 2m）
+  return formatDurationCompact(ms) ?? "0s";
 }
 
 /** Check if a job is high-frequency (runs more often than every 10 min). */
@@ -91,7 +86,7 @@ function isHighFrequency(schedule: CronSchedule): boolean {
     // "*/N ..." runs every N minutes
     const stepMatch = minField.match(/^\*\/(\d+)$/);
     if (stepMatch) {
-      return parseInt(stepMatch[1], 10) <= 10;
+      return Number.parseInt(stepMatch[1], 10) <= 10;
     }
   }
   return false;
@@ -99,17 +94,16 @@ function isHighFrequency(schedule: CronSchedule): boolean {
 
 /** Get zoom range in hours [start, end]. */
 export function getZoomRange(zoom: TimelineZoom): [number, number] {
-  switch (zoom) {
-    case "all":
-      return [0, 24];
-    case "work":
-      return [8, 20];
-    case "now": {
-      const now = new Date();
-      const h = now.getHours() + now.getMinutes() / 60;
-      return [Math.max(0, h - 3), Math.min(24, h + 3)];
-    }
+  if (zoom === "all") {
+    return [0, 24];
   }
+  if (zoom === "work") {
+    return [8, 20];
+  }
+  // "now"
+  const now = new Date();
+  const h = now.getHours() + now.getMinutes() / 60;
+  return [Math.max(0, h - 3), Math.min(24, h + 3)];
 }
 
 /** Convert an hour value to a percentage within the zoom range. */
@@ -135,11 +129,11 @@ function dateInTimezone(tz: string): Date {
     const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
     // Construct a Date in local time that has the tz's date/time values
     const d = new Date(
-      parseInt(get("year")),
-      parseInt(get("month")) - 1,
-      parseInt(get("day")),
-      parseInt(get("hour")),
-      parseInt(get("minute")),
+      Number.parseInt(get("year"), 10),
+      Number.parseInt(get("month"), 10) - 1,
+      Number.parseInt(get("day"), 10),
+      Number.parseInt(get("hour"), 10),
+      Number.parseInt(get("minute"), 10),
     );
     // Preserve weekday from tz (Date constructor may differ at day boundaries)
     const weekdays: Record<string, number> = {
@@ -189,7 +183,8 @@ function convertTzHourToLocal(
     });
     // Read what our guess looks like in the target tz
     const parts = fmt.formatToParts(guess);
-    const get = (type: string) => parseInt(parts.find((p) => p.type === type)?.value ?? "0");
+    const get = (type: string) =>
+      Number.parseInt(parts.find((p) => p.type === type)?.value ?? "0", 10);
     const guessInTz = Date.UTC(
       get("year"),
       get("month") - 1,
@@ -282,11 +277,12 @@ function getTodayRunHours(schedule: CronSchedule): number[] {
   const [minField, hourField, domField, monField, dowField] = parts;
 
   // Determine "today" in the job's timezone (if specified).
-  // TODO(P1-8): For tz-less cron expressions, we should use the gateway's
-  // configured timezone (not browser local time) as the default. The gateway
-  // timezone is not currently exposed to the UI layer. Once it is (e.g. via
-  // gatewayTimezone in CronStatus or a global config store), use it here
-  // instead of falling back to the browser's local time.
+  // Note: tz-less cron expressions currently fall back to the browser's local
+  // time. The gateway resolves missing tz to its host timezone (see
+  // src/cron/schedule.ts:resolveCronTimezone), so remote setups where the
+  // operator browser tz differs from the gateway tz can render off-by-offset
+  // markers. The fix requires exposing the gateway tz through CronStatus and
+  // threading it through the controller; tracked separately.
   const today = schedule.tz ? dateInTimezone(schedule.tz) : new Date();
 
   const minutes = parseCronField(minField, 0, 59);
@@ -396,11 +392,27 @@ function getTodayRunHours(schedule: CronSchedule): number[] {
 
 // Name-to-number mappings for Croner-compatible cron tokens
 const MONTH_NAMES: Record<string, number> = {
-  JAN: 1, FEB: 2, MAR: 3, APR: 4, MAY: 5, JUN: 6,
-  JUL: 7, AUG: 8, SEP: 9, OCT: 10, NOV: 11, DEC: 12,
+  JAN: 1,
+  FEB: 2,
+  MAR: 3,
+  APR: 4,
+  MAY: 5,
+  JUN: 6,
+  JUL: 7,
+  AUG: 8,
+  SEP: 9,
+  OCT: 10,
+  NOV: 11,
+  DEC: 12,
 };
 const DOW_NAMES: Record<string, number> = {
-  SUN: 0, MON: 1, TUE: 2, WED: 3, THU: 4, FRI: 5, SAT: 6,
+  SUN: 0,
+  MON: 1,
+  TUE: 2,
+  WED: 3,
+  THU: 4,
+  FRI: 5,
+  SAT: 6,
 };
 
 /** Resolve a cron token to a number, handling named days/months.
@@ -413,7 +425,7 @@ function resolveToken(token: string, min: number, max: number): number {
   if (max === 7 && DOW_NAMES[upper] !== undefined) {
     return DOW_NAMES[upper];
   }
-  return parseInt(token, 10);
+  return Number.parseInt(token, 10);
 }
 
 /** Parse a single cron field into an array of values.
@@ -436,7 +448,7 @@ function parseCronField(field: string, min: number, max: number): number[] {
   for (const part of field.split(",")) {
     const stepMatch = part.match(/^(\*|\d+-\d+)\/(\d+)$/);
     if (stepMatch) {
-      const step = parseInt(stepMatch[2], 10);
+      const step = Number.parseInt(stepMatch[2], 10);
       if (step <= 0) {
         continue;
       }
@@ -470,7 +482,7 @@ function parseCronField(field: string, min: number, max: number): number[] {
     }
 
     const num = resolveToken(part, min, max);
-    if (!isNaN(num) && num >= min && num <= max) {
+    if (!Number.isNaN(num) && num >= min && num <= max) {
       values.add(num);
     }
   }
