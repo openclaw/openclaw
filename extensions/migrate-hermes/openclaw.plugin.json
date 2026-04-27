@@ -1,5 +1,5 @@
 {
-  "id": "hermes-migration",
+  "id": "migrate-hermes",
   "name": "Hermes Migration",
   "description": "Imports Hermes configuration, memories, skills, and supported credentials into OpenClaw.",
   "contracts": {

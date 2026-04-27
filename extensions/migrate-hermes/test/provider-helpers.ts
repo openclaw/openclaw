@@ -14,7 +14,7 @@ export const logger = {
 };
 
 export async function makeTempRoot() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hermes-migration-"));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-migrate-hermes-"));
   tempRoots.add(root);
   return root;
 }

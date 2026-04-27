@@ -48,7 +48,7 @@ describe("bundled capability metadata", () => {
     expect(BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          pluginId: "hermes-migration",
+          pluginId: "migrate-hermes",
           migrationProviderIds: ["hermes"],
         }),
       ]),

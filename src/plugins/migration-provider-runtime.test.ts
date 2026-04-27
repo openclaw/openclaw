@@ -128,7 +128,7 @@ describe("migration provider runtime", () => {
     const active = createEmptyPluginRegistry();
     const loaded = createEmptyPluginRegistry();
     loaded.migrationProviders.push({
-      pluginId: "hermes-migration",
+      pluginId: "migrate-hermes",
       pluginName: "Hermes Migration",
       source: "test",
       provider,
@@ -144,7 +144,7 @@ describe("migration provider runtime", () => {
         diagnostics: [],
         plugins: [
           {
-            id: "hermes-migration",
+            id: "migrate-hermes",
             origin: "bundled",
             contracts: { migrationProviders: ["hermes"] },
           },
@@ -162,7 +162,7 @@ describe("migration provider runtime", () => {
       preferPersisted: false,
     });
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
-      onlyPluginIds: ["hermes-migration"],
+      onlyPluginIds: ["migrate-hermes"],
       activate: false,
     });
   });

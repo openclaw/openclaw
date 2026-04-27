@@ -672,19 +672,6 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
-  extensions/hermes-migration:
-    dependencies:
-      yaml:
-        specifier: ^2.8.3
-        version: 2.8.3
-    devDependencies:
-      '@openclaw/plugin-sdk':
-        specifier: workspace:*
-        version: link:../../packages/plugin-sdk
-      openclaw:
-        specifier: workspace:*
-        version: link:../..
-
   extensions/huggingface:
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -879,6 +866,19 @@ importers:
       typebox:
         specifier: 1.1.33
         version: 1.1.33
+      yaml:
+        specifier: ^2.8.3
+        version: 2.8.3
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
+  extensions/migrate-hermes:
+    dependencies:
       yaml:
         specifier: ^2.8.3
         version: 2.8.3

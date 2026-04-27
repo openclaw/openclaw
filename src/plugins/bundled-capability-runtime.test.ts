@@ -29,17 +29,17 @@ describe("buildVitestCapabilityShimAliasMap", () => {
 describe("loadBundledCapabilityRuntimeRegistry", () => {
   it("captures bundled migration providers", () => {
     const registry = loadBundledCapabilityRuntimeRegistry({
-      pluginIds: ["hermes-migration"],
+      pluginIds: ["migrate-hermes"],
       pluginSdkResolution: "dist",
     });
 
-    const record = registry.plugins.find((entry) => entry.id === "hermes-migration");
+    const record = registry.plugins.find((entry) => entry.id === "migrate-hermes");
     expect(record?.migrationProviderIds).toEqual(["hermes"]);
     expect(
       registry.migrationProviders.map((entry) => ({
         pluginId: entry.pluginId,
         providerId: entry.provider.id,
       })),
-    ).toEqual([{ pluginId: "hermes-migration", providerId: "hermes" }]);
+    ).toEqual([{ pluginId: "migrate-hermes", providerId: "hermes" }]);
   });
 });
