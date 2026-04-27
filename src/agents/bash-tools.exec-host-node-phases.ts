@@ -123,6 +123,9 @@ export async function resolveNodeExecutionTarget(
       "exec host=node requires a node that supports system.run (companion app or node host).",
     );
   }
+  if (params.timeoutSec === 0) {
+    throw new Error("exec host=node does not support timeout=0; use a large positive timeout.");
+  }
   const invokeTimeoutSec =
     typeof params.timeoutSec === "number" && params.timeoutSec > 0
       ? params.timeoutSec

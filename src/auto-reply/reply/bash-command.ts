@@ -233,7 +233,7 @@ function buildUsageReply(): ReplyPayload {
     text: [
       "⚙️ Usage:",
       "- ! <command>",
-      "- ! --timeout <seconds> <command> (use --timeout 0 for long-running jobs)",
+      "- ! --timeout <seconds> <command> (0 disables local/sandbox/gateway exec timeout)",
       "- !poll | ! poll",
       "- !stop | ! stop",
       "- /bash ... (alias; same subcommands as !)",

@@ -386,32 +386,25 @@ describe("executeNodeHostCommand", () => {
     );
   });
 
-  it("omits zero command timeout for node system.run while keeping the default invoke wait", async () => {
-    await executeNodeHostCommand({
-      command: "bun ./script.ts",
-      workdir: "/tmp/work",
-      env: {},
-      security: "full",
-      ask: "off",
-      timeoutSec: 0,
-      defaultTimeoutSec: 30,
-      approvalRunningNoticeMs: 0,
-      warnings: [],
-      agentId: "requested-agent",
-      sessionKey: "requested-session",
-      notifyOnExit: false,
-    });
-
-    expect(callGatewayToolMock).toHaveBeenCalledWith(
-      "node.invoke",
-      expect.objectContaining({ timeoutMs: 35_000 }),
-      expect.objectContaining({
-        command: "system.run",
-        params: expect.not.objectContaining({
-          timeoutMs: expect.anything(),
-        }),
+  it("rejects timeout=0 for node system.run instead of leaving the remote process untimed", async () => {
+    await expect(
+      executeNodeHostCommand({
+        command: "bun ./script.ts",
+        workdir: "/tmp/work",
+        env: {},
+        security: "full",
+        ask: "off",
+        timeoutSec: 0,
+        defaultTimeoutSec: 30,
+        approvalRunningNoticeMs: 0,
+        warnings: [],
+        agentId: "requested-agent",
+        sessionKey: "requested-session",
+        notifyOnExit: false,
       }),
-    );
+    ).rejects.toThrow("exec host=node does not support timeout=0");
+
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
   it("denies timed-out inline-eval requests instead of invoking the node", async () => {

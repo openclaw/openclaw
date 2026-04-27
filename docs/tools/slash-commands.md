@@ -180,7 +180,7 @@ Current source-of-truth:
   <Accordion title="Voice, TTS, channel control">
     - `/tts on|off|status|chat|latest|provider|limit|summary|audio|help` controls TTS. See [TTS](/tools/tts).
     - `/activation mention|always` sets group activation mode.
-    - `/bash [--timeout <seconds>] <command>` runs a host shell command. Text-only. Alias: `! <command>`. Use `--timeout 0` for long-running jobs that should stay pollable without the exec timeout. Requires `commands.bash: true` plus `tools.elevated` allowlists.
+    - `/bash [--timeout <seconds>] <command>` runs a host shell command. Text-only. Alias: `! <command>`. Use `--timeout 0` only for local/sandbox/gateway jobs that should stay pollable without the exec timeout; node-backed bash requires a large positive timeout. Requires `commands.bash: true` plus `tools.elevated` allowlists.
     - `!poll [sessionId]` checks a background bash job.
     - `!stop [sessionId]` stops a background bash job.
   </Accordion>
