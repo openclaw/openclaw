@@ -176,6 +176,39 @@ test("process poll timed waits stop when the tool call is aborted", async () => 
   }
 });
 
+test("process poll abort preserves unread output for the next poll", async () => {
+  vi.useFakeTimers();
+  try {
+    const sessionId = "sess-timeout-abort-preserve";
+    const { processTool, session } = createProcessSessionHarness(sessionId);
+    const controller = new AbortController();
+
+    const pollPromise = pollSession(
+      processTool,
+      "toolcall-timeout-abort-preserve",
+      sessionId,
+      2000,
+      controller.signal,
+    );
+
+    await vi.advanceTimersByTimeAsync(100);
+    appendOutput(session, "stdout", "ready\n");
+    controller.abort();
+    await vi.advanceTimersByTimeAsync(150);
+
+    const abortedPoll = await pollPromise;
+    const abortedText = abortedPoll.content[0]?.type === "text" ? abortedPoll.content[0].text : "";
+    expect(abortedText).toContain("Poll aborted before reading output.");
+    expect(abortedText).not.toContain("ready");
+
+    const retryPoll = await pollSession(processTool, "toolcall-timeout-abort-retry", sessionId);
+    const retryText = retryPoll.content[0]?.type === "text" ? retryPoll.content[0].text : "";
+    expect(retryText).toContain("ready");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 test("process poll exposes adaptive retryInMs for repeated no-output polls", async () => {
   const sessionId = "sess-retry";
   const { processTool } = createProcessSessionHarness(sessionId);

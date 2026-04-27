@@ -394,6 +394,41 @@ export function createProcessTool(
               );
             }
           }
+          if (signal?.aborted) {
+            const abortedExitCode = scopedSession.exitCode ?? null;
+            const abortedExitSignal = scopedSession.exitSignal ?? null;
+            const abortedExitReason = scopedSession.exitReason;
+            const abortedExited = scopedSession.exited;
+            const abortedStatus = abortedExited
+              ? abortedExitCode === 0 &&
+                abortedExitSignal == null &&
+                !isFailedExitReason(abortedExitReason)
+                ? "completed"
+                : "failed"
+              : "running";
+            return {
+              content: [
+                {
+                  type: "text",
+                  text:
+                    "Poll aborted before reading output." +
+                    (abortedExited
+                      ? `\n\nProcess exited with ${formatProcessExitLabel({
+                          exitCode: abortedExitCode,
+                          exitSignal: abortedExitSignal,
+                          exitReason: abortedExitReason,
+                        })}.`
+                      : "\n\nProcess still running."),
+                },
+              ],
+              details: {
+                status: abortedStatus,
+                sessionId: params.sessionId,
+                exitCode: abortedExited ? (abortedExitCode ?? undefined) : undefined,
+                name: deriveSessionName(scopedSession.command),
+              },
+            };
+          }
           const { stdout, stderr } = drainSession(scopedSession);
           const exited = scopedSession.exited;
           const exitCode = scopedSession.exitCode ?? null;
