@@ -268,7 +268,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
+
       typing,
       sessionCtx,
       sessionEntry,
@@ -357,7 +357,7 @@ describe("runReplyAgent block streaming", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
+
       opts: { onBlockReply },
       typing,
       sessionCtx,
@@ -459,7 +459,7 @@ describe("runReplyAgent block streaming", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
+
       opts: { onBlockReply, blockReplyTimeoutMs: 1 },
       typing,
       sessionCtx,
@@ -572,7 +572,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
+
       typing,
       sessionCtx,
       sessionEntry,
@@ -666,7 +666,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
+
       typing,
       sessionCtx,
       sessionEntry,
@@ -732,7 +732,7 @@ describe("runReplyAgent claude-cli routing", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
+
       typing,
       sessionCtx,
       defaultModel: "claude-cli/opus-4.5",
@@ -813,7 +813,7 @@ describe("runReplyAgent messaging tool suppression", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
+
       typing,
       sessionCtx,
       sessionKey,
@@ -934,7 +934,7 @@ describe("runReplyAgent reminder commitment guard", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
+
       typing,
       sessionCtx,
       ...(params?.omitSessionKey ? {} : { sessionKey: params?.sessionKey ?? "main" }),
@@ -1155,7 +1155,7 @@ describe("runReplyAgent fallback reasoning tags", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
+
       typing,
       sessionCtx,
       sessionEntry: params?.sessionEntry,
@@ -1284,7 +1284,7 @@ describe("runReplyAgent response usage footer", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
+
       typing,
       sessionCtx,
       sessionEntry,
@@ -1395,7 +1395,7 @@ describe("runReplyAgent transient HTTP retry", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
+
       typing,
       sessionCtx,
       defaultModel: "anthropic/claude-opus-4-6",
@@ -1471,7 +1471,7 @@ describe("runReplyAgent billing error classification", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
+
       typing,
       sessionCtx,
       defaultModel: "anthropic/claude",
@@ -1532,7 +1532,7 @@ describe("runReplyAgent mid-turn rate-limit fallback", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
+
       typing,
       sessionCtx,
       defaultModel: "anthropic/claude",
@@ -1586,7 +1586,7 @@ describe("runReplyAgent mid-turn rate-limit fallback", () => {
 describe("runReplyAgent mid-stream steer", () => {
   const queueEmbeddedPiMessageMock = vi.mocked(queueEmbeddedPiMessage);
 
-  function createSteerRun(overrides: { isStreaming: boolean; steerReturns: boolean }) {
+  function createSteerRun(overrides: { steerReturns: boolean; isHeartbeat?: boolean }) {
     const typing = createMockTypingController();
     const sessionCtx = {
       Provider: "whatsapp",
@@ -1633,7 +1633,7 @@ describe("runReplyAgent mid-stream steer", () => {
           shouldSteer: true,
           shouldFollowup: false,
           isActive: true,
-          isStreaming: overrides.isStreaming,
+          opts: overrides.isHeartbeat ? { isHeartbeat: true } : undefined,
           typing,
           sessionCtx,
           defaultModel: "anthropic/claude",
@@ -1647,22 +1647,28 @@ describe("runReplyAgent mid-stream steer", () => {
     };
   }
 
-  it("aborts active run when steer injection fails (not streaming)", async () => {
-    const { call } = createSteerRun({ isStreaming: false, steerReturns: false });
+  it("aborts active run when steer injection fails", async () => {
+    const { call } = createSteerRun({ steerReturns: false });
     await call();
     expect(abortEmbeddedPiRunMock).toHaveBeenCalledWith("steer-session");
   });
 
-  it("does not abort when steer injection succeeds (streaming)", async () => {
-    const { call } = createSteerRun({ isStreaming: true, steerReturns: true });
+  it("does not abort when steer injection succeeds", async () => {
+    const { call } = createSteerRun({ steerReturns: true });
     const result = await call();
     expect(result).toBeUndefined();
     expect(abortEmbeddedPiRunMock).not.toHaveBeenCalled();
   });
 
-  it("attempts steer even when run is active but not streaming", async () => {
-    const { call } = createSteerRun({ isStreaming: false, steerReturns: false });
+  it("attempts steer for active runs", async () => {
+    const { call } = createSteerRun({ steerReturns: false });
     await call();
     expect(queueEmbeddedPiMessageMock).toHaveBeenCalledWith("steer-session", "change direction");
+  });
+
+  it("does not abort for heartbeat steer fallbacks", async () => {
+    const { call } = createSteerRun({ steerReturns: false, isHeartbeat: true });
+    await call();
+    expect(abortEmbeddedPiRunMock).not.toHaveBeenCalled();
   });
 });

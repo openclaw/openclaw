@@ -112,7 +112,7 @@ export async function runReplyAgent(params: {
   shouldFollowup: boolean;
   isActive: boolean;
   isRunActive?: () => boolean;
-  isStreaming: boolean;
+
   opts?: GetReplyOptions;
   typing: TypingController;
   sessionEntry?: SessionEntry;
@@ -146,7 +146,7 @@ export async function runReplyAgent(params: {
     shouldFollowup,
     isActive,
     isRunActive,
-    isStreaming: _isStreaming,
+
     opts,
     typing,
     sessionEntry,
@@ -219,8 +219,10 @@ export async function runReplyAgent(params: {
     }
     // Steer injection failed (run active but not streaming) — abort so
     // the enqueued followup starts sooner instead of waiting for the
-    // current turn to finish naturally.
-    if (!steered) {
+    // current turn to finish naturally.  Skip for heartbeats: queue
+    // policy drops active heartbeats, so aborting would kill the user's
+    // in-flight run for a turn that will be discarded anyway.
+    if (!steered && !isHeartbeat) {
       abortEmbeddedPiRun(steerSessionId);
     }
   }

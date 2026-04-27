@@ -520,7 +520,7 @@ export async function runPreparedReply(
       isStreaming: piRuntime.isEmbeddedPiRunStreaming(activeSessionId),
     };
   };
-  let { activeSessionId, isActive, isStreaming } = resolveQueueBusyState();
+  let { activeSessionId, isActive } = resolveQueueBusyState();
   const shouldSteer = resolvedQueue.mode === "steer" || resolvedQueue.mode === "steer-backlog";
   const shouldFollowup =
     resolvedQueue.mode === "followup" ||
@@ -566,7 +566,7 @@ export async function runPreparedReply(
       typing.cleanup();
       return queueState.reply;
     }
-    ({ activeSessionId, isActive, isStreaming } = queueState.busyState);
+    ({ activeSessionId, isActive } = queueState.busyState);
   }
   const authProfileIdSource = preparedSessionState.sessionEntry?.authProfileOverrideSource;
   const followupRun = {
@@ -665,7 +665,6 @@ export async function runPreparedReply(
         piRuntime?.resolveActiveEmbeddedRunSessionId(sessionKey) ?? latestSessionState.sessionId;
       return piRuntime?.isEmbeddedPiRunActive(latestActiveSessionId) ?? false;
     },
-    isStreaming,
     opts,
     typing,
     sessionEntry: preparedSessionState.sessionEntry,

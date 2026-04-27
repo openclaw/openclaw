@@ -57,7 +57,7 @@ describe("resolveActiveRunQueueAction", () => {
     ).toBe("run-now");
   });
 
-  it("enqueues steer-backlog mode while active", () => {
+  it("runs immediately for steer-backlog mode while active", () => {
     expect(
       resolveActiveRunQueueAction({
         isActive: true,
