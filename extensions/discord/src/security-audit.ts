@@ -170,7 +170,7 @@ export async function collectDiscordSecurityAuditFindings(params: {
       return Array.isArray(channelRecord.users) && channelRecord.users.length > 0;
     });
   });
-  const topLevelAllowFromRaw = (discordCfg as { allowFrom?: unknown }).allowFrom;
+  const topLevelAllowFromRaw = discordCfg.allowFrom;
   const topLevelAllowFrom = Array.isArray(topLevelAllowFromRaw) ? topLevelAllowFromRaw : [];
   const dmAllowFromRaw = (discordCfg.dm as { allowFrom?: unknown } | undefined)?.allowFrom;
   const dmAllowFrom = Array.isArray(dmAllowFromRaw) ? dmAllowFromRaw : [];
