@@ -4,21 +4,104 @@ import {
   FLAG_TERMINATOR,
   isValueToken,
 } from "../infra/cli-root-options.js";
-import { CORE_CLI_COMMAND_DESCRIPTORS } from "./program/core-command-descriptors.js";
-import { SUB_CLI_DESCRIPTORS } from "./program/subcli-descriptors.js";
 
 const HELP_FLAGS = new Set(["-h", "--help"]);
 const VERSION_FLAGS = new Set(["-V", "--version"]);
 const ROOT_VERSION_ALIAS_FLAG = "-v";
-const ROOT_COMMAND_DESCRIPTORS = [...CORE_CLI_COMMAND_DESCRIPTORS, ...SUB_CLI_DESCRIPTORS];
-const KNOWN_ROOT_COMMANDS: ReadonlySet<string> = new Set(
-  ROOT_COMMAND_DESCRIPTORS.map((descriptor) => descriptor.name),
-);
-const ROOT_COMMANDS_WITH_SUBCOMMANDS: ReadonlySet<string> = new Set(
-  ROOT_COMMAND_DESCRIPTORS.filter((descriptor) => descriptor.hasSubcommands).map(
-    (descriptor) => descriptor.name,
-  ),
-);
+
+const KNOWN_ROOT_COMMANDS: ReadonlySet<string> = new Set([
+  "crestodian",
+  "setup",
+  "onboard",
+  "configure",
+  "config",
+  "backup",
+  "doctor",
+  "dashboard",
+  "reset",
+  "uninstall",
+  "message",
+  "mcp",
+  "agent",
+  "agents",
+  "status",
+  "health",
+  "sessions",
+  "tasks",
+  "acp",
+  "gateway",
+  "daemon",
+  "logs",
+  "system",
+  "models",
+  "infer",
+  "capability",
+  "approvals",
+  "exec-policy",
+  "nodes",
+  "devices",
+  "node",
+  "sandbox",
+  "tui",
+  "terminal",
+  "chat",
+  "cron",
+  "dns",
+  "docs",
+  "qa",
+  "proxy",
+  "hooks",
+  "webhooks",
+  "qr",
+  "clawbot",
+  "pairing",
+  "plugins",
+  "channels",
+  "directory",
+  "security",
+  "secrets",
+  "skills",
+  "update",
+  "completion",
+]);
+
+const ROOT_COMMANDS_WITH_SUBCOMMANDS: ReadonlySet<string> = new Set([
+  "config",
+  "backup",
+  "message",
+  "mcp",
+  "agents",
+  "sessions",
+  "tasks",
+  "acp",
+  "gateway",
+  "daemon",
+  "system",
+  "models",
+  "infer",
+  "capability",
+  "approvals",
+  "exec-policy",
+  "nodes",
+  "devices",
+  "node",
+  "sandbox",
+  "cron",
+  "dns",
+  "qa",
+  "proxy",
+  "hooks",
+  "webhooks",
+  "clawbot",
+  "pairing",
+  "plugins",
+  "channels",
+  "directory",
+  "security",
+  "secrets",
+  "skills",
+  "update",
+]);
 
 export function hasHelpOrVersion(argv: string[]): boolean {
   return (
