@@ -12,7 +12,6 @@ export function buildReplyPromptBodies(params: {
   prefixedBody: string;
   transcriptBody?: string;
   threadContextNote?: string;
-  systemEventBlocks?: string[];
 }): {
   mediaNote?: string;
   mediaReplyHint?: string;
@@ -20,12 +19,9 @@ export function buildReplyPromptBodies(params: {
   queuedBody: string;
   transcriptCommandBody: string;
 } {
-  const combinedEventsBlock = (params.systemEventBlocks ?? []).filter(Boolean).join("\n");
-  const prependEvents = (body: string) =>
-    combinedEventsBlock ? `${combinedEventsBlock}\n\n${body}` : body;
-  const bodyWithEvents = prependEvents(params.effectiveBaseBody);
+  const bodyWithEvents = params.effectiveBaseBody;
   const prefixedBodyWithEvents = appendUntrustedContext(
-    prependEvents(params.prefixedBody),
+    params.prefixedBody,
     params.sessionCtx.UntrustedContext,
   );
   const prefixedBody = [params.threadContextNote, prefixedBodyWithEvents]

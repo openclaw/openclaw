@@ -515,9 +515,8 @@ export async function runPreparedReply(
   });
   const isGroupSession = sessionEntry?.chatType === "group" || sessionEntry?.chatType === "channel";
   const isMainSession = !isGroupSession && sessionKey === normalizeMainKey(sessionCfg?.mainKey);
-  // Extract first-token think hint from the user body BEFORE prepending system events.
-  // If done after, the System: prefix becomes parts[0] and silently shadows any
-  // low|medium|high shorthand the user typed.
+  // Extract first-token think hint before runtime system events are drained so
+  // internal event labels cannot shadow low|medium|high shorthand.
   if (!resolvedThinkLevel && prefixedBodyBase) {
     const parts = prefixedBodyBase.split(/\s+/);
     const maybeLevel = normalizeThinkLevel(parts[0]);
@@ -534,8 +533,19 @@ export async function runPreparedReply(
     : !isNewSession && threadStarterBody
       ? `[Thread starter - for context]\n${threadStarterBody}`
       : undefined;
-  const drainedSystemEventBlocks: string[] = [];
+  const drainedSystemContextBlocks: string[] = [];
   let forceSenderIsOwnerFalseFromSystemEvents = false;
+  const buildRuntimeSystemEventsPrompt = () => {
+    if (drainedSystemContextBlocks.length === 0) {
+      return undefined;
+    }
+    return [
+      "Runtime System Events",
+      "These events are runtime-generated, not user-authored.",
+      "",
+      drainedSystemContextBlocks.join("\n"),
+    ].join("\n");
+  };
   const rebuildPromptBodies = async (): Promise<{
     prefixedCommandBody: string;
     queuedBody: string;
@@ -549,7 +559,7 @@ export async function runPreparedReply(
         isNewSession,
       });
       if (eventsBlock) {
-        drainedSystemEventBlocks.push(eventsBlock);
+        drainedSystemContextBlocks.push(eventsBlock);
         if (UNTRUSTED_SYSTEM_EVENT_LINE_RE.test(eventsBlock)) {
           forceSenderIsOwnerFalseFromSystemEvents = true;
         }
@@ -562,7 +572,6 @@ export async function runPreparedReply(
       prefixedBody: prefixedBodyCore,
       transcriptBody: transcriptBodyBase,
       threadContextNote,
-      systemEventBlocks: drainedSystemEventBlocks,
     });
   };
   const skillResult =
@@ -833,7 +842,10 @@ export async function runPreparedReply(
       blockReplyBreak: resolvedBlockStreamingBreak,
       ownerNumbers: command.ownerList.length > 0 ? command.ownerList : undefined,
       inputProvenance: ctx.InputProvenance ?? sessionCtx.InputProvenance,
-      extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
+      extraSystemPrompt:
+        [...extraSystemPromptParts, buildRuntimeSystemEventsPrompt()]
+          .filter(Boolean)
+          .join("\n\n") || undefined,
       extraSystemPromptStatic: extraSystemPromptStaticParts.join("\n\n"),
       skipProviderRuntimeHints: useFastReplyRuntime,
       allowEmptyAssistantReplyAsSilent,
