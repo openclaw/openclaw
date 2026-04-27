@@ -117,6 +117,7 @@ type ParsedComputerUseArgs = {
 };
 
 const CODEX_DIAGNOSTICS_SOURCE = "openclaw-diagnostics";
+const CODEX_DIAGNOSTICS_REASON_MAX_CHARS = 2048;
 
 export async function handleCodexSubcommand(
   ctx: PluginCommandContext,
@@ -518,7 +519,7 @@ async function sendCodexDiagnosticsFeedback(
       "Use /codex threads to find a thread, then /codex resume <thread-id> before sending diagnostics.",
     ].join("\n");
   }
-  const reason = normalizeOptionalString(note);
+  const reason = normalizeDiagnosticsReason(note);
   const response = await deps.safeCodexControlRequest(
     pluginConfig,
     CODEX_CONTROL_METHODS.feedback,
@@ -531,20 +532,27 @@ async function sendCodexDiagnosticsFeedback(
     },
   );
   if (!response.ok) {
+    const displayThreadId = formatCodexThreadIdForDisplay(binding.threadId);
     return [
-      `Could not send Codex diagnostics for thread ${binding.threadId}: ${response.error}`,
-      `Inspect locally: ${formatCodexResumeCommand(binding.threadId)}`,
+      `Could not send Codex diagnostics for thread ${displayThreadId}: ${response.error}`,
+      `Inspect locally: ${formatCodexResumeCommand(displayThreadId)}`,
     ].join("\n");
   }
   const responseThreadId = isJsonObject(response.value)
     ? readString(response.value, "threadId")
     : undefined;
   const threadId = responseThreadId ?? binding.threadId;
+  const displayThreadId = formatCodexThreadIdForDisplay(threadId);
   return [
-    `Codex diagnostics sent for thread ${threadId}.`,
-    `Inspect locally: ${formatCodexResumeCommand(threadId)}`,
+    `Codex diagnostics sent for thread ${displayThreadId}.`,
+    `Inspect locally: ${formatCodexResumeCommand(displayThreadId)}`,
     "Included Codex logs and spawned Codex subthreads when available.",
   ].join("\n");
+}
+
+function normalizeDiagnosticsReason(note: string): string | undefined {
+  const normalized = normalizeOptionalString(note);
+  return normalized ? normalized.slice(0, CODEX_DIAGNOSTICS_REASON_MAX_CHARS) : undefined;
 }
 
 function buildDiagnosticsTags(ctx: PluginCommandContext): Record<string, string> {
@@ -559,6 +567,16 @@ function addTag(tags: Record<string, string>, key: string, value: unknown): void
   if (typeof value === "string" && value.trim()) {
     tags[key] = value.trim();
   }
+}
+
+function formatCodexThreadIdForDisplay(threadId: string): string {
+  let safe = "";
+  for (const character of threadId) {
+    const codePoint = character.codePointAt(0);
+    safe += codePoint != null && (codePoint < 32 || codePoint === 127) ? "?" : character;
+  }
+  safe = safe.trim();
+  return safe || "<unknown>";
 }
 
 function formatCodexResumeCommand(threadId: string): string {
