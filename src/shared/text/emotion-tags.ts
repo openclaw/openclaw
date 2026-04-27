@@ -1,7 +1,7 @@
 import type { EmotionMode } from "../../emotion-mode.js";
 import { findCodeRegions, isInsideCode } from "./code-regions.js";
 
-const EMOTION_TAG_RE = /\[([A-Za-z]+(?:[ /-][A-Za-z]+){0,7})\](?!\s*\()/g;
+const EMOTION_TAG_RE = /\[([A-Za-z]+(?:[ /-][A-Za-z]+){0,7})\]/g;
 const TRAILING_EMOTION_TAG_RE = /\[[A-Za-z]+(?:[ /-][A-Za-z]+){0,7}[ /-]?$/u;
 const EMOTION_TAG_WORDS = new Set([
   "amused",
@@ -165,6 +165,10 @@ function isEmotionTagBoundary(char: string | undefined, side: "before" | "after"
 
 function isLikelyEmotionTag(text: string, index: number, rawTag: string, body: string): boolean {
   if (body.includes("  ")) {
+    return false;
+  }
+  const afterTagText = text.slice(index + rawTag.length);
+  if (/^\s*\((?:https?:\/\/|www\.)[^)\s]+/iu.test(afterTagText)) {
     return false;
   }
   const trimmedBody = body.trim();
