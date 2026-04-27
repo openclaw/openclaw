@@ -289,7 +289,7 @@ function resolveOwnerAllowFromList(params: {
       const prefix = trimmed.slice(0, separatorIndex);
       const channel = normalizeAnyChannelId(prefix);
       if (channel) {
-        if (params.providerId && channel !== params.providerId) {
+        if (!params.providerId || channel !== params.providerId) {
           continue;
         }
         const remainder = trimmed.slice(separatorIndex + 1).trim();
