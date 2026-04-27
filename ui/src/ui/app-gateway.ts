@@ -71,26 +71,49 @@ function isGenericBrowserFetchFailure(message: string): boolean {
 }
 
 /**
+ * Detail codes that represent a genuine credential/identity failure where the
+ * user must re-authenticate. Transient infra codes like `AUTH_RATE_LIMITED`
+ * or the `AUTH_TAILSCALE_*` family are deliberately excluded — those map to
+ * server-side conditions the user can't fix by re-entering credentials, and
+ * treating them as auth failures would re-flash the credentials gate on a
+ * brief WhoIs blip (the exact regression this PR prevents).
+ */
+const AUTH_FAILURE_DETAIL_CODES: ReadonlySet<string> = new Set([
+  ConnectErrorDetailCodes.AUTH_REQUIRED,
+  ConnectErrorDetailCodes.AUTH_UNAUTHORIZED,
+  ConnectErrorDetailCodes.AUTH_TOKEN_MISSING,
+  ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH,
+  ConnectErrorDetailCodes.AUTH_TOKEN_NOT_CONFIGURED,
+  ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING,
+  ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH,
+  ConnectErrorDetailCodes.AUTH_PASSWORD_NOT_CONFIGURED,
+  ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID,
+  ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH,
+  ConnectErrorDetailCodes.AUTH_TAILSCALE_IDENTITY_MISMATCH,
+  ConnectErrorDetailCodes.DEVICE_AUTH_INVALID,
+  ConnectErrorDetailCodes.DEVICE_AUTH_DEVICE_ID_MISMATCH,
+  ConnectErrorDetailCodes.DEVICE_AUTH_SIGNATURE_EXPIRED,
+  ConnectErrorDetailCodes.DEVICE_AUTH_NONCE_REQUIRED,
+  ConnectErrorDetailCodes.DEVICE_AUTH_NONCE_MISMATCH,
+  ConnectErrorDetailCodes.DEVICE_AUTH_SIGNATURE_INVALID,
+  ConnectErrorDetailCodes.DEVICE_AUTH_PUBLIC_KEY_INVALID,
+  ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED,
+  ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED,
+  ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
+  ConnectErrorDetailCodes.PAIRING_REQUIRED,
+]);
+
+/**
  * Returns true when a gateway close detail code indicates an explicit
  * auth/identity failure that should force the credentials gate to reappear.
- * Pure transport disconnects (network blip, server restart, tab focus) do
- * NOT match here — those keep the sticky `hasEverConnected` flag set so the
+ * Pure transport disconnects (network blip, server restart, tab focus) and
+ * transient infra codes (`AUTH_RATE_LIMITED`, `AUTH_TAILSCALE_WHOIS_FAILED`,
+ * `AUTH_TAILSCALE_PROXY_MISSING`, `AUTH_TAILSCALE_IDENTITY_MISSING`) do NOT
+ * match here — those keep the sticky `hasEverConnected` flag set so the
  * renderer can hold the chat UI mounted across reconnects.
  */
 export function isAuthFailureDetailCode(code: string): boolean {
-  if (!code) {
-    return false;
-  }
-  if (code === ConnectErrorDetailCodes.PAIRING_REQUIRED) {
-    return true;
-  }
-  return (
-    code.startsWith("AUTH_") ||
-    code.startsWith("DEVICE_AUTH_") ||
-    code === ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED ||
-    code === ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED ||
-    code === ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED
-  );
+  return !!code && AUTH_FAILURE_DETAIL_CODES.has(code);
 }
 
 type GatewayHost = {

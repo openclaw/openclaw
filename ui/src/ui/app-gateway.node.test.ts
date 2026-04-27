@@ -366,6 +366,28 @@ describe("connectGateway", () => {
     expect(host.hasEverConnected).toBe(false);
   });
 
+  it.each([
+    "AUTH_RATE_LIMITED",
+    "AUTH_TAILSCALE_WHOIS_FAILED",
+    "AUTH_TAILSCALE_PROXY_MISSING",
+    "AUTH_TAILSCALE_IDENTITY_MISSING",
+  ])("keeps hasEverConnected on transient infra code %s", (code) => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    client.emitHello();
+    expect(host.hasEverConnected).toBe(true);
+
+    client.emitClose({
+      code: 1006,
+      reason: "transient",
+      error: { code, message: "transient" },
+    });
+    expect(host.connected).toBe(false);
+    expect(host.hasEverConnected).toBe(true);
+  });
+
   it("preserves pending approval requests across reconnect", () => {
     const host = createHost();
     host.execApprovalQueue = [
