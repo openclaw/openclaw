@@ -673,23 +673,11 @@ export class QmdMemoryManager implements MemorySearchManager {
 
     if (!conflictName) {
       const parsedConflictName = this.parseConflictingCollectionNameFromAddError(addErrorMessage);
-      const parsedDetails = parsedConflictName ? existing.get(parsedConflictName) : undefined;
-      if (
-        parsedConflictName &&
-        parsedDetails?.path &&
-        typeof parsedDetails.pattern === "string" &&
-        this.pathsMatch(parsedDetails.path, collection.path) &&
-        this.patternsMatchForManagedCollection(
-          collection.path,
-          parsedDetails.pattern,
-          collection.pattern,
-        )
-      ) {
-        conflictName = parsedConflictName;
+      if (parsedConflictName) {
+        log.warn(
+          `qmd collection add conflict for ${collection.name}: qmd reported existing collection ${parsedConflictName}, but list output did not include verifiable path/pattern metadata; refusing automatic rebind. If ${parsedConflictName} is stale, remove it manually with 'qmd collection remove ${parsedConflictName}'`,
+        );
       }
-    }
-
-    if (!conflictName) {
       return false;
     }
     if (conflictName === collection.name) {
