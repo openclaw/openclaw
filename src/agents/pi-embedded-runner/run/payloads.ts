@@ -46,15 +46,9 @@ const RECOVERABLE_TOOL_ERROR_KEYWORDS = [
 
 const MUTATING_FAILURE_ACTION_PATTERN =
   "(?:write|edit|update|save|create|delete|remove|modify|change|apply|patch|move|rename|send|reply|message|tool|action|operation)";
-const MUTATING_FAILURE_VERB_PATTERN =
-  "(?:write|edit|update|save|create|delete|remove|modify|change|apply|patch|move|rename|send|reply|message)";
 
 const MUTATING_FAILURE_INABILITY_PATTERN = new RegExp(
   `\\b(?:couldn't|could not|can't|cannot|unable to|am unable to|wasn't able to|was not able to|were unable to)\\b.{0,100}\\b${MUTATING_FAILURE_ACTION_PATTERN}\\b`,
-  "u",
-);
-const MUTATING_FAILURE_DID_NOT_ACTION_PATTERN = new RegExp(
-  `\\b(?:didn't|did not)\\b\\s+(?:\\w+\\s+){0,3}?${MUTATING_FAILURE_VERB_PATTERN}\\b`,
   "u",
 );
 const MUTATING_FAILURE_ACTION_THEN_FAILURE_PATTERN = new RegExp(
@@ -86,9 +80,6 @@ function hasExplicitMutatingToolFailureAcknowledgement(text: string): boolean {
     return false;
   }
   if (MUTATING_FAILURE_INABILITY_PATTERN.test(normalizedText)) {
-    return true;
-  }
-  if (MUTATING_FAILURE_DID_NOT_ACTION_PATTERN.test(normalizedText)) {
     return true;
   }
   if (NEGATED_FAILURE_PATTERN.test(normalizedText)) {

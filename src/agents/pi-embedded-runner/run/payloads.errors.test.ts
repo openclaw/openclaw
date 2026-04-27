@@ -371,6 +371,23 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[1]?.text).not.toContain("missing");
   });
 
+  it.each([
+    "I did not need to update the file; it is already correct.",
+    "I did not have to edit the file because it was already correct.",
+  ])("shows mutating tool errors when assistant output uses no-op phrasing: %s", (text) => {
+    const payloads = buildPayloads({
+      assistantTexts: [text],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: { toolName: "edit", error: "file missing" },
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]?.text).toBe(text);
+    expect(payloads[1]?.isError).toBe(true);
+    expect(payloads[1]?.text).toContain("Edit");
+    expect(payloads[1]?.text).not.toContain("missing");
+  });
+
   it("suppresses mutating tool errors when assistant output explicitly acknowledges the failed action", () => {
     const text = "I couldn't update the file, so no changes were applied.";
     const payloads = buildPayloads({
