@@ -82,6 +82,14 @@ describe("createCovenClient", () => {
     );
   });
 
+  it("rejects oversized event cursors before building the events URL", () => {
+    expect(() =>
+      createCovenClient("/tmp/coven.sock").listEvents("session-1", {
+        afterEventId: "e".repeat(257),
+      }),
+    ).toThrow(/event id is invalid/);
+  });
+
   it("wraps invalid daemon JSON in a typed API error", async () => {
     await withServer(
       (_req, res) => {
@@ -178,5 +186,29 @@ describe("createCovenClient", () => {
     await expect(createCovenClient(socketPath, { socketRoot: covenHome }).health()).rejects.toThrow(
       /must be a Unix socket/,
     );
+  });
+
+  it("rejects socket path overrides even when they are inside covenHome", async () => {
+    const covenHome = path.join(tmpDir, ".coven");
+    await fs.mkdir(covenHome);
+    await fs.chmod(covenHome, 0o700);
+    const socketPath = path.join(covenHome, "other.sock");
+    const server = http.createServer((_req, res) => {
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ ok: true, daemon: null }));
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(socketPath, () => resolve());
+    });
+    try {
+      await expect(
+        createCovenClient(socketPath, { socketRoot: covenHome }).health(),
+      ).rejects.toThrow(/socketPath must be <covenHome>\/coven\.sock/);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 });

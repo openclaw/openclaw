@@ -52,6 +52,18 @@ describe("resolveCovenPluginConfig", () => {
     ).toThrow(/socketPath must stay inside covenHome/);
   });
 
+  it("rejects alternate socket filenames inside covenHome", () => {
+    expect(() =>
+      resolveCovenPluginConfig({
+        rawConfig: {
+          covenHome: "~/.coven",
+          socketPath: "~/.coven/other.sock",
+        },
+        workspaceDir: "/repo",
+      }),
+    ).toThrow(/socketPath overrides are not supported/);
+  });
+
   it("rejects socket paths that are symlinks", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-coven-config-"));
     const covenHome = path.join(workspaceDir, ".coven");

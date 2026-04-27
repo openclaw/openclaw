@@ -1,5 +1,5 @@
 {
-  "name": "@openclaw/coven-runtime",
+  "name": "@openclaw/coven",
   "version": "2026.4.26",
   "private": true,
   "description": "OpenClaw Coven ACP runtime bridge",

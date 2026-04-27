@@ -226,6 +226,49 @@ describe("CovenAcpRuntime", () => {
     ]);
   });
 
+  it("rejects unknown ACP agent ids instead of forwarding them as Coven harness names", async () => {
+    const client = fakeClient();
+    const runtime = new CovenAcpRuntime({ config, client });
+
+    await expect(
+      runtime.ensureSession({
+        sessionKey: "agent:attacker:test",
+        agent: "attacker-harness",
+        mode: "oneshot",
+        cwd: workspaceDir,
+      }),
+    ).rejects.toThrow(/Unknown or unauthorized ACP agent/);
+    expect(client.health).not.toHaveBeenCalled();
+  });
+
+  it("allows explicit configured agent-to-harness mappings", async () => {
+    const client = fakeClient();
+    const runtime = new CovenAcpRuntime({
+      config: { ...config, harnesses: { assistant: "codex" } },
+      client,
+    });
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:assistant:test",
+      agent: "assistant",
+      mode: "oneshot",
+      cwd: workspaceDir,
+    });
+
+    await collect(
+      runtime.runTurn({
+        handle,
+        text: "Fix tests",
+        mode: "prompt",
+        requestId: "req-1",
+      }),
+    );
+
+    expect(client.launchSession).toHaveBeenCalledWith(
+      expect.objectContaining({ harness: "codex" }),
+      undefined,
+    );
+  });
+
   it("sanitizes daemon-controlled harness fields in start status", async () => {
     const client = fakeClient({
       launchSession: vi.fn(async () =>
@@ -471,6 +514,37 @@ describe("CovenAcpRuntime", () => {
     );
   });
 
+  it("fails and kills the Coven session when the daemon returns an unsafe event id", async () => {
+    const client = fakeClient({
+      listEvents: vi.fn(async () => [
+        event({
+          id: "e".repeat(257),
+          kind: "output",
+          payloadJson: JSON.stringify({ data: "hello\n" }),
+        }),
+      ]),
+      killSession: vi.fn(async () => undefined),
+    });
+    const runtime = new CovenAcpRuntime({ config, client });
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:test",
+      agent: "codex",
+      mode: "oneshot",
+      cwd: workspaceDir,
+    });
+
+    const events = await collect(
+      runtime.runTurn({ handle, text: "Fix tests", mode: "prompt", requestId: "req-1" }),
+    );
+
+    expect(client.killSession).toHaveBeenCalledWith("session-1", undefined);
+    expect(events).toEqual([
+      expect.objectContaining({ type: "status", text: "coven session session-1 started (codex)" }),
+      expect.objectContaining({ type: "status", text: "coven session polling failed" }),
+      expect.objectContaining({ type: "done", stopReason: "error" }),
+    ]);
+  });
+
   it("clamps malformed runtime poll intervals before sleeping", async () => {
     const sleep = vi.fn(async () => undefined);
     const client = fakeClient({
@@ -592,6 +666,18 @@ describe("CovenAcpRuntime", () => {
         }),
       ),
     ).toContainEqual(expect.objectContaining({ type: "done", stopReason: "completed" }));
+  });
+
+  it("guards daemon exitCode types before rendering terminal status text", () => {
+    expect(
+      __testing.terminalStatusEvent(
+        session({ status: "completed", exitCode: "\u001b[31m1" as unknown as number }),
+      ),
+    ).toEqual({
+      type: "status",
+      text: "coven session completed",
+      tag: "session_info_update",
+    });
   });
 
   it("drops oversized daemon event payloads before parsing", () => {

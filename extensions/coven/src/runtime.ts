@@ -45,6 +45,7 @@ const MAX_RUNTIME_AGENT_CHARS = 128;
 const MAX_RUNTIME_MODE_CHARS = 32;
 const MAX_STATUS_FIELD_CHARS = 256;
 const MAX_SESSION_ID_CHARS = 128;
+const MAX_EVENT_ID_CHARS = 256;
 const SAFE_SESSION_ID_REGEX = /^[A-Za-z0-9._:-]+$/;
 
 type CovenRuntimeSessionState = {
@@ -191,6 +192,14 @@ function requireSafeSessionId(input: string): string {
   return value;
 }
 
+function requireSafeEventId(input: string): string {
+  const value = input.trim();
+  if (!value || value.length > MAX_EVENT_ID_CHARS || !SAFE_SESSION_ID_REGEX.test(value)) {
+    throw new Error("Coven event id is invalid");
+  }
+  return value;
+}
+
 function boundedCovenPrompt(input: string): string {
   if (Buffer.byteLength(input, "utf8") > MAX_COVEN_PROMPT_BYTES) {
     throw new Error("Coven prompt exceeded size limit");
@@ -286,6 +295,8 @@ export class CovenAcpRuntime implements AcpRuntime {
   async ensureSession(
     input: Parameters<AcpRuntime["ensureSession"]>[0],
   ): Promise<AcpRuntimeHandle> {
+    const agent = normalizeAgentId(input.agent);
+    this.resolveHarness(agent);
     if (!(await this.isCovenAvailable())) {
       if (!this.config.allowFallback) {
         throw new AcpRuntimeError(
@@ -295,7 +306,6 @@ export class CovenAcpRuntime implements AcpRuntime {
       }
       return await this.ensureFallbackSession(input);
     }
-    const agent = normalizeAgentId(input.agent);
     return {
       sessionKey: input.sessionKey,
       backend: COVEN_BACKEND_ID,
@@ -322,6 +332,7 @@ export class CovenAcpRuntime implements AcpRuntime {
     }
 
     const cwd = this.resolveWorkspaceCwd(input.handle.cwd);
+    const harness = this.resolveHarness(state.agent);
     let session: CovenSessionRecord;
     let sessionId: string;
     try {
@@ -330,7 +341,7 @@ export class CovenAcpRuntime implements AcpRuntime {
         {
           projectRoot: this.config.workspaceDir,
           cwd,
-          harness: this.resolveHarness(state.agent),
+          harness,
           prompt,
           title: titleFromPrompt(prompt),
         },
@@ -380,18 +391,19 @@ export class CovenAcpRuntime implements AcpRuntime {
           throw new Error("Coven daemon returned too many events");
         }
         for (const event of events) {
-          if (seenEventIds.has(event.id)) {
+          const eventId = requireSafeEventId(event.id);
+          if (seenEventIds.has(eventId)) {
             continue;
           }
-          seenEventIds.add(event.id);
-          seenEventQueue.push(event.id);
+          seenEventIds.add(eventId);
+          seenEventQueue.push(eventId);
           while (seenEventQueue.length > MAX_TRACKED_EVENT_IDS) {
             const removed = seenEventQueue.shift();
             if (removed) {
               seenEventIds.delete(removed);
             }
           }
-          lastSeenEventId = event.id;
+          lastSeenEventId = eventId;
           for (const runtimeEvent of eventToRuntimeEvents(event)) {
             yield runtimeEvent;
             if (runtimeEvent.type === "done") {
@@ -522,7 +534,14 @@ export class CovenAcpRuntime implements AcpRuntime {
 
   private resolveHarness(agent: string): string {
     const normalized = normalizeAgentId(agent);
-    return this.config.harnesses[normalized] ?? DEFAULT_HARNESSES[normalized] ?? normalized;
+    const harness = this.config.harnesses[normalized] ?? DEFAULT_HARNESSES[normalized];
+    if (!harness) {
+      throw new AcpRuntimeError(
+        "ACP_INVALID_RUNTIME_OPTION",
+        `Unknown or unauthorized ACP agent "${normalized}" for Coven backend.`,
+      );
+    }
+    return harness;
   }
 
   private getFallbackRuntime(backendId = this.config.fallbackBackend): AcpRuntime | null {
@@ -618,5 +637,6 @@ export const __testing = {
   normalizeStopReason,
   sanitizeStatusField,
   sanitizeTerminalText,
+  terminalStatusEvent,
   titleFromPrompt,
 };

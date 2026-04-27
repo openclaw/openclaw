@@ -218,7 +218,7 @@ Minimal opt-in config:
         config: {
           // Optional. Defaults to COVEN_HOME or ~/.coven.
           covenHome: "~/.coven",
-          // Optional. Defaults to <covenHome>/coven.sock.
+          // Optional. Defaults to <covenHome>/coven.sock; overrides must resolve to that path.
           socketPath: "~/.coven/coven.sock",
           // Optional. Defaults to false; enable only when direct ACP fallback is acceptable.
           allowFallback: false,
@@ -242,16 +242,18 @@ For path safety, `~` in `covenHome` and `socketPath` expands to the current
 user home directory, and configured Coven paths must be absolute after that
 expansion. OpenClaw rejects workspace-relative Coven daemon paths because the
 daemon socket is a local user trust anchor, not repository-controlled state.
-`socketPath` must stay inside `covenHome`; use the default
-`<covenHome>/coven.sock` unless your Coven daemon uses a different socket
-filename in the same home directory. Keep `covenHome` owned by the OpenClaw user
-and private (`0700`); OpenClaw rejects symlinked, shared-accessible,
-shared-writable, or non-socket Coven socket paths before connecting.
+`socketPath` must resolve to `<covenHome>/coven.sock`; OpenClaw does not allow
+arbitrary Coven socket filenames because the daemon socket is the local trust
+anchor. Keep `covenHome` owned by the OpenClaw user and private (`0700`);
+OpenClaw rejects symlinked, shared-accessible, shared-writable, or non-socket
+Coven socket paths before connecting.
 
-The default harness mapping sends common ACP agent ids such as `codex`,
-`claude`, `gemini`, and `opencode` to the matching Coven harness id. Override
+The default harness mapping sends known ACP agent ids such as `codex`, `claude`,
+`gemini`, and `opencode` to explicitly authorized Coven harness ids. Unknown
+ACP agent ids are rejected instead of being forwarded as harness names. Override
 `plugins.entries.coven.config.harnesses` only when your local Coven install uses
-custom harness names.
+custom harness names, and keep `acp.allowedAgents` aligned with the intended
+chat-exposed harness set.
 
 ### Automatic dependency install
 

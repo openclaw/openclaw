@@ -94,6 +94,9 @@ export class CovenApiError extends Error {
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const MAX_REQUEST_BYTES = 1_000_000;
 const MAX_RESPONSE_BYTES = 1_000_000;
+const DEFAULT_SOCKET_FILENAME = "coven.sock";
+const SAFE_QUERY_ID_REGEX = /^[A-Za-z0-9._:-]+$/;
+const MAX_QUERY_ID_CHARS = 256;
 
 function statExistingPath(filePath: string, label: string): fs.Stats {
   try {
@@ -145,6 +148,10 @@ function validateSocketPathForUse(
   const socketRootStat = statExistingPath(socketRoot, "Coven covenHome");
   validateSocketOwnerAndMode(socketRootStat, "Coven covenHome");
   validatePrivateDirectory(socketRootStat, "Coven covenHome");
+  const expectedSocketPath = path.resolve(socketRoot, DEFAULT_SOCKET_FILENAME);
+  if (path.resolve(socketPath) !== expectedSocketPath) {
+    throw new Error("Coven socketPath must be <covenHome>/coven.sock");
+  }
 
   const socketStat = lstatIfExists(socketPath);
   if (socketStat?.isSymbolicLink()) {
@@ -172,6 +179,14 @@ function validateSocketPathForUse(
     throw new Error("Coven socketPath must stay inside covenHome");
   }
   return fingerprintSocket(resolvedSocketStat);
+}
+
+function requireSafeQueryId(input: string, label: string): string {
+  const value = input.trim();
+  if (!value || value.length > MAX_QUERY_ID_CHARS || !SAFE_QUERY_ID_REGEX.test(value)) {
+    throw new Error(`${label} is invalid`);
+  }
+  return value;
 }
 
 function validateSocketOwnerAndMode(stat: fs.Stats, label: string): void {
@@ -375,10 +390,12 @@ export function createCovenClient(
       });
     },
     listEvents(sessionId, options, signal) {
-      const params = new URLSearchParams({ sessionId });
+      const params = new URLSearchParams({
+        sessionId: requireSafeQueryId(sessionId, "Coven session id"),
+      });
       const afterEventId = options?.afterEventId?.trim();
       if (afterEventId) {
-        params.set("afterEventId", afterEventId);
+        params.set("afterEventId", requireSafeQueryId(afterEventId, "Coven event id"));
       }
       return requestJson<CovenEventRecord[]>({
         socketPath,

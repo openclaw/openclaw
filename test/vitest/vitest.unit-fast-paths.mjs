@@ -96,7 +96,6 @@ export const forcedUnitFastTestFiles = [
   "src/pairing/allow-from-store-read.test.ts",
   "src/pairing/pairing-store.test.ts",
   "src/plugin-sdk/memory-host-events.test.ts",
-  "src/proxy-capture/runtime.test.ts",
   "src/proxy-capture/store.sqlite.test.ts",
   "src/security/audit-exec-surface.test.ts",
   "src/security/audit-extra.async.test.ts",

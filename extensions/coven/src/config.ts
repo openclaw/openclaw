@@ -25,6 +25,7 @@ export type ResolvedCovenPluginConfig = {
 
 const DEFAULT_FALLBACK_BACKEND = "acpx";
 const DEFAULT_POLL_INTERVAL_MS = 250;
+const DEFAULT_SOCKET_FILENAME = "coven.sock";
 
 const nonEmptyString = z.string().trim().min(1);
 
@@ -81,11 +82,13 @@ function resolveSocketPath(covenHome: string, raw: string | undefined): string {
   if (lstatIfExists(covenHome)?.isSymbolicLink()) {
     throw new Error("Coven covenHome must not be a symlink");
   }
-  const socketPath = raw?.trim()
-    ? resolveConfiguredPath(raw, "socketPath")
-    : path.join(covenHome, "coven.sock");
+  const defaultSocketPath = path.join(covenHome, DEFAULT_SOCKET_FILENAME);
+  const socketPath = raw?.trim() ? resolveConfiguredPath(raw, "socketPath") : defaultSocketPath;
   if (!pathIsInside(covenHome, socketPath)) {
     throw new Error("Coven socketPath must stay inside covenHome");
+  }
+  if (socketPath !== defaultSocketPath) {
+    throw new Error("Coven socketPath overrides are not supported");
   }
   const socketStat = lstatIfExists(socketPath);
   if (socketStat?.isSymbolicLink()) {

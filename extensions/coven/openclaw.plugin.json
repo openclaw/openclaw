@@ -13,7 +13,7 @@
       },
       "socketPath": {
         "type": "string",
-        "description": "Path to the Coven daemon Unix socket. Defaults to <covenHome>/coven.sock and must stay inside covenHome."
+        "description": "Path to the Coven daemon Unix socket. Defaults to <covenHome>/coven.sock; overrides must resolve to that fixed socket filename."
       },
       "allowFallback": {
         "type": "boolean",
@@ -30,7 +30,7 @@
       "harnesses": {
         "type": "object",
         "additionalProperties": { "type": "string" },
-        "description": "Map OpenClaw ACP agent ids to Coven harness ids."
+        "description": "Explicitly map additional OpenClaw ACP agent ids to authorized Coven harness ids. Unknown agent ids are rejected."
       }
     }
   }
