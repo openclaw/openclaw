@@ -13,7 +13,7 @@ export const execSchema = Type.Object({
   timeout: Type.Optional(
     Type.Number({
       description:
-        "Timeout in seconds (default 1800; use 0 to disable local/gateway timeout; use a large positive timeout for host=node)",
+        "Timeout in seconds (default 1800; use 0 to disable local/sandbox/gateway timeout; use a large positive timeout for host=node)",
     }),
   ),
   pty: Type.Optional(

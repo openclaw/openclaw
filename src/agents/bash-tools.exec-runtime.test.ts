@@ -382,8 +382,9 @@ describe("exec notifyOnExit suppression", () => {
   });
 
   it("still notifies for no-output background exec timeouts", async () => {
-    await runBackgroundedExit({ reason: "overall-timeout" });
+    const outcome = await runBackgroundedExit({ reason: "overall-timeout" });
 
+    expect(outcome.aggregated).toContain("Command timed out");
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       expect.stringContaining("Exec failed"),
       expect.objectContaining({ sessionKey: "agent:main:main" }),

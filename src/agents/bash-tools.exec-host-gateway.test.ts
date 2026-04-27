@@ -307,6 +307,49 @@ describe("processGatewayAllowlist", () => {
     );
   });
 
+  it("includes timeout guidance in approved background followups", async () => {
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+    runExecProcessMock.mockResolvedValue({
+      session: { id: "sess_timeout" },
+      startedAt: Date.now(),
+      pid: 123,
+      promise: Promise.resolve({
+        status: "failed" as const,
+        exitCode: null,
+        exitSignal: "SIGKILL",
+        durationMs: 30_000,
+        aggregated:
+          "Command timed out after 30 seconds. If this command is expected to take longer, re-run with a higher timeout.",
+        timedOut: true,
+        failureKind: "overall-timeout" as const,
+        reason:
+          "Command timed out after 30 seconds. If this command is expected to take longer, re-run with a higher timeout.",
+      }),
+      kill: vi.fn(),
+    });
+
+    const result = await runGatewayAllowlist({
+      command: "sleep 999",
+    });
+
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    await vi.waitFor(() => {
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
+        null,
+        expect.stringContaining("Exec finished (gateway id=req-1, session=sess_timeout, timeout)"),
+      );
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
+        null,
+        expect.stringContaining("Command timed out after 30 seconds"),
+      );
+    });
+  });
+
   it("denies timed-out inline-eval requests instead of auto-running them", async () => {
     const result = await runTimedOutStrictInlineEval({
       security: "full",
