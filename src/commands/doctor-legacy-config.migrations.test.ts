@@ -342,6 +342,40 @@ describe("normalizeCompatibilityConfigValues", () => {
     );
   });
 
+  it("migrates legacy OpenAI provider api values to OpenAI completions", () => {
+    const res = normalizeCompatibilityConfigValues({
+      models: {
+        providers: {
+          openrouter: {
+            baseUrl: "https://openrouter.ai/api/v1",
+            api: "openai",
+            models: [
+              {
+                id: "openai/gpt-4o-mini",
+                name: "OpenRouter GPT-4o Mini",
+                api: "openai",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 16_384,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.models?.providers?.openrouter?.api).toBe("openai-completions");
+    expect(res.config.models?.providers?.openrouter?.models?.[0]?.api).toBe("openai-completions");
+    expect(res.changes).toContain(
+      'Moved models.providers.openrouter.api "openai" → "openai-completions".',
+    );
+    expect(res.changes).toContain(
+      'Moved models.providers.openrouter.models[0].api "openai" → "openai-completions".',
+    );
+  });
+
   it("marks legacy untagged /models add OpenAI Codex metadata rows for doctor repair", () => {
     const res = normalizeCompatibilityConfigValues({
       models: {
@@ -427,11 +461,11 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.changes).toEqual([]);
   });
 
-  it("migrates legacy Codex primary refs to OpenAI refs plus explicit Codex harness", () => {
+  it("migrates legacy Codex primary refs to OpenAI refs plus explicit Codex runtime", () => {
     const res = normalizeCompatibilityConfigValues({
       agents: {
         defaults: {
-          embeddedHarness: { runtime: "auto", fallback: "pi" },
+          agentRuntime: { id: "auto", fallback: "pi" },
           model: {
             primary: "codex/gpt-5.5",
             fallbacks: ["anthropic/claude-sonnet-4-6", "codex/gpt-5.4-mini"],
@@ -455,8 +489,8 @@ describe("normalizeCompatibilityConfigValues", () => {
       primary: "openai/gpt-5.5",
       fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.4-mini"],
     });
-    expect(res.config.agents?.defaults?.embeddedHarness).toEqual({
-      runtime: "codex",
+    expect(res.config.agents?.defaults?.agentRuntime).toEqual({
+      id: "codex",
       fallback: "pi",
     });
     expect(res.config.agents?.defaults?.models).toEqual({
@@ -465,7 +499,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
     expect(res.config.agents?.list?.[0]).toMatchObject({
       id: "reviewer",
-      embeddedHarness: { runtime: "codex" },
+      agentRuntime: { id: "codex" },
       model: "openai/gpt-5.4-mini",
     });
     expect(res.changes).toEqual(
@@ -518,7 +552,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       primary: "anthropic/claude-opus-4-7",
       fallbacks: ["anthropic/claude-sonnet-4-6"],
     });
-    expect(res.config.agents?.defaults?.embeddedHarness).toEqual({ runtime: "claude-cli" });
+    expect(res.config.agents?.defaults?.agentRuntime).toEqual({ id: "claude-cli" });
     expect(res.config.agents?.defaults?.models).toEqual({
       "anthropic/claude-opus-4-7": { alias: "Anthropic Opus" },
     });
@@ -544,7 +578,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       primary: "openai/gpt-5.5",
       fallbacks: ["openai/gpt-5.4-mini"],
     });
-    expect(res.config.agents?.defaults?.embeddedHarness).toEqual({ runtime: "codex-cli" });
+    expect(res.config.agents?.defaults?.agentRuntime).toEqual({ id: "codex-cli" });
     expect(res.config.agents?.defaults?.models).toEqual({
       "openai/gpt-5.5": { alias: "OpenAI GPT" },
     });
@@ -570,8 +604,8 @@ describe("normalizeCompatibilityConfigValues", () => {
       primary: "google/gemini-3.1-pro-preview",
       fallbacks: ["google/gemini-3-flash-preview"],
     });
-    expect(res.config.agents?.defaults?.embeddedHarness).toEqual({
-      runtime: "google-gemini-cli",
+    expect(res.config.agents?.defaults?.agentRuntime).toEqual({
+      id: "google-gemini-cli",
     });
     expect(res.config.agents?.defaults?.models).toEqual({
       "google/gemini-3.1-pro-preview": { alias: "Gemini API" },

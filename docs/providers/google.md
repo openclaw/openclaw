@@ -13,7 +13,7 @@ Gemini Grounding.
 - Provider: `google`
 - Auth: `GEMINI_API_KEY` or `GOOGLE_API_KEY`
 - API: Google Gemini API
-- Runtime option: `agents.defaults.embeddedHarness.runtime: "google-gemini-cli"`
+- Runtime option: `agents.defaults.agentRuntime.id: "google-gemini-cli"`
   reuses Gemini CLI OAuth while keeping model refs canonical as `google/*`.
 
 ## Getting started

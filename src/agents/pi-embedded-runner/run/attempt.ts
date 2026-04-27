@@ -12,8 +12,8 @@ import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import {
-  createDiagnosticTraceContext,
   createChildDiagnosticTraceContext,
+  createDiagnosticTraceContextFromActiveScope,
   freezeDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
 import { isEmbeddedMode } from "../../../infra/embedded-mode.js";
@@ -232,6 +232,10 @@ import {
   shouldStripBootstrapFromEmbeddedContext,
 } from "./attempt-bootstrap-routing.js";
 export { shouldStripBootstrapFromEmbeddedContext } from "./attempt-bootstrap-routing.js";
+import {
+  rotateTranscriptAfterCompaction,
+  shouldRotateCompactionTranscript,
+} from "../compaction-successor-transcript.js";
 import { configureEmbeddedAttemptHttpRuntime } from "./attempt-http-runtime.js";
 import {
   assembleAttemptContextEngine,
@@ -297,7 +301,10 @@ import {
   selectCompactionTimeoutSnapshot,
   shouldFlagCompactionTimeout,
 } from "./compaction-timeout.js";
-import { pruneProcessedHistoryImages } from "./history-image-prune.js";
+import {
+  installHistoryImagePruneContextTransform,
+  pruneProcessedHistoryImages,
+} from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
 import { buildAttemptReplayMetadata } from "./incomplete-turn.js";
 import { resolveLlmIdleTimeoutMs, streamWithIdleTimeout } from "./llm-idle-timeout.js";
@@ -487,7 +494,9 @@ export function shouldCreateBundleMcpRuntimeForAttempt(params: {
   if (!params.toolsAllow || params.toolsAllow.length === 0) {
     return true;
   }
-  return params.toolsAllow.some((toolName) => toolName.includes(TOOL_NAME_SEPARATOR));
+  return params.toolsAllow.some(
+    (toolName) => toolName === "bundle-mcp" || toolName.includes(TOOL_NAME_SEPARATOR),
+  );
 }
 
 function collectAttemptExplicitToolAllowlistSources(params: {
@@ -643,7 +652,9 @@ export async function runEmbeddedAttempt(
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const contextInjectionMode = resolveContextInjectionMode(params.config);
     const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
-    const diagnosticTrace = freezeDiagnosticTraceContext(createDiagnosticTraceContext());
+    const diagnosticTrace = freezeDiagnosticTraceContext(
+      createDiagnosticTraceContextFromActiveScope(),
+    );
     const runTrace = freezeDiagnosticTraceContext(
       createChildDiagnosticTraceContext(diagnosticTrace),
     );
@@ -678,71 +689,72 @@ export async function runEmbeddedAttempt(
         ...(err ? { errorCategory: diagnosticErrorCategory(err) } : {}),
       });
     };
-    const toolsRaw = params.disableTools
-      ? []
-      : (() => {
-          const allTools = createOpenClawCodingTools({
-            agentId: sessionAgentId,
-            ...buildEmbeddedAttemptToolRunContext({ ...params, trace: runTrace }),
-            exec: {
-              ...params.execOverrides,
-              elevated: params.bashElevated,
-            },
-            sandbox,
-            messageProvider: params.messageChannel ?? params.messageProvider,
-            agentAccountId: params.agentAccountId,
-            messageTo: params.messageTo,
-            messageThreadId: params.messageThreadId,
-            groupId: params.groupId,
-            groupChannel: params.groupChannel,
-            groupSpace: params.groupSpace,
-            memberRoleIds: params.memberRoleIds,
-            spawnedBy: params.spawnedBy,
-            senderId: params.senderId,
-            senderName: params.senderName,
-            senderUsername: params.senderUsername,
-            senderE164: params.senderE164,
-            senderIsOwner: params.senderIsOwner,
-            allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
-            sessionKey: sandboxSessionKey,
-            sessionId: params.sessionId,
-            runId: params.runId,
-            agentDir,
-            workspaceDir: effectiveWorkspace,
-            // When sandboxing uses a copied workspace (`ro` or `none`), effectiveWorkspace points
-            // at the sandbox copy. Spawned subagents should inherit the real workspace instead.
-            spawnWorkspaceDir: resolveAttemptSpawnWorkspaceDir({
+    const toolsRaw =
+      params.disableTools || params.modelRun
+        ? []
+        : (() => {
+            const allTools = createOpenClawCodingTools({
+              agentId: sessionAgentId,
+              ...buildEmbeddedAttemptToolRunContext({ ...params, trace: runTrace }),
+              exec: {
+                ...params.execOverrides,
+                elevated: params.bashElevated,
+              },
               sandbox,
-              resolvedWorkspace,
-            }),
-            config: params.config,
-            abortSignal: runAbortController.signal,
-            modelProvider: params.model.provider,
-            modelId: params.modelId,
-            modelCompat: extractModelCompat(params.model),
-            modelApi: params.model.api,
-            modelContextWindowTokens: params.model.contextWindow,
-            modelAuthMode: resolveModelAuthMode(params.model.provider, params.config),
-            currentChannelId: params.currentChannelId,
-            currentThreadTs: params.currentThreadTs,
-            currentMessageId: params.currentMessageId,
-            replyToMode: params.replyToMode,
-            hasRepliedRef: params.hasRepliedRef,
-            modelHasVision: params.model.input?.includes("image") ?? false,
-            requireExplicitMessageTarget:
-              params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
-            disableMessageTool: params.disableMessageTool,
-            forceMessageTool: params.forceMessageTool,
-            onYield: (message) => {
-              yieldDetected = true;
-              yieldMessage = message;
-              queueYieldInterruptForSession?.();
-              runAbortController.abort("sessions_yield");
-              abortSessionForYield?.();
-            },
-          });
-          return applyEmbeddedAttemptToolsAllow(allTools, params.toolsAllow);
-        })();
+              messageProvider: params.messageChannel ?? params.messageProvider,
+              agentAccountId: params.agentAccountId,
+              messageTo: params.messageTo,
+              messageThreadId: params.messageThreadId,
+              groupId: params.groupId,
+              groupChannel: params.groupChannel,
+              groupSpace: params.groupSpace,
+              memberRoleIds: params.memberRoleIds,
+              spawnedBy: params.spawnedBy,
+              senderId: params.senderId,
+              senderName: params.senderName,
+              senderUsername: params.senderUsername,
+              senderE164: params.senderE164,
+              senderIsOwner: params.senderIsOwner,
+              allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
+              sessionKey: sandboxSessionKey,
+              sessionId: params.sessionId,
+              runId: params.runId,
+              agentDir,
+              workspaceDir: effectiveWorkspace,
+              // When sandboxing uses a copied workspace (`ro` or `none`), effectiveWorkspace points
+              // at the sandbox copy. Spawned subagents should inherit the real workspace instead.
+              spawnWorkspaceDir: resolveAttemptSpawnWorkspaceDir({
+                sandbox,
+                resolvedWorkspace,
+              }),
+              config: params.config,
+              abortSignal: runAbortController.signal,
+              modelProvider: params.model.provider,
+              modelId: params.modelId,
+              modelCompat: extractModelCompat(params.model),
+              modelApi: params.model.api,
+              modelContextWindowTokens: params.model.contextWindow,
+              modelAuthMode: resolveModelAuthMode(params.model.provider, params.config),
+              currentChannelId: params.currentChannelId,
+              currentThreadTs: params.currentThreadTs,
+              currentMessageId: params.currentMessageId,
+              replyToMode: params.replyToMode,
+              hasRepliedRef: params.hasRepliedRef,
+              modelHasVision: params.model.input?.includes("image") ?? false,
+              requireExplicitMessageTarget:
+                params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
+              disableMessageTool: params.disableMessageTool,
+              forceMessageTool: params.forceMessageTool,
+              onYield: (message) => {
+                yieldDetected = true;
+                yieldMessage = message;
+                queueYieldInterruptForSession?.();
+                runAbortController.abort("sessions_yield");
+                abortSessionForYield?.();
+              },
+            });
+            return applyEmbeddedAttemptToolsAllow(allTools, params.toolsAllow);
+          })();
     const toolsEnabled = supportsModelTools(params.model);
     const bootstrapHasFileAccess = toolsEnabled && toolsRaw.some((tool) => tool.name === "read");
     const bootstrapRouting = await resolveAttemptWorkspaceBootstrapRouting({
@@ -1054,7 +1066,9 @@ export async function runEmbeddedAttempt(
       },
     });
     const isDefaultAgent = sessionAgentId === defaultAgentId;
-    const promptMode = resolvePromptModeForSession(params.sessionKey);
+    const promptMode =
+      params.promptMode ??
+      (params.modelRun ? "none" : resolvePromptModeForSession(params.sessionKey));
 
     // When toolsAllow is set, use minimal prompt and strip skills catalog
     const effectivePromptMode = params.toolsAllow?.length ? ("minimal" as const) : promptMode;
@@ -1065,7 +1079,9 @@ export async function runEmbeddedAttempt(
       cwd: effectiveWorkspace,
       moduleUrl: import.meta.url,
     });
-    const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
+    const ttsHint = params.config
+      ? buildTtsSystemPromptHint(params.config, sessionAgentId)
+      : undefined;
     const ownerDisplay = resolveOwnerDisplaySetting(params.config);
     const heartbeatPrompt = shouldInjectHeartbeatPrompt({
       config: params.config,
@@ -1448,6 +1464,14 @@ export async function runEmbeddedAttempt(
             }),
         });
       }
+      const removeLoopContextGuard = removeToolResultContextGuard;
+      const removeHistoryImagePruneContextTransform = installHistoryImagePruneContextTransform(
+        activeSession.agent,
+      );
+      removeToolResultContextGuard = () => {
+        removeHistoryImagePruneContextTransform();
+        removeLoopContextGuard?.();
+      };
       const cacheTrace = createCacheTrace({
         cfg: params.config,
         env: process.env,
@@ -2012,6 +2036,7 @@ export async function runEmbeddedAttempt(
           hookRunner: getGlobalHookRunner() ?? undefined,
           verboseLevel: params.verboseLevel,
           reasoningMode: params.reasoningLevel ?? "off",
+          thinkingLevel: params.thinkLevel,
           toolResultFormat: params.toolResultFormat,
           shouldEmitToolResult: params.shouldEmitToolResult,
           shouldEmitToolOutput: params.shouldEmitToolOutput,
@@ -2149,6 +2174,7 @@ export async function runEmbeddedAttempt(
 
       let messagesSnapshot: AgentMessage[] = [];
       let sessionIdUsed = activeSession.sessionId;
+      let sessionFileUsed: string | undefined = params.sessionFile;
       const onAbort = () => {
         externalAbort = true;
         const reason = params.abortSignal ? getAbortReason(params.abortSignal) : undefined;
@@ -2214,9 +2240,11 @@ export async function runEmbeddedAttempt(
           trigger: params.trigger,
           channelId: params.messageChannel ?? params.messageProvider ?? undefined,
         };
+        const promptBuildMessages =
+          pruneProcessedHistoryImages(activeSession.messages) ?? activeSession.messages;
         const hookResult = await resolvePromptBuildHookResult({
           prompt: params.prompt,
-          messages: activeSession.messages,
+          messages: promptBuildMessages,
           hookCtx,
           hookRunner,
           legacyBeforeAgentStartResult: params.legacyBeforeAgentStartResult,
@@ -2360,14 +2388,6 @@ export async function runEmbeddedAttempt(
             : undefined;
 
         try {
-          // Idempotent cleanup: prune old image blocks to limit context
-          // growth. Only mutates turns older than a few assistant replies;
-          // the delay also reduces prompt-cache churn.
-          const didPruneImages = pruneProcessedHistoryImages(activeSession.messages);
-          if (didPruneImages) {
-            activeSession.agent.state.messages = activeSession.messages;
-          }
-
           const filteredMessages = filterHeartbeatPairs(
             activeSession.messages,
             heartbeatSummary?.ackMaxChars,
@@ -2382,6 +2402,17 @@ export async function runEmbeddedAttempt(
             effectivePrompt,
             transcriptPrompt: params.transcriptPrompt,
           });
+          const runtimeSystemContext = promptSubmission.runtimeSystemContext?.trim();
+          if (promptSubmission.runtimeOnly && runtimeSystemContext) {
+            const runtimeSystemPrompt = composeSystemPromptWithHookContext({
+              baseSystemPrompt: systemPromptText,
+              appendSystemContext: runtimeSystemContext,
+            });
+            if (runtimeSystemPrompt) {
+              applySystemPromptOverrideToSession(activeSession, runtimeSystemPrompt);
+              systemPromptText = runtimeSystemPrompt;
+            }
+          }
 
           // Detect and load images referenced in the visible prompt for vision-capable models.
           // Images are prompt-local only (pi-like behavior).
@@ -2419,6 +2450,7 @@ export async function runEmbeddedAttempt(
 
           if (
             !skipPromptSubmission &&
+            !promptSubmission.runtimeOnly &&
             !hasPromptSubmissionContent({
               prompt: promptSubmission.prompt,
               messages: activeSession.messages,
@@ -2612,19 +2644,23 @@ export async function runEmbeddedAttempt(
               messages: btwSnapshotMessages,
               inFlightPrompt: promptSubmission.prompt,
             });
-            await queueRuntimeContextForNextTurn({
-              session: activeSession,
-              runtimeContext: promptSubmission.runtimeContext,
-            });
-
-            // Only pass images option if there are actually images to pass
-            // This avoids potential issues with models that don't expect the images parameter
-            if (imageResult.images.length > 0) {
-              await abortable(
-                activeSession.prompt(promptSubmission.prompt, { images: imageResult.images }),
-              );
-            } else {
+            if (promptSubmission.runtimeOnly) {
               await abortable(activeSession.prompt(promptSubmission.prompt));
+            } else {
+              await queueRuntimeContextForNextTurn({
+                session: activeSession,
+                runtimeContext: promptSubmission.runtimeContext,
+              });
+
+              // Only pass images option if there are actually images to pass
+              // This avoids potential issues with models that don't expect the images parameter
+              if (imageResult.images.length > 0) {
+                await abortable(
+                  activeSession.prompt(promptSubmission.prompt, { images: imageResult.images }),
+                );
+              } else {
+                await abortable(activeSession.prompt(promptSubmission.prompt));
+              }
             }
           }
         } catch (err) {
@@ -2873,6 +2909,35 @@ export async function runEmbeddedAttempt(
           }
         }
 
+        if (
+          compactionOccurredThisAttempt &&
+          !promptError &&
+          !aborted &&
+          !timedOut &&
+          !idleTimedOut &&
+          !timedOutDuringCompaction &&
+          shouldRotateCompactionTranscript(params.config)
+        ) {
+          try {
+            const rotation = await rotateTranscriptAfterCompaction({
+              sessionManager,
+              sessionFile: params.sessionFile,
+            });
+            if (rotation.rotated) {
+              sessionIdUsed = rotation.sessionId ?? sessionIdUsed;
+              sessionFileUsed = rotation.sessionFile ?? sessionFileUsed;
+              log.info(
+                `[compaction] rotated active transcript after automatic compaction ` +
+                  `(sessionKey=${params.sessionKey ?? params.sessionId})`,
+              );
+            }
+          } catch (err) {
+            log.warn("[compaction] automatic transcript rotation failed", {
+              errorMessage: formatErrorMessage(err),
+            });
+          }
+        }
+
         cacheTrace?.recordStage("session:after", {
           messages: messagesSnapshot,
           note: timedOutDuringCompaction
@@ -3096,6 +3161,7 @@ export async function runEmbeddedAttempt(
         promptErrorSource,
         preflightRecovery,
         sessionIdUsed,
+        sessionFileUsed,
         diagnosticTrace,
         bootstrapPromptWarningSignaturesSeen: bootstrapPromptWarning.warningSignaturesSeen,
         bootstrapPromptWarningSignature: bootstrapPromptWarning.signature,

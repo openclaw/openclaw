@@ -11,12 +11,9 @@ import {
   getInstalledPluginRecord,
   isInstalledPluginEnabled,
   listEnabledInstalledPluginRecords,
-  listInstalledPluginContributionIds,
   listInstalledPluginRecords,
   loadInstalledPluginIndex,
   refreshInstalledPluginIndex,
-  resolveInstalledPluginContributionOwners,
-  resolveInstalledPluginContributions,
 } from "./installed-plugin-index.js";
 import { recordPluginInstall } from "./installs.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
@@ -69,12 +66,16 @@ function createPluginCandidate(params: {
   packageVersion?: string;
   packageDir?: string;
   packageManifest?: OpenClawPackageManifest;
+  format?: PluginCandidate["format"];
+  bundleFormat?: PluginCandidate["bundleFormat"];
 }): PluginCandidate {
   return {
     idHint: params.idHint ?? "demo",
-    source: path.join(params.rootDir, "index.ts"),
+    source: params.format === "bundle" ? params.rootDir : path.join(params.rootDir, "index.ts"),
     rootDir: params.rootDir,
     origin: params.origin ?? "global",
+    format: params.format,
+    bundleFormat: params.bundleFormat,
     packageName: params.packageName,
     packageVersion: params.packageVersion,
     packageDir: params.packageDir ?? params.rootDir,
@@ -122,10 +123,12 @@ function createRichPluginFixture(params: { packageVersion?: string } = {}) {
     providerAuthEnvVars: {
       demo: ["DEMO_API_KEY"],
     },
+    syntheticAuthRefs: ["demo", "demo-cli"],
     channelEnvVars: {
       "demo-chat": ["DEMO_CHAT_TOKEN"],
     },
     activation: {
+      onAgentHarnesses: ["codex"],
       onProviders: ["demo"],
       onChannels: ["demo-chat"],
     },
@@ -137,6 +140,16 @@ function createRichPluginFixture(params: { packageVersion?: string } = {}) {
       packageName: "@vendor/demo-plugin",
       packageVersion: params.packageVersion ?? "1.2.3",
       packageManifest: {
+        channel: {
+          id: "demo",
+          label: "Demo",
+          blurb: "Demo channel",
+          preferOver: ["legacy-demo"],
+          commands: {
+            nativeCommandsAutoEnabled: true,
+            nativeSkillsAutoEnabled: false,
+          },
+        },
         install: {
           npmSpec: "@vendor/demo-plugin@1.2.3",
           expectedIntegrity: "sha512-demo",
@@ -168,7 +181,9 @@ describe("installed plugin index", () => {
           packageVersion: "1.2.3",
           origin: "global",
           rootDir: fixture.rootDir,
+          source: path.join(fixture.rootDir, "index.ts"),
           enabled: true,
+          syntheticAuthRefs: ["demo", "demo-cli"],
           packageInstall: {
             defaultChoice: "npm",
             npm: {
@@ -182,17 +197,18 @@ describe("installed plugin index", () => {
             },
             warnings: [],
           },
-          contributions: {
-            providers: ["demo"],
-            channels: ["demo-chat"],
-            channelConfigs: ["demo-chat"],
-            setupProviders: ["demo"],
-            cliBackends: ["demo-cli", "setup-cli"],
-            modelCatalogProviders: ["demo"],
-            commandAliases: ["demo-command"],
-            contracts: ["tools"],
+          packageChannel: {
+            id: "demo",
+            label: "Demo",
+            blurb: "Demo channel",
+            preferOver: ["legacy-demo"],
+            commands: {
+              nativeCommandsAutoEnabled: true,
+              nativeSkillsAutoEnabled: false,
+            },
           },
           compat: [
+            "activation-agent-harness-hint",
             "activation-channel-hint",
             "activation-provider-hint",
             "channel-env-vars",
@@ -208,11 +224,39 @@ describe("installed plugin index", () => {
     });
     expect(index.plugins[0]?.installRecord).toBeUndefined();
     expect(index.plugins[0]?.installRecordHash).toBeUndefined();
+  });
 
-    const contributions = resolveInstalledPluginContributions(index);
-    expect(contributions.providers.get("demo")).toEqual(["demo"]);
-    expect(contributions.channels.get("demo-chat")).toEqual(["demo"]);
-    expect(contributions.contracts.get("tools")).toEqual(["demo"]);
+  it("keeps bundle format metadata needed for manifest reconstruction", () => {
+    const rootDir = makeTempDir();
+    fs.mkdirSync(path.join(rootDir, ".claude-plugin"), { recursive: true });
+    fs.mkdirSync(path.join(rootDir, "commands"), { recursive: true });
+    fs.writeFileSync(
+      path.join(rootDir, ".claude-plugin", "plugin.json"),
+      JSON.stringify({
+        name: "Claude Bundle",
+        commands: "commands",
+      }),
+      "utf8",
+    );
+
+    const index = loadInstalledPluginIndex({
+      candidates: [
+        createPluginCandidate({
+          rootDir,
+          idHint: "claude-bundle",
+          format: "bundle",
+          bundleFormat: "claude",
+        }),
+      ],
+      env: hermeticEnv(),
+    });
+
+    expect(index.plugins[0]).toMatchObject({
+      pluginId: "claude-bundle",
+      format: "bundle",
+      bundleFormat: "claude",
+      source: rootDir,
+    });
   });
 
   it("keeps packageJson paths root-relative when packageDir is reached through a symlink", () => {
@@ -242,7 +286,7 @@ describe("installed plugin index", () => {
     });
   });
 
-  it("exposes cold registry records and owners for existing plugins without plugin indexs", () => {
+  it("exposes cold registry records for existing plugins without plugin runtimes", () => {
     const fixture = createRichPluginFixture();
     const index = loadInstalledPluginIndex({
       candidates: [fixture.candidate],
@@ -260,11 +304,6 @@ describe("installed plugin index", () => {
     });
     expect(record?.installRecord).toBeUndefined();
     expect(isInstalledPluginEnabled(index, "demo")).toBe(true);
-    expect(listInstalledPluginContributionIds(index, "providers")).toEqual(["demo"]);
-    expect(resolveInstalledPluginContributionOwners(index, "providers", "demo")).toEqual(["demo"]);
-    expect(resolveInstalledPluginContributionOwners(index, "channels", "demo-chat")).toEqual([
-      "demo",
-    ]);
   });
 
   it("keeps disabled plugins in inventory while excluding them from cold owner resolution", () => {
@@ -299,18 +338,6 @@ describe("installed plugin index", () => {
       enabled: false,
     });
     expect(isInstalledPluginEnabled(index, "demo", config)).toBe(false);
-    expect(listInstalledPluginContributionIds(index, "providers", { config })).toEqual([]);
-    expect(
-      listInstalledPluginContributionIds(index, "providers", { includeDisabled: true }),
-    ).toEqual(["demo"]);
-    expect(
-      resolveInstalledPluginContributionOwners(index, "providers", "demo", { config }),
-    ).toEqual([]);
-    expect(
-      resolveInstalledPluginContributionOwners(index, "providers", "demo", {
-        includeDisabled: true,
-      }),
-    ).toEqual(["demo"]);
   });
 
   it("uses runtime plugin id normalization for legacy enablement aliases", () => {
@@ -735,7 +762,6 @@ describe("installed plugin index", () => {
       }),
     ).toBe(false);
     expect(index.plugins[0]?.enabled).toBe(false);
-    expect(index.plugins[0]?.contributions.providers).toEqual(["demo"]);
   });
 
   it("tracks refresh reason without using the manifest cache", () => {
@@ -793,13 +819,11 @@ describe("installed plugin index", () => {
         env: hermeticEnv({ OPENCLAW_VERSION: "2026.4.26" }),
       }),
       compatRegistryVersion: "different-compat-registry",
-      migrationVersion: 2 as 1,
     };
 
     expect(diffInstalledPluginIndexInvalidationReasons(previous, current)).toEqual([
       "compat-registry-changed",
       "host-contract-changed",
-      "migration",
       "source-changed",
       "stale-manifest",
       "stale-package",

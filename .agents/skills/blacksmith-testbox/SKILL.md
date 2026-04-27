@@ -93,6 +93,14 @@ Only use Testbox in OpenClaw when the user explicitly wants CI-parity or the
 check truly depends on remote secrets/services that the local repo loop cannot
 provide.
 
+For installable-package product proof, prefer the GitHub `Package Acceptance`
+workflow over an ad hoc Testbox command. It resolves one package candidate
+(`source=npm`, `source=ref`, `source=url`, or `source=artifact`), uploads it as
+`package-under-test`, and runs the reusable Docker E2E lanes against that exact
+tarball on GitHub/Blacksmith runners. Use `workflow_ref` for the trusted
+workflow/harness code and `package_ref` for the source ref to pack when testing
+an older trusted branch, tag, or SHA.
+
 ## Setup: Warmup before coding
 
 If you decided Testbox is actually warranted, warm one up early. This returns

@@ -1,7 +1,7 @@
 import path from "node:path";
 import { ensureMediaDir, saveMediaBuffer } from "../../media/store.js";
 import { resolveBrowserNavigationProxyMode } from "../browser-proxy-mode.js";
-import { captureScreenshot, snapshotAria } from "../cdp.js";
+import { captureScreenshot, snapshotAria, snapshotRoleViaCdp } from "../cdp.js";
 import {
   evaluateChromeMcpScript,
   navigateChromeMcpPage,
@@ -627,10 +627,6 @@ export function registerBrowserAgentSnapshotRoutes(
           });
         }
         if (plan.format === "ai") {
-          const pw = await requirePwAi(res, "ai snapshot");
-          if (!pw) {
-            return;
-          }
           const roleSnapshotArgs = {
             cdpUrl: profileCtx.profile.cdpUrl,
             targetId: tab.targetId,
@@ -646,18 +642,54 @@ export function registerBrowserAgentSnapshotRoutes(
             },
           };
 
+          const cdpRoleSnapshot = async () => {
+            if (!tab.wsUrl) {
+              return null;
+            }
+            if (plan.selectorValue || plan.frameSelectorValue) {
+              return null;
+            }
+            return await snapshotRoleViaCdp({
+              wsUrl: tab.wsUrl,
+              urls: plan.urls,
+              options: {
+                interactive: plan.interactive ?? undefined,
+                compact: plan.compact ?? undefined,
+                maxDepth: plan.depth ?? undefined,
+              },
+            });
+          };
+
+          const pw = await getPwAiModule();
           const snap = plan.wantsRoleSnapshot
-            ? await pw.snapshotRoleViaPlaywright(roleSnapshotArgs)
-            : await pw.snapshotAiViaPlaywright({
-                cdpUrl: profileCtx.profile.cdpUrl,
-                targetId: tab.targetId,
-                ssrfPolicy: ctx.state().resolved.ssrfPolicy,
-                urls: plan.urls,
-                ...(typeof plan.resolvedMaxChars === "number"
-                  ? { maxChars: plan.resolvedMaxChars }
-                  : {}),
-              });
+            ? pw
+              ? await pw.snapshotRoleViaPlaywright(roleSnapshotArgs).catch(async (err) => {
+                  const fallback = await cdpRoleSnapshot();
+                  if (fallback) {
+                    return fallback;
+                  }
+                  throw err;
+                })
+              : await cdpRoleSnapshot()
+            : pw
+              ? await pw.snapshotAiViaPlaywright({
+                  cdpUrl: profileCtx.profile.cdpUrl,
+                  targetId: tab.targetId,
+                  ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+                  urls: plan.urls,
+                  ...(typeof plan.resolvedMaxChars === "number"
+                    ? { maxChars: plan.resolvedMaxChars }
+                    : {}),
+                })
+              : await cdpRoleSnapshot();
+          if (!snap) {
+            await requirePwAi(res, "ai snapshot");
+            return;
+          }
           if (plan.labels) {
+            if (!pw) {
+              return jsonError(res, 501, "Snapshot labels require Playwright.");
+            }
             const labeled = await pw.screenshotWithLabelsViaPlaywright({
               cdpUrl: profileCtx.profile.cdpUrl,
               targetId: tab.targetId,

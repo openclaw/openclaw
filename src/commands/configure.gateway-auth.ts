@@ -2,8 +2,6 @@ import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import type { OpenClawConfig, GatewayAuthConfig } from "../config/config.js";
 import { isSecretRef, type SecretInput } from "../config/types.secrets.js";
-import { resolveProviderPluginChoice } from "../plugins/provider-wizard.js";
-import { resolvePluginProviders } from "../plugins/providers.runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
@@ -32,18 +30,21 @@ function sanitizeTokenValue(value: unknown): string | undefined {
   return trimmed;
 }
 
-function resolveProviderChoiceModelAllowlist(params: {
+async function resolveProviderChoiceModelAllowlist(params: {
   authChoice: string;
   config: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-}):
+}): Promise<
   | {
       allowedKeys?: string[];
       initialSelections?: string[];
       message?: string;
     }
-  | undefined {
+  | undefined
+> {
+  const { resolvePluginProviders, resolveProviderPluginChoice } =
+    await import("../plugins/provider-auth-choice.runtime.js");
   const providers = resolvePluginProviders({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -132,7 +133,8 @@ export async function promptAuthConfig(
         prompter,
         allowKeep: true,
         ignoreAllowlist: true,
-        includeProviderPluginSetups: true,
+        includeProviderPluginSetups: false,
+        loadCatalog: false,
         preferredProvider,
         workspaceDir: resolveDefaultAgentWorkspaceDir(),
         runtime,
@@ -162,7 +164,7 @@ export async function promptAuthConfig(
   }
 
   if (authChoice !== "custom-api-key") {
-    const modelAllowlist = resolveProviderChoiceModelAllowlist({
+    const modelAllowlist = await resolveProviderChoiceModelAllowlist({
       authChoice,
       config: next,
       workspaceDir: resolveDefaultAgentWorkspaceDir(),
@@ -175,12 +177,15 @@ export async function promptAuthConfig(
       initialSelections: modelAllowlist?.initialSelections,
       message: modelAllowlist?.message,
       preferredProvider,
+      loadCatalog: false,
     });
     if (allowlistSelection.models) {
+      next = applyModelFallbacksFromSelection(next, allowlistSelection.models, {
+        scopeKeys: allowlistSelection.scopeKeys,
+      });
       next = applyModelAllowlist(next, allowlistSelection.models, {
         scopeKeys: allowlistSelection.scopeKeys,
       });
-      next = applyModelFallbacksFromSelection(next, allowlistSelection.models);
     }
   }
 

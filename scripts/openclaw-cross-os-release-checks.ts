@@ -18,6 +18,7 @@ import { createConnection as createNetConnection, createServer as createNetServe
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, win32 as pathWin32 } from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertNoBundledRuntimeDepsStagingDebris } from "../src/infra/package-dist-inventory.ts";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const PUBLISHED_INSTALLER_BASE_URL = "https://openclaw.ai";
@@ -57,6 +58,8 @@ const OMITTED_QA_EXTENSION_PREFIXES = [
   "dist/extensions/qa-lab/",
   "dist/extensions/qa-matrix/",
 ];
+export const CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS = 120_000;
+export const CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS = 10_000;
 
 if (isMainModule()) {
   try {
@@ -157,7 +160,7 @@ export function resolveRunnerMatrix(params) {
     {
       os_id: "macos",
       display_name: "macOS",
-      runner: pick(params.macosRunner, params.varMacosRunner, "macos-latest-xlarge"),
+      runner: pick(params.macosRunner, params.varMacosRunner, "blacksmith-6vcpu-macos-latest"),
       artifact_name: "macos",
     },
   ];
@@ -482,7 +485,8 @@ function isPackagedDistPath(relativePath) {
   return true;
 }
 
-async function writePackageDistInventoryForCandidate(params) {
+export async function writePackageDistInventoryForCandidate(params) {
+  await assertNoBundledRuntimeDepsStagingDebris(params.sourceDir);
   const dryRun = await runCommand(
     npmCommand(),
     ["pack", "--dry-run", "--ignore-scripts", "--json"],
@@ -1738,6 +1742,14 @@ async function runInstalledModelsSet(params) {
     logPath: params.logPath,
     timeoutMs: 2 * 60 * 1000,
   });
+  await runInstalledCli({
+    cliPath: params.cliPath,
+    args: ["config", "set", "agents.defaults.skipBootstrap", "true", "--strict-json"],
+    cwd: params.cwd,
+    env: params.env,
+    logPath: params.logPath,
+    timeoutMs: 2 * 60 * 1000,
+  });
 }
 
 async function runInstalledAgentTurn(params) {
@@ -2384,6 +2396,13 @@ async function runModelsSet(params) {
     logPath: params.logPath,
     timeoutMs: 2 * 60 * 1000,
   });
+  await runOpenClaw({
+    lane: params.lane,
+    env: params.env,
+    args: ["config", "set", "agents.defaults.skipBootstrap", "true", "--strict-json"],
+    logPath: params.logPath,
+    timeoutMs: 2 * 60 * 1000,
+  });
 }
 
 async function runAgentTurn(params) {
@@ -2461,7 +2480,7 @@ function parseAgentPayloadTexts(stdout) {
 async function runDashboardSmoke(params) {
   const dashboardUrl = `http://127.0.0.1:${params.lane.gatewayPort}/`;
   const logStream = createWriteStream(params.logPath, { flags: "a" });
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS;
   let attempt = 0;
   try {
     while (Date.now() < deadline) {
@@ -2469,7 +2488,7 @@ async function runDashboardSmoke(params) {
       logStream.write(`${new Date().toISOString()} attempt=${attempt} url=${dashboardUrl}\n`);
       try {
         const response = await fetch(dashboardUrl, {
-          signal: AbortSignal.timeout(5_000),
+          signal: AbortSignal.timeout(CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS),
         });
         const html = await response.text();
         if (

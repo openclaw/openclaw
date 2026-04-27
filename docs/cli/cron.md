@@ -57,6 +57,12 @@ Note: if an isolated cron run returns only the silent token (`NO_REPLY` /
 `no_reply`), cron suppresses direct outbound delivery and the fallback queued
 summary path as well, so nothing is posted back to chat.
 
+Note: isolated cron runs prefer structured execution-denial metadata from the
+embedded run, then fall back to known denial markers in final output, such as
+`SYSTEM_RUN_DENIED`, `INVALID_REQUEST`, and approval-binding refusal phrases.
+`cron list` and run history surface the denial reason instead of reporting a
+blocked command as `ok`.
+
 Note: `cron add|edit --model ...` uses that selected allowed model for the job.
 If the model is not allowed, cron warns and falls back to the job's agent/default
 model selection instead. Configured fallback chains still apply, but a plain
@@ -138,6 +144,10 @@ Delivery ownership note:
 - `announce` fallback-delivers the final reply only when the agent did not send
   directly to the resolved target. `webhook` posts the finished payload to a URL.
   `none` disables runner fallback delivery.
+- Reminders created from an active chat preserve the live chat delivery target
+  for fallback announce delivery. Internal session keys may be lowercase; do not
+  use them as a source of truth for case-sensitive provider IDs such as Matrix
+  room IDs.
 
 ## Common admin commands
 

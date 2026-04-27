@@ -138,6 +138,42 @@ describe("buildAuthHealthSummary", () => {
     expect(statuses["google:no-refresh"]).toBe("expired");
   });
 
+  it("uses runtime provider credentials for profile health", () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const store = {
+      version: 1,
+      profiles: {
+        "anthropic:claude-cli": {
+          type: "oauth" as const,
+          provider: "claude-cli",
+          access: "stale-access",
+          refresh: "stale-refresh",
+          expires: now - 10_000,
+        },
+      },
+    };
+
+    const summary = buildAuthHealthSummary({
+      store,
+      warnAfterMs: DEFAULT_OAUTH_WARN_MS,
+      runtimeCredentialsByProvider: new Map([
+        [
+          "claude-cli",
+          {
+            type: "token",
+            provider: "claude-cli",
+            token: "fresh-cli-access",
+            expires: now + DEFAULT_OAUTH_WARN_MS + 60_000,
+          },
+        ],
+      ]),
+    });
+
+    const profile = summary.profiles.find((entry) => entry.profileId === "anthropic:claude-cli");
+    expect(profile?.status).toBe("ok");
+    expect(profile?.expiresAt).toBe(now + DEFAULT_OAUTH_WARN_MS + 60_000);
+  });
+
   it("does not let fresh .codex state override expired canonical health", () => {
     vi.spyOn(Date, "now").mockReturnValue(now);
     mockFreshCodexCliCredentials();
