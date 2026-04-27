@@ -4806,12 +4806,19 @@ describe("QmdMemoryManager", () => {
       path.join(sessionsDir, "team.checkpoint.notes.jsonl"),
       `${JSON.stringify({ type: "message", message: { role: "user", content: "notes" } })}\n`,
     );
+    await fs.writeFile(
+      path.join(sessionsDir, "live-session.checkpoint.11111111-1111-4111-8111-111111111111.jsonl"),
+      `${JSON.stringify({ type: "message", message: { role: "user", content: "checkpoint" } })}\n`,
+    );
 
     const { manager } = await createManager({ mode: "full" });
     const sessionExportDir = path.join(stateDir, "agents", agentId, "qmd", "sessions");
     const exported = (await fs.readdir(sessionExportDir)).toSorted();
 
     expect(exported).toEqual(["live-session.md", "team.checkpoint.notes.md"]);
+    await expect(
+      fs.readFile(path.join(sessionExportDir, "team.checkpoint.notes.md"), "utf-8"),
+    ).resolves.toContain("notes");
     await manager.close();
   });
 
