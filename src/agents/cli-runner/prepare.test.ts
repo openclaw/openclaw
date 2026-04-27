@@ -598,6 +598,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         resolvePluginSetupCliBackend: () => undefined,
         resolveRuntimeCliBackends: () => [
           {
+            pluginId: "test-plugin",
             id: "test-cli",
             config: {
               command: "test-cli",

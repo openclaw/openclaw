@@ -5,7 +5,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const { resolveAgentEffectiveModelPrimaryMock, runEmbeddedPiAgentMock, runCliAgentMock } =
   vi.hoisted(() => ({
-    resolveAgentEffectiveModelPrimaryMock: vi.fn<() => string | null>(() => null),
+    resolveAgentEffectiveModelPrimaryMock: vi.fn<(cfg?: OpenClawConfig) => string | null>(
+      () => null,
+    ),
     runEmbeddedPiAgentMock: vi.fn(),
     runCliAgentMock: vi.fn(),
   }));
@@ -74,8 +76,8 @@ describe("generateSlugViaLLM", () => {
   });
 
   it("infers provider metadata for bare configured agent models", async () => {
-    resolveAgentEffectiveModelPrimaryMock.mockImplementation((cfg: OpenClawConfig) => {
-      const model = cfg.agents?.defaults?.model;
+    resolveAgentEffectiveModelPrimaryMock.mockImplementation((cfg?: OpenClawConfig) => {
+      const model = cfg?.agents?.defaults?.model;
       if (typeof model === "string") {
         return model;
       }
