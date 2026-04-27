@@ -361,6 +361,7 @@ function listSessions(params: Record<string, unknown>) {
   const urlKey = normalizeMeetKey(readString(params.url));
   const mode = readString(params.mode);
   const bridges = [...sessions.values()]
+    .filter((session) => !session.closed)
     .filter((session) => !urlKey || normalizeMeetKey(session.url) === urlKey)
     .filter((session) => !mode || session.mode === mode)
     .map(summarizeSession);
@@ -385,9 +386,12 @@ function stopSessionsByUrl(params: Record<string, unknown>) {
     if (mode && session.mode !== mode) {
       continue;
     }
+    const wasClosed = session.closed;
     stopSession(session);
     sessions.delete(bridgeId);
-    stopped += 1;
+    if (!wasClosed) {
+      stopped += 1;
+    }
   }
   return { ok: true, stopped };
 }
