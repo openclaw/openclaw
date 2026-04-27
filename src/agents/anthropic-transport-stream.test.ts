@@ -309,6 +309,47 @@ describe("anthropic transport stream", () => {
     );
   });
 
+  it("skips malformed tools when building Anthropic payloads", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [{ role: "user", content: "hello" }],
+        tools: [
+          {
+            name: "bad_plugin_tool",
+            description: "missing schema",
+            execute: async () => ({ content: [{ type: "text", text: "bad" }] }),
+          },
+          {
+            name: "good_plugin_tool",
+            description: "valid schema",
+            parameters: {
+              type: "object",
+              properties: {
+                query: { type: "string" },
+              },
+              required: ["query"],
+            },
+          },
+        ],
+      } as unknown as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequest().payload.tools).toEqual([
+      expect.objectContaining({
+        name: "good_plugin_tool",
+        input_schema: expect.objectContaining({
+          properties: {
+            query: { type: "string" },
+          },
+        }),
+      }),
+    ]);
+  });
+
   it("coerces replayed malformed tool-call args to an object for Anthropic payloads", async () => {
     const model = makeAnthropicTransportModel({
       requestTransport: {

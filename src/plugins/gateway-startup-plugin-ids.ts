@@ -9,10 +9,11 @@ import {
 } from "../memory-host-sdk/dreaming.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { hasExplicitChannelConfig } from "./channel-presence-policy.js";
+import { collectPluginConfigContractMatches } from "./config-contracts.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
 import type { InstalledPluginIndexRecord } from "./installed-plugin-index.js";
 import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
-import type { PluginManifestRegistry } from "./manifest-registry.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import {
   createPluginRegistryIdNormalizer,
   normalizePluginsConfigWithRegistry,
@@ -37,6 +38,20 @@ function listDisabledChannelIds(config: OpenClawConfig): Set<string> {
       .map(([channelId]) => normalizeOptionalLowercaseString(channelId))
       .filter((channelId): channelId is string => Boolean(channelId)),
   );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function isConfigActivationValueEnabled(value: unknown): boolean {
+  if (value === false) {
+    return false;
+  }
+  if (isRecord(value) && value.enabled === false) {
+    return false;
+  }
+  return true;
 }
 
 function listPotentialEnabledChannelIds(config: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
@@ -123,6 +138,60 @@ function listManifestChannelIds(
   pluginId: string,
 ): readonly string[] {
   return manifestRegistry.plugins.find((plugin) => plugin.id === pluginId)?.channels ?? [];
+}
+
+function findManifestPlugin(
+  manifestRegistry: PluginManifestRegistry,
+  pluginId: string,
+): PluginManifestRecord | undefined {
+  return manifestRegistry.plugins.find((plugin) => plugin.id === pluginId);
+}
+
+function hasConfiguredActivationPath(params: {
+  manifest: PluginManifestRecord | undefined;
+  config: OpenClawConfig;
+}): boolean {
+  const paths = params.manifest?.activation?.onConfigPaths;
+  if (!paths?.length) {
+    return false;
+  }
+  return paths.some((pathPattern) =>
+    collectPluginConfigContractMatches({
+      root: params.config,
+      pathPattern,
+    }).some((match) => isConfigActivationValueEnabled(match.value)),
+  );
+}
+
+function canStartConfiguredRootPlugin(params: {
+  plugin: InstalledPluginIndexRecord;
+  manifest: PluginManifestRecord | undefined;
+  config: OpenClawConfig;
+  pluginsConfig: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+  activationSourcePlugins: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+}): boolean {
+  if (params.plugin.origin !== "bundled") {
+    return false;
+  }
+  if (!hasConfiguredActivationPath({ manifest: params.manifest, config: params.config })) {
+    return false;
+  }
+  if (!params.pluginsConfig.enabled || !params.activationSourcePlugins.enabled) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.deny.includes(params.plugin.pluginId) ||
+    params.activationSourcePlugins.deny.includes(params.plugin.pluginId)
+  ) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.entries[params.plugin.pluginId]?.enabled === false ||
+    params.activationSourcePlugins.entries[params.plugin.pluginId]?.enabled === false
+  ) {
+    return false;
+  }
+  return true;
 }
 
 function canStartConfiguredChannelPlugin(params: {
@@ -301,6 +370,7 @@ export function resolveGatewayStartupPluginIdsFromRegistry(params: {
   });
   return params.index.plugins
     .filter((plugin) => {
+      const manifest = findManifestPlugin(params.manifestRegistry, plugin.pluginId);
       if (
         hasConfiguredStartupChannel({
           plugin,
@@ -337,6 +407,17 @@ export function resolveGatewayStartupPluginIdsFromRegistry(params: {
         })
       ) {
         return false;
+      }
+      if (
+        canStartConfiguredRootPlugin({
+          plugin,
+          manifest,
+          config: activationSourceConfig,
+          pluginsConfig,
+          activationSourcePlugins,
+        })
+      ) {
+        return true;
       }
       const activationState = resolveEffectivePluginActivationState({
         id: plugin.pluginId,

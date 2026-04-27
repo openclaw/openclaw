@@ -2,24 +2,13 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { CommanderError } from "commander";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeEnv } from "../infra/env.js";
-import { formatUncaughtError } from "../infra/errors.js";
 import { isMainModule } from "../infra/is-main.js";
-import { ensureGlobalUndiciEnvProxyDispatcher } from "../infra/net/undici-global-dispatcher.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
-import { enableConsoleCapture } from "../logging.js";
 import type { PluginManifestCommandAliasRegistry } from "../plugins/manifest-command-aliases.js";
-import { resolveManifestCommandAliasOwner } from "../plugins/manifest-command-aliases.runtime.js";
-import { hasMemoryRuntime } from "../plugins/memory-state.js";
-import { maybeWarnAboutDebugProxyCoverage } from "../proxy-capture/coverage.js";
-import {
-  finalizeDebugProxyCapture,
-  initializeDebugProxyCapture,
-} from "../proxy-capture/runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import {
@@ -28,8 +17,6 @@ import {
 } from "./command-registration-policy.js";
 import { maybeRunCliInContainer, parseCliContainerArgs } from "./container-target.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
-import { createCliProgress } from "./progress.js";
-import { tryRouteCli } from "./route.js";
 import {
   resolveMissingPluginCommandMessage as resolveMissingPluginCommandMessageFromPolicy,
   rewriteUpdateFlagArgv,
@@ -51,6 +38,7 @@ export {
 } from "./run-main-policy.js";
 
 async function closeCliMemoryManagers(): Promise<void> {
+  const { hasMemoryRuntime } = await import("../plugins/memory-state.js");
   if (!hasMemoryRuntime()) {
     return;
   }
@@ -67,10 +55,11 @@ export function resolveMissingPluginCommandMessage(
   config?: OpenClawConfig,
   options?: { registry?: PluginManifestCommandAliasRegistry },
 ): string | null {
-  return resolveMissingPluginCommandMessageFromPolicy(pluginId, config, {
-    ...(options?.registry ? { registry: options.registry } : {}),
-    resolveCommandAliasOwner: resolveManifestCommandAliasOwner,
-  });
+  return resolveMissingPluginCommandMessageFromPolicy(
+    pluginId,
+    config,
+    options?.registry ? { registry: options.registry } : undefined,
+  );
 }
 
 function shouldLoadCliDotEnv(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -78,6 +67,33 @@ function shouldLoadCliDotEnv(env: NodeJS.ProcessEnv = process.env): boolean {
     return true;
   }
   return existsSync(path.join(resolveStateDir(env), ".env"));
+}
+
+function isCommanderParseExit(error: unknown): error is { exitCode: number } {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const candidate = error as { code?: unknown; exitCode?: unknown };
+  return (
+    typeof candidate.exitCode === "number" &&
+    Number.isInteger(candidate.exitCode) &&
+    typeof candidate.code === "string" &&
+    candidate.code.startsWith("commander.")
+  );
+}
+
+async function ensureCliEnvProxyDispatcher(): Promise<void> {
+  try {
+    const { hasEnvHttpProxyAgentConfigured } = await import("../infra/net/proxy-env.js");
+    if (!hasEnvHttpProxyAgentConfigured()) {
+      return;
+    }
+    const { ensureGlobalUndiciEnvProxyDispatcher } =
+      await import("../infra/net/undici-global-dispatcher.js");
+    ensureGlobalUndiciEnvProxyDispatcher();
+  } catch {
+    // Best-effort proxy bootstrap; CLI startup should continue without it.
+  }
 }
 
 export async function runCli(argv: string[] = process.argv) {
@@ -113,12 +129,6 @@ export async function runCli(argv: string[] = process.argv) {
     loadCliDotEnv({ quiet: true });
   }
   normalizeEnv();
-  initializeDebugProxyCapture("cli");
-  process.once("exit", () => {
-    finalizeDebugProxyCapture();
-  });
-  ensureGlobalUndiciEnvProxyDispatcher();
-  maybeWarnAboutDebugProxyCoverage();
   if (shouldEnsureCliPath(normalizedArgv)) {
     ensureOpenClawCliOnPath();
   }
@@ -143,7 +153,13 @@ export async function runCli(argv: string[] = process.argv) {
       }
     }
 
-    if (shouldStartCrestodianForBareRoot(normalizedArgv)) {
+    const shouldRunBareRootCrestodian = shouldStartCrestodianForBareRoot(normalizedArgv);
+    const shouldRunModernOnboardCrestodian = shouldStartCrestodianForModernOnboard(normalizedArgv);
+    if (shouldRunBareRootCrestodian || shouldRunModernOnboardCrestodian) {
+      await ensureCliEnvProxyDispatcher();
+    }
+
+    if (shouldRunBareRootCrestodian) {
       if (!process.stdin.isTTY || !process.stdout.isTTY) {
         console.error(
           'Crestodian needs an interactive TTY. Use `openclaw crestodian --message "status"` for one command.',
@@ -152,6 +168,7 @@ export async function runCli(argv: string[] = process.argv) {
         return;
       }
       const { runCrestodian } = await import("../crestodian/crestodian.js");
+      const { createCliProgress } = await import("./progress.js");
       const progress = createCliProgress({
         label: "Starting Crestodian…",
         indeterminate: true,
@@ -174,7 +191,7 @@ export async function runCli(argv: string[] = process.argv) {
       return;
     }
 
-    if (shouldStartCrestodianForModernOnboard(normalizedArgv)) {
+    if (shouldRunModernOnboardCrestodian) {
       const { runCrestodian } = await import("../crestodian/crestodian.js");
       const nonInteractive = normalizedArgv.includes("--non-interactive");
       await runCrestodian({
@@ -186,10 +203,26 @@ export async function runCli(argv: string[] = process.argv) {
       return;
     }
 
+    const [
+      { initializeDebugProxyCapture, finalizeDebugProxyCapture },
+      { maybeWarnAboutDebugProxyCoverage },
+    ] = await Promise.all([
+      import("../proxy-capture/runtime.js"),
+      import("../proxy-capture/coverage.js"),
+    ]);
+    initializeDebugProxyCapture("cli");
+    process.once("exit", () => {
+      finalizeDebugProxyCapture();
+    });
+    await ensureCliEnvProxyDispatcher();
+    maybeWarnAboutDebugProxyCoverage();
+
+    const { tryRouteCli } = await import("./route.js");
     if (await tryRouteCli(normalizedArgv)) {
       return;
     }
 
+    const { createCliProgress } = await import("./progress.js");
     const startupProgress = createCliProgress({
       label: "Loading OpenClaw CLI…",
       indeterminate: true,
@@ -207,15 +240,22 @@ export async function runCli(argv: string[] = process.argv) {
 
     try {
       // Capture all console output into structured logs while keeping stdout/stderr behavior.
+      const { enableConsoleCapture } = await import("../logging.js");
       enableConsoleCapture();
 
       const [
         { buildProgram },
+        { formatUncaughtError },
         { runFatalErrorHooks },
-        { installUnhandledRejectionHandler, isUncaughtExceptionHandled },
+        {
+          installUnhandledRejectionHandler,
+          isBenignUncaughtExceptionError,
+          isUncaughtExceptionHandled,
+        },
         { restoreTerminalState },
       ] = await Promise.all([
         import("./program.js"),
+        import("../infra/errors.js"),
         import("../infra/fatal-error-hooks.js"),
         import("../infra/unhandled-rejections.js"),
         import("../terminal/restore.js"),
@@ -228,6 +268,13 @@ export async function runCli(argv: string[] = process.argv) {
 
       process.on("uncaughtException", (error) => {
         if (isUncaughtExceptionHandled(error)) {
+          return;
+        }
+        if (isBenignUncaughtExceptionError(error)) {
+          console.warn(
+            "[openclaw] Non-fatal uncaught exception (continuing):",
+            formatUncaughtError(error),
+          );
           return;
         }
         console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
@@ -283,7 +330,15 @@ export async function runCli(argv: string[] = process.argv) {
               (command) => command.name() === primary || command.aliases().includes(primary),
             )
           ) {
-            const missingPluginCommandMessage = resolveMissingPluginCommandMessage(primary, config);
+            const { resolveManifestCommandAliasOwner } =
+              await import("../plugins/manifest-command-aliases.runtime.js");
+            const missingPluginCommandMessage = resolveMissingPluginCommandMessageFromPolicy(
+              primary,
+              config,
+              {
+                resolveCommandAliasOwner: resolveManifestCommandAliasOwner,
+              },
+            );
             if (missingPluginCommandMessage) {
               throw new Error(missingPluginCommandMessage);
             }
@@ -296,7 +351,7 @@ export async function runCli(argv: string[] = process.argv) {
       try {
         await program.parseAsync(parseArgv);
       } catch (error) {
-        if (!(error instanceof CommanderError)) {
+        if (!isCommanderParseExit(error)) {
           throw error;
         }
         process.exitCode = error.exitCode;

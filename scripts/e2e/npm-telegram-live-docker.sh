@@ -249,6 +249,12 @@ for (const packageJsonPath of [
     types: "./extensions/qa-channel/src/protocol.ts",
     default: "./extensions/qa-channel/src/protocol.ts",
   };
+  if (!pkg.exports["./plugin-sdk/gateway-runtime"]) {
+    pkg.exports["./plugin-sdk/gateway-runtime"] = {
+      types: "./dist/plugin-sdk/browser-node-runtime.d.ts",
+      default: "./dist/plugin-sdk/browser-node-runtime.js",
+    };
+  }
   fs.writeFileSync(packageJsonPath, `${JSON.stringify(pkg, null, 2)}\n`);
 }
 NODE

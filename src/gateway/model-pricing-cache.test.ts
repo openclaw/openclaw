@@ -3,15 +3,36 @@ import { modelKey } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { normalizeProviderModelIdWithPlugin } from "../plugins/provider-runtime.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 
 const normalizeProviderModelIdWithPluginMock = vi.hoisted(() =>
   vi.fn<typeof normalizeProviderModelIdWithPlugin>(({ context }) => context.modelId),
 );
+const pluginManifestRegistryMocks = vi.hoisted(() => ({
+  manifestRegistry: undefined as PluginManifestRegistry | undefined,
+  loadPluginManifestRegistryForInstalledIndex: vi.fn(),
+}));
 
 vi.mock("../plugins/provider-runtime.js", () => {
   return { normalizeProviderModelIdWithPlugin: normalizeProviderModelIdWithPluginMock };
+});
+
+vi.mock("../plugins/manifest-registry-installed.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/manifest-registry-installed.js")>();
+  return {
+    ...actual,
+    loadPluginManifestRegistryForInstalledIndex: (
+      params: Parameters<typeof actual.loadPluginManifestRegistryForInstalledIndex>[0],
+    ) => {
+      pluginManifestRegistryMocks.loadPluginManifestRegistryForInstalledIndex(params);
+      return (
+        pluginManifestRegistryMocks.manifestRegistry ??
+        actual.loadPluginManifestRegistryForInstalledIndex(params)
+      );
+    },
+  };
 });
 
 import {
@@ -25,6 +46,8 @@ import {
 describe("model-pricing-cache", () => {
   beforeEach(() => {
     __resetGatewayModelPricingCacheForTest();
+    pluginManifestRegistryMocks.manifestRegistry = undefined;
+    pluginManifestRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockClear();
   });
 
   afterEach(() => {
@@ -121,6 +144,48 @@ describe("model-pricing-cache", () => {
     expect(refs).toContain("tavily/search-preview");
   });
 
+  it("uses one installed manifest pass for pricing policies and configured web-search refs", async () => {
+    pluginManifestRegistryMocks.manifestRegistry = {
+      diagnostics: [],
+      plugins: [
+        createManifestRecord({
+          id: "search-plugin",
+          contracts: { webSearchProviders: ["search-plugin"] },
+        }),
+      ],
+    };
+    const config = {
+      plugins: {
+        entries: {
+          "search-plugin": {
+            config: {
+              webSearch: {
+                model: "local-search/search-model",
+              },
+            },
+          },
+        },
+      },
+      models: {
+        providers: {
+          "local-search": {
+            baseUrl: "http://127.0.0.1:43210/v1",
+            api: "openai-completions",
+            models: [{ id: "search-model" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = vi.fn<typeof fetch>();
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    expect(
+      pluginManifestRegistryMocks.loadPluginManifestRegistryForInstalledIndex,
+    ).toHaveBeenCalledOnce();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("skips remote pricing catalogs for local-only model providers", async () => {
     const config = {
       agents: {
@@ -135,7 +200,7 @@ describe("model-pricing-cache", () => {
             api: "ollama",
             models: [{ id: "llama3.2:latest" }],
           },
-          vllm: {
+          "my-local-gpu": {
             baseUrl: "http://192.168.1.25:8000/v1",
             api: "openai-completions",
             models: [{ id: "qwen2.5-coder:7b" }],
@@ -143,7 +208,7 @@ describe("model-pricing-cache", () => {
         },
       },
       tools: {
-        subagents: { model: { primary: "vllm/qwen2.5-coder:7b" } },
+        subagents: { model: { primary: "my-local-gpu/qwen2.5-coder:7b" } },
       },
     } as unknown as OpenClawConfig;
     const fetchImpl = vi.fn<typeof fetch>();
@@ -154,6 +219,46 @@ describe("model-pricing-cache", () => {
     expect(
       getCachedGatewayModelPricing({ provider: "ollama", model: "llama3.2:latest" }),
     ).toBeUndefined();
+  });
+
+  it("seeds pricing from explicit configured model cost without external catalog fetches", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "custom/gpt-local" },
+        },
+      },
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://models.example/v1",
+            api: "openai-completions",
+            models: [
+              {
+                id: "gpt-local",
+                name: "GPT Local",
+                reasoning: false,
+                input: ["text"],
+                contextWindow: 128000,
+                maxTokens: 8192,
+                cost: { input: 0.12, output: 0.48, cacheRead: 0.01, cacheWrite: 0.02 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = vi.fn<typeof fetch>();
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(getCachedGatewayModelPricing({ provider: "custom", model: "gpt-local" })).toEqual({
+      input: 0.12,
+      output: 0.48,
+      cacheRead: 0.01,
+      cacheWrite: 0.02,
+    });
   });
 
   it("loads openrouter pricing and maps provider aliases, wrappers, and anthropic dotted ids", async () => {
@@ -631,7 +736,7 @@ describe("model-pricing-cache", () => {
     const config = {
       agents: {
         defaults: {
-          model: { primary: "moonshot/kimi-k2.6" },
+          model: { primary: "kimi/kimi-k2.6" },
         },
       },
     } as unknown as OpenClawConfig;
@@ -669,7 +774,7 @@ describe("model-pricing-cache", () => {
 
     await refreshGatewayModelPricingCache({ config, fetchImpl });
 
-    expect(getCachedGatewayModelPricing({ provider: "moonshot", model: "kimi-k2.6" })).toEqual({
+    expect(getCachedGatewayModelPricing({ provider: "kimi", model: "kimi-k2.6" })).toEqual({
       input: 0.95,
       output: 4,
       cacheRead: 0.16,
@@ -677,3 +782,19 @@ describe("model-pricing-cache", () => {
     });
   });
 });
+
+function createManifestRecord(overrides: Partial<PluginManifestRecord>): PluginManifestRecord {
+  return {
+    id: "plugin",
+    channels: [],
+    providers: [],
+    cliBackends: [],
+    skills: [],
+    hooks: [],
+    origin: "global",
+    rootDir: "/tmp/plugin",
+    source: "/tmp/plugin/index.js",
+    manifestPath: "/tmp/plugin/openclaw.plugin.json",
+    ...overrides,
+  };
+}

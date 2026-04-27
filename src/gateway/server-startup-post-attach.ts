@@ -13,6 +13,7 @@ import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   type GatewayUpdateAvailableEventPayload,
 } from "./events.js";
+import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
 import type { logGatewayStartup } from "./server-startup-log.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./server-startup-unavailable-methods.js";
 import type { startGatewayTailscaleExposure } from "./server-tailscale.js";
@@ -20,6 +21,8 @@ import type { startGatewayTailscaleExposure } from "./server-tailscale.js";
 const SESSION_LOCK_STALE_MS = 30 * 60 * 1000;
 const ACP_BACKEND_READY_TIMEOUT_MS = 5_000;
 const ACP_BACKEND_READY_POLL_MS = 50;
+const PRIMARY_MODEL_PREWARM_TIMEOUT_MS = 5_000;
+const STARTUP_PROVIDER_DISCOVERY_TIMEOUT_MS = 5_000;
 
 type Awaitable<T> = T | Promise<T>;
 
@@ -144,7 +147,10 @@ async function prewarmConfiguredPrimaryModel(params: {
   }
   const agentDir = resolveOpenClawAgentDir();
   try {
-    await ensureOpenClawModelsJson(params.cfg, agentDir);
+    await ensureOpenClawModelsJson(params.cfg, agentDir, {
+      providerDiscoveryProviderIds: [provider],
+      providerDiscoveryTimeoutMs: STARTUP_PROVIDER_DISCOVERY_TIMEOUT_MS,
+    });
     const resolved = resolveModel(provider, model, agentDir, params.cfg, {
       skipProviderRuntimeHooks: true,
     });
@@ -159,6 +165,34 @@ async function prewarmConfiguredPrimaryModel(params: {
   } catch (err) {
     params.log.warn(`startup model warmup failed for ${provider}/${model}: ${String(err)}`);
   }
+}
+
+async function prewarmConfiguredPrimaryModelWithTimeout(
+  params: {
+    cfg: OpenClawConfig;
+    log: { warn: (msg: string) => void };
+    timeoutMs?: number;
+  },
+  prewarm: typeof prewarmConfiguredPrimaryModel = prewarmConfiguredPrimaryModel,
+): Promise<void> {
+  let settled = false;
+  const warmup = prewarm(params)
+    .catch((err) => {
+      params.log.warn(`startup model warmup failed: ${String(err)}`);
+    })
+    .finally(() => {
+      settled = true;
+    });
+  const timeout = sleep(params.timeoutMs ?? PRIMARY_MODEL_PREWARM_TIMEOUT_MS, undefined, {
+    ref: false,
+  }).then(() => {
+    if (!settled) {
+      params.log.warn(
+        `startup model warmup timed out after ${params.timeoutMs ?? PRIMARY_MODEL_PREWARM_TIMEOUT_MS}ms; continuing channel startup`,
+      );
+    }
+  });
+  await Promise.race([warmup, timeout]);
 }
 
 export async function startGatewaySidecars(params: {
@@ -288,11 +322,15 @@ export async function startGatewaySidecars(params: {
   await measureStartup(params.startupTrace, "sidecars.channels", async () => {
     if (!skipChannels) {
       try {
-        await prewarmConfiguredPrimaryModel({
-          cfg: params.cfg,
-          log: params.log,
-        });
-        await params.startChannels();
+        await measureStartup(params.startupTrace, "sidecars.model-prewarm", () =>
+          prewarmConfiguredPrimaryModelWithTimeout({
+            cfg: params.cfg,
+            log: params.log,
+          }),
+        );
+        await measureStartup(params.startupTrace, "sidecars.channel-start", () =>
+          params.startChannels(),
+        );
       } catch (err) {
         params.logChannels.error(`channel startup failed: ${String(err)}`);
       }
@@ -407,6 +445,9 @@ export async function startGatewaySidecars(params: {
 type GatewayPostAttachRuntimeDeps = {
   getGlobalHookRunner: () => Awaitable<ReturnType<typeof getGlobalHookRunner>>;
   logGatewayStartup: (params: Parameters<typeof logGatewayStartup>[0]) => Awaitable<void>;
+  refreshLatestUpdateRestartSentinel: () => Awaitable<
+    ReturnType<typeof refreshLatestUpdateRestartSentinel>
+  >;
   scheduleGatewayUpdateCheck: (
     ...args: Parameters<typeof scheduleGatewayUpdateCheck>
   ) => Awaitable<ReturnType<typeof scheduleGatewayUpdateCheck>>;
@@ -421,6 +462,8 @@ const defaultGatewayPostAttachRuntimeDeps: GatewayPostAttachRuntimeDeps = {
     (await import("../plugins/hook-runner-global.js")).getGlobalHookRunner(),
   logGatewayStartup: async (params) =>
     (await import("./server-startup-log.js")).logGatewayStartup(params),
+  refreshLatestUpdateRestartSentinel: async () =>
+    (await import("./server-restart-sentinel.js")).refreshLatestUpdateRestartSentinel(),
   scheduleGatewayUpdateCheck: async (...args) =>
     (await import("../infra/update-startup.js")).scheduleGatewayUpdateCheck(...args),
   startGatewaySidecars,
@@ -464,6 +507,7 @@ export async function startGatewayPostAttachRuntime(
     };
     logChannels: { info: (msg: string) => void; error: (msg: string) => void };
     unavailableGatewayMethods: Set<string>;
+    getCronService?: () => PluginHookGatewayCronService | null | undefined;
     onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
     onSidecarsReady?: () => void;
     startupTrace?: GatewayStartupTrace;
@@ -471,6 +515,14 @@ export async function startGatewayPostAttachRuntime(
   },
   runtimeDeps: GatewayPostAttachRuntimeDeps = defaultGatewayPostAttachRuntimeDeps,
 ) {
+  await measureStartup(params.startupTrace, "post-attach.update-sentinel", async () => {
+    try {
+      await runtimeDeps.refreshLatestUpdateRestartSentinel();
+    } catch (err) {
+      params.log.warn(`restart sentinel refresh failed: ${String(err)}`);
+    }
+  });
+
   await measureStartup(params.startupTrace, "post-attach.log", () =>
     runtimeDeps.logGatewayStartup({
       cfg: params.cfgAtStart,
@@ -556,7 +608,9 @@ export async function startGatewayPostAttachRuntime(
               port: params.port,
               config: params.gatewayPluginConfigAtStart,
               workspaceDir: params.defaultWorkspaceDir,
-              getCron: () => params.deps.cron as PluginHookGatewayCronService | undefined,
+              getCron: () =>
+                params.getCronService?.() ??
+                (params.deps.cron as PluginHookGatewayCronService | undefined),
             },
           )
           .catch((err) => {
@@ -591,4 +645,5 @@ export async function startGatewayPostAttachRuntime(
 
 export const __testing = {
   prewarmConfiguredPrimaryModel,
+  prewarmConfiguredPrimaryModelWithTimeout,
 };

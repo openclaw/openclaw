@@ -86,6 +86,9 @@ function collectCompatCodes(record: PluginManifestRecord): readonly PluginCompat
   if (record.activation?.onRoutes?.length) {
     codes.push("activation-route-hint");
   }
+  if (record.activation?.onConfigPaths?.length) {
+    codes.push("activation-config-path-hint");
+  }
   if (record.activation?.onCapabilities?.length) {
     codes.push("activation-capability-hint");
   }

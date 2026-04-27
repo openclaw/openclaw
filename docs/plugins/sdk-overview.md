@@ -37,9 +37,9 @@ the broader umbrella surface and shared helpers such as
 
 For channel config, publish the channel-owned JSON Schema through
 `openclaw.plugin.json#channelConfigs`. The `plugin-sdk/channel-config-schema`
-subpath is for shared schema primitives and the generic builder. Any
-bundled-channel-named schema exports on that subpath are legacy compatibility
-exports, not a pattern for new plugins.
+subpath is for shared schema primitives and the generic builder. Deprecated
+bundled-channel schema exports live on `plugin-sdk/channel-config-schema-legacy`
+for bundled compatibility only; they are not a pattern for new plugins.
 
 <Warning>
   Do not import provider- or channel-branded convenience seams (for example
@@ -93,6 +93,10 @@ methods:
 | ------------------------------- | --------------------------------------------- |
 | `api.registerTool(tool, opts?)` | Agent tool (required or `{ optional: true }`) |
 | `api.registerCommand(def)`      | Custom command (bypasses the LLM)             |
+
+Plugin commands can set `agentPromptGuidance` when the agent needs a short,
+command-owned routing hint. Keep that text about the command itself; do not add
+provider- or plugin-specific policy to core prompt builders.
 
 ### Infrastructure
 

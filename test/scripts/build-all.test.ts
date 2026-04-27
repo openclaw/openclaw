@@ -131,6 +131,7 @@ describe("resolveBuildAllSteps", () => {
     expect(resolveBuildAllSteps("ciArtifacts").map((step) => step.label)).toEqual([
       "canvas:a2ui:bundle",
       "tsdown",
+      "check-cli-bootstrap-imports",
       "runtime-postbuild",
       "build-stamp",
       "build:plugin-sdk:dts",
@@ -148,6 +149,7 @@ describe("resolveBuildAllSteps", () => {
   it("uses a minimal built runtime profile for gateway watch regression", () => {
     expect(resolveBuildAllSteps("gatewayWatch").map((step) => step.label)).toEqual([
       "tsdown",
+      "check-cli-bootstrap-imports",
       "runtime-postbuild",
       "build-stamp",
     ]);

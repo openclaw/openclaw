@@ -335,7 +335,10 @@ describe("buildAgentSystemPrompt", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["sessions_spawn", "subagents", "agents_list", "exec"],
-      nativeCommandNames: ["codex"],
+      nativeCommandGuidanceLines: [
+        "Native Codex app-server plugin is available (`/codex ...`). For Codex bind/control/thread/resume/steer/stop requests, prefer `/codex bind`, `/codex threads`, `/codex resume`, `/codex steer`, and `/codex stop` over ACP.",
+        "Use ACP for Codex only when the user explicitly asks for ACP/acpx or wants to test the ACP path.",
+      ],
       acpEnabled: true,
     });
 
@@ -1038,7 +1041,9 @@ describe("buildSubagentSystemPrompt", () => {
       task: "research task",
       childDepth: 1,
       maxSpawnDepth: 2,
-      nativeCommandNames: ["codex"],
+      nativeCommandGuidanceLines: [
+        "Native Codex app-server plugin is available (`/codex ...`). Prefer that path for Codex bind/control/thread/resume/steer/stop requests; use Codex ACP only when explicitly requested.",
+      ],
       acpEnabled: true,
     });
 

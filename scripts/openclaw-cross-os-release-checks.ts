@@ -17,7 +17,7 @@ import { createServer } from "node:http";
 import { createConnection as createNetConnection, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, win32 as pathWin32 } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { assertNoBundledRuntimeDepsStagingDebris } from "../src/infra/package-dist-inventory.ts";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
@@ -585,6 +585,14 @@ async function runFreshLane(params) {
       logPath: join(params.logsDir, "fresh-onboard.log"),
     });
 
+    logLanePhase(lane, "models-set");
+    await runModelsSet({
+      lane,
+      env,
+      providerConfig: params.providerConfig,
+      logPath: join(params.logsDir, "fresh-models-set.log"),
+    });
+
     logLanePhase(lane, "start-gateway");
     const gateway = await startGateway({
       lane,
@@ -604,14 +612,6 @@ async function runFreshLane(params) {
     await runDashboardSmoke({
       lane,
       logPath: join(params.logsDir, "fresh-dashboard.log"),
-    });
-
-    logLanePhase(lane, "models-set");
-    await runModelsSet({
-      lane,
-      env,
-      providerConfig: params.providerConfig,
-      logPath: join(params.logsDir, "fresh-models-set.log"),
     });
 
     logLanePhase(lane, "agent-turn");
@@ -720,6 +720,14 @@ async function runUpgradeLane(params) {
       logPath: join(params.logsDir, "upgrade-onboard.log"),
     });
 
+    logLanePhase(lane, "models-set");
+    await runModelsSet({
+      lane,
+      env,
+      providerConfig: params.providerConfig,
+      logPath: join(params.logsDir, "upgrade-models-set.log"),
+    });
+
     logLanePhase(lane, "start-gateway");
     const gateway = await startGateway({
       lane,
@@ -739,14 +747,6 @@ async function runUpgradeLane(params) {
     await runDashboardSmoke({
       lane,
       logPath: join(params.logsDir, "upgrade-dashboard.log"),
-    });
-
-    logLanePhase(lane, "models-set");
-    await runModelsSet({
-      lane,
-      env,
-      providerConfig: params.providerConfig,
-      logPath: join(params.logsDir, "upgrade-models-set.log"),
     });
 
     logLanePhase(lane, "agent-turn");
@@ -837,6 +837,15 @@ async function runInstallerFreshSuite(params) {
       });
     }
 
+    logLanePhase(lane, "models-set");
+    await runInstalledModelsSet({
+      cliPath: freshShell.cliPath,
+      env,
+      providerConfig: params.providerConfig,
+      cwd: lane.homeDir,
+      logPath: join(params.logsDir, "installer-fresh-models-set.log"),
+    });
+
     if (!useManagedGatewayAfterInstall) {
       // Keep the Windows installer lane validating Scheduled Task registration during
       // onboarding and lifecycle commands, but use a manual gateway for the runtime
@@ -882,15 +891,6 @@ async function runInstallerFreshSuite(params) {
     await runDashboardSmoke({
       lane,
       logPath: join(params.logsDir, "installer-fresh-dashboard.log"),
-    });
-
-    logLanePhase(lane, "models-set");
-    await runInstalledModelsSet({
-      cliPath: freshShell.cliPath,
-      env,
-      providerConfig: params.providerConfig,
-      cwd: lane.homeDir,
-      logPath: join(params.logsDir, "installer-fresh-models-set.log"),
     });
 
     logLanePhase(lane, "agent-turn");
@@ -1023,6 +1023,15 @@ async function runDevUpdateSuite(params) {
       logPath: join(params.logsDir, "dev-update-onboard.log"),
     });
 
+    logLanePhase(lane, "models-set");
+    await runInstalledModelsSet({
+      cliPath: verifiedShell.cliPath,
+      env,
+      providerConfig: params.providerConfig,
+      cwd: lane.homeDir,
+      logPath: join(params.logsDir, "dev-update-models-set.log"),
+    });
+
     if (!useManagedGatewayAfterDevUpdate) {
       logLanePhase(lane, "gateway-start");
       const gateway = await startManualGatewayFromInstalledCli({
@@ -1054,15 +1063,6 @@ async function runDevUpdateSuite(params) {
     await runDashboardSmoke({
       lane,
       logPath: join(params.logsDir, "dev-update-dashboard.log"),
-    });
-
-    logLanePhase(lane, "models-set");
-    await runInstalledModelsSet({
-      cliPath: verifiedShell.cliPath,
-      env,
-      providerConfig: params.providerConfig,
-      cwd: lane.homeDir,
-      logPath: join(params.logsDir, "dev-update-models-set.log"),
     });
 
     logLanePhase(lane, "agent-turn");
@@ -1559,29 +1559,12 @@ async function ensureDevUpdateGitInstall(params) {
 
 async function runOnboardWithInstalledCli(params) {
   await withAllocatedGatewayPort(params.lane, async () => {
-    const args = [
-      "onboard",
-      "--non-interactive",
-      "--mode",
-      "local",
-      "--auth-choice",
-      params.providerConfig.authChoice,
-      "--secret-input-mode",
-      "ref",
-      "--gateway-port",
-      String(params.lane.gatewayPort),
-      "--gateway-bind",
-      "loopback",
-      "--skip-skills",
-      "--accept-risk",
-      "--json",
-    ];
-    if (params.installDaemon) {
-      args.push("--install-daemon");
-    }
-    if (!params.installDaemon || shouldSkipInstallerDaemonHealthCheck()) {
-      args.push("--skip-health");
-    }
+    const args = buildReleaseOnboardArgs({
+      authChoice: params.providerConfig.authChoice,
+      gatewayPort: params.lane.gatewayPort,
+      installDaemon: params.installDaemon,
+      skipHealth: !params.installDaemon || shouldSkipInstallerDaemonHealthCheck(),
+    });
     await runInstalledCli({
       cliPath: params.cliPath,
       args,
@@ -1591,6 +1574,34 @@ async function runOnboardWithInstalledCli(params) {
       timeoutMs: 10 * 60 * 1000,
     });
   });
+}
+
+export function buildReleaseOnboardArgs(params) {
+  const args = [
+    "onboard",
+    "--non-interactive",
+    "--mode",
+    "local",
+    "--auth-choice",
+    params.authChoice,
+    "--secret-input-mode",
+    "ref",
+    "--gateway-port",
+    String(params.gatewayPort),
+    "--gateway-bind",
+    "loopback",
+    "--skip-skills",
+    "--skip-bootstrap",
+    "--accept-risk",
+    "--json",
+  ];
+  if (params.installDaemon) {
+    args.push("--install-daemon");
+  }
+  if (params.skipHealth) {
+    args.push("--skip-health");
+  }
+  return args;
 }
 
 async function startManualGatewayFromInstalledCli(params) {
@@ -2228,10 +2239,12 @@ export function shouldRunWindowsInstalledBrowserOverrideImportSmoke(platform = p
   return platform === "win32";
 }
 
-export function buildInstalledBrowserOverrideImportProbeScript() {
+export function buildInstalledBrowserOverrideImportProbeScript(
+  runtimeModuleSpecifier = "openclaw/plugin-sdk/browser-node-runtime",
+) {
   return `
 import { existsSync } from "node:fs";
-import { startLazyPluginServiceModule } from "openclaw/plugin-sdk/browser-node-runtime";
+import { startLazyPluginServiceModule } from ${JSON.stringify(runtimeModuleSpecifier)};
 
 const startedPath = process.env.OPENCLAW_BROWSER_OVERRIDE_STARTED_PATH;
 const stoppedPath = process.env.OPENCLAW_BROWSER_OVERRIDE_STOPPED_PATH;
@@ -2295,15 +2308,24 @@ async function runInstalledBrowserOverrideImportSmoke(params) {
   const probePath = join(probeDir, "run browser override probe.mjs");
   const startedPath = join(probeDir, "started.txt");
   const stoppedPath = join(probeDir, "stopped.txt");
+  const packageRoot = installedPackageRoot(params.prefixDir);
+  const runtimeModulePath = join(packageRoot, "dist", "plugin-sdk", "browser-node-runtime.js");
+  if (!existsSync(runtimeModulePath)) {
+    throw new Error(`Installed browser runtime module not found: ${runtimeModulePath}`);
+  }
 
   writeFileSync(overridePath, `${buildBrowserOverrideProbeServiceModule()}\n`, "utf8");
-  writeFileSync(probePath, `${buildInstalledBrowserOverrideImportProbeScript()}\n`, "utf8");
+  writeFileSync(
+    probePath,
+    `${buildInstalledBrowserOverrideImportProbeScript(pathToFileURL(runtimeModulePath).href)}\n`,
+    "utf8",
+  );
 
   await runCommand(process.execPath, [probePath], {
-    cwd: installedPackageRoot(params.prefixDir),
+    cwd: packageRoot,
     env: {
       ...params.env,
-      OPENCLAW_BROWSER_CONTROL_MODULE: overridePath,
+      OPENCLAW_BROWSER_CONTROL_MODULE: pathToFileURL(overridePath).href,
       OPENCLAW_BROWSER_OVERRIDE_STARTED_PATH: startedPath,
       OPENCLAW_BROWSER_OVERRIDE_STOPPED_PATH: stoppedPath,
     },
@@ -2349,24 +2371,11 @@ async function runOnboard(params) {
     await runOpenClaw({
       lane: params.lane,
       env: params.env,
-      args: [
-        "onboard",
-        "--non-interactive",
-        "--mode",
-        "local",
-        "--auth-choice",
-        params.providerConfig.authChoice,
-        "--secret-input-mode",
-        "ref",
-        "--gateway-port",
-        String(params.lane.gatewayPort),
-        "--gateway-bind",
-        "loopback",
-        "--skip-skills",
-        "--skip-health",
-        "--accept-risk",
-        "--json",
-      ],
+      args: buildReleaseOnboardArgs({
+        authChoice: params.providerConfig.authChoice,
+        gatewayPort: params.lane.gatewayPort,
+        skipHealth: true,
+      }),
       logPath: params.logPath,
       timeoutMs: 10 * 60 * 1000,
     });

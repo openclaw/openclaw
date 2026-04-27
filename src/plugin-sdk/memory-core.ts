@@ -6,6 +6,12 @@ export {
   DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR,
   emptyPluginConfigSchema,
   jsonResult,
+  /**
+   * @deprecated Use getRuntimeConfig(), runtime.config.current(), or pass the
+   * already loaded config through the call path. Runtime code must not reload
+   * config on demand. Bundled plugins and repo code are blocked from using
+   * this by the deprecated-internal-config-api architecture guard.
+   */
   loadConfig,
   parseAgentSessionKey,
   parseNonNegativeByteSize,

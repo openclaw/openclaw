@@ -77,6 +77,7 @@ import {
   runMatrixQaCanary,
   runMembershipLossScenario,
   runObserverAllowlistOverrideScenario,
+  runPartialStreamingPreviewScenario,
   runQuietStreamingPreviewScenario,
   runReactionThreadedScenario,
   runRoomAutoJoinInviteScenario,
@@ -86,6 +87,10 @@ import {
   runThreadIsolationScenario,
   runThreadNestedReplyShapeScenario,
   runThreadRootPreservationScenario,
+  runToolProgressErrorScenario,
+  runToolProgressMentionSafetyScenario,
+  runToolProgressPreviewOptOutScenario,
+  runToolProgressPreviewScenario,
   runTopLevelReplyShapeScenario,
 } from "./scenario-runtime-room.js";
 import {
@@ -203,8 +208,18 @@ export async function runMatrixQaScenario(
       return await runTopLevelReplyShapeScenario(context);
     case "matrix-room-thread-reply-override":
       return await runRoomThreadReplyOverrideScenario(context);
+    case "matrix-room-partial-streaming-preview":
+      return await runPartialStreamingPreviewScenario(context);
     case "matrix-room-quiet-streaming-preview":
       return await runQuietStreamingPreviewScenario(context);
+    case "matrix-room-tool-progress-preview":
+      return await runToolProgressPreviewScenario(context);
+    case "matrix-room-tool-progress-preview-opt-out":
+      return await runToolProgressPreviewOptOutScenario(context);
+    case "matrix-room-tool-progress-error":
+      return await runToolProgressErrorScenario(context);
+    case "matrix-room-tool-progress-mention-safety":
+      return await runToolProgressMentionSafetyScenario(context);
     case "matrix-room-block-streaming":
       return await runBlockStreamingScenario(context);
     case "matrix-room-image-understanding-attachment":

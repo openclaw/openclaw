@@ -7,7 +7,10 @@ import {
   resolveAwsSdkEnvVarName,
   resolveEnvApiKey,
 } from "../../agents/model-auth.js";
-import { shouldSuppressBuiltInModel } from "../../agents/model-suppression.js";
+import {
+  shouldSuppressBuiltInModel,
+  shouldSuppressBuiltInModelFromManifest,
+} from "../../agents/model-suppression.js";
 import { normalizeProviderId } from "../../agents/provider-id.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -137,7 +140,11 @@ function shouldSuppressListModel(params: {
   context: RowBuilderContext;
 }): boolean {
   if (params.context.skipRuntimeModelSuppression) {
-    return false;
+    return shouldSuppressBuiltInModelFromManifest({
+      provider: params.model.provider,
+      id: params.model.id,
+      config: params.context.cfg,
+    });
   }
   return shouldSuppressBuiltInModel({
     provider: params.model.provider,

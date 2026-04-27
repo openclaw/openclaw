@@ -12,7 +12,6 @@ import type {
 import type { AgentHarness } from "../agents/harness/types.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import type { FailoverReason } from "../agents/pi-embedded-helpers/types.js";
-import type { ModelProviderRequestTransportOverrides } from "../agents/provider-request-config.js";
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
 import type { PromptMode } from "../agents/system-prompt.types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
@@ -136,6 +135,9 @@ import type {
   OpenClawPluginToolOptions,
 } from "./tool-types.js";
 import type { WebFetchProviderPlugin, WebSearchProviderPlugin } from "./web-provider-types.js";
+
+type ModelProviderRequestTransportOverrides =
+  import("../agents/provider-request-config.js").ModelProviderRequestTransportOverrides;
 
 export type { PluginRuntime } from "./runtime/types.js";
 export type { PluginOrigin } from "./plugin-origin.types.js";
@@ -911,6 +913,9 @@ export type ProviderCreateEmbeddingProviderContext = {
     headers?: Record<string, string>;
   };
   providerApiKey?: string;
+  inputType?: string;
+  queryInputType?: string;
+  documentInputType?: string;
   outputDimensionality?: number;
   taskType?: string;
 };
@@ -961,11 +966,11 @@ export type ProviderBuildUnknownModelHintContext = {
 };
 
 /**
- * Built-in model suppression hook.
+ * Built-in model suppression hook context.
  *
- * Use this when a provider/plugin needs to hide stale upstream catalog rows or
- * replace them with a vendor-specific hint. This hook is consulted by model
- * resolution, model listing, and catalog loading.
+ * @deprecated Use manifest `modelCatalog.suppressions` for static suppression
+ * rules. Runtime suppression hooks remain as compatibility fallback for
+ * plugins that cannot express a rule declaratively yet.
  */
 export type ProviderBuiltInModelSuppressionContext = {
   config?: OpenClawConfig;
@@ -1475,6 +1480,10 @@ export type ProviderPlugin = {
    * Return `{ suppress: true }` to hide a stale upstream row. Include
    * `errorMessage` when OpenClaw should surface a provider-specific hint for
    * direct model resolution failures.
+   *
+   * @deprecated Use manifest `modelCatalog.suppressions` for static suppression
+   * rules. Runtime suppression hooks remain as compatibility fallback for
+   * plugins that cannot express a rule declaratively yet.
    */
   suppressBuiltInModel?: (
     ctx: ProviderBuiltInModelSuppressionContext,
@@ -1871,6 +1880,8 @@ export type OpenClawPluginCommandDefinition = {
   };
   /** Description shown in /help and command menus */
   description: string;
+  /** Optional system-prompt guidance for agents when this command is registered. */
+  agentPromptGuidance?: readonly string[];
   /** Whether this command accepts arguments */
   acceptsArgs?: boolean;
   /** Whether only authorized senders can use this command (default: true) */

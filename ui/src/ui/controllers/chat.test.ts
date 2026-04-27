@@ -47,16 +47,20 @@ function createActiveStreamingState() {
   });
 }
 
-function createOtherRunNoReplyFinalPayload(): ChatEventPayload {
+function createOtherRunSilentFinalPayload(text: string): ChatEventPayload {
   return {
     runId: "run-announce",
     sessionKey: "main",
     state: "final",
     message: {
       role: "assistant",
-      content: [{ type: "text", text: "NO_REPLY" }],
+      content: [{ type: "text", text }],
     },
   };
+}
+
+function createOtherRunNoReplyFinalPayload(): ChatEventPayload {
+  return createOtherRunSilentFinalPayload("NO_REPLY");
 }
 
 describe("handleChatEvent", () => {
@@ -143,6 +147,20 @@ describe("handleChatEvent", () => {
     expect(state.chatStreamStartedAt).toBe(123);
     expect(state.chatMessages).toEqual([]);
   });
+
+  it.each(["no_reply", "ANNOUNCE_SKIP", "REPLY_SKIP"])(
+    "keeps plain-text %s final payload from another run without clearing active stream",
+    (text) => {
+      const state = createActiveStreamingState();
+      const payload = createOtherRunSilentFinalPayload(text);
+
+      expect(handleChatEvent(state, payload)).toBe(null);
+      expect(state.chatRunId).toBe("run-user");
+      expect(state.chatStream).toBe("Working...");
+      expect(state.chatStreamStartedAt).toBe(123);
+      expect(state.chatMessages).toEqual([payload.message]);
+    },
+  );
 
   it("replaces the stream when a delta snapshot gets shorter", () => {
     const state = createState({
@@ -440,6 +458,32 @@ describe("handleChatEvent", () => {
     expect(state.chatStream).toBe(null);
   });
 
+  it.each(["no_reply", "ANNOUNCE_SKIP", "REPLY_SKIP"])(
+    "keeps plain-text %s final payload from own run",
+    (text) => {
+      const state = createState({
+        sessionKey: "main",
+        chatRunId: "run-1",
+        chatStream: text,
+        chatStreamStartedAt: 100,
+      });
+      const payload: ChatEventPayload = {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text }],
+        },
+      };
+
+      expect(handleChatEvent(state, payload)).toBe("final");
+      expect(state.chatMessages).toEqual([payload.message]);
+      expect(state.chatRunId).toBe(null);
+      expect(state.chatStream).toBe(null);
+    },
+  );
+
   it("does not persist NO_REPLY stream text on final without message", () => {
     const state = createState({
       sessionKey: "main",
@@ -522,10 +566,13 @@ describe("handleChatEvent", () => {
 });
 
 describe("loadChatHistory", () => {
-  it("filters NO_REPLY assistant messages from history", async () => {
+  it("filters legacy silent assistant messages from history", async () => {
     const messages = [
       { role: "user", content: [{ type: "text", text: "Hello" }] },
       { role: "assistant", content: [{ type: "text", text: "NO_REPLY" }] },
+      { role: "assistant", content: [{ type: "text", text: "no_reply" }] },
+      { role: "assistant", content: [{ type: "text", text: "ANNOUNCE_SKIP" }] },
+      { role: "assistant", content: [{ type: "text", text: "REPLY_SKIP" }] },
       { role: "assistant", content: [{ type: "text", text: "Real answer" }] },
       { role: "assistant", text: "  NO_REPLY  " },
     ];
@@ -539,9 +586,12 @@ describe("loadChatHistory", () => {
 
     await loadChatHistory(state);
 
-    expect(state.chatMessages).toHaveLength(2);
+    expect(state.chatMessages).toHaveLength(5);
     expect(state.chatMessages[0]).toEqual(messages[0]);
     expect(state.chatMessages[1]).toEqual(messages[2]);
+    expect(state.chatMessages[2]).toEqual(messages[3]);
+    expect(state.chatMessages[3]).toEqual(messages[4]);
+    expect(state.chatMessages[4]).toEqual(messages[5]);
     expect(state.chatThinkingLevel).toBe("low");
     expect(state.chatLoading).toBe(false);
   });
@@ -624,6 +674,28 @@ describe("loadChatHistory", () => {
 });
 
 describe("sendChatMessage", () => {
+  it("does not start a second chat.send while the first send is awaiting ack", async () => {
+    const sent = createDeferred<unknown>();
+    const request = vi.fn(() => sent.promise);
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const first = sendChatMessage(state, "hello");
+    const activeRunId = state.chatRunId;
+    const second = sendChatMessage(state, "hello");
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(state.chatMessages).toHaveLength(1);
+    await expect(second).resolves.toBe(activeRunId);
+
+    sent.resolve({ runId: activeRunId, status: "started" });
+    await expect(first).resolves.toBe(activeRunId);
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(state.chatMessages).toHaveLength(1);
+  });
+
   it("serializes non-image chat attachments as files", async () => {
     const request = vi.fn().mockResolvedValue({ runId: "run-1", status: "started" });
     const state = createState({

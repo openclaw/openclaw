@@ -134,6 +134,7 @@ if (
 export async function tryHandleRootHelpFastPath(
   argv: string[],
   deps: {
+    outputPrecomputedRootHelpText?: () => boolean;
     outputRootHelp?: () => void | Promise<void>;
     onError?: (error: unknown) => void;
     env?: NodeJS.ProcessEnv;
@@ -159,7 +160,9 @@ export async function tryHandleRootHelpFastPath(
       await deps.outputRootHelp();
       return true;
     }
-    const { outputPrecomputedRootHelpText } = await import("./cli/root-help-metadata.js");
+    const outputPrecomputedRootHelpText =
+      deps.outputPrecomputedRootHelpText ??
+      (await import("./cli/root-help-metadata.js")).outputPrecomputedRootHelpText;
     if (!outputPrecomputedRootHelpText()) {
       const { outputRootHelp } = await import("./cli/program/root-help.js");
       await outputRootHelp();

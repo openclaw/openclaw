@@ -36,7 +36,7 @@ import {
   ensureBundledPluginRuntimeDeps,
   installBundledRuntimeDeps,
   materializeBundledRuntimeMirrorDistFile,
-  resolveBundledRuntimeDependencyInstallRoot,
+  resolveBundledRuntimeDependencyInstallRootPlan,
   resolveBundledRuntimeDependencyPackageRoot,
   registerBundledRuntimeDependencyNodePath,
   shouldMaterializeBundledRuntimeMirrorDistFile,
@@ -2552,7 +2552,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         let runtimeDepsInstallStartedAt: number | null = null;
         let runtimeDepsInstallSpecs: string[] = [];
         try {
-          const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env });
+          const installRootPlan = resolveBundledRuntimeDependencyInstallRootPlan(pluginRoot, {
+            env,
+          });
+          const installRoot = installRootPlan.installRoot;
           const retainSpecs = bundledRuntimeDepsRetainSpecsByInstallRoot.get(installRoot) ?? [];
           const depsInstallResult = ensureBundledPluginRuntimeDeps({
             pluginId: record.id,
@@ -2605,8 +2608,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
               registerBundledRuntimeDependencyNodePath(packageRoot);
               registerBundledRuntimeDependencyJitiAliases(packageRoot);
             }
-            registerBundledRuntimeDependencyNodePath(installRoot);
-            registerBundledRuntimeDependencyJitiAliases(installRoot);
+            for (const searchRoot of installRootPlan.searchRoots) {
+              registerBundledRuntimeDependencyNodePath(searchRoot);
+              registerBundledRuntimeDependencyJitiAliases(searchRoot);
+            }
             runtimePluginRoot = mirrorBundledPluginRuntimeRoot({
               pluginId: record.id,
               pluginRoot,

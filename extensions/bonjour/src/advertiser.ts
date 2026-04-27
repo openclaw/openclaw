@@ -1,6 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
+import os from "node:os";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import { classifyCiaoProcessError, type CiaoProcessErrorClassification } from "./ciao.js";
@@ -160,9 +161,50 @@ function isDisabledByEnv() {
   return false;
 }
 
+function resolveSystemMdnsHostname(): string | null {
+  let raw: string;
+  try {
+    raw = os.hostname();
+  } catch {
+    return null;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const firstLabel =
+    trimmed
+      .replace(/\.local$/i, "")
+      .split(".")[0]
+      ?.trim() ?? "";
+  if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/.test(firstLabel)) {
+    return null;
+  }
+  return firstLabel;
+}
+
+const MAX_DNS_LABEL_BYTES = 63;
+const utf8Encoder = new TextEncoder();
+
+function truncateToDnsLabel(name: string, fallback = "OpenClaw"): string {
+  const encoded = utf8Encoder.encode(name);
+  if (encoded.byteLength <= MAX_DNS_LABEL_BYTES) {
+    return name;
+  }
+  for (let end = MAX_DNS_LABEL_BYTES; end > 0; end -= 1) {
+    try {
+      const decoded = new TextDecoder("utf-8", { fatal: true }).decode(encoded.subarray(0, end));
+      return decoded.replace(/-+$/, "").trim() || fallback;
+    } catch {
+      // Try the next shorter prefix until the byte slice ends on a UTF-8 boundary.
+    }
+  }
+  return fallback;
+}
+
 function safeServiceName(name: string) {
   const trimmed = name.trim();
-  return trimmed.length > 0 ? trimmed : "OpenClaw";
+  return trimmed.length > 0 ? truncateToDnsLabel(trimmed) : "OpenClaw";
 }
 
 function prettifyInstanceName(name: string) {
@@ -328,12 +370,15 @@ export async function startGatewayBonjourAdvertiser(
     cleanupUnhandledRejection = deps.registerUnhandledRejectionHandler?.(handleCiaoProcessError);
     cleanupUncaughtException = deps.registerUncaughtExceptionHandler?.(handleCiaoProcessError);
 
-    const hostnameRaw = process.env.OPENCLAW_MDNS_HOSTNAME?.trim() || "openclaw";
-    const hostname =
+    const hostnameRaw =
+      process.env.OPENCLAW_MDNS_HOSTNAME?.trim() || resolveSystemMdnsHostname() || "openclaw";
+    const hostname = truncateToDnsLabel(
       hostnameRaw
         .replace(/\.local$/i, "")
         .split(".")[0]
-        .trim() || "openclaw";
+        .trim() || "openclaw",
+      "openclaw",
+    );
     const instanceName =
       typeof opts.instanceName === "string" && opts.instanceName.trim()
         ? opts.instanceName.trim()

@@ -33,13 +33,26 @@ const FORBIDDEN_PATTERNS: Array<{ pattern: RegExp; hint: string }> = [
   },
 ];
 
+const FORBIDDEN_TEST_SUPPORT_PATTERNS: Array<{ pattern: RegExp; hint: string }> = [
+  {
+    pattern:
+      /\b(?:import|export)\b[\s\S]*?\bfrom\s*["'](?:\.\.\/){2,}src\/(?:agents|channels|config|infra|plugins|routing|security|test-helpers|test-utils)\/[^"']+["']/,
+    hint: "Use openclaw/plugin-sdk/testing or a focused plugin-sdk test/runtime subpath instead of core internals.",
+  },
+];
+
 function isExtensionTestFile(filePath: string): boolean {
   return /\.test\.[cm]?[jt]sx?$/u.test(filePath) || /\.e2e\.test\.[cm]?[jt]sx?$/u.test(filePath);
 }
 
+function isExtensionTestSupportFile(filePath: string): boolean {
+  return /(?:^|[/\\])test-support(?:[/\\]|$)/u.test(filePath) && /\.[cm]?[jt]sx?$/u.test(filePath);
+}
+
 function collectExtensionTestFiles(rootDir: string): string[] {
   return collectFilesSync(rootDir, {
-    includeFile: (filePath) => isExtensionTestFile(filePath),
+    includeFile: (filePath) =>
+      isExtensionTestFile(filePath) || isExtensionTestSupportFile(filePath),
   });
 }
 
@@ -50,7 +63,10 @@ function main() {
 
   for (const file of files) {
     const content = fs.readFileSync(file, "utf8");
-    for (const rule of FORBIDDEN_PATTERNS) {
+    const rules = isExtensionTestSupportFile(file)
+      ? [...FORBIDDEN_PATTERNS, ...FORBIDDEN_TEST_SUPPORT_PATTERNS]
+      : FORBIDDEN_PATTERNS;
+    for (const rule of rules) {
       if (!rule.pattern.test(content)) {
         continue;
       }
@@ -70,7 +86,7 @@ function main() {
   }
 
   console.log(
-    `OK: extension test files avoid direct core test/internal imports (${files.length} checked).`,
+    `OK: extension test files and support helpers avoid direct core test/internal imports (${files.length} checked).`,
   );
 }
 

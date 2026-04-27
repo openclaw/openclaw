@@ -28,13 +28,9 @@ import {
   createToolEventRecipientRegistry,
 } from "./server-chat-state.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
-import {
-  attachGatewayUpgradeHandler,
-  createGatewayHttpServer,
-  type HookClientIpConfig,
-} from "./server-http.js";
+import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
 import type { DedupeEntry } from "./server-shared.js";
-import { createGatewayHooksRequestHandler } from "./server/hooks.js";
+import type { HookClientIpConfig, HooksRequestHandler } from "./server/hooks-request-handler.js";
 import { listenGatewayHttpServer } from "./server/http-listen.js";
 import type { PluginRoutePathContext } from "./server/plugins-http/path-context.js";
 import { shouldEnforceGatewayAuthForPluginPath } from "./server/plugins-http/route-auth.js";
@@ -145,14 +141,30 @@ export async function createGatewayRuntimeState(params: {
     const clients = new Set<GatewayWsClient>();
     const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
 
-    const handleHooksRequest = createGatewayHooksRequestHandler({
-      deps: params.deps,
-      getHooksConfig: params.hooksConfig,
-      getClientIpConfig: params.getHookClientIpConfig,
-      bindHost: params.bindHost,
-      port: params.port,
-      logHooks: params.logHooks,
-    });
+    let loadedHooksRequestHandler: HooksRequestHandler | null = null;
+    const handleHooksRequest: HooksRequestHandler = async (req, res) => {
+      const hooksConfig = params.hooksConfig();
+      if (!hooksConfig) {
+        return false;
+      }
+      const url = new URL(req.url ?? "/", "http://localhost");
+      const basePath = hooksConfig.basePath;
+      if (url.pathname !== basePath && !url.pathname.startsWith(`${basePath}/`)) {
+        return false;
+      }
+      if (!loadedHooksRequestHandler) {
+        const { createGatewayHooksRequestHandler } = await import("./server/hooks.js");
+        loadedHooksRequestHandler = createGatewayHooksRequestHandler({
+          deps: params.deps,
+          getHooksConfig: params.hooksConfig,
+          getClientIpConfig: params.getHookClientIpConfig,
+          bindHost: params.bindHost,
+          port: params.port,
+          logHooks: params.logHooks,
+        });
+      }
+      return await loadedHooksRequestHandler(req, res);
+    };
 
     let loadedPluginRequestHandler: GatewayPluginRequestHandler | null = null;
     const handlePluginRequest: GatewayPluginRequestHandler = async (

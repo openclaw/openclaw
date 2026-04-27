@@ -117,4 +117,24 @@ describe("Dockerfile", () => {
       'corepack prepare "$(node -p "require(\'./package.json\').packageManager")" --activate',
     );
   });
+
+  it("pre-creates the OpenClaw home before switching to the node user", async () => {
+    const dockerfile = await readFile(dockerfilePath, "utf8");
+    const runtimeStageIndex = dockerfile.lastIndexOf("FROM base-runtime");
+    const stateDirIndex = dockerfile.indexOf(
+      "RUN install -d -m 0700 -o node -g node /home/node/.openclaw && \\",
+      runtimeStageIndex,
+    );
+    const userIndex = dockerfile.indexOf("USER node", runtimeStageIndex);
+
+    expect(runtimeStageIndex).toBeGreaterThan(-1);
+    expect(stateDirIndex).toBeGreaterThan(-1);
+    expect(userIndex).toBeGreaterThan(-1);
+    expect(stateDirIndex).toBeGreaterThan(runtimeStageIndex);
+    expect(stateDirIndex).toBeLessThan(userIndex);
+    expect(dockerfile).not.toContain("mkdir -p /home/node/.openclaw");
+    expect(dockerfile).toContain(
+      "stat -c '%U:%G %a' /home/node/.openclaw | grep -qx 'node:node 700'",
+    );
+  });
 });

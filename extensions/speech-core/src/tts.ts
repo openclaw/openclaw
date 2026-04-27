@@ -10,22 +10,24 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { resolveChannelTtsVoiceDelivery } from "openclaw/plugin-sdk/channel-targets";
-import {
-  getRuntimeConfigSnapshot,
-  getRuntimeConfigSourceSnapshot,
-  type OpenClawConfig,
-  type ResolvedTtsPersona,
-  type TtsAutoMode,
-  type TtsConfig,
-  type TtsModelOverrideConfig,
-  type TtsProvider,
-} from "openclaw/plugin-sdk/config-runtime";
+import type {
+  OpenClawConfig,
+  ResolvedTtsPersona,
+  TtsAutoMode,
+  TtsConfig,
+  TtsModelOverrideConfig,
+  TtsProvider,
+} from "openclaw/plugin-sdk/config-types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import {
   resolveSendableOutboundReplyParts,
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { isVerbose, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
 import {
@@ -1589,6 +1591,7 @@ export async function maybeApplyTtsToPayload(params: {
       ...nextPayload,
       mediaUrl: result.audioPath,
       audioAsVoice: result.audioAsVoice || params.payload.audioAsVoice,
+      spokenText: textForAudio,
     };
   }
 

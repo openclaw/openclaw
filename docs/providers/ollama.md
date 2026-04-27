@@ -59,7 +59,7 @@ Choose your preferred setup method and mode.
         - **Local only** — local models only
       </Step>
       <Step title="Select a model">
-        `Cloud only` prompts for `OLLAMA_API_KEY` and suggests hosted cloud defaults. `Cloud + Local` and `Local only` ask for an Ollama base URL, discover available models, and auto-pull the selected local model if it is not available yet. `Cloud + Local` also checks whether that Ollama host is signed in for cloud access.
+        `Cloud only` prompts for `OLLAMA_API_KEY` and suggests hosted cloud defaults. `Cloud + Local` and `Local only` ask for an Ollama base URL, discover available models, and auto-pull the selected local model if it is not available yet. When Ollama reports an installed `:latest` tag such as `gemma4:latest`, setup shows that installed model once instead of showing both `gemma4` and `gemma4:latest` or pulling the bare alias again. `Cloud + Local` also checks whether that Ollama host is signed in for cloud access.
       </Step>
       <Step title="Verify the model is available">
         ```bash
@@ -415,6 +415,7 @@ Use these as starting points and replace model IDs with the exact names from `ol
                 input: ["text"],
                 params: {
                   num_ctx: 32768,
+                  thinking: false,
                   keep_alive: "15m",
                 },
               },
@@ -585,6 +586,7 @@ Use these as starting points and replace model IDs with the exact names from `ol
     ```
 
     Use `compat.supportsTools: false` only when the model or server reliably fails on tool schemas. It trades agent capability for stability.
+    `localModelLean` removes the browser, cron, and message tools from the agent surface, but it does not change Ollama's runtime context or thinking mode. Pair it with explicit `params.num_ctx` and `params.thinking: false` for small Qwen-style thinking models that loop or spend their response budget on hidden reasoning.
 
   </Accordion>
 </AccordionGroup>
@@ -845,6 +847,8 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
     | Default model | `nomic-embed-text`  |
     | Auto-pull     | Yes — the embedding model is pulled automatically if not present locally |
 
+    Query-time embeddings use retrieval prefixes for models that require or recommend them, including `nomic-embed-text`, `qwen3-embedding`, and `mxbai-embed-large`. Memory document batches stay raw so existing indexes do not need a format migration.
+
     To select Ollama as the memory search embedding provider:
 
     ```json5
@@ -893,6 +897,41 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
 ## Troubleshooting
 
 <AccordionGroup>
+  <Accordion title="WSL2 crash loop (repeated reboots)">
+    On WSL2 with NVIDIA/CUDA, the official Ollama Linux installer creates an `ollama.service` systemd unit with `Restart=always`. If that service autostarts and loads a GPU-backed model during WSL2 boot, Ollama can pin host memory while the model loads. Hyper-V memory reclaim cannot always reclaim those pinned pages, so Windows can terminate the WSL2 VM, systemd starts Ollama again, and the loop repeats.
+
+    Common evidence:
+
+    - repeated WSL2 reboots or terminations from the Windows side
+    - high CPU in `app.slice` or `ollama.service` shortly after WSL2 startup
+    - SIGTERM from systemd rather than a Linux OOM-killer event
+
+    OpenClaw logs a startup warning when it detects WSL2, `ollama.service` enabled with `Restart=always`, and visible CUDA markers.
+
+    Mitigation:
+
+    ```bash
+    sudo systemctl disable ollama
+    ```
+
+    Add this to `%USERPROFILE%\.wslconfig` on the Windows side, then run `wsl --shutdown`:
+
+    ```ini
+    [experimental]
+    autoMemoryReclaim=disabled
+    ```
+
+    Set a shorter keep-alive in the Ollama service environment, or start Ollama manually only when you need it:
+
+    ```bash
+    export OLLAMA_KEEP_ALIVE=5m
+    ollama serve
+    ```
+
+    See [ollama/ollama#11317](https://github.com/ollama/ollama/issues/11317).
+
+  </Accordion>
+
   <Accordion title="Ollama not detected">
     Make sure Ollama is running and that you set `OLLAMA_API_KEY` (or an auth profile), and that you did **not** define an explicit `models.providers.ollama` entry:
 
@@ -1012,7 +1051,7 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
               {
                 id: "qwen3.5:9b",
                 name: "qwen3.5:9b",
-                params: { num_ctx: 32768 },
+                params: { num_ctx: 32768, thinking: false },
               },
             ],
           },

@@ -13,6 +13,7 @@ import {
   resolveBootstrapContextForRun,
   resolveContextInjectionMode,
 } from "../../bootstrap-files.js";
+import { stripRuntimeContextCustomMessages } from "../../internal-runtime-context.js";
 import type { EmbeddedContextFile } from "../../pi-embedded-helpers.js";
 import {
   resolveBootstrapMaxChars,
@@ -54,7 +55,9 @@ export function remapInjectedContextFilesToWorkspace(params: {
 }
 
 export function normalizeMessagesForLlmBoundary(messages: AgentMessage[]): AgentMessage[] {
-  return stripToolResultDetails(normalizeAssistantReplayContent(messages));
+  return stripToolResultDetails(
+    normalizeAssistantReplayContent(stripRuntimeContextCustomMessages(messages)),
+  );
 }
 
 export async function prepareAttemptBootstrapPromptContext(params: {

@@ -27,10 +27,10 @@ describe("lane-workspace orchestration helpers", () => {
     });
 
     expect(plan.sessionLane).toBe("session:session-key");
-    expect(plan.globalLane).toBe(CommandLane.Nested);
+    expect(plan.globalLane).toBe(CommandLane.CronNested);
     await expect(plan.enqueueSession(async () => "session")).resolves.toBe("session");
     await expect(plan.enqueueGlobal(async () => "global")).resolves.toBe("global");
-    expect(calls).toEqual(["session:session-key", CommandLane.Nested]);
+    expect(calls).toEqual(["session:session-key", CommandLane.CronNested]);
   });
 
   it("preserves caller-provided enqueue functions for both queue stages", async () => {
