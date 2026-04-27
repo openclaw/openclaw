@@ -84,6 +84,15 @@ type WhatsAppSharedConfig = {
   chunkMode?: "length" | "newline";
   /** Maximum media file size in MB. Default: 50. */
   mediaMaxMb?: number;
+  /**
+   * Default disappearing-message expiration (seconds) applied to outbound replies.
+   * Positive values are forwarded to Baileys as `ephemeralExpiration` so the
+   * agent's messages match the surrounding chat's disappearing-messages policy.
+   * 0 / undefined leaves WhatsApp/Baileys to fall back to the chat's own
+   * disappearing-messages setting (no OpenClaw override). The account-level
+   * setting overrides the channel-level setting when both are present.
+   */
+  disappearingMessagesSeconds?: number;
   /** Disable block streaming for this account. */
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */

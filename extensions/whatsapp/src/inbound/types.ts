@@ -20,6 +20,12 @@ export type ActiveWebSendOptions = {
   gifPlayback?: boolean;
   accountId?: string;
   fileName?: string;
+  /**
+   * Optional disappearing-message expiration (seconds). When present and
+   * positive, forwarded to Baileys' `MiscMessageGenerationOptions.ephemeralExpiration`
+   * so OpenClaw replies inherit the chat's disappearing-messages policy. (#71157)
+   */
+  ephemeralExpiration?: number;
 };
 
 export type ActiveWebListener = {

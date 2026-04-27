@@ -236,6 +236,67 @@ describe("createWebSendApi", () => {
     expect(sendMessage).toHaveBeenCalledWith("123@s.whatsapp.net", { text: "hello" });
   });
 
+  it("forwards positive ephemeralExpiration to Baileys MiscMessageGenerationOptions (#71157)", async () => {
+    await api.sendMessage("+1555", "hi", undefined, undefined, {
+      ephemeralExpiration: 86400,
+    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      "1555@s.whatsapp.net",
+      { text: "hi" },
+      expect.objectContaining({ ephemeralExpiration: 86400 }),
+    );
+  });
+
+  it("merges ephemeralExpiration with quoted reply options (#71157)", async () => {
+    await api.sendMessage("+1555", "hi", undefined, undefined, {
+      ephemeralExpiration: 604800,
+      quotedMessageKey: {
+        id: "q1",
+        remoteJid: "1555@s.whatsapp.net",
+        fromMe: false,
+      },
+    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      "1555@s.whatsapp.net",
+      { text: "hi" },
+      expect.objectContaining({
+        ephemeralExpiration: 604800,
+        quoted: expect.objectContaining({
+          key: expect.objectContaining({ id: "q1" }),
+        }),
+      }),
+    );
+  });
+
+  it("forwards ephemeralExpiration to the trailing voice-note text message (#71157)", async () => {
+    const payload = Buffer.from("aud");
+    await api.sendMessage("+1555", "voice text", payload, "audio/ogg", {
+      ephemeralExpiration: 60,
+    });
+    expect(sendMessage).toHaveBeenNthCalledWith(
+      1,
+      "1555@s.whatsapp.net",
+      expect.objectContaining({ audio: payload, ptt: true }),
+      expect.objectContaining({ ephemeralExpiration: 60 }),
+    );
+    expect(sendMessage).toHaveBeenNthCalledWith(
+      2,
+      "1555@s.whatsapp.net",
+      { text: "voice text" },
+      expect.objectContaining({ ephemeralExpiration: 60 }),
+    );
+  });
+
+  it("does not pass MiscMessageGenerationOptions when ephemeralExpiration is non-positive (#71157)", async () => {
+    await api.sendMessage("+1555", "hi", undefined, undefined, { ephemeralExpiration: 0 });
+    expect(sendMessage).toHaveBeenCalledWith("1555@s.whatsapp.net", { text: "hi" });
+    sendMessage.mockClear();
+    await api.sendMessage("+1555", "hi2", undefined, undefined, {
+      ephemeralExpiration: Number.NaN,
+    });
+    expect(sendMessage).toHaveBeenCalledWith("1555@s.whatsapp.net", { text: "hi2" });
+  });
+
   it("preserves the quoted remoteJid provided by the outbound adapter", async () => {
     await api.sendMessage("+1555", "hello", undefined, undefined, {
       quotedMessageKey: {

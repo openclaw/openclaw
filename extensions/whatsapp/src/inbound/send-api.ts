@@ -82,13 +82,24 @@ export function createWebSendApi(params: {
         participant: sendOptions?.quotedMessageKey?.participant,
         messageText: sendOptions?.quotedMessageKey?.messageText,
       });
-      const result = quotedOpts
-        ? await params.sock.sendMessage(jid, payload, quotedOpts)
+      const ephemeralExpiration = sendOptions?.ephemeralExpiration;
+      const ephemeralOpts: MiscMessageGenerationOptions | undefined =
+        typeof ephemeralExpiration === "number" &&
+        Number.isFinite(ephemeralExpiration) &&
+        ephemeralExpiration > 0
+          ? { ephemeralExpiration }
+          : undefined;
+      const mergedOpts: MiscMessageGenerationOptions | undefined =
+        quotedOpts && ephemeralOpts
+          ? { ...quotedOpts, ...ephemeralOpts }
+          : (quotedOpts ?? ephemeralOpts);
+      const result = mergedOpts
+        ? await params.sock.sendMessage(jid, payload, mergedOpts)
         : await params.sock.sendMessage(jid, payload);
       if (mediaBuffer && mediaType?.startsWith("audio/") && text.trim()) {
         const textPayload: AnyMessageContent = { text };
-        if (quotedOpts) {
-          await params.sock.sendMessage(jid, textPayload, quotedOpts);
+        if (mergedOpts) {
+          await params.sock.sendMessage(jid, textPayload, mergedOpts);
         } else {
           await params.sock.sendMessage(jid, textPayload);
         }

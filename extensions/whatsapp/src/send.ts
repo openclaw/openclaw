@@ -12,6 +12,7 @@ import { createSubsystemLogger, getChildLogger } from "openclaw/plugin-sdk/runti
 import {
   resolveDefaultWhatsAppAccountId,
   resolveWhatsAppAccount,
+  resolveWhatsAppDisappearingExpiration,
   resolveWhatsAppMediaMaxBytes,
 } from "./accounts.js";
 import { getRegisteredWhatsAppConnectionController } from "./connection-controller-registry.js";
@@ -145,12 +146,18 @@ export async function sendMessageWhatsApp(
     await active.sendComposingTo(to);
     const hasExplicitAccountId = Boolean(options.accountId?.trim());
     const accountId = hasExplicitAccountId ? resolvedAccountId : undefined;
+    const ephemeralExpiration = resolveWhatsAppDisappearingExpiration(account);
     const sendOptions: ActiveWebSendOptions | undefined =
-      options.gifPlayback || accountId || documentFileName || options.quotedMessageKey
+      options.gifPlayback ||
+      accountId ||
+      documentFileName ||
+      options.quotedMessageKey ||
+      ephemeralExpiration !== undefined
         ? {
             ...(options.gifPlayback ? { gifPlayback: true } : {}),
             ...(documentFileName ? { fileName: documentFileName } : {}),
             ...(options.quotedMessageKey ? { quotedMessageKey: options.quotedMessageKey } : {}),
+            ...(ephemeralExpiration !== undefined ? { ephemeralExpiration } : {}),
             accountId,
           }
         : undefined;

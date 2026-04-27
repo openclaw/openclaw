@@ -1,6 +1,10 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveWhatsAppAccount, resolveWhatsAppAuthDir } from "./accounts.js";
+import {
+  resolveWhatsAppAccount,
+  resolveWhatsAppAuthDir,
+  resolveWhatsAppDisappearingExpiration,
+} from "./accounts.js";
 
 describe("resolveWhatsAppAuthDir", () => {
   const stubCfg = { channels: { whatsapp: { accounts: {} } } } as Parameters<
@@ -158,6 +162,67 @@ describe("resolveWhatsAppAuthDir", () => {
 
     expect(resolved.authDir).toMatch(/whatsapp[/\\]work$/);
     expect(resolved.name).toBeUndefined();
+  });
+
+  it("resolves disappearingMessagesSeconds with account-level override winning over channel-level (#71157)", () => {
+    const resolved = resolveWhatsAppAccount({
+      cfg: {
+        channels: {
+          whatsapp: {
+            disappearingMessagesSeconds: 86400,
+            accounts: {
+              work: {
+                disappearingMessagesSeconds: 60,
+              },
+            },
+          },
+        },
+      } as Parameters<typeof resolveWhatsAppAccount>[0]["cfg"],
+      accountId: "work",
+    });
+
+    expect(resolved.disappearingMessagesSeconds).toBe(60);
+    expect(resolveWhatsAppDisappearingExpiration(resolved)).toBe(60);
+  });
+
+  it("inherits channel-level disappearingMessagesSeconds when account omits it (#71157)", () => {
+    const resolved = resolveWhatsAppAccount({
+      cfg: {
+        channels: {
+          whatsapp: {
+            disappearingMessagesSeconds: 604800,
+            accounts: { work: {} },
+          },
+        },
+      } as Parameters<typeof resolveWhatsAppAccount>[0]["cfg"],
+      accountId: "work",
+    });
+
+    expect(resolveWhatsAppDisappearingExpiration(resolved)).toBe(604800);
+  });
+
+  it("treats non-positive / non-finite disappearingMessagesSeconds as no override (#71157)", () => {
+    expect(
+      resolveWhatsAppDisappearingExpiration({ disappearingMessagesSeconds: 0 }),
+    ).toBeUndefined();
+    expect(
+      resolveWhatsAppDisappearingExpiration({ disappearingMessagesSeconds: -10 }),
+    ).toBeUndefined();
+    expect(
+      resolveWhatsAppDisappearingExpiration({ disappearingMessagesSeconds: Number.NaN }),
+    ).toBeUndefined();
+    expect(
+      resolveWhatsAppDisappearingExpiration({
+        disappearingMessagesSeconds: Number.POSITIVE_INFINITY,
+      }),
+    ).toBeUndefined();
+    expect(resolveWhatsAppDisappearingExpiration({})).toBeUndefined();
+  });
+
+  it("floors fractional disappearingMessagesSeconds to whole seconds (#71157)", () => {
+    expect(resolveWhatsAppDisappearingExpiration({ disappearingMessagesSeconds: 86400.7 })).toBe(
+      86400,
+    );
   });
 
   it("does not inherit default-account selfChatMode for named accounts", () => {

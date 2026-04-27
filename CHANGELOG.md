@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Channels/WhatsApp: add `channels.whatsapp.disappearingMessagesSeconds` (and matching per-account override under `channels.whatsapp.accounts.<id>`) so outbound replies inherit the chat's disappearing-messages policy. The resolved positive integer is forwarded to Baileys as `MiscMessageGenerationOptions.ephemeralExpiration`; non-positive / non-finite values fall back to no override. Fixes #71157.
 - Codex: add Computer Use setup for Codex-mode agents, including `/codex computer-use status/install`, marketplace discovery, optional auto-install, and fail-closed MCP server checks before Codex-mode turns start. Fixes #72094. (#71842) Thanks @pash-openai.
 - Matrix/streaming: stream tool-progress updates into live Matrix preview edits by default when preview streaming is active, with `streaming.preview.toolProgress: false` to keep answer previews while hiding interim tool lines. Thanks @gumadeiras.
 - Plugins/models: wire manifest `modelCatalog.aliases` and `modelCatalog.suppressions` into model-catalog planning and built-in model suppression, with OpenAI stale Spark suppression now declared in the plugin manifest before runtime fallback. Thanks @shakkernerd.

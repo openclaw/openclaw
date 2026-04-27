@@ -38,6 +38,7 @@ export type ResolvedWhatsAppAccount = {
   textChunkLimit?: number;
   chunkMode?: "length" | "newline";
   mediaMaxMb?: number;
+  disappearingMessagesSeconds?: number;
   blockStreaming?: boolean;
   ackReaction?: WhatsAppAccountConfig["ackReaction"];
   reactionLevel?: WhatsAppAccountConfig["reactionLevel"];
@@ -149,6 +150,7 @@ export function resolveWhatsAppAccount(params: {
     textChunkLimit: merged.textChunkLimit,
     chunkMode: merged.chunkMode,
     mediaMaxMb: merged.mediaMaxMb,
+    disappearingMessagesSeconds: merged.disappearingMessagesSeconds,
     blockStreaming: merged.blockStreaming,
     ackReaction: merged.ackReaction,
     reactionLevel: merged.reactionLevel,
@@ -167,6 +169,25 @@ export function resolveWhatsAppMediaMaxBytes(
       ? account.mediaMaxMb
       : DEFAULT_WHATSAPP_MEDIA_MAX_MB;
   return mediaMaxMb * 1024 * 1024;
+}
+
+/**
+ * Resolve the effective disappearing-messages expiration for outbound replies.
+ *
+ * Returns a positive integer number of seconds when the operator opted in;
+ * returns `undefined` to mean "no OpenClaw override — let Baileys/WhatsApp
+ * apply the chat's own disappearing-messages policy." Non-positive, NaN, or
+ * non-finite values are dropped to match the documented opt-out semantics
+ * (`0`, `null`, omitted).
+ */
+export function resolveWhatsAppDisappearingExpiration(
+  account: Pick<ResolvedWhatsAppAccount, "disappearingMessagesSeconds">,
+): number | undefined {
+  const value = account.disappearingMessagesSeconds;
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return Math.floor(value);
 }
 
 export function listEnabledWhatsAppAccounts(cfg: OpenClawConfig): ResolvedWhatsAppAccount[] {
