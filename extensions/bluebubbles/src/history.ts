@@ -198,8 +198,9 @@ export async function fetchBlueBubblesMessageByGuid(
 
   let baseUrl: string;
   let password: string;
+  let allowPrivateNetwork = false;
   try {
-    ({ baseUrl, password } = resolveAccount(opts));
+    ({ baseUrl, password, allowPrivateNetwork } = resolveAccount(opts));
   } catch {
     return null;
   }
@@ -207,14 +208,23 @@ export async function fetchBlueBubblesMessageByGuid(
   // Strip part-index prefix (e.g. "p:0/msg-guid" → "msg-guid")
   const bareGuid = trimmed.includes("/") ? trimmed.split("/").pop()! : trimmed;
 
-  const url = buildBlueBubblesApiUrl({
+  // Route through the SSRF-guarded client (matches fetchBlueBubblesHistory):
+  // a bare blueBubblesFetchWithTimeout call without `ssrfPolicy` skips the
+  // private-network guard entirely, defeating the SSRF defense for the
+  // BlueBubbles Private API endpoint.
+  const client = createBlueBubblesClientFromParts({
     baseUrl,
-    path: `/api/v1/message/${encodeURIComponent(bareGuid)}`,
     password,
+    allowPrivateNetwork,
+    timeoutMs: opts.timeoutMs ?? 5000,
   });
 
   try {
-    const res = await blueBubblesFetchWithTimeout(url, { method: "GET" }, opts.timeoutMs ?? 5000);
+    const res = await client.request({
+      method: "GET",
+      path: `/api/v1/message/${encodeURIComponent(bareGuid)}`,
+      timeoutMs: opts.timeoutMs ?? 5000,
+    });
     if (!res.ok) {
       return null;
     }
