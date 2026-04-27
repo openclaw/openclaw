@@ -409,6 +409,7 @@ describe("agent event handler", () => {
     let now = 10_000;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
     const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness();
+    loadSessionEntryMock.mockReturnValue({ entry: { emotionMode: "on" } });
     chatRunState.registry.add("run-flush", {
       sessionKey: "session-flush",
       clientRunId: "client-flush",
@@ -419,7 +420,7 @@ describe("agent event handler", () => {
       seq: 1,
       stream: "assistant",
       ts: Date.now(),
-      data: { text: "Hello" },
+      data: { text: "[warmly] Hello" },
     });
 
     now = 10_100;
@@ -428,7 +429,7 @@ describe("agent event handler", () => {
       seq: 1,
       stream: "assistant",
       ts: Date.now(),
-      data: { text: "Hello world" },
+      data: { text: "[warmly] Hello world" },
     });
 
     emitLifecycleEnd(handler, "run-flush");
@@ -445,6 +446,7 @@ describe("agent event handler", () => {
     expect(secondPayload.state).toBe("delta");
     expect(secondPayload.message?.content?.[0]?.text).toBe("Hello world");
     expect(thirdPayload.state).toBe("final");
+    expect(loadSessionEntryMock).toHaveBeenCalledTimes(1);
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(3);
     nowSpy.mockRestore();
   });

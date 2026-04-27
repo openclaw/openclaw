@@ -658,6 +658,20 @@ export function createAgentEventHandler({
     pendingTerminalLifecycleErrors.set(evt.runId, timer);
   };
 
+  const resolveLiveEmotionMode = (sessionKey: string, clientRunId: string): EmotionMode => {
+    const now = Date.now();
+    const cached = chatRunState.emotionModes.get(clientRunId);
+    if (cached && cached.expiresAt > now) {
+      return cached.mode;
+    }
+    const mode = resolveSessionEmotionMode(sessionKey);
+    chatRunState.emotionModes.set(clientRunId, {
+      mode,
+      expiresAt: now + LIVE_EMOTION_MODE_CACHE_TTL_MS,
+    });
+    return mode;
+  };
+
   const emitChatDelta = (
     sessionKey: string,
     clientRunId: string,
@@ -667,19 +681,6 @@ export function createAgentEventHandler({
     delta?: unknown,
   ) => {
     const cleaned = normalizeLiveAssistantEventText({ text, delta });
-    const resolveLiveEmotionMode = (): EmotionMode => {
-      const now = Date.now();
-      const cached = chatRunState.emotionModes.get(clientRunId);
-      if (cached && cached.expiresAt > now) {
-        return cached.mode;
-      }
-      const mode = resolveSessionEmotionMode(sessionKey);
-      chatRunState.emotionModes.set(clientRunId, {
-        mode,
-        expiresAt: now + LIVE_EMOTION_MODE_CACHE_TTL_MS,
-      });
-      return mode;
-    };
     const previousRawText = chatRunState.rawBuffers.get(clientRunId) ?? "";
     const mergedRawText = resolveMergedAssistantText({
       previousText: previousRawText,
@@ -696,7 +697,7 @@ export function createAgentEventHandler({
     // raw buffer so literal text like `Use [` can recover when more tokens arrive.
     chatRunState.buffers.set(clientRunId, projected.text);
     const mergedText = sanitizeDirectiveAndEmotionTagsForDisplay(projected.text, {
-      emotionMode: resolveLiveEmotionMode(),
+      emotionMode: resolveLiveEmotionMode(sessionKey, clientRunId),
       hideTrailingPartialEmotionTag: true,
     }).text;
     if (projected.suppress) {
@@ -745,7 +746,7 @@ export function createAgentEventHandler({
       suppressLeadFragments: options?.suppressLeadFragments,
     });
     const visibleText = sanitizeDirectiveAndEmotionTagsForDisplay(projected.text.trim(), {
-      emotionMode: resolveSessionEmotionMode(sessionKey),
+      emotionMode: resolveLiveEmotionMode(sessionKey, clientRunId),
       hideTrailingPartialEmotionTag: false,
     }).text;
     return {
