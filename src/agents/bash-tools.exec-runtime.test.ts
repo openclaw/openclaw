@@ -386,9 +386,10 @@ describe("exec notifyOnExit suppression", () => {
 
     expect(outcome.aggregated).toContain("Command timed out");
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
-      expect.stringContaining("Exec failed"),
+      expect.stringMatching(/Exec failed \([^,]+, timeout\) ::/),
       expect.objectContaining({ sessionKey: "agent:main:main" }),
     );
+    expect(enqueueSystemEventMock.mock.calls[0]?.[0]).not.toContain("signal SIGKILL");
     expect(requestHeartbeatNowMock).toHaveBeenCalled();
   });
 });

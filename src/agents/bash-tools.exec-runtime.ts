@@ -293,6 +293,21 @@ function compactNotifyOutput(value: string, maxChars = DEFAULT_NOTIFY_SNIPPET_CH
   return `${normalized.slice(0, safe)}…`;
 }
 
+function formatExecSessionExitLabel(
+  session: Pick<ProcessSession, "exitCode" | "exitSignal" | "exitReason">,
+) {
+  switch (session.exitReason) {
+    case "overall-timeout":
+      return "timeout";
+    case "no-output-timeout":
+      return "no-output timeout";
+    case "manual-cancel":
+      return "manual cancel";
+    default:
+      return session.exitSignal ? `signal ${session.exitSignal}` : `code ${session.exitCode ?? 0}`;
+  }
+}
+
 export function applyShellPath(env: Record<string, string>, shellPath?: string | null) {
   if (!shellPath) {
     return;
@@ -320,9 +335,7 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
     return;
   }
   session.exitNotified = true;
-  const exitLabel = session.exitSignal
-    ? `signal ${session.exitSignal}`
-    : `code ${session.exitCode ?? 0}`;
+  const exitLabel = formatExecSessionExitLabel(session);
   const output = compactNotifyOutput(
     tail(session.tail || session.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
   );
