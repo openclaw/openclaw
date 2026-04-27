@@ -387,8 +387,11 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
   }
 
   if (action === "search") {
+    // Discord検索は必ずguild-idが必要。CLI側はSlackと共有のため optional にしているので、
+    // ここでDiscord固有のチェックを行いユーザーに分かりやすいエラーを返す
     const guildId = readStringParam(actionParams, "guildId", {
       required: true,
+      label: "guild-id (--guild-id is required for Discord search)",
     });
     const query = readStringParam(actionParams, "query", { required: true });
     return await handleDiscordAction(

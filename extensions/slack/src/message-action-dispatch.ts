@@ -190,12 +190,14 @@ export async function handleSlackMessageAction(params: {
     const sort = readStringParam(actionParams, "sort") as "score" | "timestamp" | undefined;
     const sortDir = readStringParam(actionParams, "sortDir") as "asc" | "desc" | undefined;
     const page = readNumberParam(actionParams, "page", { integer: true });
+    // Slackのsearch.messagesは in:channel_name 形式を期待するので、channelIdは別パラメータで
+    // ランタイムに渡し、そこでconversations.info経由で名前を解決する
     const channelId = readStringParam(actionParams, "channelId");
-    const fullQuery = channelId ? `${query} in:${channelId}` : query;
     return await invoke(
       {
         action: "searchMessages",
-        query: fullQuery,
+        query,
+        channelId: channelId ?? undefined,
         count: count ?? undefined,
         sort: sort ?? undefined,
         sortDir: sortDir ?? undefined,

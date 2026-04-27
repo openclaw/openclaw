@@ -199,7 +199,8 @@ describe("handleSlackMessageAction", () => {
     expect(invoke).toHaveBeenCalledWith(
       expect.objectContaining({
         action: "searchMessages",
-        query: "hello world in:C123",
+        query: "hello world",
+        channelId: "C123",
         count: 10,
         sort: "timestamp",
         sortDir: "desc",

@@ -84,6 +84,20 @@ async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write
   return mode === "write" ? getSlackWriteClient(token) : createSlackWebClient(token);
 }
 
+async function resolveSlackChannelName(
+  client: WebClient,
+  channelId: string,
+): Promise<string | undefined> {
+  try {
+    const info = await client.conversations.info({ channel: channelId });
+    const channel = info.channel as { name?: string } | undefined;
+    const name = channel?.name?.trim();
+    return name && name.length > 0 ? name : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function resolveBotUserId(client: WebClient) {
   const auth = await client.auth.test();
   if (!auth?.user_id) {
@@ -330,6 +344,7 @@ export type SlackSearchResult = {
 export async function searchSlackMessages(
   query: string,
   opts: SlackActionClientOpts & {
+    channelId?: string;
     count?: number;
     sort?: "score" | "timestamp";
     sortDir?: "asc" | "desc";
@@ -337,8 +352,20 @@ export async function searchSlackMessages(
   } = {},
 ): Promise<SlackSearchResult> {
   const client = await getClient(opts);
+  // channelIdが指定されたら conversations.info で channel name を解決して
+  // Slackのsearch.messages文法に沿った in:channel_name を query に組み立てる
+  let scopedQuery = query;
+  if (opts.channelId?.trim()) {
+    const channelName = await resolveSlackChannelName(client, opts.channelId.trim());
+    if (channelName) {
+      scopedQuery = `${query} in:${channelName}`;
+    } else {
+      // 名前解決に失敗した場合はchannel mention link形式を使う（Slackが解釈する）
+      scopedQuery = `${query} in:<#${opts.channelId.trim()}>`;
+    }
+  }
   const result = await client.search.messages({
-    query,
+    query: scopedQuery,
     count: opts.count,
     sort: opts.sort,
     sort_dir: opts.sortDir,
