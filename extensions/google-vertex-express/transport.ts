@@ -154,7 +154,7 @@ export function buildVertexExpressUrl(modelId: string, apiKey: string): string {
 // Helpers: message conversion
 // ---------------------------------------------------------------------------
 
-let toolCallCounter = 0;
+
 
 function mapToolChoice(
   choice: VertexExpressOptions["toolChoice"],
@@ -443,6 +443,7 @@ function pushBlockEnd(
  */
 export function createVertexExpressTransportStreamFn(): StreamFn {
   return (rawModel, context, rawOptions) => {
+    let toolCallCounter = 0;
     const model = rawModel as VertexExpressModel;
     const options = rawOptions as VertexExpressOptions | undefined;
     const { eventStream, stream } = createWritableTransportEventStream();
