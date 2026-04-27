@@ -575,6 +575,55 @@ describe("embedded attempt harness pinning", () => {
     );
   });
 
+  it("runs configured Claude CLI runtime through the CLI backend instead of embedded harness pinning", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "claude-runtime-session",
+      updatedAt: Date.now(),
+    };
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("claude cli runtime response"));
+
+    await runAgentAttempt({
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-6",
+      cfg: {
+        agents: {
+          defaults: {
+            embeddedHarness: { runtime: "claude-cli", fallback: "pi" },
+          },
+        },
+      } as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey: "agent:main:main",
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "continue",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-claude-cli-runtime",
+      opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: undefined,
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "anthropic",
+      sessionHasHistory: true,
+    });
+
+    expect(runCliAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "claude-cli",
+        model: "claude-opus-4-6",
+      }),
+    );
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+  });
+
   it("pins a fresh unpinned session to the default PI harness", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "fresh-session",

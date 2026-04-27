@@ -13,7 +13,10 @@ import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
-import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
+import {
+  isCliRuntimeId,
+  resolveCliRuntimeExecutionProvider,
+} from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
@@ -1105,7 +1108,8 @@ export async function runAgentTurnWithFallback(params: {
                 ...runBaseParams,
                 ...(agentRuntimeOverride &&
                 agentRuntimeOverride !== "auto" &&
-                agentRuntimeOverride !== "default"
+                agentRuntimeOverride !== "default" &&
+                !isCliRuntimeId(agentRuntimeOverride)
                   ? { agentHarnessId: agentRuntimeOverride }
                   : {}),
                 sandboxSessionKey: params.runtimePolicySessionKey,

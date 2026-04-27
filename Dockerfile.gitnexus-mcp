@@ -1,0 +1,10 @@
+# syntax=docker/dockerfile:1.7
+
+FROM node:24-trixie
+
+RUN npm install -g gitnexus@1.6.3 mcp-proxy@6.4.6
+
+USER node
+
+ENTRYPOINT ["mcp-proxy", "--host", "127.0.0.1", "--port", "4748", "--server", "stream", "--streamEndpoint", "/mcp", "--connectionTimeout", "180000", "--"]
+CMD ["gitnexus", "mcp"]

@@ -18,6 +18,9 @@ describe("gh-read helpers", () => {
     expect(normalizeRepo("github.com/openclaw/openclaw")).toBe("openclaw/openclaw");
     expect(normalizeRepo("https://github.com/openclaw/openclaw.git")).toBe("openclaw/openclaw");
     expect(normalizeRepo("git@github.com:openclaw/openclaw.git")).toBe("openclaw/openclaw");
+    expect(normalizeRepo("Outta-Bounds/openclaw-workspace-engineering")).toBe(
+      "Outta-Bounds/openclaw-workspace-engineering",
+    );
     expect(normalizeRepo("invalid")).toBeNull();
   });
 

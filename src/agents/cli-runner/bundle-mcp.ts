@@ -221,6 +221,49 @@ function normalizeGeminiServerConfig(
   return next;
 }
 
+function normalizeClaudeMcpServerType(server: BundleMcpServerConfig): string | undefined {
+  if (typeof server.type === "string") {
+    return server.type;
+  }
+  if (typeof server.transport !== "string") {
+    return undefined;
+  }
+  switch (normalizeOptionalLowercaseString(server.transport)) {
+    case "http":
+    case "streamable-http":
+      return "http";
+    case "sse":
+      return "sse";
+    default:
+      return undefined;
+  }
+}
+
+function normalizeClaudeServerConfig(server: BundleMcpServerConfig): Record<string, unknown> {
+  const next: Record<string, unknown> = {};
+  applyCommonServerConfig(next, server);
+  const type = normalizeClaudeMcpServerType(server);
+  if (type) {
+    next.type = type;
+  }
+  const headers = normalizeStringRecord(server.headers);
+  if (headers) {
+    next.headers = headers;
+  }
+  return next;
+}
+
+function normalizeClaudeBundleMcpConfig(config: BundleMcpConfig): BundleMcpConfig {
+  return {
+    mcpServers: Object.fromEntries(
+      Object.entries(config.mcpServers).map(([name, server]) => [
+        name,
+        normalizeClaudeServerConfig(server),
+      ]),
+    ) as BundleMcpConfig["mcpServers"],
+  };
+}
+
 function injectCodexMcpConfigArgs(args: string[] | undefined, config: BundleMcpConfig): string[] {
   const overrides = serializeTomlInlineValue(
     Object.fromEntries(
@@ -320,10 +363,14 @@ async function prepareModeSpecificBundleMcpConfig(params: {
   mergedConfig: BundleMcpConfig;
   env?: Record<string, string>;
 }): Promise<PreparedCliBundleMcpConfig> {
-  const serializedConfig = `${JSON.stringify(params.mergedConfig, null, 2)}\n`;
+  const effectiveMergedConfig =
+    params.mode === "claude-config-file"
+      ? normalizeClaudeBundleMcpConfig(params.mergedConfig)
+      : params.mergedConfig;
+  const serializedConfig = `${JSON.stringify(effectiveMergedConfig, null, 2)}\n`;
   const mcpConfigHash = crypto.createHash("sha256").update(serializedConfig).digest("hex");
   const serializedResumeConfig = `${JSON.stringify(
-    canonicalizeBundleMcpConfigForResume(params.mergedConfig),
+    canonicalizeBundleMcpConfigForResume(effectiveMergedConfig),
     null,
     2,
   )}\n`;

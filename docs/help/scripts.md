@@ -37,6 +37,7 @@ Repo resolution order:
 
 - `gh ... -R owner/repo`
 - `GH_REPO`
+- `GITHUB_REPOSITORY`
 - `git remote origin`
 
 Examples:
@@ -44,6 +45,26 @@ Examples:
 - `scripts/gh-read pr view 123`
 - `scripts/gh-read run list -R openclaw/openclaw`
 - `scripts/gh-read api repos/openclaw/openclaw/pulls/123`
+
+## GitHub App token helper
+
+Use `scripts/openclaw-gh-token` when a container or runtime script needs a raw GitHub App installation token. Repo context is preferred because it lets GitHub choose the correct App installation:
+
+- `scripts/openclaw-gh-token --repo Outta-Bounds/openclaw-workspace-engineering`
+- `GH_REPO=sebbyyyywebbyyy/example scripts/openclaw-gh-token --probe`
+
+Agents can also force a known installation when repo context is unavailable:
+
+- `scripts/openclaw-gh-token --installation outta --probe`
+- `scripts/openclaw-gh-token --installation personal --probe`
+- `eval "$(scripts/openclaw-gh-token --installation outta --export)"`
+
+Installation aliases:
+
+- `outta`, `primary`, `openclaw`, `agents`: Outta-Bounds/OpenClaw repos.
+- `personal`, `secondary`, `sebbyyyywebbyyy`: personal repos.
+
+When repo context is present and no installation alias is forced, it asks GitHub for the App installation attached to that repository before minting the token. A forced installation alias only scopes to explicit repo context (`--repo`, `GH_REPO`, or `GITHUB_REPOSITORY`), so the current directory's git remote cannot accidentally mix installations. Without repo context, it falls back to the primary Outta-Bounds/OpenClaw installation.
 
 ## When adding scripts
 

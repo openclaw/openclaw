@@ -74,6 +74,7 @@ sudo sh -c 'umask 077; cat > /home/jpow/.openclaw/secrets/gog_keyring_password'
 sudo sh -c 'umask 077; cat > /home/jpow/.openclaw/secrets/perplexity_api_key'
 sudo sh -c 'umask 077; cat > /home/jpow/.openclaw/secrets/gemini_api_key'
 sudo sh -c 'umask 077; cat > /home/jpow/.openclaw/secrets/notion_api_key'
+sudo sh -c 'umask 077; cat > /home/jpow/.openclaw/secrets/dune_api_key'
 
 sudo chown root:root "$SECRETS_DIR"/*
 sudo chmod 0400 "$SECRETS_DIR"/*
@@ -119,6 +120,7 @@ services:
       - PERPLEXITY_API_KEY=
       - GEMINI_API_KEY=
       - NOTION_API_KEY=
+      - DUNE_API_KEY=
       - DISCORD_BOT_TOKEN_PATH=/run/secrets/discord_bot_token
       - DISCORD_APPLICATION_ID_PATH=/run/secrets/discord_application_id
       - OPENCLAW_GATEWAY_TOKEN_PATH=/run/secrets/gateway_token
@@ -126,6 +128,7 @@ services:
       - PERPLEXITY_API_KEY_PATH=/run/secrets/perplexity_api_key
       - GEMINI_API_KEY_PATH=/run/secrets/gemini_api_key
       - NOTION_API_KEY_PATH=/run/secrets/notion_api_key
+      - DUNE_API_KEY_PATH=/run/secrets/dune_api_key
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
@@ -152,6 +155,9 @@ services:
       - source: notion_api_key
         target: notion_api_key
         mode: 0400
+      - source: dune_api_key
+        target: dune_api_key
+        mode: 0400
     entrypoint: ["/usr/local/bin/entrypoint-secrets.sh"]
     command: ["node", "dist/index.js", "gateway", "--bind", "lan", "--port", "18791"]
 
@@ -170,6 +176,8 @@ secrets:
     file: /home/jpow/.openclaw/secrets/gemini_api_key
   notion_api_key:
     file: /home/jpow/.openclaw/secrets/notion_api_key
+  dune_api_key:
+    file: /home/jpow/.openclaw/secrets/dune_api_key
 YAML
 ```
 

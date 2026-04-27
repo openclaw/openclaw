@@ -679,6 +679,39 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("success");
   });
 
+  it("does not pass CLI runtime overrides to the embedded harness selector", async () => {
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "openai";
+    followupRun.run.model = "gpt-5.4";
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "embedded ok" }],
+      meta: {},
+    });
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("openai", "gpt-5.4"),
+      provider: "openai",
+      model: "gpt-5.4",
+      attempts: [],
+    }));
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      getActiveSessionEntry: () =>
+        ({
+          sessionId: "session",
+          updatedAt: Date.now(),
+          agentRuntimeOverride: "claude-cli",
+        }) as SessionEntry,
+    });
+
+    expect(result.kind).toBe("success");
+    expect(state.runCliAgentMock).not.toHaveBeenCalled();
+    expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({ agentHarnessId: "claude-cli" }),
+    );
+  });
+
   it("does not classify empty final payloads while block replies are buffered", async () => {
     const followupRun = createFollowupRun();
     followupRun.run.provider = "openai-codex";

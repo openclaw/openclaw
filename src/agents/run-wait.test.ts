@@ -191,6 +191,7 @@ describe("waitForAgentRun", () => {
 
 describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     callGatewayMock.mockClear();
     __testing.setDepsForTest({
       callGateway: async (opts) => await callGatewayMock(opts),
@@ -203,15 +204,12 @@ describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
       content: [{ type: "text", text: "same reply" }],
       timestamp: 42,
     };
-    callGatewayMock
-      .mockResolvedValueOnce({
-        status: "ok",
-      })
-      .mockResolvedValueOnce({
-        messages: [assistantMessage],
-      });
+    vi.useFakeTimers();
+    callGatewayMock.mockResolvedValueOnce({ status: "ok" }).mockResolvedValue({
+      messages: [assistantMessage],
+    });
 
-    const result = await waitForAgentRunAndReadUpdatedAssistantReply({
+    const resultPromise = waitForAgentRunAndReadUpdatedAssistantReply({
       runId: "run-1",
       sessionKey: "agent:main:child",
       timeoutMs: 1_000,
@@ -220,6 +218,8 @@ describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
         fingerprint: JSON.stringify(assistantMessage),
       },
     });
+    await vi.advanceTimersByTimeAsync(2_100);
+    const result = await resultPromise;
 
     expect(result).toEqual({
       status: "ok",
@@ -251,6 +251,51 @@ describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
         fingerprint: "old-fingerprint",
       },
     });
+
+    expect(result).toEqual({
+      status: "ok",
+      replyText: "fresh reply",
+    });
+  });
+
+  it("briefly polls history after a completed run when the reply is not visible yet", async () => {
+    vi.useFakeTimers();
+    callGatewayMock
+      .mockResolvedValueOnce({ status: "ok" })
+      .mockResolvedValueOnce({
+        messages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "old reply" }],
+            timestamp: 1,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        messages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "fresh reply" }],
+            timestamp: 2,
+          },
+        ],
+      });
+
+    const resultPromise = waitForAgentRunAndReadUpdatedAssistantReply({
+      runId: "run-3",
+      sessionKey: "agent:main:child",
+      timeoutMs: 1_000,
+      baseline: {
+        text: "old reply",
+        fingerprint: JSON.stringify({
+          role: "assistant",
+          content: [{ type: "text", text: "old reply" }],
+          timestamp: 1,
+        }),
+      },
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    const result = await resultPromise;
 
     expect(result).toEqual({
       status: "ok",

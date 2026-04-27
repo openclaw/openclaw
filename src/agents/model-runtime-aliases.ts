@@ -121,3 +121,13 @@ export function resolveCliRuntimeExecutionProvider(params: {
   }
   return CLI_RUNTIME_BY_PROVIDER.get(`${provider}:${runtime}`)?.runtime;
 }
+
+export function isCliRuntimeId(runtime: string | undefined): boolean {
+  const normalized = runtime?.trim() ? normalizeProviderId(runtime) : undefined;
+  if (!normalized) {
+    return false;
+  }
+  return LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES.some(
+    (entry) => entry.cli && normalizeProviderId(entry.runtime) === normalized,
+  );
+}

@@ -227,6 +227,60 @@ describe("prepareCliBundleMcpConfig", () => {
     await prepared.cleanup?.();
   });
 
+  it("normalizes OpenClaw MCP server keys before writing Claude config files", async () => {
+    const workspaceDir = await tempHarness.createTempDir(
+      "openclaw-cli-bundle-mcp-claude-normalize-",
+    );
+
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: {
+        command: "node",
+        args: ["./fake-claude.mjs"],
+      },
+      workspaceDir,
+      config: {
+        plugins: { enabled: false },
+        mcp: {
+          servers: {
+            gitnexus: {
+              url: "http://openclaw-gitnexus-mcp:4748/mcp",
+              transport: "streamable-http",
+              connectionTimeoutMs: 60_000,
+              headers: { "x-openclaw": "enabled" },
+            },
+          },
+        },
+      },
+    });
+
+    const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
+    expect(configFlagIndex).toBeGreaterThanOrEqual(0);
+    const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
+      mcpServers?: Record<
+        string,
+        {
+          type?: string;
+          url?: string;
+          transport?: string;
+          connectionTimeoutMs?: number;
+          headers?: Record<string, string>;
+        }
+      >;
+    };
+    expect(raw.mcpServers?.gitnexus).toEqual({
+      type: "http",
+      url: "http://openclaw-gitnexus-mcp:4748/mcp",
+      headers: { "x-openclaw": "enabled" },
+    });
+    expect(raw.mcpServers?.gitnexus?.transport).toBeUndefined();
+    expect(raw.mcpServers?.gitnexus?.connectionTimeoutMs).toBeUndefined();
+
+    await prepared.cleanup?.();
+  });
+
   it("user mcp.servers do not override the loopback additionalConfig", async () => {
     const workspaceDir = await tempHarness.createTempDir(
       "openclaw-cli-bundle-mcp-user-servers-loopback-",

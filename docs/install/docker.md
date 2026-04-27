@@ -251,7 +251,7 @@ See [ClawDock](/install/clawdock) for the full helper guide.
     `pnpm install` unless lockfiles change:
 
     ```dockerfile
-    FROM node:24-bookworm
+    FROM node:24-trixie
     RUN curl -fsSL https://bun.sh/install | bash
     ENV PATH="/root/.bun/bin:${PATH}"
     RUN corepack enable
@@ -294,7 +294,7 @@ See [ClawDock](/install/clawdock) for the full helper guide.
   </Accordion>
 
   <Accordion title="Base image metadata">
-    The main Docker image uses `node:24-bookworm` and publishes OCI base-image
+    The main Docker image uses `node:24-trixie` and publishes OCI base-image
     annotations including `org.opencontainers.image.base.name`,
     `org.opencontainers.image.source`, and others. See
     [OCI image annotations](https://github.com/opencontainers/image-spec/blob/main/annotations.md).
