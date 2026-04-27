@@ -1,4 +1,4 @@
-import net from "node:net";
+import http from "node:http";
 
 export type CovenSessionRecord = {
   id: string;
@@ -40,10 +40,18 @@ export interface CovenClient {
   health(signal?: AbortSignal): Promise<CovenHealthResponse>;
   launchSession(input: LaunchCovenSessionInput, signal?: AbortSignal): Promise<CovenSessionRecord>;
   getSession(sessionId: string, signal?: AbortSignal): Promise<CovenSessionRecord>;
-  listEvents(sessionId: string, signal?: AbortSignal): Promise<CovenEventRecord[]>;
+  listEvents(
+    sessionId: string,
+    options?: CovenListEventsOptions,
+    signal?: AbortSignal,
+  ): Promise<CovenEventRecord[]>;
   sendInput(sessionId: string, data: string, signal?: AbortSignal): Promise<void>;
   killSession(sessionId: string, signal?: AbortSignal): Promise<void>;
 }
+
+export type CovenListEventsOptions = {
+  afterEventId?: string;
+};
 
 type RequestOptions = {
   socketPath: string;
@@ -70,14 +78,8 @@ export class CovenApiError extends Error {
   }
 }
 
-function parseHttpResponse(raw: string): HttpResponse {
-  const [head = "", ...bodyParts] = raw.split("\r\n\r\n");
-  const statusMatch = /^HTTP\/\d(?:\.\d)?\s+(\d+)/i.exec(head);
-  return {
-    status: statusMatch ? Number(statusMatch[1]) : 0,
-    body: bodyParts.join("\r\n\r\n"),
-  };
-}
+const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
+const MAX_RESPONSE_BYTES = 1_000_000;
 
 function requestOverSocket(options: RequestOptions): Promise<HttpResponse> {
   return new Promise((resolve, reject) => {
@@ -86,53 +88,71 @@ function requestOverSocket(options: RequestOptions): Promise<HttpResponse> {
       return;
     }
 
-    const socket = net.createConnection(options.socketPath);
-    const chunks: Buffer[] = [];
     let settled = false;
+    let body = "";
+    let totalBytes = 0;
 
-    const settle = (fn: () => void) => {
+    const settle = (fn: () => void, req?: http.ClientRequest) => {
       if (settled) {
         return;
       }
       settled = true;
-      options.signal?.removeEventListener("abort", onAbort);
+      req?.destroy();
       fn();
     };
 
-    const onAbort = () => {
-      socket.destroy();
-      settle(() => reject(options.signal?.reason ?? new Error("request aborted")));
-    };
-
-    options.signal?.addEventListener("abort", onAbort, { once: true });
-
-    socket.on("connect", () => {
-      const body = options.body === undefined ? "" : JSON.stringify(options.body);
-      const headers = [
-        `${options.method} ${options.path} HTTP/1.1`,
-        "Host: coven",
-        "Connection: close",
-        ...(body
-          ? ["Content-Type: application/json", `Content-Length: ${Buffer.byteLength(body)}`]
-          : []),
-        "",
-        body,
-      ];
-      socket.write(headers.join("\r\n"));
+    const requestBody = options.body === undefined ? "" : JSON.stringify(options.body);
+    const req = http.request(
+      {
+        socketPath: options.socketPath,
+        method: options.method,
+        path: options.path,
+        headers: {
+          Host: "coven",
+          Connection: "close",
+          ...(requestBody
+            ? {
+                "Content-Type": "application/json",
+                "Content-Length": Buffer.byteLength(requestBody),
+              }
+            : {}),
+        },
+        signal: options.signal,
+      },
+      (res) => {
+        res.setEncoding("utf8");
+        res.on("data", (chunk: string) => {
+          if (settled) {
+            return;
+          }
+          totalBytes += Buffer.byteLength(chunk);
+          if (totalBytes > MAX_RESPONSE_BYTES) {
+            settle(() => reject(new Error("Coven API response exceeded size limit")), req);
+            return;
+          }
+          body += chunk;
+        });
+        res.on("end", () => {
+          settle(() =>
+            resolve({
+              status: res.statusCode ?? 0,
+              body,
+            }),
+          );
+        });
+        res.on("error", (error) => settle(() => reject(error), req));
+      },
+    );
+    req.setTimeout(DEFAULT_REQUEST_TIMEOUT_MS, () => {
+      settle(() => reject(new Error("Coven API request timed out")), req);
     });
-    socket.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-    socket.on("error", (error) => settle(() => reject(error)));
-    socket.on("end", () => {
-      const response = parseHttpResponse(Buffer.concat(chunks).toString("utf8"));
-      settle(() => resolve(response));
-    });
-    socket.on("close", () => {
+    req.on("error", (error) => {
       if (settled) {
         return;
       }
-      const response = parseHttpResponse(Buffer.concat(chunks).toString("utf8"));
-      settle(() => resolve(response));
+      settle(() => reject(error));
     });
+    req.end(requestBody);
   });
 }
 
@@ -141,7 +161,11 @@ async function requestJson<T>(options: RequestOptions): Promise<T> {
   if (response.status < 200 || response.status >= 300) {
     throw new CovenApiError(response.status, response.body);
   }
-  return JSON.parse(response.body || "null") as T;
+  try {
+    return JSON.parse(response.body || "null") as T;
+  } catch (error) {
+    throw new CovenApiError(response.status, `Invalid JSON response: ${String(error)}`);
+  }
 }
 
 export function createCovenClient(socketPath: string): CovenClient {
@@ -171,11 +195,16 @@ export function createCovenClient(socketPath: string): CovenClient {
         signal,
       });
     },
-    listEvents(sessionId, signal) {
+    listEvents(sessionId, options, signal) {
+      const params = new URLSearchParams({ sessionId });
+      const afterEventId = options?.afterEventId?.trim();
+      if (afterEventId) {
+        params.set("afterEventId", afterEventId);
+      }
       return requestJson<CovenEventRecord[]>({
         socketPath,
         method: "GET",
-        path: `/events?sessionId=${encodeURIComponent(sessionId)}`,
+        path: `/events?${params.toString()}`,
         signal,
       });
     },

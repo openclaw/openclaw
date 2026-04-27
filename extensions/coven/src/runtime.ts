@@ -30,10 +30,12 @@ const DEFAULT_HARNESSES: Record<string, string> = {
   "google-gemini-cli": "gemini",
   opencode: "opencode",
 };
+const HEALTH_CHECK_TIMEOUT_MS = 5_000;
+const MAX_TRACKED_EVENT_IDS = 10_000;
 
 type CovenRuntimeSessionState = {
   agent: string;
-  mode: "prompt" | "steer" | string;
+  mode: string;
   sessionMode?: string;
   cwd?: string;
 };
@@ -106,10 +108,32 @@ function parsePayload(event: CovenEventRecord): Record<string, unknown> {
   }
 }
 
+const ESC = String.fromCharCode(0x1b);
+const BEL = String.fromCharCode(0x07);
+const c0Start = String.fromCharCode(0x00);
+const c0Backspace = String.fromCharCode(0x08);
+const c0VerticalTab = String.fromCharCode(0x0b);
+const c0UnitSeparator = String.fromCharCode(0x1f);
+const del = String.fromCharCode(0x7f);
+const c1Start = String.fromCharCode(0x80);
+const c1End = String.fromCharCode(0x9f);
+const ANSI_ESCAPE_REGEX = new RegExp(
+  `${ESC}(?:\\[[\\x20-\\x3f]*[\\x40-\\x7e]|\\][^${BEL}${ESC}]*(?:${BEL}|${ESC}\\\\)|[\\x40-\\x5f])`,
+  "g",
+);
+const TEXT_CONTROL_REGEX = new RegExp(
+  `[${c0Start}-${c0Backspace}${c0VerticalTab}-${c0UnitSeparator}${del}${c1Start}-${c1End}]`,
+  "g",
+);
+
+function sanitizeTerminalText(input: string): string {
+  return input.replace(ANSI_ESCAPE_REGEX, "").replace(TEXT_CONTROL_REGEX, "");
+}
+
 function eventToRuntimeEvents(event: CovenEventRecord): AcpRuntimeEvent[] {
   const payload = parsePayload(event);
   if (event.kind === "output") {
-    const text = typeof payload.data === "string" ? payload.data : "";
+    const text = typeof payload.data === "string" ? sanitizeTerminalText(payload.data) : "";
     return text ? [{ type: "text_delta", text, stream: "output", tag: "agent_message_chunk" }] : [];
   }
   if (event.kind === "exit") {
@@ -143,6 +167,11 @@ function terminalStatusEvent(session: CovenSessionRecord): AcpRuntimeEvent {
     text: `coven session ${session.status}${session.exitCode == null ? "" : ` exitCode=${session.exitCode}`}`,
     tag: "session_info_update",
   };
+}
+
+function pathIsInside(parent: string, child: string): boolean {
+  const relative = path.relative(parent, child);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 export class CovenAcpRuntime implements AcpRuntime {
@@ -192,12 +221,13 @@ export class CovenAcpRuntime implements AcpRuntime {
       );
     }
 
+    const cwd = this.resolveWorkspaceCwd(input.handle.cwd);
     let session: CovenSessionRecord;
     try {
       session = await this.client.launchSession(
         {
-          projectRoot: state.cwd ?? input.handle.cwd ?? process.cwd(),
-          cwd: state.cwd ?? input.handle.cwd ?? process.cwd(),
+          projectRoot: this.config.workspaceDir,
+          cwd,
           harness: this.resolveHarness(state.agent),
           prompt: input.text,
           title: titleFromPrompt(input.text),
@@ -222,32 +252,63 @@ export class CovenAcpRuntime implements AcpRuntime {
     };
 
     const seenEventIds = new Set<string>();
+    const seenEventQueue: string[] = [];
+    let lastSeenEventId: string | undefined;
     while (true) {
       if (input.signal?.aborted) {
         await this.killActiveSession(session.id, input.signal).catch(() => undefined);
         throw input.signal.reason ?? new Error("Coven turn aborted");
       }
 
-      const events = await this.client.listEvents(session.id, input.signal);
-      for (const event of events) {
-        if (seenEventIds.has(event.id)) {
-          continue;
-        }
-        seenEventIds.add(event.id);
-        for (const runtimeEvent of eventToRuntimeEvents(event)) {
-          yield runtimeEvent;
-          if (runtimeEvent.type === "done") {
-            this.activeSessionIdsBySessionKey.delete(input.handle.sessionKey);
-            return;
+      try {
+        const events = await this.client.listEvents(
+          session.id,
+          lastSeenEventId ? { afterEventId: lastSeenEventId } : undefined,
+          input.signal,
+        );
+        const cursorIndex = lastSeenEventId
+          ? events.findIndex((event) => event.id === lastSeenEventId)
+          : -1;
+        const nextEvents = cursorIndex >= 0 ? events.slice(cursorIndex + 1) : events;
+        for (const event of nextEvents) {
+          if (seenEventIds.has(event.id)) {
+            continue;
+          }
+          seenEventIds.add(event.id);
+          seenEventQueue.push(event.id);
+          while (seenEventQueue.length > MAX_TRACKED_EVENT_IDS) {
+            const removed = seenEventQueue.shift();
+            if (removed) {
+              seenEventIds.delete(removed);
+            }
+          }
+          lastSeenEventId = event.id;
+          for (const runtimeEvent of eventToRuntimeEvents(event)) {
+            yield runtimeEvent;
+            if (runtimeEvent.type === "done") {
+              this.activeSessionIdsBySessionKey.delete(input.handle.sessionKey);
+              return;
+            }
           }
         }
-      }
 
-      const latest = await this.client.getSession(session.id, input.signal);
-      if (sessionIsTerminal(latest)) {
-        yield terminalStatusEvent(latest);
-        yield { type: "done", stopReason: latest.status };
+        const latest = await this.client.getSession(session.id, input.signal);
+        if (sessionIsTerminal(latest)) {
+          yield terminalStatusEvent(latest);
+          yield { type: "done", stopReason: latest.status };
+          this.activeSessionIdsBySessionKey.delete(input.handle.sessionKey);
+          return;
+        }
+      } catch (error) {
+        if (input.signal?.aborted) {
+          await this.killActiveSession(session.id, input.signal).catch(() => undefined);
+          throw input.signal.reason ?? error;
+        }
+        this.logger?.warn(`coven polling failed: ${String(error)}`);
+        await this.killActiveSession(session.id).catch(() => undefined);
         this.activeSessionIdsBySessionKey.delete(input.handle.sessionKey);
+        yield { type: "status", text: "coven session polling failed", tag: "session_info_update" };
+        yield { type: "done", stopReason: "error" };
         return;
       }
 
@@ -338,11 +399,18 @@ export class CovenAcpRuntime implements AcpRuntime {
   }
 
   private async isCovenAvailable(): Promise<boolean> {
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () => controller.abort(new Error("Coven health check timed out")),
+      HEALTH_CHECK_TIMEOUT_MS,
+    );
     try {
-      const health = await this.client.health();
-      return health.ok === true;
+      const health = await this.client.health(controller.signal);
+      return health.ok;
     } catch {
       return false;
+    } finally {
+      clearTimeout(timeout);
     }
   }
 
@@ -388,15 +456,22 @@ export class CovenAcpRuntime implements AcpRuntime {
     state: CovenRuntimeSessionState,
   ): AsyncIterable<AcpRuntimeEvent> {
     const fallback = this.requireFallbackRuntime();
-    const cwd = state.cwd ?? input.handle.cwd;
     const handle = await fallback.ensureSession({
       sessionKey: input.handle.sessionKey,
       agent: state.agent,
       mode: state.sessionMode === "persistent" ? "persistent" : "oneshot",
-      ...(cwd ? { cwd: path.resolve(cwd) } : {}),
+      cwd: this.resolveWorkspaceCwd(input.handle.cwd),
     });
     Object.assign(input.handle, handle);
     yield* fallback.runTurn({ ...input, handle });
+  }
+
+  private resolveWorkspaceCwd(candidate: string | undefined): string {
+    const cwd = path.resolve(candidate ?? this.config.workspaceDir);
+    if (!pathIsInside(this.config.workspaceDir, cwd)) {
+      throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "Coven cwd is outside workspace.");
+    }
+    return cwd;
   }
 
   private async killActiveSession(sessionId: string, signal?: AbortSignal): Promise<void> {
@@ -408,4 +483,5 @@ export const __testing = {
   decodeRuntimeSessionName,
   encodeRuntimeSessionName,
   eventToRuntimeEvents,
+  sanitizeTerminalText,
 };

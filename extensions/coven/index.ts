@@ -22,7 +22,7 @@ export default definePluginEntry({
         });
         const runtime = new CovenAcpRuntime({ config, logger: ctx.logger });
         registerAcpRuntimeBackend({ id: COVEN_BACKEND_ID, runtime });
-        ctx.logger.info(`coven ACP runtime backend registered (socket: ${config.socketPath})`);
+        ctx.logger.info("coven ACP runtime backend registered");
       },
       async stop() {
         unregisterAcpRuntimeBackend(COVEN_BACKEND_ID);
