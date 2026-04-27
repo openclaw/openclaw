@@ -315,7 +315,7 @@ export function createFollowupRunner(params: {
                 agentId: run.agentId,
                 runtimeOverride: activeSessionEntry?.agentRuntimeOverride?.trim() || undefined,
               }) ?? provider;
-            const authProfile = resolveRunAuthProfile(run, provider, {
+            const authProfile = resolveRunAuthProfile(run, cliExecutionProvider, {
               config: runtimeConfig,
             });
             let attemptCompactionCount = 0;

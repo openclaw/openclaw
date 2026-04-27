@@ -119,7 +119,10 @@ export function createCronPromptExecutor(params: {
   let fallbackProvider = params.liveSelection.provider;
   let fallbackModel = params.liveSelection.model;
   let runEndedAt = Date.now();
-  let activeCliSessionBinding: Awaited<ReturnType<typeof getCliSessionBinding>> | undefined;
+  const activeCliSessionBindings = new Map<
+    string,
+    Awaited<ReturnType<typeof getCliSessionBinding>>
+  >();
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.cronSession.sessionEntry.systemPromptReport,
   );
@@ -148,7 +151,7 @@ export function createCronPromptExecutor(params: {
           }) ?? providerOverride;
         if (isCliProvider(cliExecutionProvider, params.cfgWithAgentDefaults)) {
           const cliSessionBinding =
-            activeCliSessionBinding ??
+            activeCliSessionBindings.get(cliExecutionProvider) ??
             (params.cronSession.isNewSession
               ? undefined
               : await getCliSessionBinding(params.cronSession.sessionEntry, cliExecutionProvider));
@@ -210,6 +213,7 @@ export function createCronPromptExecutor(params: {
               throw err;
             }
             clearCliSession(params.cronSession.sessionEntry, cliExecutionProvider);
+            activeCliSessionBindings.delete(cliExecutionProvider);
             params.cronSession.sessionEntry.updatedAt = Date.now();
             await params.persistSessionEntry?.();
             result = await runCliAgent({
@@ -219,7 +223,10 @@ export function createCronPromptExecutor(params: {
             });
           }
           if (result.meta.agentMeta?.cliSessionBinding) {
-            activeCliSessionBinding = result.meta.agentMeta.cliSessionBinding;
+            activeCliSessionBindings.set(
+              cliExecutionProvider,
+              result.meta.agentMeta.cliSessionBinding,
+            );
             setCliSessionBinding(
               params.cronSession.sessionEntry,
               cliExecutionProvider,
