@@ -528,6 +528,42 @@ describe("tryDispatchAcpReply", () => {
     expect(mediaUnderstandingMocks.applyMediaUnderstanding).not.toHaveBeenCalled();
   });
 
+  it("passes the ACP agent directory to media understanding", async () => {
+    setReadyAcpResolution();
+    mockVisibleTextTurn("image turn");
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
+    const agentDir = path.join(tempDir, "codex-agent");
+    const imagePath = path.join(tempDir, "inbound.png");
+    try {
+      await fs.mkdir(agentDir);
+      await fs.writeFile(imagePath, "image-bytes");
+
+      await runDispatch({
+        bodyForAgent: "describe image",
+        cfg: createAcpTestConfig({
+          agents: {
+            list: [{ id: "codex-acp", agentDir }],
+          },
+          channels: {
+            discord: {
+              attachmentRoots: [tempDir],
+            },
+          },
+        }),
+        ctxOverrides: {
+          MediaPath: imagePath,
+          MediaType: "image/png",
+        },
+      });
+
+      expect(mediaUnderstandingMocks.applyMediaUnderstanding).toHaveBeenCalledWith(
+        expect.objectContaining({ agentDir }),
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("forwards normalized image attachments into ACP turns", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
     const imagePath = path.join(tempDir, "inbound.png");
