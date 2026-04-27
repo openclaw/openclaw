@@ -263,32 +263,21 @@ function resolveHeartbeatSession(
   const mainEntry = store[mainSessionKey];
 
   if (scope === "global") {
-    return {
-      sessionKey: mainSessionKey,
-      storePath,
-      store,
-      entry: mainEntry,
-      suppressOriginatingContext: false,
-    };
+    return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry, suppressOriginatingContext: false };
   }
 
   const forced = forcedSessionKey?.trim();
-  if (forced && isSubagentSessionKey(forced)) {
-    return {
-      sessionKey: mainSessionKey,
-      storePath,
-      store,
-      entry: mainEntry,
-      suppressOriginatingContext: true,
-    };
-  }
-
-  if (forced && !isSubagentSessionKey(forced)) {
+  if (forced) {
+    if (isSubagentSessionKey(forced)) {
+      return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry, suppressOriginatingContext: true };
+    }
+    
     const forcedCandidate = toAgentStoreSessionKey({
       agentId: resolvedAgentId,
       requestKey: forced,
       mainKey: cfg.session?.mainKey,
     });
+
     if (!isSubagentSessionKey(forcedCandidate)) {
       const forcedCanonical = canonicalizeMainSessionAlias({
         cfg,
@@ -300,96 +289,38 @@ function resolveHeartbeatSession(
         const sessionAgentId = resolveAgentIdFromSessionKey(forcedCanonical);
         if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
           const agentsCfg = (cfg as any)?.agents;
-          const allowFrom = agentsCfg?.defaults?.allowFrom ?? [];
-          const dmScope = (cfg as any)?.session?.scope;
-
-          const finalSessionKey = (resolvedAgentId)
-            ? normalizeEventRoutingKey({
-                sessionKey: forcedCanonical,
-                dmScope: dmScope,
-                allowFrom: allowFrom, 
-                normalizeEntry: (entry) => entry.toLowerCase(),
-                resolveAgentMainSessionKey: (key) => 
-                  resolveAgentMainSessionKey({ cfg, agentId: resolvedAgentId }),
-              })
-            : forcedCanonical;
+          const finalSessionKey = normalizeEventRoutingKey({
+            sessionKey: forcedCanonical,
+            dmScope: cfg.session?.scope,
+            allowFrom: agentsCfg?.defaults?.allowFrom ?? [], 
+            normalizeEntry: (entry) => entry.toLowerCase(),
+            resolveAgentMainSessionKey: () => resolveAgentMainSessionKey({ cfg, agentId: resolvedAgentId }),
+          });
           
-          return {
-            sessionKey: finalSessionKey,
-            storePath,
-            store,
-            entry: store[forcedCanonical],
-            suppressOriginatingContext: false,
-          };
+          return { sessionKey: finalSessionKey, storePath, store, entry: store[forcedCanonical], suppressOriginatingContext: false };
         }
       }
     }
   }
 
   const trimmed = heartbeat?.session?.trim() ?? "";
-  if (!trimmed || isSubagentSessionKey(trimmed)) {
-    return {
-      sessionKey: mainSessionKey,
-      storePath,
-      store,
-      entry: mainEntry,
-      suppressOriginatingContext: false,
-    };
-  }
-
   const normalized = normalizeLowercaseStringOrEmpty(trimmed);
-  if (normalized === "main" || normalized === "global") {
-    return {
-      sessionKey: mainSessionKey,
-      storePath,
-      store,
-      entry: mainEntry,
-      suppressOriginatingContext: false,
-    };
-  }
-
-  const candidate = toAgentStoreSessionKey({
-    agentId: resolvedAgentId,
-    requestKey: trimmed,
-    mainKey: cfg.session?.mainKey,
-  });
   
-  if (isSubagentSessionKey(candidate)) {
-    return {
-      sessionKey: mainSessionKey,
-      storePath,
-      store,
-      entry: mainEntry,
-      suppressOriginatingContext: false,
-    };
+  if (!trimmed || isSubagentSessionKey(trimmed) || normalized === "main" || normalized === "global") {
+    return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry, suppressOriginatingContext: false };
   }
 
-  const canonical = canonicalizeMainSessionAlias({
-    cfg,
-    agentId: resolvedAgentId,
-    sessionKey: candidate,
-  });
+  const candidate = toAgentStoreSessionKey({ agentId: resolvedAgentId, requestKey: trimmed, mainKey: cfg.session?.mainKey });
+  const canonical = canonicalizeMainSessionAlias({ cfg, agentId: resolvedAgentId, sessionKey: candidate });
 
   if (canonical !== "global" && !isSubagentSessionKey(canonical)) {
     const sessionAgentId = resolveAgentIdFromSessionKey(canonical);
     if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
-      return {
-        sessionKey: canonical,
-        storePath,
-        store,
-        entry: store[canonical],
-        suppressOriginatingContext: false,
-      };
+      return { sessionKey: canonical, storePath, store, entry: store[canonical], suppressOriginatingContext: false };
     }
   }
 
-  return {
-    sessionKey: mainSessionKey,
-    storePath,
-    store,
-    entry: mainEntry,
-    suppressOriginatingContext: false,
-  };
+  return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry, suppressOriginatingContext: false };
 }
 
 function resolveIsolatedHeartbeatSessionKey(params: {
