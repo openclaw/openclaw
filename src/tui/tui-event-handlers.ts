@@ -47,7 +47,7 @@ type EventHandlerContext = {
   localMode?: boolean;
 };
 
-const DEFAULT_STREAMING_WATCHDOG_MS = 30_000;
+const DEFAULT_STREAMING_WATCHDOG_MS = 120_000;
 
 export function createEventHandlers(context: EventHandlerContext) {
   const {
@@ -106,11 +106,11 @@ export function createEventHandlers(context: EventHandlerContext) {
       streamingWatchdogRunId = null;
       state.activeChatRunId = null;
       setActivityStatus("idle");
-      chatLog.addSystem(
-        `streaming watchdog: no stream updates for ${Math.round(
-          streamingWatchdogMs / 1000,
-        )}s; resetting status. The backend may have dropped this run silently — send a new message to resync.`,
-      );
+      /* Watchdog fires silently — the internal reset (clearing activeChatRunId,
+         setting status idle) still happens, but the user-visible warning is
+         suppressed to avoid false-positive noise during long-running agent
+         turns (tool calls, sub-agent work, code generation).  The user can
+         always send a new message to resync if something is truly stuck. */
       tui.requestRender();
     }, streamingWatchdogMs);
     const maybeUnref = (streamingWatchdogTimer as { unref?: () => void }).unref;
