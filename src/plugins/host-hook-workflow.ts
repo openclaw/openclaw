@@ -5,7 +5,7 @@ import { extractDeliveryInfo } from "../config/sessions/delivery-info.js";
 import { ADMIN_SCOPE } from "../gateway/operator-scopes.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { sendMessage } from "../infra/outbound/message.js";
+import type { sendMessage as sendOutboundMessage } from "../infra/outbound/message.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { registerPluginSessionSchedulerJob } from "./host-hook-runtime.js";
@@ -23,6 +23,15 @@ import type { PluginOrigin } from "./plugin-origin.types.js";
 
 const DEFAULT_ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024;
 const log = createSubsystemLogger("plugins/host-workflow");
+type SendMessage = typeof sendOutboundMessage;
+let sendMessagePromise: Promise<SendMessage> | undefined;
+
+async function loadSendMessage(): Promise<SendMessage> {
+  sendMessagePromise ??= import("../infra/outbound/message.js").then(
+    (module) => module.sendMessage,
+  );
+  return sendMessagePromise;
+}
 
 function normalizePluginEventData(params: {
   pluginId: string;
@@ -124,8 +133,9 @@ export async function sendPluginSessionAttachment(
   const explicitThreadId = normalizeOptionalString(params.threadId);
   const deliveryThreadId = normalizeOptionalString(deliveryContext.threadId);
   const fallbackThreadId = normalizeOptionalString(threadId);
-  let result: Awaited<ReturnType<typeof sendMessage>>;
+  let result: Awaited<ReturnType<SendMessage>>;
   try {
+    const sendMessage = await loadSendMessage();
     result = await sendMessage({
       to: deliveryContext.to,
       content: text,
