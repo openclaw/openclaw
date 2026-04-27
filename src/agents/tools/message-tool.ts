@@ -48,7 +48,7 @@ function actionNeedsExplicitTarget(action: ChannelMessageActionName): boolean {
 function buildRoutingSchema() {
   return {
     channel: Type.Optional(Type.String()),
-    target: Type.Optional(channelTargetSchema({ description: "Target channel/user id or name." })),
+    target: Type.Optional(channelTargetSchema()),
     targets: Type.Optional(channelTargetsSchema()),
     accountId: Type.Optional(Type.String()),
     dryRun: Type.Optional(Type.Boolean()),
