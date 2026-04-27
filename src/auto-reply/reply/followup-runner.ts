@@ -452,6 +452,7 @@ export function createFollowupRunner(params: {
           sessionKey,
           storePath,
           amount: autoCompactionCount,
+          compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
           lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           contextTokensUsed,
           newSessionId: runResult.meta?.agentMeta?.sessionId,

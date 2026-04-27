@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { loadQaRuntimeModule } from "openclaw/plugin-sdk/qa-runner-runtime";
 import type { QaReportCheck } from "../../report.js";
@@ -60,6 +60,8 @@ type MatrixQaLiveLaneGatewayHarness = {
 function buildMatrixQaGatewayConfigKey(overrides?: MatrixQaConfigOverrides) {
   return JSON.stringify(overrides ?? null);
 }
+
+const MATRIX_QA_EXECUTION_TAIL_SCENARIO_IDS = new Set(["matrix-e2ee-wrong-account-recovery-key"]);
 
 type MatrixQaScenarioResult = {
   artifacts?: MatrixQaScenarioArtifacts;
@@ -313,7 +315,27 @@ function buildMatrixQaScenarioResult(params: {
 function scheduleMatrixQaScenariosInCatalogOrder(
   scenarios: readonly (typeof MATRIX_QA_SCENARIOS)[number][],
 ): MatrixQaScheduledScenario[] {
-  return scenarios.map((scenario, originalIndex) => ({ originalIndex, scenario }));
+  const entries = scenarios.map((scenario, originalIndex) => ({ originalIndex, scenario }));
+  const groupedEntries: MatrixQaScheduledScenario[][] = [];
+  const groupIndexes = new Map<string, number>();
+  const tailEntries: MatrixQaScheduledScenario[] = [];
+
+  for (const entry of entries) {
+    if (MATRIX_QA_EXECUTION_TAIL_SCENARIO_IDS.has(entry.scenario.id)) {
+      tailEntries.push(entry);
+      continue;
+    }
+    const key = buildMatrixQaGatewayConfigKey(entry.scenario.configOverrides);
+    const existingIndex = groupIndexes.get(key);
+    if (existingIndex !== undefined) {
+      groupedEntries[existingIndex]?.push(entry);
+      continue;
+    }
+    groupIndexes.set(key, groupedEntries.length);
+    groupedEntries.push([entry]);
+  }
+
+  return [...groupedEntries.flat(), ...tailEntries];
 }
 
 function getMatrixQaScenarioRestartReadyTimeoutMs(scenario: { timeoutMs: number }): number {
@@ -498,8 +520,10 @@ async function startMatrixQaLiveLaneGateway(params: {
 
 export async function runMatrixQaLive(params: {
   fastMode?: boolean;
+  failFast?: boolean;
   outputDir?: string;
   primaryModel?: string;
+  profile?: string;
   providerMode?: QaProviderModeInput;
   repoRoot?: string;
   scenarioIds?: string[];
@@ -518,7 +542,7 @@ export async function runMatrixQaLive(params: {
     alternateModel: params.alternateModel,
   });
   const sutAccountId = params.sutAccountId?.trim() || "sut";
-  const scenarios = findMatrixQaScenarios(params.scenarioIds);
+  const scenarios = findMatrixQaScenarios(params.scenarioIds, params.profile);
   const runSuffix = randomUUID().slice(0, 8);
   const topology = buildMatrixQaTopologyForScenarios({
     defaultRoomName: `OpenClaw Matrix QA ${runSuffix}`,
@@ -531,7 +555,7 @@ export async function runMatrixQaLive(params: {
   const runStartedAtMs = Date.now();
   const runDeadline = createMatrixQaRunDeadline();
   writeMatrixQaProgress(
-    `suite start scenarios=${scenarios.length} provider=${providerMode} output=${outputDir} timeout=${formatMatrixQaDurationMs(runDeadline.timeoutMs)}`,
+    `suite start scenarios=${scenarios.length} profile=${params.profile?.trim() || "all"} provider=${providerMode} output=${outputDir} timeout=${formatMatrixQaDurationMs(runDeadline.timeoutMs)}`,
   );
 
   const { durationMs: harnessBootMs, result: harness } = await measureMatrixQaStep(() =>
@@ -895,6 +919,10 @@ export async function runMatrixQaLive(params: {
             status: "fail",
           });
           writeMatrixQaProgress(`scenario fail ${scenario.id} ${formatErrorMessage(error)}`);
+          if (params.failFast) {
+            writeMatrixQaProgress("fail-fast stop");
+            break;
+          }
         }
       }
     }

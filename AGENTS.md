@@ -50,11 +50,14 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - Prod sweep: `pnpm check`; tests: `pnpm test`, `pnpm test:changed`, `pnpm test:serial`, `pnpm test:coverage`.
 - Extension tests: `pnpm test:extensions`, `pnpm test extensions`, `pnpm test extensions/<id>`.
 - Targeted tests: `pnpm test <path-or-filter> [vitest args...]`; never raw `vitest`.
+- Vitest flags only; no Jest flags like `--runInBand`. For serial runs use `pnpm test:serial` or `OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test ...`.
 - Typecheck: `tsgo` lanes only (`pnpm tsgo*`, `pnpm check:test-types`); do not add `tsc --noEmit`, `typecheck`, `check:types`.
 - Formatting: use `oxfmt`, not Prettier. Prefer `pnpm format:check` / `pnpm format`; for targeted files use `pnpm exec oxfmt --check --threads=1 <files...>` or `pnpm exec oxfmt --write --threads=1 <files...>`.
 - Linting: use repo wrappers (`pnpm lint:*`, `scripts/run-oxlint.mjs`); do not invoke generic JS formatters/lints unless a repo script uses them.
 - Heavy checks: `OPENCLAW_LOCAL_CHECK=1`, mode `OPENCLAW_LOCAL_CHECK_MODE=throttled|full`; CI/shared use `OPENCLAW_LOCAL_CHECK=0`.
-- Local first. Use repo `pnpm` lanes before Blacksmith/Testbox. Remote only for parity-only failures, secrets/services, or explicit ask.
+- Blacksmith/Testbox is maintainer opt-in, not a repo-wide default. If Blacksmith access is available and `OPENCLAW_TESTBOX=1` is set, or a maintainer's personal AGENTS rules ask for it, use Testbox for broad, slow, Docker, live, E2E, full-suite, or CI-parity validation instead of running those heavy lanes locally. Use `OPENCLAW_LOCAL_CHECK_MODE=throttled|full` as the explicit local escape hatch.
+- Testbox use: run from repo root, pre-warm early with `blacksmith testbox warmup ci-check-testbox.yml --ref main --idle-timeout 90`, reuse the returned `tbx_...` id for all `run`/`download` commands, and stop boxes you created before handoff. Timeout bins: `90` minutes default, `240` multi-hour, `720` all-day, `1440` overnight; anything above `1440` needs explicit approval and cleanup.
+- Testbox full-suite profile: `blacksmith testbox run --id <ID> "env NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test"`. For installable package proof, prefer the GitHub `Package Acceptance` workflow over ad hoc Testbox commands.
 
 ## GitHub / CI
 
@@ -137,7 +140,7 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 
 - Docs change with behavior/API. Use docs list/read_when hints; docs links per `docs/AGENTS.md`.
 - Changelog user-facing only; pure test/internal usually no entry.
-- Changelog placement: active version `### Changes`/`### Fixes`; every added entry must include at least one `Thanks @author` attribution, using credited GitHub username(s). Never add `Thanks @steipete` or `Thanks @codex`.
+- Changelog placement: active version `### Changes`/`### Fixes`; every added entry must include at least one `Thanks @author` attribution, using credited GitHub username(s). Never add `Thanks @codex`, `Thanks @openclaw`, or `Thanks @steipete`.
 - Changelog bullets are always single-line. No wrapping/continuation across multiple lines. Long entries stay on one long line so dedupe, PR-ref, and credit-audit tooling work and so the visual style stays uniform.
 
 ## Git

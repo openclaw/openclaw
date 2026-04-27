@@ -28,6 +28,22 @@
       "types": "./dist/src/plugin-sdk/config-runtime.d.ts",
       "default": "./src/config-runtime.ts"
     },
+    "./config-types": {
+      "types": "./dist/src/plugin-sdk/config-types.d.ts",
+      "default": "./src/config-types.ts"
+    },
+    "./plugin-config-runtime": {
+      "types": "./dist/src/plugin-sdk/plugin-config-runtime.d.ts",
+      "default": "./src/plugin-config-runtime.ts"
+    },
+    "./config-mutation": {
+      "types": "./dist/src/plugin-sdk/config-mutation.d.ts",
+      "default": "./src/config-mutation.ts"
+    },
+    "./cron-store-runtime": {
+      "types": "./dist/src/plugin-sdk/cron-store-runtime.d.ts",
+      "default": "./src/cron-store-runtime.ts"
+    },
     "./browser-setup-tools": {
       "types": "./dist/src/plugin-sdk/browser-setup-tools.d.ts",
       "default": "./src/browser-setup-tools.ts"
@@ -92,6 +108,14 @@
       "types": "./dist/src/plugin-sdk/provider-model-shared.d.ts",
       "default": "./src/provider-model-shared.ts"
     },
+    "./model-session-runtime": {
+      "types": "./dist/src/plugin-sdk/model-session-runtime.d.ts",
+      "default": "./src/model-session-runtime.ts"
+    },
+    "./talk-config-runtime": {
+      "types": "./dist/src/plugin-sdk/talk-config-runtime.d.ts",
+      "default": "./src/talk-config-runtime.ts"
+    },
     "./provider-onboard": {
       "types": "./dist/src/plugin-sdk/provider-onboard.d.ts",
       "default": "./src/provider-onboard.ts"
@@ -143,6 +167,10 @@
     "./text-runtime": {
       "types": "./dist/src/plugin-sdk/text-runtime.d.ts",
       "default": "./src/text-runtime.ts"
+    },
+    "./tts-runtime": {
+      "types": "./dist/src/plugin-sdk/tts-runtime.d.ts",
+      "default": "./src/tts-runtime.ts"
     },
     "./testing": {
       "types": "./dist/src/plugin-sdk/testing.d.ts",

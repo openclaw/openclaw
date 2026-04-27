@@ -98,6 +98,17 @@ function createOptionalDemoEntry(): MockRegistryToolEntry {
   };
 }
 
+function createMalformedTool(name: string) {
+  return {
+    name,
+    description: `${name} tool`,
+    inputSchema: { type: "object", properties: {} },
+    async execute() {
+      return { content: [{ type: "text", text: "bad" }] };
+    },
+  };
+}
+
 function resolveWithConflictingCoreName(options?: { suppressNameConflicts?: boolean }) {
   return resolvePluginTools(
     createResolveToolsParams({
@@ -308,6 +319,44 @@ describe("resolvePluginTools optional tools", () => {
     resolvePluginTools(createResolveToolsParams(params));
 
     expectLoaderCall(expectedLoaderCall);
+  });
+
+  it("skips malformed plugin tools while keeping valid sibling tools", () => {
+    const registry = setRegistry([
+      {
+        pluginId: "schema-bug",
+        optional: false,
+        source: "/tmp/schema-bug.js",
+        factory: () => [createMalformedTool("broken_tool"), makeTool("valid_tool")],
+      },
+    ]);
+
+    const tools = resolvePluginTools(createResolveToolsParams());
+
+    expectResolvedToolNames(tools, ["valid_tool"]);
+    expectSingleDiagnosticMessage(
+      registry.diagnostics,
+      "plugin tool is malformed (schema-bug): broken_tool missing parameters object",
+    );
+  });
+
+  it("skips allowlisted optional malformed plugin tools", () => {
+    const registry = setRegistry([
+      {
+        pluginId: "optional-demo",
+        optional: true,
+        source: "/tmp/optional-demo.js",
+        factory: () => createMalformedTool("optional_tool"),
+      },
+    ]);
+
+    const tools = resolveOptionalDemoTools(["optional_tool"]);
+
+    expect(tools).toHaveLength(0);
+    expectSingleDiagnosticMessage(
+      registry.diagnostics,
+      "plugin tool is malformed (optional-demo): optional_tool missing parameters object",
+    );
   });
 
   it.each([

@@ -8,6 +8,13 @@ vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: vi.fn(),
   recoverConfigFromLastKnownGood: vi.fn(),
   recoverConfigFromJsonRootSuffix: vi.fn(),
+  isPluginLocalInvalidConfigSnapshot: vi.fn((snapshot: ConfigFileSnapshot) => {
+    if (snapshot.valid || snapshot.legacyIssues.length > 0 || snapshot.issues.length === 0) {
+      return false;
+    }
+    return snapshot.issues.every((issue) => issue.path.startsWith("plugins.entries."));
+  }),
+  replaceConfigFile: vi.fn(),
   shouldAttemptLastKnownGoodRecovery: vi.fn((snapshot: ConfigFileSnapshot) => {
     if (snapshot.valid) {
       return false;
@@ -69,6 +76,67 @@ describe("gateway startup config recovery", () => {
     vi.clearAllMocks();
   });
 
+  it("runs startup plugin auto-enable against source config without persisting runtime defaults", async () => {
+    const sourceConfig = {
+      browser: { enabled: false },
+      gateway: { mode: "local" },
+      plugins: {
+        allow: ["bench-plugin"],
+        entries: {
+          browser: { enabled: false },
+        },
+      },
+    } as OpenClawConfig;
+    const runtimeConfig = {
+      ...sourceConfig,
+      plugins: {
+        ...sourceConfig.plugins,
+        entries: {
+          ...sourceConfig.plugins?.entries,
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: false,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const snapshot = {
+      ...buildTestConfigSnapshot({
+        path: configPath,
+        exists: true,
+        raw: `${JSON.stringify(sourceConfig)}\n`,
+        parsed: sourceConfig,
+        valid: true,
+        config: runtimeConfig,
+        issues: [],
+        legacyIssues: [],
+      }),
+      sourceConfig,
+      resolved: sourceConfig,
+      runtimeConfig,
+      config: runtimeConfig,
+    } satisfies ConfigFileSnapshot;
+    vi.mocked(configIo.readConfigFileSnapshot).mockResolvedValueOnce(snapshot);
+    const log = { info: vi.fn(), warn: vi.fn() };
+
+    await expect(
+      loadGatewayStartupConfigSnapshot({
+        minimalTestGateway: false,
+        log,
+      }),
+    ).resolves.toEqual({
+      snapshot,
+      wroteConfig: false,
+    });
+
+    expect(configIo.readConfigFileSnapshot).toHaveBeenCalledTimes(1);
+    expect(configIo.replaceConfigFile).not.toHaveBeenCalled();
+    expect(log.info).not.toHaveBeenCalled();
+  });
+
   it("restores last-known-good config before startup validation", async () => {
     const invalidSnapshot = buildSnapshot({ valid: false, raw: "{ invalid json" });
     const recoveredSnapshot = buildSnapshot({
@@ -125,7 +193,7 @@ describe("gateway startup config recovery", () => {
     expect(recoveryNotice.enqueueConfigRecoveryNotice).not.toHaveBeenCalled();
   });
 
-  it("does not restore last-known-good for plugin-local startup invalidity", async () => {
+  it("continues startup in degraded mode for plugin-local startup invalidity", async () => {
     const invalidSnapshot = buildTestConfigSnapshot({
       path: configPath,
       exists: true,
@@ -171,14 +239,80 @@ describe("gateway startup config recovery", () => {
         minimalTestGateway: true,
         log,
       }),
-    ).rejects.toThrow(`Invalid config at ${configPath}.`);
+    ).resolves.toEqual({
+      snapshot: expect.objectContaining({
+        valid: true,
+        issues: [],
+        warnings: invalidSnapshot.issues,
+      }),
+      wroteConfig: false,
+      degradedPluginConfig: true,
+    });
 
     expect(configIo.recoverConfigFromLastKnownGood).not.toHaveBeenCalled();
-    expect(configIo.recoverConfigFromJsonRootSuffix).toHaveBeenCalledWith(invalidSnapshot);
+    expect(configIo.recoverConfigFromJsonRootSuffix).not.toHaveBeenCalled();
     expect(log.warn).toHaveBeenCalledWith(
-      `gateway: last-known-good recovery skipped for plugin-local config invalidity: ${configPath}`,
+      `gateway: skipped plugin config validation issue at plugins.entries.feishu: plugin feishu: plugin requires OpenClaw >=2026.4.23, but this host is 2026.4.22; skipping load. Run "openclaw doctor --fix" to quarantine the plugin config.`,
     );
     expect(recoveryNotice.enqueueConfigRecoveryNotice).not.toHaveBeenCalled();
+  });
+
+  it("keeps mixed plugin and core startup invalidity fatal", async () => {
+    const invalidSnapshot = buildTestConfigSnapshot({
+      path: configPath,
+      exists: true,
+      raw: `${JSON.stringify({
+        gateway: { mode: "invalid" },
+        plugins: {
+          entries: {
+            feishu: { enabled: true },
+          },
+        },
+      })}\n`,
+      parsed: {
+        gateway: { mode: "invalid" },
+        plugins: {
+          entries: {
+            feishu: { enabled: true },
+          },
+        },
+      },
+      valid: false,
+      config: {
+        gateway: { mode: "invalid" },
+        plugins: {
+          entries: {
+            feishu: { enabled: true },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      issues: [
+        {
+          path: "gateway.mode",
+          message: "Expected 'local' or 'remote'",
+        },
+        {
+          path: "plugins.entries.feishu.config.token",
+          message: "invalid config: must be string",
+        },
+      ],
+      legacyIssues: [],
+    });
+    vi.mocked(configIo.readConfigFileSnapshot).mockResolvedValueOnce(invalidSnapshot);
+    vi.mocked(configIo.recoverConfigFromLastKnownGood).mockResolvedValueOnce(false);
+    vi.mocked(configIo.recoverConfigFromJsonRootSuffix).mockResolvedValueOnce(false);
+
+    await expect(
+      loadGatewayStartupConfigSnapshot({
+        minimalTestGateway: true,
+        log: { info: vi.fn(), warn: vi.fn() },
+      }),
+    ).rejects.toThrow(`Invalid config at ${configPath}.`);
+
+    expect(configIo.recoverConfigFromLastKnownGood).toHaveBeenCalledWith({
+      snapshot: invalidSnapshot,
+      reason: "startup-invalid-config",
+    });
   });
 
   it("skips providers with stale model api enum values during startup", async () => {

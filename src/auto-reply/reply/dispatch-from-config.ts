@@ -11,6 +11,7 @@ import {
 } from "../../bindings/records.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
+import { applyMergePatch } from "../../config/merge-patch.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -74,6 +75,7 @@ import type {
   DispatchFromConfigResult,
 } from "./dispatch-from-config.types.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
+import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
 import { resolveReplyRoutingDecision } from "./routing-policy.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
@@ -84,7 +86,7 @@ let getReplyFromConfigRuntimePromise: Promise<
 > | null = null;
 let abortRuntimePromise: Promise<typeof import("./abort.runtime.js")> | null = null;
 let ttsRuntimePromise: Promise<typeof import("../../tts/tts.runtime.js")> | null = null;
-let runtimePluginsPromise: Promise<typeof import("../../agents/runtime-plugins.js")> | null = null;
+let runtimePluginsPromise: Promise<typeof import("./runtime-plugins.runtime.js")> | null = null;
 let replyMediaPathsRuntimePromise: Promise<typeof import("./reply-media-paths.runtime.js")> | null =
   null;
 
@@ -109,7 +111,7 @@ function loadTtsRuntime() {
 }
 
 function loadRuntimePlugins() {
-  runtimePluginsPromise ??= import("../../agents/runtime-plugins.js");
+  runtimePluginsPromise ??= import("./runtime-plugins.runtime.js");
   return runtimePluginsPromise;
 }
 
@@ -346,6 +348,11 @@ export async function dispatchReplyFromConfig(
   let inboundDedupeReplayUnsafe = false;
   const markInboundDedupeReplayUnsafe = () => {
     inboundDedupeReplayUnsafe = true;
+  };
+  const commitInboundDedupeIfClaimed = () => {
+    if (inboundDedupeClaim.status === "claimed") {
+      commitInboundDedupe(inboundDedupeClaim.key);
+    }
   };
 
   const initialSessionStoreEntry = resolveSessionStoreLookup(ctx, cfg);
@@ -629,6 +636,7 @@ export async function dispatchReplyFromConfig(
           }
           markIdle("plugin_binding_dispatch");
           recordProcessed("completed", { reason: "plugin-bound-handled" });
+          commitInboundDedupeIfClaimed();
           return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
         }
         case "missing_plugin":
@@ -655,6 +663,7 @@ export async function dispatchReplyFromConfig(
           );
           markIdle("plugin_binding_declined");
           recordProcessed("completed", { reason: "plugin-bound-declined" });
+          commitInboundDedupeIfClaimed();
           return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
         }
         case "error": {
@@ -667,6 +676,7 @@ export async function dispatchReplyFromConfig(
           );
           markIdle("plugin_binding_error");
           recordProcessed("completed", { reason: "plugin-bound-error" });
+          commitInboundDedupeIfClaimed();
           return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
         }
       }
@@ -739,6 +749,7 @@ export async function dispatchReplyFromConfig(
       counts.final += routedFinalCount;
       recordProcessed("completed", { reason: "fast_abort" });
       markIdle("message_completed");
+      commitInboundDedupeIfClaimed();
       return { queuedFinal, counts };
     }
 
@@ -817,6 +828,7 @@ export async function dispatchReplyFromConfig(
         counts.final += routedFinalCount;
         recordProcessed("completed", { reason: "before_dispatch_handled" });
         markIdle("message_completed");
+        commitInboundDedupeIfClaimed();
         return { queuedFinal, counts };
       }
     }
@@ -848,6 +860,7 @@ export async function dispatchReplyFromConfig(
         },
       );
       if (replyDispatchResult?.handled) {
+        commitInboundDedupeIfClaimed();
         return {
           queuedFinal: replyDispatchResult.queuedFinal,
           counts: replyDispatchResult.counts,
@@ -1024,6 +1037,9 @@ export async function dispatchReplyFromConfig(
 
     const replyResolver =
       params.replyResolver ?? (await loadGetReplyFromConfigRuntime()).getReplyFromConfig;
+    const replyConfig = withFullRuntimeReplyConfig(
+      params.configOverride ? (applyMergePatch(cfg, params.configOverride) as OpenClawConfig) : cfg,
+    );
     const replyResult = await replyResolver(
       ctx,
       {
@@ -1187,7 +1203,7 @@ export async function dispatchReplyFromConfig(
           return run();
         },
       },
-      params.configOverride,
+      replyConfig,
     );
 
     if (ctx.AcpDispatchTailAfterReset === true) {
@@ -1308,9 +1324,7 @@ export async function dispatchReplyFromConfig(
 
     const counts = dispatcher.getQueuedCounts();
     counts.final += routedFinalCount;
-    if (inboundDedupeClaim.status === "claimed") {
-      commitInboundDedupe(inboundDedupeClaim.key);
-    }
+    commitInboundDedupeIfClaimed();
     recordProcessed(
       "completed",
       pluginFallbackReason ? { reason: pluginFallbackReason } : undefined,

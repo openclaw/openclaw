@@ -48,6 +48,10 @@ describe("Dockerfile", () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     expect(dockerfile).toContain("Verifying critical native addons");
     expect(dockerfile).toContain('find /app/node_modules -name "matrix-sdk-crypto*.node"');
+    expect(dockerfile).toContain(
+      "node /app/node_modules/@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js",
+    );
+    expect(dockerfile).toContain("matrix-sdk-crypto native addon missing after retries");
     expect(dockerfile).not.toMatch(
       /ADDON_DIR=.*node_modules\/\.pnpm\/@matrix-org\+matrix-sdk-crypto-nodejs@/,
     );
@@ -111,6 +115,26 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain("ENV COREPACK_HOME=/usr/local/share/corepack");
     expect(dockerfile).toContain(
       'corepack prepare "$(node -p "require(\'./package.json\').packageManager")" --activate',
+    );
+  });
+
+  it("pre-creates the OpenClaw home before switching to the node user", async () => {
+    const dockerfile = await readFile(dockerfilePath, "utf8");
+    const runtimeStageIndex = dockerfile.lastIndexOf("FROM base-runtime");
+    const stateDirIndex = dockerfile.indexOf(
+      "RUN install -d -m 0700 -o node -g node /home/node/.openclaw && \\",
+      runtimeStageIndex,
+    );
+    const userIndex = dockerfile.indexOf("USER node", runtimeStageIndex);
+
+    expect(runtimeStageIndex).toBeGreaterThan(-1);
+    expect(stateDirIndex).toBeGreaterThan(-1);
+    expect(userIndex).toBeGreaterThan(-1);
+    expect(stateDirIndex).toBeGreaterThan(runtimeStageIndex);
+    expect(stateDirIndex).toBeLessThan(userIndex);
+    expect(dockerfile).not.toContain("mkdir -p /home/node/.openclaw");
+    expect(dockerfile).toContain(
+      "stat -c '%U:%G %a' /home/node/.openclaw | grep -qx 'node:node 700'",
     );
   });
 });

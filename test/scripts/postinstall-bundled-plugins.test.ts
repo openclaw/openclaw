@@ -79,6 +79,7 @@ describe("bundled plugin postinstall", () => {
       },
       shell: false,
       stdio: "pipe",
+      windowsHide: true,
       windowsVerbatimArguments: undefined,
     });
   }

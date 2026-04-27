@@ -211,7 +211,7 @@ vi.mock("../config/io.js", async () => {
   const configMock = createGatewayConfigModuleMock(configActual);
   const createConfigIO = vi.fn(() => ({
     ...actual.createConfigIO(),
-    loadConfig: configMock.loadConfig,
+    getRuntimeConfig: configMock.getRuntimeConfig,
     readConfigFileSnapshot: configMock.readConfigFileSnapshot,
     readConfigFileSnapshotForWrite: configMock.readConfigFileSnapshotForWrite,
     writeConfigFile: configMock.writeConfigFile,
@@ -220,7 +220,6 @@ vi.mock("../config/io.js", async () => {
     ...actual,
     createConfigIO,
     getRuntimeConfig: configMock.getRuntimeConfig,
-    loadConfig: configMock.loadConfig,
     readConfigFileSnapshot: configMock.readConfigFileSnapshot,
     readConfigFileSnapshotForWrite: configMock.readConfigFileSnapshotForWrite,
     writeConfigFile: configMock.writeConfigFile,

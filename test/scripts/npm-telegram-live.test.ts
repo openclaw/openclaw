@@ -55,6 +55,46 @@ describe("package Telegram live Docker E2E", () => {
     );
   });
 
+  it("keeps private QA harness imports local while using the installed package dist", () => {
+    const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
+    const gatewayRpcClient = readFileSync(
+      path.resolve(TEST_DIR, "../../extensions/qa-lab/src/gateway-rpc-client.ts"),
+      "utf8",
+    );
+    const qaRuntimeApi = readFileSync(
+      path.resolve(TEST_DIR, "../../extensions/qa-lab/src/runtime-api.ts"),
+      "utf8",
+    );
+
+    expect(script).toContain('ln -sfnT "$openclaw_package_dir/dist" /app/dist');
+    expect(script).toContain('cp "$openclaw_package_dir/package.json" /app/package.json');
+    expect(script).toContain('ln -sfnT /app/extensions "$openclaw_package_dir/extensions"');
+    expect(script).toContain('"/app/node_modules/openclaw/package.json"');
+    expect(script).toContain('pkg.exports["./plugin-sdk/qa-channel"]');
+    expect(script).toContain('"./extensions/qa-channel/api.ts"');
+    expect(script).toContain('pkg.exports["./plugin-sdk/qa-channel-protocol"]');
+    expect(script).toContain('"./extensions/qa-channel/src/protocol.ts"');
+    expect(script).toContain('pkg.exports["./plugin-sdk/gateway-runtime"]');
+    expect(script).toContain('"./dist/plugin-sdk/browser-node-runtime.js"');
+    expect(gatewayRpcClient).toContain('from "openclaw/plugin-sdk/gateway-runtime"');
+    expect(qaRuntimeApi).toContain('from "openclaw/plugin-sdk/gateway-runtime"');
+    expect(gatewayRpcClient).not.toContain('from "openclaw/plugin-sdk/browser-node-runtime"');
+  });
+
+  it("exposes installed package dependencies to the mounted QA harness", () => {
+    const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("link_installed_package_dependency()");
+    expect(script).toContain(
+      'local source="/npm-global/lib/node_modules/openclaw/node_modules/$name"',
+    );
+    expect(script).toContain('ln -sfn "$source" "$target"');
+    expect(script).toContain('link_installed_package_dependency "$dependency"');
+    expect(script).toContain("@modelcontextprotocol/sdk");
+    expect(script).toContain("yaml");
+    expect(script).toContain("zod");
+  });
+
   it("lets npm-specific credential aliases override shared QA env", () => {
     expect(
       __testing.resolveCredentialSource({
