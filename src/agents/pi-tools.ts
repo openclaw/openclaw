@@ -340,6 +340,11 @@ export function createOpenClawCodingTools(options?: {
   forceMessageTool?: boolean;
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
+  /**
+   * Additional owner-only tools authorized by a server-side runtime grant.
+   * Keep this narrowly scoped; it is not a replacement for sender ownership.
+   */
+  ownerOnlyToolAllowlist?: string[];
   /** Callback invoked when sessions_yield tool is called. */
   onYield?: (message: string) => Promise<void> | void;
 }): AnyAgentTool[] {
@@ -670,7 +675,11 @@ export function createOpenClawCodingTools(options?: {
   });
   // Security: treat unknown/undefined as unauthorized (opt-in, not opt-out)
   const senderIsOwner = options?.senderIsOwner === true;
-  const toolsByAuthorization = applyOwnerOnlyToolPolicy(toolsForModelProvider, senderIsOwner);
+  const toolsByAuthorization = applyOwnerOnlyToolPolicy(
+    toolsForModelProvider,
+    senderIsOwner,
+    options?.ownerOnlyToolAllowlist,
+  );
   const subagentFiltered = applyToolPolicyPipeline({
     tools: toolsByAuthorization,
     toolMeta: (tool) => getPluginToolMeta(tool),

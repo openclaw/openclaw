@@ -106,6 +106,19 @@ describe("createOpenClawCodingTools", () => {
     );
   });
 
+  it("exposes only an explicitly authorized owner-only tool to non-owner sessions", () => {
+    const tools = createOpenClawCodingTools({
+      config: testConfig,
+      senderIsOwner: false,
+      ownerOnlyToolAllowlist: ["cron"],
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+
+    expect(names.has("cron")).toBe(true);
+    expect(names.has("gateway")).toBe(false);
+    expect(names.has("nodes")).toBe(false);
+  });
+
   it("preserves action enums in normalized schemas", () => {
     const defaultTools = createOpenClawCodingTools({ config: testConfig, senderIsOwner: true });
     const toolNames = ["canvas", "nodes", "cron", "gateway", "message"];

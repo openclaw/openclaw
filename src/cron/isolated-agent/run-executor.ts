@@ -47,6 +47,13 @@ async function loadCronSubagentRegistryRuntime() {
   return await cronSubagentRegistryRuntimePromise;
 }
 
+function resolveCronOwnerOnlyToolAllowlist(toolsAllow: string[] | undefined): string[] | undefined {
+  if (!toolsAllow?.some((toolName) => toolName.trim().toLowerCase() === "cron")) {
+    return undefined;
+  }
+  return ["cron"];
+}
+
 export type CronExecutionResult = {
   runResult: CronPromptRunResult;
   fallbackProvider: string;
@@ -172,6 +179,9 @@ export function createCronPromptExecutor(params: {
           cleanupBundleMcpOnRunEnd: params.job.sessionTarget === "isolated",
           allowGatewaySubagentBinding: true,
           senderIsOwner: false,
+          ownerOnlyToolAllowlist: resolveCronOwnerOnlyToolAllowlist(
+            params.agentPayload?.toolsAllow,
+          ),
           messageChannel: params.messageChannel,
           agentAccountId: params.resolvedDelivery.accountId,
           messageTo: params.resolvedDelivery.to,
