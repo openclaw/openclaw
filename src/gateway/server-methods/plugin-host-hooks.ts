@@ -10,6 +10,10 @@ import {
 } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
 export const pluginHostHookHandlers: GatewayRequestHandlers = {
   "plugins.uiDescriptors": ({ params, respond }) => {
     if (!validatePluginsUiDescriptorsParams(params)) {
@@ -97,7 +101,37 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
           scopes,
         },
       });
-      if (result && "ok" in result && result.ok === false) {
+      if (result !== undefined && !isRecord(result)) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "plugin session action result must be an object"),
+        );
+        return;
+      }
+      if (result && result.ok === false) {
+        if (typeof result.error !== "string" || !result.error.trim()) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "plugin session action error must be a non-empty string",
+            ),
+          );
+          return;
+        }
+        if (result.code !== undefined && typeof result.code !== "string") {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "plugin session action error code must be a string",
+            ),
+          );
+          return;
+        }
         if (result.details !== undefined && !isPluginJsonValue(result.details)) {
           respond(
             false,
@@ -147,6 +181,17 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
           errorShape(
             ErrorCodes.INVALID_REQUEST,
             "plugin session action reply must be JSON-compatible",
+          ),
+        );
+        return;
+      }
+      if (success?.continueAgent !== undefined && typeof success.continueAgent !== "boolean") {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "plugin session action continueAgent must be a boolean",
           ),
         );
         return;

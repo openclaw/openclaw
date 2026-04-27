@@ -595,6 +595,10 @@ describe("host-hook fixture plugin contract", () => {
           handler: () => ({ reply: { text: "ok", extra: () => undefined } as never }),
         });
         api.registerSessionAction({
+          id: "primitive-result",
+          handler: () => "not-an-object" as never,
+        });
+        api.registerSessionAction({
           id: "typed-error",
           handler: () => ({
             ok: false,
@@ -610,6 +614,10 @@ describe("host-hook fixture plugin contract", () => {
             error: "bad details",
             details: { value: 1n } as never,
           }),
+        });
+        api.registerSessionAction({
+          id: "bad-continue-agent",
+          handler: () => ({ continueAgent: "yes" as never }),
         });
       },
     });
@@ -647,6 +655,20 @@ describe("host-hook fixture plugin contract", () => {
       callPluginSessionActionForTest({
         body: {
           pluginId: "session-action-validation-fixture",
+          actionId: "primitive-result",
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "plugin session action result must be an object",
+      },
+    });
+    await expect(
+      callPluginSessionActionForTest({
+        body: {
+          pluginId: "session-action-validation-fixture",
           actionId: "typed-error",
         },
       }),
@@ -672,6 +694,20 @@ describe("host-hook fixture plugin contract", () => {
       error: {
         code: "INVALID_REQUEST",
         message: "plugin session action error details must be JSON-compatible",
+      },
+    });
+    await expect(
+      callPluginSessionActionForTest({
+        body: {
+          pluginId: "session-action-validation-fixture",
+          actionId: "bad-continue-agent",
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "plugin session action continueAgent must be a boolean",
       },
     });
   });
@@ -1105,6 +1141,18 @@ describe("host-hook fixture plugin contract", () => {
           sessionKey: "agent:main:main",
           message: "wake",
           delayMs: 1000,
+        },
+      }),
+    ).resolves.toBeUndefined();
+
+    await expect(
+      schedulePluginSessionTurn({
+        pluginId: "scheduler-fixture",
+        origin: "bundled",
+        schedule: {
+          sessionKey: "agent:main:main",
+          message: "wake",
+          delayMs: Number.MAX_VALUE,
         },
       }),
     ).resolves.toBeUndefined();
