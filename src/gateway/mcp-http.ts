@@ -88,6 +88,34 @@ function resolveMessageToolSentMediaUrls(args: Record<string, unknown>): string[
   return urls;
 }
 
+function responseHasLogicalToolFailure(response: object): boolean {
+  if (!isRecord(response) || !isRecord(response.result)) {
+    return false;
+  }
+  const content = response.result.content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  for (const block of content) {
+    if (!isRecord(block) || typeof block.text !== "string") {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(block.text) as unknown;
+      if (!isRecord(parsed)) {
+        continue;
+      }
+      const status = readStringField(parsed, "status");
+      if (status === "error" || status === "forbidden" || status === "timeout") {
+        return true;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return false;
+}
+
 function recordMcpMessagingToolSend(params: {
   requestContext: McpRequestContext;
   toolName?: string;
@@ -244,11 +272,15 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
                 : {};
             const isError =
               isRecord(response) && isRecord(response.result) && response.result.isError === true;
+            const hasLogicalFailure =
+              typeof toolName === "string" && toolName === "sessions_send"
+                ? responseHasLogicalToolFailure(response)
+                : false;
             recordMcpMessagingToolSend({
               requestContext,
               toolName: typeof toolName === "string" ? toolName : undefined,
               args: toolArgs,
-              isError,
+              isError: isError || hasLogicalFailure,
             });
             logMcpLoopbackTraffic("response", {
               method: message.method,

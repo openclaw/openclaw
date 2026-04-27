@@ -673,6 +673,63 @@ describe("mcp loopback server", () => {
     });
   });
 
+  it("does not record logically failed sessions_send calls", async () => {
+    resolveGatewayScopedToolsMock.mockReturnValue({
+      agentId: "main",
+      tools: [
+        {
+          name: "sessions_send",
+          description: "send to a session",
+          parameters: { type: "object", properties: {} },
+          execute: vi.fn(async () => ({
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  status: "forbidden",
+                  error: "session is not visible",
+                }),
+              },
+            ],
+          })),
+        },
+      ],
+    });
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime ? resolveMcpLoopbackBearerToken(runtime, false) : undefined,
+      headers: {
+        "content-type": "application/json",
+        "x-session-key": "agent:main:telegram:chat123",
+        "x-openclaw-run-id": "run-sessions-send-failed",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "sessions_send",
+          arguments: {
+            sessionKey: "agent:hidden:main",
+            message: "not sent",
+          },
+        },
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(
+      drainCliMessagingToolSends("agent:main:telegram:chat123", "run-sessions-send-failed"),
+    ).toEqual({
+      targets: [],
+      texts: [],
+      mediaUrls: [],
+    });
+  });
+
   it("forwards the request abort signal to loopback tool execution", async () => {
     const execute = vi.fn(async () => ({
       content: [{ type: "text", text: "EXECUTED" }],
