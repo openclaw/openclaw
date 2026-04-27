@@ -105,6 +105,34 @@ beforeAll(async () => {
   ({ setDiscordRuntime } = await import("./runtime.js"));
 });
 
+describe("discordPlugin messaging", () => {
+  it("preserves explicit user targets when parsing outbound recipients", () => {
+    const parseExplicitTarget = discordPlugin.messaging?.parseExplicitTarget;
+    const inferTargetChatType = discordPlugin.messaging?.inferTargetChatType;
+    if (!parseExplicitTarget || !inferTargetChatType) {
+      throw new Error("Expected discordPlugin messaging target helpers to be defined");
+    }
+
+    expect(parseExplicitTarget({ raw: "user:1234567890" })).toEqual({
+      to: "user:1234567890",
+      chatType: "direct",
+    });
+    expect(inferTargetChatType({ to: "user:1234567890" })).toBe("direct");
+  });
+
+  it("normalizes bare numeric outbound recipients as channel targets", () => {
+    const parseExplicitTarget = discordPlugin.messaging?.parseExplicitTarget;
+    if (!parseExplicitTarget) {
+      throw new Error("Expected discordPlugin messaging.parseExplicitTarget to be defined");
+    }
+
+    expect(parseExplicitTarget({ raw: "1234567890" })).toEqual({
+      to: "channel:1234567890",
+      chatType: "channel",
+    });
+  });
+});
+
 describe("discordPlugin outbound", () => {
   it("avoids local require calls for bundled-only sibling modules", async () => {
     const source = await readFile(
