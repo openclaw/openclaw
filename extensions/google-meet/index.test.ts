@@ -371,6 +371,31 @@ describe("google-meet plugin", () => {
     );
   });
 
+  it("returns structured gateway errors for missing session ids", async () => {
+    const { methods } = setup();
+    for (const method of ["googlemeet.leave", "googlemeet.speak"]) {
+      const handler = methods.get(method) as
+        | ((ctx: {
+            params: Record<string, unknown>;
+            respond: ReturnType<typeof vi.fn>;
+          }) => Promise<void>)
+        | undefined;
+      const respond = vi.fn();
+
+      await handler?.({ params: {}, respond });
+
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        { error: "sessionId required" },
+        {
+          code: "INVALID_REQUEST",
+          message: "sessionId required",
+          details: { error: "sessionId required" },
+        },
+      );
+    }
+  });
+
   it("uses a provider-safe flat tool parameter schema", () => {
     const { tools } = setup();
     const tool = tools[0] as { description?: string; parameters: unknown };

@@ -575,14 +575,22 @@ export default definePluginEntry({
     const formatGatewayError = (err: unknown) =>
       isGoogleMeetBrowserManualActionError(err) ? err.payload : { error: formatErrorMessage(err) };
 
-    const sendError = (respond: GatewayRequestHandlerOptions["respond"], err: unknown) => {
+    const sendError = (
+      respond: GatewayRequestHandlerOptions["respond"],
+      err: unknown,
+      code = ErrorCodes.UNAVAILABLE,
+    ) => {
       const payload = formatGatewayError(err);
       respond(
         false,
         payload,
-        errorShape(ErrorCodes.UNAVAILABLE, "Google Meet request failed", {
-          details: payload,
-        }),
+        errorShape(
+          code,
+          typeof payload.error === "string" ? payload.error : "Google Meet request failed",
+          {
+            details: payload,
+          },
+        ),
       );
     };
 
@@ -783,7 +791,7 @@ export default definePluginEntry({
         try {
           const sessionId = normalizeOptionalString(params?.sessionId);
           if (!sessionId) {
-            respond(false, { error: "sessionId required" });
+            sendError(respond, new Error("sessionId required"), ErrorCodes.INVALID_REQUEST);
             return;
           }
           const rt = await ensureRuntime();
@@ -800,7 +808,7 @@ export default definePluginEntry({
         try {
           const sessionId = normalizeOptionalString(params?.sessionId);
           if (!sessionId) {
-            respond(false, { error: "sessionId required" });
+            sendError(respond, new Error("sessionId required"), ErrorCodes.INVALID_REQUEST);
             return;
           }
           const rt = await ensureRuntime();
