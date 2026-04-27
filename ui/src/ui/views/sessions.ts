@@ -350,7 +350,7 @@ export function renderSessions(props: SessionsProps) {
           <div class="data-table-search">
             <input
               type="text"
-              placeholder="Filter by key, label, kind…"
+              placeholder="Filter by key, agent, label, kind…"
               .value=${props.searchQuery}
               @input=${(e: Event) => props.onSearchChange((e.target as HTMLInputElement).value)}
             />
@@ -492,6 +492,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
     identityName && keyParts
       ? `${identityEmoji ? `${identityEmoji} ` : ""}${identityName} (${keyParts.channel})`
       : null;
+  const keyCellTitle = friendlyKeyLabel ?? row.key;
   const canLink = row.kind !== "global";
   const chatUrl = canLink
     ? `${pathForTab("chat", props.basePath)}?session=${encodeURIComponent(row.key)}`
@@ -518,7 +519,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
       <td class="data-table-key-col">
         <div
           class=${friendlyKeyLabel ? "session-key-cell" : "mono session-key-cell"}
-          title=${row.key}
+          title=${keyCellTitle}
         >
           ${canLink
             ? html`<a

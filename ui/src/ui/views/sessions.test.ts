@@ -196,9 +196,7 @@ describe("sessions view", () => {
 
     const keyCell = container.querySelector(".session-key-cell");
     expect(keyCell?.textContent).toContain("📊 Data Expert (dingtalk)");
-    expect(keyCell?.getAttribute("title")).toBe(
-      "agent:data-expert:dingtalk:cidzg6sF43NZMy52Rnk8EN",
-    );
+    expect(keyCell?.getAttribute("title")).toBe("📊 Data Expert (dingtalk)");
   });
 
   it("keeps raw keys when identity data is unavailable", async () => {
@@ -217,9 +215,9 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    expect(container.querySelector(".session-key-cell")?.textContent).toContain(
-      "agent:unknown-agent:telegram:abc123",
-    );
+    const keyCell = container.querySelector(".session-key-cell");
+    expect(keyCell?.textContent).toContain("agent:unknown-agent:telegram:abc123");
+    expect(keyCell?.getAttribute("title")).toBe("agent:unknown-agent:telegram:abc123");
   });
 
   it("keeps raw keys for inherited identity object properties", async () => {
