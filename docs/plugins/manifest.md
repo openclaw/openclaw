@@ -730,6 +730,17 @@ Top-level fields:
 | `suppressions` | `object[]`                                               | Model rows from another source that this plugin suppresses for a provider-specific reason.                  |
 | `discovery`    | `Record<string, "static" \| "refreshable" \| "runtime">` | Whether the provider catalog can be read from manifest metadata, refreshed into cache, or requires runtime. |
 
+`aliases` participates in provider ownership lookup for model-catalog planning.
+Alias targets must be top-level providers owned by the same plugin. When a
+provider-filtered list uses an alias, OpenClaw can read the owning manifest and
+apply alias API/base URL overrides without loading provider runtime.
+
+`suppressions` is the preferred static replacement for provider runtime
+`suppressBuiltInModel` hooks. Suppression entries are honored only when the
+provider is owned by the plugin or declared as a `modelCatalog.aliases` key that
+targets an owned provider. Runtime suppression hooks still run as deprecated
+compatibility fallback for plugins that have not migrated.
+
 Provider fields:
 
 | Field     | Type                     | What it means                                                     |

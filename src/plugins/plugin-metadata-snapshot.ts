@@ -120,6 +120,9 @@ export function buildPluginMetadataOwnerMaps(
     for (const providerId of Object.keys(plugin.modelCatalog?.providers ?? {})) {
       appendOwner(modelCatalogProviders, providerId, plugin.id);
     }
+    for (const providerId of Object.keys(plugin.modelCatalog?.aliases ?? {})) {
+      appendOwner(modelCatalogProviders, providerId, plugin.id);
+    }
     for (const cliBackendId of plugin.cliBackends) {
       appendOwner(cliBackends, cliBackendId, plugin.id);
     }

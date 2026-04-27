@@ -125,6 +125,11 @@ describe("loadPluginLookUpTable", () => {
         origin: "bundled",
         providers: ["openai", "openai-codex"],
         modelCatalog: {
+          aliases: {
+            "azure-openai-responses": {
+              provider: "openai",
+            },
+          },
           providers: {
             openai: {
               models: [{ id: "gpt-test" }],
@@ -180,6 +185,7 @@ describe("loadPluginLookUpTable", () => {
     expect(table.owners.channelConfigs.get("telegram")).toEqual(["telegram"]);
     expect(table.owners.providers.get("openai")).toEqual(["openai"]);
     expect(table.owners.modelCatalogProviders.get("openai")).toEqual(["openai"]);
+    expect(table.owners.modelCatalogProviders.get("azure-openai-responses")).toEqual(["openai"]);
     expect(table.owners.cliBackends.get("codex-cli")).toEqual(["openai"]);
     expect(table.owners.setupProviders.get("openai")).toEqual(["openai"]);
     expect(table.owners.commandAliases.get("telegram-send")).toEqual(["telegram"]);

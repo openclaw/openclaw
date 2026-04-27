@@ -1102,6 +1102,9 @@ export function resolveProviderBuiltInModelSuppression(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderBuiltInModelSuppressionContext;
 }) {
+  // Deprecated compatibility fallback. Static suppression rules should live in
+  // manifest modelCatalog.suppressions so list/model resolution can answer
+  // without loading provider runtime.
   for (const plugin of resolveProviderPluginsForCatalogHooks(params)) {
     const result = plugin.suppressBuiltInModel?.(params.context);
     if (result?.suppress) {

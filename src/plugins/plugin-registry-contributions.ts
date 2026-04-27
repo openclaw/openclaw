@@ -173,7 +173,10 @@ function listManifestContributionIds(
     case "cliBackends":
       return [...plugin.cliBackends, ...(plugin.setup?.cliBackends ?? [])];
     case "modelCatalogProviders":
-      return collectObjectKeys(plugin.modelCatalog?.providers);
+      return [
+        ...collectObjectKeys(plugin.modelCatalog?.providers),
+        ...collectObjectKeys(plugin.modelCatalog?.aliases),
+      ];
     case "commandAliases":
       return plugin.commandAliases?.map((alias) => alias.name) ?? [];
     case "contracts":
