@@ -327,11 +327,24 @@ export async function prepareCliRunContext(
   let systemPrompt = transformedSystemPrompt;
   let preparedPrompt = params.prompt;
   const hookRunner = getGlobalHookRunner();
+  // Per chatgpt-codex P2 review on prepare.ts:331 — `loadOpenClawHistoryMessages()`
+  // reads/parses transcript history from disk, so eagerly invoking it on every
+  // CLI run forces avoidable file I/O even when no message-consuming hooks are
+  // registered. Gate the call on `hasHooks(...)` for any prompt-build hook
+  // that actually uses `messages` so the no-hook hot path stays free of disk
+  // I/O. (`heartbeat_prompt_contribution` does not consume `messages`, so it
+  // is intentionally excluded.)
+  const hookRunnerNeedsHistoryMessages = Boolean(
+    hookRunner &&
+    (hookRunner.hasHooks("agent_turn_prepare") ||
+      hookRunner.hasHooks("before_prompt_build") ||
+      hookRunner.hasHooks("before_agent_start")),
+  );
   try {
     const hookResult = await resolvePromptBuildHookResult({
       config: params.config ?? getRuntimeConfig(),
       prompt: params.prompt,
-      messages: loadOpenClawHistoryMessages(),
+      messages: hookRunnerNeedsHistoryMessages ? loadOpenClawHistoryMessages() : [],
       hookCtx: {
         runId: params.runId,
         agentId: sessionAgentId,
