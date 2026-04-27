@@ -481,3 +481,11 @@ yuweuii
 yxjsxy
 zijiess
 clawtributors:hidden:end -->
+
+## 💰 Bounty Contribution
+
+- **Task:** Session context bloat: bootstrap files re-injected every turn, wasting 20-30% to
+- **Reward:** $18
+- **Source:** GitHub-Paid
+- **Date:** 2026-04-27
+
