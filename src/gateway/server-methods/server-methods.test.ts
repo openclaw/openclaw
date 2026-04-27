@@ -11,7 +11,10 @@ import {
   buildSystemRunApprovalEnvBinding,
 } from "../../infra/system-run-approval-binding.js";
 import { resetLogger, setLoggerOverride } from "../../logging.js";
-import { projectRecentChatDisplayMessages } from "../chat-display-projection.js";
+import {
+  projectChatDisplayMessage,
+  projectRecentChatDisplayMessages,
+} from "../chat-display-projection.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { validateExecApprovalRequestParams } from "../protocol/index.js";
 import { waitForAgentJob } from "./agent-job.js";
@@ -470,6 +473,24 @@ describe("projectRecentChatDisplayMessages", () => {
     );
 
     expect(result).toEqual([{ role: "assistant", content: "older answer", timestamp: 2 }]);
+  });
+
+  it("threads emotion mode through recent-history projection", () => {
+    const result = projectRecentChatDisplayMessages(
+      [{ role: "assistant", content: "[warmly] hello", timestamp: 1 }],
+      { emotionMode: "off" },
+    );
+
+    expect(result).toEqual([{ role: "assistant", content: "hello", timestamp: 1 }]);
+  });
+
+  it("threads emotion mode through single-message projection", () => {
+    const result = projectChatDisplayMessage(
+      { role: "assistant", content: "[softly] hello", timestamp: 1 },
+      { emotionMode: "off" },
+    );
+
+    expect(result).toEqual({ role: "assistant", content: "hello", timestamp: 1 });
   });
 });
 

@@ -578,7 +578,12 @@ export function limitChatDisplayMessages<T>(messages: T[], maxMessages?: number)
 
 export function projectRecentChatDisplayMessages(
   messages: unknown[],
-  options?: { maxChars?: number; maxMessages?: number; stripEnvelope?: boolean },
+  options?: {
+    maxChars?: number;
+    maxMessages?: number;
+    stripEnvelope?: boolean;
+    emotionMode?: EmotionMode;
+  },
 ): Array<Record<string, unknown>> {
   return limitChatDisplayMessages(
     projectChatDisplayMessages(messages, options),
@@ -588,7 +593,7 @@ export function projectRecentChatDisplayMessages(
 
 export function projectChatDisplayMessage(
   message: unknown,
-  options?: { maxChars?: number; stripEnvelope?: boolean },
+  options?: { maxChars?: number; stripEnvelope?: boolean; emotionMode?: EmotionMode },
 ): Record<string, unknown> | undefined {
   return projectChatDisplayMessages([message], options)[0];
 }
