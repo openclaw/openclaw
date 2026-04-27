@@ -362,7 +362,7 @@ describe("rewriteTranscriptEntriesInSessionManager — #66443 dedupe invariant",
     expect(branchMessages[0]).toMatchObject({ role: "user", content: heartbeatPrompt });
   });
 
-  it("preserves messages with same content but distinct entry-identity inputs", () => {
+  it("preserves distinct user messages with the same role", () => {
     // Two user messages with same content but different timestamps and metadata
     // are separate logical entries; we dedupe on (role + content), so they
     // collapse. This documents the chosen invariant: identity = role + content.
