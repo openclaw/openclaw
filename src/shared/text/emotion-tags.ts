@@ -207,6 +207,17 @@ function isSecondLabelInMarkdownReferenceLink(text: string, index: number): bool
   if (text.slice(previousOpenIndex + 1, index - 1).includes("\n")) {
     return false;
   }
+  // Label-pair detection at line start is genuinely ambiguous between a
+  // markdown reference link (`[fast][1]`) and adjacent emotion tags
+  // (`[fast][softly]`). The existing test suite asserts both cases:
+  // line-start `[allowlisted][allowlisted]` strips as emotion tags, while
+  // line-start `[label][digits-or-non-allowlisted]` should preserve. The
+  // hasNonWhitespaceBeforeOnLine guard short-circuits to "emotion tags" at
+  // line start, which is wrong for the reference-link case but right for
+  // the adjacent-tags case. A proper fix needs to inspect the second
+  // label's content (digits / non-allowlisted name → reference link;
+  // allowlisted emotion → emotion tag). For now keep the existing guard
+  // and track this as a follow-up refinement.
   return hasNonWhitespaceBeforeOnLine(text, previousOpenIndex);
 }
 
