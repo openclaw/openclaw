@@ -57,6 +57,22 @@ export function listRegisteredPluginCommands(): RegisteredPluginCommand[] {
   return Array.from(pluginCommands.values());
 }
 
+export function listRegisteredPluginAgentPromptGuidance(): string[] {
+  const lines: string[] = [];
+  const seen = new Set<string>();
+  for (const command of pluginCommands.values()) {
+    for (const line of command.agentPromptGuidance ?? []) {
+      const trimmed = line.trim();
+      if (!trimmed || seen.has(trimmed)) {
+        continue;
+      }
+      seen.add(trimmed);
+      lines.push(trimmed);
+    }
+  }
+  return lines;
+}
+
 export function restorePluginCommands(commands: readonly RegisteredPluginCommand[]): void {
   pluginCommands.clear();
   for (const command of commands) {

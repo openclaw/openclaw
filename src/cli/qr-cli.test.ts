@@ -23,7 +23,10 @@ vi.mock("../runtime.js", async () => {
     runtime,
   );
 });
-vi.mock("../config/config.js", () => ({ loadConfig: mocks.loadConfig }));
+vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: mocks.loadConfig,
+  loadConfig: mocks.loadConfig,
+}));
 vi.mock("../process/exec.js", () => ({ runCommandWithTimeout: mocks.runCommandWithTimeout }));
 vi.mock("../media/qr-terminal.ts", () => ({
   renderQrTerminal: mocks.renderTerminal,

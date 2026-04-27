@@ -234,7 +234,7 @@ describe("skill-workshop", () => {
       pluginConfig: { approvalPolicy: "auto" },
       runtime: {
         config: {
-          loadConfig: () => configFile,
+          current: () => configFile,
         },
       } as never,
       on,
@@ -288,7 +288,7 @@ describe("skill-workshop", () => {
           resolveStateDir: () => stateDir,
         },
         config: {
-          loadConfig: () => configFile,
+          current: () => configFile,
         },
       } as never,
       registerTool(registered) {
@@ -346,7 +346,7 @@ describe("skill-workshop", () => {
           resolveStateDir: () => stateDir,
         },
         config: {
-          loadConfig: () => configFile,
+          current: () => configFile,
         },
       } as never,
       registerTool(registered) {
@@ -405,7 +405,7 @@ describe("skill-workshop", () => {
           resolveStateDir: () => stateDir,
         },
         config: {
-          loadConfig: () => configFile,
+          current: () => configFile,
         },
       } as never,
       on,
@@ -492,7 +492,7 @@ describe("skill-workshop", () => {
           resolveStateDir: () => stateDir,
         },
         config: {
-          loadConfig: () => configFile,
+          current: () => configFile,
         },
       } as never,
       on,

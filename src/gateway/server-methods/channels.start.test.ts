@@ -3,13 +3,13 @@ import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js"
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
-  loadConfig: vi.fn(() => ({})),
+  getRuntimeConfig: vi.fn(() => ({})),
   applyPluginAutoEnable: vi.fn(),
   getChannelPlugin: vi.fn(),
 }));
 
 vi.mock("../../config/config.js", () => ({
-  loadConfig: mocks.loadConfig,
+  getRuntimeConfig: mocks.getRuntimeConfig,
   readConfigFileSnapshot: vi.fn(),
 }));
 
@@ -36,6 +36,7 @@ function createOptions(
     isWebchatConnect: () => false,
     respond: vi.fn(),
     context: {
+      getRuntimeConfig: mocks.getRuntimeConfig,
       startChannel: vi.fn(),
       getRuntimeSnapshot: vi.fn(
         (): ChannelRuntimeSnapshot => ({
@@ -63,7 +64,7 @@ function createOptions(
 describe("channelsHandlers channels.start", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.loadConfig.mockReturnValue({});
+    mocks.getRuntimeConfig.mockReturnValue({});
     mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
     mocks.getChannelPlugin.mockReturnValue({
       id: "whatsapp",
@@ -86,6 +87,7 @@ describe("channelsHandlers channels.start", () => {
         {
           respond,
           context: {
+            getRuntimeConfig: mocks.getRuntimeConfig,
             startChannel,
             getRuntimeSnapshot: vi.fn(
               (): ChannelRuntimeSnapshot => ({
@@ -136,6 +138,7 @@ describe("channelsHandlers channels.start", () => {
         {
           respond,
           context: {
+            getRuntimeConfig: mocks.getRuntimeConfig,
             startChannel,
             getRuntimeSnapshot: vi.fn(
               (): ChannelRuntimeSnapshot => ({

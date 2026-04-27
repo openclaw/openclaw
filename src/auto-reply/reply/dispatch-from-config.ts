@@ -11,6 +11,7 @@ import {
 } from "../../bindings/records.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
+import { applyMergePatch } from "../../config/merge-patch.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -74,6 +75,7 @@ import type {
   DispatchFromConfigResult,
 } from "./dispatch-from-config.types.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
+import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
 import { resolveReplyRoutingDecision } from "./routing-policy.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
@@ -84,7 +86,7 @@ let getReplyFromConfigRuntimePromise: Promise<
 > | null = null;
 let abortRuntimePromise: Promise<typeof import("./abort.runtime.js")> | null = null;
 let ttsRuntimePromise: Promise<typeof import("../../tts/tts.runtime.js")> | null = null;
-let runtimePluginsPromise: Promise<typeof import("../../agents/runtime-plugins.js")> | null = null;
+let runtimePluginsPromise: Promise<typeof import("./runtime-plugins.runtime.js")> | null = null;
 let replyMediaPathsRuntimePromise: Promise<typeof import("./reply-media-paths.runtime.js")> | null =
   null;
 
@@ -109,7 +111,7 @@ function loadTtsRuntime() {
 }
 
 function loadRuntimePlugins() {
-  runtimePluginsPromise ??= import("../../agents/runtime-plugins.js");
+  runtimePluginsPromise ??= import("./runtime-plugins.runtime.js");
   return runtimePluginsPromise;
 }
 
@@ -343,6 +345,15 @@ export async function dispatchReplyFromConfig(
     recordProcessed("skipped", { reason: "duplicate" });
     return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
   }
+  let inboundDedupeReplayUnsafe = false;
+  const markInboundDedupeReplayUnsafe = () => {
+    inboundDedupeReplayUnsafe = true;
+  };
+  const commitInboundDedupeIfClaimed = () => {
+    if (inboundDedupeClaim.status === "claimed") {
+      commitInboundDedupe(inboundDedupeClaim.key);
+    }
+  };
 
   const initialSessionStoreEntry = resolveSessionStoreLookup(ctx, cfg);
   const boundAcpDispatchSessionKey = resolveBoundAcpDispatchSessionKey({ ctx, cfg });
@@ -473,6 +484,7 @@ export async function dispatchReplyFromConfig(
     if (!shouldRouteToOriginating || !routeReplyChannel || !routeReplyTo || !routeReplyRuntime) {
       return null;
     }
+    markInboundDedupeReplayUnsafe();
     return await routeReplyRuntime.routeReply({
       payload,
       channel: routeReplyChannel,
@@ -538,6 +550,7 @@ export async function dispatchReplyFromConfig(
       }
       return result.ok;
     }
+    markInboundDedupeReplayUnsafe();
     return mode === "additive"
       ? dispatcher.sendToolResult(payload)
       : dispatcher.sendFinalReply(payload);
@@ -623,6 +636,7 @@ export async function dispatchReplyFromConfig(
           }
           markIdle("plugin_binding_dispatch");
           recordProcessed("completed", { reason: "plugin-bound-handled" });
+          commitInboundDedupeIfClaimed();
           return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
         }
         case "missing_plugin":
@@ -649,6 +663,7 @@ export async function dispatchReplyFromConfig(
           );
           markIdle("plugin_binding_declined");
           recordProcessed("completed", { reason: "plugin-bound-declined" });
+          commitInboundDedupeIfClaimed();
           return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
         }
         case "error": {
@@ -661,6 +676,7 @@ export async function dispatchReplyFromConfig(
           );
           markIdle("plugin_binding_error");
           recordProcessed("completed", { reason: "plugin-bound-error" });
+          commitInboundDedupeIfClaimed();
           return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
         }
       }
@@ -721,6 +737,7 @@ export async function dispatchReplyFromConfig(
             );
           }
         } else {
+          markInboundDedupeReplayUnsafe();
           queuedFinal = dispatcher.sendFinalReply(payload);
         }
       } else {
@@ -732,6 +749,7 @@ export async function dispatchReplyFromConfig(
       counts.final += routedFinalCount;
       recordProcessed("completed", { reason: "fast_abort" });
       markIdle("message_completed");
+      commitInboundDedupeIfClaimed();
       return { queuedFinal, counts };
     }
 
@@ -744,6 +762,9 @@ export async function dispatchReplyFromConfig(
     const sendFinalPayload = async (
       payload: ReplyPayload,
     ): Promise<{ queuedFinal: boolean; routedFinalCount: number }> => {
+      if (resolveSendableOutboundReplyParts(payload).hasContent) {
+        markInboundDedupeReplayUnsafe();
+      }
       const ttsPayload = await maybeApplyTtsToReplyPayload({
         payload,
         cfg,
@@ -767,6 +788,7 @@ export async function dispatchReplyFromConfig(
           routedFinalCount: result.ok ? 1 : 0,
         };
       }
+      markInboundDedupeReplayUnsafe();
       return {
         queuedFinal: dispatcher.sendFinalReply(normalizedPayload),
         routedFinalCount: 0,
@@ -806,6 +828,7 @@ export async function dispatchReplyFromConfig(
         counts.final += routedFinalCount;
         recordProcessed("completed", { reason: "before_dispatch_handled" });
         markIdle("message_completed");
+        commitInboundDedupeIfClaimed();
         return { queuedFinal, counts };
       }
     }
@@ -837,6 +860,7 @@ export async function dispatchReplyFromConfig(
         },
       );
       if (replyDispatchResult?.handled) {
+        commitInboundDedupeIfClaimed();
         return {
           queuedFinal: replyDispatchResult.queuedFinal,
           counts: replyDispatchResult.counts,
@@ -898,6 +922,7 @@ export async function dispatchReplyFromConfig(
         await sendPayloadAsync(payload, undefined, false);
         return;
       }
+      markInboundDedupeReplayUnsafe();
       dispatcher.sendToolResult(payload);
     };
     const sendPlanUpdate = async (payload: {
@@ -914,6 +939,7 @@ export async function dispatchReplyFromConfig(
         await sendPayloadAsync(replyPayload, undefined, false);
         return;
       }
+      markInboundDedupeReplayUnsafe();
       dispatcher.sendToolResult(replyPayload);
     };
     const summarizeApprovalLabel = (payload: {
@@ -1011,6 +1037,9 @@ export async function dispatchReplyFromConfig(
 
     const replyResolver =
       params.replyResolver ?? (await loadGetReplyFromConfigRuntime()).getReplyFromConfig;
+    const replyConfig = withFullRuntimeReplyConfig(
+      params.configOverride ? (applyMergePatch(cfg, params.configOverride) as OpenClawConfig) : cfg,
+    );
     const replyResult = await replyResolver(
       ctx,
       {
@@ -1019,6 +1048,7 @@ export async function dispatchReplyFromConfig(
         suppressTyping: typing.suppressTyping,
         onToolResult: (payload: ReplyPayload) => {
           const run = async () => {
+            markInboundDedupeReplayUnsafe();
             await onToolResultFromReplyOptions?.(payload);
             if (suppressDelivery) {
               return;
@@ -1055,12 +1085,14 @@ export async function dispatchReplyFromConfig(
             if (shouldRouteToOriginating) {
               await sendPayloadAsync(deliveryPayload, undefined, false);
             } else {
+              markInboundDedupeReplayUnsafe();
               dispatcher.sendToolResult(deliveryPayload);
             }
           };
           return run();
         },
         onPlanUpdate: async (payload) => {
+          markInboundDedupeReplayUnsafe();
           await onPlanUpdateFromReplyOptions?.(payload);
           if (payload.phase !== "update" || suppressDefaultToolProgressMessages) {
             return;
@@ -1068,6 +1100,7 @@ export async function dispatchReplyFromConfig(
           await sendPlanUpdate({ explanation: payload.explanation, steps: payload.steps });
         },
         onApprovalEvent: async (payload) => {
+          markInboundDedupeReplayUnsafe();
           await onApprovalEventFromReplyOptions?.(payload);
           if (payload.phase !== "requested" || suppressDefaultToolProgressMessages) {
             return;
@@ -1083,6 +1116,7 @@ export async function dispatchReplyFromConfig(
           await maybeSendWorkingStatus(label);
         },
         onPatchSummary: async (payload) => {
+          markInboundDedupeReplayUnsafe();
           await onPatchSummaryFromReplyOptions?.(payload);
           if (payload.phase !== "end" || suppressDefaultToolProgressMessages) {
             return;
@@ -1095,6 +1129,12 @@ export async function dispatchReplyFromConfig(
         },
         onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => {
           const run = async () => {
+            if (
+              payload.isReasoning !== true &&
+              resolveSendableOutboundReplyParts(payload).hasContent
+            ) {
+              markInboundDedupeReplayUnsafe();
+            }
             if (suppressDelivery) {
               return;
             }
@@ -1156,13 +1196,14 @@ export async function dispatchReplyFromConfig(
             if (shouldRouteToOriginating) {
               await sendPayloadAsync(normalizedPayload, context?.abortSignal, false);
             } else {
+              markInboundDedupeReplayUnsafe();
               dispatcher.sendBlockReply(normalizedPayload);
             }
           };
           return run();
         },
       },
-      params.configOverride,
+      replyConfig,
     );
 
     if (ctx.AcpDispatchTailAfterReset === true) {
@@ -1268,6 +1309,7 @@ export async function dispatchReplyFromConfig(
                 );
               }
             } else {
+              markInboundDedupeReplayUnsafe();
               const didQueue = dispatcher.sendFinalReply(normalizedTtsOnlyPayload);
               queuedFinal = didQueue || queuedFinal;
             }
@@ -1282,9 +1324,7 @@ export async function dispatchReplyFromConfig(
 
     const counts = dispatcher.getQueuedCounts();
     counts.final += routedFinalCount;
-    if (inboundDedupeClaim.status === "claimed") {
-      commitInboundDedupe(inboundDedupeClaim.key);
-    }
+    commitInboundDedupeIfClaimed();
     recordProcessed(
       "completed",
       pluginFallbackReason ? { reason: pluginFallbackReason } : undefined,
@@ -1293,7 +1333,11 @@ export async function dispatchReplyFromConfig(
     return { queuedFinal, counts };
   } catch (err) {
     if (inboundDedupeClaim.status === "claimed") {
-      releaseInboundDedupe(inboundDedupeClaim.key);
+      if (inboundDedupeReplayUnsafe) {
+        commitInboundDedupe(inboundDedupeClaim.key);
+      } else {
+        releaseInboundDedupe(inboundDedupeClaim.key);
+      }
     }
     recordProcessed("error", { error: String(err) });
     markIdle("message_error");

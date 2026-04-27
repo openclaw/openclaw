@@ -1,4 +1,6 @@
-import { afterAll, describe, expect, it } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyPluginAutoEnable,
   detectPluginAutoEnableCandidates,
@@ -16,6 +18,10 @@ const env = makeIsolatedEnv();
 
 afterAll(() => {
   resetPluginAutoEnableTestState();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe("applyPluginAutoEnable core", () => {
@@ -155,6 +161,78 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.config.plugins?.allow).toEqual(["telegram"]);
     expect(result.config.plugins?.entries?.browser).toBeUndefined();
     expect(result.changes).toEqual([]);
+  });
+
+  it("does not load plugin manifests for disabled plugin entries under a restrictive allowlist", () => {
+    const readFileSync = vi.spyOn(fs, "readFileSync");
+
+    const result = applyPluginAutoEnable({
+      config: {
+        browser: { enabled: false },
+        plugins: {
+          allow: ["telegram"],
+          entries: {
+            browser: { enabled: false },
+          },
+        },
+      },
+      env,
+    });
+
+    expect(result.config.plugins?.allow).toEqual(["telegram"]);
+    expect(result.config.plugins?.entries?.browser?.enabled).toBe(false);
+    expect(result.changes).toEqual([]);
+    expect(
+      readFileSync.mock.calls.some(
+        ([filePath]) => typeof filePath === "string" && filePath.endsWith("openclaw.plugin.json"),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not load disabled setup plugin manifests when another setup signal exists", () => {
+    const readFileSync = vi.spyOn(fs, "readFileSync");
+
+    const result = applyPluginAutoEnable({
+      config: {
+        plugins: {
+          allow: ["telegram"],
+          entries: {
+            browser: { enabled: false },
+          },
+        },
+        tools: {
+          allow: ["browser"],
+        },
+      },
+      env,
+    });
+
+    expect(result.config.plugins?.allow).toEqual(["telegram"]);
+    expect(result.config.plugins?.entries?.browser?.enabled).toBe(false);
+    expect(result.changes).toEqual([]);
+    expect(
+      readFileSync.mock.calls.some(
+        ([filePath]) => typeof filePath === "string" && filePath.endsWith("openclaw.plugin.json"),
+      ),
+    ).toBe(false);
+  });
+
+  it("still treats a non-disabled browser plugin entry as setup auto-enable input", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        plugins: {
+          allow: ["telegram"],
+          entries: {
+            browser: {},
+          },
+        },
+      },
+      env,
+    });
+
+    expect(result.config.plugins?.allow).toEqual(["telegram", "browser"]);
+    expect(result.config.plugins?.entries?.browser?.enabled).toBe(true);
+    expect(result.changes).toContain("browser plugin configured, enabled automatically.");
   });
 
   it("does not auto-enable or allowlist non-bundled web fetch providers from config", () => {
@@ -477,6 +555,31 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.config.channels?.whatsapp?.enabled).toBe(true);
     expect(result.config.plugins?.allow).toEqual(["telegram", "whatsapp"]);
     expect(validateConfigObject(result.config).ok).toBe(true);
+  });
+
+  it("does not auto-enable WhatsApp from persisted auth state alone", () => {
+    const persistedEnv = makeIsolatedEnv();
+    const authDir = path.join(
+      persistedEnv.OPENCLAW_STATE_DIR ?? "",
+      "credentials",
+      "whatsapp",
+      "default",
+    );
+    fs.mkdirSync(authDir, { recursive: true });
+    fs.writeFileSync(path.join(authDir, "creds.json"), "{}", "utf-8");
+
+    const candidates = detectPluginAutoEnableCandidates({
+      config: {},
+      env: persistedEnv,
+    });
+    const result = applyPluginAutoEnable({
+      config: {},
+      env: persistedEnv,
+    });
+
+    expect(candidates).toEqual([]);
+    expect(result.config).toEqual({});
+    expect(result.changes).toEqual([]);
   });
 
   it("preserves configured plugin entries in restrictive plugins.allow", () => {

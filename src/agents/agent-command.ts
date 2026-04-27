@@ -471,11 +471,17 @@ async function agentCommandInternal(
       const visibleTextAccumulator = attemptExecutionRuntime.createAcpVisibleTextAccumulator();
       let stopReason: string | undefined;
       try {
-        const { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } =
-          await loadAcpPolicyRuntime();
-        const dispatchPolicyError = resolveAcpDispatchPolicyError(cfg);
-        if (dispatchPolicyError) {
-          throw dispatchPolicyError;
+        const {
+          resolveAcpAgentPolicyError,
+          resolveAcpDispatchPolicyError,
+          resolveAcpExplicitTurnPolicyError,
+        } = await loadAcpPolicyRuntime();
+        const turnPolicyError =
+          opts.acpTurnSource === "manual_spawn"
+            ? resolveAcpExplicitTurnPolicyError(cfg)
+            : resolveAcpDispatchPolicyError(cfg);
+        if (turnPolicyError) {
+          throw turnPolicyError;
         }
         const acpAgent = normalizeAgentId(
           acpResolution.meta.agent || resolveAgentIdFromSessionKey(sessionKey),
@@ -813,17 +819,27 @@ async function agentCommandInternal(
         catalog: catalogForThinking.length > 0 ? catalogForThinking : undefined,
       });
     }
-    if (!isThinkingLevelSupported({ provider, model, level: resolvedThinkLevel })) {
+    const catalogForThinking = modelCatalog ?? allowedModelCatalog;
+    const thinkingCatalog = catalogForThinking.length > 0 ? catalogForThinking : undefined;
+    if (
+      !isThinkingLevelSupported({
+        provider,
+        model,
+        level: resolvedThinkLevel,
+        catalog: thinkingCatalog,
+      })
+    ) {
       const explicitThink = Boolean(thinkOnce || thinkOverride);
       if (explicitThink) {
         throw new Error(
-          `Thinking level "${resolvedThinkLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model)}.`,
+          `Thinking level "${resolvedThinkLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model, ", ", thinkingCatalog)}.`,
         );
       }
       const fallbackThinkLevel = resolveSupportedThinkingLevel({
         provider,
         model,
         level: resolvedThinkLevel,
+        catalog: thinkingCatalog,
       });
       if (fallbackThinkLevel !== resolvedThinkLevel) {
         const previousThinkLevel = resolvedThinkLevel;

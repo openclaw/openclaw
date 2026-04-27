@@ -10,8 +10,8 @@ import {
   isMissingOperatorReadScopeError,
 } from "./scope-errors.ts";
 
-const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
+const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
   "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
@@ -264,7 +264,7 @@ function messageDisplaySignature(message: unknown): string | null {
   }
 }
 
-function preserveOptimisticTailMessages(
+export function preserveOptimisticTailMessages(
   historyMessages: unknown[],
   previousMessages: unknown[],
 ): unknown[] {
@@ -279,20 +279,28 @@ function preserveOptimisticTailMessages(
       ? previousMessages
       : historyMessages;
   }
-  const historySignatures = new Set(
-    historyMessages
-      .map((message) => messageDisplaySignature(message))
-      .filter((signature): signature is string => Boolean(signature)),
-  );
+  const historySignatureIndexes = new Map<string, number>();
+  historyMessages.forEach((message, index) => {
+    const signature = messageDisplaySignature(message);
+    if (signature) {
+      historySignatureIndexes.set(signature, index);
+    }
+  });
   let sharedPreviousIndex = -1;
+  let sharedHistoryIndex = -1;
   for (let index = previousMessages.length - 1; index >= 0; index--) {
     const signature = messageDisplaySignature(previousMessages[index]);
-    if (signature && historySignatures.has(signature)) {
+    const historyIndex = signature ? historySignatureIndexes.get(signature) : undefined;
+    if (typeof historyIndex === "number") {
       sharedPreviousIndex = index;
+      sharedHistoryIndex = historyIndex;
       break;
     }
   }
   if (sharedPreviousIndex < 0) {
+    return historyMessages;
+  }
+  if (sharedHistoryIndex < historyMessages.length - 1) {
     return historyMessages;
   }
   const optimisticTail: unknown[] = [];
@@ -301,7 +309,7 @@ function preserveOptimisticTailMessages(
       return historyMessages;
     }
     const signature = messageDisplaySignature(message);
-    if (!signature || historySignatures.has(signature)) {
+    if (!signature || historySignatureIndexes.has(signature)) {
       return historyMessages;
     }
     optimisticTail.push(message);
@@ -348,6 +356,7 @@ export type ChatState = {
   chatStream: string | null;
   chatStreamStartedAt: number | null;
   lastError: string | null;
+  resetChatInputHistoryNavigation?: () => void;
 };
 
 export type ChatEventPayload = {
@@ -378,6 +387,8 @@ export async function loadChatHistory(state: ChatState) {
   const requestVersion = beginChatHistoryRequest(state);
   const startedAt = Date.now();
   const previousMessages = state.chatMessages;
+  // Any pending input-history snapshot becomes invalid once we start reloading transcript state.
+  state.resetChatInputHistoryNavigation?.();
   state.chatLoading = true;
   state.lastError = null;
   try {
@@ -456,8 +467,9 @@ function buildApiAttachments(attachments?: ChatAttachment[]) {
             return null;
           }
           return {
-            type: "image",
+            type: parsed.mimeType.startsWith("image/") ? "image" : "file",
             mimeType: parsed.mimeType,
+            fileName: att.fileName,
             content: parsed.content,
           };
         })
@@ -540,20 +552,45 @@ export async function sendChatMessage(
   if (!msg && !hasAttachments) {
     return null;
   }
+  if (state.chatSending) {
+    return state.chatRunId;
+  }
 
   const now = Date.now();
 
   // Build user message content blocks
-  const contentBlocks: Array<{ type: string; text?: string; source?: unknown }> = [];
+  const contentBlocks: Array<{
+    type: string;
+    text?: string;
+    source?: unknown;
+    attachment?: {
+      url: string;
+      kind: "audio" | "document";
+      label: string;
+      mimeType?: string;
+    };
+  }> = [];
   if (msg) {
     contentBlocks.push({ type: "text", text: msg });
   }
   // Add image previews to the message for display
   if (hasAttachments) {
     for (const att of attachments) {
+      if (att.mimeType.startsWith("image/")) {
+        contentBlocks.push({
+          type: "image",
+          source: { type: "base64", media_type: att.mimeType, data: att.dataUrl },
+        });
+        continue;
+      }
       contentBlocks.push({
-        type: "image",
-        source: { type: "base64", media_type: att.mimeType, data: att.dataUrl },
+        type: "attachment",
+        attachment: {
+          url: att.dataUrl,
+          kind: att.mimeType.startsWith("audio/") ? "audio" : "document",
+          label: att.fileName?.trim() || "Attached file",
+          mimeType: att.mimeType,
+        },
       });
     }
   }

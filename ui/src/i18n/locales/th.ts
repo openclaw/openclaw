@@ -108,6 +108,13 @@ export const th: TranslationMap = {
       lightningHelp: "ที่อยู่ Lightning สำหรับทิป (LUD-16)",
     },
   },
+  lazyView: {
+    loadingTitle: "กำลังโหลดแผง",
+    errorTitle: "โหลดแผงไม่สำเร็จ",
+    errorSubtitle: "โหลดหน้าใหม่เพื่อโหลดบันเดิล Control UI ล่าสุด หรือลองอีกครั้งหากคำขอเครือข่ายล้มเหลว",
+    retry: "ลองอีกครั้ง",
+    unknownError: "ข้อผิดพลาดในการโหลดโมดูลที่ไม่ทราบสาเหตุ",
+  },
   nodes: {
     binding: {
       loadConfigHint: "โหลด config เพื่อแก้ไขการผูก",
@@ -268,6 +275,8 @@ export const th: TranslationMap = {
       tailscaleDocsLink: "เอกสาร: Tailscale Serve",
       insecureHttpDocsTitle: "เอกสาร HTTP ที่ไม่ปลอดภัย (เปิดในแท็บใหม่)",
       insecureHttpDocsLink: "เอกสาร: HTTP ที่ไม่ปลอดภัย",
+      copyCommand: "คัดลอกคำสั่ง",
+      copyCommandAria: "คัดลอกคำสั่ง: {command}",
     },
     cards: {
       cost: "ค่าใช้จ่าย",
@@ -303,6 +312,30 @@ export const th: TranslationMap = {
     palette: {
       placeholder: "พิมพ์คำสั่ง…",
       noResults: "ไม่พบผลลัพธ์",
+      categories: {
+        search: "ค้นหา",
+        navigation: "การนำทาง",
+        skills: "ทักษะ",
+      },
+      items: {
+        overview: "ภาพรวม",
+        sessions: "เซสชัน",
+        scheduled: "กำหนดเวลาแล้ว",
+        skills: "ทักษะ",
+        settings: "การตั้งค่า",
+        agents: "เอเจนต์",
+        shellCommand: "คำสั่งเชลล์",
+        debugMode: "โหมดดีบัก",
+      },
+      descriptions: {
+        shellCommand: "เรียกใช้เชลล์",
+        debugMode: "สลับดีบัก",
+      },
+      footer: {
+        navigate: "นำทาง",
+        select: "เลือก",
+        close: "ปิด",
+      },
     },
   },
   dreaming: {
@@ -316,6 +349,15 @@ export const th: TranslationMap = {
       refreshing: "กำลังรีเฟรช…",
       on: "เปิดการฝัน",
       off: "ปิดการฝัน",
+    },
+    restartConfirmation: {
+      title: "รีสตาร์ท Gateway เพื่อใช้การเปลี่ยนแปลง",
+      subtitle: "การเปลี่ยนโหมด Dreaming จะรีสตาร์ท Gateway",
+      warning:
+        "การดำเนินการนี้จะรีสตาร์ท Gateway และอาจทำให้แชต ระบบอัตโนมัติ และช่องทางที่เชื่อมต่อหยุดชะงักชั่วคราว",
+      confirm: "ยืนยันการรีสตาร์ท",
+      restarting: "กำลังรีสตาร์ท…",
+      failed: "ไม่สามารถใช้การเปลี่ยนแปลงได้ ตรวจสอบการเชื่อมต่อของคุณแล้วลองอีกครั้ง",
     },
     status: {
       active: "การฝันกำลังทำงาน",
@@ -554,7 +596,7 @@ export const th: TranslationMap = {
       total: "ทั้งหมด {count}",
       avg: "เฉลี่ย",
       all: "ทั้งหมด",
-      recent: "ดูล่าสุด",
+      recent: "ดูล่า��ุด",
       recentShort: "ล่าสุด",
       sort: "เรียงลำดับ",
       ascending: "น้อยไปมาก",

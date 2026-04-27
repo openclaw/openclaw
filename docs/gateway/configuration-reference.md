@@ -88,6 +88,9 @@ target server during config edits.
 
 - `mcp.servers`: named stdio or remote MCP server definitions for runtimes that
   expose configured MCP tools.
+  Remote entries use `transport: "streamable-http"` or `transport: "sse"`;
+  `type: "http"` is a CLI-native alias that `openclaw mcp set` and
+  `openclaw doctor --fix` normalize into the canonical `transport` field.
 - `mcp.sessionIdleTtlMs`: idle TTL for session-scoped bundled MCP runtimes.
   One-shot embedded runs request run-end cleanup; this TTL is the backstop for
   long-lived sessions and future callers.
@@ -182,6 +185,7 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 - `plugins.entries.memory-core.config.dreaming`: memory dreaming settings. See [Dreaming](/concepts/dreaming) for phases and thresholds.
   - `enabled`: master dreaming switch (default `false`).
   - `frequency`: cron cadence for each full dreaming sweep (`"0 3 * * *"` by default).
+  - `model`: optional Dream Diary subagent model override. Requires `plugins.entries.memory-core.subagent.allowModelOverride: true`; pair with `allowedModels` to restrict targets.
   - phase policy and thresholds are implementation details (not user-facing config keys).
 - Full memory config lives in [Memory configuration reference](/reference/memory-config):
   - `agents.defaults.memorySearch.*`
@@ -648,7 +652,7 @@ Validation and safety notes:
 
 - `minimal` (default): omit `cliPath` + `sshPort` from TXT records.
 - `full`: include `cliPath` + `sshPort`.
-- Hostname defaults to `openclaw`. Override with `OPENCLAW_MDNS_HOSTNAME`.
+- Hostname defaults to the system hostname when it is a valid DNS label, falling back to `openclaw`. Override with `OPENCLAW_MDNS_HOSTNAME`.
 
 ### Wide-area (DNS-SD)
 
@@ -859,6 +863,7 @@ Notes:
 - Set `logging.file` for a stable path.
 - `consoleLevel` bumps to `debug` when `--verbose`.
 - `maxFileBytes`: maximum active log file size in bytes before rotation (positive integer; default: `104857600` = 100 MB). OpenClaw keeps up to five numbered archives beside the active file.
+- `redactSensitive` / `redactPatterns`: best-effort masking for console output, file logs, OTLP log records, and persisted session transcript text.
 
 ---
 
@@ -1078,7 +1083,7 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
 {
   cron: {
     enabled: true,
-    maxConcurrentRuns: 2,
+    maxConcurrentRuns: 2, // cron dispatch + isolated cron agent-turn execution
     webhook: "https://example.invalid/legacy", // deprecated fallback for stored notify:true jobs
     webhookToken: "replace-with-dedicated-token", // optional bearer token for outbound webhook auth
     sessionRetention: "24h", // duration string or false
@@ -1125,6 +1130,7 @@ Applies only to one-shot cron jobs. Recurring jobs use separate failure handling
       enabled: false,
       after: 3,
       cooldownMs: 3600000,
+      includeSkipped: false,
       mode: "announce",
       accountId: "main",
     },
@@ -1135,6 +1141,7 @@ Applies only to one-shot cron jobs. Recurring jobs use separate failure handling
 - `enabled`: enable failure alerts for cron jobs (default: `false`).
 - `after`: consecutive failures before an alert fires (positive integer, min: `1`).
 - `cooldownMs`: minimum milliseconds between repeated alerts for the same job (non-negative integer).
+- `includeSkipped`: count consecutive skipped runs toward the alert threshold (default: `false`). Skipped runs are tracked separately and do not affect execution-error backoff.
 - `mode`: delivery mode — `"announce"` sends via a channel message; `"webhook"` posts to the configured webhook.
 - `accountId`: optional account or channel id to scope alert delivery.
 

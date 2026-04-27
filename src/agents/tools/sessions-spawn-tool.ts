@@ -1,6 +1,6 @@
 import { Type } from "typebox";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
-import { loadConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
@@ -154,10 +154,13 @@ function createSessionsSpawnToolSchema(params: { acpAvailable: boolean }) {
           resumeSessionId: Type.Optional(
             Type.String({
               description:
-                'Resume an existing agent session by its ID (e.g. a Codex session UUID from ~/.codex/sessions/). Requires runtime="acp". The agent replays conversation history via session/load instead of starting fresh.',
+                'ACP-only resume target. Only meaningful with runtime="acp"; ignored for runtime="subagent". Use only an ACP/harness session ID already recorded for this requester so the ACP backend replays conversation history instead of starting fresh.',
             }),
           ),
-          streamTo: optionalStringEnum(SESSIONS_SPAWN_ACP_STREAM_TARGETS),
+          streamTo: optionalStringEnum(SESSIONS_SPAWN_ACP_STREAM_TARGETS, {
+            description:
+              'ACP-only stream target. Only meaningful with runtime="acp"; ignored for runtime="subagent". Use "parent" to stream the ACP turn back to the requester instead of tracking it as a background sessions_spawn run.',
+          }),
         }
       : {}),
   };
@@ -261,22 +264,6 @@ export function createSessionsSpawnTool(
           }>)
         : undefined;
 
-      if (streamTo && runtime !== "acp") {
-        return jsonResult({
-          status: "error",
-          error: `streamTo is only supported for runtime=acp; got runtime=${runtime}`,
-          ...roleContext,
-        });
-      }
-
-      if (resumeSessionId && runtime !== "acp") {
-        return jsonResult({
-          status: "error",
-          error: `resumeSessionId is only supported for runtime=acp; got runtime=${runtime}`,
-          ...roleContext,
-        });
-      }
-
       if (runtime === "acp") {
         const { isSpawnAcpAcceptedResult, spawnAcpDirect } = await loadAcpSpawnModule();
         if (Array.isArray(attachments) && attachments.length > 0) {
@@ -322,7 +309,7 @@ export function createSessionsSpawnTool(
           Boolean(childRunId) &&
           streamTo !== "parent";
         if (shouldTrackViaRegistry && childSessionKey && childRunId) {
-          const cfg = loadConfig();
+          const cfg = getRuntimeConfig();
           const trackedSpawnMode = resolveTrackedSpawnMode({
             requestedMode: result.mode,
             threadRequested: thread,

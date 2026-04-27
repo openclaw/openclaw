@@ -108,6 +108,13 @@ export const zh_TW: TranslationMap = {
       lightningHelp: "用於接收小費的 Lightning 地址（LUD-16）",
     },
   },
+  lazyView: {
+    loadingTitle: "正在載入面板",
+    errorTitle: "面板載入失敗",
+    errorSubtitle: "重新載入頁面以載入最新的 Control UI bundle，或在網路請求失敗時重試。",
+    retry: "重試",
+    unknownError: "未知的模組載入錯誤。",
+  },
   nodes: {
     binding: {
       loadConfigHint: "載入設定以編輯綁定。",
@@ -268,6 +275,8 @@ export const zh_TW: TranslationMap = {
       tailscaleDocsLink: "文件：Tailscale Serve",
       insecureHttpDocsTitle: "不安全 HTTP 文件（在新分頁中開啟）",
       insecureHttpDocsLink: "文件：不安全 HTTP",
+      copyCommand: "複製指令",
+      copyCommandAria: "複製指令：{command}",
     },
     cards: {
       cost: "費用",
@@ -303,6 +312,30 @@ export const zh_TW: TranslationMap = {
     palette: {
       placeholder: "輸入指令…",
       noResults: "無結果",
+      categories: {
+        search: "搜尋",
+        navigation: "導覽",
+        skills: "技能",
+      },
+      items: {
+        overview: "概覽",
+        sessions: "工作階段",
+        scheduled: "已排程",
+        skills: "技能",
+        settings: "設定",
+        agents: "代理",
+        shellCommand: "Shell 指令",
+        debugMode: "偵錯模式",
+      },
+      descriptions: {
+        shellCommand: "執行 shell",
+        debugMode: "切換偵錯",
+      },
+      footer: {
+        navigate: "導覽",
+        select: "選取",
+        close: "關閉",
+      },
     },
   },
   dreaming: {
@@ -316,6 +349,15 @@ export const zh_TW: TranslationMap = {
       refreshing: "重新整理中…",
       on: "Dreaming 已開啟",
       off: "Dreaming 已關閉",
+    },
+    restartConfirmation: {
+      title: "Restart Gateway to Apply Change",
+      subtitle: "Changing Dreaming mode restarts the gateway.",
+      warning:
+        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      confirm: "Confirm Restart",
+      restarting: "Restarting…",
+      failed: "Could not apply change. Check your connection and try again.",
     },
     status: {
       active: "Dreaming 進行中",

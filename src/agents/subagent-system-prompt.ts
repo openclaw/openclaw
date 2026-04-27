@@ -11,37 +11,54 @@ export function buildSubagentSystemPrompt(params: {
   acpEnabled?: boolean;
   /** Registered runtime slash/native command names such as `codex`. */
   nativeCommandNames?: string[];
+  /** Plugin-owned prompt guidance for registered native slash commands. */
+  nativeCommandGuidanceLines?: string[];
   /** Depth of the child being spawned (1 = sub-agent, 2 = sub-sub-agent). */
   childDepth?: number;
   /** Config value: max allowed spawn depth. */
   maxSpawnDepth?: number;
 }) {
-  const taskText =
-    typeof params.task === "string" && params.task.trim()
-      ? params.task.replace(/\s+/g, " ").trim()
-      : "{{TASK_DESCRIPTION}}";
+  const taskRaw = typeof params.task === "string" ? params.task : "";
+  const taskBody = taskRaw.trim();
+  const hasTask = taskBody !== "";
   const childDepth = typeof params.childDepth === "number" ? params.childDepth : 1;
   const maxSpawnDepth =
     typeof params.maxSpawnDepth === "number"
       ? params.maxSpawnDepth
       : DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
   const acpEnabled = params.acpEnabled === true;
-  const nativeCodexCommandAvailable = (params.nativeCommandNames ?? []).some(
-    (name) => name.trim().replace(/^\/+/, "").toLowerCase() === "codex",
+  const nativeCommandGuidanceLines = Array.from(
+    new Set((params.nativeCommandGuidanceLines ?? []).map((line) => line.trim()).filter(Boolean)),
   );
   const canSpawn = childDepth < maxSpawnDepth;
   const parentLabel = childDepth >= 2 ? "parent orchestrator" : "main agent";
+  const roleLines =
+    hasTask && taskBody.includes("\n")
+      ? [
+          "## Your Role",
+          "- You were created to handle the following task (verbatim; line breaks preserved):",
+          "",
+          "```",
+          taskBody,
+          "```",
+          "- Complete this task. That's your entire purpose.",
+          `- You are NOT the ${parentLabel}. Don't try to be.`,
+          "",
+        ]
+      : [
+          "## Your Role",
+          `- You were created to handle: ${hasTask ? taskBody : "{{TASK_DESCRIPTION}}"}`,
+          "- Complete this task. That's your entire purpose.",
+          `- You are NOT the ${parentLabel}. Don't try to be.`,
+          "",
+        ];
 
   const lines = [
     "# Subagent Context",
     "",
     `You are a **subagent** spawned by the ${parentLabel} for a specific task.`,
     "",
-    "## Your Role",
-    `- You were created to handle: ${taskText}`,
-    "- Complete this task. That's your entire purpose.",
-    `- You are NOT the ${parentLabel}. Don't try to be.`,
-    "",
+    ...roleLines,
     "## Rules",
     "1. **Stay focused** - Do your assigned task, nothing else",
     `2. **Complete the task** - Your final message will be automatically reported to the ${parentLabel}`,
@@ -80,11 +97,7 @@ export function buildSubagentSystemPrompt(params: {
       "Coordinate their work and synthesize results before reporting back.",
       ...(acpEnabled
         ? [
-            ...(nativeCodexCommandAvailable
-              ? [
-                  "Native Codex app-server plugin is available (`/codex ...`). Prefer that path for Codex bind/control/thread/resume/steer/stop requests; use Codex ACP only when explicitly requested.",
-                ]
-              : []),
+            ...nativeCommandGuidanceLines,
             'For ACP harness sessions (claudecode/gemini/opencode, or Codex only when explicit ACP/acpx), use `sessions_spawn` with `runtime: "acp"` (set `agentId` unless `acp.defaultAgent` is configured).',
             '`agents_list` and `subagents` apply to OpenClaw sub-agents (`runtime: "subagent"`); ACP harness ids are controlled by `acp.allowedAgents`.',
             "Do not ask users to run slash commands or CLI when `sessions_spawn` can do it directly.",

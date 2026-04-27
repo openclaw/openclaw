@@ -164,10 +164,15 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
           role: "custom",
           customType: "openclaw.runtime-context",
           display: false,
-          content: expect.stringContaining("secret runtime context"),
+          content:
+            "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nsecret runtime context\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
         }),
       ]),
     );
+    expect(JSON.stringify(seen.messages)).not.toContain(
+      "OpenClaw runtime context for the immediately preceding user message.",
+    );
+    expect(JSON.stringify(seen.messages)).not.toContain("not user-authored");
     const trajectoryEvents = (
       await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
     )
@@ -251,6 +256,27 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expectCalledWithSessionKey(bootstrap, sessionKey);
     expectCalledWithSessionKey(assemble, sessionKey);
     expectCalledWithSessionKey(afterTurn, sessionKey);
+  });
+
+  it("resolves bootstrap context before acquiring the session write lock", async () => {
+    const events: string[] = [];
+    hoisted.resolveBootstrapContextForRunMock.mockImplementation(async () => {
+      events.push("bootstrap");
+      return { bootstrapFiles: [], contextFiles: [] };
+    });
+    hoisted.acquireSessionWriteLockMock.mockImplementation(async () => {
+      events.push("lock");
+      return { release: async () => {} };
+    });
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+    });
+
+    expect(events).toEqual(expect.arrayContaining(["bootstrap", "lock"]));
+    expect(events.indexOf("bootstrap")).toBeLessThan(events.indexOf("lock"));
   });
 
   it("forwards modelId to assemble", async () => {

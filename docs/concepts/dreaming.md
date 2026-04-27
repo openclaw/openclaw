@@ -72,7 +72,7 @@ Dreaming can ingest redacted session transcripts into the dreaming corpus. When 
 
 ## Dream Diary
 
-Dreaming also keeps a narrative **Dream Diary** in `DREAMS.md`. After each phase has enough material, `memory-core` runs a best-effort background subagent turn (using the default runtime model) and appends a short diary entry.
+Dreaming also keeps a narrative **Dream Diary** in `DREAMS.md`. After each phase has enough material, `memory-core` runs a best-effort background subagent turn and appends a short diary entry. It uses the default runtime model unless `dreaming.model` is configured.
 
 <Note>
 This diary is for human reading in the Dreams UI, not a promotion source. Dreaming-generated diary/report artifacts are excluded from short-term promotion. Only grounded memory snippets are eligible to promote into `MEMORY.md`.
@@ -112,9 +112,10 @@ When enabled, `memory-core` auto-manages one cron job for a full dreaming sweep.
 
 Default cadence behavior:
 
-| Setting              | Default     |
-| -------------------- | ----------- |
-| `dreaming.frequency` | `0 3 * * *` |
+| Setting              | Default       |
+| -------------------- | ------------- |
+| `dreaming.frequency` | `0 3 * * *`   |
+| `dreaming.model`     | default model |
 
 ## Quick start
 
@@ -210,6 +211,13 @@ All settings live under `plugins.entries.memory-core.config.dreaming`.
 <ParamField path="frequency" type="string" default="0 3 * * *">
   Cron cadence for the full dreaming sweep.
 </ParamField>
+<ParamField path="model" type="string">
+  Optional Dream Diary subagent model override. Use a canonical `provider/model` value when also setting a subagent `allowedModels` allowlist.
+</ParamField>
+
+<Warning>
+`dreaming.model` requires `plugins.entries.memory-core.subagent.allowModelOverride: true`. To restrict it, also set `plugins.entries.memory-core.subagent.allowedModels`.
+</Warning>
 
 <Note>
 Phase policy, thresholds, and storage behavior are internal implementation details (not user-facing config). See [Memory configuration reference](/reference/memory-config#dreaming) for the full key list.

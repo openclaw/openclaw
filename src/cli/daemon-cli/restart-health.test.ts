@@ -241,14 +241,60 @@ describe("inspectGatewayRestart", () => {
     expect(snapshot.staleGatewayPids).toEqual([]);
   });
 
-  it("treats auth-closed probe as healthy gateway reachability", async () => {
-    const snapshot = await inspectAmbiguousOwnershipWithProbe({
-      ok: false,
-      close: { code: 1008, reason: "auth required" },
-    });
+  it.each([
+    "auth required",
+    "owner auth required",
+    "connect failed",
+    "device required",
+    "pairing required",
+    "pairing required: device is asking for more scopes than currently approved",
+    "unauthorized: gateway token missing (set gateway.remote.token to match gateway.auth.token)",
+    "unauthorized: gateway password mismatch (set gateway.remote.password to match gateway.auth.password)",
+    "unauthorized: device token rejected (pair/repair this device, or provide gateway token)",
+  ])(
+    "treats local policy-close probe reason %s as healthy gateway reachability",
+    async (reason) => {
+      const snapshot = await inspectAmbiguousOwnershipWithProbe({
+        ok: false,
+        close: { code: 1008, reason },
+      });
 
-    expect(snapshot.healthy).toBe(true);
-  });
+      expect(snapshot.healthy).toBe(true);
+    },
+  );
+
+  it.each([
+    "",
+    " ",
+    "repair required",
+    "repairing required",
+    "unpairing required",
+    "device",
+    "device required by local spoof",
+    "device required: identity missing",
+    "device identity required",
+    "connect challenge missing nonce",
+    "connect challenge timeout",
+    "authoritative policy close",
+    "device identity mismatch",
+    "device signature invalid",
+    "device nonce required",
+    "token expired",
+    "password required",
+    "missing scope: operator.admin",
+    "role denied",
+    "unauthorized: session revoked",
+  ])(
+    "does not treat ambiguous 1008 close reason %s as healthy gateway reachability",
+    async (reason) => {
+      const snapshot = await inspectAmbiguousOwnershipWithProbe({
+        ok: false,
+        close: { code: 1008, reason },
+      });
+
+      expect(snapshot.healthy).toBe(false);
+    },
+  );
 
   it("requires the expected gateway version when provided", async () => {
     probeGateway.mockResolvedValue({
@@ -434,6 +480,44 @@ describe("inspectGatewayRestart", () => {
       waitOutcome: "plugin-errors",
       elapsedMs: 0,
       activatedPluginErrors: [expect.objectContaining({ id: "telegram" })],
+    });
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it("stops waiting once the expected-version gateway reports channel probe errors", async () => {
+    probeGateway.mockResolvedValue({
+      ok: true,
+      close: null,
+      server: { version: "2026.4.24", connId: "new" },
+      health: {
+        ok: true,
+        channels: {
+          telegram: {
+            configured: true,
+            probe: { ok: false, error: "This operation was aborted" },
+          },
+        },
+      },
+    });
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+      hints: [],
+    });
+
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyRestart({
+      service: makeGatewayService({ status: "running", pid: 8000 }),
+      port: 18789,
+      expectedVersion: "2026.4.24",
+    });
+
+    expect(snapshot).toMatchObject({
+      healthy: false,
+      waitOutcome: "channel-errors",
+      elapsedMs: 0,
+      channelProbeErrors: [{ id: "telegram", error: "This operation was aborted" }],
     });
     expect(sleep).not.toHaveBeenCalled();
   });

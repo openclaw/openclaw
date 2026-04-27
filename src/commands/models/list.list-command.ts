@@ -1,6 +1,5 @@
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 import { parseModelRef } from "../../agents/model-selection.js";
-import type { NormalizedModelCatalogRow } from "../../model-catalog/index.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { resolveConfiguredEntries } from "./list.configured.js";
@@ -14,11 +13,11 @@ const DISPLAY_MODEL_PARSE_OPTIONS = { allowPluginNormalization: false } as const
 
 type RegistryLoadModule = typeof import("./list.registry-load.js");
 type RowSourcesModule = typeof import("./list.row-sources.js");
-type ProviderCatalogModule = typeof import("./list.provider-catalog.js");
+type SourcePlanModule = typeof import("./list.source-plan.js");
 
 let registryLoadModulePromise: Promise<RegistryLoadModule> | undefined;
 let rowSourcesModulePromise: Promise<RowSourcesModule> | undefined;
-let providerCatalogModulePromise: Promise<ProviderCatalogModule> | undefined;
+let sourcePlanModulePromise: Promise<SourcePlanModule> | undefined;
 
 function loadRegistryLoadModule(): Promise<RegistryLoadModule> {
   registryLoadModulePromise ??= import("./list.registry-load.js");
@@ -30,25 +29,9 @@ function loadRowSourcesModule(): Promise<RowSourcesModule> {
   return rowSourcesModulePromise;
 }
 
-function loadProviderCatalogModule(): Promise<ProviderCatalogModule> {
-  providerCatalogModulePromise ??= import("./list.provider-catalog.js");
-  return providerCatalogModulePromise;
-}
-
-function modelRowSourcesRequireRegistry(params: {
-  all?: boolean;
-  providerFilter?: string;
-  useManifestCatalogFastPath: boolean;
-  useProviderCatalogFastPath: boolean;
-  useProviderIndexCatalogFastPath: boolean;
-}): boolean {
-  if (!params.all) {
-    return false;
-  }
-  if (params.providerFilter) {
-    return false;
-  }
-  return true;
+function loadSourcePlanModule(): Promise<SourcePlanModule> {
+  sourcePlanModulePromise ??= import("./list.source-plan.js");
+  return sourcePlanModulePromise;
 }
 
 export async function modelsListCommand(
@@ -98,38 +81,15 @@ export async function modelsListCommand(
   let availabilityErrorMessage: string | undefined;
   const { entries } = resolveConfiguredEntries(cfg);
   const configuredByKey = new Map(entries.map((entry) => [entry.key, entry]));
-  let manifestCatalogRows: readonly NormalizedModelCatalogRow[] = [];
-  let providerIndexCatalogRows: readonly NormalizedModelCatalogRow[] = [];
-  if (opts.all && providerFilter) {
-    const { loadStaticManifestCatalogRowsForList } = await import("./list.manifest-catalog.js");
-    manifestCatalogRows = loadStaticManifestCatalogRowsForList({ cfg, providerFilter });
-  }
-  const useManifestCatalogFastPath = manifestCatalogRows.length > 0;
-  if (!useManifestCatalogFastPath && opts.all && providerFilter) {
-    const { loadProviderIndexCatalogRowsForList } =
-      await import("./list.provider-index-catalog.js");
-    providerIndexCatalogRows = loadProviderIndexCatalogRowsForList({ cfg, providerFilter });
-  }
-  const useProviderIndexCatalogFastPath = providerIndexCatalogRows.length > 0;
-  const useProviderCatalogFastPath = await (async () => {
-    if (
-      useManifestCatalogFastPath ||
-      useProviderIndexCatalogFastPath ||
-      !opts.all ||
-      !providerFilter
-    ) {
-      return false;
-    }
-    const { hasProviderStaticCatalogForFilter } = await loadProviderCatalogModule();
-    return hasProviderStaticCatalogForFilter({ cfg, providerFilter });
-  })();
-  const shouldLoadRegistry = modelRowSourcesRequireRegistry({
-    all: opts.all,
-    providerFilter,
-    useManifestCatalogFastPath,
-    useProviderCatalogFastPath,
-    useProviderIndexCatalogFastPath,
-  });
+  const sourcePlanModule = opts.all ? await loadSourcePlanModule() : undefined;
+  const sourcePlan = sourcePlanModule
+    ? await sourcePlanModule.planAllModelListSources({
+        all: opts.all,
+        providerFilter,
+        cfg,
+      })
+    : undefined;
+  const shouldLoadRegistry = sourcePlan?.requiresInitialRegistry ?? false;
   const loadRegistryState = async () => {
     const { loadListModelRegistry } = await loadRegistryLoadModule();
     const loaded = await loadListModelRegistry(cfg, { providerFilter });
@@ -170,18 +130,15 @@ export async function modelsListCommand(
 
   if (opts.all) {
     const { appendAllModelRowSources } = await loadRowSourcesModule();
-    let rowContext = buildRowContext(
-      useManifestCatalogFastPath || useProviderCatalogFastPath || useProviderIndexCatalogFastPath,
-    );
+    if (!sourcePlan || !sourcePlanModule) {
+      throw new Error("models list source plan was not initialized");
+    }
+    let rowContext = buildRowContext(sourcePlan.skipRuntimeModelSuppression);
     const initialAppend = await appendAllModelRowSources({
       rows,
       context: rowContext,
       modelRegistry,
-      manifestCatalogRows,
-      providerIndexCatalogRows,
-      useManifestCatalogFastPath,
-      useProviderCatalogFastPath,
-      useProviderIndexCatalogFastPath,
+      sourcePlan,
     });
     if (initialAppend.requiresRegistryFallback) {
       try {
@@ -197,11 +154,7 @@ export async function modelsListCommand(
         rows,
         context: rowContext,
         modelRegistry,
-        manifestCatalogRows: [],
-        providerIndexCatalogRows: [],
-        useManifestCatalogFastPath: false,
-        useProviderCatalogFastPath: false,
-        useProviderIndexCatalogFastPath: false,
+        sourcePlan: sourcePlanModule.createRegistryModelListSourcePlan(),
       });
     }
   } else {

@@ -905,7 +905,7 @@ const { enqueueSystemEventSpy, resolveAgentRouteMock } = vi.hoisted(() => ({
   })),
 }));
 
-const channelRuntimeModule = await import("openclaw/plugin-sdk/infra-runtime");
+const channelRuntimeModule = await import("openclaw/plugin-sdk/system-event-runtime");
 vi.spyOn(channelRuntimeModule, "enqueueSystemEvent").mockImplementation(enqueueSystemEventSpy);
 
 const routingModule = await import("openclaw/plugin-sdk/routing");
@@ -991,7 +991,7 @@ function makeReactionListenerParams(overrides?: {
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
 }) {
   return {
-    cfg: {} as ReturnType<typeof import("openclaw/plugin-sdk/config-runtime").loadConfig>,
+    cfg: {} as import("openclaw/plugin-sdk/config-types").OpenClawConfig,
     accountId: "acc-1",
     runtime: {} as import("openclaw/plugin-sdk/runtime-env").RuntimeEnv,
     botUserId: overrides?.botUserId ?? "bot-1",

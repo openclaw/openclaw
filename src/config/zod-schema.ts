@@ -219,6 +219,7 @@ const McpServerSchema = z
     cwd: z.string().optional(),
     workingDirectory: z.string().optional(),
     url: HttpUrlSchema.optional(),
+    transport: z.union([z.literal("sse"), z.literal("streamable-http")]).optional(),
     headers: z
       .record(
         z.string(),
@@ -598,6 +599,7 @@ export const OpenClawSchema = z
             enabled: z.boolean().optional(),
             after: z.number().int().min(1).optional(),
             cooldownMs: z.number().int().min(0).optional(),
+            includeSkipped: z.boolean().optional(),
             mode: z.enum(["announce", "webhook"]).optional(),
             accountId: z.string().optional(),
           })

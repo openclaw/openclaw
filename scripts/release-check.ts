@@ -23,6 +23,7 @@ import {
   resolveBundledRuntimeDependencyInstallRoot,
   resolveBundledRuntimeDependencyPackageInstallRoot,
 } from "../src/plugins/bundled-runtime-deps.ts";
+import { checkCliBootstrapExternalImports } from "./check-cli-bootstrap-imports.mjs";
 import {
   collectBundledExtensionManifestErrors,
   type BundledExtension,
@@ -79,19 +80,27 @@ const forbiddenPrefixes = [
   "dist/OpenClaw.app/",
   "dist/extensions/qa-channel/",
   "dist/extensions/qa-lab/",
+  "dist/plugin-sdk/extensions/qa-channel/",
   "dist/plugin-sdk/extensions/qa-lab/",
+  "dist/plugin-sdk/qa-channel.",
+  "dist/plugin-sdk/qa-channel-protocol.",
   "dist/plugin-sdk/qa-lab.",
   "dist/plugin-sdk/qa-runtime.",
+  "dist/plugin-sdk/src/plugin-sdk/qa-channel.d.ts",
+  "dist/plugin-sdk/src/plugin-sdk/qa-channel-protocol.d.ts",
   "dist/plugin-sdk/src/plugin-sdk/qa-lab.d.ts",
   "dist/plugin-sdk/src/plugin-sdk/qa-runtime.d.ts",
   "dist/qa-runtime-",
   "dist/plugin-sdk/.tsbuildinfo",
   "docs/.generated/",
+  "docs/channels/qa-channel.md",
   "qa/",
 ];
 const forbiddenPrivateQaContentMarkers = [
   "//#region extensions/qa-lab/",
   "qa-channel/runtime-api.js",
+  "qa-channel.js",
+  "qa-channel-protocol.js",
   "qa-lab/cli.js",
   "qa-lab/runtime-api.js",
 ] as const;
@@ -102,6 +111,8 @@ const laneFloorAdoptionDateKey = 20260227;
 const SAFE_UNIX_SMOKE_PATH = "/usr/bin:/bin";
 export const PACKED_CLI_SMOKE_COMMANDS = [
   ["--help"],
+  ["onboard", "--help"],
+  ["doctor", "--help"],
   ["status", "--json", "--timeout", "1"],
   ["config", "schema"],
   ["models", "list", "--provider", "amazon-bedrock"],
@@ -582,6 +593,27 @@ export function collectMissingPackPaths(paths: Iterable<string>): string[] {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+export function resolveMissingPackBuildHint(missing: readonly string[]): string | null {
+  const needsControlUiBuild = missing.includes("dist/control-ui/index.html");
+  const needsRuntimeBuild = missing.some(
+    (path) =>
+      path !== "dist/control-ui/index.html" &&
+      (path === "dist/build-info.json" || path.startsWith("dist/")),
+  );
+
+  if (!needsControlUiBuild && !needsRuntimeBuild) {
+    return null;
+  }
+
+  if (needsControlUiBuild && needsRuntimeBuild) {
+    return "release-check: build and Control UI artifacts are missing. Run `pnpm build && pnpm ui:build` before `pnpm release:check`.";
+  }
+  if (needsControlUiBuild) {
+    return "release-check: Control UI artifacts are missing. Run `pnpm ui:build` before `pnpm release:check`.";
+  }
+  return "release-check: build artifacts are missing. Run `pnpm build` before `pnpm release:check`.";
+}
+
 export function collectForbiddenPackPaths(paths: Iterable<string>): string[] {
   return [...paths]
     .filter(
@@ -602,9 +634,6 @@ export function collectForbiddenPackContentPaths(
   const textPathPattern = /\.(?:[cm]?js|d\.ts|json|md|mjs|cjs)$/u;
   return [...paths]
     .filter((packedPath) => {
-      if (packedPath === PACKAGE_DIST_INVENTORY_RELATIVE_PATH) {
-        return false;
-      }
       if (!forbiddenPrivateQaContentScanPrefixes.some((prefix) => packedPath.startsWith(prefix))) {
         return false;
       }
@@ -781,6 +810,11 @@ async function checkPluginSdkExports() {
 
 async function main() {
   checkAppcastSparkleVersions();
+  checkCliBootstrapExternalImports({
+    logger: {
+      error: (message: string) => console.error(`release-check: ${message}`),
+    },
+  });
   await checkPluginSdkExports();
   checkBundledExtensionMetadata();
   await writePackageDistInventory(process.cwd());
@@ -812,17 +846,9 @@ async function main() {
       for (const path of missing) {
         console.error(`  - ${path}`);
       }
-      if (
-        missing.some(
-          (path) =>
-            path === "dist/build-info.json" ||
-            path === "dist/control-ui/index.html" ||
-            path.startsWith("dist/"),
-        )
-      ) {
-        console.error(
-          "release-check: build artifacts are missing. Run `pnpm build` before `pnpm release:check`.",
-        );
+      const buildHint = resolveMissingPackBuildHint(missing);
+      if (buildHint) {
+        console.error(buildHint);
       }
     }
     if (forbidden.length > 0) {

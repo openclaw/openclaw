@@ -8,8 +8,8 @@ import {
 } from "@buape/carbon";
 import type { GatewayPlugin } from "@buape/carbon/gateway";
 import { VoicePlugin } from "@buape/carbon/voice";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";

@@ -1,6 +1,5 @@
+import { createEmptyPluginRegistry, setActivePluginRegistry } from "openclaw/plugin-sdk/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createEmptyPluginRegistry } from "../../../src/plugins/registry-empty.js";
-import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
 import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedZaloAccount } from "./accounts.js";

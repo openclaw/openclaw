@@ -96,6 +96,42 @@ describe("normalizeMessagesForLlmBoundary", () => {
     expect(output[0]?.content).toEqual([{ type: "text", text: "visible output" }]);
     expect(input[0]).toHaveProperty("details");
   });
+
+  it("keeps runtime-context transcript entries out of the LLM boundary", () => {
+    const input = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "visible ask" }],
+        timestamp: 1,
+      },
+      {
+        role: "custom",
+        customType: "openclaw.runtime-context",
+        content: "secret runtime context",
+        display: false,
+        timestamp: 2,
+      },
+      {
+        role: "custom",
+        customType: "other-extension-context",
+        content: "normal custom context",
+        display: false,
+        timestamp: 3,
+      },
+    ];
+
+    const output = normalizeMessagesForLlmBoundary(
+      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+    ) as Array<Record<string, unknown>>;
+
+    expect(output).toHaveLength(2);
+    expect(output).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ customType: "openclaw.runtime-context" })]),
+    );
+    expect(output).toEqual(
+      expect.arrayContaining([expect.objectContaining({ customType: "other-extension-context" })]),
+    );
+  });
 });
 
 describe("shouldCreateBundleMcpRuntimeForAttempt", () => {
@@ -117,6 +153,12 @@ describe("shouldCreateBundleMcpRuntimeForAttempt", () => {
         toolsAllow: ["memory_search", "memory_get"],
       }),
     ).toBe(false);
+    expect(
+      shouldCreateBundleMcpRuntimeForAttempt({
+        toolsEnabled: true,
+        toolsAllow: ["bundle-mcp"],
+      }),
+    ).toBe(true);
     expect(
       shouldCreateBundleMcpRuntimeForAttempt({
         toolsEnabled: true,
@@ -1625,6 +1667,82 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     expect(baseFn).toHaveBeenCalledTimes(1);
     const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
     expect(seenContext.messages).toBe(messages);
+  });
+
+  it("strips trailing assistant prefill turns for Anthropic outbound replay", async () => {
+    const messages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "earlier question" }],
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "stale assistant answer" }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
+      validateAnthropicTurns: true,
+      preserveSignatures: true,
+      dropThinkingBlocks: false,
+    } as never);
+    const stream = wrapped(
+      { api: "anthropic-messages" } as never,
+      { messages } as never,
+      {} as never,
+    ) as FakeWrappedStream | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    expect(seenContext.messages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "earlier question" }],
+      },
+    ]);
+    expect(seenContext.messages).not.toBe(messages);
+  });
+
+  it("strips trailing assistant prefill turns for Gemini outbound replay", async () => {
+    const messages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "earlier question" }],
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "stale model answer" }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
+      validateGeminiTurns: true,
+      preserveSignatures: true,
+      dropThinkingBlocks: false,
+    } as never);
+    const stream = wrapped(
+      { api: "google-generative-ai" } as never,
+      { messages } as never,
+      {} as never,
+    ) as FakeWrappedStream | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    expect(seenContext.messages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "earlier question" }],
+      },
+    ]);
+    expect(seenContext.messages).not.toBe(messages);
   });
 
   it("drops signed thinking turns when sibling replay tool calls are not allowlisted", async () => {
