@@ -246,6 +246,25 @@ describe("exec approvals store helpers", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "refuses a first-level .openclaw symlink target below a writable ancestor",
+    () => {
+      const dir = createHomeDir();
+      const sharedParent = path.join(dir, "shared-parent");
+      const linkedStateTarget = path.join(sharedParent, "state-target");
+      fs.mkdirSync(linkedStateTarget, { recursive: true, mode: 0o700 });
+      fs.chmodSync(sharedParent, 0o777);
+      fs.chmodSync(linkedStateTarget, 0o700);
+      fs.symlinkSync(linkedStateTarget, path.join(dir, ".openclaw"), "dir");
+
+      expect(() =>
+        saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
+      ).toThrow(/group\/other-writable exec approvals \.openclaw symlink ancestor/);
+      expectBestEffortEmptyApprovalsRead();
+      expect(fs.existsSync(path.join(linkedStateTarget, "exec-approvals.json"))).toBe(false);
+    },
+  );
+
   it("refuses a dangling first-level .openclaw symlink", () => {
     const dir = createHomeDir();
     const missingTarget = path.join(dir, "missing-state-target");

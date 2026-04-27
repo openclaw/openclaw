@@ -172,6 +172,9 @@ export const DEFAULT_EXEC_APPROVAL_ASK_FALLBACK: ExecSecurity = "full";
 const DEFAULT_AUTO_ALLOW_SKILLS = false;
 const DEFAULT_SOCKET = "~/.openclaw/exec-approvals.sock";
 const DEFAULT_FILE = "~/.openclaw/exec-approvals.json";
+const POSIX_OWNER_WRITE = 0o200;
+const POSIX_GROUP_OR_OTHER_WRITE = 0o022;
+const POSIX_STICKY = 0o1000;
 
 class UnsafeExecApprovalsPathError extends Error {
   constructor(message: string) {
@@ -316,18 +319,68 @@ function resolveTrustedOpenClawSymlink(linkPath: string): string {
   }
   if (process.platform !== "win32") {
     const getuid = process.getuid;
-    if (typeof getuid === "function" && targetStat.uid !== getuid.call(process)) {
+    if (typeof getuid !== "function") {
+      return realPath;
+    }
+    const currentUid = getuid.call(process);
+    if (targetStat.uid !== currentUid) {
       throw new UnsafeExecApprovalsPathError(
         `Refusing to use exec approvals .openclaw symlink target not owned by current user: ${linkPath}`,
       );
     }
-    if ((targetStat.mode & 0o022) !== 0) {
+    if ((targetStat.mode & POSIX_GROUP_OR_OTHER_WRITE) !== 0) {
       throw new UnsafeExecApprovalsPathError(
         `Refusing to use group/other-writable exec approvals .openclaw symlink target: ${linkPath}`,
       );
     }
+    assertStableResolvedOpenClawSymlinkTarget(realPath, linkPath, currentUid);
   }
   return realPath;
+}
+
+function assertStableResolvedOpenClawSymlinkTarget(
+  realPath: string,
+  linkPath: string,
+  currentUid: number,
+): void {
+  const root = path.parse(realPath).root;
+  let current = root;
+  assertStableResolvedOpenClawDirectory(current, linkPath, currentUid);
+
+  const relative = path.relative(root, realPath);
+  const segments = relative && relative !== "." ? relative.split(path.sep).filter(Boolean) : [];
+  for (const segment of segments) {
+    current = path.join(current, segment);
+    assertStableResolvedOpenClawDirectory(current, linkPath, currentUid);
+  }
+}
+
+function assertStableResolvedOpenClawDirectory(
+  dirPath: string,
+  linkPath: string,
+  currentUid: number,
+): void {
+  const stat = fs.lstatSync(dirPath);
+  if (!stat.isDirectory()) {
+    throw new UnsafeExecApprovalsPathError(
+      `Refusing to use exec approvals .openclaw symlink ancestor that is not a directory: ${dirPath} (${linkPath})`,
+    );
+  }
+  if (stat.isSymbolicLink()) {
+    throw new UnsafeExecApprovalsPathError(
+      `Refusing to use exec approvals .openclaw symlink ancestor that resolves through another symlink: ${dirPath} (${linkPath})`,
+    );
+  }
+  if (stat.uid !== currentUid && stat.uid !== 0 && (stat.mode & POSIX_OWNER_WRITE) !== 0) {
+    throw new UnsafeExecApprovalsPathError(
+      `Refusing to use owner-writable exec approvals .openclaw symlink ancestor not owned by current user: ${dirPath} (${linkPath})`,
+    );
+  }
+  if ((stat.mode & POSIX_GROUP_OR_OTHER_WRITE) !== 0 && (stat.mode & POSIX_STICKY) === 0) {
+    throw new UnsafeExecApprovalsPathError(
+      `Refusing to use group/other-writable exec approvals .openclaw symlink ancestor: ${dirPath} (${linkPath})`,
+    );
+  }
 }
 
 function assertSafeExecApprovalsDestination(filePath: string): void {

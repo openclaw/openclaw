@@ -184,8 +184,8 @@ Targeting notes:
 - The node host must advertise `system.execApprovals.get/set` (macOS app or headless node host).
 - Approvals files are stored per host at `~/.openclaw/exec-approvals.json`.
 - The first-level `~/.openclaw` directory may be a symlink to a current-user-owned,
-  non-group/other-writable directory. Deeper symlinks and a symlinked
-  `exec-approvals.json` destination are refused.
+  non-group/other-writable directory with a stable resolved ancestor chain. Deeper
+  symlinks and a symlinked `exec-approvals.json` destination are refused.
 
 ## Related
 

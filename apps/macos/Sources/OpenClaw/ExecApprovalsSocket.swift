@@ -589,6 +589,9 @@ enum ExecApprovalsSocketPathGuardError: LocalizedError {
 
 enum ExecApprovalsSocketPathGuard {
     static let parentDirectoryPermissions = 0o700
+    private static let posixOwnerWrite = mode_t(0o200)
+    private static let posixGroupOrOtherWrite = mode_t(0o022)
+    private static let posixSticky = mode_t(0o1000)
 
     static func pathKind(at path: String) throws -> ExecApprovalsSocketPathKind {
         var status = stat()
@@ -677,7 +680,65 @@ enum ExecApprovalsSocketPathGuard {
                 path: parentPath,
                 message: "resolved target kind is \(kind)")
         }
+        try self.validateResolvedAncestorChain(for: targetURL, reportedPath: parentPath)
         return targetURL
+    }
+
+    private static func validateResolvedAncestorChain(for targetURL: URL, reportedPath: String)
+        throws
+    {
+        let currentUID = getuid()
+        var ancestors: [URL] = []
+        var current = targetURL.standardizedFileURL
+
+        while true {
+            ancestors.append(current)
+            let parent = current.deletingLastPathComponent()
+            if parent.path == current.path {
+                break
+            }
+            current = parent
+        }
+
+        for url in ancestors.reversed() {
+            try self.validateStableResolvedAncestor(
+                at: url.path,
+                reportedPath: reportedPath,
+                currentUID: currentUID)
+        }
+    }
+
+    private static func validateStableResolvedAncestor(
+        at path: String,
+        reportedPath: String,
+        currentUID: uid_t
+    ) throws {
+        var status = stat()
+        if lstat(path, &status) != 0 {
+            throw ExecApprovalsSocketPathGuardError.parentSymlinkTargetInvalid(
+                path: reportedPath,
+                message: "ancestor lstat failed at \(path) (errno \(errno))")
+        }
+        let fileType = status.st_mode & mode_t(S_IFMT)
+        guard fileType == mode_t(S_IFDIR) else {
+            throw ExecApprovalsSocketPathGuardError.parentSymlinkTargetInvalid(
+                path: reportedPath,
+                message: "ancestor is not a directory at \(path)")
+        }
+        guard status.st_uid == currentUID || status.st_uid == 0
+            || (status.st_mode & self.posixOwnerWrite) == 0
+        else {
+            throw ExecApprovalsSocketPathGuardError.parentSymlinkTargetInvalid(
+                path: reportedPath,
+                message: "ancestor is owner-writable by an untrusted user at \(path)")
+        }
+        guard (status.st_mode & self.posixGroupOrOtherWrite) == 0
+            || (status.st_mode & self.posixSticky) != 0
+        else {
+            throw ExecApprovalsSocketPathGuardError.parentSymlinkTargetInvalid(
+                path: reportedPath,
+                message: "ancestor is group/other-writable at \(path)")
+        }
     }
 
     static func removeExistingSocket(at socketPath: String) throws {
