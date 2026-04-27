@@ -169,6 +169,34 @@ function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
   };
 }
 
+function isObjectSchemaWithNoRequiredFields(schema: unknown): boolean {
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
+    return false;
+  }
+  const record = schema as Record<string, unknown>;
+  if (record.type !== "object") {
+    return false;
+  }
+  if (record.required === undefined) {
+    return true;
+  }
+  return Array.isArray(record.required) && record.required.length === 0;
+}
+
+function createPrepareArgumentsForTool(
+  tool: AnyAgentTool,
+): ToolDefinition["prepareArguments"] | undefined {
+  const basePrepareArguments = tool.prepareArguments;
+  const normalizeEmptyObjectArgs = isObjectSchemaWithNoRequiredFields(tool.parameters);
+  if (!basePrepareArguments && !normalizeEmptyObjectArgs) {
+    return undefined;
+  }
+  return (args: unknown) => {
+    const prepared = basePrepareArguments ? basePrepareArguments(args) : args;
+    return normalizeEmptyObjectArgs && prepared == null ? {} : prepared;
+  };
+}
+
 export const CLIENT_TOOL_NAME_CONFLICT_PREFIX = "client tool name conflict:";
 
 export function findClientToolNameConflicts(params: {
@@ -218,11 +246,13 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
     const name = tool.name || "tool";
     const normalizedName = normalizeToolName(name);
     const beforeHookWrapped = isToolWrappedWithBeforeToolCallHook(tool);
+    const prepareArguments = createPrepareArgumentsForTool(tool);
     return {
       name,
       label: tool.label ?? name,
       description: tool.description ?? "",
       parameters: tool.parameters,
+      ...(prepareArguments ? { prepareArguments } : {}),
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
         let executeParams = params;

@@ -105,6 +105,71 @@ describe("pi tool definition adapter", () => {
     expect(result.content[0]).toMatchObject({ type: "text" });
     expect((result.content[0] as { text?: string }).text).toContain('"count"');
   });
+
+  it("prepares null args as an empty object for parameterless object-schema tools", async () => {
+    const tool = {
+      name: "wiki_lint",
+      label: "Wiki Lint",
+      description: "parameterless object-schema tool",
+      parameters: Type.Object({}, { additionalProperties: false }),
+      execute: (async (_toolCallId: string, params: unknown) => ({
+        content: [{ type: "text", text: "ok" }],
+        details: { params },
+      })) as unknown as AgentTool["execute"],
+    } satisfies AgentTool;
+
+    const [def] = toToolDefinitions([tool]);
+    if (!def) {
+      throw new Error("missing tool definition");
+    }
+
+    expect(def.prepareArguments).toBeTypeOf("function");
+    const prepared = def.prepareArguments?.(null);
+    expect(prepared).toEqual({});
+
+    const result = await def.execute("call-null", prepared, undefined, undefined, extensionContext);
+    expect(result.details).toEqual({ params: {} });
+  });
+
+  it("does not prepare null args for required object-schema tools", () => {
+    const tool = {
+      name: "search",
+      label: "Search",
+      description: "requires query",
+      parameters: Type.Object({ query: Type.String() }, { additionalProperties: false }),
+      execute: (async () => ({
+        content: [{ type: "text", text: "ok" }],
+      })) as unknown as AgentTool["execute"],
+    } satisfies AgentTool;
+
+    const [def] = toToolDefinitions([tool]);
+    if (!def) {
+      throw new Error("missing tool definition");
+    }
+
+    expect(def.prepareArguments).toBeUndefined();
+  });
+
+  it("passes plain object args through unchanged for parameterless object-schema tools", () => {
+    const tool = {
+      name: "wiki_status",
+      label: "Wiki Status",
+      description: "parameterless object-schema tool",
+      parameters: Type.Object({}, { additionalProperties: false }),
+      execute: (async () => ({
+        content: [{ type: "text", text: "ok" }],
+      })) as unknown as AgentTool["execute"],
+    } satisfies AgentTool;
+
+    const [def] = toToolDefinitions([tool]);
+    if (!def) {
+      throw new Error("missing tool definition");
+    }
+
+    const params = { extra: true };
+    expect(def.prepareArguments).toBeTypeOf("function");
+    expect(def.prepareArguments?.(params)).toBe(params);
+  });
 });
 
 // ---------------------------------------------------------------------------
