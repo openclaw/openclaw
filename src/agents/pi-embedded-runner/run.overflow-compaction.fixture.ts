@@ -51,15 +51,6 @@ export function makeAttemptResult(
     toolMetas,
     lastAssistant: undefined,
     messagesSnapshot: [],
-    replayMetadata:
-      overrides.replayMetadata ??
-      buildAttemptReplayMetadata({
-        toolMetas,
-        didSendViaMessagingTool,
-        messagingToolSentTexts,
-        messagingToolSentMediaUrls,
-        successfulCronAdds,
-      }),
     itemLifecycle: {
       startedCount: 0,
       completedCount: 0,
@@ -71,6 +62,15 @@ export function makeAttemptResult(
     messagingToolSentTargets: [],
     cloudCodeAssistFormatError: false,
     ...overrides,
+    replayMetadata:
+      overrides.replayMetadata ??
+      buildAttemptReplayMetadata({
+        toolMetas,
+        didSendViaMessagingTool,
+        messagingToolSentTexts,
+        messagingToolSentMediaUrls,
+        successfulCronAdds,
+      }),
   };
 }
 

@@ -855,7 +855,7 @@ export async function runEmbeddedPiAgent(
             },
           });
 
-          const attempt = await runEmbeddedAttemptWithBackend({
+          const rawAttempt = await runEmbeddedAttemptWithBackend({
             sessionId: activeSessionId,
             sessionKey: resolvedSessionKey,
             sandboxSessionKey: params.sandboxSessionKey,
@@ -960,6 +960,25 @@ export async function runEmbeddedPiAgent(
             bootstrapPromptWarningSignature:
               bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
           });
+          const attempt = {
+            ...rawAttempt,
+            assistantTexts: rawAttempt.assistantTexts ?? [],
+            toolMetas: rawAttempt.toolMetas ?? [],
+            messagesSnapshot: rawAttempt.messagesSnapshot ?? [],
+            messagingToolSentTexts: rawAttempt.messagingToolSentTexts ?? [],
+            messagingToolSentMediaUrls: rawAttempt.messagingToolSentMediaUrls ?? [],
+            messagingToolSentTargets: rawAttempt.messagingToolSentTargets ?? [],
+            itemLifecycle: rawAttempt.itemLifecycle ?? {
+              startedCount: 0,
+              completedCount: 0,
+              activeCount: 0,
+            },
+            // Malformed or legacy harness results must not be considered safe to replay.
+            replayMetadata: rawAttempt.replayMetadata ?? {
+              hadPotentialSideEffects: true,
+              replaySafe: false,
+            },
+          };
 
           const {
             aborted,

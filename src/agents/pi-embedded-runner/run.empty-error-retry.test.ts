@@ -131,6 +131,7 @@ describe("runEmbeddedPiAgent silent-error retry", () => {
       provider: "ollama",
       model: "glm-5.1:cloud",
       runId: "run-empty-error-retry-skip-clean-stop",
+      allowEmptyAssistantReplyAsSilent: true,
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
