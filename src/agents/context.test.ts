@@ -483,6 +483,19 @@ describe("shouldEagerWarmContextWindowCache", () => {
     ).toBe(true);
   });
 
+  it("warms the cache for a dev-checkout daemon entry", () => {
+    // Local source builds run as `node /home/u/git/openclaw/dist/index.js
+    // gateway ...`. The ancestor-directory check still recognises this as a
+    // genuine OpenClaw entry, not a generic Node script.
+    expect(
+      shouldEagerWarmContextWindowCache([
+        "/usr/bin/node",
+        "/home/u/git/openclaw/dist/index.js",
+        "gateway",
+      ]),
+    ).toBe(true);
+  });
+
   it("still skips warmup for help/version invocations", () => {
     expect(
       shouldEagerWarmContextWindowCache(["/usr/bin/node", "/usr/bin/openclaw", "--version"]),
@@ -493,8 +506,47 @@ describe("shouldEagerWarmContextWindowCache", () => {
   });
 
   it("does not warm when imported from a generic Node script (plugin-sdk surface)", () => {
+    // The bundled plugin-sdk can be imported by arbitrary downstream Node
+    // scripts. If those scripts happen to be named index.js, we must not
+    // trigger eager warmup, because that cascades into
+    // ensureOpenClawModelsJson() and breaks dist/source singleton
+    // assumptions for plugin-sdk consumers.
     expect(
       shouldEagerWarmContextWindowCache(["/usr/bin/node", "/some/random/script.js", "gateway"]),
+    ).toBe(false);
+    expect(
+      shouldEagerWarmContextWindowCache([
+        "/usr/bin/node",
+        "/some/random/project/index.js",
+        "gateway",
+      ]),
+    ).toBe(false);
+    expect(
+      shouldEagerWarmContextWindowCache([
+        "/usr/bin/node",
+        "/home/u/projects/my-cool-tool/dist/index.mjs",
+        "gateway",
+      ]),
+    ).toBe(false);
+  });
+
+  it("does not match substrings of openclaw in ancestor directory names", () => {
+    // The ancestor check must compare basenames exactly, not as substrings.
+    // A directory called `my-openclaw-fork` or `openclaw-extras` is not the
+    // canonical install layout and should not trigger warmup.
+    expect(
+      shouldEagerWarmContextWindowCache([
+        "/usr/bin/node",
+        "/home/u/projects/my-openclaw-fork/dist/index.js",
+        "gateway",
+      ]),
+    ).toBe(false);
+    expect(
+      shouldEagerWarmContextWindowCache([
+        "/usr/bin/node",
+        "/home/u/openclaw-extras/dist/index.js",
+        "gateway",
+      ]),
     ).toBe(false);
   });
 });

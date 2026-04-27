@@ -106,22 +106,54 @@ function loadModelsConfigRuntime() {
 }
 
 function isLikelyOpenClawCliProcess(argv: string[] = process.argv): boolean {
-  const entryBasename = normalizeLowercaseStringOrEmpty(path.basename(argv[1] ?? ""));
-  return (
+  const entryPath = argv[1] ?? "";
+  const entryBasename = normalizeLowercaseStringOrEmpty(path.basename(entryPath));
+  if (
     entryBasename === "openclaw" ||
     entryBasename === "openclaw.mjs" ||
     entryBasename === "entry.js" ||
-    entryBasename === "entry.mjs" ||
-    // The bundled gateway daemon (and any direct invocation of dist/index.js)
-    // launches as `node .../dist/index.js gateway ...`, so argv[1] basename is
-    // `index.js`. Without this, the gateway service never eager-warms the
-    // context-window cache, leaving long-running synchronous lookups
-    // (allowAsyncLoad: false) to fall back to DEFAULT_CONTEXT_TOKENS until
-    // the first agent run completes — which then persists the wrong window
-    // onto the session record.
-    entryBasename === "index.js" ||
-    entryBasename === "index.mjs"
-  );
+    entryBasename === "entry.mjs"
+  ) {
+    return true;
+  }
+  // The bundled gateway daemon (and any direct invocation of dist/index.js)
+  // launches as `node .../dist/index.js gateway ...`, so argv[1] basename is
+  // `index.js`. Without recognising that, the gateway service never
+  // eager-warms the context-window cache, leaving long-running synchronous
+  // lookups (allowAsyncLoad: false) to fall back to DEFAULT_CONTEXT_TOKENS
+  // until the first agent run completes — which then persists the wrong
+  // window onto the session record.
+  //
+  // Bare `index.js` / `index.mjs` is far too generic to match on its own (it
+  // would fire for every plugin-sdk consumer that happens to be named
+  // index.js). Require an ancestor directory named `openclaw` in the entry
+  // path so this only matches genuine OpenClaw entries (npm-global install:
+  // `.../node_modules/openclaw/dist/index.js`; dev checkout:
+  // `.../git/openclaw/dist/index.js`).
+  if (entryBasename !== "index.js" && entryBasename !== "index.mjs") {
+    return false;
+  }
+  return entryPathHasOpenClawAncestor(entryPath);
+}
+
+function entryPathHasOpenClawAncestor(entryPath: string): boolean {
+  if (!entryPath) {
+    return false;
+  }
+  // Walk parent directories looking for one whose lowercased basename is
+  // exactly `openclaw`. We deliberately avoid substring matches (e.g.
+  // `my-openclaw-fork`) and only accept the canonical directory name to keep
+  // the boundary tight for plugin-sdk consumers.
+  let current = path.dirname(entryPath);
+  let previous = "";
+  while (current && current !== previous) {
+    if (normalizeLowercaseStringOrEmpty(path.basename(current)) === "openclaw") {
+      return true;
+    }
+    previous = current;
+    current = path.dirname(current);
+  }
+  return false;
 }
 
 function getCommandPathFromArgv(argv: string[]): string[] {
