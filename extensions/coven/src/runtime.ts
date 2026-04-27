@@ -256,9 +256,10 @@ function sessionIsTerminal(session: CovenSessionRecord): boolean {
 
 function terminalStatusEvent(session: CovenSessionRecord): AcpRuntimeEvent {
   const status = sanitizeStatusField(session.status, "completed");
+  const exitCode = typeof session.exitCode === "number" ? session.exitCode : null;
   return {
     type: "status",
-    text: `coven session ${status}${session.exitCode == null ? "" : ` exitCode=${session.exitCode}`}`,
+    text: `coven session ${status}${exitCode == null ? "" : ` exitCode=${exitCode}`}`,
     tag: "session_info_update",
   };
 }
