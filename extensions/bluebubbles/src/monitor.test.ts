@@ -31,6 +31,10 @@ import {
 } from "./test-support/monitor-test-support.js";
 import { _setFetchGuardForTesting } from "./types.js";
 
+const hoisted = vi.hoisted(() => ({
+  callGatewayMock: vi.fn(),
+}));
+
 // Mock dependencies
 vi.mock("./send.js", () => ({
   resolveChatGuidForTarget: vi.fn().mockResolvedValue("iMessage;-;+15551234567"),
@@ -60,6 +64,16 @@ vi.mock("./reactions.js", async () => {
 vi.mock("./history.js", () => ({
   fetchBlueBubblesHistory: vi.fn().mockResolvedValue({ entries: [], resolved: true }),
 }));
+
+vi.mock("openclaw/plugin-sdk/gateway-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/gateway-runtime")>(
+    "openclaw/plugin-sdk/gateway-runtime",
+  );
+  return {
+    ...actual,
+    callGateway: (...args: unknown[]) => hoisted.callGatewayMock(...args),
+  };
+});
 
 // Mock runtime
 const mockEnqueueSystemEvent = vi.fn();
@@ -1793,6 +1807,210 @@ describe("BlueBubbles webhook monitor", () => {
       expect(callArgs.ctx.RawBody).toBe("reacted with 😅");
       expect(callArgs.ctx.Body).toContain("reacted with 😅");
       expect(callArgs.ctx.Body).not.toContain("[[reply_to:");
+    });
+
+    it("resolves exec approvals from thumbs-up tapbacks and skips agent dispatch", async () => {
+      hoisted.callGatewayMock.mockResolvedValue({ ok: true });
+      const account = createMockAccount({
+        dmPolicy: "open",
+        allowFrom: ["+15551234567"],
+      });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const approvalReplyText = [
+        "Approval required.",
+        "",
+        "Run:",
+        "```txt",
+        "/approve 1a2b3c4d allow-once",
+        "```",
+        "",
+        "Full id: `1a2b3c4d-1234-5678-90ab-cdef01234567`",
+      ].join("\n");
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: 'Liked "run this"',
+          handle: { address: "+15551234567" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-approval-1",
+          chatGuid: "iMessage;-;+15551234567",
+          date: Date.now(),
+          replyTo: {
+            guid: "approval-origin-1",
+            text: approvalReplyText,
+          },
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      expect(hoisted.callGatewayMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "exec.approval.resolve",
+          params: { id: "1a2b3c4d-1234-5678-90ab-cdef01234567", decision: "allow-once" },
+        }),
+      );
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    });
+
+    it("resolves exec approvals from thumbs-down tapbacks as deny", async () => {
+      hoisted.callGatewayMock.mockResolvedValue({ ok: true });
+      const account = createMockAccount({
+        dmPolicy: "open",
+        allowFrom: ["+15551234567"],
+      });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: 'Disliked "run this"',
+          handle: { address: "+15551234567" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-approval-2",
+          chatGuid: "iMessage;-;+15551234567",
+          date: Date.now(),
+          replyTo: {
+            guid: "approval-origin-2",
+            text: "Approval required.\n\nRun:\n```txt\n/approve 1a2b3c4d allow-once\n```\n\nFull id: `1a2b3c4d-1234-5678-90ab-cdef01234567`",
+          },
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      expect(hoisted.callGatewayMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "exec.approval.resolve",
+          params: { id: "1a2b3c4d-1234-5678-90ab-cdef01234567", decision: "deny" },
+        }),
+      );
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    });
+
+    it("drops unauthorized approval tapbacks without calling gateway", async () => {
+      const account = createMockAccount({
+        dmPolicy: "open",
+        allowFrom: ["+15550000000"],
+      });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: 'Liked "run this"',
+          handle: { address: "+15551234567" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-approval-3",
+          chatGuid: "iMessage;-;+15551234567",
+          date: Date.now(),
+          replyTo: {
+            guid: "approval-origin-3",
+            text: "Approval required.\n\nRun:\n```txt\n/approve 1a2b3c4d allow-once\n```\n\nFull id: `1a2b3c4d-1234-5678-90ab-cdef01234567`",
+          },
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    });
+
+    it("falls through to agent dispatch when approval tapback resolve fails", async () => {
+      hoisted.callGatewayMock.mockRejectedValueOnce(new Error("gateway down"));
+      const account = createMockAccount({
+        dmPolicy: "open",
+        allowFrom: ["+15551234567"],
+      });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      const runtime = { log: vi.fn(), error: vi.fn() };
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime,
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: 'Liked "run this"',
+          handle: { address: "+15551234567" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-approval-4",
+          chatGuid: "iMessage;-;+15551234567",
+          date: Date.now(),
+          replyTo: {
+            guid: "approval-origin-4",
+            text: "Approval required.\n\nRun:\n```txt\n/approve 1a2b3c4d allow-once\n```\n\nFull id: `1a2b3c4d-1234-5678-90ab-cdef01234567`",
+          },
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      expect(hoisted.callGatewayMock).toHaveBeenCalled();
+      expect(runtime.error).toHaveBeenCalled();
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+      const callArgs = getFirstDispatchCall();
+      expect(callArgs.ctx.RawBody).toContain("reacted with 👍");
     });
   });
 

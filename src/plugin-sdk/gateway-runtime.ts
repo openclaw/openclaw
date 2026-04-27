@@ -1,6 +1,7 @@
 // Public gateway/client helpers for plugins that talk to the host gateway surface.
 
 export * from "../gateway/channel-status-patches.js";
+export { callGateway } from "../gateway/call.js";
 export { GatewayClient } from "../gateway/client.js";
 export {
   createOperatorApprovalsGatewayClient,

@@ -1,3 +1,4 @@
+import { callGateway } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   resolveOutboundMediaUrls,
   resolveTextChunksWithFallback,
@@ -1246,6 +1247,44 @@ async function processMessageAfterDedupe(
   const visibleReplyToShortId = includeReplyContext ? replyToShortId : undefined;
   const visibleReplyToBody = includeReplyContext ? replyToBody : undefined;
   const visibleReplyToSender = includeReplyContext ? replyToSender : undefined;
+
+  if (isTapbackMessage && tapbackParsed && tapbackParsed.action !== "removed" && replyToBody) {
+    const tapbackEmoji = tapbackParsed.emoji;
+    const approvalId =
+      replyToBody.match(/Full id:\s*`?([^\s`]+)`?/i)?.[1]?.trim() ||
+      replyToBody.match(/\/approve\s+([^\s`]+)\s+allow-(?:once|always)/i)?.[1]?.trim() ||
+      replyToBody.match(/Approval required \(id ([a-z0-9-]{8,})(?:,|\))/i)?.[1]?.trim();
+    const decision = tapbackEmoji === "👍" ? "allow-once" : tapbackEmoji === "👎" ? "deny" : null;
+    if (approvalId && decision) {
+      if (!commandAuthorized) {
+        logInboundDrop({
+          log: (msg) => logVerbose(core, runtime, msg),
+          channel: "bluebubbles",
+          reason: "exec approval tapback (unauthorized)",
+          target: message.senderId,
+        });
+        return;
+      }
+      try {
+        await callGateway({
+          config,
+          method: "exec.approval.resolve",
+          params: { id: approvalId, decision },
+          clientDisplayName: `BlueBubbles approval (${message.senderId})`,
+        });
+        logVerbose(
+          core,
+          runtime,
+          `bluebubbles: resolved exec approval ${approvalId} via tapback ${tapbackEmoji}`,
+        );
+        return;
+      } catch (err) {
+        runtime.error?.(
+          `[bluebubbles] approval tapback resolve failed id=${approvalId}: ${String(err)}`,
+        );
+      }
+    }
+  }
 
   // Use inline [[reply_to:N]] tag format
   // For tapbacks/reactions: append at end (e.g., "reacted with ❤️ [[reply_to:4]]")
