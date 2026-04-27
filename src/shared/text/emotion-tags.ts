@@ -2,7 +2,7 @@ import type { EmotionMode } from "../../emotion-mode.js";
 import { findCodeRegions, isInsideCode } from "./code-regions.js";
 
 const EMOTION_TAG_RE = /\[([A-Za-z]+(?:[ /-][A-Za-z]+){0,7})\](?!\s*\()/g;
-const TRAILING_EMOTION_TAG_RE = /\[[A-Za-z]+(?:[ /-][A-Za-z]+){0,7}$/u;
+const TRAILING_EMOTION_TAG_RE = /\[[A-Za-z]+(?:[ /-][A-Za-z]+){0,7}[ /-]?$/u;
 const EMOTION_TAG_WORDS = new Set([
   "amused",
   "angry",
