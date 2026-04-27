@@ -10,7 +10,7 @@ read_when:
 ---
 
 This doc is a recipe book. It does not re-document the API surface — that is the
-job of [Plugin SDK overview](/plugins/sdk-overview#host-hooks-for-workflow-plugins)
+job of [Plugin SDK overview](/plugins/sdk-overview)
 and [Plugin hooks](/plugins/hooks). Instead, every section here answers a single
 question: _"if I want my plugin to do **X**, which host-hook contracts do I
 compose, and what does that look like end-to-end?"_
@@ -21,14 +21,26 @@ policy gates, background monitors, setup wizards, review assistants, and
 release workflows can all be built as plugins through the same seams.
 
 <Note>
-  The 27 contract tests in `src/plugins/contracts/host-hooks.contract.test.ts`
-  are the executable spec for everything below. If a recipe drifts from
-  those tests, the tests win — open an issue or a follow-up doc PR.
+  This is a docs-only follow-up. The SDK and Gateway contracts used below land
+  in #72287, the workflow seams land in #72383, and the advanced contract
+  fixtures land in #72384. The contract tests in
+  `src/plugins/contracts/host-hooks.contract.test.ts` and
+  `src/plugins/contracts/advanced-workflow-fixtures.contract.test.ts` are the
+  executable spec for these recipes.
 </Note>
+
+```mermaid
+flowchart LR
+  A["#72287 generic host hooks"] --> B["#72383 workflow seams"]
+  B --> C["#72384 contract fixtures"]
+  C --> D["#72333 recipes and examples"]
+  A --> D
+  B --> D
+```
 
 ## How to read this doc
 
-Each recipe has the same five parts:
+Each recipe has the same six parts:
 
 1. **What it does** — the one-line behavior.
 2. **Contract** — the actual TypeScript shape from `src/plugins/types.ts` or
@@ -60,7 +72,7 @@ export default definePluginEntry({
     // Existing surfaces you already know:
     //   api.registerTool(...), api.registerCommand(...), api.on(...)
     //
-    // New host-hook surfaces this PR adds:
+    // Host-hook surfaces introduced by the host-hook contract PRs:
     //   api.registerSessionExtension(...)
     //   api.enqueueNextTurnInjection(...)
     //   api.registerTrustedToolPolicy(...)        // bundled-only
@@ -86,7 +98,7 @@ not participate in that category.
 
 # Recipe gallery (one section per contract)
 
-## 1. Plugin-owned session state — `api.registerSessionExtension(...)`
+## 1. Plugin-owned session state: `api.registerSessionExtension(...)`
 
 **What it does**
 
@@ -166,7 +178,7 @@ sequenceDiagram
   GW-->>UI: live row update
 ```
 
-**Real-world example — Review Concierge session state**
+**Real-world example: Review Concierge session state**
 
 A code-review plugin that tracks which files an operator has approved per
 session. The persisted state is the full file list; the projection returns
@@ -234,7 +246,7 @@ export default definePluginEntry({
 
 ---
 
-## 2. Patching session state from clients — `sessions.pluginPatch`
+## 2. Patching session state from clients: `sessions.pluginPatch`
 
 **What it does**
 
@@ -296,7 +308,7 @@ sequenceDiagram
   end
 ```
 
-**Real-world example — operator approval card**
+**Real-world example: operator approval card**
 
 The Control UI approval card binds approve/deny buttons to `sessions.pluginPatch`
 calls. The plugin doesn't need a custom Gateway method; the patch protocol is
@@ -333,7 +345,7 @@ async function denyDeploy(sessionKey: string, reason: string) {
 
 ---
 
-## 3. Durable next-turn context — `api.enqueueNextTurnInjection(...)`
+## 3. Durable next-turn context: `api.enqueueNextTurnInjection(...)`
 
 **What it does**
 
@@ -380,7 +392,7 @@ api.registerCommand({
       sessionKey: ctx.sessionKey,
       text: `[note saved] previous answer captured at ${new Date().toISOString()}`,
       placement: "prepend_context",
-      idempotencyKey: `note-${Date.now()}`,
+      idempotencyKey: `note-save:${ctx.sessionKey ?? "unknown"}:${ctx.args ?? "default"}`,
       ttlMs: 5 * 60_000, // 5 min
     });
     return { content: "Saved.", continueAgent: false };
@@ -410,7 +422,7 @@ sequenceDiagram
   Runner->>Model: prompt + drained context
 ```
 
-**Real-world example — Code Review Concierge auto-retry**
+**Real-world example: Code Review Concierge auto-retry**
 
 When a tool call fails, the plugin queues a one-shot diagnosis for the next
 turn so the model retries with full context:
@@ -462,16 +474,17 @@ idempotencyKey)`.
 
 ---
 
-## 4. Same-turn context from drained injections — `agent_turn_prepare`
+## 4. Same-turn context from drained injections: `agent_turn_prepare`
 
 **What it does**
 
 Receives the drained next-turn injections and lets you fold them into prompt
 context **before** the ordinary `before_prompt_build` hook fires. Use this
 when the queued context needs plugin-side shaping before it becomes part of
-the prompt — otherwise the host helper
-`buildPluginAgentTurnPrepareContext({queuedInjections})` already does the
-default fold.
+the prompt. If no plugin handles `agent_turn_prepare`, the host applies the
+default fold for queued injections: `prepend_context` items go before the
+turn prompt, `append_context` items go after it, and priority decides ordering
+within each placement.
 
 **Contract**
 
@@ -508,14 +521,14 @@ flowchart LR
   Drain["drainPluginNextTurnInjections(sessionKey)"]
   Drain --> Sort["sort by createdAt"]
   Sort --> ATP["agent_turn_prepare hooks (priority order)"]
-  ATP --> Defaults["buildPluginAgentTurnPrepareContext\n(host default fold)"]
+  ATP --> Defaults["host default fold\nfor queued injections"]
   ATP --> Custom["plugin-custom fold"]
   Defaults --> PB["before_prompt_build"]
   Custom --> PB
   PB --> Build["prompt build"]
 ```
 
-**Real-world example — multi-plugin draft for a meeting summarizer**
+**Real-world example: multi-plugin draft for a meeting summarizer**
 
 ```typescript
 api.on(
@@ -558,7 +571,7 @@ api.on(
 
 ---
 
-## 5. Heartbeat-only prompt context — `heartbeat_prompt_contribution`
+## 5. Heartbeat-only prompt context: `heartbeat_prompt_contribution`
 
 **What it does**
 
@@ -615,7 +628,7 @@ sequenceDiagram
   Runner->>Model: user prompt (NO heartbeat note)
 ```
 
-**Real-world example — SLA Watcher**
+**Real-world example: SLA Watcher**
 
 ```typescript
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
@@ -636,8 +649,11 @@ export default definePluginEntry({
       id: "sla-watcher.run-tracker",
       streams: ["run"],
       handle: (event, ctx) => {
-        if (event.kind === "run_started" && event.runId) {
+        if (event.kind === "run_started" && event.runId && event.sessionKey) {
+          startedAt.set(event.sessionKey, Date.now());
           ctx.setRunContext("sla", { startedAt: Date.now() });
+        } else if ((event.kind === "run_ended" || event.kind === "run_error") && event.sessionKey) {
+          startedAt.delete(event.sessionKey);
         }
       },
     });
@@ -670,7 +686,7 @@ export default definePluginEntry({
 
 ---
 
-## 6. Bundled-only pre-plugin policy — `api.registerTrustedToolPolicy(...)`
+## 6. Bundled-only pre-plugin policy: `api.registerTrustedToolPolicy(...)`
 
 **What it does**
 
@@ -746,7 +762,7 @@ sequenceDiagram
   end
 ```
 
-**Real-world example — Budget Guard**
+**Real-world example: Budget Guard**
 
 ```typescript
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
@@ -807,7 +823,7 @@ export default definePluginEntry({
 
 ---
 
-## 7. Tool catalog & inventory metadata — `api.registerToolMetadata(...)`
+## 7. Tool catalog and inventory metadata: `api.registerToolMetadata(...)`
 
 **What it does**
 
@@ -854,7 +870,7 @@ flowchart LR
   Inventory --> Audit[Audit log row \n with risk + tags]
 ```
 
-**Real-world example — Compliance Vault**
+**Real-world example: Compliance Vault**
 
 ```typescript
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
@@ -893,7 +909,7 @@ export default definePluginEntry({
 
 **Common pitfalls**
 
-- **Metadata is additive — you can't override another plugin's metadata.**
+- **Metadata is additive.** You can't override another plugin's metadata.
   The first registration wins, and conflicts are logged. Pick names that
   describe your intent.
 - **`risk` is enum.** Only `"low" | "medium" | "high"` are valid. Don't
@@ -901,7 +917,7 @@ export default definePluginEntry({
 
 ---
 
-## 8. Scoped commands with continuation — `api.registerCommand(...)`
+## 8. Scoped commands with continuation: `api.registerCommand(...)`
 
 **What it does**
 
@@ -929,13 +945,14 @@ export type OpenClawPluginCommandDefinition = {
 };
 ```
 
-The reserved-command list lives in `src/plugins/command-registration.ts`
-(`getReservedCommands()`): `help, commands, status, whoami, context, btw,
-stop, restart, reset, new, compact, config, debug, allowlist, activation,
-skill, subagents, kill, steer, tell, model, models, queue, send, bash, exec,
-think, verbose, reasoning, elevated, usage`. External plugins are rejected
-at registration if they try to claim those — only `ownership: "reserved"`
-on a bundled plugin can override.
+The authoritative reserved-command check lives in
+`src/plugins/command-registration.ts` inside `validateCommandName`, which
+builds its reserved `Set` from names such as `help, commands, status, whoami,
+context, btw, stop, restart, reset, new, compact, config, debug, allowlist,
+activation, skill, subagents, kill, steer, tell, model, models, queue, send,
+bash, exec, think, verbose, reasoning, elevated, usage`. External plugins are
+rejected at registration if they try to claim those; only
+`ownership: "reserved"` on a bundled plugin can override.
 
 **Minimal example**
 
@@ -976,7 +993,7 @@ sequenceDiagram
   end
 ```
 
-**Real-world example — Release Train Conductor**
+**Real-world example: Release Train Conductor**
 
 ```typescript
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
@@ -1051,7 +1068,7 @@ export default definePluginEntry({
 
 ---
 
-## 9. Command-then-continue — `PluginCommandResult.continueAgent`
+## 9. Command-then-continue: `PluginCommandResult.continueAgent`
 
 **What it does**
 
@@ -1118,7 +1135,7 @@ sequenceDiagram
 
 ---
 
-## 10. Data-only Control UI surfaces — `api.registerControlUiDescriptor(...)`
+## 10. Data-only Control UI surfaces: `api.registerControlUiDescriptor(...)`
 
 **What it does**
 
@@ -1175,7 +1192,7 @@ flowchart LR
   iOS --> Render3[Renders schema with SwiftUI component]
 ```
 
-**Real-world example — Budget Meter card**
+**Real-world example: Budget Meter card**
 
 ```typescript
 api.registerControlUiDescriptor({
@@ -1211,7 +1228,7 @@ row. The plugin only ships data — never UI code.
 
 ---
 
-## 11. Sanitized event subscriptions — `api.registerAgentEventSubscription(...)`
+## 11. Sanitized event subscriptions: `api.registerAgentEventSubscription(...)`
 
 **What it does**
 
@@ -1285,7 +1302,7 @@ sequenceDiagram
   Runner-->>Bus: more events (NOT delivered)
 ```
 
-**Real-world example — Pager Bridge**
+**Real-world example: Pager Bridge**
 
 ```typescript
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
@@ -1342,7 +1359,7 @@ export default definePluginEntry({
 
 ---
 
-## 12. Per-run plugin context — `setRunContext` / `getRunContext` / `clearRunContext`
+## 12. Per-run plugin context: `setRunContext` / `getRunContext` / `clearRunContext`
 
 **What it does**
 
@@ -1447,7 +1464,7 @@ sequenceDiagram
 
 ---
 
-## 13. Session scheduler jobs — `api.registerSessionSchedulerJob(...)`
+## 13. Session scheduler jobs: `api.registerSessionSchedulerJob(...)`
 
 **What it does**
 
@@ -1489,9 +1506,10 @@ this plugin/session). The job ownership is `(pluginId, sessionKey, jobId)`.
 **Minimal example**
 
 ```typescript
+const sessionKey = "agent:main:main"; // from the command/event handler context
 const handle = api.registerSessionSchedulerJob({
   id: "follow-up-9am",
-  sessionKey: ctx.sessionKey,
+  sessionKey,
   kind: "follow-up",
   description: "Wake the agent at 9am with a follow-up summary",
   cleanup: async ({ reason, jobId }) => {
@@ -1521,7 +1539,7 @@ sequenceDiagram
   Sched-->>Sched: keep restart-preserved jobs,\nskip cleanup callbacks
 ```
 
-**Real-world example — Quiet Hours**
+**Real-world example: Quiet Hours**
 
 ```typescript
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
@@ -1574,7 +1592,7 @@ jobId)` — duplicates within that triple are rejected.
 
 ---
 
-## 14. Runtime lifecycle cleanup — `api.registerRuntimeLifecycle(...)`
+## 14. Runtime lifecycle cleanup: `api.registerRuntimeLifecycle(...)`
 
 **What it does**
 
@@ -1667,7 +1685,7 @@ The single-hook recipes above show how each contract behaves alone. Real
 plugins compose 2–6 hooks. Here are the canonical archetypes, fully
 worked.
 
-## Recipe A — Approval workflow plugin
+## Recipe A: Approval workflow plugin
 
 **Goal.** Operator runs a sensitive command (deploy, release, escalation).
 The plugin pauses execution, opens an approval card in Control UI, and
@@ -1711,7 +1729,7 @@ sequenceDiagram
 
   Op->>R: "deploy v1.4.2"
   R->>M: turn
-  M-->>R: tool_call("deploy", {ver:"v1.4.2"})
+  M-->>R: tool_call("deploy", {version:"v1.4.2"})
   Note over R,Plugin: api.on("before_tool_call") intercepts
 
   Plugin->>Plugin: sessionExt.deploy-approver = pending
@@ -1722,7 +1740,7 @@ sequenceDiagram
   UI->>GW: sessions.pluginPatch(deploy-approver, {state:"approved"})
   GW->>Plugin: validate + write
   Op->>Cmd: /deploy-approve v1.4.2
-  Cmd->>Plugin: handler — requiredScopes ok
+  Cmd->>Plugin: handler, requiredScopes ok
   Plugin->>Q: enqueueNextTurnInjection
   Plugin-->>Cmd: { ...reply, continueAgent: true }
   Cmd->>R: start next turn
@@ -1777,7 +1795,7 @@ export default definePluginEntry({
       await markPending(ctx.sessionKey, String(event.params.version ?? ""));
       return {
         block: true,
-        blockReason: "Deploy paused — awaiting operator approval. Use /deploy-approve to continue.",
+        blockReason: "Deploy paused; awaiting operator approval. Use /deploy-approve to continue.",
       };
     });
 
@@ -1824,13 +1842,13 @@ export default definePluginEntry({
 
 async function markPending(_sessionKey: string, _version: string): Promise<void> {
   // Patch in via sessions.pluginPatch from a host RPC, or from a co-registered
-  // gateway method. Sketch only — production code lives in your plugin.
+  // gateway method. Sketch only; production code lives in your plugin.
 }
 ```
 
 ---
 
-## Recipe B — Workspace policy gate
+## Recipe B: Workspace policy gate
 
 **Goal.** Bundled-only host policy. Block any tool call whose path argument
 escapes the configured workspace root, before any third-party plugin can
@@ -1904,7 +1922,7 @@ function normalize(p: string): string {
 
 ---
 
-## Recipe C — Background lifecycle monitor
+## Recipe C: Background lifecycle monitor
 
 **Goal.** Watch long-running runs. Open an incident timeline, schedule
 periodic ticks, surface elapsed time only on heartbeats, clean up on
@@ -2045,7 +2063,7 @@ export default definePluginEntry({
 
 ---
 
-## Recipe D — Setup / onboarding wizard
+## Recipe D: Setup / onboarding wizard
 
 **Goal.** First-run onboarding flow that walks the operator through provider
 auth, workspace selection, and a smoke test. Each step persists progress so
@@ -2125,7 +2143,7 @@ export default definePluginEntry({
 
 ---
 
-## Recipe E — Review assistant
+## Recipe E: Review assistant
 
 **Goal.** Watch tool failures, queue diagnostic context for the next turn,
 tag review-relevant tools in the catalog, surface session review status.
