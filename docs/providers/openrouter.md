@@ -4,6 +4,7 @@ read_when:
   - You want a single API key for many LLMs
   - You want to run models via OpenRouter in OpenClaw
   - You want to use OpenRouter for image generation
+  - You want to use OpenRouter for video generation
 title: "OpenRouter"
 ---
 
@@ -77,6 +78,25 @@ OpenRouter can also back the `image_generate` tool. Use an OpenRouter image mode
 ```
 
 OpenClaw sends image requests to OpenRouter's chat completions image API with `modalities: ["image", "text"]`. Gemini image models receive supported `aspectRatio` and `resolution` hints through OpenRouter's `image_config`. Use `agents.defaults.imageGenerationModel.timeoutMs` for slower OpenRouter image models; the `image_generate` tool's per-call `timeoutMs` parameter still wins.
+
+## Video generation
+
+OpenRouter can also back the `video_generate` tool through its asynchronous `/videos` API. Use an OpenRouter video model under `agents.defaults.videoGenerationModel`:
+
+```json5
+{
+  env: { OPENROUTER_API_KEY: "sk-or-..." },
+  agents: {
+    defaults: {
+      videoGenerationModel: {
+        primary: "openrouter/google/veo-3.1",
+      },
+    },
+  },
+}
+```
+
+OpenClaw submits text-to-video and image-to-video jobs to OpenRouter, polls the returned `polling_url`, and downloads the completed video from OpenRouter's `unsigned_urls`. Reference images are sent as first/last frame images by default; images tagged with `reference_image` are sent as OpenRouter input references. Video-to-video is not registered for OpenRouter because the upstream video generation API currently accepts text and image references.
 
 ## Text-to-speech
 

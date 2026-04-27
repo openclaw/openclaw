@@ -18,6 +18,7 @@ export const DEFAULT_LIVE_VIDEO_MODELS: Record<string, string> = {
   google: "google/veo-3.1-fast-generate-preview",
   minimax: "minimax/MiniMax-Hailuo-2.3",
   openai: "openai/sora-2",
+  openrouter: "openrouter/google/veo-3.1",
   qwen: "qwen/wan2.6-t2v",
   runway: "runway/gen4.5",
   together: "together/Wan-AI/Wan2.2-T2V-A14B",
