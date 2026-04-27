@@ -992,6 +992,18 @@ async function agentCommandInternal(
           if (stopReason && stopReason !== "end_turn") {
             console.error(`[agent] run ${runId} ended with stopReason=${stopReason}`);
           }
+          const agentMeta = result.meta.agentMeta;
+          const rawUsage = agentMeta?.usage;
+          const lifecycleUsage =
+            rawUsage !== undefined
+              ? {
+                  inputTokens: rawUsage.input ?? 0,
+                  outputTokens: rawUsage.output ?? 0,
+                  ...(rawUsage.cacheRead !== undefined && {
+                    cacheReadTokens: rawUsage.cacheRead,
+                  }),
+                }
+              : undefined;
           emitAgentEvent({
             runId,
             stream: "lifecycle",
@@ -1001,6 +1013,8 @@ async function agentCommandInternal(
               endedAt: Date.now(),
               aborted: result.meta.aborted ?? false,
               stopReason,
+              ...(agentMeta?.model !== undefined && { model: agentMeta.model }),
+              ...(lifecycleUsage !== undefined && { usage: lifecycleUsage }),
             },
           });
         }

@@ -4,7 +4,9 @@ import { getRuntimeConfig } from "../config/io.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { detectErrorKind, type ErrorKind } from "../infra/errors.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
+import { GATEWAY_EVENT_AGENT_RUN_STATUS } from "./events.js";
 import {
   normalizeLiveAssistantEventText,
   projectLiveAssistantBufferedText,
@@ -620,6 +622,49 @@ export function createAgentEventHandler({
           { dropIfSlow: true },
         );
       }
+      const startedAt = typeof evt.data?.startedAt === "number" ? evt.data.startedAt : undefined;
+      const endedAt = typeof evt.data?.endedAt === "number" ? evt.data.endedAt : Date.now();
+      const durationMs = startedAt !== undefined ? endedAt - startedAt : undefined;
+      const evtModel = typeof evt.data?.model === "string" ? evt.data.model : undefined;
+      const evtUsageRaw = evt.data?.usage;
+      const evtUsage =
+        evtUsageRaw !== null &&
+        typeof evtUsageRaw === "object" &&
+        typeof (evtUsageRaw as Record<string, unknown>).inputTokens === "number" &&
+        typeof (evtUsageRaw as Record<string, unknown>).outputTokens === "number"
+          ? {
+              inputTokens: (evtUsageRaw as Record<string, unknown>).inputTokens as number,
+              outputTokens: (evtUsageRaw as Record<string, unknown>).outputTokens as number,
+              ...(typeof (evtUsageRaw as Record<string, unknown>).cacheReadTokens === "number" && {
+                cacheReadTokens: (evtUsageRaw as Record<string, unknown>).cacheReadTokens as number,
+              }),
+            }
+          : undefined;
+      const evtToolCallCount =
+        typeof evt.data?.toolCallCount === "number" ? evt.data.toolCallCount : undefined;
+      const evtExitReason =
+        typeof evt.data?.stopReason === "string"
+          ? evt.data.stopReason
+          : typeof evt.data?.error === "string"
+            ? evt.data.error
+            : undefined;
+      const runStatus =
+        lifecyclePhase === "error" ? "failed" : isAborted ? "interrupted" : "completed";
+      broadcast(
+        GATEWAY_EVENT_AGENT_RUN_STATUS,
+        {
+          agentId: resolveAgentIdFromSessionKey(sessionKey),
+          sessionKey,
+          status: runStatus,
+          startedAt: startedAt ?? endedAt,
+          ...(evtModel !== undefined && { model: evtModel }),
+          ...(durationMs !== undefined && { durationMs }),
+          ...(evtUsage !== undefined && { usage: evtUsage }),
+          ...(evtToolCallCount !== undefined && { toolCallCount: evtToolCallCount }),
+          ...(evtExitReason !== undefined && { exitReason: evtExitReason }),
+        },
+        { dropIfSlow: true },
+      );
     }
   };
 
@@ -970,6 +1015,19 @@ export function createAgentEventHandler({
           { dropIfSlow: true },
         );
       }
+      const startedAt = typeof evt.data?.startedAt === "number" ? evt.data.startedAt : evt.ts;
+      const evtModel = typeof evt.data?.model === "string" ? evt.data.model : undefined;
+      broadcast(
+        GATEWAY_EVENT_AGENT_RUN_STATUS,
+        {
+          agentId: resolveAgentIdFromSessionKey(sessionKey),
+          sessionKey,
+          status: "started",
+          startedAt,
+          ...(evtModel !== undefined && { model: evtModel }),
+        },
+        { dropIfSlow: true },
+      );
     }
   };
 }
