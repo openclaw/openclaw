@@ -184,23 +184,22 @@ function resolveSystemMdnsHostname(): string | null {
 }
 
 const MAX_DNS_LABEL_BYTES = 63;
+const utf8Encoder = new TextEncoder();
 
 function truncateToDnsLabel(name: string, fallback = "OpenClaw"): string {
-  const encoder = new TextEncoder();
-  const encoded = encoder.encode(name);
+  const encoded = utf8Encoder.encode(name);
   if (encoded.byteLength <= MAX_DNS_LABEL_BYTES) {
     return name;
   }
-  // Truncate at byte boundary, then decode back (TextDecoder handles incomplete sequences)
-  const truncated = encoded.slice(0, MAX_DNS_LABEL_BYTES);
-  const decoded = new TextDecoder("utf-8", { fatal: false }).decode(truncated);
-  // Strip any replacement character from incomplete multi-byte sequence at the end
-  return (
-    decoded
-      .replace(/\uFFFD$/, "")
-      .replace(/-+$/, "")
-      .trim() || fallback
-  );
+  for (let end = MAX_DNS_LABEL_BYTES; end > 0; end -= 1) {
+    try {
+      const decoded = new TextDecoder("utf-8", { fatal: true }).decode(encoded.subarray(0, end));
+      return decoded.replace(/-+$/, "").trim() || fallback;
+    } catch {
+      // Try the next shorter prefix until the byte slice ends on a UTF-8 boundary.
+    }
+  }
+  return fallback;
 }
 
 function safeServiceName(name: string) {

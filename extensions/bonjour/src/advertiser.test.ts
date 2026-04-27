@@ -29,9 +29,18 @@ const {
   registerUnhandledRejectionHandler,
   logger,
 } = mocks;
+const dnsLabelEncoder = new TextEncoder();
 
 const asString = (value: unknown, fallback: string) =>
   typeof value === "string" && value.trim() ? value : fallback;
+
+function expectDnsLabelByteLength(value: string, expected: number) {
+  expect(dnsLabelEncoder.encode(value).byteLength).toBe(expected);
+}
+
+function expectDnsLabelWithinLimit(value: string) {
+  expect(dnsLabelEncoder.encode(value).byteLength).toBeLessThanOrEqual(63);
+}
 
 function enableAdvertiserUnitMode(hostname = "test-host") {
   // Allow advertiser to run in unit tests.
@@ -735,8 +744,32 @@ describe("gateway bonjour advertiser", () => {
     await started.stop();
   });
 
-  it("truncates service name exceeding 63-byte DNS label limit", async () => {
-    const longHostname = "app-41627eae5842473f9e05f139ea307277-7f9477f4d6-lqqzf-abcdefghi";
+  it("truncates reported Kubernetes service name at the DNS label byte limit", async () => {
+    const reportedHostname = "app-41627eae5842473f9e05f139ea307277-7f9477f4d6-lqqzf";
+    enableAdvertiserUnitMode(reportedHostname);
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy });
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    const [gatewayCall] = createService.mock.calls as Array<[ServiceCall]>;
+    const serviceName = gatewayCall?.[0]?.name as string;
+    const hostname = gatewayCall?.[0]?.hostname as string;
+
+    expectDnsLabelByteLength(`${reportedHostname} (OpenClaw)`, 64);
+    expect(hostname).toBe(reportedHostname);
+    expectDnsLabelWithinLimit(serviceName);
+
+    await started.stop();
+  });
+
+  it("truncates host labels exceeding the 63-byte DNS label limit", async () => {
+    const longHostname = "app-41627eae5842473f9e05f139ea307277-7f9477f4d6-lqqzf-abcdefghij";
     enableAdvertiserUnitMode(longHostname);
 
     const destroy = vi.fn().mockResolvedValue(undefined);
@@ -752,10 +785,11 @@ describe("gateway bonjour advertiser", () => {
     const serviceName = gatewayCall?.[0]?.name as string;
     const hostname = gatewayCall?.[0]?.hostname as string;
 
-    // Both name and hostname must be within the 63-byte DNS label limit
-    expect(new TextEncoder().encode(serviceName).byteLength).toBeLessThanOrEqual(63);
-    expect(new TextEncoder().encode(hostname).byteLength).toBeLessThanOrEqual(63);
+    expectDnsLabelByteLength(longHostname, 64);
+    expectDnsLabelByteLength(hostname, 63);
+    expect(hostname).toBe(longHostname.slice(0, -1));
     expect(hostname).not.toMatch(/-$/);
+    expectDnsLabelWithinLimit(serviceName);
 
     await started.stop();
   });
@@ -777,8 +811,7 @@ describe("gateway bonjour advertiser", () => {
     const [gatewayCall] = createService.mock.calls as Array<[ServiceCall]>;
     const serviceName = gatewayCall?.[0]?.name as string;
 
-    expect(new TextEncoder().encode(serviceName).byteLength).toBeLessThanOrEqual(63);
-    // Should not end with a replacement character from incomplete multi-byte truncation
+    expectDnsLabelWithinLimit(serviceName);
     expect(serviceName).not.toMatch(/\uFFFD$/);
 
     await started.stop();

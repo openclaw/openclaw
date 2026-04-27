@@ -19,6 +19,7 @@ import {
   isGatewaySigusr1RestartExternallyAllowed,
   markGatewaySigusr1RestartHandled,
   peekGatewaySigusr1RestartReason,
+  resetGatewayRestartStateForInProcessRestart,
   scheduleGatewaySigusr1Restart,
 } from "../../infra/restart.js";
 import { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
@@ -36,6 +37,7 @@ import {
 } from "../../process/command-queue.js";
 import { createRestartIterationHook } from "../../process/restart-recovery.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { reloadTaskRegistryFromStore } from "../../tasks/runtime-internal.js";
 
 const gatewayLog = createSubsystemLogger("gateway");
 const LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS = 1500;
@@ -422,10 +424,12 @@ export async function runGatewayLoop(params: {
       // After an in-process restart (SIGUSR1), reset command-queue lane state.
       // Interrupted tasks from the previous lifecycle may have left `active`
       // counts elevated (their finally blocks never ran), permanently blocking
-      // new work from draining. This must happen here — at the restart
-      // coordinator level — rather than inside individual subsystem init
-      // functions, to avoid surprising cross-cutting side effects.
+      // new work from draining. The same boundary also discards stale restart
+      // deferral timers and reloads the task registry from durable state so
+      // cancelled/completed work is not kept alive by old in-memory maps.
       resetAllLanes();
+      resetGatewayRestartStateForInProcessRestart();
+      reloadTaskRegistryFromStore();
     });
 
     // Keep process alive; SIGUSR1 triggers an in-process restart (no supervisor required).

@@ -47,6 +47,8 @@ async function buildModelsJsonFingerprint(params: {
   agentDir: string;
   workspaceDir?: string;
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index">;
+  providerDiscoveryProviderIds?: readonly string[];
+  providerDiscoveryTimeoutMs?: number;
 }): Promise<string> {
   const authProfilesMtimeMs = await readFileMtimeMs(
     path.join(params.agentDir, "auth-profiles.json"),
@@ -64,6 +66,8 @@ async function buildModelsJsonFingerprint(params: {
     modelsFileMtimeMs,
     workspaceDir: params.workspaceDir,
     pluginMetadataSnapshotIndexFingerprint,
+    providerDiscoveryProviderIds: params.providerDiscoveryProviderIds,
+    providerDiscoveryTimeoutMs: params.providerDiscoveryTimeoutMs,
   });
 }
 
@@ -152,6 +156,8 @@ export async function ensureOpenClawModelsJson(
   options: {
     pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;
     workspaceDir?: string;
+    providerDiscoveryProviderIds?: readonly string[];
+    providerDiscoveryTimeoutMs?: number;
   } = {},
 ): Promise<{ agentDir: string; wrote: boolean }> {
   const resolved = resolveModelsConfigInput(config);
@@ -175,6 +181,12 @@ export async function ensureOpenClawModelsJson(
     agentDir,
     ...(workspaceDir ? { workspaceDir } : {}),
     ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+    ...(options.providerDiscoveryProviderIds
+      ? { providerDiscoveryProviderIds: options.providerDiscoveryProviderIds }
+      : {}),
+    ...(options.providerDiscoveryTimeoutMs !== undefined
+      ? { providerDiscoveryTimeoutMs: options.providerDiscoveryTimeoutMs }
+      : {}),
   });
   const cached = MODELS_JSON_STATE.readyCache.get(targetPath);
   if (cached) {
@@ -199,6 +211,12 @@ export async function ensureOpenClawModelsJson(
       existingRaw: existingModelsFile.raw,
       existingParsed: existingModelsFile.parsed,
       ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+      ...(options.providerDiscoveryProviderIds
+        ? { providerDiscoveryProviderIds: options.providerDiscoveryProviderIds }
+        : {}),
+      ...(options.providerDiscoveryTimeoutMs !== undefined
+        ? { providerDiscoveryTimeoutMs: options.providerDiscoveryTimeoutMs }
+        : {}),
     });
 
     if (plan.action === "skip") {

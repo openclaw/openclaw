@@ -13,6 +13,7 @@ on:
           - security
           - quality
           - android-security
+          - macos-security
   schedule:
     - cron: "0 6 * * *"
 
@@ -117,3 +118,35 @@ jobs:
         uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
         with:
           category: "/codeql-critical-security/android"
+
+  macos-security:
+    name: Critical Security (macOS)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.profile == 'macos-security' }}
+    runs-on: blacksmith-6vcpu-macos-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          submodules: false
+
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.1.app
+          xcodebuild -version
+          swift --version
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        with:
+          languages: swift
+          build-mode: manual
+          config-file: ./.github/codeql/codeql-macos-critical-security.yml
+
+      - name: Build macOS for CodeQL
+        run: swift build --package-path apps/macos --product OpenClaw
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        with:
+          category: "/codeql-critical-security/macos"

@@ -2,7 +2,11 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
 const ensureOpenClawModelsJsonMock = vi.fn<
-  (config: unknown, agentDir: unknown) => Promise<{ agentDir: string; wrote: boolean }>
+  (
+    config: unknown,
+    agentDir: unknown,
+    options?: unknown,
+  ) => Promise<{ agentDir: string; wrote: boolean }>
 >(async () => ({ agentDir: "/tmp/agent", wrote: false }));
 const resolveModelMock = vi.fn<
   (
@@ -41,8 +45,8 @@ vi.mock("../agents/agent-paths.js", () => ({
 }));
 
 vi.mock("../agents/models-config.js", () => ({
-  ensureOpenClawModelsJson: (config: unknown, agentDir: unknown) =>
-    ensureOpenClawModelsJsonMock(config, agentDir),
+  ensureOpenClawModelsJson: (config: unknown, agentDir: unknown, options?: unknown) =>
+    ensureOpenClawModelsJsonMock(config, agentDir, options),
 }));
 
 vi.mock("../agents/harness/selection.js", () => ({
@@ -100,7 +104,14 @@ describe("gateway startup primary model warmup", () => {
       log: { warn: vi.fn() },
     });
 
-    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledWith(cfg, "/tmp/agent");
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledWith(
+      cfg,
+      "/tmp/agent",
+      expect.objectContaining({
+        providerDiscoveryProviderIds: ["openai-codex"],
+        providerDiscoveryTimeoutMs: 5000,
+      }),
+    );
     expect(resolveModelMock).toHaveBeenCalledWith("openai-codex", "gpt-5.4", "/tmp/agent", cfg, {
       skipProviderRuntimeHooks: true,
     });
@@ -208,7 +219,14 @@ describe("gateway startup primary model warmup", () => {
       modelId: "gpt-5.4",
       config: cfg,
     });
-    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledWith(cfg, "/tmp/agent");
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledWith(
+      cfg,
+      "/tmp/agent",
+      expect.objectContaining({
+        providerDiscoveryProviderIds: ["openai-codex"],
+        providerDiscoveryTimeoutMs: 5000,
+      }),
+    );
     expect(resolveModelMock).toHaveBeenCalled();
   });
 
