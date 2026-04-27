@@ -163,6 +163,31 @@ function isEmotionTagBoundary(char: string | undefined, side: "before" | "after"
   return /[\s.,!?;:)\]}>\/\[\\"'`-]/u.test(char);
 }
 
+function emotionTagWordsFromBody(body: string): string[] {
+  return body
+    .trim()
+    .split(/[ /-]+/u)
+    .map((word) => word.toLowerCase())
+    .filter(Boolean);
+}
+
+function isCompleteAllowlistedEmotionBody(body: string): boolean {
+  const words = emotionTagWordsFromBody(body);
+  return words.length > 0 && words.every((word) => EMOTION_TAG_WORDS.has(word));
+}
+
+function isFollowedByNonEmotionReferenceLink(text: string, afterIndex: number): boolean {
+  if (text[afterIndex] !== "[") {
+    return false;
+  }
+  const closingIndex = text.indexOf("]", afterIndex + 1);
+  if (closingIndex === -1) {
+    return false;
+  }
+  const referenceBody = text.slice(afterIndex + 1, closingIndex);
+  return !isCompleteAllowlistedEmotionBody(referenceBody);
+}
+
 function isLikelyEmotionTag(text: string, index: number, rawTag: string, body: string): boolean {
   if (body.includes("  ")) {
     return false;
@@ -175,15 +200,14 @@ function isLikelyEmotionTag(text: string, index: number, rawTag: string, body: s
   if (!trimmedBody || /^(?:https?|www)\b/i.test(trimmedBody)) {
     return false;
   }
-  const words = trimmedBody
-    .split(/[ /-]+/u)
-    .map((word) => word.toLowerCase())
-    .filter(Boolean);
-  if (words.length === 0 || words.some((word) => !EMOTION_TAG_WORDS.has(word))) {
+  if (!isCompleteAllowlistedEmotionBody(trimmedBody)) {
     return false;
   }
   const before = index > 0 ? text[index - 1] : undefined;
   const after = text[index + rawTag.length];
+  if (after === "[" && isFollowedByNonEmotionReferenceLink(text, index + rawTag.length)) {
+    return false;
+  }
   return isEmotionTagBoundary(before, "before") && isEmotionTagBoundary(after, "after");
 }
 
