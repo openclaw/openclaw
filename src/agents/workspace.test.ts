@@ -299,6 +299,20 @@ describe("ensureAgentWorkspace", () => {
     expect(voice).toContain("[calm]");
     expect(voice).toContain("ElevenLabs Eleven v3 and Eleven v3 Conversational");
   });
+
+  it("does not seed voice.md into legacy workspaces where it is absent", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await writeWorkspaceFile({ dir: tempDir, name: DEFAULT_IDENTITY_FILENAME, content: "custom" });
+    await writeWorkspaceFile({ dir: tempDir, name: DEFAULT_USER_FILENAME, content: "custom" });
+
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+    await expect(fs.access(path.join(tempDir, DEFAULT_VOICE_FILENAME))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    const state = await readWorkspaceState(tempDir);
+    expect(state.setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
+  });
 });
 
 describe("loadWorkspaceBootstrapFiles", () => {

@@ -528,14 +528,16 @@ export async function ensureAgentWorkspace(params?: {
 
   const agentsTemplate = await loadTemplate(DEFAULT_AGENTS_FILENAME);
   const soulTemplate = await loadTemplate(DEFAULT_SOUL_FILENAME);
-  const voiceTemplate = await loadTemplate(DEFAULT_VOICE_FILENAME);
   const toolsTemplate = await loadTemplate(DEFAULT_TOOLS_FILENAME);
   const identityTemplate = await loadTemplate(DEFAULT_IDENTITY_FILENAME);
   const userTemplate = await loadTemplate(DEFAULT_USER_FILENAME);
   const heartbeatTemplate = await loadTemplate(DEFAULT_HEARTBEAT_FILENAME);
   await writeFileIfMissing(agentsPath, agentsTemplate);
   await writeFileIfMissing(soulPath, soulTemplate);
-  await writeFileIfMissing(voicePath, voiceTemplate);
+  if (isBrandNewWorkspace) {
+    const voiceTemplate = await loadTemplate(DEFAULT_VOICE_FILENAME);
+    await writeFileIfMissing(voicePath, voiceTemplate);
+  }
   await writeFileIfMissing(toolsPath, toolsTemplate);
   const identityPathCreated = await writeFileIfMissing(identityPath, identityTemplate);
   await writeFileIfMissing(userPath, userTemplate);
