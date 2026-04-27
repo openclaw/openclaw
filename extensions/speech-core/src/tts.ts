@@ -1600,15 +1600,25 @@ export async function maybeApplyTtsToPayload(params: {
     typeof directives.ttsText === "string" && directives.ttsText.trim().length > 0
       ? directives.ttsText.trim()
       : undefined;
+  const plainVariantTtsOverride =
+    typeof plainSpeechDirectives.ttsText === "string" &&
+    plainSpeechDirectives.ttsText.trim().length > 0
+      ? plainSpeechDirectives.ttsText.trim()
+      : undefined;
+  const expressiveVariantTtsOverride =
+    typeof expressiveSpeechDirectives.ttsText === "string" &&
+    expressiveSpeechDirectives.ttsText.trim().length > 0
+      ? expressiveSpeechDirectives.ttsText.trim()
+      : undefined;
   const plainVariantText = hasTtsPlainText
-    ? (plainSpeechDirectives.ttsText?.trim() ??
+    ? (plainVariantTtsOverride ??
       (plainSpeechDirectives.hasDirective
         ? plainSpeechDirectives.cleanedText
         : ttsPlainText
       ).trim())
     : undefined;
   const expressiveVariantText = hasTtsSourceText
-    ? (expressiveSpeechDirectives.ttsText?.trim() ??
+    ? (expressiveVariantTtsOverride ??
       (expressiveSpeechDirectives.hasDirective
         ? expressiveSpeechDirectives.cleanedText
         : ttsSourceText
