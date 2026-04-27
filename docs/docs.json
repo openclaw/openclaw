@@ -1325,6 +1325,7 @@
                   "providers/lmstudio",
                   "providers/minimax",
                   "providers/mistral",
+                  "providers/mlx-openai-server",
                   "providers/moonshot",
                   "providers/nvidia",
                   "providers/ollama",

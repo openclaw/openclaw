@@ -1,0 +1,25 @@
+{
+  "id": "mlx-openai-server",
+  "enabledByDefault": true,
+  "providers": ["mlx-openai-server"],
+  "providerAuthEnvVars": {
+    "mlx-openai-server": ["MLX_OPENAI_SERVER_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "mlx-openai-server",
+      "method": "custom",
+      "choiceId": "mlx-openai-server",
+      "choiceLabel": "MLX OpenAI Server",
+      "choiceHint": "Apple Silicon self-hosted OpenAI-compatible server",
+      "groupId": "mlx-openai-server",
+      "groupLabel": "MLX OpenAI Server",
+      "groupHint": "Apple Silicon local MLX inference"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

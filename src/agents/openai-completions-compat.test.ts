@@ -47,6 +47,7 @@ describe("resolveOpenAICompletionsCompatDefaults", () => {
     "jan",
     "lmstudio",
     "lm-studio",
+    "mlx-openai-server",
     "text-generation-webui",
     "tabby",
     "tabbyapi",

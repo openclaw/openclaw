@@ -330,6 +330,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/lmstudio/**"
+"extensions: mlx-openai-server":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/mlx-openai-server/**"
+          - "docs/providers/mlx-openai-server.md"
 "extensions: litellm":
   - changed-files:
       - any-glob-to-any-file:

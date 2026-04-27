@@ -1,0 +1,4 @@
+export const MLX_OPENAI_SERVER_DEFAULT_BASE_URL = "http://127.0.0.1:8000/v1";
+export const MLX_OPENAI_SERVER_PROVIDER_LABEL = "MLX OpenAI Server";
+export const MLX_OPENAI_SERVER_DEFAULT_API_KEY_ENV_VAR = "MLX_OPENAI_SERVER_API_KEY";
+export const MLX_OPENAI_SERVER_MODEL_PLACEHOLDER = "mlx-community/Qwen3-Coder-Next-4bit";

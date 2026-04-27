@@ -236,6 +236,7 @@ const TEST_PROVIDER_ENV_TO_PROVIDER_IDS: Record<string, string[]> = {
   MINIMAX_API_KEY: ["minimax"],
   MINIMAX_OAUTH_TOKEN: ["minimax"],
   MODELSTUDIO_API_KEY: ["chutes"],
+  MLX_OPENAI_SERVER_API_KEY: ["mlx-openai-server"],
   MOONSHOT_API_KEY: ["moonshot"],
   NVIDIA_API_KEY: ["nvidia"],
   OLLAMA_API_KEY: ["ollama"],

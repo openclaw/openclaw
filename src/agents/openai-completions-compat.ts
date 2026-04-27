@@ -38,6 +38,7 @@ const KNOWN_LOCAL_STREAMING_USAGE_PROVIDERS = new Set([
   "lm-studio",
   "lmstudio",
   "localai",
+  "mlx-openai-server",
   "sglang",
   "tabby",
   "tabbyapi",

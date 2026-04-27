@@ -52,6 +52,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [LM Studio (local models)](/providers/lmstudio)
 - [MiniMax](/providers/minimax)
 - [Mistral](/providers/mistral)
+- [MLX OpenAI Server (local models)](/providers/mlx-openai-server)
 - [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
 - [NVIDIA](/providers/nvidia)
 - [Ollama (cloud + local models)](/providers/ollama)
