@@ -2454,7 +2454,8 @@ describe("spawnAcpDirect", () => {
         conversation: expect.objectContaining({
           channel: "telegram",
           accountId: "default",
-          conversationId: "-1003342490704:topic:2",
+          conversationId: "2",
+          parentConversationId: "-1003342490704",
         }),
       }),
     );

@@ -107,6 +107,9 @@ const defaultSubagentSpawnDeps: SubagentSpawnDeps = {
 };
 
 let subagentSpawnDeps: SubagentSpawnDeps = defaultSubagentSpawnDeps;
+const SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS = 60_000;
+const DEFAULT_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS = 60_000;
+const MAX_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS = 300_000;
 
 export type SpawnSubagentParams = {
   task: string;
@@ -197,6 +200,53 @@ function readGatewayRunId(response: Awaited<ReturnType<typeof callGateway>>): st
   }
   const { runId } = response as { runId?: unknown };
   return typeof runId === "string" && runId ? runId : undefined;
+}
+
+function resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds: number): number {
+  const runTimeoutMs =
+    Number.isFinite(runTimeoutSeconds) && runTimeoutSeconds > 0
+      ? Math.floor(runTimeoutSeconds * 1000)
+      : 0;
+  if (runTimeoutMs <= 0) {
+    return DEFAULT_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS;
+  }
+  return Math.min(
+    MAX_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS,
+    Math.max(DEFAULT_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS, runTimeoutMs + 5_000),
+  );
+}
+
+function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<SessionEntry> {
+  const entry: Partial<SessionEntry> = {};
+  const spawnDepth = patch.spawnDepth;
+  if (typeof spawnDepth === "number" && Number.isFinite(spawnDepth) && spawnDepth >= 0) {
+    entry.spawnDepth = Math.floor(spawnDepth);
+  }
+  if (patch.subagentRole === "orchestrator" || patch.subagentRole === "leaf") {
+    entry.subagentRole = patch.subagentRole;
+  }
+  if (patch.subagentControlScope === "children" || patch.subagentControlScope === "none") {
+    entry.subagentControlScope = patch.subagentControlScope;
+  }
+  if (typeof patch.spawnedBy === "string" && patch.spawnedBy.trim()) {
+    entry.spawnedBy = patch.spawnedBy.trim();
+  }
+  if (typeof patch.spawnedWorkspaceDir === "string" && patch.spawnedWorkspaceDir.trim()) {
+    entry.spawnedWorkspaceDir = patch.spawnedWorkspaceDir.trim();
+  }
+  if (typeof patch.thinkingLevel === "string" && patch.thinkingLevel.trim()) {
+    entry.thinkingLevel = patch.thinkingLevel.trim();
+  }
+  if (typeof patch.model === "string" && patch.model.trim()) {
+    const { provider, model } = splitModelRef(patch.model.trim());
+    if (model) {
+      entry.model = model;
+      if (provider) {
+        entry.modelProvider = provider;
+      }
+    }
+  }
+  return entry;
 }
 
 function loadSubagentConfig() {
@@ -430,7 +480,7 @@ async function cleanupProvisionalSession(
         emitLifecycleHooks: options?.emitLifecycleHooks === true,
         deleteTranscript: options?.deleteTranscript === true,
       },
-      timeoutMs: 10_000,
+      timeoutMs: SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
     });
   } catch {
     // Best-effort cleanup only.
@@ -752,14 +802,25 @@ export async function spawnSubagentDirect(
   const { resolvedModel, thinkingOverride } = plan;
   const patchChildSession = async (patch: Record<string, unknown>): Promise<string | undefined> => {
     try {
-      await callSubagentGateway({
-        method: "sessions.patch",
-        params: { key: childSessionKey, ...patch },
-        timeoutMs: 10_000,
+      const target = resolveGatewaySessionStoreTarget({
+        cfg,
+        key: childSessionKey,
+      });
+      await updateSubagentSessionStore(target.storePath, (store) => {
+        pruneLegacyStoreKeys({
+          store,
+          canonicalKey: target.canonicalKey,
+          candidates: target.storeKeys,
+        });
+        store[target.canonicalKey] = mergeSessionEntry(
+          store[target.canonicalKey],
+          buildDirectChildSessionPatch(patch),
+        );
       });
       return undefined;
     } catch (err) {
-      return err instanceof Error ? err.message : typeof err === "string" ? err : "error";
+      const message = err instanceof Error ? err.message : typeof err === "string" ? err : "error";
+      return `child session patch failed: ${message}`;
     }
   };
 
@@ -808,7 +869,7 @@ export async function spawnSubagentDirect(
         await callSubagentGateway({
           method: "sessions.delete",
           params: { key: childSessionKey, emitLifecycleHooks: false },
-          timeoutMs: 10_000,
+          timeoutMs: SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
         });
       } catch {
         // Best-effort cleanup only.
@@ -841,7 +902,7 @@ export async function spawnSubagentDirect(
         await callSubagentGateway({
           method: "sessions.delete",
           params: { key: childSessionKey, emitLifecycleHooks: false },
-          timeoutMs: 10_000,
+          timeoutMs: SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
         });
       } catch {
         // Best-effort cleanup only.
@@ -1019,7 +1080,7 @@ export async function spawnSubagentDirect(
           : {}),
         ...publicSpawnedMetadata,
       },
-      timeoutMs: 10_000,
+      timeoutMs: resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds),
     });
     const runId = readGatewayRunId(response);
     if (runId) {
@@ -1074,7 +1135,7 @@ export async function spawnSubagentDirect(
           deleteTranscript: true,
           emitLifecycleHooks,
         },
-        timeoutMs: 10_000,
+        timeoutMs: SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
       });
     } catch {
       // Best-effort only.
@@ -1125,7 +1186,7 @@ export async function spawnSubagentDirect(
           deleteTranscript: true,
           emitLifecycleHooks: threadBindingReady,
         },
-        timeoutMs: 10_000,
+        timeoutMs: SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
       });
     } catch {
       // Best-effort cleanup only.

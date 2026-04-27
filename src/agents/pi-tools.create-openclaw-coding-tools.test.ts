@@ -86,6 +86,25 @@ function expectNoSubagentControlTools(tools: ReturnType<typeof createOpenClawCod
 describe("createOpenClawCodingTools", () => {
   const testConfig: OpenClawConfig = {};
 
+  it("exposes gateway config and restart actions to owner sessions", () => {
+    const tools = createOpenClawCodingTools({ config: testConfig, senderIsOwner: true });
+    const gateway = tools.find((tool) => tool.name === "gateway");
+    expect(gateway).toBeDefined();
+
+    const parameters = gateway?.parameters as {
+      properties?: Record<string, unknown>;
+    };
+    const action = parameters.properties?.action as
+      | { const?: unknown; enum?: unknown[] }
+      | undefined;
+    const values = new Set<string>();
+    collectActionValues(action, values);
+
+    expect([...values]).toEqual(
+      expect.arrayContaining(["restart", "config.get", "config.patch", "config.apply"]),
+    );
+  });
+
   it("preserves action enums in normalized schemas", () => {
     const defaultTools = createOpenClawCodingTools({ config: testConfig, senderIsOwner: true });
     const toolNames = ["canvas", "nodes", "cron", "gateway", "message"];

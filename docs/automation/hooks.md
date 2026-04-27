@@ -126,6 +126,11 @@ Each event includes: `type`, `action`, `sessionKey`, `timestamp`, `messages` (pu
 
 **Compaction events**: `session:compact:before` includes `messageCount`, `tokenCount`. `session:compact:after` adds `compactedCount`, `summaryLength`, `tokensBefore`, `tokensAfter`.
 
+`command:stop` observes the user issuing `/stop`; it is cancellation/command
+lifecycle, not an agent-finalization gate. Plugins that need to inspect a
+natural final answer and ask the agent for one more pass should use the typed
+plugin hook `before_agent_finalize` instead. See [Plugin hooks](/plugins/hooks).
+
 ## Hook discovery
 
 Hooks are discovered from these directories, in order of increasing override precedence:
@@ -168,7 +173,7 @@ openclaw hooks enable <hook-name>
 
 ### session-memory details
 
-Extracts the last 15 user/assistant messages, generates a descriptive filename slug via LLM, and saves to `<workspace>/memory/YYYY-MM-DD-slug.md`. Requires `workspace.dir` to be configured.
+Extracts the last 15 user/assistant messages, generates a descriptive filename slug via LLM, and saves to `<workspace>/memory/YYYY-MM-DD-slug.md` using the host local date. Requires `workspace.dir` to be configured.
 
 <a id="bootstrap-extra-files"></a>
 

@@ -18,12 +18,12 @@ describe("agents_list tool", () => {
     loadConfigMock.mockReset();
   });
 
-  it("returns model and embedded harness metadata for allowed agents", async () => {
+  it("returns model and agent runtime metadata for allowed agents", async () => {
     loadConfigMock.mockReturnValue({
       agents: {
         defaults: {
           model: "anthropic/claude-opus-4.5",
-          embeddedHarness: { runtime: "pi", fallback: "pi" },
+          agentRuntime: { id: "pi", fallback: "pi" },
           subagents: { allowAgents: ["codex"] },
         },
         list: [
@@ -32,7 +32,7 @@ describe("agents_list tool", () => {
             id: "codex",
             name: "Codex",
             model: "openai/gpt-5.5",
-            embeddedHarness: { runtime: "codex", fallback: "none" },
+            agentRuntime: { id: "codex", fallback: "none" },
           },
         ],
       },
@@ -51,14 +51,14 @@ describe("agents_list tool", () => {
           id: "main",
           configured: true,
           model: "anthropic/claude-opus-4.5",
-          embeddedHarness: { runtime: "pi", source: "defaults" },
+          agentRuntime: { id: "pi", source: "defaults" },
         },
         {
           id: "codex",
           name: "Codex",
           configured: true,
           model: "openai/gpt-5.5",
-          embeddedHarness: { runtime: "codex", fallback: "none", source: "agent" },
+          agentRuntime: { id: "codex", fallback: "none", source: "agent" },
         },
       ],
     });
@@ -85,7 +85,7 @@ describe("agents_list tool", () => {
       agents: [
         {
           id: "main",
-          embeddedHarness: { runtime: "codex", source: "env" },
+          agentRuntime: { id: "codex", source: "env" },
         },
       ],
     });

@@ -14,6 +14,7 @@ import {
 import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions/paths.js";
 import { isExecCompletionEvent } from "../../infra/heartbeat-events-filter.js";
 import { redactSensitiveText } from "../../logging/redact.js";
+import { hasInterSessionUserProvenance } from "../../sessions/input-provenance.js";
 import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
 import { hashText } from "./hash.js";
 
@@ -504,12 +505,15 @@ export async function buildSessionEntry(
         continue;
       }
       const message = (record as { message?: unknown }).message as
-        | { role?: unknown; content?: unknown }
+        | { role?: unknown; content?: unknown; provenance?: unknown }
         | undefined;
       if (!message || typeof message.role !== "string") {
         continue;
       }
       if (message.role !== "user" && message.role !== "assistant") {
+        continue;
+      }
+      if (message.role === "user" && hasInterSessionUserProvenance(message)) {
         continue;
       }
       const rawText = collectRawSessionText(message.content);

@@ -35,6 +35,7 @@ agent automation and verification.
 
 ```bash
 openclaw browser --browser-profile openclaw doctor
+openclaw browser --browser-profile openclaw doctor --deep
 openclaw browser --browser-profile openclaw status
 openclaw browser --browser-profile openclaw start
 openclaw browser --browser-profile openclaw open https://example.com
