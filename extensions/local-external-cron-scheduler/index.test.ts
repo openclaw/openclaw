@@ -149,6 +149,7 @@ describe("local-external-cron-scheduler", () => {
       jobs: [expect.objectContaining({ jobId: "job-1", nextRunAtMs: 1_000 })],
     });
 
+    // Single-fire finished (no job on event) removes the job
     await syncCronChanged({
       config,
       nowMs: 300,
@@ -160,6 +161,85 @@ describe("local-external-cron-scheduler", () => {
       updatedAtMs: 300,
       jobs: [],
     });
+  });
+
+  it("finished on a recurring job upserts the new wake time instead of removing", async () => {
+    const root = await makeTempRoot();
+    const statePath = path.join(root, "jobs.json");
+    const config = resolveLocalExternalCronSchedulerConfig({ enabled: true, statePath });
+
+    // Add a recurring job
+    await syncCronChanged({
+      config,
+      nowMs: 100,
+      event: {
+        action: "added",
+        jobId: "recurring-1",
+        job: {
+          id: "recurring-1",
+          enabled: true,
+          schedule: { kind: "every", everyMs: 60_000 },
+          state: { nextRunAtMs: 60_000 },
+        },
+      },
+    });
+
+    expect(await readJson(statePath)).toEqual({
+      version: 1,
+      updatedAtMs: 100,
+      jobs: [expect.objectContaining({ jobId: "recurring-1", nextRunAtMs: 60_000 })],
+    });
+
+    // Finished event on recurring job — job still exists with advanced nextRunAtMs
+    await syncCronChanged({
+      config,
+      nowMs: 200,
+      event: {
+        action: "finished",
+        jobId: "recurring-1",
+        job: {
+          id: "recurring-1",
+          enabled: true,
+          schedule: { kind: "every", everyMs: 60_000 },
+          state: { nextRunAtMs: 120_000 },
+        },
+      },
+    });
+
+    // Should upsert with new wake time, NOT remove
+    expect(await readJson(statePath)).toEqual({
+      version: 1,
+      updatedAtMs: 200,
+      jobs: [expect.objectContaining({ jobId: "recurring-1", nextRunAtMs: 120_000 })],
+    });
+  });
+
+  it("started event without a job is a no-op (does not remove existing schedule)", async () => {
+    const root = await makeTempRoot();
+    const statePath = path.join(root, "jobs.json");
+    const config = resolveLocalExternalCronSchedulerConfig({ enabled: true, statePath });
+
+    // Seed a job in the state file
+    await syncCronChanged({
+      config,
+      nowMs: 100,
+      event: {
+        action: "added",
+        jobId: "job-1",
+        job: { id: "job-1", enabled: true, state: { nextRunAtMs: 5_000 } },
+      },
+    });
+
+    // Started event without a job object — should not remove
+    await syncCronChanged({
+      config,
+      nowMs: 200,
+      event: { action: "started", jobId: "job-1" },
+    });
+
+    const state = (await readJson(statePath)) as { jobs: { jobId: string }[] };
+    expect(state.jobs).toHaveLength(1);
+    expect(state.jobs[0]!.jobId).toBe("job-1");
   });
 
   it("omits disabled jobs unless includeDisabled is configured", () => {

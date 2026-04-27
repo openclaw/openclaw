@@ -225,18 +225,28 @@ export async function syncCronChanged(params: {
   nowMs?: number;
 }): Promise<void> {
   const nowMs = params.nowMs ?? Date.now();
+  const { action, jobId } = params.event;
   const job = params.event.job;
   const schedulerJob = job ? buildSchedulerJob({ job, config: params.config, nowMs }) : null;
-  if (schedulerJob && params.event.action !== "removed") {
+
+  // For finished events on recurring jobs, the job still exists with an updated
+  // nextRunAtMs — upsert the new wake time instead of removing. This avoids a
+  // race where external schedulers briefly see the job disappear before the
+  // subsequent "updated" event re-adds it.
+  if (schedulerJob && action !== "removed") {
     await upsertJobs({ statePath: params.config.statePath, jobs: [schedulerJob], nowMs });
     return;
   }
-  if (
-    params.event.action === "removed" ||
-    params.event.action === "finished" ||
-    params.event.nextRunAtMs === undefined
-  ) {
-    await removeJobs({ statePath: params.config.statePath, jobIds: [params.event.jobId], nowMs });
+
+  // "started" without a resolvable job is a transient state — don't remove the
+  // existing wake schedule since the job is actively running and will produce a
+  // "finished" event shortly.
+  if (action === "started") {
+    return;
+  }
+
+  if (action === "removed" || action === "finished") {
+    await removeJobs({ statePath: params.config.statePath, jobIds: [jobId], nowMs });
   }
 }
 
