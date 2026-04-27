@@ -27,7 +27,8 @@ export function isSystemdUserBusUnavailableDetail(detail?: string): boolean {
     normalized.includes("failed to connect to user scope bus") ||
     normalized.includes("dbus_session_bus_address") ||
     normalized.includes("xdg_runtime_dir") ||
-    normalized.includes("no medium found")
+    normalized.includes("no medium found") ||
+    normalized.includes("transport endpoint is not connected")
   );
 }
 
