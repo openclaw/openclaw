@@ -13,7 +13,7 @@ import {
   makeBootstrapWarn as realMakeBootstrapWarn,
   resolveBootstrapContextForRun as realResolveBootstrapContextForRun,
 } from "./bootstrap-files.js";
-import { buildRunClaudeCliAgentParams } from "./cli-runner.js";
+import { buildRunClaudeCliAgentParams, runPreparedCliAgent } from "./cli-runner.js";
 import {
   createManagedRun,
   mockSuccessfulCliRun,
@@ -31,6 +31,10 @@ import {
   executePreparedCliRun,
 } from "./cli-runner/execute.js";
 import { buildSystemPrompt } from "./cli-runner/helpers.js";
+import {
+  recordCliMessagingToolSend,
+  resetCliMessagingToolSendsForTest,
+} from "./cli-runner/messaging-tool-tracker.js";
 import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
 import { createClaudeApiErrorFixture } from "./test-helpers/claude-api-error-fixture.js";
@@ -49,6 +53,7 @@ beforeEach(() => {
 afterEach(() => {
   resetClaudeLiveSessionsForTest();
   replyRunTesting.resetReplyRunRegistry();
+  resetCliMessagingToolSendsForTest();
 });
 
 function buildPreparedCliRunContext(params: {
@@ -507,6 +512,20 @@ describe("runCliAgent spawn path", () => {
     expect(params.messageProvider).toBe("acp");
   });
 
+  it("forwards account context through the compat wrapper", () => {
+    const params = buildRunClaudeCliAgentParams({
+      sessionId: "openclaw-session",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      prompt: "hi",
+      timeoutMs: 1_000,
+      runId: "run-claude-account-wrapper",
+      agentAccountId: "ops",
+    });
+
+    expect(params.agentAccountId).toBe("ops");
+  });
+
   it("forwards static extra system prompt through the compat wrapper", () => {
     const params = buildRunClaudeCliAgentParams({
       sessionId: "openclaw-session",
@@ -586,6 +605,41 @@ describe("runCliAgent spawn path", () => {
     expect(input.noOutputTimeoutMs).toBeGreaterThanOrEqual(1_000);
     expect(input.replaceExistingScope).toBe(true);
     expect(input.scopeKey).toContain("thread-123");
+  });
+
+  it("returns messaging tool sends recorded by bundled MCP", async () => {
+    supervisorSpawnMock.mockImplementationOnce(async () => {
+      recordCliMessagingToolSend({
+        sessionKey: "agent:main:telegram:chat123",
+        target: { tool: "message", provider: "telegram", to: "chat123" },
+        text: "sent from tool",
+      });
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "final note",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    const result = await runPreparedCliAgent(
+      buildPreparedCliRunContext({
+        provider: "codex-cli",
+        model: "gpt-5.4",
+        runId: "run-cli-message-tool",
+        sessionKey: "agent:main:telegram:chat123",
+      }),
+    );
+
+    expect(result.didSendViaMessagingTool).toBe(true);
+    expect(result.messagingToolSentTexts).toEqual(["sent from tool"]);
+    expect(result.messagingToolSentTargets).toEqual([
+      { tool: "message", provider: "telegram", to: "chat123" },
+    ]);
   });
 
   it("passes Codex system prompts through model_instructions_file", async () => {

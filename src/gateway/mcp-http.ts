@@ -4,10 +4,12 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
+import { recordCliMessagingToolSend } from "../agents/cli-runner/messaging-tool-tracker.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logDebug, logWarn } from "../logger.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { handleMcpJsonRpc } from "./mcp-http.handlers.js";
 import {
   clearActiveMcpLoopbackRuntimeByOwnerToken,
@@ -20,6 +22,7 @@ import {
   readMcpHttpBody,
   resolveMcpRequestContext,
   validateMcpLoopbackRequest,
+  type McpRequestContext,
 } from "./mcp-http.request.js";
 import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
 
@@ -42,6 +45,57 @@ function shouldLogMcpLoopbackTraffic(): boolean {
     isTruthyEnvValue(process.env.OPENCLAW_CLI_BACKEND_LOG_OUTPUT) ||
     isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND_DEBUG)
   );
+}
+
+function readStringField(record: Record<string, unknown>, key: string): string | undefined {
+  return normalizeOptionalString(record[key]);
+}
+
+function resolveMessageToolSentText(args: Record<string, unknown>): string | undefined {
+  return (
+    readStringField(args, "message") ??
+    readStringField(args, "text") ??
+    readStringField(args, "body") ??
+    readStringField(args, "content")
+  );
+}
+
+function recordMcpMessagingToolSend(params: {
+  requestContext: McpRequestContext;
+  toolName?: string;
+  args: Record<string, unknown>;
+  isError: boolean;
+}): void {
+  if (params.isError || params.toolName !== "message") {
+    return;
+  }
+  const action = readStringField(params.args, "action") ?? "send";
+  if (action !== "send" && action !== "thread-reply") {
+    return;
+  }
+  const provider =
+    readStringField(params.args, "provider") ??
+    readStringField(params.args, "channel") ??
+    params.requestContext.messageProvider ??
+    "message";
+  const to =
+    readStringField(params.args, "to") ??
+    readStringField(params.args, "target") ??
+    params.requestContext.currentChannelId ??
+    params.requestContext.agentTo;
+  const accountId = readStringField(params.args, "accountId") ?? params.requestContext.accountId;
+  const threadId = readStringField(params.args, "threadId") ?? params.requestContext.agentThreadId;
+  recordCliMessagingToolSend({
+    sessionKey: params.requestContext.sessionKey,
+    target: {
+      tool: params.toolName,
+      provider,
+      ...(accountId ? { accountId } : {}),
+      ...(to ? { to } : {}),
+      ...(threadId ? { threadId } : {}),
+    },
+    text: resolveMessageToolSentText(params.args),
+  });
 }
 
 function logMcpLoopbackTraffic(step: string, details: Record<string, unknown>): void {
@@ -144,8 +198,20 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
               message.method === "tools/call" && isRecord(message.params)
                 ? message.params.name
                 : undefined;
+            const toolArgs =
+              message.method === "tools/call" &&
+              isRecord(message.params) &&
+              isRecord(message.params.arguments)
+                ? message.params.arguments
+                : {};
             const isError =
               isRecord(response) && isRecord(response.result) && response.result.isError === true;
+            recordMcpMessagingToolSend({
+              requestContext,
+              toolName: typeof toolName === "string" ? toolName : undefined,
+              args: toolArgs,
+              isError,
+            });
             logMcpLoopbackTraffic("response", {
               method: message.method,
               toolName: typeof toolName === "string" ? toolName : undefined,

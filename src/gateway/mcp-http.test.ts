@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  drainCliMessagingToolSends,
+  resetCliMessagingToolSendsForTest,
+} from "../agents/cli-runner/messaging-tool-tracker.js";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
 
 type MockGatewayTool = {
@@ -91,6 +95,7 @@ async function sendRaw(params: {
 beforeEach(() => {
   resolveGatewayScopedToolsMock.mockClear();
   runBeforeToolCallHookMock.mockClear();
+  resetCliMessagingToolSendsForTest();
   runBeforeToolCallHookMock.mockImplementation(
     async (args: { params: unknown }): Promise<MockBeforeToolCallHookResult> => ({
       blocked: false,
@@ -115,6 +120,7 @@ beforeEach(() => {
 afterEach(async () => {
   await server?.close();
   server = undefined;
+  resetCliMessagingToolSendsForTest();
 });
 
 describe("mcp loopback server", () => {
@@ -460,6 +466,49 @@ describe("mcp loopback server", () => {
     expect(execute).not.toHaveBeenCalled();
     expect(payload.result?.isError).toBe(true);
     expect(payload.result?.content?.[0]?.text).toBe("blocked by hook");
+  });
+
+  it("records successful message tool sends for CLI duplicate suppression", async () => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: "text", text: "sent" }],
+    }));
+    resolveGatewayScopedToolsMock.mockReturnValue({
+      agentId: "main",
+      tools: [
+        {
+          name: "message",
+          description: "send a message",
+          parameters: { type: "object", properties: {} },
+          execute,
+        },
+      ],
+    });
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime ? resolveMcpLoopbackBearerToken(runtime, false) : undefined,
+      headers: {
+        "content-type": "application/json",
+        "x-session-key": "agent:main:telegram:chat123",
+        "x-openclaw-message-channel": "telegram",
+        "x-openclaw-message-to": "chat123",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "message", arguments: { action: "send", message: "hello" } },
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(execute).toHaveBeenCalledOnce();
+    expect(drainCliMessagingToolSends("agent:main:telegram:chat123")).toEqual({
+      targets: [{ tool: "message", provider: "telegram", to: "chat123" }],
+      texts: ["hello"],
+    });
   });
 
   it("forwards the request abort signal to loopback tool execution", async () => {

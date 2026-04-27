@@ -2,6 +2,7 @@ import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { drainCliMessagingToolSends } from "./cli-runner/messaging-tool-tracker.js";
 import { loadCliSessionHistoryMessages } from "./cli-runner/session-history.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 import { FailoverError, isFailoverError, resolveFailoverStatus } from "./failover-error.js";
@@ -123,6 +124,7 @@ export async function runPreparedCliAgent(
 ): Promise<EmbeddedPiRunResult> {
   const { executePreparedCliRun } = await import("./cli-runner/execute.runtime.js");
   const { params } = context;
+  drainCliMessagingToolSends(params.sessionKey);
   const hookRunner = getGlobalHookRunner();
   const hasLlmInputHooks = hookRunner?.hasHooks("llm_input") === true;
   const hasLlmOutputHooks = hookRunner?.hasHooks("llm_output") === true;
@@ -233,9 +235,17 @@ export async function runPreparedCliAgent(
     const text = resultParams.output.text?.trim();
     const rawText = resultParams.output.rawText?.trim();
     const payloads = text ? [{ text }] : undefined;
+    const messagingToolSends = drainCliMessagingToolSends(params.sessionKey);
 
     return {
       payloads,
+      ...(messagingToolSends.targets.length > 0 || messagingToolSends.texts.length > 0
+        ? {
+            didSendViaMessagingTool: true,
+            messagingToolSentTargets: messagingToolSends.targets,
+            messagingToolSentTexts: messagingToolSends.texts,
+          }
+        : {}),
       meta: {
         durationMs: Date.now() - context.started,
         ...(resultParams.output.finalPromptText
@@ -413,6 +423,7 @@ export function buildRunClaudeCliAgentParams(params: RunClaudeCliAgentParams): R
     messageTo: params.messageTo,
     messageThreadId: params.messageThreadId,
     currentChannelId: params.currentChannelId,
+    agentAccountId: params.agentAccountId,
     senderIsOwner: params.senderIsOwner,
   };
 }
