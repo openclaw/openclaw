@@ -6,6 +6,12 @@ export type EmbeddedPiAgentMeta = {
   provider: string;
   model: string;
   compactionCount?: number;
+  /**
+   * Token count estimate after the last auto-compaction (overflow or timeout).
+   * Used to update session totalTokens so /status shows accurate context usage
+   * after compaction, without relying on API usage which reflects pre-compaction state.
+   */
+  compactionTokensAfter?: number;
   promptTokens?: number;
   usage?: {
     input?: number;
