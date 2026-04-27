@@ -39,6 +39,25 @@ function resolveSlackBaseConversationId(params: {
     : params.message.channel;
 }
 
+export function resolveSlackInitialAgentRoute(params: {
+  ctx: SlackRoutingContextDeps;
+  account: ResolvedSlackAccount;
+  message: SlackMessageEvent;
+  isDirectMessage: boolean;
+  isRoom: boolean;
+}) {
+  return resolveAgentRoute({
+    cfg: params.ctx.cfg,
+    channel: "slack",
+    accountId: params.account.accountId,
+    teamId: params.ctx.teamId || undefined,
+    peer: {
+      kind: params.isDirectMessage ? "direct" : params.isRoom ? "channel" : "group",
+      id: params.isDirectMessage ? (params.message.user ?? "unknown") : params.message.channel,
+    },
+  });
+}
+
 export function resolveSlackRoutingContext(params: {
   ctx: SlackRoutingContextDeps;
   account: ResolvedSlackAccount;
@@ -59,15 +78,12 @@ export function resolveSlackRoutingContext(params: {
     isRoomish,
     seedTopLevelRoomThread,
   } = params;
-  let route = resolveAgentRoute({
-    cfg: ctx.cfg,
-    channel: "slack",
-    accountId: account.accountId,
-    teamId: ctx.teamId || undefined,
-    peer: {
-      kind: isDirectMessage ? "direct" : isRoom ? "channel" : "group",
-      id: isDirectMessage ? (message.user ?? "unknown") : message.channel,
-    },
+  let route = resolveSlackInitialAgentRoute({
+    ctx,
+    account,
+    message,
+    isDirectMessage,
+    isRoom,
   });
 
   const chatType = isDirectMessage ? "direct" : isGroupDm ? "group" : "channel";
@@ -88,7 +104,7 @@ export function resolveSlackRoutingContext(params: {
   // This keeps a thread root and its later replies on one parent session
   // without returning to the old "every channel message is its own thread"
   // behavior (regression from #10686).
-  const seedCandidateThreadId = threadContext.conversationThreadTs ?? threadContext.messageTs;
+  const seedCandidateThreadId = threadContext.incomingThreadTs ?? threadContext.messageTs;
   const seededRoomThreadId =
     !isThreadReply &&
     isRoomish &&

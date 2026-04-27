@@ -4,7 +4,7 @@ import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
 import { resolveSlackRoutingContext, type SlackRoutingContextDeps } from "./prepare-routing.js";
 
-function buildCtx(overrides?: { replyToMode?: "all" | "first" | "off" }) {
+function buildCtx(overrides?: { replyToMode?: "all" | "first" | "off" | "batched" }) {
   const replyToMode = overrides?.replyToMode ?? "all";
   return {
     cfg: {
@@ -18,7 +18,7 @@ function buildCtx(overrides?: { replyToMode?: "all" | "first" | "off" }) {
   } satisfies SlackRoutingContextDeps;
 }
 
-function buildAccount(replyToMode: "all" | "first" | "off"): ResolvedSlackAccount {
+function buildAccount(replyToMode: "all" | "first" | "off" | "batched"): ResolvedSlackAccount {
   return {
     accountId: "default",
     enabled: true,

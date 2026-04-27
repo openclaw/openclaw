@@ -59,7 +59,7 @@ import { resolveSlackRoomContextHints } from "../room-context.js";
 import { sendMessageSlack } from "../send.runtime.js";
 import { resolveSlackThreadStarter } from "../thread.js";
 import { resolveSlackMessageContent } from "./prepare-content.js";
-import { resolveSlackRoutingContext } from "./prepare-routing.js";
+import { resolveSlackInitialAgentRoute, resolveSlackRoutingContext } from "./prepare-routing.js";
 import { resolveSlackThreadContextData } from "./prepare-thread-context.js";
 import type { PreparedSlackMessage } from "./types.js";
 
@@ -286,6 +286,26 @@ export async function prepareSlackMessage(params: {
   const explicitlyMentioned = Boolean(
     ctx.botUserId && message.text?.includes(`<@${ctx.botUserId}>`),
   );
+  const initialRoute = resolveSlackInitialAgentRoute({
+    ctx,
+    account,
+    message,
+    isDirectMessage,
+    isRoom,
+  });
+  const initialMentionRegexes = resolveCachedMentionRegexes(ctx, initialRoute.agentId);
+  const wasMentionedForRouting =
+    opts.wasMentioned ??
+    (!isDirectMessage &&
+      matchesMentionWithExplicit({
+        text: message.text ?? "",
+        mentionRegexes: initialMentionRegexes,
+        explicit: {
+          hasAnyMention,
+          isExplicitlyMentioned: explicitlyMentioned,
+          canResolveExplicit: Boolean(ctx.botUserId),
+        },
+      }));
   const routing = resolveSlackRoutingContext({
     ctx,
     account,
@@ -294,8 +314,7 @@ export async function prepareSlackMessage(params: {
     isGroupDm,
     isRoom,
     isRoomish,
-    seedTopLevelRoomThread:
-      opts.source === "app_mention" || opts.wasMentioned === true || explicitlyMentioned,
+    seedTopLevelRoomThread: opts.source === "app_mention" || wasMentionedForRouting,
   });
   const {
     route,
