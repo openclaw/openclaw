@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mergeProviderModels } from "./models-config.merge.js";
+import { mergeProviderModels, mergeProviders } from "./models-config.merge.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
 /**
@@ -84,10 +84,41 @@ describe("mergeProviderModels — explicit-only input defaults", () => {
       { id: "titan-embed-text-v2" },
       { id: "some-custom-text-only-model" },
       { id: "claude-2" }, // pre-vision Claude
+      { id: "llama-3.2-1b-instruct" }, // text-only small Llama
+      { id: "llama-3.2-3b-instruct" }, // text-only small Llama
+      { id: "fo1-embed" }, // bare 'o1' substring must NOT match
+      { id: "us.amazon.nova-pro-o4-v1:0" }, // bare 'o4' substring must NOT match
     ]);
     const merged = mergeProviderModels(implicit, explicit);
     for (const m of merged.models ?? []) {
       expect("input" in (m as object)).toBe(false);
+    }
+  });
+
+  it("still flags genuine Llama vision variants", () => {
+    const implicit = makeProvider([]);
+    const explicit = makeProvider([
+      { id: "llama-3.2-11b-vision-instruct" },
+      { id: "llama-3.2-90b-vision" },
+      { id: "llama-4-scout-vision" },
+    ]);
+    const merged = mergeProviderModels(implicit, explicit);
+    for (const m of merged.models ?? []) {
+      expect((m as { input?: string[] }).input).toEqual(["text", "image"]);
+    }
+  });
+
+  it("flags OpenAI o-series at token boundaries only", () => {
+    const implicit = makeProvider([]);
+    const explicit = makeProvider([
+      { id: "o1" },
+      { id: "o1-mini" },
+      { id: "o3-pro" },
+      { id: "openai/o4-mini" },
+    ]);
+    const merged = mergeProviderModels(implicit, explicit);
+    for (const m of merged.models ?? []) {
+      expect((m as { input?: string[] }).input).toEqual(["text", "image"]);
     }
   });
 
@@ -114,5 +145,26 @@ describe("mergeProviderModels — explicit-only input defaults", () => {
         contextWindow: 1_000_000,
       }),
     );
+  });
+});
+
+describe("mergeProviders — applies defaults to brand-new providers", () => {
+  it("defaults input for a provider that has no implicit (discovery) entry", () => {
+    // Simulates a user declaring a provider entirely in openclaw.json that
+    // discovery never returns (e.g. discovery is off, or this provider has
+    // no dynamic-catalog support). Previously these entries bypassed the
+    // merge path entirely and were returned verbatim.
+    const merged = mergeProviders({
+      implicit: {},
+      explicit: {
+        "custom-anthropic": makeProvider([
+          { id: "claude-opus-4-7", name: "Opus via custom backend" },
+        ]),
+      },
+    });
+    expect((merged["custom-anthropic"]?.models?.[0] as { input?: string[] })?.input).toEqual([
+      "text",
+      "image",
+    ]);
   });
 });
