@@ -86,6 +86,34 @@ fnm use 24
 
 ## Troubleshooting
 
+### Shell Node vs service Node mismatch
+
+If you use `nvm`/`fnm`/`mise`/`asdf`, your interactive shell may use a different Node binary than the daemon/service (launchd/systemd/Task Scheduler). Verify both paths when debugging startup/runtime issues.
+
+```bash
+node -v
+npm -v
+which node
+which openclaw
+openclaw gateway status
+```
+
+For service-managed installs, also inspect the service definition/runtime path:
+
+```bash
+# Linux (systemd user service)
+systemctl --user cat openclaw-gateway.service
+
+# macOS (LaunchAgent)
+launchctl print "gui/$(id -u)/ai.openclaw.gateway" | grep -E "program|program arguments" -i
+```
+
+After Node upgrades or switching Node managers, restart the gateway service so it picks up the intended runtime:
+
+```bash
+openclaw gateway restart
+```
+
 ### `openclaw: command not found`
 
 This almost always means npm's global bin directory isn't on your PATH.
