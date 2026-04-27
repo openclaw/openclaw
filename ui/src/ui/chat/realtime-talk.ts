@@ -51,8 +51,9 @@ function resolveTransport(session: RealtimeTalkSessionResult): string {
     protocol?: string;
     websocketUrl?: string;
   };
-  if (raw.protocol === "google-live-bidi" || raw.websocketUrl) {
+  if (raw.protocol === "google-live-bidi" || (raw.websocketUrl && raw.provider?.trim().toLowerCase() === "google")) {
     return "json-pcm-websocket";
+  }
   }
   if (raw.provider?.trim().toLowerCase() === "google") {
     throw new Error(buildGoogleWebRtcUnsupportedMessage());
