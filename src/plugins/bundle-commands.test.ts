@@ -13,7 +13,7 @@ vi.mock("./manifest-registry.js", () => ({
   loadPluginManifestRegistry: () => ({ diagnostics: [], plugins: mocks.plugins }),
 }));
 
-vi.mock("./plugin-registry.js", () => ({
+vi.mock("./plugin-registry-contributions.js", () => ({
   loadPluginManifestRegistryForPluginRegistry: () => ({ diagnostics: [], plugins: mocks.plugins }),
 }));
 
@@ -21,11 +21,23 @@ vi.mock("./config-state.js", () => ({
   hasExplicitPluginConfig: (plugins?: { entries?: Record<string, unknown> }) =>
     Boolean(plugins?.entries && Object.keys(plugins.entries).length > 0),
   normalizePluginsConfig: (plugins?: unknown) => plugins,
+  resolveEffectiveEnableState: (params: {
+    config?: { entries?: Record<string, { enabled?: boolean }> };
+    id: string;
+  }) => ({
+    enabled: params.config?.entries?.[params.id]?.enabled !== false,
+  }),
   resolveEffectivePluginActivationState: (params: {
     config?: { entries?: Record<string, { enabled?: boolean }> };
     id: string;
   }) => ({
     activated: params.config?.entries?.[params.id]?.enabled !== false,
+  }),
+  resolveEffectiveEnableState: (params: {
+    config?: { entries?: Record<string, { enabled?: boolean }> };
+    id: string;
+  }) => ({
+    enabled: params.config?.entries?.[params.id]?.enabled !== false,
   }),
 }));
 

@@ -1126,6 +1126,7 @@ Applies only to one-shot cron jobs. Recurring jobs use separate failure handling
       enabled: false,
       after: 3,
       cooldownMs: 3600000,
+      includeSkipped: false,
       mode: "announce",
       accountId: "main",
     },
@@ -1136,6 +1137,7 @@ Applies only to one-shot cron jobs. Recurring jobs use separate failure handling
 - `enabled`: enable failure alerts for cron jobs (default: `false`).
 - `after`: consecutive failures before an alert fires (positive integer, min: `1`).
 - `cooldownMs`: minimum milliseconds between repeated alerts for the same job (non-negative integer).
+- `includeSkipped`: count consecutive skipped runs toward the alert threshold (default: `false`). Skipped runs are tracked separately and do not affect execution-error backoff.
 - `mode`: delivery mode — `"announce"` sends via a channel message; `"webhook"` posts to the configured webhook.
 - `accountId`: optional account or channel id to scope alert delivery.
 

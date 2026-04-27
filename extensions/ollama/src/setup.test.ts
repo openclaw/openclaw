@@ -10,11 +10,31 @@ import {
 } from "./setup.js";
 
 const upsertAuthProfileWithLock = vi.hoisted(() => vi.fn(async () => {}));
+const fetchWithSsrFGuardMock = vi.hoisted(() =>
+  vi.fn(async (params: { url: string; init?: RequestInit; signal?: AbortSignal }) => ({
+    response: await globalThis.fetch(params.url, {
+      ...params.init,
+      ...(params.signal ? { signal: params.signal } : {}),
+    }),
+    finalUrl: params.url,
+    release: async () => {},
+  })),
+);
+
 vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>();
   return {
     ...actual,
     upsertAuthProfileWithLock,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard: (...args: Parameters<typeof actual.fetchWithSsrFGuard>) =>
+      fetchWithSsrFGuardMock(...args),
   };
 });
 
@@ -93,7 +113,9 @@ function createRuntime() {
 describe("ollama setup", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     upsertAuthProfileWithLock.mockClear();
+    fetchWithSsrFGuardMock.mockClear();
     resetOllamaModelShowInfoCacheForTest();
   });
 
@@ -110,6 +132,34 @@ describe("ollama setup", () => {
     const modelIds = result.config.models?.providers?.ollama?.models?.map((m) => m.id);
 
     expect(modelIds?.[0]).toBe("gemma4");
+  });
+
+  it("Docker setup defaults to the host Ollama endpoint", async () => {
+    vi.stubEnv("OPENCLAW_DOCKER_SETUP", "1");
+    const prompter = {
+      select: vi.fn().mockResolvedValueOnce("local-only"),
+      text: vi.fn().mockResolvedValueOnce("http://host.docker.internal:11434"),
+      note: vi.fn(async () => undefined),
+    } as unknown as WizardPrompter;
+
+    const fetchMock = createOllamaFetchMock({ tags: ["llama3:8b"] });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await promptAndConfigureOllama({
+      cfg: {},
+      prompter,
+    });
+
+    expect(prompter.text).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialValue: "http://host.docker.internal:11434",
+        placeholder: "http://host.docker.internal:11434",
+      }),
+    );
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("http://host.docker.internal:11434/api/tags");
+    expect(result.config.models?.providers?.ollama?.baseUrl).toBe(
+      "http://host.docker.internal:11434",
+    );
   });
 
   it("puts suggested cloud model first in cloud mode", async () => {

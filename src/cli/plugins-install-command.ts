@@ -201,14 +201,10 @@ async function tryInstallHookPackFromNpmSpec(params: {
   return { ok: true };
 }
 
-function shouldExitOnForcedUnsafeInstall(params: {
-  forceUnsafeInstall: boolean;
-  code?: string;
-}): boolean {
+function isTerminalPluginInstallSecurityFailure(code?: string): boolean {
   return (
-    params.forceUnsafeInstall &&
-    (params.code === PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED ||
-      params.code === PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED)
+    code === PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED ||
+    code === PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED
   );
 }
 
@@ -372,8 +368,6 @@ export async function runPluginInstallCommand(params: {
   }
 
   const resolved = request.resolvedPath ?? request.normalizedSpec;
-  const forceUnsafeInstall = opts.dangerouslyForceUnsafeInstall === true;
-
   if (fs.existsSync(resolved)) {
     if (opts.link) {
       const existing = cfg.plugins?.load?.paths ?? [];
@@ -386,7 +380,7 @@ export async function runPluginInstallCommand(params: {
         logger: createPluginInstallLogger(),
       });
       if (!probe.ok) {
-        if (shouldExitOnForcedUnsafeInstall({ forceUnsafeInstall, code: probe.code })) {
+        if (isTerminalPluginInstallSecurityFailure(probe.code)) {
           defaultRuntime.error(probe.error);
           return defaultRuntime.exit(1);
         }
@@ -439,7 +433,7 @@ export async function runPluginInstallCommand(params: {
       logger: createPluginInstallLogger(),
     });
     if (!result.ok) {
-      if (shouldExitOnForcedUnsafeInstall({ forceUnsafeInstall, code: result.code })) {
+      if (isTerminalPluginInstallSecurityFailure(result.code)) {
         defaultRuntime.error(result.error);
         return defaultRuntime.exit(1);
       }
@@ -588,7 +582,7 @@ export async function runPluginInstallCommand(params: {
     logger: createPluginInstallLogger(),
   });
   if (!result.ok) {
-    if (shouldExitOnForcedUnsafeInstall({ forceUnsafeInstall, code: result.code })) {
+    if (isTerminalPluginInstallSecurityFailure(result.code)) {
       defaultRuntime.error(result.error);
       return defaultRuntime.exit(1);
     }

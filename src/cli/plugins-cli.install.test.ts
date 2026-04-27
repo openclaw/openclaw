@@ -191,6 +191,20 @@ function primeHookPackNpmFallback() {
   return { cfg, installedCfg };
 }
 
+function primeBlockedNpmPluginInstall(params: {
+  spec: string;
+  pluginId: string;
+  code?: "security_scan_blocked" | "security_scan_failed";
+}) {
+  loadConfig.mockReturnValue({} as OpenClawConfig);
+  mockClawHubPackageNotFound(params.spec);
+  installPluginFromNpmSpec.mockResolvedValue({
+    ok: false,
+    error: `Plugin "${params.pluginId}" installation blocked: dangerous code patterns detected: finding details`,
+    code: params.code ?? "security_scan_blocked",
+  });
+}
+
 function primeHookPackPathFallback(params: {
   tmpRoot: string;
   pluginInstallError: string;
@@ -606,6 +620,30 @@ describe("plugins cli install", () => {
     );
   });
 
+  it("does not fall back to hook pack for linked path when a no-flag security scan blocks", async () => {
+    const localPluginDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-link-plugin-"));
+    const pluginInstallError = "plugin blocked by security scan";
+
+    loadConfig.mockReturnValue({} as OpenClawConfig);
+    installPluginFromPath.mockResolvedValue({
+      ok: false,
+      error: pluginInstallError,
+      code: "security_scan_blocked",
+    });
+
+    try {
+      await expect(
+        runPluginsCommand(["plugins", "install", localPluginDir, "--link"]),
+      ).rejects.toThrow("__exit__:1");
+    } finally {
+      fs.rmSync(localPluginDir, { recursive: true, force: true });
+    }
+
+    expect(installHooksFromPath).not.toHaveBeenCalled();
+    expect(runtimeErrors.at(-1)).toContain(pluginInstallError);
+    expect(runtimeErrors.at(-1)).not.toContain("Also not a valid hook pack");
+  });
+
   it("passes dangerous force unsafe install to local hook-pack fallback installs", async () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hook-install-"));
     primeHookPackPathFallback({
@@ -740,6 +778,30 @@ describe("plugins cli install", () => {
     ).toBe(true);
   });
 
+  it("does not fall back to hook pack for local path when a no-flag security scan fails", async () => {
+    const localPluginDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-local-plugin-"));
+    const pluginInstallError = "plugin security scan failed";
+
+    loadConfig.mockReturnValue({} as OpenClawConfig);
+    installPluginFromPath.mockResolvedValue({
+      ok: false,
+      error: pluginInstallError,
+      code: "security_scan_failed",
+    });
+
+    try {
+      await expect(runPluginsCommand(["plugins", "install", localPluginDir])).rejects.toThrow(
+        "__exit__:1",
+      );
+    } finally {
+      fs.rmSync(localPluginDir, { recursive: true, force: true });
+    }
+
+    expect(installHooksFromPath).not.toHaveBeenCalled();
+    expect(runtimeErrors.at(-1)).toContain(pluginInstallError);
+    expect(runtimeErrors.at(-1)).not.toContain("Also not a valid hook pack");
+  });
+
   it("does not fall back to hook pack for local path when dangerous force unsafe install is set", async () => {
     const localPluginDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-local-plugin-"));
     const cfg = {} as OpenClawConfig;
@@ -820,6 +882,21 @@ describe("plugins cli install", () => {
 
     expect(installHooksFromNpmSpec).not.toHaveBeenCalled();
     expect(runtimeErrors.at(-1)).toContain(pluginInstallError);
+  });
+
+  it("does not fall back to hook pack for npm installs when a no-flag security scan blocks", async () => {
+    primeBlockedNpmPluginInstall({
+      spec: "@acme/unsafe-plugin",
+      pluginId: "unsafe-plugin",
+    });
+
+    await expect(runPluginsCommand(["plugins", "install", "@acme/unsafe-plugin"])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(installHooksFromNpmSpec).not.toHaveBeenCalled();
+    expect(runtimeErrors.at(-1)).toContain('Plugin "unsafe-plugin" installation blocked');
+    expect(runtimeErrors.at(-1)).not.toContain("Also not a valid hook pack");
   });
 
   it("does not fall back to hook pack for npm installs when security scan fails under dangerous force unsafe install", async () => {

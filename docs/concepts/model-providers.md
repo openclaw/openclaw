@@ -16,7 +16,7 @@ Reference for **LLM/model providers** (not chat channels like WhatsApp/Telegram)
     - Model refs use `provider/model` (example: `opencode/claude-opus-4-6`).
     - `agents.defaults.models` acts as an allowlist when set.
     - CLI helpers: `openclaw onboard`, `openclaw models list`, `openclaw models set <provider/model>`.
-    - `models.providers.*.models[].contextWindow` is native model metadata; `contextTokens` is the effective runtime cap.
+    - `models.providers.*.contextWindow` / `contextTokens` / `maxTokens` set provider-level defaults; `models.providers.*.models[].contextWindow` / `contextTokens` / `maxTokens` override them per model.
     - Fallback rules, cooldown probes, and session-override persistence: [Model failover](/concepts/model-failover).
   </Accordion>
   <Accordion title="OpenAI provider/runtime split">
@@ -367,7 +367,7 @@ Kimi K2 model IDs:
 }
 ```
 
-### Kimi Coding
+### Kimi coding
 
 Kimi Coding uses Moonshot AI's Anthropic-compatible endpoint:
 

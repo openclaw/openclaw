@@ -116,7 +116,7 @@ function installTestRegistry(...plugins: ChannelPlugin<TestAccount>[]) {
 
 function createManager(options?: {
   channelRuntime?: PluginRuntime["channel"];
-  resolveChannelRuntime?: () => PluginRuntime["channel"];
+  resolveChannelRuntime?: () => PluginRuntime["channel"] | Promise<PluginRuntime["channel"]>;
   loadConfig?: () => Record<string, unknown>;
   channelIds?: ChannelId[];
 }) {
@@ -373,6 +373,25 @@ describe("server-channels auto restart", () => {
     const [ctx] = startAccount.mock.calls[0] ?? [];
     expect(ctx?.channelRuntime).toMatchObject({ marker: "lazy-channel-runtime" });
     expect(ctx?.channelRuntime).not.toBe(channelRuntime);
+  });
+
+  it("does not resolve channelRuntime for disabled accounts", async () => {
+    const channelRuntime = createRuntimeChannel();
+    const resolveChannelRuntime = vi.fn(() => channelRuntime);
+    const startAccount = vi.fn(async (_ctx: ChannelGatewayContext<TestAccount>) => {});
+
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        account: { enabled: false, configured: true },
+      }),
+    );
+    const manager = createManager({ resolveChannelRuntime });
+
+    await manager.startChannels();
+
+    expect(resolveChannelRuntime).not.toHaveBeenCalled();
+    expect(startAccount).not.toHaveBeenCalled();
   });
 
   it("fails fast when channelRuntime is not a full plugin runtime surface", async () => {

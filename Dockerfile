@@ -72,10 +72,20 @@ RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/sto
     NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile
 
 # pnpm v10+ may append peer-resolution hashes to virtual-store folder names; do not hardcode `.pnpm/...`
-# paths. Fail fast here if the Matrix native binding did not materialize after install.
-RUN echo "==> Verifying critical native addons..." && \
+# paths. Matrix's native downloader can hit transient release CDN errors while
+# still exiting successfully, so retry the package downloader before failing.
+RUN set -eux; \
+    echo "==> Verifying critical native addons..."; \
+    for attempt in 1 2 3 4 5; do \
+      if find /app/node_modules -name "matrix-sdk-crypto*.node" 2>/dev/null | grep -q .; then \
+        exit 0; \
+      fi; \
+      echo "matrix-sdk-crypto native addon missing; retrying download (${attempt}/5)"; \
+      node /app/node_modules/@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js || true; \
+      sleep $((attempt * 2)); \
+    done; \
     find /app/node_modules -name "matrix-sdk-crypto*.node" 2>/dev/null | grep -q . || \
-    (echo "ERROR: matrix-sdk-crypto native addon missing (pnpm install may have silently failed on this arch)" >&2 && exit 1)
+      (echo "ERROR: matrix-sdk-crypto native addon missing after retries" >&2 && exit 1)
 
 COPY . .
 

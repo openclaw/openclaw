@@ -1633,6 +1633,44 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     expect(seenContext.messages).toBe(messages);
   });
 
+  it("strips trailing assistant prefill turns for Anthropic outbound replay", async () => {
+    const messages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "earlier question" }],
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "stale assistant answer" }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
+      validateAnthropicTurns: true,
+      preserveSignatures: true,
+      dropThinkingBlocks: false,
+    } as never);
+    const stream = wrapped(
+      { api: "anthropic-messages" } as never,
+      { messages } as never,
+      {} as never,
+    ) as FakeWrappedStream | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    expect(seenContext.messages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "earlier question" }],
+      },
+    ]);
+    expect(seenContext.messages).not.toBe(messages);
+  });
+
   it("drops signed thinking turns when sibling replay tool calls are not allowlisted", async () => {
     const messages = [
       {

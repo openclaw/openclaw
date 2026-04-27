@@ -63,6 +63,10 @@ Failure notifications resolve in this order:
 Main-session jobs may only use `delivery.failureDestination` when primary delivery mode is `webhook`. Isolated jobs accept it in all modes.
 </Note>
 
+Note: isolated cron runs treat run-level agent failures as job errors even when
+no reply payload is produced, so model/provider failures still increment error
+counters and trigger failure notifications.
+
 ## Scheduling
 
 ### One-shot jobs
@@ -76,6 +80,10 @@ One-shot jobs delete after success by default. Use `--keep-after-run` to preserv
 ### Recurring jobs
 
 Recurring jobs use exponential retry backoff after consecutive errors: 30s, 1m, 5m, 15m, 60m. The schedule returns to normal after the next successful run.
+
+Skipped runs are tracked separately from execution errors. They do not affect retry backoff, but `openclaw cron edit <job-id> --failure-alert-include-skipped` can opt failure alerts into repeated skipped-run notifications.
+
+Note: cron job definitions live in `jobs.json`, while pending runtime state lives in `jobs-state.json`. If `jobs.json` is edited externally, the Gateway reloads changed schedules and clears stale pending slots; formatting-only rewrites do not clear the pending slot.
 
 ### Manual runs
 

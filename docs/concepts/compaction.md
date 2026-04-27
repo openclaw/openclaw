@@ -41,6 +41,7 @@ Before compacting, OpenClaw automatically reminds the agent to save important no
     - `input token count exceeds the maximum number of input tokens`
     - `input is too long for the model`
     - `ollama error: context length exceeded`
+
   </Accordion>
 </AccordionGroup>
 

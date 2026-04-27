@@ -37,6 +37,7 @@ import {
   type PluginManifestContracts,
   type PluginManifestMediaUnderstandingProviderMetadata,
   type PluginManifestModelCatalog,
+  type PluginManifestModelPricing,
   type PluginManifestModelSupport,
   type PluginManifestProviderEndpoint,
   type PluginManifestQaRunner,
@@ -79,7 +80,8 @@ export type PluginManifestContractListKey =
   | "memoryEmbeddingProviders"
   | "webContentExtractors"
   | "webFetchProviders"
-  | "webSearchProviders";
+  | "webSearchProviders"
+  | "migrationProviders";
 
 type SeenIdEntry = {
   candidate: PluginCandidate;
@@ -112,6 +114,7 @@ export type PluginManifestRecord = {
   providerDiscoverySource?: string;
   modelSupport?: PluginManifestModelSupport;
   modelCatalog?: PluginManifestModelCatalog;
+  modelPricing?: PluginManifestModelPricing;
   providerEndpoints?: PluginManifestProviderEndpoint[];
   cliBackends: string[];
   syntheticAuthRefs?: string[];
@@ -337,6 +340,7 @@ function buildRecord(params: {
       : undefined,
     modelSupport: params.manifest.modelSupport,
     modelCatalog: params.manifest.modelCatalog,
+    modelPricing: params.manifest.modelPricing,
     providerEndpoints: params.manifest.providerEndpoints,
     cliBackends: params.manifest.cliBackends ?? [],
     syntheticAuthRefs: params.manifest.syntheticAuthRefs ?? [],

@@ -542,7 +542,7 @@ Environment overrides remain available for local testing:
 preferred for repeatable deployments because it keeps the plugin behavior in the
 same reviewed file as the rest of the Codex harness setup.
 
-## Computer Use
+## Computer use
 
 Computer Use is a Codex-native MCP plugin. OpenClaw does not vendor the desktop
 control app or execute desktop actions itself; it enables Codex app-server

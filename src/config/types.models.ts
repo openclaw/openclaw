@@ -119,6 +119,9 @@ export type ModelProviderConfig = {
   apiKey?: SecretInput;
   auth?: ModelProviderAuthMode;
   api?: ModelApi;
+  contextWindow?: number;
+  contextTokens?: number;
+  maxTokens?: number;
   timeoutSeconds?: number;
   injectNumCtxForOpenAICompat?: boolean;
   headers?: Record<string, SecretInput>;

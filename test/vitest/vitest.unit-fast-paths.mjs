@@ -52,6 +52,15 @@ const unitFastCandidateGlobs = [
   "src/wizard/**/*.test.ts",
   "test/**/*.test.ts",
 ];
+export const forcedUnitFastTestFiles = [
+  "src/crestodian/overview.test.ts",
+  "src/flows/channel-setup.test.ts",
+  "src/memory-host-sdk/host/session-files.test.ts",
+  "src/node-host/invoke-system-run-plan.test.ts",
+  "src/node-host/invoke-system-run.test.ts",
+  "src/pairing/pairing-store.test.ts",
+];
+const forcedUnitFastTestFileSet = new Set(forcedUnitFastTestFiles);
 const unitFastCandidateExactFiles = [...pluginSdkLightTestFiles, ...commandsLightTestFiles];
 const broadUnitFastCandidateGlobs = [
   "src/**/*.test.ts",
@@ -171,9 +180,9 @@ export function collectUnitFastTestCandidates(cwd = process.cwd()) {
         matchesAnyGlob(file, unitFastCandidateGlobs) &&
         !matchesAnyGlob(file, broadUnitFastCandidateSkipGlobs),
     );
-  return [...new Set([...discovered, ...unitFastCandidateExactFiles])].toSorted((a, b) =>
-    a.localeCompare(b),
-  );
+  return [
+    ...new Set([...discovered, ...unitFastCandidateExactFiles, ...forcedUnitFastTestFiles]),
+  ].toSorted((a, b) => a.localeCompare(b));
 }
 
 export function collectBroadUnitFastTestCandidates(cwd = process.cwd()) {
@@ -185,9 +194,9 @@ export function collectBroadUnitFastTestCandidates(cwd = process.cwd()) {
         matchesAnyGlob(file, broadUnitFastCandidateGlobs) &&
         !matchesAnyGlob(file, broadUnitFastCandidateSkipGlobs),
     );
-  return [...new Set([...discovered, ...unitFastCandidateExactFiles])].toSorted((a, b) =>
-    a.localeCompare(b),
-  );
+  return [
+    ...new Set([...discovered, ...unitFastCandidateExactFiles, ...forcedUnitFastTestFiles]),
+  ].toSorted((a, b) => a.localeCompare(b));
 }
 
 export function collectUnitFastTestFileAnalysis(cwd = process.cwd(), options = {}) {
@@ -208,9 +217,11 @@ export function collectUnitFastTestFileAnalysis(cwd = process.cwd(), options = {
       };
     }
     const reasons = classifyUnitFastTestFileContent(source);
+    const forced = forcedUnitFastTestFileSet.has(file);
     return {
       file,
-      unitFast: reasons.length === 0,
+      unitFast: forced || reasons.length === 0,
+      forced,
       reasons,
     };
   });

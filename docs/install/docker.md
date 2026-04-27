@@ -23,7 +23,7 @@ Docker is **optional**. Use it only if you want a containerized gateway or to va
   [Security hardening for network exposure](/gateway/security),
   especially Docker `DOCKER-USER` firewall policy.
 
-## Containerized Gateway
+## Containerized gateway
 
 <Steps>
   <Step title="Build the image">
@@ -215,6 +215,33 @@ Use bind mode values in `gateway.bind` (`lan` / `loopback` / `custom` /
 `tailnet` / `auto`), not host aliases like `0.0.0.0` or `127.0.0.1`.
 </Note>
 
+### Host Local Providers
+
+When OpenClaw runs in Docker, `127.0.0.1` inside the container is the container
+itself, not your host machine. Use `host.docker.internal` for AI providers that
+run on the host:
+
+| Provider  | Host default URL         | Docker setup URL                    |
+| --------- | ------------------------ | ----------------------------------- |
+| LM Studio | `http://127.0.0.1:1234`  | `http://host.docker.internal:1234`  |
+| Ollama    | `http://127.0.0.1:11434` | `http://host.docker.internal:11434` |
+
+The bundled Docker setup uses those host URLs as the LM Studio and Ollama
+onboarding defaults, and `docker-compose.yml` maps `host.docker.internal` to
+Docker's host gateway for Linux Docker Engine. Docker Desktop already provides
+the same hostname on macOS and Windows.
+
+Host services must also listen on an address reachable from Docker:
+
+```bash
+lms server start --port 1234 --bind 0.0.0.0
+OLLAMA_HOST=0.0.0.0:11434 ollama serve
+```
+
+If you use your own Compose file or `docker run` command, add the same host
+mapping yourself, for example
+`--add-host=host.docker.internal:host-gateway`.
+
 ### Bonjour / mDNS
 
 Docker bridge networking usually does not forward Bonjour/mDNS multicast
@@ -372,7 +399,7 @@ See [Hetzner (Docker VPS)](/install/hetzner) and
 [Docker VM Runtime](/install/docker-vm-runtime) for shared VM deployment steps
 including binary baking, persistence, and updates.
 
-## Agent Sandbox
+## Agent sandbox
 
 When `agents.defaults.sandbox` is enabled with the Docker backend, the gateway
 runs agent tool execution (shell, file read/write, etc.) inside isolated Docker

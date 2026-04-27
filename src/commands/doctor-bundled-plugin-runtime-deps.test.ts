@@ -616,6 +616,55 @@ describe("doctor bundled plugin runtime deps", () => {
     expect(readRetainedRuntimeDepsManifest(installRoot)).toEqual(["@slack/web-api@7.15.1"]);
   });
 
+  it("repairs only missing deps into the final layered stage dir", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
+    const baselineStageDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-doctor-bundled-baseline-"),
+    );
+    const writableStageDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-doctor-bundled-writable-"),
+    );
+    writeJson(path.join(root, "package.json"), { name: "openclaw", version: "2026.4.25" });
+    writeBundledChannelPlugin(root, "slack", {
+      "@slack/web-api": "7.15.1",
+      grammy: "1.37.0",
+    });
+    const env = {
+      OPENCLAW_PLUGIN_STAGE_DIR: [baselineStageDir, writableStageDir].join(path.delimiter),
+    };
+    const installRoot = resolveBundledRuntimeDependencyPackageInstallRoot(root, { env });
+    const baselineRoot = installRoot.replace(writableStageDir, baselineStageDir);
+    writeJson(path.join(baselineRoot, "node_modules", "@slack", "web-api", "package.json"), {
+      name: "@slack/web-api",
+      version: "7.15.1",
+    });
+    const installed = createInstalledRuntimeDeps();
+
+    await maybeRepairBundledPluginRuntimeDeps({
+      runtime: { error: () => {} } as never,
+      prompter: createNonInteractivePrompter(),
+      env,
+      packageRoot: root,
+      config: {
+        plugins: { enabled: true },
+        channels: { slack: { enabled: true } },
+      },
+      installDeps: (params) => {
+        installed.push(params);
+      },
+    });
+
+    expect(installRoot).toContain(writableStageDir);
+    expect(installed).toEqual([
+      {
+        installRoot,
+        missingSpecs: ["grammy@1.37.0"],
+        installSpecs: ["grammy@1.37.0"],
+      },
+    ]);
+    expect(readRetainedRuntimeDepsManifest(installRoot)).toEqual(["grammy@1.37.0"]);
+  });
+
   it("retains already staged bundled deps when repairing a subset", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
     writeJson(path.join(root, "package.json"), { name: "openclaw" });

@@ -4,7 +4,10 @@ import { setCommandLaneConcurrency } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 
 export function applyGatewayLaneConcurrency(cfg: OpenClawConfig) {
-  setCommandLaneConcurrency(CommandLane.Cron, cfg.cron?.maxConcurrentRuns ?? 1);
+  const cronMaxConcurrentRuns = cfg.cron?.maxConcurrentRuns ?? 1;
+  setCommandLaneConcurrency(CommandLane.Cron, cronMaxConcurrentRuns);
+  // Cron isolated agent turns remap their inner LLM work to the nested lane.
+  setCommandLaneConcurrency(CommandLane.Nested, cronMaxConcurrentRuns);
   setCommandLaneConcurrency(CommandLane.Main, resolveAgentMaxConcurrent(cfg));
   setCommandLaneConcurrency(CommandLane.Subagent, resolveSubagentMaxConcurrent(cfg));
 }

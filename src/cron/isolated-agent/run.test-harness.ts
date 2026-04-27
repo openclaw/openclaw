@@ -365,21 +365,55 @@ function resetRunOutcomeMocks(): void {
     ({
       payloads,
       failureSignal,
+      runLevelError,
     }: {
       payloads: Array<{ isError?: boolean }>;
       failureSignal?: { fatalForCron?: boolean; message?: string };
+      runLevelError?: unknown;
     }) => {
+      const runLevelErrorMessage =
+        typeof runLevelError === "string" && runLevelError.trim()
+          ? `cron isolated run failed: ${runLevelError.trim()}`
+          : runLevelError && typeof runLevelError === "object"
+            ? (() => {
+                const record = runLevelError as { message?: unknown; kind?: unknown };
+                const message =
+                  typeof record.message === "string" && record.message.trim()
+                    ? record.message.trim()
+                    : undefined;
+                if (message) {
+                  return `cron isolated run failed: ${message}`;
+                }
+                const kind =
+                  typeof record.kind === "string" && record.kind.trim()
+                    ? record.kind.trim()
+                    : undefined;
+                return kind ? `cron isolated run failed: ${kind}` : "cron isolated run failed";
+              })()
+            : undefined;
       const failureMessage =
         failureSignal?.fatalForCron === true
           ? (failureSignal.message ?? "cron isolated run returned a fatal failure signal")
           : undefined;
-      const outputText = failureMessage ?? pickLastNonEmptyTextFromPayloadsMock(payloads);
+      const errorPayloadMessage = payloads.some((payload) => payload?.isError === true)
+        ? "cron isolated run returned an error payload"
+        : undefined;
+      const outputText =
+        errorPayloadMessage ??
+        failureMessage ??
+        runLevelErrorMessage ??
+        pickLastNonEmptyTextFromPayloadsMock(payloads);
       const synthesizedText = outputText?.trim() || "summary";
       const hasFatalErrorPayload =
-        payloads.some((payload) => payload?.isError === true) || failureMessage !== undefined;
-      const deliveryPayload = failureMessage ? { text: failureMessage, isError: true } : undefined;
+        errorPayloadMessage !== undefined ||
+        failureMessage !== undefined ||
+        runLevelErrorMessage !== undefined;
+      const deliveryPayload =
+        errorPayloadMessage || failureMessage || runLevelErrorMessage
+          ? { text: errorPayloadMessage ?? failureMessage ?? runLevelErrorMessage, isError: true }
+          : undefined;
       return {
-        summary: failureMessage ?? "summary",
+        summary: errorPayloadMessage ?? failureMessage ?? runLevelErrorMessage ?? "summary",
         outputText,
         synthesizedText,
         deliveryPayload,
@@ -391,11 +425,7 @@ function resetRunOutcomeMocks(): void {
         deliveryPayloadHasStructuredContent: false,
         hasFatalErrorPayload,
         embeddedRunError:
-          failureMessage !== undefined
-            ? failureMessage
-            : hasFatalErrorPayload
-              ? "cron isolated run returned an error payload"
-              : undefined,
+          errorPayloadMessage ?? failureMessage ?? runLevelErrorMessage ?? undefined,
       };
     },
   );

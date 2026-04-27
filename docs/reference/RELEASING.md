@@ -118,7 +118,7 @@ the maintainer-only release runbook.
   Example: `gh workflow run package-acceptance.yml --ref main -f workflow_ref=main -f source=npm -f package_spec=openclaw@beta -f suite_profile=product -f telegram_mode=mock-openai`
   Common profiles:
   - `smoke`: install/channel/agent, gateway network, and config reload lanes
-  - `package`: package/update/plugin lanes without OpenWebUI
+  - `package`: artifact-native package/update/plugin lanes without OpenWebUI or live ClawHub
   - `product`: package profile plus MCP channels, cron/subagent cleanup,
     OpenAI web search, and OpenWebUI
   - `full`: Docker release-path chunks with OpenWebUI
@@ -137,14 +137,16 @@ the maintainer-only release runbook.
 - Run `pnpm release:check` before every tagged release
 - Release checks now run in a separate manual workflow:
   `OpenClaw Release Checks`
-- `OpenClaw Release Checks` also runs the QA Lab mock parity gate plus the live
-  Matrix and Telegram QA lanes before release approval. The live lanes use the
-  `qa-live-shared` environment; Telegram also uses Convex CI credential leases.
-- Cross-OS install and upgrade runtime validation is dispatched from the
-  private caller workflow
-  `openclaw/releases-private/.github/workflows/openclaw-cross-os-release-checks.yml`,
-  which invokes the reusable public workflow
-  `.github/workflows/openclaw-cross-os-release-checks-reusable.yml`
+- `OpenClaw Release Checks` also runs the QA Lab mock parity gate plus the fast
+  live Matrix profile and Telegram QA lane before release approval. The live
+  lanes use the `qa-live-shared` environment; Telegram also uses Convex CI
+  credential leases. Run the manual `QA-Lab - All Lanes` workflow with
+  `matrix_profile=all` and `matrix_shards=true` when you want full Matrix
+  transport, media, and E2EE inventory in parallel.
+- Cross-OS install and upgrade runtime validation is part of public
+  `OpenClaw Release Checks` and `Full Release Validation`, which call the
+  reusable workflow
+  `.github/workflows/openclaw-cross-os-release-checks-reusable.yml` directly
 - This split is intentional: keep the real npm release path short,
   deterministic, and artifact-focused, while slower live checks stay in their
   own lane so they do not stall or block publish
@@ -318,7 +320,9 @@ Release Docker coverage includes:
 - repository E2E lanes
 - release-path Docker chunks: `core`, `package-update`, and
   `plugins-integrations`
-- OpenWebUI coverage inside the plugins/integrations chunk
+- OpenWebUI coverage inside the `plugins-integrations` chunk when requested
+- split bundled-channel dependency lanes inside `plugins-integrations` instead
+  of the serial all-in-one bundled-channel lane
 - live/E2E provider suites and Docker live model coverage when release checks
   include live suites
 
@@ -326,7 +330,9 @@ Use Docker artifacts before rerunning. The release-path scheduler uploads
 `.artifacts/docker-tests/` with lane logs, `summary.json`, `failures.json`,
 phase timings, scheduler plan JSON, and rerun commands. For focused recovery,
 use `docker_lanes=<lane[,lane]>` on the reusable live/E2E workflow instead of
-rerunning all release chunks.
+rerunning all release chunks. Generated rerun commands include prior
+`package_artifact_run_id` and prepared Docker image inputs when available, so a
+failed lane can reuse the same tarball and GHCR images.
 
 ### QA Lab
 
@@ -338,13 +344,14 @@ Release QA Lab coverage includes:
 
 - mock parity gate comparing the OpenAI candidate lane against the Opus 4.6
   baseline using the agentic parity pack
-- live Matrix QA lane using the `qa-live-shared` environment
+- fast live Matrix QA profile using the `qa-live-shared` environment
 - live Telegram QA lane using Convex CI credential leases
 - `pnpm qa:otel:smoke` when release telemetry needs explicit local proof
 
 Use this box to answer "does the release behave correctly in QA scenarios and
 live channel flows?" Keep the artifact URLs for parity, Matrix, and Telegram
-lanes when approving the release.
+lanes when approving the release. Full Matrix coverage remains available as a
+manual sharded QA-Lab run rather than the default release-critical lane.
 
 ### Package
 
@@ -367,11 +374,21 @@ Supported candidate sources:
 `OpenClaw Release Checks` runs Package Acceptance with `source=ref`,
 `package_ref=<release-ref>`, `suite_profile=package`, and
 `telegram_mode=mock-openai`. That profile covers install, update, plugin
-package contracts, and Telegram package QA against the same resolved tarball,
-and is the GitHub-native replacement for most of the package/update coverage
-that previously required Parallels. Cross-OS release checks still matter for
-OS-specific onboarding, installer, and platform behavior, but package/update
-product validation should prefer Package Acceptance.
+package contracts through offline plugin fixtures, and Telegram package QA
+against the same resolved tarball. It is the GitHub-native replacement for most
+of the package/update coverage that previously required Parallels. Cross-OS
+release checks still matter for OS-specific onboarding, installer, and platform
+behavior, but package/update product validation should prefer Package
+Acceptance.
+
+Legacy package-acceptance leniency is intentionally time boxed. Packages through
+`2026.4.25` may use the compatibility path for metadata gaps already published
+to npm: private QA inventory entries missing from the tarball, missing
+`gateway install --wrapper`, missing patch files in the tarball-derived git
+fixture, missing persisted `update.channel`, legacy plugin install-record
+locations, missing marketplace install-record persistence, and config metadata
+migration during `plugins update`. Packages after `2026.4.25` must satisfy the
+modern package contracts; those same gaps fail release validation.
 
 Use broader Package Acceptance profiles when the release question is about an
 actual installable package:
@@ -389,7 +406,7 @@ Common package profiles:
 
 - `smoke`: quick package install/channel/agent, gateway network, and config
   reload lanes
-- `package`: install/update/plugin package contracts; this is the release-check
+- `package`: install/update/plugin package contracts without live ClawHub; this is the release-check
   default
 - `product`: `package` plus MCP channels, cron/subagent cleanup, OpenAI web
   search, and OpenWebUI
