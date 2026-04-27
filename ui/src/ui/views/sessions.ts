@@ -82,6 +82,15 @@ const FAST_LEVELS = [
 const REASONING_LEVELS = ["", "off", "on", "stream"] as const;
 const PAGE_SIZES = [10, 25, 50, 100] as const;
 
+function getAgentIdentity(
+  agentIdentityById: Record<string, AgentIdentityResult>,
+  agentId: string,
+): AgentIdentityResult | null {
+  return Object.prototype.hasOwnProperty.call(agentIdentityById, agentId)
+    ? (agentIdentityById[agentId] ?? null)
+    : null;
+}
+
 function normalizeThinkingOptionValue(raw: string): string {
   return normalizeThinkLevel(raw) ?? normalizeLowercaseStringOrEmpty(raw);
 }
@@ -154,7 +163,7 @@ function filterRows(
     }
     const keyParts = parseSessionKeyParts(row.key);
     const identityName = keyParts
-      ? normalizeLowercaseStringOrEmpty(agentIdentityById[keyParts.agentId]?.name)
+      ? normalizeLowercaseStringOrEmpty(getAgentIdentity(agentIdentityById, keyParts.agentId)?.name)
       : "";
     return identityName.includes(q);
   });
@@ -474,7 +483,9 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
     displayName && displayName !== row.key && displayName !== trimmedLabel,
   );
   const keyParts = parseSessionKeyParts(row.key);
-  const agentIdentity = keyParts ? (props.agentIdentityById[keyParts.agentId] ?? null) : null;
+  const agentIdentity = keyParts
+    ? getAgentIdentity(props.agentIdentityById, keyParts.agentId)
+    : null;
   const identityEmoji = normalizeOptionalString(agentIdentity?.emoji) ?? "";
   const identityName = normalizeOptionalString(agentIdentity?.name) ?? "";
   const friendlyKeyLabel =

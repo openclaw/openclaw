@@ -222,6 +222,27 @@ describe("sessions view", () => {
     );
   });
 
+  it("keeps raw keys for inherited identity object properties", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult({
+            key: "agent:constructor:telegram:abc123",
+            kind: "direct",
+            updatedAt: Date.now(),
+          }),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const text = container.querySelector(".session-key-cell")?.textContent ?? "";
+    expect(text).toContain("agent:constructor:telegram:abc123");
+    expect(text).not.toContain("Object (telegram)");
+  });
+
   it("filters rows by agent identity name", async () => {
     const container = document.createElement("div");
     render(
