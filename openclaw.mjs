@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { access } from "node:fs/promises";
 import module from "node:module";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const MIN_NODE_MAJOR = 22;
@@ -38,8 +39,23 @@ const ensureSupportedNodeVersion = () => {
 
 ensureSupportedNodeVersion();
 
+// Skip compile cache for source-checkout installs (a `.git` entry sitting next
+// to this script). Live `pnpm build` rebuilds dist/ in place, and a stale cache
+// hit can mask freshly built CLI changes — see openclaw#73037.
+const isSourceCheckoutInstall = () => {
+  try {
+    return existsSync(path.join(path.dirname(fileURLToPath(import.meta.url)), ".git"));
+  } catch {
+    return false;
+  }
+};
+
 // https://nodejs.org/api/module.html#module-compile-cache
-if (module.enableCompileCache && !process.env.NODE_DISABLE_COMPILE_CACHE) {
+if (
+  module.enableCompileCache &&
+  !process.env.NODE_DISABLE_COMPILE_CACHE &&
+  !isSourceCheckoutInstall()
+) {
   try {
     module.enableCompileCache();
   } catch {
