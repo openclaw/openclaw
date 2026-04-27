@@ -12,7 +12,7 @@ vi.mock("./session-transcript-key.js", () => ({
 }));
 
 vi.mock("./session-utils.js", () => ({
-  attachOpenClawTranscriptMeta: vi.fn((message, meta) => ({ ...message, _openclaw: meta })),
+  attachOpenClawTranscriptMeta: vi.fn((message, meta) => ({ ...message, __openclaw: meta })),
   loadGatewaySessionRow: vi.fn(() => sessionUtilsState.sessionRow),
   loadSessionEntry: vi.fn(() => ({
     entry: { sessionId: "sess-main", sessionFile: "/tmp/sess-main.jsonl" },
