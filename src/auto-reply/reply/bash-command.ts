@@ -446,13 +446,27 @@ export async function handleBashChatCommand(params: {
       };
     }
 
-    // Completed in foreground.
+    // Completed or failed before the foreground yield window expired.
     activeJob = null;
+    const outputFromContent = () =>
+      result.content.map((chunk) => (chunk.type === "text" ? chunk.text : "")).join("\n");
+    if (result.details?.status === "failed") {
+      const exitLabel = result.details.timedOut
+        ? "timeout"
+        : `code ${String(result.details.exitCode ?? 1)}`;
+      const output = result.details.aggregated || outputFromContent();
+      return {
+        text: [
+          `⚠️ bash failed: ${commandText}`,
+          `Exit: ${exitLabel}`,
+          formatOutputBlock(output || "(no output)"),
+        ].join("\n"),
+      };
+    }
+
     const exitCode = result.details?.status === "completed" ? result.details.exitCode : 0;
     const output =
-      result.details?.status === "completed"
-        ? result.details.aggregated
-        : result.content.map((chunk) => (chunk.type === "text" ? chunk.text : "")).join("\n");
+      result.details?.status === "completed" ? result.details.aggregated : outputFromContent();
     return {
       text: [
         `⚙️ bash: ${commandText}`,
