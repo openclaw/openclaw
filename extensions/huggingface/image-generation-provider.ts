@@ -24,7 +24,7 @@ const HF_INFERENCE_IMAGE_MODELS = [
   "ByteDance/Hyper-SD",
 ] as const;
 
-const HF_MODEL_ID_PATTERN = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+const HF_MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 function buildEndpointUrl(baseUrl: string, model: string): string {
   if (!HF_MODEL_ID_PATTERN.test(model)) {

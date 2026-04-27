@@ -171,7 +171,16 @@ describe("huggingface image-generation provider", () => {
     ).rejects.toThrow(/returned no image data/);
   });
 
-  it("rejects model ids that contain path-traversal segments", async () => {
+  it.each([
+    ["multi-segment traversal", "../../admin"],
+    ["single-segment traversal as org", "../foo"],
+    ["single-segment traversal as repo", "foo/.."],
+    ["leading dot in repo", "foo/.bar"],
+    ["leading slash", "/foo/bar"],
+    ["missing repo segment", "foo"],
+    ["empty org", "/foo"],
+    ["empty repo", "foo/"],
+  ])("rejects model id with %s (%s)", async (_label, model) => {
     mockHuggingfaceApiKey();
     const fetchMock = mockSuccessfulImageResponse();
 
@@ -179,7 +188,7 @@ describe("huggingface image-generation provider", () => {
     await expect(
       provider.generateImage({
         provider: "huggingface",
-        model: "../../admin",
+        model,
         prompt: "draw a cat",
         cfg: {},
       }),
