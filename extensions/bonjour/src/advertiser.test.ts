@@ -736,7 +736,7 @@ describe("gateway bonjour advertiser", () => {
   });
 
   it("truncates service name exceeding 63-byte DNS label limit", async () => {
-    const longHostname = "app-41627eae5842473f9e05f139ea307277-7f9477f4d6-lqqzf";
+    const longHostname = "app-41627eae5842473f9e05f139ea307277-7f9477f4d6-lqqzf-abcdefghi";
     enableAdvertiserUnitMode(longHostname);
 
     const destroy = vi.fn().mockResolvedValue(undefined);
@@ -755,6 +755,7 @@ describe("gateway bonjour advertiser", () => {
     // Both name and hostname must be within the 63-byte DNS label limit
     expect(new TextEncoder().encode(serviceName).byteLength).toBeLessThanOrEqual(63);
     expect(new TextEncoder().encode(hostname).byteLength).toBeLessThanOrEqual(63);
+    expect(hostname).not.toMatch(/-$/);
 
     await started.stop();
   });

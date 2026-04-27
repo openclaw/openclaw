@@ -185,7 +185,7 @@ function resolveSystemMdnsHostname(): string | null {
 
 const MAX_DNS_LABEL_BYTES = 63;
 
-function truncateToDnsLabel(name: string): string {
+function truncateToDnsLabel(name: string, fallback = "OpenClaw"): string {
   const encoder = new TextEncoder();
   const encoded = encoder.encode(name);
   if (encoded.byteLength <= MAX_DNS_LABEL_BYTES) {
@@ -195,7 +195,12 @@ function truncateToDnsLabel(name: string): string {
   const truncated = encoded.slice(0, MAX_DNS_LABEL_BYTES);
   const decoded = new TextDecoder("utf-8", { fatal: false }).decode(truncated);
   // Strip any replacement character from incomplete multi-byte sequence at the end
-  return decoded.replace(/\uFFFD$/, "").trim() || "OpenClaw";
+  return (
+    decoded
+      .replace(/\uFFFD$/, "")
+      .replace(/-+$/, "")
+      .trim() || fallback
+  );
 }
 
 function safeServiceName(name: string) {
@@ -373,6 +378,7 @@ export async function startGatewayBonjourAdvertiser(
         .replace(/\.local$/i, "")
         .split(".")[0]
         .trim() || "openclaw",
+      "openclaw",
     );
     const instanceName =
       typeof opts.instanceName === "string" && opts.instanceName.trim()
