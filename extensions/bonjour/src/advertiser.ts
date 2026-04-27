@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import { classifyCiaoProcessError, type CiaoProcessErrorClassification } from "./ciao.js";
@@ -148,6 +149,45 @@ function isDisabledByEnv() {
   return false;
 }
 
+function resolveSystemMdnsHostname(): string | null {
+  // Use the system hostname (os.hostname()) so the mDNS announcement matches
+  // what the host actually resolves to on the LAN. Strip a single trailing
+  // ".local" suffix and take the first label so we always pass a bare label
+  // to ciao (matching the `${hostname}.local.` FQDN it builds).
+  //
+  // Falls back to null when:
+  //   - os.hostname() throws (rare, sandboxed environments)
+  //   - the hostname is empty or whitespace
+  //   - the hostname contains characters disallowed in DNS labels (RFC 1123
+  //     LDH); we let the caller fall through to "openclaw" rather than
+  //     advertise an invalid label that ciao would reject during PROBING.
+  // See https://github.com/openclaw/openclaw/issues/72355
+  let raw: string;
+  try {
+    raw = os.hostname();
+  } catch {
+    return null;
+  }
+  if (typeof raw !== "string") {
+    return null;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const firstLabel = trimmed.replace(/\.local$/i, "").split(".")[0]?.trim() ?? "";
+  if (!firstLabel) {
+    return null;
+  }
+  // RFC 1123 label: letters/digits/hyphens, 1-63 chars, no leading/trailing
+  // hyphen. ciao itself is stricter than `bonjour-service` was, so reject
+  // anything that wouldn't survive its own validation up-front.
+  if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/.test(firstLabel)) {
+    return null;
+  }
+  return firstLabel;
+}
+
 function safeServiceName(name: string) {
   const trimmed = name.trim();
   return trimmed.length > 0 ? trimmed : "OpenClaw";
@@ -256,7 +296,8 @@ export async function startGatewayBonjourAdvertiser(
   cleanupUncaughtException = deps.registerUncaughtExceptionHandler?.(handleCiaoProcessError);
 
   try {
-    const hostnameRaw = process.env.OPENCLAW_MDNS_HOSTNAME?.trim() || "openclaw";
+    const hostnameRaw =
+      process.env.OPENCLAW_MDNS_HOSTNAME?.trim() || resolveSystemMdnsHostname() || "openclaw";
     const hostname =
       hostnameRaw
         .replace(/\.local$/i, "")
