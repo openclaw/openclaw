@@ -187,6 +187,26 @@ function hashExecApprovalsRaw(raw: string | null): string {
     .digest("hex");
 }
 
+function emptyExecApprovalsFile(): ExecApprovalsFile {
+  return normalizeExecApprovals({ version: 1, agents: {} });
+}
+
+function emptyExecApprovalsSnapshot(filePath: string): ExecApprovalsSnapshot {
+  return {
+    path: filePath,
+    exists: false,
+    raw: null,
+    file: emptyExecApprovalsFile(),
+    hash: hashExecApprovalsRaw(null),
+  };
+}
+
+function isBestEffortReadPathError(err: unknown): boolean {
+  return (
+    err instanceof UnsafeExecApprovalsPathError || (err as NodeJS.ErrnoException).code === "ENOENT"
+  );
+}
+
 export function resolveExecApprovalsPath(): string {
   return expandHomePrefix(DEFAULT_FILE);
 }
@@ -478,16 +498,16 @@ function generateToken(): string {
 
 export function readExecApprovalsSnapshot(): ExecApprovalsSnapshot {
   const filePath = resolveExecApprovalsPath();
-  assertSafeExecApprovalsFilePath(filePath);
+  try {
+    assertSafeExecApprovalsFilePath(filePath);
+  } catch (err) {
+    if (isBestEffortReadPathError(err)) {
+      return emptyExecApprovalsSnapshot(filePath);
+    }
+    throw err;
+  }
   if (!fs.existsSync(filePath)) {
-    const file = normalizeExecApprovals({ version: 1, agents: {} });
-    return {
-      path: filePath,
-      exists: false,
-      raw: null,
-      file,
-      hash: hashExecApprovalsRaw(null),
-    };
+    return emptyExecApprovalsSnapshot(filePath);
   }
   const raw = fs.readFileSync(filePath, "utf8");
   let parsed: ExecApprovalsFile | null = null;
@@ -496,10 +516,7 @@ export function readExecApprovalsSnapshot(): ExecApprovalsSnapshot {
   } catch {
     parsed = null;
   }
-  const file =
-    parsed?.version === 1
-      ? normalizeExecApprovals(parsed)
-      : normalizeExecApprovals({ version: 1, agents: {} });
+  const file = parsed?.version === 1 ? normalizeExecApprovals(parsed) : emptyExecApprovalsFile();
   return {
     path: filePath,
     exists: true,
@@ -511,19 +528,19 @@ export function readExecApprovalsSnapshot(): ExecApprovalsSnapshot {
 
 export function loadExecApprovals(): ExecApprovalsFile {
   const filePath = resolveExecApprovalsPath();
-  assertSafeExecApprovalsFilePath(filePath);
   try {
+    assertSafeExecApprovalsFilePath(filePath);
     if (!fs.existsSync(filePath)) {
-      return normalizeExecApprovals({ version: 1, agents: {} });
+      return emptyExecApprovalsFile();
     }
     const raw = fs.readFileSync(filePath, "utf8");
     const parsed = JSON.parse(raw) as ExecApprovalsFile;
     if (parsed?.version !== 1) {
-      return normalizeExecApprovals({ version: 1, agents: {} });
+      return emptyExecApprovalsFile();
     }
     return normalizeExecApprovals(parsed);
   } catch {
-    return normalizeExecApprovals({ version: 1, agents: {} });
+    return emptyExecApprovalsFile();
   }
 }
 

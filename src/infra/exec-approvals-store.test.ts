@@ -81,6 +81,15 @@ function readApprovalsFile(homeDir: string): ExecApprovalsFile {
   return JSON.parse(fs.readFileSync(approvalsFilePath(homeDir), "utf8")) as ExecApprovalsFile;
 }
 
+function expectBestEffortEmptyApprovalsRead() {
+  const empty = normalizeExecApprovals({ version: 1, agents: {} });
+  expect(loadExecApprovals()).toEqual(empty);
+  const snapshot = readExecApprovalsSnapshot();
+  expect(snapshot.exists).toBe(false);
+  expect(snapshot.raw).toBeNull();
+  expect(snapshot.file).toEqual(empty);
+}
+
 describe("exec approvals store helpers", () => {
   it("expands home-prefixed default file and socket paths", () => {
     const dir = createHomeDir();
@@ -232,12 +241,7 @@ describe("exec approvals store helpers", () => {
       expect(() =>
         saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
       ).toThrow(/group\/other-writable exec approvals \.openclaw symlink target/);
-      expect(() => loadExecApprovals()).toThrow(
-        /group\/other-writable exec approvals \.openclaw symlink target/,
-      );
-      expect(() => readExecApprovalsSnapshot()).toThrow(
-        /group\/other-writable exec approvals \.openclaw symlink target/,
-      );
+      expectBestEffortEmptyApprovalsRead();
       expect(fs.existsSync(path.join(linkedStateTarget, "exec-approvals.json"))).toBe(false);
     },
   );
@@ -250,8 +254,7 @@ describe("exec approvals store helpers", () => {
     expect(() =>
       saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
     ).toThrow(/ENOENT|no such file or directory/i);
-    expect(() => loadExecApprovals()).toThrow(/ENOENT|no such file or directory/i);
-    expect(() => readExecApprovalsSnapshot()).toThrow(/ENOENT|no such file or directory/i);
+    expectBestEffortEmptyApprovalsRead();
     expect(fs.existsSync(path.join(missingTarget, "exec-approvals.json"))).toBe(false);
   });
 
@@ -267,8 +270,7 @@ describe("exec approvals store helpers", () => {
     expect(() =>
       saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
     ).toThrow(/Refusing to use exec approvals via symlink/);
-    expect(() => loadExecApprovals()).toThrow(/Refusing to use exec approvals via symlink/);
-    expect(() => readExecApprovalsSnapshot()).toThrow(/Refusing to use exec approvals via symlink/);
+    expectBestEffortEmptyApprovalsRead();
     expect(fs.readFileSync(targetPath, "utf8")).toBe('{"sentinel":true}\n');
   });
 
