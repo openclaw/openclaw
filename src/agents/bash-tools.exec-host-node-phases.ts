@@ -53,9 +53,13 @@ export function shouldSkipNodeApprovalPrepare(params: {
   hostSecurity: ExecSecurity;
   hostAsk: ExecAsk;
   strictInlineEval?: boolean;
+  workdir?: string;
 }): boolean {
   return (
-    params.hostSecurity === "full" && params.hostAsk === "off" && params.strictInlineEval !== true
+    params.hostSecurity === "full" &&
+    params.hostAsk === "off" &&
+    params.strictInlineEval !== true &&
+    params.workdir === undefined
   );
 }
 
