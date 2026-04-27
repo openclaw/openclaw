@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/coven-runtime",
+  "version": "2026.4.26",
+  "private": true,
+  "description": "OpenClaw Coven ACP runtime bridge",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

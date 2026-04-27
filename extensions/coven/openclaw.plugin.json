@@ -1,0 +1,33 @@
+{
+  "id": "coven",
+  "enabledByDefault": false,
+  "name": "Coven ACP Runtime",
+  "description": "Opt-in ACP runtime backend that launches coding tasks through a local Coven daemon.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "covenHome": {
+        "type": "string",
+        "description": "Path to COVEN_HOME. Defaults to COVEN_HOME or ~/.coven."
+      },
+      "socketPath": {
+        "type": "string",
+        "description": "Path to the Coven daemon Unix socket. Defaults to <covenHome>/coven.sock."
+      },
+      "fallbackBackend": {
+        "type": "string",
+        "description": "ACP backend to use when Coven is unavailable. Defaults to acpx."
+      },
+      "pollIntervalMs": {
+        "type": "number",
+        "description": "Polling interval for Coven session events."
+      },
+      "harnesses": {
+        "type": "object",
+        "additionalProperties": { "type": "string" },
+        "description": "Map OpenClaw ACP agent ids to Coven harness ids."
+      }
+    }
+  }
+}
