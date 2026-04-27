@@ -505,7 +505,10 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
         />
       </td>
       <td class="data-table-key-col">
-        <div class="${friendlyKeyLabel ? "" : "mono "}session-key-cell" title=${row.key}>
+        <div
+          class=${friendlyKeyLabel ? "session-key-cell" : "mono session-key-cell"}
+          title=${row.key}
+        >
           ${canLink
             ? html`<a
                 href=${chatUrl}
