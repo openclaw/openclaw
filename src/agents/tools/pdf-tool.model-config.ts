@@ -50,7 +50,7 @@ export function resolvePdfModelConfigForTool(params: {
     // Don't reuse an image-only model on a native-PDF provider (e.g. google/*-image-preview
     // returns 404 on native PDF endpoints). Fall through to auto-detect a PDF-capable model.
     const imageProvider = explicitImage.primary?.split("/")[0]?.trim() ?? "";
-    if (!bundledProviderSupportsNativePdfDocument(imageProvider)) {
+    if (!providerSupportsNativePdfDocument({ cfg: params.cfg, providerId: imageProvider })) {
       return explicitImage;
     }
   }
