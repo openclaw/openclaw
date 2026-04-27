@@ -398,6 +398,8 @@ describe("task-flow-registry", () => {
         flow: expect.objectContaining({
           flowId: created.flowId,
           revision: 1,
+          updatedAt: 200,
+          endedAt: 200,
           stateJson: {
             residueResolution: {
               disposition: "interpreted_non_blocking",
