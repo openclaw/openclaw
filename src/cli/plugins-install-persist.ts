@@ -61,6 +61,7 @@ export async function persistPluginInstall(params: {
   snapshot: ConfigSnapshotForInstallPersist;
   pluginId: string;
   install: Omit<PluginInstallUpdate, "pluginId">;
+  enable?: boolean;
   successMessage?: string;
   warningMessage?: string;
 }): Promise<OpenClawConfig> {
@@ -68,7 +69,12 @@ export async function persistPluginInstall(params: {
     addInstalledPluginToAllowlist(params.snapshot.config, params.pluginId),
     params.pluginId,
   );
-  let next = enablePluginInConfig(installConfig, params.pluginId).config;
+  let next =
+    params.enable === false
+      ? installConfig
+      : enablePluginInConfig(installConfig, params.pluginId, {
+          updateChannelConfig: false,
+        }).config;
   const installRecords = await loadInstalledPluginIndexInstallRecords();
   const nextInstallRecords = recordPluginInstallInRecords(installRecords, {
     pluginId: params.pluginId,

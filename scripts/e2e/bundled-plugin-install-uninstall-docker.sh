@@ -45,14 +45,41 @@ const explicit = (process.env.OPENCLAW_BUNDLED_PLUGIN_SWEEP_IDS || "")
   .split(/[,\s]+/u)
   .map((entry) => entry.trim())
   .filter(Boolean);
-const allIds =
+const extensionRoot = path.join(process.cwd(), "dist", "extensions");
+const manifestEntries = fs
+  .readdirSync(extensionRoot, { withFileTypes: true })
+  .filter((entry) => entry.isDirectory())
+  .map((entry) => {
+    const manifestPath = path.join(extensionRoot, entry.name, "openclaw.plugin.json");
+    if (!fs.existsSync(manifestPath)) {
+      return null;
+    }
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const id = typeof manifest.id === "string" ? manifest.id.trim() : "";
+    if (!id) {
+      throw new Error(`Bundled plugin manifest is missing id: ${manifestPath}`);
+    }
+    const required = manifest.configSchema?.required;
+    return {
+      id,
+      dir: entry.name,
+      requiresConfig:
+        Array.isArray(required) && required.some((value) => typeof value === "string"),
+    };
+  })
+  .filter(Boolean)
+  .sort((a, b) => a.id.localeCompare(b.id));
+const allEntries =
   explicit.length > 0
-    ? explicit
-    : fs
-        .readdirSync(path.join(process.cwd(), "dist", "extensions"), { withFileTypes: true })
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => entry.name)
-        .sort((a, b) => a.localeCompare(b));
+    ? explicit.map(
+        (lookup) =>
+          manifestEntries.find((entry) => entry.id === lookup || entry.dir === lookup) || {
+            id: lookup,
+            dir: lookup,
+            requiresConfig: false,
+          },
+      )
+    : manifestEntries;
 
 const total = Number.parseInt(process.env.OPENCLAW_BUNDLED_PLUGIN_SWEEP_TOTAL || "1", 10);
 const index = Number.parseInt(process.env.OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX || "0", 10);
@@ -63,26 +90,35 @@ if (!Number.isInteger(index) || index < 0 || index >= total) {
   throw new Error(`OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX must be in [0, ${total - 1}], got ${process.env.OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX}`);
 }
 
-const selected = allIds.filter((_, candidateIndex) => candidateIndex % total === index);
+const selected = allEntries.filter((_, candidateIndex) => candidateIndex % total === index);
 if (selected.length === 0) {
   throw new Error(`No bundled plugin ids selected for shard ${index}/${total}`);
 }
 
-for (const id of selected) {
-  console.log(id);
+for (const entry of selected) {
+  console.log(`${entry.id}\t${entry.dir}\t${entry.requiresConfig ? "1" : "0"}`);
 }
 NODE
 
-mapfile -t plugin_ids < /tmp/bundled-plugin-sweep-ids
-echo "Selected ${#plugin_ids[@]} bundled plugins for shard ${OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX:-0}/${OPENCLAW_BUNDLED_PLUGIN_SWEEP_TOTAL:-1}: ${plugin_ids[*]}"
+mapfile -t plugin_entries < /tmp/bundled-plugin-sweep-ids
+selected_labels=()
+for plugin_entry in "${plugin_entries[@]}"; do
+  IFS=$'\t' read -r plugin_id plugin_dir _requires_config <<<"$plugin_entry"
+  selected_labels+=("${plugin_id}@${plugin_dir}")
+done
+echo "Selected ${#plugin_entries[@]} bundled plugins for shard ${OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX:-0}/${OPENCLAW_BUNDLED_PLUGIN_SWEEP_TOTAL:-1}: ${selected_labels[*]}"
 
 assert_installed() {
   local plugin_id="$1"
-  node - <<'NODE' "$plugin_id"
+  local plugin_dir="$2"
+  local requires_config="$3"
+  node - <<'NODE' "$plugin_id" "$plugin_dir" "$requires_config"
 const fs = require("node:fs");
 const path = require("node:path");
 
 const pluginId = process.argv[2];
+const pluginDir = process.argv[3];
+const requiresConfig = process.argv[4] === "1";
 const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
 const indexPath = path.join(process.env.HOME, ".openclaw", "plugins", "installs.json");
 const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
@@ -95,7 +131,7 @@ if (!record) {
 if (record.source !== "path") {
   throw new Error(`expected bundled install record source=path for ${pluginId}, got ${record.source}`);
 }
-if (typeof record.sourcePath !== "string" || !record.sourcePath.includes(`/dist/extensions/${pluginId}`)) {
+if (typeof record.sourcePath !== "string" || !record.sourcePath.includes(`/dist/extensions/${pluginDir}`)) {
   throw new Error(`unexpected bundled source path for ${pluginId}: ${record.sourcePath}`);
 }
 if (record.installPath !== record.sourcePath) {
@@ -105,7 +141,10 @@ const paths = config.plugins?.load?.paths || [];
 if (!paths.includes(record.sourcePath)) {
   throw new Error(`config load paths do not include bundled install path for ${pluginId}`);
 }
-if (config.plugins?.entries?.[pluginId]?.enabled !== true) {
+if (requiresConfig && config.plugins?.entries?.[pluginId]?.enabled === true) {
+  throw new Error(`plugin requiring config should not be enabled immediately after install for ${pluginId}`);
+}
+if (!requiresConfig && config.plugins?.entries?.[pluginId]?.enabled !== true) {
   throw new Error(`config entry is not enabled after install for ${pluginId}`);
 }
 const allow = config.plugins?.allow || [];
@@ -120,11 +159,13 @@ NODE
 
 assert_uninstalled() {
   local plugin_id="$1"
-  node - <<'NODE' "$plugin_id"
+  local plugin_dir="$2"
+  node - <<'NODE' "$plugin_id" "$plugin_dir"
 const fs = require("node:fs");
 const path = require("node:path");
 
 const pluginId = process.argv[2];
+const pluginDir = process.argv[3];
 const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
 const indexPath = path.join(process.env.HOME, ".openclaw", "plugins", "installs.json");
 const config = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, "utf8")) : {};
@@ -134,7 +175,7 @@ if (records[pluginId]) {
   throw new Error(`install record still present after uninstall for ${pluginId}`);
 }
 const paths = config.plugins?.load?.paths || [];
-if (paths.some((entry) => String(entry).includes(`/dist/extensions/${pluginId}`))) {
+if (paths.some((entry) => String(entry).includes(`/dist/extensions/${pluginDir}`))) {
   throw new Error(`load path still present after uninstall for ${pluginId}`);
 }
 if (config.plugins?.entries?.[pluginId]) {
@@ -154,26 +195,27 @@ NODE
 }
 
 plugin_index=0
-for plugin_id in "${plugin_ids[@]}"; do
+for plugin_entry in "${plugin_entries[@]}"; do
+  IFS=$'\t' read -r plugin_id plugin_dir requires_config <<<"$plugin_entry"
   install_log="/tmp/openclaw-install-${plugin_index}.log"
   uninstall_log="/tmp/openclaw-uninstall-${plugin_index}.log"
-  echo "Installing bundled plugin: $plugin_id"
+  echo "Installing bundled plugin: $plugin_id ($plugin_dir)"
   node "$OPENCLAW_ENTRY" plugins install "$plugin_id" >"$install_log" 2>&1 || {
     cat "$install_log"
     exit 1
   }
-  assert_installed "$plugin_id"
+  assert_installed "$plugin_id" "$plugin_dir" "$requires_config"
 
-  echo "Uninstalling bundled plugin: $plugin_id"
+  echo "Uninstalling bundled plugin: $plugin_id ($plugin_dir)"
   node "$OPENCLAW_ENTRY" plugins uninstall "$plugin_id" --force >"$uninstall_log" 2>&1 || {
     cat "$uninstall_log"
     exit 1
   }
-  assert_uninstalled "$plugin_id"
+  assert_uninstalled "$plugin_id" "$plugin_dir"
   plugin_index=$((plugin_index + 1))
 done
 
-echo "bundled plugin install/uninstall sweep passed (${#plugin_ids[@]} plugin(s))"
+echo "bundled plugin install/uninstall sweep passed (${#plugin_entries[@]} plugin(s))"
 EOF
 then
   cat "$RUN_LOG"

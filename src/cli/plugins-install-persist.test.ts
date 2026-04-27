@@ -107,4 +107,38 @@ describe("persistPluginInstall", () => {
 
     expect(next).toEqual(enabledConfig);
   });
+
+  it("can persist an install record without enabling a plugin that needs config first", async () => {
+    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const baseConfig = {
+      plugins: {
+        entries: {},
+      },
+    } as OpenClawConfig;
+
+    const next = await persistPluginInstall({
+      snapshot: {
+        config: baseConfig,
+        baseHash: "config-1",
+      },
+      pluginId: "memory-lancedb",
+      enable: false,
+      install: {
+        source: "path",
+        spec: "memory-lancedb",
+        sourcePath: "/app/dist/extensions/memory-lancedb",
+        installPath: "/app/dist/extensions/memory-lancedb",
+      },
+    });
+
+    expect(next).toEqual(baseConfig);
+    expect(enablePluginInConfig).not.toHaveBeenCalled();
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({
+      "memory-lancedb": expect.objectContaining({
+        source: "path",
+        sourcePath: "/app/dist/extensions/memory-lancedb",
+      }),
+    });
+    expect(writeConfigFile).toHaveBeenCalledWith(baseConfig);
+  });
 });

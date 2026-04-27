@@ -60,6 +60,20 @@ async function installBundledPluginSource(params: {
 }) {
   const existing = params.snapshot.config.plugins?.load?.paths ?? [];
   const mergedPaths = Array.from(new Set([...existing, params.bundledSource.localPath]));
+  const existingEntry = params.snapshot.config.plugins?.entries?.[params.bundledSource.pluginId];
+  const shouldEnable =
+    !params.bundledSource.requiresConfig ||
+    Boolean(
+      existingEntry &&
+      typeof existingEntry === "object" &&
+      !Array.isArray(existingEntry) &&
+      existingEntry.config &&
+      typeof existingEntry.config === "object" &&
+      !Array.isArray(existingEntry.config),
+    );
+  const configWarning = shouldEnable
+    ? ""
+    : `Installed bundled plugin "${params.bundledSource.pluginId}" without enabling it because it requires configuration first. Configure it, then run \`openclaw plugins enable ${params.bundledSource.pluginId}\`.`;
   await persistPluginInstall({
     snapshot: {
       config: {
@@ -81,7 +95,8 @@ async function installBundledPluginSource(params: {
       sourcePath: params.bundledSource.localPath,
       installPath: params.bundledSource.localPath,
     },
-    warningMessage: params.warning,
+    enable: shouldEnable,
+    warningMessage: [params.warning, configWarning].filter(Boolean).join("\n"),
   });
 }
 
