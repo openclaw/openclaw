@@ -58,6 +58,7 @@ vi.mock("./reply/directive-handling.defaults.js", () => ({
     defaultModel: "claude-opus-4-6",
     aliasIndex: new Map(),
   })),
+  resolveSubagentSessionDefaultModel: vi.fn(() => null),
 }));
 vi.mock("./reply/inbound-context.js", () => ({
   finalizeInboundContext: vi.fn((ctx: unknown) => ctx),
