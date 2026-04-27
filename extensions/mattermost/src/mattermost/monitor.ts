@@ -231,9 +231,13 @@ function channelChatType(kind: ChatType): "direct" | "group" | "channel" {
 }
 
 export function resolveMattermostReplyRootId(params: {
+  kind: ChatType;
   threadRootId?: string;
   replyToId?: string;
 }): string | undefined {
+  if (params.kind === "direct") {
+    return undefined;
+  }
   const threadRootId = normalizeOptionalString(params.threadRootId);
   if (threadRootId) {
     return threadRootId;
@@ -242,12 +246,14 @@ export function resolveMattermostReplyRootId(params: {
 }
 
 export function canFinalizeMattermostPreviewInPlace(params: {
+  kind: ChatType;
   previewRootId?: string;
   threadRootId?: string;
   replyToId?: string;
 }): boolean {
   return (
     resolveMattermostReplyRootId({
+      kind: params.kind,
       threadRootId: params.threadRootId,
       replyToId: params.replyToId,
     }) === params.previewRootId?.trim()
@@ -275,6 +281,7 @@ type MattermostDraftPreviewState = {
 type MattermostDraftPreviewDeliverParams = {
   payload: ReplyPayload;
   info: { kind: "tool" | "block" | "final" };
+  kind: ChatType;
   client: MattermostClient;
   draftStream: Pick<
     ReturnType<typeof createMattermostDraftStream>,
@@ -313,6 +320,7 @@ export async function deliverMattermostReplyWithDraftPreview(
         typeof previewFinalText !== "string" ||
         payload.isError ||
         !canFinalizeMattermostPreviewInPlace({
+          kind: params.kind,
           previewRootId: params.effectiveReplyToId,
           threadRootId: params.effectiveReplyToId,
           replyToId: payload.replyToId,
@@ -345,12 +353,12 @@ export function resolveMattermostEffectiveReplyToId(params: {
   replyToMode: "off" | "first" | "all" | "batched";
   threadRootId?: string | null;
 }): string | undefined {
+  if (params.kind === "direct") {
+    return undefined;
+  }
   const threadRootId = normalizeOptionalString(params.threadRootId);
   if (threadRootId && params.replyToMode !== "off") {
     return threadRootId;
-  }
-  if (params.kind === "direct") {
-    return undefined;
   }
   const postId = normalizeOptionalString(params.postId);
   if (!postId) {
@@ -707,6 +715,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 accountId: account.accountId,
                 agentId: route.agentId,
                 replyToId: resolveMattermostReplyRootId({
+                  kind,
                   threadRootId: threadContext.effectiveReplyToId,
                   replyToId: payload.replyToId,
                 }),
@@ -915,6 +924,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             accountId: account.accountId,
             agentId: params.route.agentId,
             replyToId: resolveMattermostReplyRootId({
+              kind: params.kind,
               threadRootId: params.effectiveReplyToId,
               replyToId: trimmedPayload.replyToId,
             }),
@@ -1695,6 +1705,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               await deliverMattermostReplyWithDraftPreview({
                 payload,
                 info,
+                kind,
                 client,
                 draftStream,
                 effectiveReplyToId,
@@ -1710,6 +1721,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                     accountId: account.accountId,
                     agentId: route.agentId,
                     replyToId: resolveMattermostReplyRootId({
+                      kind,
                       threadRootId: effectiveReplyToId,
                       replyToId: payload.replyToId,
                     }),
