@@ -901,6 +901,22 @@ function sliceLinkSpans(spans: MarkdownLinkSpan[], start: number, end: number): 
   return sliced;
 }
 
+function expandFinalChunkEndForTrailingStyles(
+  spans: MarkdownStyleSpan[],
+  start: number,
+  end: number,
+  maxLength: number,
+): number {
+  let expandedEnd = end;
+  for (const span of spans) {
+    if (span.end <= expandedEnd || span.start > expandedEnd || span.end <= start) {
+      continue;
+    }
+    expandedEnd = Math.min(maxLength, span.end);
+  }
+  return expandedEnd;
+}
+
 export function sliceMarkdownIR(ir: MarkdownIR, start: number, end: number): MarkdownIR {
   return {
     text: ir.text.slice(start, end),
@@ -997,9 +1013,14 @@ export function chunkMarkdownIR(ir: MarkdownIR, limit: number): MarkdownIR[] {
       }
     }
     const start = cursor;
-    const end = Math.min(ir.text.length, start + chunk.length);
+    const rawEnd = Math.min(ir.text.length, start + chunk.length);
+    const end =
+      index === chunks.length - 1
+        ? expandFinalChunkEndForTrailingStyles(ir.styles, start, rawEnd, ir.text.length)
+        : rawEnd;
+    const text = end === rawEnd ? chunk : ir.text.slice(start, end);
     results.push({
-      text: chunk,
+      text,
       styles: sliceStyleSpans(ir.styles, start, end),
       links: sliceLinkSpans(ir.links, start, end),
     });

@@ -27,8 +27,9 @@ export function chunkTextByBreakResolver(
     const nextStart = Math.min(remaining.length, breakIdx + (brokeOnSeparator ? 1 : 0));
     remaining = remaining.slice(nextStart).trimStart();
   }
-  if (remaining.length) {
-    chunks.push(remaining);
+  const finalChunk = remaining.trimEnd();
+  if (finalChunk.length > 0) {
+    chunks.push(finalChunk);
   }
   return chunks;
 }
