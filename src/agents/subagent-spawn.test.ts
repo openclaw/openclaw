@@ -76,6 +76,45 @@ describe("spawnSubagentDirect seam flow", () => {
     );
   });
 
+  it("rejects an explicit same-agent spawn when allowAgents does not include the requester (#72827)", async () => {
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+          subagents: {
+            allowAgents: ["coder"],
+          },
+        },
+        list: [
+          {
+            id: "main",
+            workspace: "/tmp/workspace-main",
+          },
+          {
+            id: "coder",
+            workspace: "/tmp/workspace-coder",
+          },
+        ],
+      },
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "spawn another main worker",
+        agentId: "main",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "forbidden",
+      error: "agentId is not allowed for sessions_spawn (allowed: coder)",
+    });
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it("accepts a spawned run across session patching, runtime-model persistence, registry registration, and lifecycle emission", async () => {
     const operations: string[] = [];
     let persistedStore: Record<string, Record<string, unknown>> | undefined;

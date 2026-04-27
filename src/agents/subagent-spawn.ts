@@ -744,7 +744,7 @@ export async function spawnSubagentDirect(
     requesterGroupSpace: ctx.agentGroupSpace,
     requesterMemberRoleIds: ctx.agentMemberRoleIds,
   });
-  if (targetAgentId !== requesterAgentId) {
+  if (requestedAgentId) {
     const allowAgents =
       resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ??
       cfg?.agents?.defaults?.subagents?.allowAgents ??
