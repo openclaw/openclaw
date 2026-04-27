@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { createCapturedPluginRegistration } from "../../src/test-utils/plugin-registration.js";
-import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
+import {
+  createCapturedPluginRegistration,
+  registerSingleProviderPlugin,
+} from "openclaw/plugin-sdk/testing";
 import deepinfraPlugin from "./index.js";
 
 describe("deepinfra augmentModelCatalog", () => {

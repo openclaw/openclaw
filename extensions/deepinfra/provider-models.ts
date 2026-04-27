@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 
@@ -166,10 +167,13 @@ export async function discoverDeepInfraModels(): Promise<ModelDefinitionConfig[]
   }
 
   try {
-    const response = await fetch(DEEPINFRA_MODELS_URL, {
-      headers: { Accept: "application/json" },
-      signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS),
-    });
+    const response = await fetchWithTimeout(
+      DEEPINFRA_MODELS_URL,
+      {
+        headers: { Accept: "application/json" },
+      },
+      DISCOVERY_TIMEOUT_MS,
+    );
     if (!response.ok) {
       log.warn(`Failed to discover models: HTTP ${response.status}, using static catalog`);
       return staticCatalog();

@@ -1,3 +1,3 @@
-import { describeProviderContracts } from "../../test/helpers/plugins/provider-contract.js";
+import { describeProviderContracts } from "openclaw/plugin-sdk/provider-test-contracts";
 
 describeProviderContracts("deepinfra");
