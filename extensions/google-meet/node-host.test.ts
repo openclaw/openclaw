@@ -51,7 +51,7 @@ describe("google-meet node host bridge sessions", () => {
         await handleGoogleMeetNodeHostCommand(
           JSON.stringify({
             action: "start",
-            url: "https://meet.google.com/abc-defg-hij",
+            url: "https://meet.google.com/xyz-abcd-uvw",
             mode: "realtime",
             launch: false,
             audioInputCommand: ["mock-rec"],
@@ -77,6 +77,7 @@ describe("google-meet node host bridge sessions", () => {
       expect(firstOutput?.kill).toHaveBeenCalledWith("SIGTERM");
 
       firstOutput?.emit("error", new Error("stale output failed after clear"));
+      firstOutput?.emit("exit", 0, "SIGTERM");
 
       const status = JSON.parse(
         await handleGoogleMeetNodeHostCommand(
@@ -104,6 +105,13 @@ describe("google-meet node host bridge sessions", () => {
 
       expect(children[2]?.stdin?.write).toHaveBeenCalledWith(audio);
       expect(firstOutput?.stdin?.write).not.toHaveBeenCalled();
+
+      await handleGoogleMeetNodeHostCommand(
+        JSON.stringify({
+          action: "stop",
+          bridgeId: start.bridgeId,
+        }),
+      );
     } finally {
       Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
     }
