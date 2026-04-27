@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { toSafeImportPath } from "./import-specifier.js";
 import { startLazyPluginServiceModule } from "./lazy-service-module.js";
 
 function createAsyncHookMock() {
@@ -87,6 +88,21 @@ describe("startLazyPluginServiceModule", () => {
 
     expect(loadOverrideModule).toHaveBeenCalledWith("virtual:service");
     expect(start).toHaveBeenCalledTimes(1);
+  });
+
+  it("converts Windows absolute override specifiers to file URLs for dynamic import", () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    try {
+      expect(toSafeImportPath("C:\\Users\\alice\\browser-control\\service.mjs")).toBe(
+        "file:///C:/Users/alice/browser-control/service.mjs",
+      );
+      expect(toSafeImportPath("file:///C:/Users/alice/browser-control/service.mjs")).toBe(
+        "file:///C:/Users/alice/browser-control/service.mjs",
+      );
+      expect(toSafeImportPath("virtual:service")).toBe("virtual:service");
+    } finally {
+      platformSpy.mockRestore();
+    }
   });
 
   it("validates the override specifier before loading it", async () => {
