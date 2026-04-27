@@ -19,7 +19,7 @@ describe("applyGatewayLaneConcurrency", () => {
     resetCommandQueueStateForTest();
   });
 
-  it("applies cron maxConcurrentRuns to the nested lane used by cron agent turns", async () => {
+  it("applies cron maxConcurrentRuns to the cron-nested lane used by cron agent turns", async () => {
     applyGatewayLaneConcurrency({ cron: { maxConcurrentRuns: 2 } } as OpenClawConfig);
 
     let activeRuns = 0;
@@ -40,8 +40,8 @@ describe("applyGatewayLaneConcurrency", () => {
       }
     };
 
-    const first = enqueueCommandInLane(CommandLane.Nested, run, { warnAfterMs: 10_000 });
-    const second = enqueueCommandInLane(CommandLane.Nested, run, { warnAfterMs: 10_000 });
+    const first = enqueueCommandInLane(CommandLane.CronNested, run, { warnAfterMs: 10_000 });
+    const second = enqueueCommandInLane(CommandLane.CronNested, run, { warnAfterMs: 10_000 });
     const timeout = setTimeout(() => {
       bothRunsStarted.reject(
         new Error("timed out waiting for nested cron work to run in parallel"),
@@ -56,5 +56,25 @@ describe("applyGatewayLaneConcurrency", () => {
       releaseRuns.resolve();
       await Promise.all([first, second]);
     }
+  });
+
+  it("keeps the shared nested lane at its default concurrency", async () => {
+    applyGatewayLaneConcurrency({ cron: { maxConcurrentRuns: 2 } } as OpenClawConfig);
+
+    let startedRuns = 0;
+    const releaseRuns = createDeferred<void>();
+    const run = async () => {
+      startedRuns += 1;
+      await releaseRuns.promise;
+    };
+
+    const first = enqueueCommandInLane(CommandLane.Nested, run, { warnAfterMs: 10_000 });
+    const second = enqueueCommandInLane(CommandLane.Nested, run, { warnAfterMs: 10_000 });
+    await Promise.resolve();
+
+    expect(startedRuns).toBe(1);
+
+    releaseRuns.resolve();
+    await Promise.all([first, second]);
   });
 });

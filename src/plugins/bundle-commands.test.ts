@@ -33,12 +33,6 @@ vi.mock("./config-state.js", () => ({
   }) => ({
     activated: params.config?.entries?.[params.id]?.enabled !== false,
   }),
-  resolveEffectiveEnableState: (params: {
-    config?: { entries?: Record<string, { enabled?: boolean }> };
-    id: string;
-  }) => ({
-    enabled: params.config?.entries?.[params.id]?.enabled !== false,
-  }),
 }));
 
 const { loadEnabledClaudeBundleCommands } = await import("./bundle-commands.js");
