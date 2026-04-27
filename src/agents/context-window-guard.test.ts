@@ -163,7 +163,11 @@ describe("context-window-guard", () => {
     });
     const guard = evaluateContextWindowGuard({ info });
     expect(info.source).toBe("agentContextTokens");
-    expect(guard.shouldWarn).toBe(false);
+    expect(info.tokens).toBe(20_000);
+    expect(info.referenceTokens).toBe(200_000);
+    expect(guard.hardMinTokens).toBe(20_000);
+    expect(guard.warnBelowTokens).toBe(40_000);
+    expect(guard.shouldWarn).toBe(true);
     expect(guard.shouldBlock).toBe(false);
   });
 
@@ -196,6 +200,30 @@ describe("context-window-guard", () => {
     expect(guard.shouldBlock).toBe(false);
   });
 
+  it("normalizes invalid default context tokens to the warning floor", () => {
+    const info = resolveContextWindowInfo({
+      cfg: undefined,
+      provider: "anthropic",
+      modelId: "unknown",
+      defaultTokens: Number.NaN,
+    });
+    const guard = evaluateContextWindowGuard({ info });
+    expect(info).toEqual({ source: "default", tokens: 8_000 });
+    expect(guard.shouldWarn).toBe(false);
+    expect(guard.shouldBlock).toBe(false);
+  });
+
+  it("blocks invalid guard token counts instead of silently passing", () => {
+    const guard = evaluateContextWindowGuard({
+      info: { tokens: Number.NaN, source: "model" },
+    });
+    expect(guard.tokens).toBe(0);
+    expect(guard.hardMinTokens).toBe(4_000);
+    expect(guard.warnBelowTokens).toBe(8_000);
+    expect(guard.shouldWarn).toBe(true);
+    expect(guard.shouldBlock).toBe(true);
+  });
+
   it("allows overriding thresholds", () => {
     const info = { tokens: 10_000, source: "model" as const };
     const guard = evaluateContextWindowGuard({
@@ -223,6 +251,20 @@ describe("context-window-guard", () => {
       hardMinTokens: 6_400,
       warnBelowTokens: 12_800,
     });
+    expect(resolveContextWindowGuardThresholds(Number.NaN)).toEqual({
+      hardMinTokens: 4_000,
+      warnBelowTokens: 8_000,
+    });
+  });
+
+  it("derives guard thresholds from the reference window when capped", () => {
+    const guard = evaluateContextWindowGuard({
+      info: { tokens: 150_000, referenceTokens: 1_000_000, source: "agentContextTokens" },
+    });
+    expect(guard.hardMinTokens).toBe(100_000);
+    expect(guard.warnBelowTokens).toBe(200_000);
+    expect(guard.shouldWarn).toBe(true);
+    expect(guard.shouldBlock).toBe(false);
   });
 
   it("adds a local-model hint to warning messages for localhost endpoints", () => {

@@ -11,6 +11,7 @@ export type ContextWindowSource = "model" | "modelsConfig" | "agentContextTokens
 
 export type ContextWindowInfo = {
   tokens: number;
+  referenceTokens?: number;
   source: ContextWindowSource;
 };
 
@@ -45,15 +46,17 @@ export function resolveContextWindowInfo(params: {
   const fromModel =
     normalizePositiveInt(params.modelContextTokens) ??
     normalizePositiveInt(params.modelContextWindow);
+  const defaultTokens =
+    normalizePositiveInt(params.defaultTokens) ?? CONTEXT_WINDOW_WARN_BELOW_TOKENS;
   const baseInfo = fromModelsConfig
     ? { tokens: fromModelsConfig, source: "modelsConfig" as const }
     : fromModel
       ? { tokens: fromModel, source: "model" as const }
-      : { tokens: Math.floor(params.defaultTokens), source: "default" as const };
+      : { tokens: defaultTokens, source: "default" as const };
 
   const capTokens = normalizePositiveInt(params.cfg?.agents?.defaults?.contextTokens);
   if (capTokens && capTokens < baseInfo.tokens) {
-    return { tokens: capTokens, source: "agentContextTokens" };
+    return { tokens: capTokens, referenceTokens: baseInfo.tokens, source: "agentContextTokens" };
   }
 
   return baseInfo;
@@ -89,7 +92,7 @@ export function resolveContextWindowGuardHint(params: {
 export function resolveContextWindowGuardThresholds(
   contextWindowTokens: number,
 ): ContextWindowGuardThresholds {
-  const tokens = Math.max(0, Math.floor(contextWindowTokens));
+  const tokens = normalizePositiveInt(contextWindowTokens) ?? 0;
   return {
     hardMinTokens: Math.max(
       CONTEXT_WINDOW_HARD_MIN_TOKENS,
@@ -163,8 +166,10 @@ export function evaluateContextWindowGuard(params: {
   warnBelowTokens?: number;
   hardMinTokens?: number;
 }): ContextWindowGuardResult {
-  const tokens = Math.max(0, Math.floor(params.info.tokens));
-  const resolvedThresholds = resolveContextWindowGuardThresholds(tokens);
+  const normalizedTokens = normalizePositiveInt(params.info.tokens);
+  const tokens = normalizedTokens ?? 0;
+  const referenceTokens = normalizePositiveInt(params.info.referenceTokens) ?? tokens;
+  const resolvedThresholds = resolveContextWindowGuardThresholds(referenceTokens);
   const warnBelow = Math.max(
     1,
     Math.floor(params.warnBelowTokens ?? resolvedThresholds.warnBelowTokens),
@@ -175,7 +180,7 @@ export function evaluateContextWindowGuard(params: {
     tokens,
     hardMinTokens: hardMin,
     warnBelowTokens: warnBelow,
-    shouldWarn: tokens > 0 && tokens < warnBelow,
-    shouldBlock: tokens > 0 && tokens < hardMin,
+    shouldWarn: !normalizedTokens || tokens < warnBelow,
+    shouldBlock: !normalizedTokens || tokens < hardMin,
   };
 }
