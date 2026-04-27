@@ -261,4 +261,10 @@ describe("WhatsApp dmPolicy precedence", () => {
     expect(result.allowed).toBe(true);
     expect(result.isSelfChat).toBe(true);
   });
+
+  it("returns shouldMarkRead=false for unauthorized senders so the monitor skips read receipts (#70470)", async () => {
+    const result = await checkUnauthorizedWorkDmSender();
+    expect(result.allowed).toBe(false);
+    expect(result.shouldMarkRead).toBe(false);
+  });
 });

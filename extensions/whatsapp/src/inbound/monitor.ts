@@ -439,7 +439,7 @@ export async function attachWebInboxToSocket(
 
   const maybeMarkInboundAsRead = async (inbound: NormalizedInboundMessage) => {
     const { id, remoteJid, participantJid, access } = inbound;
-    if (id && !access.isSelfChat && options.sendReadReceipts !== false) {
+    if (id && access.shouldMarkRead && !access.isSelfChat && options.sendReadReceipts !== false) {
       try {
         await sock.readMessages([{ remoteJid, id, participant: participantJid, fromMe: false }]);
         const suffix = participantJid ? ` (participant ${participantJid})` : "";
