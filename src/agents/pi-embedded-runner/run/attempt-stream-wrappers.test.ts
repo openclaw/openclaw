@@ -1,6 +1,8 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { TranscriptPolicy } from "../transcript-policy.js";
+import type { AnthropicPayloadLogger } from "../../anthropic-payload-log.js";
+import type { CacheTrace } from "../../cache-trace.js";
+import type { TranscriptPolicy } from "../../transcript-policy.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 // Track every wrapper application, in the order it happens, so tests can
@@ -51,7 +53,7 @@ vi.mock("./attempt.tool-call-normalization.js", () => ({
   }),
 }));
 
-vi.mock("../transcript-policy.js", () => ({
+vi.mock("../../transcript-policy.js", () => ({
   shouldAllowProviderOwnedThinkingReplay: vi.fn(() => false),
 }));
 
@@ -115,7 +117,7 @@ function buildParams(
     session,
     params: {
       activeSession: session as Parameters<typeof applyAttemptStreamWrappers>[0]["activeSession"],
-      cacheTrace: overrides.cacheTrace ?? null,
+      cacheTrace: (overrides.cacheTrace ?? null) as CacheTrace | null,
       transcriptPolicy: {
         ...baseTranscriptPolicy,
         ...overrides.transcriptPolicy,
@@ -128,7 +130,8 @@ function buildParams(
         ...baseModel,
         api: overrides.modelApi ?? "openai",
       } as EmbeddedRunAttemptParams["model"],
-      anthropicPayloadLogger: overrides.anthropicPayloadLogger ?? null,
+      anthropicPayloadLogger: (overrides.anthropicPayloadLogger ??
+        null) as AnthropicPayloadLogger | null,
       shouldReturnYieldAbortedResponse: overrides.shouldReturnYieldAbortedResponse ?? (() => false),
     },
   };
@@ -146,10 +149,16 @@ describe("applyAttemptStreamWrappers", () => {
   describe("composition order (innermost-applied → outermost)", () => {
     it("preserves the canonical ordering when every conditional is enabled", () => {
       const cacheTrace = {
-        wrapStreamFn: vi.fn((s) => (wrapperCalls.events.push("cacheTrace"), s)),
+        wrapStreamFn: vi.fn((s) => {
+          wrapperCalls.events.push("cacheTrace");
+          return s;
+        }),
       };
       const anthropicPayloadLogger = {
-        wrapStreamFn: vi.fn((s) => (wrapperCalls.events.push("anthropicPayloadLogger"), s)),
+        wrapStreamFn: vi.fn((s) => {
+          wrapperCalls.events.push("anthropicPayloadLogger");
+          return s;
+        }),
       };
       vi.mocked(shouldRepairMalformedToolCallArguments).mockReturnValueOnce(true);
       vi.mocked(resolveToolCallArgumentsEncoding).mockReturnValueOnce("html-entities");
@@ -160,7 +169,7 @@ describe("applyAttemptStreamWrappers", () => {
           dropThinkingBlocks: true,
           dropReasoningFromHistory: true,
           sanitizeToolCallIds: true,
-          toolCallIdMode: "anthropic-reset",
+          toolCallIdMode: "strict",
         } as Partial<TranscriptPolicy>,
         isOpenAIResponsesApi: false,
       });
@@ -207,7 +216,10 @@ describe("applyAttemptStreamWrappers", () => {
 
     it("applies the cacheTrace wrapper when cacheTrace is non-null", () => {
       const cacheTrace = {
-        wrapStreamFn: vi.fn((s) => (wrapperCalls.events.push("cacheTrace"), s)),
+        wrapStreamFn: vi.fn((s) => {
+          wrapperCalls.events.push("cacheTrace");
+          return s;
+        }),
       };
       const { params } = buildParams({ cacheTrace });
       applyAttemptStreamWrappers(params);
@@ -249,7 +261,7 @@ describe("applyAttemptStreamWrappers", () => {
       const { params: paramsAllTrue, session: sessAllTrue } = buildParams({
         transcriptPolicy: {
           sanitizeToolCallIds: true,
-          toolCallIdMode: "anthropic-reset",
+          toolCallIdMode: "strict",
         } as Partial<TranscriptPolicy>,
         isOpenAIResponsesApi: false,
       });
@@ -262,7 +274,7 @@ describe("applyAttemptStreamWrappers", () => {
       const { params: paramsOpenAI } = buildParams({
         transcriptPolicy: {
           sanitizeToolCallIds: true,
-          toolCallIdMode: "anthropic-reset",
+          toolCallIdMode: "strict",
         } as Partial<TranscriptPolicy>,
         isOpenAIResponsesApi: true,
       });
@@ -310,7 +322,10 @@ describe("applyAttemptStreamWrappers", () => {
 
     it("applies anthropicPayloadLogger wrapper when logger is non-null", () => {
       const logger = {
-        wrapStreamFn: vi.fn((s) => (wrapperCalls.events.push("anthropicPayloadLogger"), s)),
+        wrapStreamFn: vi.fn((s) => {
+          wrapperCalls.events.push("anthropicPayloadLogger");
+          return s;
+        }),
       };
       const { params } = buildParams({ anthropicPayloadLogger: logger });
       applyAttemptStreamWrappers(params);
@@ -326,7 +341,10 @@ describe("applyAttemptStreamWrappers", () => {
 
     it("always applies handleSensitiveStopReason last", () => {
       const cacheTrace = {
-        wrapStreamFn: vi.fn((s) => (wrapperCalls.events.push("cacheTrace"), s)),
+        wrapStreamFn: vi.fn((s) => {
+          wrapperCalls.events.push("cacheTrace");
+          return s;
+        }),
       };
       const { params } = buildParams({ cacheTrace });
       applyAttemptStreamWrappers(params);
