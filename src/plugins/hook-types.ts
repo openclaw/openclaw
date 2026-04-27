@@ -853,6 +853,7 @@ export type PluginHookResolveExecEnvEvent = {
   host?: "gateway" | "sandbox" | "node";
 };
 
+export type PluginHookResolveExecEnvContext = PluginHookAgentContext;
 
 export type PluginHookHandlerMap = {
   agent_turn_prepare: (
@@ -1008,7 +1009,7 @@ export type PluginHookHandlerMap = {
   ) => Promise<PluginHookBeforeAgentRunResult> | PluginHookBeforeAgentRunResult;
   resolve_exec_env: (
     event: PluginHookResolveExecEnvEvent,
-    ctx: PluginHookAgentContext,
+    ctx: PluginHookResolveExecEnvContext,
   ) => Promise<Record<string, string>> | Record<string, string>;
 };
 
