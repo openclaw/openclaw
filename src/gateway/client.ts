@@ -180,6 +180,7 @@ export function resolveGatewayClientConnectChallengeTimeoutMs(
 
 const FORCE_STOP_TERMINATE_GRACE_MS = 250;
 const STOP_AND_WAIT_TIMEOUT_MS = 1_000;
+const MAX_TRANSIENT_PREHELLO_NORMAL_CLOSES = 3;
 
 type PendingStop = {
   ws: WebSocket;
@@ -202,7 +203,9 @@ export class GatewayClient {
   private deviceTokenRetryBudgetUsed = false;
   private pendingConnectErrorDetailCode: string | null = null;
   private helloOkReceived = false;
-  private suppressNextConnectError = false;
+  private connectAttempt = 0;
+  private suppressConnectErrorAttempts = new Set<number>();
+  private transientPrehelloNormalCloseCount = 0;
   // Track last tick to detect silent stalls.
   private lastTick: number | null = null;
   private tickIntervalMs = 30_000;
@@ -313,9 +316,19 @@ export class GatewayClient {
     ws.on("message", (data) => this.handleMessage(rawDataToString(data)));
     ws.on("close", (code, reason) => {
       const reasonText = rawDataToString(reason);
-      const isTransientPrehelloNormalClose =
+      const isPrehelloNormalCloseCandidate =
         !this.closed && !this.helloOkReceived && code === 1000 && reasonText.trim().length === 0;
-      this.suppressNextConnectError = isTransientPrehelloNormalClose;
+      if (isPrehelloNormalCloseCandidate) {
+        this.transientPrehelloNormalCloseCount += 1;
+      } else {
+        this.transientPrehelloNormalCloseCount = 0;
+      }
+      const isTransientPrehelloNormalClose =
+        isPrehelloNormalCloseCandidate &&
+        this.transientPrehelloNormalCloseCount <= MAX_TRANSIENT_PREHELLO_NORMAL_CLOSES;
+      if (isTransientPrehelloNormalClose && this.connectSent) {
+        this.suppressConnectErrorAttempts.add(this.connectAttempt);
+      }
 
       const connectErrorDetailCode = this.pendingConnectErrorDetailCode;
       this.pendingConnectErrorDetailCode = null;
@@ -405,6 +418,8 @@ export class GatewayClient {
 
   private beginStop(): Promise<void> | null {
     this.closed = true;
+    this.suppressConnectErrorAttempts.clear();
+    this.transientPrehelloNormalCloseCount = 0;
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
     this.pendingConnectErrorDetailCode = null;
@@ -550,10 +565,13 @@ export class GatewayClient {
       device,
     };
 
+    const connectAttempt = this.connectAttempt;
+
     void this.request<HelloOk>("connect", params)
       .then((helloOk) => {
         this.helloOkReceived = true;
-        this.suppressNextConnectError = false;
+        this.suppressConnectErrorAttempts.clear();
+        this.transientPrehelloNormalCloseCount = 0;
         this.pendingDeviceTokenRetry = false;
         this.deviceTokenRetryBudgetUsed = false;
         this.pendingConnectErrorDetailCode = null;
@@ -576,8 +594,7 @@ export class GatewayClient {
         this.opts.onHelloOk?.(helloOk);
       })
       .catch((err) => {
-        if (this.suppressNextConnectError) {
-          this.suppressNextConnectError = false;
+        if (this.suppressConnectErrorAttempts.delete(connectAttempt)) {
           return;
         }
         this.pendingConnectErrorDetailCode =
@@ -830,8 +847,8 @@ export class GatewayClient {
   }
 
   private beginPreauthHandshake() {
+    this.connectAttempt += 1;
     this.helloOkReceived = false;
-    this.suppressNextConnectError = false;
     if (this.connectSent) {
       return;
     }

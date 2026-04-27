@@ -595,6 +595,48 @@ describe("GatewayClient reconnect behavior", () => {
       vi.useRealTimers();
     }
   });
+
+  it("emits a failure signal after repeated pre-hello 1000 closes", async () => {
+    vi.useFakeTimers();
+    const onClose = vi.fn();
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      onClose,
+      onConnectError,
+    });
+
+    try {
+      (client as unknown as { backoffMs: number }).backoffMs = 1;
+      client.start();
+
+      for (let attempt = 1; attempt <= 4; attempt += 1) {
+        const ws = getLatestWs();
+        ws.emitOpen();
+        ws.emitMessage(
+          JSON.stringify({
+            type: "event",
+            event: "connect.challenge",
+            payload: { nonce: `nonce-${attempt}` },
+          }),
+        );
+        ws.emitClose(1000, "");
+
+        // Allow the reconnect timer to schedule the next socket.
+        await vi.advanceTimersByTimeAsync(30_000);
+      }
+
+      for (let i = 0; i < 5; i += 1) {
+        await Promise.resolve();
+      }
+
+      expect(onConnectError).toHaveBeenCalled();
+      expect(onClose).toHaveBeenCalledWith(1000, "");
+    } finally {
+      client.stop();
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("GatewayClient connect auth payload", () => {
