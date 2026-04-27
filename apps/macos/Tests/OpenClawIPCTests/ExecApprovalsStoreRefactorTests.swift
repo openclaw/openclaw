@@ -78,6 +78,50 @@ struct ExecApprovalsStoreRefactorTests {
         }
     }
 
+    @Test
+    func `ensure file accepts trusted symlinked state directory`() async throws {
+        let root = FileManager().temporaryDirectory.resolvingSymlinksInPath()
+            .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: root) }
+        let target = root.appendingPathComponent("state-target", isDirectory: true)
+        let linkedState = root.appendingPathComponent(".openclaw", isDirectory: true)
+        try FileManager().createDirectory(at: target, withIntermediateDirectories: true)
+        try FileManager().setAttributes([.posixPermissions: 0o700], ofItemAtPath: target.path)
+        try FileManager().createSymbolicLink(at: linkedState, withDestinationURL: target)
+
+        try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": linkedState.path]) {
+            _ = ExecApprovalsStore.ensureFile()
+
+            let approvalsURL = target.appendingPathComponent("exec-approvals.json")
+            #expect(FileManager().fileExists(atPath: approvalsURL.path))
+            let attrs = try FileManager().attributesOfItem(atPath: target.path)
+            let permissions = (attrs[.posixPermissions] as? NSNumber)?.intValue ?? -1
+            #expect(permissions & 0o777 == 0o700)
+        }
+    }
+
+    @Test
+    func `ensure file refuses unsafe symlinked state directory`() async throws {
+        let root = FileManager().temporaryDirectory.resolvingSymlinksInPath()
+            .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: root) }
+        let target = root.appendingPathComponent("state-target", isDirectory: true)
+        let linkedState = root.appendingPathComponent(".openclaw", isDirectory: true)
+        try FileManager().createDirectory(at: target, withIntermediateDirectories: true)
+        try FileManager().setAttributes([.posixPermissions: 0o777], ofItemAtPath: target.path)
+        try FileManager().createSymbolicLink(at: linkedState, withDestinationURL: target)
+
+        try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": linkedState.path]) {
+            let file = ExecApprovalsStore.ensureFile()
+            let snapshot = ExecApprovalsStore.readSnapshot()
+
+            #expect(file.agents?.isEmpty ?? true)
+            #expect(snapshot.exists == false)
+            #expect(!FileManager().fileExists(
+                atPath: target.appendingPathComponent("exec-approvals.json").path))
+        }
+    }
+
     private static func fileIdentity(at url: URL) throws -> Int {
         let attributes = try FileManager().attributesOfItem(atPath: url.path)
         guard let identifier = (attributes[.systemFileNumber] as? NSNumber)?.intValue else {
