@@ -4,13 +4,15 @@ import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { createGatewayRequest, createHooksConfig } from "./hooks-test-helpers.js";
 import { canonicalizePathVariant, isProtectedPluginRoutePath } from "./security-path.js";
-import { createGatewayHttpServer, createHooksRequestHandler } from "./server-http.js";
+import { createGatewayHttpServer } from "./server-http.js";
+import { createHooksRequestHandler } from "./server/hooks-request-handler.js";
 import { withTempConfig } from "./test-temp-config.js";
 
 export type GatewayHttpServer = ReturnType<typeof createGatewayHttpServer>;
 export type GatewayServerOptions = Partial<Parameters<typeof createGatewayHttpServer>[0]>;
 type HooksHandlerDeps = Parameters<typeof createHooksRequestHandler>[0];
 
+const responseEndPromises = new WeakMap<ServerResponse, Promise<void>>();
 export const AUTH_NONE: ResolvedGatewayAuth = {
   mode: "none",
   token: undefined,
@@ -67,16 +69,23 @@ export function createResponse(): {
 } {
   const setHeader = vi.fn();
   let body = "";
+  let resolveEnd!: () => void;
+  const ended = new Promise<void>((resolve) => {
+    resolveEnd = resolve;
+  });
   const end = vi.fn((chunk?: unknown) => {
     if (typeof chunk === "string") {
       body = chunk;
+      resolveEnd();
       return;
     }
     if (chunk == null) {
       body = "";
+      resolveEnd();
       return;
     }
     body = JSON.stringify(chunk);
+    resolveEnd();
   });
   const res = {
     headersSent: false,
@@ -84,6 +93,7 @@ export function createResponse(): {
     setHeader,
     end,
   } as unknown as ServerResponse;
+  responseEndPromises.set(res, ended);
   return {
     res,
     setHeader,
@@ -98,7 +108,10 @@ export async function dispatchRequest(
   res: ServerResponse,
 ): Promise<void> {
   server.emit("request", req, res);
-  await new Promise((resolve) => setImmediate(resolve));
+  await Promise.race([
+    responseEndPromises.get(res) ?? new Promise((resolve) => setImmediate(resolve)),
+    new Promise((resolve) => setTimeout(resolve, 2_000)),
+  ]);
 }
 
 export async function withGatewayTempConfig(

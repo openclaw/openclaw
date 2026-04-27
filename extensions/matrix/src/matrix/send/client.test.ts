@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createMockMatrixClient,
   expectExplicitMatrixClientConfig,
@@ -15,6 +15,8 @@ const {
   isBunRuntimeMock,
   resolveMatrixAuthContextMock,
 } = matrixClientResolverMocks;
+
+const TEST_CFG = {};
 
 vi.mock("../active-client.js", () => ({
   getActiveMatrixClient: (...args: unknown[]) => getActiveMatrixClientMock(...args),
@@ -38,10 +40,12 @@ let withResolvedMatrixControlClient: typeof import("./client.js").withResolvedMa
 let withResolvedMatrixSendClient: typeof import("./client.js").withResolvedMatrixSendClient;
 
 describe("matrix send client helpers", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ withResolvedMatrixControlClient, withResolvedMatrixSendClient } =
       await import("./client.js"));
+  });
+
+  beforeEach(() => {
     primeMatrixClientResolverMocks({
       resolved: {},
     });
@@ -54,7 +58,10 @@ describe("matrix send client helpers", () => {
   it("stops one-off shared clients when no active monitor client is registered", async () => {
     vi.stubEnv("OPENCLAW_GATEWAY_PORT", "18799");
 
-    const result = await withResolvedMatrixSendClient({ accountId: "default" }, async () => "ok");
+    const result = await withResolvedMatrixSendClient(
+      { cfg: TEST_CFG, accountId: "default" },
+      async () => "ok",
+    );
 
     await expectOneOffSharedMatrixClient({
       prepareForOneOffCalls: 0,
@@ -68,10 +75,13 @@ describe("matrix send client helpers", () => {
     const activeClient = createMockMatrixClient();
     getActiveMatrixClientMock.mockReturnValue(activeClient);
 
-    const result = await withResolvedMatrixSendClient({ accountId: "default" }, async (client) => {
-      expect(client).toBe(activeClient);
-      return "ok";
-    });
+    const result = await withResolvedMatrixSendClient(
+      { cfg: TEST_CFG, accountId: "default" },
+      async (client) => {
+        expect(client).toBe(activeClient);
+        return "ok";
+      },
+    );
 
     expect(result).toBe("ok");
     expect(acquireSharedMatrixClientMock).not.toHaveBeenCalled();
@@ -87,7 +97,7 @@ describe("matrix send client helpers", () => {
       accountId: "ops",
       resolved: {},
     });
-    await withResolvedMatrixSendClient({}, async () => {});
+    await withResolvedMatrixSendClient({ cfg: TEST_CFG }, async () => {});
 
     await expectOneOffSharedMatrixClient({
       accountId: "ops",
@@ -119,7 +129,7 @@ describe("matrix send client helpers", () => {
     acquireSharedMatrixClientMock.mockResolvedValue(sharedClient);
 
     await expect(
-      withResolvedMatrixSendClient({ accountId: "default" }, async () => {
+      withResolvedMatrixSendClient({ cfg: TEST_CFG, accountId: "default" }, async () => {
         throw new Error("boom");
       }),
     ).rejects.toThrow("boom");
@@ -131,7 +141,7 @@ describe("matrix send client helpers", () => {
     const sharedClient = createMockMatrixClient();
     acquireSharedMatrixClientMock.mockResolvedValue(sharedClient);
 
-    await withResolvedMatrixSendClient({ accountId: "default" }, async () => "ok");
+    await withResolvedMatrixSendClient({ cfg: TEST_CFG, accountId: "default" }, async () => "ok");
 
     expect(sharedClient.start).toHaveBeenCalledTimes(1);
     expect(sharedClient.prepareForOneOff).not.toHaveBeenCalled();
@@ -139,7 +149,7 @@ describe("matrix send client helpers", () => {
 
   it("keeps one-off control clients lightweight when no active monitor client is registered", async () => {
     const result = await withResolvedMatrixControlClient(
-      { accountId: "default" },
+      { cfg: TEST_CFG, accountId: "default" },
       async () => "ok",
     );
 
@@ -156,7 +166,7 @@ describe("matrix send client helpers", () => {
     getActiveMatrixClientMock.mockReturnValue(activeClient);
 
     const result = await withResolvedMatrixControlClient(
-      { accountId: "default" },
+      { cfg: TEST_CFG, accountId: "default" },
       async (client) => {
         expect(client).toBe(activeClient);
         return "ok";

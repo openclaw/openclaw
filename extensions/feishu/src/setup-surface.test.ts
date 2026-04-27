@@ -11,6 +11,16 @@ vi.mock("./probe.js", () => ({
   probeFeishu: vi.fn(async () => ({ ok: false, error: "mocked" })),
 }));
 
+vi.mock("./app-registration.js", () => ({
+  initAppRegistration: vi.fn(async () => {
+    throw new Error("mocked: scan-to-create not available");
+  }),
+  beginAppRegistration: vi.fn(),
+  pollAppRegistration: vi.fn(),
+  printQrCode: vi.fn(async () => {}),
+  getAppOwnerOpenId: vi.fn(async () => undefined),
+}));
+
 import { feishuPlugin } from "./channel.js";
 
 const baseStatusContext = {
@@ -64,13 +74,12 @@ describe("feishu setup wizard", () => {
     const text = vi
       .fn()
       .mockResolvedValueOnce("cli_from_prompt")
-      .mockResolvedValueOnce("secret_from_prompt")
-      .mockResolvedValueOnce("oc_group_1");
+      .mockResolvedValueOnce("secret_from_prompt");
     const prompter = createTestWizardPrompter({
       text,
       confirm: vi.fn(async () => true),
       select: vi.fn(
-        async ({ initialValue }: { initialValue?: string }) => initialValue ?? "allowlist",
+        async ({ initialValue }: { initialValue?: string }) => initialValue ?? "bot",
       ) as never,
     });
 

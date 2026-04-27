@@ -14,6 +14,20 @@ repo_root() {
   (cd "$base_dir/.." && pwd)
 }
 
+ensure_gh_api_auth() {
+  # Use a non-interactive API probe so wrapper auth behaves the same in
+  # terminal sessions and redirected/scripted runs.
+  if gh api user >/dev/null 2>&1; then
+    return 0
+  fi
+
+  cat >&2 <<'EOF'
+GitHub CLI auth is not usable for non-interactive API calls.
+Run `gh auth login -h github.com` (or refresh the current token) and retry.
+EOF
+  return 1
+}
+
 enter_worktree() {
   local pr="$1"
   local reset_to_main="${2:-false}"
@@ -27,7 +41,7 @@ enter_worktree() {
   fi
 
   cd "$root"
-  gh auth status >/dev/null
+  ensure_gh_api_auth
   git fetch origin main
 
   local dir=".worktrees/pr-$pr"
@@ -131,10 +145,10 @@ gc_pr_worktrees() {
         if [ "$dry_run" = "true" ]; then
           echo "would remove $dir (PR #$pr state=$state)"
         else
-          git worktree remove "$dir" --force
-          git branch -D "temp/pr-$pr" 2>/dev/null || true
-          git branch -D "pr-$pr" 2>/dev/null || true
-          git branch -D "pr-$pr-prep" 2>/dev/null || true
+          remove_worktree_if_present "$dir"
+          delete_local_branch_if_safe "temp/pr-$pr"
+          delete_local_branch_if_safe "pr-$pr"
+          delete_local_branch_if_safe "pr-$pr-prep"
           echo "removed $dir (PR #$pr state=$state)"
         fi
         removed=$((removed + 1))

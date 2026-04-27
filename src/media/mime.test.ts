@@ -4,10 +4,12 @@ import { mediaKindFromMime } from "./constants.js";
 import {
   detectMime,
   extensionForMime,
+  FILE_TYPE_SNIFF_MAX_BYTES,
   imageMimeFromFormat,
   isAudioFileName,
   kindFromMime,
   normalizeMimeType,
+  sliceMimeSniffBuffer,
 } from "./mime.js";
 
 async function makeOoxmlZip(opts: { mainMime: string; partPath: string }): Promise<Buffer> {
@@ -88,6 +90,41 @@ describe("mime detection", () => {
       expected,
     });
   });
+
+  it("detects HTML files by extension (no magic bytes)", async () => {
+    const buf = Buffer.from("<!DOCTYPE html><html><body>test</body></html>");
+    const mime = await detectMime({ buffer: buf, filePath: "/tmp/report.html" });
+    expect(mime).toBe("text/html");
+  });
+
+  it("detects .htm files by extension", async () => {
+    const buf = Buffer.from("<html><body>test</body></html>");
+    const mime = await detectMime({ buffer: buf, filePath: "/tmp/page.htm" });
+    expect(mime).toBe("text/html");
+  });
+
+  it("detects XML files by extension", async () => {
+    const mime = await detectMime({ filePath: "/tmp/data.xml" });
+    expect(mime).toBe("text/xml");
+  });
+
+  it("detects CSS files by extension", async () => {
+    const mime = await detectMime({ filePath: "/tmp/style.css" });
+    expect(mime).toBe("text/css");
+  });
+
+  it("detects AAC from a bare filename when buffer sniffing is inconclusive", async () => {
+    const mime = await detectMime({ buffer: Buffer.alloc(16), filePath: "voice.aac" });
+    expect(mime).toBe("audio/aac");
+  });
+
+  it("caps dependency sniffing to a bounded prefix", () => {
+    const small = Buffer.alloc(32);
+    const large = Buffer.alloc(FILE_TYPE_SNIFF_MAX_BYTES + 16);
+
+    expect(sliceMimeSniffBuffer(small)).toBe(small);
+    expect(sliceMimeSniffBuffer(large)).toHaveLength(FILE_TYPE_SNIFF_MAX_BYTES);
+  });
 });
 
 describe("extensionForMime", () => {
@@ -113,6 +150,10 @@ describe("extensionForMime", () => {
     { mime: "application/pdf", expected: ".pdf" },
     { mime: "text/plain", expected: ".txt" },
     { mime: "text/markdown", expected: ".md" },
+    { mime: "text/html", expected: ".html" },
+    { mime: "text/xml", expected: ".xml" },
+    { mime: "text/css", expected: ".css" },
+    { mime: "application/xml", expected: ".xml" },
     { mime: "IMAGE/JPEG", expected: ".jpg" },
     { mime: "Audio/X-M4A", expected: ".m4a" },
     { mime: "Video/QuickTime", expected: ".mov" },

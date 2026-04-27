@@ -8,8 +8,12 @@ function hasScheme(value: string): boolean {
   return /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(value);
 }
 
+export function normalizeUrbitHostname(hostname: string | undefined): string {
+  return (hostname ?? "").trim().toLowerCase().replace(/\.$/, "");
+}
+
 export function validateUrbitBaseUrl(raw: string): UrbitBaseUrlValidation {
-  const trimmed = String(raw ?? "").trim();
+  const trimmed = raw.trim();
   if (!trimmed) {
     return { ok: false, error: "Required" };
   }
@@ -31,7 +35,7 @@ export function validateUrbitBaseUrl(raw: string): UrbitBaseUrlValidation {
     return { ok: false, error: "URL must not include credentials" };
   }
 
-  const hostname = parsed.hostname.trim().toLowerCase().replace(/\.$/, "");
+  const hostname = normalizeUrbitHostname(parsed.hostname);
   if (!hostname) {
     return { ok: false, error: "Invalid hostname" };
   }
@@ -49,7 +53,7 @@ export function validateUrbitBaseUrl(raw: string): UrbitBaseUrlValidation {
 }
 
 export function isBlockedUrbitHostname(hostname: string): boolean {
-  const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
+  const normalized = normalizeUrbitHostname(hostname);
   if (!normalized) {
     return false;
   }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { startLazyPluginServiceModule } from "./lazy-service-module.js";
+import { defaultLoadOverrideModule, startLazyPluginServiceModule } from "./lazy-service-module.js";
 
 function createAsyncHookMock() {
   return vi.fn(async () => {});
@@ -20,6 +20,7 @@ function createLazyModuleLifecycle() {
 
 async function expectLifecycleStarted(params: {
   overrideEnvVar?: string;
+  validateOverrideSpecifier?: (specifier: string) => string;
   loadDefaultModule?: () => Promise<Record<string, unknown>>;
   loadOverrideModule?: (spec: string) => Promise<Record<string, unknown>>;
   startExportNames: string[];
@@ -27,6 +28,9 @@ async function expectLifecycleStarted(params: {
 }) {
   return startLazyPluginServiceModule({
     ...(params.overrideEnvVar ? { overrideEnvVar: params.overrideEnvVar } : {}),
+    ...(params.validateOverrideSpecifier
+      ? { validateOverrideSpecifier: params.validateOverrideSpecifier }
+      : {}),
     loadDefaultModule: params.loadDefaultModule ?? (async () => createLazyModuleLifecycle().module),
     ...(params.loadOverrideModule ? { loadOverrideModule: params.loadOverrideModule } : {}),
     startExportNames: params.startExportNames,
@@ -83,5 +87,71 @@ describe("startLazyPluginServiceModule", () => {
 
     expect(loadOverrideModule).toHaveBeenCalledWith("virtual:service");
     expect(start).toHaveBeenCalledTimes(1);
+  });
+
+  it("normalizes Windows absolute paths in the default override loader", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const start = createAsyncHookMock();
+    const importModule = vi.fn(async () => ({ startOverride: start }));
+
+    try {
+      await defaultLoadOverrideModule("C:\\Users\\alice\\plugin folder\\x#y.mjs", importModule);
+    } finally {
+      platformSpy.mockRestore();
+    }
+
+    expect(importModule).toHaveBeenCalledWith(
+      "file:///C:/Users/alice/plugin%20folder/x%23y.mjs",
+    );
+  });
+
+  it("leaves caller-supplied override loaders responsible for their own specifiers", async () => {
+    process.env.OPENCLAW_LAZY_SERVICE_OVERRIDE = "C:\\Users\\alice\\browser-service.mjs";
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const start = createAsyncHookMock();
+    const loadOverrideModule = vi.fn(async () => ({ startOverride: start }));
+
+    try {
+      await expectLifecycleStarted({
+        overrideEnvVar: "OPENCLAW_LAZY_SERVICE_OVERRIDE",
+        loadOverrideModule,
+        startExportNames: ["startOverride"],
+      });
+    } finally {
+      platformSpy.mockRestore();
+    }
+
+    expect(loadOverrideModule).toHaveBeenCalledWith("C:\\Users\\alice\\browser-service.mjs");
+    expect(start).toHaveBeenCalledTimes(1);
+  });
+
+  it("validates the override specifier before loading it", async () => {
+    process.env.OPENCLAW_LAZY_SERVICE_OVERRIDE = "virtual:service";
+    const loadOverrideModule = vi.fn(async () => ({ startOverride: createAsyncHookMock() }));
+    const validateOverrideSpecifier = vi.fn((specifier: string) => `validated:${specifier}`);
+
+    await expectLifecycleStarted({
+      overrideEnvVar: "OPENCLAW_LAZY_SERVICE_OVERRIDE",
+      validateOverrideSpecifier,
+      loadOverrideModule,
+      startExportNames: ["startOverride"],
+    });
+
+    expect(validateOverrideSpecifier).toHaveBeenCalledWith("virtual:service");
+    expect(loadOverrideModule).toHaveBeenCalledWith("validated:virtual:service");
+  });
+
+  it("surfaces override validation failures", async () => {
+    process.env.OPENCLAW_LAZY_SERVICE_OVERRIDE = "data:text/javascript,boom";
+
+    await expect(
+      expectLifecycleStarted({
+        overrideEnvVar: "OPENCLAW_LAZY_SERVICE_OVERRIDE",
+        validateOverrideSpecifier: () => {
+          throw new Error("blocked override");
+        },
+        startExportNames: ["startDefault"],
+      }),
+    ).rejects.toThrow("blocked override");
   });
 });

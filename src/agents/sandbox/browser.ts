@@ -1,15 +1,23 @@
 import crypto from "node:crypto";
 import { deriveDefaultBrowserCdpPortRange } from "../../config/port-defaults.js";
+import { isSameSsrFPolicy, type SsrFPolicy } from "../../infra/net/ssrf.js";
 import {
+  startBrowserBridgeServer,
+  stopBrowserBridgeServer,
+} from "../../plugin-sdk/browser-bridge.js";
+import {
+  DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
   DEFAULT_BROWSER_EVALUATE_ENABLED,
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
   resolveProfile,
-  startBrowserBridgeServer,
-  stopBrowserBridgeServer,
   type ResolvedBrowserConfig,
-} from "../../plugin-sdk/browser-runtime.js";
+} from "../../plugin-sdk/browser-profiles.js";
 import { defaultRuntime } from "../../runtime.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
 import { computeSandboxBrowserConfigHash } from "./config-hash.js";
 import { resolveSandboxBrowserDockerCreateConfig } from "./config.js";
@@ -20,6 +28,8 @@ import {
   execDocker,
   readDockerContainerEnvVar,
   readDockerContainerLabel,
+  readDockerNetworkDriver,
+  readDockerNetworkGateway,
   readDockerPort,
 } from "./docker.js";
 import {
@@ -58,7 +68,11 @@ async function waitForSandboxCdp(params: { cdpPort: number; timeoutMs: number })
     } catch {
       // ignore
     }
-    await new Promise((r) => setTimeout(r, 150));
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      break;
+    }
+    await new Promise((r) => setTimeout(r, Math.min(150, remainingMs)));
   }
   return false;
 }
@@ -68,6 +82,7 @@ function buildSandboxBrowserResolvedConfig(params: {
   cdpPort: number;
   headless: boolean;
   evaluateEnabled: boolean;
+  ssrfPolicy?: SsrFPolicy;
 }): ResolvedBrowserConfig {
   const cdpHost = "127.0.0.1";
   const cdpPortRange = deriveDefaultBrowserCdpPortRange(params.controlPort);
@@ -82,6 +97,9 @@ function buildSandboxBrowserResolvedConfig(params: {
     cdpPortRangeEnd: cdpPortRange.end,
     remoteCdpTimeoutMs: 1500,
     remoteCdpHandshakeTimeoutMs: 3000,
+    localLaunchTimeoutMs: 15_000,
+    localCdpReadyTimeoutMs: 8_000,
+    actionTimeoutMs: DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
     color: DEFAULT_OPENCLAW_BROWSER_COLOR,
     executablePath: undefined,
     headless: params.headless,
@@ -89,12 +107,19 @@ function buildSandboxBrowserResolvedConfig(params: {
     attachOnly: true,
     defaultProfile: DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
     extraArgs: [],
+    tabCleanup: {
+      enabled: true,
+      idleMinutes: 120,
+      maxTabsPerSession: 8,
+      sweepMinutes: 5,
+    },
     profiles: {
       [DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME]: {
         cdpPort: params.cdpPort,
         color: DEFAULT_OPENCLAW_BROWSER_COLOR,
       },
     },
+    ssrfPolicy: params.ssrfPolicy,
   };
 }
 
@@ -117,7 +142,7 @@ async function ensureDockerNetwork(
   validateNetworkMode(network, {
     allowContainerNamespaceJoin: opts?.allowContainerNamespaceJoin === true,
   });
-  const normalized = network.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(network) ?? "";
   if (!normalized || normalized === "bridge" || normalized === "none") {
     return;
   }
@@ -135,6 +160,7 @@ export async function ensureSandboxBrowser(params: {
   cfg: SandboxConfig;
   evaluateEnabled?: boolean;
   bridgeAuth?: { token?: string; password?: string };
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<SandboxBrowserContext | null> {
   if (!params.cfg.browser.enabled) {
     return null;
@@ -148,7 +174,7 @@ export async function ensureSandboxBrowser(params: {
   const containerName = name.slice(0, 63);
   const state = await dockerContainerState(containerName);
   const browserImage = params.cfg.browser.image ?? DEFAULT_SANDBOX_BROWSER_IMAGE;
-  const cdpSourceRange = params.cfg.browser.cdpSourceRange?.trim() || undefined;
+  const cdpSourceRange = normalizeOptionalString(params.cfg.browser.cdpSourceRange);
   const browserDockerCfg = resolveSandboxBrowserDockerCreateConfig({
     docker: params.cfg.docker,
     browser: { ...params.cfg.browser, image: browserImage },
@@ -161,6 +187,7 @@ export async function ensureSandboxBrowser(params: {
       noVncPort: params.cfg.browser.noVncPort,
       headless: params.cfg.browser.headless,
       enableNoVnc: params.cfg.browser.enableNoVnc,
+      autoStartTimeoutMs: params.cfg.browser.autoStartTimeoutMs,
       cdpSourceRange,
     },
     securityEpoch: SANDBOX_BROWSER_SECURITY_HASH_EPOCH,
@@ -225,6 +252,35 @@ export async function ensureSandboxBrowser(params: {
       allowContainerNamespaceJoin: browserDockerCfg.dangerouslyAllowContainerNamespaceJoin === true,
     });
     await ensureSandboxBrowserImage(browserImage);
+    // Derive effective CDP source range: explicit config > Docker network gateway > fail-closed.
+    // Only IPv4 gateways are usable for auto-derivation because the CDP relay
+    // binds on 0.0.0.0 (IPv4); an IPv6 CIDR would cause an address-family mismatch.
+    let effectiveCdpSourceRange = cdpSourceRange;
+    if (!effectiveCdpSourceRange) {
+      // Only auto-derive from gateway for bridge-style networks where inbound
+      // CDP traffic reliably comes from the Docker gateway IP. Non-bridge drivers
+      // (macvlan, ipvlan, overlay, etc.) may route traffic from other source IPs,
+      // so they require explicit cdpSourceRange config.
+      const driver = await readDockerNetworkDriver(browserDockerCfg.network);
+      const isBridgeLike = !driver || driver === "bridge";
+      if (isBridgeLike) {
+        const gateway = await readDockerNetworkGateway(browserDockerCfg.network);
+        if (gateway && !gateway.includes(":")) {
+          effectiveCdpSourceRange = `${gateway}/32`;
+        }
+      }
+    }
+    // network="none" has no IPAM gateway by design and no peer container risk;
+    // use loopback range so the socat CDP relay still starts.
+    if (!effectiveCdpSourceRange && browserDockerCfg.network.trim().toLowerCase() === "none") {
+      effectiveCdpSourceRange = "127.0.0.1/32";
+    }
+    if (!effectiveCdpSourceRange) {
+      throw new Error(
+        `Cannot derive CDP source range for sandbox browser on network "${browserDockerCfg.network}". ` +
+          `Set agents.defaults.sandbox.browser.cdpSourceRange explicitly.`,
+      );
+    }
     const args = buildSandboxCreateArgs({
       name: containerName,
       cfg: browserDockerCfg,
@@ -256,14 +312,15 @@ export async function ensureSandboxBrowser(params: {
     args.push("-e", `OPENCLAW_BROWSER_HEADLESS=${params.cfg.browser.headless ? "1" : "0"}`);
     args.push("-e", `OPENCLAW_BROWSER_ENABLE_NOVNC=${params.cfg.browser.enableNoVnc ? "1" : "0"}`);
     args.push("-e", `OPENCLAW_BROWSER_CDP_PORT=${params.cfg.browser.cdpPort}`);
-    if (cdpSourceRange) {
-      args.push("-e", `${CDP_SOURCE_RANGE_ENV_KEY}=${cdpSourceRange}`);
+    args.push(
+      "-e",
+      `OPENCLAW_BROWSER_AUTO_START_TIMEOUT_MS=${params.cfg.browser.autoStartTimeoutMs}`,
+    );
+    if (effectiveCdpSourceRange) {
+      args.push("-e", `${CDP_SOURCE_RANGE_ENV_KEY}=${effectiveCdpSourceRange}`);
     }
     args.push("-e", `OPENCLAW_BROWSER_VNC_PORT=${params.cfg.browser.vncPort}`);
     args.push("-e", `OPENCLAW_BROWSER_NOVNC_PORT=${params.cfg.browser.noVncPort}`);
-    // Chromium's setuid/namespace sandbox cannot work inside Docker containers
-    // (PID namespace creation requires privileges Docker does not grant by default).
-    // The container itself provides isolation, so --no-sandbox is safe here.
     args.push("-e", "OPENCLAW_BROWSER_NO_SANDBOX=1");
     if (noVncEnabled && noVncPassword) {
       args.push("-e", `${NOVNC_PASSWORD_ENV_KEY}=${noVncPassword}`);
@@ -293,12 +350,9 @@ export async function ensureSandboxBrowser(params: {
     ? resolveProfile(existing.bridge.state.resolved, DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME)
     : null;
 
-  let desiredAuthToken = params.bridgeAuth?.token?.trim() || undefined;
-  let desiredAuthPassword = params.bridgeAuth?.password?.trim() || undefined;
+  let desiredAuthToken = normalizeOptionalString(params.bridgeAuth?.token);
+  let desiredAuthPassword = normalizeOptionalString(params.bridgeAuth?.password);
   if (!desiredAuthToken && !desiredAuthPassword) {
-    // Always require auth for the sandbox bridge server, even if gateway auth
-    // mode doesn't produce a shared secret (e.g. trusted-proxy).
-    // Keep it stable across calls by reusing the existing bridge auth.
     desiredAuthToken = existing?.authToken;
     desiredAuthPassword = existing?.authPassword;
     if (!desiredAuthToken && !desiredAuthPassword) {
@@ -308,6 +362,8 @@ export async function ensureSandboxBrowser(params: {
 
   const shouldReuse =
     existing && existing.containerName === containerName && existingProfile?.cdpPort === mappedCdp;
+  const policyMatches =
+    !existing || isSameSsrFPolicy(existing.bridge.state.resolved.ssrfPolicy, params.ssrfPolicy);
   const authMatches =
     !existing ||
     (existing.authToken === desiredAuthToken && existing.authPassword === desiredAuthPassword);
@@ -315,13 +371,13 @@ export async function ensureSandboxBrowser(params: {
     await stopBrowserBridgeServer(existing.bridge.server).catch(() => undefined);
     BROWSER_BRIDGES.delete(params.scopeKey);
   }
-  if (existing && shouldReuse && !authMatches) {
+  if (existing && shouldReuse && (!policyMatches || !authMatches)) {
     await stopBrowserBridgeServer(existing.bridge.server).catch(() => undefined);
     BROWSER_BRIDGES.delete(params.scopeKey);
   }
 
   const bridge = (() => {
-    if (shouldReuse && authMatches && existing) {
+    if (shouldReuse && policyMatches && authMatches && existing) {
       return existing.bridge;
     }
     return null;
@@ -343,8 +399,9 @@ export async function ensureSandboxBrowser(params: {
             timeoutMs: params.cfg.browser.autoStartTimeoutMs,
           });
           if (!ok) {
+            await execDocker(["rm", "-f", containerName], { allowFailure: true });
             throw new Error(
-              `Sandbox browser CDP did not become reachable on 127.0.0.1:${mappedCdp} within ${params.cfg.browser.autoStartTimeoutMs}ms.`,
+              `Sandbox browser CDP did not become reachable on 127.0.0.1:${mappedCdp} within ${params.cfg.browser.autoStartTimeoutMs}ms. The hung container has been forcefully removed.`,
             );
           }
         }
@@ -356,6 +413,7 @@ export async function ensureSandboxBrowser(params: {
         cdpPort: mappedCdp,
         headless: params.cfg.browser.headless,
         evaluateEnabled: params.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED,
+        ssrfPolicy: params.ssrfPolicy,
       }),
       authToken: desiredAuthToken,
       authPassword: desiredAuthPassword,
@@ -365,7 +423,7 @@ export async function ensureSandboxBrowser(params: {
   };
 
   const resolvedBridge = await ensureBridge();
-  if (!shouldReuse || !authMatches) {
+  if (!shouldReuse || !policyMatches || !authMatches) {
     BROWSER_BRIDGES.set(params.scopeKey, {
       bridge: resolvedBridge,
       containerName,

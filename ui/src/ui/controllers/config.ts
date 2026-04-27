@@ -1,3 +1,4 @@
+import { applyMergePatch } from "../../../../src/config/merge-patch.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot, ConfigUiHints } from "../types.ts";
 import type { JsonSchema } from "../views/config-form.shared.ts";
@@ -33,6 +34,8 @@ export type ConfigState = {
   configSearchQuery: string;
   configActiveSection: string | null;
   configActiveSubsection: string | null;
+  pendingUpdateExpectedVersion: string | null;
+  updateStatusBanner: { tone: "danger" | "warn" | "info"; text: string } | null;
   lastError: string | null;
 };
 
@@ -134,11 +137,52 @@ function serializeFormForSubmit(state: ConfigState): string {
   return serializeConfigForm(form);
 }
 
-export async function saveConfig(state: ConfigState) {
+type ConfigSubmitMethod = "config.set" | "config.apply";
+type ConfigSubmitBusyKey = "configSaving" | "configApplying";
+
+function resolveUpdateStatusBanner(params: { status?: string; reason?: string }): {
+  tone: "danger" | "warn" | "info";
+  text: string;
+} {
+  const status = (params.status ?? "error").trim() || "error";
+  const reason = (params.reason ?? "unexpected-error").trim() || "unexpected-error";
+  const tone = status === "skipped" ? "warn" : "danger";
+  const guidance =
+    {
+      dirty: "Commit or stash changes, then retry.",
+      "no-upstream": "Set an upstream branch, then retry.",
+      "not-git-install":
+        "Not a git checkout. Run `openclaw update` from the CLI for a global reinstall.",
+      "not-openclaw-root":
+        "Run the update from an OpenClaw checkout or use the CLI global reinstall path.",
+      "deps-install-failed": "Dependency install failed. Fix the install error and retry.",
+      "build-failed": "Build failed. Fix the build error and retry.",
+      "ui-build-failed": "The control UI rebuild failed. Fix the UI build error and retry.",
+      "global-install-failed":
+        "The global package install did not verify on disk. Retry or reinstall from the CLI.",
+      "restart-disabled": "The update was not applied because gateway restarts are disabled. Enable restarts in config, then retry — or run `openclaw update` from the CLI.",
+      "restart-unavailable":
+        "This global install cannot be safely replaced while restarts are disabled and no supervisor is present.",
+      "restart-unhealthy":
+        "The replacement process never became healthy. The previous process stayed up so you can recover.",
+      "doctor-failed": "Doctor repair failed. Run `openclaw doctor --non-interactive` and retry.",
+    }[reason] ?? "See the gateway logs for the exact failure and retry once the cause is fixed.";
+  return {
+    tone,
+    text: `Update ${status}: ${reason}. ${guidance}`,
+  };
+}
+
+async function submitConfigChange(
+  state: ConfigState,
+  method: ConfigSubmitMethod,
+  busyKey: ConfigSubmitBusyKey,
+  extraParams: Record<string, unknown> = {},
+) {
   if (!state.client || !state.connected) {
     return;
   }
-  state.configSaving = true;
+  state[busyKey] = true;
   state.lastError = null;
   try {
     const raw = serializeFormForSubmit(state);
@@ -147,41 +191,35 @@ export async function saveConfig(state: ConfigState) {
       state.lastError = "Config hash missing; reload and retry.";
       return;
     }
-    await state.client.request("config.set", { raw, baseHash });
+    await state.client.request(method, { raw, baseHash, ...extraParams });
     state.configFormDirty = false;
     await loadConfig(state);
   } catch (err) {
     state.lastError = String(err);
   } finally {
-    state.configSaving = false;
+    state[busyKey] = false;
   }
 }
 
+function syncConfigDraft(state: ConfigState, nextForm: Record<string, unknown>) {
+  const original = cloneConfigObject(
+    state.configFormOriginal ?? state.configSnapshot?.config ?? {},
+  );
+  const nextRaw = serializeConfigForm(nextForm);
+  const originalRaw = serializeConfigForm(original);
+  state.configForm = nextForm;
+  state.configRaw = nextRaw;
+  state.configFormDirty = nextRaw !== originalRaw;
+}
+
+export async function saveConfig(state: ConfigState) {
+  await submitConfigChange(state, "config.set", "configSaving");
+}
+
 export async function applyConfig(state: ConfigState) {
-  if (!state.client || !state.connected) {
-    return;
-  }
-  state.configApplying = true;
-  state.lastError = null;
-  try {
-    const raw = serializeFormForSubmit(state);
-    const baseHash = state.configSnapshot?.hash;
-    if (!baseHash) {
-      state.lastError = "Config hash missing; reload and retry.";
-      return;
-    }
-    await state.client.request("config.apply", {
-      raw,
-      baseHash,
-      sessionKey: state.applySessionKey,
-    });
-    state.configFormDirty = false;
-    await loadConfig(state);
-  } catch (err) {
-    state.lastError = String(err);
-  } finally {
-    state.configApplying = false;
-  }
+  await submitConfigChange(state, "config.apply", "configApplying", {
+    sessionKey: state.applySessionKey,
+  });
 }
 
 export async function runUpdate(state: ConfigState) {
@@ -190,23 +228,36 @@ export async function runUpdate(state: ConfigState) {
   }
   state.updateRunning = true;
   state.lastError = null;
+  state.updateStatusBanner = null;
   try {
     const res = await state.client.request<{
       ok?: boolean;
-      result?: { status?: string; reason?: string };
+      result?: { status?: string; reason?: string; after?: { version?: string | null } };
     }>("update.run", {
       sessionKey: state.applySessionKey,
     });
-    if (res && res.ok === false) {
-      const status = res.result?.status ?? "error";
-      const reason = res.result?.reason ?? "Update failed.";
-      state.lastError = `Update ${status}: ${reason}`;
+    const status = res.result?.status ?? (res.ok === true ? "ok" : "error");
+    if (status === "ok" && res.ok === true) {
+      state.pendingUpdateExpectedVersion = res.result?.after?.version ?? null;
+      return;
     }
+    state.pendingUpdateExpectedVersion = null;
+    state.updateStatusBanner = resolveUpdateStatusBanner({
+      status,
+      reason: res.result?.reason,
+    });
   } catch (err) {
     state.lastError = String(err);
+    state.pendingUpdateExpectedVersion = null;
   } finally {
     state.updateRunning = false;
   }
+}
+
+function mutateConfigForm(state: ConfigState, mutate: (draft: Record<string, unknown>) => void) {
+  const base = cloneConfigObject(state.configForm ?? state.configSnapshot?.config ?? {});
+  mutate(base);
+  syncConfigDraft(state, base);
 }
 
 export function updateConfigFormValue(
@@ -214,23 +265,40 @@ export function updateConfigFormValue(
   path: Array<string | number>,
   value: unknown,
 ) {
-  const base = cloneConfigObject(state.configForm ?? state.configSnapshot?.config ?? {});
-  setPathValue(base, path, value);
-  state.configForm = base;
-  state.configFormDirty = true;
-  if (state.configFormMode === "form") {
-    state.configRaw = serializeConfigForm(base);
+  mutateConfigForm(state, (draft) => setPathValue(draft, path, value));
+}
+
+export function stageConfigPreset(state: ConfigState, patch: Record<string, unknown>) {
+  const snapshotConfig =
+    state.configSnapshot?.config &&
+    typeof state.configSnapshot.config === "object" &&
+    !Array.isArray(state.configSnapshot.config)
+      ? state.configSnapshot.config
+      : null;
+  const baseSource = state.configForm ?? snapshotConfig;
+  if (!baseSource || (!state.configForm && !state.configSnapshot?.hash)) {
+    return;
   }
+  const base = cloneConfigObject(baseSource);
+  const merged = applyMergePatch(base, patch);
+  if (!merged || typeof merged !== "object" || Array.isArray(merged)) {
+    return;
+  }
+  syncConfigDraft(state, cloneConfigObject(merged as Record<string, unknown>));
+}
+
+export function resetConfigPendingChanges(state: ConfigState) {
+  state.configForm = cloneConfigObject(
+    state.configFormOriginal ?? state.configSnapshot?.config ?? {},
+  );
+  state.configRaw =
+    state.configRawOriginal ??
+    serializeConfigForm(state.configFormOriginal ?? state.configSnapshot?.config ?? {});
+  state.configFormDirty = false;
 }
 
 export function removeConfigFormValue(state: ConfigState, path: Array<string | number>) {
-  const base = cloneConfigObject(state.configForm ?? state.configSnapshot?.config ?? {});
-  removePathValue(base, path);
-  state.configForm = base;
-  state.configFormDirty = true;
-  if (state.configFormMode === "form") {
-    state.configRaw = serializeConfigForm(base);
-  }
+  mutateConfigForm(state, (draft) => removePathValue(draft, path));
 }
 
 export function findAgentConfigEntryIndex(

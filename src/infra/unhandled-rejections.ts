@@ -1,14 +1,42 @@
 import process from "node:process";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { restoreTerminalState } from "../terminal/restore.js";
 import {
   collectErrorGraphCandidates,
   extractErrorCode,
   formatUncaughtError,
   readErrorName,
 } from "./errors.js";
+import { runFatalErrorHooks } from "./fatal-error-hooks.js";
 
 type UnhandledRejectionHandler = (reason: unknown) => boolean;
+type UncaughtExceptionHandler = (error: unknown) => boolean;
 
-const handlers = new Set<UnhandledRejectionHandler>();
+// Plugins resolve `openclaw/plugin-sdk/runtime` through their own staged
+// `node_modules`, which loads a separate copy of this module. To keep registry
+// state shared across instances, anchor the handlers Set on globalThis.
+const HANDLERS_GLOBAL_KEY = Symbol.for("openclaw.unhandledRejection.handlers");
+const EXCEPTION_HANDLERS_GLOBAL_KEY = Symbol.for("openclaw.uncaughtException.handlers");
+const handlers: Set<UnhandledRejectionHandler> = (() => {
+  const g = globalThis as unknown as Record<symbol, Set<UnhandledRejectionHandler>>;
+  const existing = g[HANDLERS_GLOBAL_KEY];
+  if (existing instanceof Set) {
+    return existing;
+  }
+  const created = new Set<UnhandledRejectionHandler>();
+  g[HANDLERS_GLOBAL_KEY] = created;
+  return created;
+})();
+const exceptionHandlers: Set<UncaughtExceptionHandler> = (() => {
+  const g = globalThis as unknown as Record<symbol, Set<UncaughtExceptionHandler>>;
+  const existing = g[EXCEPTION_HANDLERS_GLOBAL_KEY];
+  if (existing instanceof Set) {
+    return existing;
+  }
+  const created = new Set<UncaughtExceptionHandler>();
+  g[EXCEPTION_HANDLERS_GLOBAL_KEY] = created;
+  return created;
+})();
 
 const FATAL_ERROR_CODES = new Set([
   "ERR_OUT_OF_MEMORY",
@@ -101,13 +129,16 @@ function hasSqliteSignal(err: unknown): boolean {
     }
   }
 
-  const name = readErrorName(err);
-  if (name.toLowerCase().includes("sqlite")) {
+  const name = normalizeLowercaseStringOrEmpty(readErrorName(err));
+  if (name.includes("sqlite")) {
     return true;
   }
 
-  const message = "message" in err && typeof err.message === "string" ? err.message : "";
-  if (message.toLowerCase().includes("sqlite")) {
+  const message =
+    "message" in err && typeof err.message === "string"
+      ? normalizeLowercaseStringOrEmpty(err.message)
+      : "";
+  if (message.includes("sqlite")) {
     return true;
   }
 
@@ -202,15 +233,8 @@ function isConfigError(err: unknown): boolean {
   return code !== undefined && CONFIG_ERROR_CODES.has(code);
 }
 
-/**
- * Checks if an error is a transient network error that shouldn't crash the gateway.
- * These are typically temporary connectivity issues that will resolve on their own.
- */
-export function isTransientNetworkError(err: unknown): boolean {
-  if (!err) {
-    return false;
-  }
-  for (const candidate of collectErrorGraphCandidates(err, (current) => {
+function collectNestedUnhandledErrorCandidates(err: unknown): unknown[] {
+  return collectErrorGraphCandidates(err, (current) => {
     const nested: Array<unknown> = [
       current.cause,
       current.reason,
@@ -222,7 +246,18 @@ export function isTransientNetworkError(err: unknown): boolean {
       nested.push(...current.errors);
     }
     return nested;
-  })) {
+  });
+}
+
+/**
+ * Checks if an error is a transient network error that shouldn't crash the gateway.
+ * These are typically temporary connectivity issues that will resolve on their own.
+ */
+export function isTransientNetworkError(err: unknown): boolean {
+  if (!err) {
+    return false;
+  }
+  for (const candidate of collectNestedUnhandledErrorCandidates(err)) {
     const code = extractErrorCodeOrErrno(candidate);
     if (code && TRANSIENT_NETWORK_CODES.has(code)) {
       return true;
@@ -237,7 +272,7 @@ export function isTransientNetworkError(err: unknown): boolean {
       continue;
     }
     const rawMessage = (candidate as { message?: unknown }).message;
-    const message = typeof rawMessage === "string" ? rawMessage.toLowerCase().trim() : "";
+    const message = normalizeLowercaseStringOrEmpty(rawMessage);
     if (!message) {
       continue;
     }
@@ -260,19 +295,7 @@ export function isTransientSqliteError(err: unknown): boolean {
     return false;
   }
 
-  for (const candidate of collectErrorGraphCandidates(err, (current) => {
-    const nested: Array<unknown> = [
-      current.cause,
-      current.reason,
-      current.original,
-      current.error,
-      current.data,
-    ];
-    if (Array.isArray(current.errors)) {
-      nested.push(...current.errors);
-    }
-    return nested;
-  })) {
+  for (const candidate of collectNestedUnhandledErrorCandidates(err)) {
     const code = extractErrorCodeOrErrno(candidate);
     if (code && TRANSIENT_SQLITE_CODES.has(code)) {
       return true;
@@ -296,7 +319,7 @@ export function isTransientSqliteError(err: unknown): boolean {
       (candidate as { errstr?: unknown }).errstr,
     ];
     for (const rawMessage of messageParts) {
-      const message = typeof rawMessage === "string" ? rawMessage.toLowerCase().trim() : "";
+      const message = normalizeLowercaseStringOrEmpty(rawMessage);
       if (!message) {
         continue;
       }
@@ -339,7 +362,38 @@ export function isUnhandledRejectionHandled(reason: unknown): boolean {
   return false;
 }
 
+export function registerUncaughtExceptionHandler(handler: UncaughtExceptionHandler): () => void {
+  exceptionHandlers.add(handler);
+  return () => {
+    exceptionHandlers.delete(handler);
+  };
+}
+
+export function isUncaughtExceptionHandled(error: unknown): boolean {
+  for (const handler of exceptionHandlers) {
+    try {
+      if (handler(error)) {
+        return true;
+      }
+    } catch (err) {
+      console.error(
+        "[openclaw] Uncaught exception handler failed:",
+        err instanceof Error ? (err.stack ?? err.message) : err,
+      );
+    }
+  }
+  return false;
+}
+
 export function installUnhandledRejectionHandler(): void {
+  const exitWithTerminalRestore = (reason: string, error?: unknown, hookReason = reason) => {
+    for (const message of runFatalErrorHooks({ reason: hookReason, error })) {
+      console.error("[openclaw]", message);
+    }
+    restoreTerminalState(reason, { resumeStdinIfPaused: false });
+    process.exit(1);
+  };
+
   process.on("unhandledRejection", (reason, _promise) => {
     if (isUnhandledRejectionHandled(reason)) {
       return;
@@ -354,13 +408,13 @@ export function installUnhandledRejectionHandler(): void {
 
     if (isFatalError(reason)) {
       console.error("[openclaw] FATAL unhandled rejection:", formatUncaughtError(reason));
-      process.exit(1);
+      exitWithTerminalRestore("fatal unhandled rejection", reason, "fatal_unhandled_rejection");
       return;
     }
 
     if (isConfigError(reason)) {
       console.error("[openclaw] CONFIGURATION ERROR - requires fix:", formatUncaughtError(reason));
-      process.exit(1);
+      exitWithTerminalRestore("configuration error", reason, "configuration_error");
       return;
     }
 
@@ -373,6 +427,6 @@ export function installUnhandledRejectionHandler(): void {
     }
 
     console.error("[openclaw] Unhandled promise rejection:", formatUncaughtError(reason));
-    process.exit(1);
+    exitWithTerminalRestore("unhandled rejection", reason, "unhandled_rejection");
   });
 }

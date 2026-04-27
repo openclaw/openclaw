@@ -40,16 +40,22 @@ vi.mock("./protocol.js", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
-  const original = (await importOriginal()) as Record<string, unknown>;
+vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
+  const original = (await vi.importActual("openclaw/plugin-sdk/config-runtime")) as Record<
+    string,
+    unknown
+  >;
   return {
     ...original,
     resolveMarkdownTableMode: hoisted.resolveMarkdownTableMode,
   };
 });
 
-vi.mock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
-  const original = (await importOriginal()) as Record<string, unknown>;
+vi.mock("openclaw/plugin-sdk/text-runtime", async () => {
+  const original = (await vi.importActual("openclaw/plugin-sdk/text-runtime")) as Record<
+    string,
+    unknown
+  >;
   return {
     ...original,
     convertMarkdownTables: hoisted.convertMarkdownTables,
@@ -102,30 +108,19 @@ describe("sendMessageIrc cfg threading", () => {
     expect(result.messageId.length).toBeGreaterThan(0);
   });
 
-  it("falls back to runtime config when cfg is omitted", async () => {
-    const runtimeCfg = {
-      channels: {
-        irc: {
-          host: "irc.example.com",
-          nick: "openclaw",
-        },
-      },
-    } as unknown as CoreConfig;
-    hoisted.loadConfig.mockReturnValueOnce(runtimeCfg);
+  it("fails hard when cfg is omitted", async () => {
     const client = {
       isReady: vi.fn(() => true),
       sendPrivmsg: vi.fn(),
     } as unknown as IrcClient;
 
-    await sendMessageIrc("#ops", "ping", { client });
+    await expect(sendMessageIrc("#ops", "ping", { client } as never)).rejects.toThrow(
+      "IRC send requires a resolved runtime config",
+    );
 
-    expect(hoisted.loadConfig).toHaveBeenCalledTimes(1);
-    expect(client.sendPrivmsg).toHaveBeenCalledWith("#ops", "ping");
-    expect(hoisted.record).toHaveBeenCalledWith({
-      channel: "irc",
-      accountId: "default",
-      direction: "outbound",
-    });
+    expect(hoisted.loadConfig).not.toHaveBeenCalled();
+    expect(client.sendPrivmsg).not.toHaveBeenCalled();
+    expect(hoisted.record).not.toHaveBeenCalled();
   });
 
   it("sends with provided cfg even when the runtime store is not initialized", async () => {

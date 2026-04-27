@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
   mockedEnsureRuntimePluginsLoaded,
@@ -9,28 +10,6 @@ import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;
 
-function makeAttemptResult(
-  overrides: Partial<EmbeddedRunAttemptResult> = {},
-): EmbeddedRunAttemptResult {
-  return {
-    aborted: false,
-    timedOut: false,
-    timedOutDuringCompaction: false,
-    promptError: null,
-    sessionIdUsed: "test-session",
-    messagesSnapshot: [],
-    assistantTexts: [],
-    toolMetas: [],
-    lastAssistant: undefined,
-    didSendViaMessagingTool: false,
-    messagingToolSentTexts: [],
-    messagingToolSentMediaUrls: [],
-    messagingToolSentTargets: [],
-    cloudCodeAssistFormatError: false,
-    ...overrides,
-  };
-}
-
 function makeAssistantMessage(
   overrides: Partial<AssistantMessage> = {},
 ): NonNullable<EmbeddedRunAttemptResult["lastAssistant"]> {
@@ -38,7 +17,7 @@ function makeAssistantMessage(
     role: "assistant",
     api: "openai-responses",
     provider: "openai",
-    model: "gpt-5.2",
+    model: "gpt-5.4",
     usage: { input: 0, output: 0 } as AssistantMessage["usage"],
     stopReason: "end_turn" as AssistantMessage["stopReason"],
     timestamp: Date.now(),

@@ -1,6 +1,7 @@
 import { clearCredentialsCache, extractGeminiCliCredentials } from "./oauth.credentials.js";
 import {
   buildAuthUrl,
+  generateOAuthState,
   generatePkce,
   parseCallbackInput,
   shouldUseManualOAuthFlow,
@@ -32,22 +33,11 @@ export async function loginGeminiCliOAuth(
   );
 
   const { verifier, challenge } = generatePkce();
-  const authUrl = buildAuthUrl(challenge, verifier);
+  const state = generateOAuthState();
+  const authUrl = buildAuthUrl(challenge, state);
 
   if (needsManual) {
-    ctx.progress.update("OAuth URL ready");
-    ctx.log(`\nOpen this URL in your LOCAL browser:\n\n${authUrl}\n`);
-    ctx.progress.update("Waiting for you to paste the callback URL...");
-    const callbackInput = await ctx.prompt("Paste the redirect URL here: ");
-    const parsed = parseCallbackInput(callbackInput, verifier);
-    if ("error" in parsed) {
-      throw new Error(parsed.error);
-    }
-    if (parsed.state !== verifier) {
-      throw new Error("OAuth state mismatch - please try again");
-    }
-    ctx.progress.update("Exchanging authorization code for tokens...");
-    return exchangeCodeForTokens(parsed.code, verifier);
+    return manualFlow(ctx, authUrl, state, verifier);
   }
 
   ctx.progress.update("Complete sign-in in browser...");
@@ -59,7 +49,7 @@ export async function loginGeminiCliOAuth(
 
   try {
     const { code } = await waitForLocalCallback({
-      expectedState: verifier,
+      expectedState: state,
       timeoutMs: 5 * 60 * 1000,
       onProgress: (msg) => ctx.progress.update(msg),
     });
@@ -73,18 +63,30 @@ export async function loginGeminiCliOAuth(
         err.message.includes("listen"))
     ) {
       ctx.progress.update("Local callback server failed. Switching to manual mode...");
-      ctx.log(`\nOpen this URL in your LOCAL browser:\n\n${authUrl}\n`);
-      const callbackInput = await ctx.prompt("Paste the redirect URL here: ");
-      const parsed = parseCallbackInput(callbackInput, verifier);
-      if ("error" in parsed) {
-        throw new Error(parsed.error, { cause: err });
-      }
-      if (parsed.state !== verifier) {
-        throw new Error("OAuth state mismatch - please try again", { cause: err });
-      }
-      ctx.progress.update("Exchanging authorization code for tokens...");
-      return exchangeCodeForTokens(parsed.code, verifier);
+      return manualFlow(ctx, authUrl, state, verifier, err);
     }
     throw err;
   }
+}
+
+async function manualFlow(
+  ctx: GeminiCliOAuthContext,
+  authUrl: string,
+  state: string,
+  verifier: string,
+  cause?: Error,
+): Promise<GeminiCliOAuthCredentials> {
+  ctx.progress.update("OAuth URL ready");
+  ctx.log(`\nOpen this URL in your LOCAL browser:\n\n${authUrl}\n`);
+  ctx.progress.update("Waiting for you to paste the callback URL...");
+  const callbackInput = await ctx.prompt("Paste the redirect URL here: ");
+  const parsed = parseCallbackInput(callbackInput);
+  if ("error" in parsed) {
+    throw new Error(parsed.error, cause ? { cause } : undefined);
+  }
+  if (parsed.state !== state) {
+    throw new Error("OAuth state mismatch - please try again", cause ? { cause } : undefined);
+  }
+  ctx.progress.update("Exchanging authorization code for tokens...");
+  return exchangeCodeForTokens(parsed.code, verifier);
 }

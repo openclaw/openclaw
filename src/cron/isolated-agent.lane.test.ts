@@ -33,7 +33,7 @@ async function runLaneCase(home: string, lane?: string) {
   await runCronIsolatedAgentTurn({
     cfg: makeCfg(home, storePath),
     deps: createCliDeps(),
-    job: makeJob({ kind: "agentTurn", message: "do it", deliver: false }),
+    job: { ...makeJob({ kind: "agentTurn", message: "do it" }), delivery: { mode: "none" } },
     message: "do it",
     sessionKey: "cron:job-1",
     ...(lane === undefined ? {} : { lane }),
@@ -82,15 +82,15 @@ describe("runCronIsolatedAgentTurn lane selection", () => {
     vi.resetModules();
   });
 
-  it("moves the cron lane to nested for embedded runs", async () => {
+  it("moves the cron lane to cron-nested for embedded runs", async () => {
     await withTempCronHome(async (home) => {
-      expect(await runLaneCase(home, "cron")).toBe("nested");
+      expect(await runLaneCase(home, "cron")).toBe("cron-nested");
     });
   });
 
-  it("defaults missing lanes to nested for embedded runs", async () => {
+  it("defaults missing lanes to cron-nested for embedded runs", async () => {
     await withTempCronHome(async (home) => {
-      expect(await runLaneCase(home)).toBe("nested");
+      expect(await runLaneCase(home)).toBe("cron-nested");
     });
   });
 

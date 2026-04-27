@@ -8,7 +8,7 @@ import {
   ANTHROPIC_SETUP_TOKEN_PREFIX,
   validateAnthropicSetupToken,
 } from "../commands/auth-token.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import {
   type AuthProfileCredential,
@@ -141,9 +141,9 @@ function pickModel(models: Array<Model<Api>>, raw?: string): Model<Api> | null {
   }
 
   const preferred = [
-    "claude-opus-4-5",
+    "claude-opus-4-6",
     "claude-sonnet-4-6",
-    "claude-sonnet-4-5",
+    "claude-sonnet-4-6",
     "claude-sonnet-4-0",
     "claude-haiku-3-5",
   ];
@@ -184,7 +184,7 @@ describeLive("live anthropic setup-token", () => {
     async () => {
       const tokenSource = await resolveTokenSource();
       try {
-        const cfg = loadConfig();
+        const cfg = getRuntimeConfig();
         await ensureOpenClawModelsJson(cfg, tokenSource.agentDir);
 
         const authStorage = discoverAuthStorage(tokenSource.agentDir);

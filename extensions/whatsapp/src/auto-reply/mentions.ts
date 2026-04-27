@@ -1,6 +1,8 @@
-import { buildMentionRegexes, normalizeMentionText } from "openclaw/plugin-sdk/channel-inbound";
-import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import { isSelfChatMode, normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
+import {
+  buildMentionRegexes,
+  normalizeMentionText,
+} from "openclaw/plugin-sdk/channel-mention-gating";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   getComparableIdentityValues,
   getMentionIdentities,
@@ -8,11 +10,13 @@ import {
   identitiesOverlap,
   type WhatsAppIdentity,
 } from "../identity.js";
+import { isSelfChatMode, normalizeE164 } from "../text-runtime.js";
 import type { WebInboundMsg } from "./types.js";
 
 export type MentionConfig = {
   mentionRegexes: RegExp[];
   allowFrom?: Array<string | number>;
+  isSelfChat?: boolean;
 };
 
 export type MentionTargets = {
@@ -20,10 +24,7 @@ export type MentionTargets = {
   self: WhatsAppIdentity;
 };
 
-export function buildMentionConfig(
-  cfg: ReturnType<typeof loadConfig>,
-  agentId?: string,
-): MentionConfig {
+export function buildMentionConfig(cfg: OpenClawConfig, agentId?: string): MentionConfig {
   const mentionRegexes = buildMentionRegexes(cfg, agentId);
   return { mentionRegexes, allowFrom: cfg.channels?.whatsapp?.allowFrom };
 }
@@ -43,7 +44,10 @@ export function isBotMentionedFromTargets(
     // Remove zero-width and directionality markers WhatsApp injects around display names
     normalizeMentionText(text);
 
-  const isSelfChat = isSelfChatMode(targets.self.e164, mentionCfg.allowFrom);
+  const isSelfChat =
+    typeof mentionCfg.isSelfChat === "boolean"
+      ? mentionCfg.isSelfChat
+      : isSelfChatMode(targets.self.e164, mentionCfg.allowFrom);
 
   const hasMentions = targets.normalizedMentions.length > 0;
   if (hasMentions && !isSelfChat) {

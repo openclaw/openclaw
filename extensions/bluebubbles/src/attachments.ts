@@ -1,27 +1,27 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
-import { assertMultipartActionOk, postMultipartFormData } from "./multipart.js";
 import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
+import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
+import {
+  createBlueBubblesClient,
+  createBlueBubblesClientFromParts,
+  type BlueBubblesClient,
+} from "./client.js";
+import { assertMultipartActionOk } from "./multipart.js";
+import {
+  fetchBlueBubblesServerInfo,
   getCachedBlueBubblesPrivateApiStatus,
   isBlueBubblesPrivateApiStatusEnabled,
 } from "./probe.js";
-import { resolveRequestUrl } from "./request-url.js";
 import type { OpenClawConfig } from "./runtime-api.js";
-import { getBlueBubblesRuntime, warnBlueBubbles } from "./runtime.js";
+import { warnBlueBubbles } from "./runtime.js";
 import { extractBlueBubblesMessageId, resolveBlueBubblesSendTarget } from "./send-helpers.js";
-import { resolveChatGuidForTarget, createChatForHandle } from "./send.js";
-import {
-  blueBubblesFetchWithTimeout,
-  buildBlueBubblesApiUrl,
-  type BlueBubblesAttachment,
-  type BlueBubblesSendTarget,
-  type SsrFPolicy,
-} from "./types.js";
-
-function blueBubblesPolicy(allowPrivateNetwork: boolean | undefined): SsrFPolicy {
-  return allowPrivateNetwork ? { allowPrivateNetwork: true } : {};
-}
+import { createChatForHandle, resolveChatGuidForTarget } from "./send.js";
+import { type BlueBubblesAttachment } from "./types.js";
 
 export type BlueBubblesAttachmentOpts = {
   serverUrl?: string;
@@ -31,7 +31,6 @@ export type BlueBubblesAttachmentOpts = {
   cfg?: OpenClawConfig;
 };
 
-const DEFAULT_ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024;
 const AUDIO_MIME_MP3 = new Set(["audio/mpeg", "audio/mp3"]);
 const AUDIO_MIME_CAF = new Set(["audio/x-caf", "audio/caf"]);
 
@@ -45,7 +44,7 @@ function sanitizeFilename(input: string | undefined, fallback: string): string {
 
 function ensureExtension(filename: string, extension: string, fallbackBase: string): string {
   const currentExt = path.extname(filename);
-  if (currentExt.toLowerCase() === extension) {
+  if (normalizeLowercaseStringOrEmpty(currentExt) === extension) {
     return filename;
   }
   const base = currentExt ? filename.slice(0, -currentExt.length) : filename;
@@ -53,8 +52,8 @@ function ensureExtension(filename: string, extension: string, fallbackBase: stri
 }
 
 function resolveVoiceInfo(filename: string, contentType?: string) {
-  const normalizedType = contentType?.trim().toLowerCase();
-  const extension = path.extname(filename).toLowerCase();
+  const normalizedType = normalizeOptionalLowercaseString(contentType);
+  const extension = normalizeLowercaseStringOrEmpty(path.extname(filename));
   const isMp3 =
     extension === ".mp3" || (normalizedType ? AUDIO_MIME_MP3.has(normalizedType) : false);
   const isCaf =
@@ -63,75 +62,53 @@ function resolveVoiceInfo(filename: string, contentType?: string) {
   return { isAudio, isMp3, isCaf };
 }
 
+function clientFromOpts(params: BlueBubblesAttachmentOpts): BlueBubblesClient {
+  return createBlueBubblesClient(params);
+}
+
 function resolveAccount(params: BlueBubblesAttachmentOpts) {
   return resolveBlueBubblesServerAccount(params);
 }
 
-function safeExtractHostname(url: string): string | undefined {
-  try {
-    const hostname = new URL(url).hostname.trim();
-    return hostname || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-type MediaFetchErrorCode = "max_bytes" | "http_error" | "fetch_failed";
-
-function readMediaFetchErrorCode(error: unknown): MediaFetchErrorCode | undefined {
-  if (!error || typeof error !== "object") {
-    return undefined;
-  }
-  const code = (error as { code?: unknown }).code;
-  return code === "max_bytes" || code === "http_error" || code === "fetch_failed"
-    ? code
-    : undefined;
+/**
+ * Fetch attachment metadata for a message from the BlueBubbles API.
+ *
+ * BlueBubbles sometimes fires the `new-message` webhook before attachment
+ * indexing is complete, so `attachments` arrives as `[]`. This function
+ * GETs the message by GUID and returns whatever attachments the server
+ * has indexed by now. (#65430, #67437)
+ */
+export async function fetchBlueBubblesMessageAttachments(
+  messageGuid: string,
+  opts: {
+    baseUrl: string;
+    password: string;
+    timeoutMs?: number;
+    allowPrivateNetwork?: boolean;
+  },
+): Promise<BlueBubblesAttachment[]> {
+  const client = createBlueBubblesClientFromParts({
+    baseUrl: opts.baseUrl,
+    password: opts.password,
+    allowPrivateNetwork: opts.allowPrivateNetwork === true,
+    timeoutMs: opts.timeoutMs,
+  });
+  return await client.getMessageAttachments({ messageGuid, timeoutMs: opts.timeoutMs });
 }
 
 export async function downloadBlueBubblesAttachment(
   attachment: BlueBubblesAttachment,
   opts: BlueBubblesAttachmentOpts & { maxBytes?: number } = {},
 ): Promise<{ buffer: Uint8Array; contentType?: string }> {
-  const guid = attachment.guid?.trim();
-  if (!guid) {
-    throw new Error("BlueBubbles attachment guid is required");
-  }
-  const { baseUrl, password, allowPrivateNetwork } = resolveAccount(opts);
-  const url = buildBlueBubblesApiUrl({
-    baseUrl,
-    path: `/api/v1/attachment/${encodeURIComponent(guid)}/download`,
-    password,
+  const client = clientFromOpts(opts);
+  // client.downloadAttachment threads this.ssrfPolicy to BOTH fetchRemoteMedia
+  // and the fetchImpl callback — closing the gap in #34749 where the legacy
+  // helper silently omitted the policy on the callback path.
+  return await client.downloadAttachment({
+    attachment,
+    maxBytes: opts.maxBytes,
+    timeoutMs: opts.timeoutMs,
   });
-  const maxBytes = typeof opts.maxBytes === "number" ? opts.maxBytes : DEFAULT_ATTACHMENT_MAX_BYTES;
-  const trustedHostname = safeExtractHostname(baseUrl);
-  try {
-    const fetched = await getBlueBubblesRuntime().channel.media.fetchRemoteMedia({
-      url,
-      filePathHint: attachment.transferName ?? attachment.guid ?? "attachment",
-      maxBytes,
-      ssrfPolicy: allowPrivateNetwork
-        ? { allowPrivateNetwork: true }
-        : trustedHostname
-          ? { allowedHostnames: [trustedHostname] }
-          : undefined,
-      fetchImpl: async (input, init) =>
-        await blueBubblesFetchWithTimeout(
-          resolveRequestUrl(input),
-          { ...init, method: init?.method ?? "GET" },
-          opts.timeoutMs,
-        ),
-    });
-    return {
-      buffer: new Uint8Array(fetched.buffer),
-      contentType: fetched.contentType ?? attachment.mimeType ?? undefined,
-    };
-  } catch (error) {
-    if (readMediaFetchErrorCode(error) === "max_bytes") {
-      throw new Error(`BlueBubbles attachment too large (limit ${maxBytes} bytes)`);
-    }
-    const text = error instanceof Error ? error.message : String(error);
-    throw new Error(`BlueBubbles attachment download failed: ${text}`);
-  }
 }
 
 export type SendBlueBubblesAttachmentResult = {
@@ -159,9 +136,35 @@ export async function sendBlueBubblesAttachment(params: {
   const wantsVoice = asVoice === true;
   const fallbackName = wantsVoice ? "Audio Message" : "attachment";
   filename = sanitizeFilename(filename, fallbackName);
-  contentType = contentType?.trim() || undefined;
+  contentType = normalizeOptionalString(contentType);
+  // Resolve account tuple for helpers that still need baseUrl/password
+  // (createChatForHandle, resolveChatGuidForTarget, fetchBlueBubblesServerInfo).
+  // These migrate to the client in subsequent passes. For this callsite, the
+  // client owns the actual attachment POST; the resolved tuple stays alongside
+  // so chat-guid resolution and Private API probe continue to work.
   const { baseUrl, password, accountId, allowPrivateNetwork } = resolveAccount(opts);
-  const privateApiStatus = getCachedBlueBubblesPrivateApiStatus(accountId);
+  const client = createBlueBubblesClient(opts);
+  let privateApiStatus = getCachedBlueBubblesPrivateApiStatus(accountId);
+
+  // Lazy refresh: when the cache has expired and Private API features are needed,
+  // fetch server info before making the decision. This prevents silent degradation
+  // of reply threading after the 10-minute cache TTL expires. (#43764)
+  const wantsReplyThread = Boolean(replyToMessageGuid?.trim());
+  if (privateApiStatus === null && wantsReplyThread) {
+    try {
+      await fetchBlueBubblesServerInfo({
+        baseUrl,
+        password,
+        accountId,
+        timeoutMs: opts.timeoutMs ?? 5000,
+        allowPrivateNetwork,
+      });
+      privateApiStatus = getCachedBlueBubblesPrivateApiStatus(accountId);
+    } catch {
+      // Refresh failed — proceed with null status (existing graceful degradation)
+    }
+  }
+
   const privateApiEnabled = isBlueBubblesPrivateApiStatusEnabled(privateApiStatus);
 
   // Validate voice memo format when requested (BlueBubbles converts MP3 -> CAF when isAudioMessage).
@@ -221,12 +224,6 @@ export async function sendBlueBubblesAttachment(params: {
     }
   }
 
-  const url = buildBlueBubblesApiUrl({
-    baseUrl,
-    path: "/api/v1/message/attachment",
-    password,
-  });
-
   // Build FormData with the attachment
   const boundary = `----BlueBubblesFormBoundary${crypto.randomUUID().replace(/-/g, "")}`;
   const parts: Uint8Array[] = [];
@@ -284,12 +281,11 @@ export async function sendBlueBubblesAttachment(params: {
   // Close the multipart body
   parts.push(encoder.encode(`--${boundary}--\r\n`));
 
-  const res = await postMultipartFormData({
-    url,
+  const res = await client.requestMultipart({
+    path: "/api/v1/message/attachment",
     boundary,
     parts,
     timeoutMs: opts.timeoutMs ?? 60_000, // longer timeout for file uploads
-    ssrfPolicy: blueBubblesPolicy(allowPrivateNetwork),
   });
 
   await assertMultipartActionOk(res, "attachment send");

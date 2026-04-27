@@ -1,12 +1,9 @@
 import type { App } from "@slack/bolt";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SlackMessageEvent } from "../types.js";
+import { describe, expect, it } from "vitest";
 import { resolveSlackChannelConfig } from "./channel-config.js";
 import { createSlackMonitorContext, normalizeSlackChannelType } from "./context.js";
-import { resetSlackThreadStarterCacheForTest, resolveSlackThreadStarter } from "./media.js";
-import { createSlackThreadTsResolver } from "./thread-resolution.js";
 
 describe("resolveSlackChannelConfig", () => {
   it("uses defaultRequireMention when channels config is empty", () => {
@@ -38,7 +35,7 @@ describe("resolveSlackChannelConfig", () => {
   it("uses wildcard entries when no direct channel config exists", () => {
     const res = resolveSlackChannelConfig({
       channelId: "C1",
-      channels: { "*": { allow: true, requireMention: false } },
+      channels: { "*": { enabled: true, requireMention: false } },
       defaultRequireMention: true,
     });
     expect(res).toMatchObject({
@@ -52,7 +49,7 @@ describe("resolveSlackChannelConfig", () => {
   it("uses direct match metadata when channel config exists", () => {
     const res = resolveSlackChannelConfig({
       channelId: "C1",
-      channels: { C1: { allow: true, requireMention: false } },
+      channels: { C1: { enabled: true, requireMention: false } },
       defaultRequireMention: true,
     });
     expect(res).toMatchObject({
@@ -66,7 +63,7 @@ describe("resolveSlackChannelConfig", () => {
     // Users commonly copy them in lowercase from docs or older CLI output.
     const res = resolveSlackChannelConfig({
       channelId: "C0ABC12345", // pragma: allowlist secret
-      channels: { c0abc12345: { allow: true, requireMention: false } },
+      channels: { c0abc12345: { enabled: true, requireMention: false } },
       defaultRequireMention: true,
     });
     expect(res).toMatchObject({ allowed: true, requireMention: false });
@@ -76,7 +73,7 @@ describe("resolveSlackChannelConfig", () => {
     // Defensive: also handle the inverse direction.
     const res = resolveSlackChannelConfig({
       channelId: "c0abc12345", // pragma: allowlist secret
-      channels: { C0ABC12345: { allow: true, requireMention: false } },
+      channels: { C0ABC12345: { enabled: true, requireMention: false } },
       defaultRequireMention: true,
     });
     expect(res).toMatchObject({ allowed: true, requireMention: false });
@@ -86,7 +83,7 @@ describe("resolveSlackChannelConfig", () => {
     const res = resolveSlackChannelConfig({
       channelId: "C1",
       channelName: "ops-room",
-      channels: { "ops-room": { allow: true, requireMention: false } },
+      channels: { "ops-room": { enabled: true, requireMention: false } },
       defaultRequireMention: true,
     });
     expect(res).toMatchObject({ allowed: false, requireMention: true });
@@ -96,7 +93,7 @@ describe("resolveSlackChannelConfig", () => {
     const res = resolveSlackChannelConfig({
       channelId: "C1",
       channelName: "ops-room",
-      channels: { "ops-room": { allow: true, requireMention: false } },
+      channels: { "ops-room": { enabled: true, requireMention: false } },
       defaultRequireMention: true,
       allowNameMatching: true,
     });
@@ -116,6 +113,7 @@ const baseParams = () => ({
   app: { client: {} } as App,
   runtime: {} as RuntimeEnv,
   botUserId: "B1",
+  botId: "B1",
   teamId: "T1",
   apiAppId: "A1",
   historyLimit: 0,
@@ -145,22 +143,9 @@ const baseParams = () => ({
   mediaMaxBytes: 1,
   threadHistoryScope: "thread" as const,
   threadInheritParent: false,
+  threadRequireExplicitMention: false,
   removeAckAfterReply: false,
 });
-
-type ThreadStarterClient = Parameters<typeof resolveSlackThreadStarter>[0]["client"];
-
-function createThreadStarterRepliesClient(
-  response: { messages?: Array<{ text?: string; user?: string; ts?: string }> } = {
-    messages: [{ text: "root message", user: "U1", ts: "1000.1" }],
-  },
-): { replies: ReturnType<typeof vi.fn>; client: ThreadStarterClient } {
-  const replies = vi.fn(async () => response);
-  const client = {
-    conversations: { replies },
-  } as unknown as ThreadStarterClient;
-  return { replies, client };
-}
 
 function createListedChannelsContext(groupPolicy: "open" | "allowlist") {
   return createSlackMonitorContext({
@@ -283,8 +268,8 @@ describe("isChannelAllowed with groupPolicy and channelsConfig", () => {
       ...baseParams(),
       groupPolicy: "open",
       channelsConfig: {
-        C_ALLOWED: { allow: true },
-        C_DENIED: { allow: false },
+        C_ALLOWED: { enabled: true },
+        C_DENIED: { enabled: false },
       },
     });
     // Explicitly allowed channel
@@ -302,123 +287,5 @@ describe("isChannelAllowed with groupPolicy and channelsConfig", () => {
       channelsConfig: undefined,
     });
     expect(ctx.isChannelAllowed({ channelId: "C_ANY", channelType: "channel" })).toBe(true);
-  });
-});
-
-describe("resolveSlackThreadStarter cache", () => {
-  afterEach(() => {
-    resetSlackThreadStarterCacheForTest();
-    vi.useRealTimers();
-  });
-
-  it("returns cached thread starter without refetching within ttl", async () => {
-    const { replies, client } = createThreadStarterRepliesClient();
-
-    const first = await resolveSlackThreadStarter({
-      channelId: "C1",
-      threadTs: "1000.1",
-      client,
-    });
-    const second = await resolveSlackThreadStarter({
-      channelId: "C1",
-      threadTs: "1000.1",
-      client,
-    });
-
-    expect(first).toEqual(second);
-    expect(replies).toHaveBeenCalledTimes(1);
-  });
-
-  it("expires stale cache entries and refetches after ttl", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
-
-    const { replies, client } = createThreadStarterRepliesClient();
-
-    await resolveSlackThreadStarter({
-      channelId: "C1",
-      threadTs: "1000.1",
-      client,
-    });
-
-    vi.setSystemTime(new Date("2026-01-01T07:00:00.000Z"));
-    await resolveSlackThreadStarter({
-      channelId: "C1",
-      threadTs: "1000.1",
-      client,
-    });
-
-    expect(replies).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not cache empty starter text", async () => {
-    const { replies, client } = createThreadStarterRepliesClient({
-      messages: [{ text: "   ", user: "U1", ts: "1000.1" }],
-    });
-
-    const first = await resolveSlackThreadStarter({
-      channelId: "C1",
-      threadTs: "1000.1",
-      client,
-    });
-    const second = await resolveSlackThreadStarter({
-      channelId: "C1",
-      threadTs: "1000.1",
-      client,
-    });
-
-    expect(first).toBeNull();
-    expect(second).toBeNull();
-    expect(replies).toHaveBeenCalledTimes(2);
-  });
-
-  it("evicts oldest entries once cache exceeds bounded size", async () => {
-    const { replies, client } = createThreadStarterRepliesClient();
-
-    // Cache cap is 2000; add enough distinct keys to force eviction of earliest keys.
-    for (let i = 0; i <= 2000; i += 1) {
-      await resolveSlackThreadStarter({
-        channelId: "C1",
-        threadTs: `1000.${i}`,
-        client,
-      });
-    }
-    const callsAfterFill = replies.mock.calls.length;
-
-    // Oldest key should be evicted and require fetch again.
-    await resolveSlackThreadStarter({
-      channelId: "C1",
-      threadTs: "1000.0",
-      client,
-    });
-
-    expect(replies.mock.calls.length).toBe(callsAfterFill + 1);
-  });
-});
-
-describe("createSlackThreadTsResolver", () => {
-  it("caches resolved thread_ts lookups", async () => {
-    const historyMock = vi.fn().mockResolvedValue({
-      messages: [{ ts: "1", thread_ts: "9" }],
-    });
-    const resolver = createSlackThreadTsResolver({
-      // oxlint-disable-next-line typescript/no-explicit-any
-      client: { conversations: { history: historyMock } } as any,
-      cacheTtlMs: 60_000,
-      maxSize: 5,
-    });
-
-    const message = {
-      channel: "C1",
-      parent_user_id: "U2",
-      ts: "1",
-    } as SlackMessageEvent;
-
-    const first = await resolver.resolve({ message, source: "message" });
-    const second = await resolver.resolve({ message, source: "message" });
-
-    expect(first.thread_ts).toBe("9");
-    expect(second.thread_ts).toBe("9");
-    expect(historyMock).toHaveBeenCalledTimes(1);
   });
 });

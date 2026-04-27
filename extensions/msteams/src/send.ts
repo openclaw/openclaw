@@ -1,14 +1,13 @@
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
-import type { OpenClawConfig } from "../runtime-api.js";
-import { loadOutboundMediaFromUrl } from "../runtime-api.js";
+import { loadOutboundMediaFromUrl, type OpenClawConfig } from "../runtime-api.js";
 import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
 import {
   classifyMSTeamsSendError,
   formatMSTeamsSendErrorHint,
   formatUnknownError,
 } from "./errors.js";
-import { prepareFileConsentActivity, requiresFileConsent } from "./file-consent-helpers.js";
+import { prepareFileConsentActivityFs, requiresFileConsent } from "./file-consent-helpers.js";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
 import {
   getDriveItemProperties,
@@ -17,8 +16,9 @@ import {
 } from "./graph-upload.js";
 import { extractFilename, extractMessageId } from "./media-helpers.js";
 import { buildConversationReference, sendMSTeamsMessages } from "./messenger.js";
+import { setPendingUploadActivityIdFs } from "./pending-uploads-fs.js";
+import { setPendingUploadActivityId } from "./pending-uploads.js";
 import { buildMSTeamsPollCard } from "./polls.js";
-import { getMSTeamsRuntime } from "./runtime.js";
 import { resolveMSTeamsSendContext, type MSTeamsProactiveContext } from "./send-context.js";
 
 export type SendMSTeamsMessageParams = {
@@ -33,6 +33,7 @@ export type SendMSTeamsMessageParams = {
   /** Optional filename override for uploaded media/files */
   filename?: string;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
 };
 
 export type SendMSTeamsMessageResult = {
@@ -98,7 +99,7 @@ export type SendMSTeamsCardResult = {
 export async function sendMessageMSTeams(
   params: SendMSTeamsMessageParams,
 ): Promise<SendMSTeamsMessageResult> {
-  const { cfg, to, text, mediaUrl, filename, mediaLocalRoots } = params;
+  const { cfg, to, text, mediaUrl, filename, mediaLocalRoots, mediaReadFile } = params;
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "msteams",
@@ -129,6 +130,7 @@ export async function sendMessageMSTeams(
     const media = await loadOutboundMediaFromUrl(mediaUrl, {
       maxBytes: mediaMaxBytes,
       mediaLocalRoots,
+      mediaReadFile,
     });
     const isLargeFile = media.buffer.length >= FILE_CONSENT_THRESHOLD_BYTES;
     const isImage = media.contentType?.startsWith("image/") ?? false;
@@ -153,7 +155,11 @@ export async function sendMessageMSTeams(
         thresholdBytes: FILE_CONSENT_THRESHOLD_BYTES,
       })
     ) {
-      const { activity, uploadId } = prepareFileConsentActivity({
+      // Proactive CLI sends run in a different process from the gateway's
+      // monitor that receives the fileConsent/invoke callback. Use the FS-
+      // backed helper so the invoke handler can find the pending upload when
+      // the user clicks "Allow".
+      const { activity, uploadId } = await prepareFileConsentActivityFs({
         media: { buffer: media.buffer, filename: fileName, contentType: media.contentType },
         conversationId,
         description: messageText || undefined,
@@ -168,6 +174,12 @@ export async function sendMessageMSTeams(
         activity,
         errorPrefix: "msteams consent card send",
       });
+
+      // Store the activity ID so the accept handler can replace the consent
+      // card in-place. Mirror it into the FS store too because the invoke
+      // callback may be delivered to a different process than the CLI send.
+      setPendingUploadActivityId(uploadId, messageId);
+      await setPendingUploadActivityIdFs(uploadId, messageId);
 
       log.info("sent file consent card", { conversationId, messageId, uploadId });
 

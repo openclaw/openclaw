@@ -1,24 +1,39 @@
-import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import {
+  chunkMarkdownTextWithMode,
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+  type ChunkMode,
+} from "openclaw/plugin-sdk/reply-chunking";
 import {
   deliverTextOrMediaReply,
   resolveSendableOutboundReplyParts,
+  type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
-import type { ChunkMode } from "openclaw/plugin-sdk/reply-runtime";
-import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-runtime";
-import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-runtime";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk/reply-runtime";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-reference";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
 import { SLACK_TEXT_LIMIT } from "../limits.js";
 import { resolveSlackReplyBlocks } from "../reply-blocks.js";
-import { sendMessageSlack, type SlackSendIdentity } from "../send.js";
+import { sendMessageSlack, type SlackSendIdentity } from "./send.runtime.js";
 
 export function readSlackReplyBlocks(payload: ReplyPayload) {
   return resolveSlackReplyBlocks(payload);
 }
 
+export function resolveDeliveredSlackReplyThreadTs(params: {
+  replyToMode: "off" | "first" | "all" | "batched";
+  payloadReplyToId?: string;
+  replyThreadTs?: string;
+}): string | undefined {
+  // Keep reply tags opt-in: when replyToMode is off, explicit reply tags
+  // must not force threading.
+  const inlineReplyToId = params.replyToMode === "off" ? undefined : params.payloadReplyToId;
+  return inlineReplyToId ?? params.replyThreadTs;
+}
+
 export async function deliverReplies(params: {
+  cfg: OpenClawConfig;
   replies: ReplyPayload[];
   target: string;
   token: string;
@@ -26,14 +41,15 @@ export async function deliverReplies(params: {
   runtime: RuntimeEnv;
   textLimit: number;
   replyThreadTs?: string;
-  replyToMode: "off" | "first" | "all";
+  replyToMode: "off" | "first" | "all" | "batched";
   identity?: SlackSendIdentity;
 }) {
   for (const payload of params.replies) {
-    // Keep reply tags opt-in: when replyToMode is off, explicit reply tags
-    // must not force threading.
-    const inlineReplyToId = params.replyToMode === "off" ? undefined : payload.replyToId;
-    const threadTs = inlineReplyToId ?? params.replyThreadTs;
+    const threadTs = resolveDeliveredSlackReplyThreadTs({
+      replyToMode: params.replyToMode,
+      payloadReplyToId: payload.replyToId,
+      replyThreadTs: params.replyThreadTs,
+    });
     const reply = resolveSendableOutboundReplyParts(payload);
     const slackBlocks = readSlackReplyBlocks(payload);
     if (!reply.hasContent && !slackBlocks?.length) {
@@ -49,6 +65,7 @@ export async function deliverReplies(params: {
         continue;
       }
       await sendMessageSlack(params.target, trimmed, {
+        cfg: params.cfg,
         token: params.token,
         threadTs,
         accountId: params.accountId,
@@ -73,6 +90,7 @@ export async function deliverReplies(params: {
         : undefined,
       sendText: async (trimmed) => {
         await sendMessageSlack(params.target, trimmed, {
+          cfg: params.cfg,
           token: params.token,
           threadTs,
           accountId: params.accountId,
@@ -81,6 +99,7 @@ export async function deliverReplies(params: {
       },
       sendMedia: async ({ mediaUrl, caption }) => {
         await sendMessageSlack(params.target, caption ?? "", {
+          cfg: params.cfg,
           token: params.token,
           mediaUrl,
           threadTs,
@@ -107,7 +126,7 @@ export type SlackRespondFn = (payload: {
  * - "all": all replies go to thread
  */
 export function resolveSlackThreadTs(params: {
-  replyToMode: "off" | "first" | "all";
+  replyToMode: "off" | "first" | "all" | "batched";
   incomingThreadTs: string | undefined;
   messageTs: string | undefined;
   hasReplied: boolean;
@@ -124,22 +143,24 @@ export function resolveSlackThreadTs(params: {
 }
 
 type SlackReplyDeliveryPlan = {
+  peekThreadTs: () => string | undefined;
   nextThreadTs: () => string | undefined;
   markSent: () => void;
 };
 
 function createSlackReplyReferencePlanner(params: {
-  replyToMode: "off" | "first" | "all";
+  replyToMode: "off" | "first" | "all" | "batched";
   incomingThreadTs: string | undefined;
   messageTs: string | undefined;
   hasReplied?: boolean;
   isThreadReply?: boolean;
 }) {
-  // Keep backward-compatible behavior: when a thread id is present and caller
-  // does not provide explicit classification, stay in thread. Callers that can
-  // distinguish Slack's auto-populated top-level thread_ts should pass
-  // `isThreadReply: false` to preserve replyToMode behavior.
-  const effectiveIsThreadReply = params.isThreadReply ?? Boolean(params.incomingThreadTs);
+  // Older/internal callers may not pass explicit thread classification. Keep
+  // genuine thread replies sticky, but do not let Slack's auto-populated
+  // top-level thread_ts override the configured replyToMode.
+  const effectiveIsThreadReply =
+    params.isThreadReply ??
+    Boolean(params.incomingThreadTs && params.incomingThreadTs !== params.messageTs);
   const effectiveMode = effectiveIsThreadReply ? "all" : params.replyToMode;
   return createReplyReferencePlanner({
     replyToMode: effectiveMode,
@@ -150,7 +171,7 @@ function createSlackReplyReferencePlanner(params: {
 }
 
 export function createSlackReplyDeliveryPlan(params: {
-  replyToMode: "off" | "first" | "all";
+  replyToMode: "off" | "first" | "all" | "batched";
   incomingThreadTs: string | undefined;
   messageTs: string | undefined;
   hasRepliedRef: { value: boolean };
@@ -164,6 +185,7 @@ export function createSlackReplyDeliveryPlan(params: {
     isThreadReply: params.isThreadReply,
   });
   return {
+    peekThreadTs: () => replyReference.peek(),
     nextThreadTs: () => replyReference.use(),
     markSent: () => {
       replyReference.markSent();

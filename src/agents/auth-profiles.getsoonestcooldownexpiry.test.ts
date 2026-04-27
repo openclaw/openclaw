@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { AuthProfileStore } from "./auth-profiles.js";
-import { getSoonestCooldownExpiry } from "./auth-profiles.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { getSoonestCooldownExpiry } from "./auth-profiles/usage-state.js";
 
 function makeStore(usageStats?: AuthProfileStore["usageStats"]): AuthProfileStore {
   return {
@@ -44,7 +44,7 @@ describe("getSoonestCooldownExpiry", () => {
         cooldownUntil: Infinity,
       },
       "openai:p3": {
-        disabledUntil: NaN,
+        disabledUntil: Number.NaN,
       },
       "openai:p4": {
         cooldownUntil: 1_700_000_005_000,
@@ -86,12 +86,12 @@ describe("getSoonestCooldownExpiry", () => {
       "openai:p2": {
         cooldownUntil: now + 30_000,
         cooldownReason: "rate_limit",
-        cooldownModel: "gpt-5.2",
+        cooldownModel: "gpt-5.4",
       },
     });
 
     expect(
-      getSoonestCooldownExpiry(store, ["openai:p1", "openai:p2"], { now, forModel: "gpt-5.2" }),
+      getSoonestCooldownExpiry(store, ["openai:p1", "openai:p2"], { now, forModel: "gpt-5.4" }),
     ).toBe(now + 30_000);
   });
 
@@ -107,12 +107,12 @@ describe("getSoonestCooldownExpiry", () => {
       "openai:p2": {
         cooldownUntil: now + 30_000,
         cooldownReason: "rate_limit",
-        cooldownModel: "gpt-5.2",
+        cooldownModel: "gpt-5.4",
       },
     });
 
     expect(
-      getSoonestCooldownExpiry(store, ["openai:p1", "openai:p2"], { now, forModel: "gpt-5.2" }),
+      getSoonestCooldownExpiry(store, ["openai:p1", "openai:p2"], { now, forModel: "gpt-5.4" }),
     ).toBe(now + 20_000);
   });
 });

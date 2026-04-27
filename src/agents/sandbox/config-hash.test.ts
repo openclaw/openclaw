@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { computeSandboxBrowserConfigHash, computeSandboxConfigHash } from "./config-hash.js";
-import { SANDBOX_MOUNT_FORMAT_VERSION } from "./workspace-mounts.js";
 import type { SandboxDockerConfig } from "./types.js";
+import { SANDBOX_MOUNT_FORMAT_VERSION } from "./workspace-mounts.js";
 
 function createDockerConfig(overrides?: Partial<SandboxDockerConfig>): SandboxDockerConfig {
   return {
@@ -118,6 +118,7 @@ describe("computeSandboxBrowserConfigHash", () => {
         noVncPort: 6080,
         headless: false,
         enableNoVnc: true,
+        autoStartTimeoutMs: 12000,
       },
       securityEpoch: "epoch-v1",
       workspaceAccess: "rw" as const,
@@ -150,6 +151,7 @@ describe("computeSandboxBrowserConfigHash", () => {
         noVncPort: 6080,
         headless: false,
         enableNoVnc: true,
+        autoStartTimeoutMs: 12000,
       },
       workspaceAccess: "rw" as const,
       workspaceDir: "/tmp/workspace",
@@ -176,6 +178,7 @@ describe("computeSandboxBrowserConfigHash", () => {
         noVncPort: 6080,
         headless: false,
         enableNoVnc: true,
+        autoStartTimeoutMs: 12000,
       },
       securityEpoch: "epoch-v1",
       workspaceAccess: "rw" as const,
@@ -204,6 +207,7 @@ describe("computeSandboxBrowserConfigHash", () => {
         noVncPort: 6080,
         headless: false,
         enableNoVnc: true,
+        autoStartTimeoutMs: 12000,
       },
       securityEpoch: "epoch-v1",
       workspaceAccess: "rw" as const,

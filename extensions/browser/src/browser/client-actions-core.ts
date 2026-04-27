@@ -4,95 +4,14 @@ import type {
   BrowserActionTabResult,
 } from "./client-actions-types.js";
 import { buildProfileQuery, withBaseUrl } from "./client-actions-url.js";
+import type { BrowserActRequest, BrowserFormField } from "./client-actions.types.js";
 import { fetchBrowserJson } from "./client-fetch.js";
+import {
+  DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
+  DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS,
+} from "./constants.js";
 
-export type BrowserFormField = {
-  ref: string;
-  type: string;
-  value?: string | number | boolean;
-};
-
-export type BrowserActRequest =
-  | {
-      kind: "click";
-      ref?: string;
-      selector?: string;
-      targetId?: string;
-      doubleClick?: boolean;
-      button?: string;
-      modifiers?: string[];
-      delayMs?: number;
-      timeoutMs?: number;
-    }
-  | {
-      kind: "type";
-      ref?: string;
-      selector?: string;
-      text: string;
-      targetId?: string;
-      submit?: boolean;
-      slowly?: boolean;
-      timeoutMs?: number;
-    }
-  | { kind: "press"; key: string; targetId?: string; delayMs?: number }
-  | {
-      kind: "hover";
-      ref?: string;
-      selector?: string;
-      targetId?: string;
-      timeoutMs?: number;
-    }
-  | {
-      kind: "scrollIntoView";
-      ref?: string;
-      selector?: string;
-      targetId?: string;
-      timeoutMs?: number;
-    }
-  | {
-      kind: "drag";
-      startRef?: string;
-      startSelector?: string;
-      endRef?: string;
-      endSelector?: string;
-      targetId?: string;
-      timeoutMs?: number;
-    }
-  | {
-      kind: "select";
-      ref?: string;
-      selector?: string;
-      values: string[];
-      targetId?: string;
-      timeoutMs?: number;
-    }
-  | {
-      kind: "fill";
-      fields: BrowserFormField[];
-      targetId?: string;
-      timeoutMs?: number;
-    }
-  | { kind: "resize"; width: number; height: number; targetId?: string }
-  | {
-      kind: "wait";
-      timeMs?: number;
-      text?: string;
-      textGone?: string;
-      selector?: string;
-      url?: string;
-      loadState?: "load" | "domcontentloaded" | "networkidle";
-      fn?: string;
-      targetId?: string;
-      timeoutMs?: number;
-    }
-  | { kind: "evaluate"; fn: string; ref?: string; targetId?: string; timeoutMs?: number }
-  | { kind: "close"; targetId?: string }
-  | {
-      kind: "batch";
-      actions: BrowserActRequest[];
-      targetId?: string;
-      stopOnError?: boolean;
-    };
+export type { BrowserActRequest, BrowserFormField } from "./client-actions.types.js";
 
 export type BrowserActResponse = {
   ok: true;
@@ -109,6 +28,29 @@ export type BrowserDownloadPayload = {
 };
 
 type BrowserDownloadResult = { ok: true; targetId: string; download: BrowserDownloadPayload };
+
+const BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS = 5_000;
+
+function normalizePositiveTimeoutMs(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
+}
+
+function resolveBrowserActRequestTimeoutMs(req: BrowserActRequest): number {
+  const explicitTimeout = normalizePositiveTimeoutMs((req as { timeoutMs?: unknown }).timeoutMs);
+  const candidateTimeouts =
+    explicitTimeout === undefined
+      ? [DEFAULT_BROWSER_ACTION_TIMEOUT_MS]
+      : [explicitTimeout + BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS];
+  if (req.kind === "wait") {
+    const waitDuration = normalizePositiveTimeoutMs(req.timeMs);
+    if (waitDuration !== undefined) {
+      candidateTimeouts.push(waitDuration + BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS);
+    }
+  }
+  return Math.max(...candidateTimeouts);
+}
 
 async function postDownloadRequest(
   baseUrl: string | undefined,
@@ -241,14 +183,17 @@ export async function browserDownload(
 export async function browserAct(
   baseUrl: string | undefined,
   req: BrowserActRequest,
-  opts?: { profile?: string },
+  opts?: { profile?: string; timeoutMs?: number },
 ): Promise<BrowserActResponse> {
   const q = buildProfileQuery(opts?.profile);
   return await fetchBrowserJson<BrowserActResponse>(withBaseUrl(baseUrl, `/act${q}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
-    timeoutMs: 20000,
+    timeoutMs:
+      typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
+        ? Math.max(1, Math.floor(opts.timeoutMs))
+        : resolveBrowserActRequestTimeoutMs(req),
   });
 }
 
@@ -260,10 +205,17 @@ export async function browserScreenshotAction(
     ref?: string;
     element?: string;
     type?: "png" | "jpeg";
+    labels?: boolean;
+    timeoutMs?: number;
     profile?: string;
   },
 ): Promise<BrowserActionPathResult> {
   const q = buildProfileQuery(opts.profile);
+  const timeoutMs =
+    typeof opts.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
+      ? Math.max(1, Math.floor(opts.timeoutMs))
+      : undefined;
+  const effectiveTimeoutMs = timeoutMs ?? DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS;
   return await fetchBrowserJson<BrowserActionPathResult>(withBaseUrl(baseUrl, `/screenshot${q}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -273,7 +225,9 @@ export async function browserScreenshotAction(
       ref: opts.ref,
       element: opts.element,
       type: opts.type,
+      labels: opts.labels,
+      timeoutMs: effectiveTimeoutMs,
     }),
-    timeoutMs: 20000,
+    timeoutMs: effectiveTimeoutMs,
   });
 }

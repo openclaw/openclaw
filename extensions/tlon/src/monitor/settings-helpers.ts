@@ -62,6 +62,12 @@ export function buildTlonSettingsMigrations(
   ];
 }
 
+export function shouldMigrateTlonSetting(fileValue: unknown, settingsValue: unknown): boolean {
+  const hasFileValue = Array.isArray(fileValue) ? fileValue.length > 0 : fileValue != null;
+  const hasSettingsValue = settingsValue != null;
+  return hasFileValue && !hasSettingsValue;
+}
+
 export function applyTlonSettingsOverrides(params: {
   account: TlonResolvedAccount;
   currentSettings: TlonSettingsStore;

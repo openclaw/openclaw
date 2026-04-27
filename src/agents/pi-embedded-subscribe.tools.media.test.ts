@@ -51,6 +51,49 @@ describe("extractToolResultMediaPaths", () => {
     });
   });
 
+  it("extracts audioAsVoice from text MEDIA directives", () => {
+    expect(
+      extractToolResultMediaArtifact({
+        content: [
+          { type: "text", text: "Generated audio\n[[audio_as_voice]]\nMEDIA:/tmp/reply.opus" },
+        ],
+      }),
+    ).toEqual({
+      mediaUrls: ["/tmp/reply.opus"],
+      audioAsVoice: true,
+    });
+  });
+
+  it("keeps audioAsVoice when the tag and MEDIA path are in separate text blocks", () => {
+    expect(
+      extractToolResultMediaArtifact({
+        content: [
+          { type: "text", text: "[[audio_as_voice]]" },
+          { type: "text", text: "MEDIA:/tmp/reply.opus" },
+        ],
+      }),
+    ).toEqual({
+      mediaUrls: ["/tmp/reply.opus"],
+      audioAsVoice: true,
+    });
+  });
+
+  it("extracts structured media trust markers", () => {
+    expect(
+      extractToolResultMediaArtifact({
+        details: {
+          media: {
+            mediaUrl: "/tmp/reply.opus",
+            trustedLocalMedia: true,
+          },
+        },
+      }),
+    ).toEqual({
+      mediaUrls: ["/tmp/reply.opus"],
+      trustedLocalMedia: true,
+    });
+  });
+
   it("extracts MEDIA: path from text content block", () => {
     const result = {
       content: [
@@ -263,6 +306,74 @@ describe("extractToolResultMediaPaths", () => {
 
   it("trusts image_generate local MEDIA paths", () => {
     expect(isToolResultMediaTrusted("image_generate")).toBe(true);
+  });
+
+  it("trusts music_generate local MEDIA paths", () => {
+    expect(isToolResultMediaTrusted("music_generate")).toBe(true);
+  });
+
+  it("trusts video_generate local MEDIA paths", () => {
+    expect(isToolResultMediaTrusted("video_generate")).toBe(true);
+  });
+
+  it("trusts bundled plugin tool local MEDIA paths", () => {
+    expect(isToolResultMediaTrusted("music_generate")).toBe(true);
+  });
+
+  it("blocks trusted-media aliases that are not exact registered built-ins", () => {
+    expect(
+      filterToolResultMediaUrls("bash", ["/etc/passwd"], undefined, new Set(["exec"])),
+    ).toEqual([]);
+    expect(
+      filterToolResultMediaUrls("Web_Search", ["/etc/passwd"], undefined, new Set(["web_search"])),
+    ).toEqual([]);
+  });
+
+  it("keeps local media for exact registered built-in tool names", () => {
+    expect(
+      filterToolResultMediaUrls(
+        "web_search",
+        ["/tmp/screenshot.png"],
+        undefined,
+        new Set(["web_search"]),
+      ),
+    ).toEqual(["/tmp/screenshot.png"]);
+  });
+
+  it("keeps local media for bundled plugin tool names registered in this run", () => {
+    // music_generate is a bundled-plugin trusted tool; when the runner
+    // registers it for this run, its raw name must be allowed through the
+    // exact-name gate just like a core built-in.
+    expect(
+      filterToolResultMediaUrls(
+        "music_generate",
+        ["/tmp/song.mp3"],
+        undefined,
+        new Set(["music_generate"]),
+      ),
+    ).toEqual(["/tmp/song.mp3"]);
+  });
+
+  it("strips local media for plugin-name collisions when the plugin is not registered", () => {
+    expect(
+      filterToolResultMediaUrls(
+        "Music_Generate",
+        ["/etc/passwd"],
+        undefined,
+        new Set(["music_generate"]),
+      ),
+    ).toEqual([]);
+  });
+
+  it("still allows remote media for colliding aliases", () => {
+    expect(
+      filterToolResultMediaUrls(
+        "bash",
+        ["/etc/passwd", "https://example.com/file.png"],
+        undefined,
+        new Set(["exec"]),
+      ),
+    ).toEqual(["https://example.com/file.png"]);
   });
 
   it("does not trust local MEDIA paths for MCP-provenance results", () => {

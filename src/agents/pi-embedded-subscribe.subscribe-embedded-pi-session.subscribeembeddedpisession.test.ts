@@ -2,6 +2,7 @@ import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import {
   THINKING_TAG_CASES,
+  createSubscribedSessionHarness,
   createStubSessionHarness,
   emitAssistantLifecycleErrorAndEnd,
   emitMessageStartAndEndForAssistantText,
@@ -10,6 +11,7 @@ import {
   findLifecycleErrorAgentEvent,
 } from "./pi-embedded-subscribe.e2e-harness.js";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
+import { makeZeroUsageSnapshot } from "./usage.js";
 
 describe("subscribeEmbeddedPiSession", () => {
   async function flushBlockReplyCallbacks(): Promise<void> {
@@ -109,6 +111,75 @@ describe("subscribeEmbeddedPiSession", () => {
     });
   }
 
+  it("captures usage from completions timings on done events", () => {
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "done",
+        timings: {
+          prompt_n: 30_834,
+          predicted_n: 34,
+        },
+      },
+    });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        usage: makeZeroUsageSnapshot(),
+      },
+    });
+
+    expect(subscription.getUsageTotals()).toEqual({
+      input: 30_834,
+      output: 34,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+      total: 30_868,
+    });
+  });
+
+  it("does not double-count usage when done and message_end carry the same snapshot", () => {
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
+    const usage = {
+      input: 100,
+      output: 20,
+      totalTokens: 120,
+    };
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "done",
+        message: {
+          role: "assistant",
+          usage,
+        },
+      },
+    });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        usage,
+      },
+    });
+
+    expect(subscription.getUsageTotals()).toEqual({
+      input: 100,
+      output: 20,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+      total: 120,
+    });
+  });
+
   it.each(THINKING_TAG_CASES)(
     "streams <%s> reasoning via onReasoningStream without leaking into final text",
     async ({ open, close }) => {
@@ -153,6 +224,279 @@ describe("subscribeEmbeddedPiSession", () => {
       ]);
     },
   );
+
+  it("suppresses assistant streaming while deterministic exec approval delivery is pending", async () => {
+    let resolveToolResult: (() => void) | undefined;
+    const onToolResult = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveToolResult = resolve;
+        }),
+    );
+    const onPartialReply = vi.fn();
+
+    const { emit } = createSubscribedHarness({
+      runId: "run",
+      onToolResult,
+      onPartialReply,
+    });
+
+    emit({
+      type: "tool_execution_start",
+      toolName: "exec",
+      toolCallId: "tool-1",
+      args: { command: "echo hi" },
+    });
+    emit({
+      type: "tool_execution_end",
+      toolName: "exec",
+      toolCallId: "tool-1",
+      isError: false,
+      result: {
+        details: {
+          status: "approval-pending",
+          approvalId: "12345678-1234-1234-1234-123456789012",
+          approvalSlug: "12345678",
+          host: "gateway",
+          command: "echo hi",
+        },
+      },
+    });
+
+    emit({
+      type: "message_start",
+      message: { role: "assistant" },
+    });
+    emitAssistantTextDelta(emit, "After tool");
+
+    await vi.waitFor(() => {
+      expect(onToolResult).toHaveBeenCalledTimes(1);
+    });
+    expect(onPartialReply).not.toHaveBeenCalled();
+
+    expect(resolveToolResult).toBeTypeOf("function");
+    resolveToolResult?.();
+    await Promise.resolve();
+    expect(onPartialReply).not.toHaveBeenCalled();
+  });
+
+  it("blocks local MEDIA urls from case-variant tool names in verbose output", async () => {
+    const onToolResult = vi.fn();
+    const { emit } = createSubscribedHarness({
+      runId: "run",
+      onToolResult,
+      verboseLevel: "full",
+      builtinToolNames: new Set(["web_search"]),
+    });
+
+    emitToolRun({
+      emit,
+      toolName: "Web_Search",
+      toolCallId: "tool-1",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "Fetched page\nMEDIA:/tmp/secret.png" }],
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(onToolResult).toHaveBeenCalled();
+    });
+    const payload = onToolResult.mock.calls.at(-1)?.[0] as
+      | { text?: string; mediaUrls?: string[] }
+      | undefined;
+    expect(payload?.text ?? "").toContain("Fetched page");
+    expect(payload?.mediaUrls).toBeUndefined();
+  });
+
+  it("delivers generated image media once in markdown verbose output", async () => {
+    const onToolResult = vi.fn();
+    const onBlockReply = vi.fn();
+    const { emit } = createSubscribedHarness({
+      runId: "run",
+      onToolResult,
+      onBlockReply,
+      verboseLevel: "full",
+      blockReplyBreak: "message_end",
+      builtinToolNames: new Set(["image_generate"]),
+    });
+
+    emitToolRun({
+      emit,
+      toolName: "image_generate",
+      toolCallId: "tool-1",
+      isError: false,
+      result: {
+        content: [
+          {
+            type: "text",
+            text: "Generated 1 image with google/gemini-3.1-flash-image-preview.\nMEDIA:/tmp/generated.png",
+          },
+        ],
+        details: {
+          media: {
+            mediaUrls: ["/tmp/generated.png"],
+          },
+        },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(onToolResult).toHaveBeenCalled();
+    });
+    const toolPayload = onToolResult.mock.calls.at(-1)?.[0] as
+      | { text?: string; mediaUrls?: string[] }
+      | undefined;
+    expect(toolPayload?.text ?? "").toContain("Generated 1 image");
+    expect(toolPayload?.mediaUrls).toBeUndefined();
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "Here is the image.");
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Here is the image." }],
+      },
+    });
+    await flushBlockReplyCallbacks();
+
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Here is the image.",
+        mediaUrls: ["/tmp/generated.png"],
+      }),
+    );
+  });
+
+  it("does not duplicate generated image media when the assistant reply has MEDIA lines", async () => {
+    const onToolResult = vi.fn();
+    const onBlockReply = vi.fn();
+    const { emit } = createSubscribedHarness({
+      runId: "run",
+      onToolResult,
+      onBlockReply,
+      verboseLevel: "full",
+      blockReplyBreak: "message_end",
+      builtinToolNames: new Set(["image_generate"]),
+    });
+
+    emitToolRun({
+      emit,
+      toolName: "image_generate",
+      toolCallId: "tool-1",
+      isError: false,
+      result: {
+        content: [
+          {
+            type: "text",
+            text: "Generated 1 image with google/gemini-3.1-flash-image-preview.\nMEDIA:/tmp/generated.png",
+          },
+        ],
+        details: {
+          media: {
+            mediaUrls: ["/tmp/generated.png"],
+          },
+        },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(onToolResult).toHaveBeenCalled();
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "Here is the selected image.\nMEDIA:./selected.png");
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Here is the selected image.\nMEDIA:./selected.png" }],
+      },
+    });
+    await flushBlockReplyCallbacks();
+
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Here is the selected image.",
+        mediaUrls: ["./selected.png"],
+      }),
+    );
+  });
+
+  it("attaches media from internal completion events even when assistant omits MEDIA lines", async () => {
+    const onBlockReply = vi.fn();
+    const { emit } = createSubscribedHarness({
+      runId: "run",
+      onBlockReply,
+      blockReplyBreak: "message_end",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "music_generation",
+          childSessionKey: "music_generate:task-123",
+          announceType: "music generation task",
+          taskLabel: "lobster boss theme",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 track.\nMEDIA:/tmp/lobster-boss.mp3",
+          mediaUrls: ["/tmp/lobster-boss.mp3"],
+          replyInstruction: "Reply normally.",
+        },
+      ],
+    });
+
+    emit({
+      type: "message_start",
+      message: { role: "assistant" },
+    });
+    emitAssistantTextDelta(emit, "Here it is.");
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Here it is." }],
+      },
+    });
+    emit({ type: "agent_end" });
+    await flushBlockReplyCallbacks();
+
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Here it is.",
+        mediaUrls: ["/tmp/lobster-boss.mp3"],
+      }),
+    );
+  });
+
+  it("keeps orphaned tool media available for non-block final payload assembly", () => {
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run",
+      builtinToolNames: new Set(["tts"]),
+    });
+
+    emit({
+      type: "tool_execution_end",
+      toolName: "tts",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        details: {
+          media: {
+            mediaUrl: "/tmp/reply.opus",
+            audioAsVoice: true,
+          },
+        },
+      },
+    });
+    emit({ type: "agent_end" });
+
+    expect(subscription.getPendingToolMediaReply()).toEqual({
+      mediaUrls: ["/tmp/reply.opus"],
+      audioAsVoice: true,
+    });
+  });
+
   it.each(THINKING_TAG_CASES)(
     "suppresses <%s> blocks across chunk boundaries",
     async ({ open, close }) => {
@@ -286,6 +630,18 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(payloads[1]?.delta).toBe(" world");
   });
 
+  it("drops malformed streamed reasoning before orphan close tags when final text follows", () => {
+    const { emit, onAgentEvent } = createAgentEventHarness();
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "private chain of thought </think> Visible answer");
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Visible answer");
+    expect(payloads[0]?.delta).toBe("Visible answer");
+  });
+
   it("emits agent events on message_end for non-streaming assistant text", () => {
     const { session, emit } = createStubSessionHarness();
 
@@ -316,7 +672,7 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(payloads).toHaveLength(1);
   });
 
-  it("skips agent events when cleaned text rewinds mid-stream", () => {
+  it("emits one cleaned media snapshot when a streamed MEDIA line resolves to caption text", () => {
     const { emit, onAgentEvent } = createAgentEventHarness();
 
     emit({ type: "message_start", message: { role: "assistant" } });
@@ -325,14 +681,25 @@ describe("subscribeEmbeddedPiSession", () => {
 
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
     expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.text).toBe("MEDIA:");
+    expect(payloads[0]?.text).toBe("Caption");
+    expect(payloads[0]?.delta).toBe("Caption");
+    expect(payloads[0]?.replace).toBeUndefined();
+    expect(payloads[0]?.mediaUrls).toEqual(["https://example.com/a.png"]);
   });
 
-  it("emits agent events when media arrives without text", () => {
+  it("emits agent events when media-only text is finalized", () => {
     const { emit, onAgentEvent } = createAgentEventHarness();
 
     emit({ type: "message_start", message: { role: "assistant" } });
     emitAssistantTextDelta(emit, "MEDIA: https://example.com/a.png");
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_end",
+        content: "MEDIA: https://example.com/a.png",
+      },
+    });
 
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
     expect(payloads).toHaveLength(1);
@@ -442,5 +809,77 @@ describe("subscribeEmbeddedPiSession", () => {
 
     expect(lifecycleError).toBeDefined();
     expect(lifecycleError?.data?.error).toContain("API rate limit reached");
+  });
+
+  it("preserves replay-invalid lifecycle truth across compaction retries after mutating tools", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+
+    const subscription = subscribeEmbeddedPiSession({
+      session,
+      runId: "run-replay-invalid-compaction",
+      onAgentEvent,
+      sessionKey: "test-session",
+    });
+
+    emitToolRun({
+      emit,
+      toolName: "edit",
+      toolCallId: "edit-1",
+      args: {
+        file_path: "/tmp/demo.txt",
+        old_string: "before",
+        new_string: "after",
+      },
+      isError: false,
+      result: { ok: true },
+    });
+    emit({ type: "compaction_end", willRetry: true, result: { summary: "compacted" } });
+    emit({ type: "agent_end" });
+
+    expect(subscription.getReplayState()).toEqual({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toContainEqual(
+      expect.objectContaining({
+        phase: "end",
+        livenessState: "abandoned",
+        replayInvalid: true,
+      }),
+    );
+  });
+
+  it("preserves deterministic side-effect liveness across compaction retries", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run-cron-side-effect-compaction",
+      onAgentEvent,
+      sessionKey: "test-session",
+    });
+
+    emitToolRun({
+      emit,
+      toolName: "cron",
+      toolCallId: "cron-1",
+      args: { action: "add", job: { name: "reminder" } },
+      isError: false,
+      result: { details: { status: "ok" } },
+    });
+    emit({ type: "compaction_end", willRetry: true, result: { summary: "compacted" } });
+    emit({ type: "agent_end" });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toContainEqual(
+      expect.objectContaining({
+        phase: "end",
+        livenessState: "working",
+        replayInvalid: true,
+      }),
+    );
   });
 });

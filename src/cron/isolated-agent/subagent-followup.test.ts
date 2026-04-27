@@ -5,27 +5,33 @@ vi.hoisted(() => {
   process.env.OPENCLAW_TEST_FAST = "1";
 });
 
+import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 import {
-  expectsSubagentFollowup,
-  isLikelyInterimCronMessage,
   readDescendantSubagentFallbackReply,
   waitForDescendantSubagentSummary,
 } from "./subagent-followup.js";
 
-vi.mock("../../agents/subagent-registry.js", () => ({
+vi.mock("../../agents/subagent-registry-read.js", () => ({
   listDescendantRunsForRequester: vi.fn().mockReturnValue([]),
 }));
 
-vi.mock("../../agents/tools/agent-step.js", () => ({
-  readLatestAssistantReply: vi.fn().mockResolvedValue(undefined),
-}));
+vi.mock("../../agents/run-wait.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/run-wait.js")>(
+    "../../agents/run-wait.js",
+  );
+  return {
+    ...actual,
+    readLatestAssistantReply: vi.fn().mockResolvedValue(undefined),
+  };
+});
 
 vi.mock("../../gateway/call.js", () => ({
   callGateway: vi.fn().mockResolvedValue({ status: "ok" }),
 }));
 
-const { listDescendantRunsForRequester } = await import("../../agents/subagent-registry.js");
-const { readLatestAssistantReply } = await import("../../agents/tools/agent-step.js");
+const { listDescendantRunsForRequester } = await import("../../agents/subagent-registry-read.js");
+const { __testing: runWaitTesting, readLatestAssistantReply } =
+  await import("../../agents/run-wait.js");
 const { callGateway } = await import("../../gateway/call.js");
 
 async function resolveAfterAdvancingTimers<T>(promise: Promise<T>, advanceMs = 100): Promise<T> {
@@ -232,10 +238,14 @@ describe("waitForDescendantSubagentSummary", () => {
     vi.mocked(listDescendantRunsForRequester).mockReturnValue([]);
     vi.mocked(readLatestAssistantReply).mockResolvedValue(undefined);
     vi.mocked(callGateway).mockResolvedValue({ status: "ok" });
+    runWaitTesting.setDepsForTest({
+      callGateway: ((opts) => vi.mocked(callGateway)(opts as never)) as typeof callGateway,
+    });
   });
 
   afterEach(() => {
     vi.useRealTimers();
+    runWaitTesting.setDepsForTest();
   });
 
   it("returns initialReply immediately when no active descendants and observedActiveDescendants=false", async () => {

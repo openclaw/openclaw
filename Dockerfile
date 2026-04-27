@@ -9,29 +9,26 @@
 # bundled plugin workspace tree, so the main build layer is not invalidated by
 # unrelated plugin source changes.
 #
-# Two runtime variants:
-#   Default (bookworm):      docker build .
-#   Slim (bookworm-slim):    docker build --build-arg OPENCLAW_VARIANT=slim .
+# Build stages use full bookworm; the runtime image is always bookworm-slim.
 ARG OPENCLAW_EXTENSIONS=""
-ARG OPENCLAW_VARIANT=default
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR=extensions
-ARG OPENCLAW_DOCKER_APT_UPGRADE=1
 ARG OPENCLAW_NODE_BOOKWORM_IMAGE="node:24-bookworm@sha256:3a09aa6354567619221ef6c45a5051b671f953f0a1924d1f819ffb236e520e6b"
-ARG OPENCLAW_NODE_BOOKWORM_DIGEST="sha256:3a09aa6354567619221ef6c45a5051b671f953f0a1924d1f819ffb236e520e6b"
 ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="node:24-bookworm-slim@sha256:e8e2e91b1378f83c5b2dd15f0247f34110e2fe895f6ca7719dbb780f929368eb"
 ARG OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST="sha256:e8e2e91b1378f83c5b2dd15f0247f34110e2fe895f6ca7719dbb780f929368eb"
 
 # Base images are pinned to SHA256 digests for reproducible builds.
-# Trade-off: digests must be updated manually when upstream tags move.
-# To update, run: docker buildx imagetools inspect node:24-bookworm (or podman)
-# and replace the digest below with the current multi-arch manifest list entry.
+# Dependabot refreshes these blessed digests; release builds consume the
+# reviewed base snapshot instead of mutating distro state on every build.
+# To update, run: docker buildx imagetools inspect node:24-bookworm and
+# node:24-bookworm-slim (or podman) and replace the digests below with the
+# current multi-arch manifest list entries.
 
 FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS ext-deps
 ARG OPENCLAW_EXTENSIONS
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
-COPY ${OPENCLAW_BUNDLED_PLUGIN_DIR} /tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}
 # Copy package.json for opted-in extensions so pnpm resolves their deps.
-RUN mkdir -p /out && \
+RUN --mount=type=bind,source=${OPENCLAW_BUNDLED_PLUGIN_DIR},target=/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR},readonly \
+    mkdir -p /out && \
     for ext in $OPENCLAW_EXTENSIONS; do \
       if [ -f "/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext/package.json" ]; then \
         mkdir -p "/out/$ext" && \
@@ -62,9 +59,10 @@ RUN corepack enable
 WORKDIR /app
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+COPY openclaw.mjs ./
 COPY ui/package.json ./ui/package.json
 COPY patches ./patches
-COPY scripts/postinstall-bundled-plugins.mjs ./scripts/postinstall-bundled-plugins.mjs
+COPY scripts/postinstall-bundled-plugins.mjs scripts/preinstall-package-manager-warning.mjs scripts/npm-runner.mjs scripts/windows-cmd-helpers.mjs ./scripts/
 
 COPY --from=ext-deps /out/ ./${OPENCLAW_BUNDLED_PLUGIN_DIR}/
 
@@ -72,6 +70,22 @@ COPY --from=ext-deps /out/ ./${OPENCLAW_BUNDLED_PLUGIN_DIR}/
 # Docker builds on small VMs may otherwise fail with "Killed" (exit 137).
 RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
     NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile
+
+# pnpm v10+ may append peer-resolution hashes to virtual-store folder names; do not hardcode `.pnpm/...`
+# paths. Matrix's native downloader can hit transient release CDN errors while
+# still exiting successfully, so retry the package downloader before failing.
+RUN set -eux; \
+    echo "==> Verifying critical native addons..."; \
+    for attempt in 1 2 3 4 5; do \
+      if find /app/node_modules -name "matrix-sdk-crypto*.node" 2>/dev/null | grep -q .; then \
+        exit 0; \
+      fi; \
+      echo "matrix-sdk-crypto native addon missing; retrying download (${attempt}/5)"; \
+      node /app/node_modules/@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js || true; \
+      sleep $((attempt * 2)); \
+    done; \
+    find /app/node_modules -name "matrix-sdk-crypto*.node" 2>/dev/null | grep -q . || \
+      (echo "ERROR: matrix-sdk-crypto native addon missing after retries" >&2 && exit 1)
 
 COPY . .
 
@@ -97,29 +111,36 @@ RUN pnpm build:docker
 # Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
 ENV OPENCLAW_PREFER_PNPM=1
 RUN pnpm ui:build
+RUN pnpm qa:lab:build
 
 # Prune dev dependencies and strip build-only metadata before copying
 # runtime assets into the final image.
 FROM build AS runtime-assets
-RUN CI=true pnpm prune --prod && \
+ARG OPENCLAW_EXTENSIONS
+ARG OPENCLAW_BUNDLED_PLUGIN_DIR
+# Keep the install layer frozen, but allow prune to run against the full copied
+# workspace tree subset used during `pnpm install`. The build stage only copied
+# the root, `ui`, and opted-in plugin manifests into the install layer, so
+# prune must not rediscover unrelated workspaces from the later full source
+# copy.
+RUN printf 'packages:\n  - .\n  - ui\n' > /tmp/pnpm-workspace.runtime.yaml && \
+    for ext in $OPENCLAW_EXTENSIONS; do \
+      printf '  - %s/%s\n' "$OPENCLAW_BUNDLED_PLUGIN_DIR" "$ext" >> /tmp/pnpm-workspace.runtime.yaml; \
+    done && \
+    cp /tmp/pnpm-workspace.runtime.yaml pnpm-workspace.yaml && \
+    CI=true NPM_CONFIG_FROZEN_LOCKFILE=false pnpm prune --prod && \
+    node scripts/postinstall-bundled-plugins.mjs && \
     find dist -type f \( -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -name '*.map' \) -delete
 
-# ── Runtime base images ─────────────────────────────────────────
-FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS base-default
-ARG OPENCLAW_NODE_BOOKWORM_DIGEST
-LABEL org.opencontainers.image.base.name="docker.io/library/node:24-bookworm" \
-  org.opencontainers.image.base.digest="${OPENCLAW_NODE_BOOKWORM_DIGEST}"
-
-FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-slim
+# ── Runtime base image ──────────────────────────────────────────
+FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-runtime
 ARG OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST
 LABEL org.opencontainers.image.base.name="docker.io/library/node:24-bookworm-slim" \
   org.opencontainers.image.base.digest="${OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST}"
 
 # ── Stage 3: Runtime ────────────────────────────────────────────
-FROM base-${OPENCLAW_VARIANT}
-ARG OPENCLAW_VARIANT
+FROM base-runtime
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
-ARG OPENCLAW_DOCKER_APT_UPGRADE
 
 # OCI base-image metadata for downstream image consumers.
 # If you change these annotations, also update:
@@ -134,32 +155,25 @@ LABEL org.opencontainers.image.source="https://github.com/openclaw/openclaw" \
 
 WORKDIR /app
 
-# Install system utilities present in bookworm but missing in bookworm-slim.
-# On the full bookworm image these are already installed (apt-get is a no-op).
-# Smoke workflows can opt out of distro upgrades to cut repeated CI time while
-# keeping the default runtime image behavior unchanged.
+# Install runtime system utilities missing from bookworm-slim.
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
     apt-get update && \
-    if [ "${OPENCLAW_DOCKER_APT_UPGRADE}" != "0" ]; then \
-      DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends; \
-    fi && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      procps hostname curl git lsof openssl
+      ca-certificates procps hostname curl git lsof openssl && \
+    update-ca-certificates
 
 RUN chown node:node /app
 
 COPY --from=runtime-assets --chown=node:node /app/dist ./dist
 COPY --from=runtime-assets --chown=node:node /app/node_modules ./node_modules
 COPY --from=runtime-assets --chown=node:node /app/package.json .
+COPY --from=runtime-assets --chown=node:node /app/patches ./patches
 COPY --from=runtime-assets --chown=node:node /app/openclaw.mjs .
 COPY --from=runtime-assets --chown=node:node /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} ./${OPENCLAW_BUNDLED_PLUGIN_DIR}
 COPY --from=runtime-assets --chown=node:node /app/skills ./skills
 COPY --from=runtime-assets --chown=node:node /app/docs ./docs
-
-# In npm-installed Docker images, prefer the copied source extension tree for
-# bundled discovery so package metadata that points at source entries stays valid.
-ENV OPENCLAW_BUNDLED_PLUGINS_DIR=/app/${OPENCLAW_BUNDLED_PLUGIN_DIR}
+COPY --from=runtime-assets --chown=node:node /app/qa ./qa
 
 # Keep pnpm available in the runtime image for container-local workflows.
 # Use a shared Corepack home so the non-root `node` user does not need a
@@ -239,6 +253,11 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
 # Expose the CLI binary without requiring npm global writes as non-root.
 RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
  && chmod 755 /app/openclaw.mjs
+
+# Pre-create the default state dir so first-run Docker named volumes mounted
+# here inherit node ownership instead of starting as root-owned state.
+RUN install -d -m 0700 -o node -g node /home/node/.openclaw && \
+    stat -c '%U:%G %a' /home/node/.openclaw | grep -qx 'node:node 700'
 
 ENV NODE_ENV=production
 

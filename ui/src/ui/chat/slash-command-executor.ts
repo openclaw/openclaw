@@ -4,23 +4,30 @@
  */
 
 import {
-  formatThinkingLevels,
-  normalizeThinkLevel,
-  normalizeVerboseLevel,
-  resolveThinkingDefaultForModel,
-} from "../../../../src/auto-reply/thinking.shared.js";
+  createChatModelOverride,
+  resolvePreferredServerChatModelValue,
+} from "../chat-model-ref.ts";
+import type { GatewayBrowserClient } from "../gateway.ts";
 import {
   DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
   isSubagentSessionKey,
   parseAgentSessionKey,
-} from "../../../../src/routing/session-key.js";
-import { createChatModelOverride, resolvePreferredServerChatModel } from "../chat-model-ref.ts";
-import type { GatewayBrowserClient } from "../gateway.ts";
+} from "../session-key.ts";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../string-coerce.ts";
+import {
+  formatThinkingLevels,
+  normalizeThinkLevel,
+  resolveThinkingDefaultForModel,
+} from "../thinking.ts";
 import type {
   AgentsListResult,
   ChatModelOverride,
   GatewaySessionRow,
+  GatewayThinkingLevelOption,
   ModelCatalogEntry,
   SessionsListResult,
   SessionsPatchResult,
@@ -56,6 +63,24 @@ export type SlashCommandContext = {
   modelCatalog?: ModelCatalogEntry[];
   sessionsResult?: SessionsListResult | null;
 };
+
+function normalizeVerboseLevel(raw?: string | null): "off" | "on" | "full" | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const key = normalizeLowercaseStringOrEmpty(raw);
+  if (["off", "false", "no", "0"].includes(key)) {
+    return "off";
+  }
+  if (["full", "all", "everything"].includes(key)) {
+    return "full";
+  }
+  if (["on", "minimal", "true", "yes", "1"].includes(key)) {
+    return "on";
+  }
+  return undefined;
+}
+
 export async function executeSlashCommand(
   client: GatewayBrowserClient,
   sessionKey: string,
@@ -129,8 +154,24 @@ async function executeCompact(
   sessionKey: string,
 ): Promise<SlashCommandResult> {
   try {
-    await client.request("sessions.compact", { key: sessionKey });
-    return { content: "Context compacted successfully.", action: "refresh" };
+    const result = await client.request<{
+      compacted?: boolean;
+      reason?: string;
+      result?: { tokensBefore?: number; tokensAfter?: number };
+    }>("sessions.compact", { key: sessionKey });
+    if (result?.compacted) {
+      const before = result.result?.tokensBefore;
+      const after = result.result?.tokensAfter;
+      const tokenSummary =
+        typeof before === "number" && typeof after === "number"
+          ? ` (${before.toLocaleString()} -> ${after.toLocaleString()} tokens)`
+          : "";
+      return { content: `Context compacted successfully${tokenSummary}.`, action: "refresh" };
+    }
+    if (typeof result?.reason === "string" && result.reason.trim()) {
+      return { content: `Compaction skipped: ${result.reason}`, action: "refresh" };
+    }
+    return { content: "Compaction skipped.", action: "refresh" };
   } catch (err) {
     return { content: `Compaction failed: ${String(err)}` };
   }
@@ -168,22 +209,35 @@ async function executeModel(
   }
 
   try {
+    const requestedModel = args.trim();
     const [patched, resolvedModelCatalog] = await Promise.all([
       client.request<SessionsPatchResult>("sessions.patch", {
         key: sessionKey,
-        model: args.trim(),
+        model: requestedModel,
       }),
       modelCatalog
         ? Promise.resolve(modelCatalog)
         : loadModelCatalog(client, { allowFailure: true }),
     ]);
-    const resolvedValue = resolvePreferredServerChatModel(
-      patched.resolved?.model ?? args.trim(),
+    const resolvedModel = patched.resolved?.model ?? requestedModel;
+    let resolvedValue = resolvePreferredServerChatModelValue(
+      resolvedModel,
       patched.resolved?.modelProvider,
       resolvedModelCatalog,
-    ).value;
+    );
+    const requestedOverride = createChatModelOverride(requestedModel);
+    const resolvedProvider = patched.resolved?.modelProvider?.trim();
+    if (
+      requestedOverride?.kind === "qualified" &&
+      resolvedProvider &&
+      resolvedValue &&
+      !resolvedValue.toLowerCase().startsWith(`${resolvedProvider.toLowerCase()}/`) &&
+      requestedOverride.value.toLowerCase().endsWith(`/${resolvedModel.trim().toLowerCase()}`)
+    ) {
+      resolvedValue = requestedOverride.value;
+    }
     return {
-      content: `Model set to \`${args.trim()}\`.`,
+      content: `Model set to \`${requestedModel}\`.`,
       action: "refresh",
       sessionPatch: { modelOverride: createChatModelOverride(resolvedValue) },
     };
@@ -201,11 +255,11 @@ async function executeThink(
 
   if (!rawLevel) {
     try {
-      const { session, models } = await loadThinkingCommandState(client, sessionKey);
+      const { session, defaults, models } = await loadThinkingCommandState(client, sessionKey);
       return {
         content: formatDirectiveOptions(
-          `Current thinking level: ${resolveCurrentThinkingLevel(session, models)}.`,
-          formatThinkingLevels(session?.modelProvider, session?.model),
+          `Current thinking level: ${resolveCurrentThinkingLevel(session, defaults, models)}.`,
+          formatThinkingOptionsForSession(session, defaults),
         ),
       };
     } catch (err) {
@@ -213,19 +267,19 @@ async function executeThink(
     }
   }
 
-  const level = normalizeThinkLevel(rawLevel);
-  if (!level) {
-    try {
-      const session = await loadCurrentSession(client, sessionKey);
-      return {
-        content: `Unrecognized thinking level "${rawLevel}". Valid levels: ${formatThinkingLevels(session?.modelProvider, session?.model)}.`,
-      };
-    } catch (err) {
-      return { content: `Failed to validate thinking level: ${String(err)}` };
-    }
-  }
-
   try {
+    const { session, defaults } = await loadCurrentSessionState(client, sessionKey);
+    const level = resolveThinkingLevelInput(rawLevel, session, defaults);
+    if (!level) {
+      return {
+        content: `Unrecognized thinking level "${rawLevel}". Valid levels: ${formatThinkingOptionsForSession(session, defaults)}.`,
+      };
+    }
+    if (!isThinkingLevelOptionForSession(session, defaults, level)) {
+      return {
+        content: `Unsupported thinking level "${rawLevel}" for this model. Valid levels: ${formatThinkingOptionsForSession(session, defaults)}.`,
+      };
+    }
     await client.request("sessions.patch", { key: sessionKey, thinkingLevel: level });
     return {
       content: `Thinking level set to **${level}**.`,
@@ -280,7 +334,7 @@ async function executeFast(
   sessionKey: string,
   args: string,
 ): Promise<SlashCommandResult> {
-  const rawMode = args.trim().toLowerCase();
+  const rawMode = normalizeLowercaseStringOrEmpty(args);
 
   if (!rawMode || rawMode === "status") {
     try {
@@ -323,17 +377,30 @@ async function executeUsage(
     if (!session) {
       return { content: "No active session." };
     }
-    const input = session.inputTokens ?? 0;
-    const output = session.outputTokens ?? 0;
-    const total = session.totalTokens ?? input + output;
+    const hasInputTokens = Number.isFinite(session.inputTokens);
+    const hasOutputTokens = Number.isFinite(session.outputTokens);
+    const input = hasInputTokens ? (session.inputTokens ?? 0) : 0;
+    const output = hasOutputTokens ? (session.outputTokens ?? 0) : 0;
+    const cumulativeTotal = hasInputTokens || hasOutputTokens ? input + output : null;
+    const contextSnapshotTotal = Number.isFinite(session.totalTokens)
+      ? (session.totalTokens ?? null)
+      : cumulativeTotal;
+    const totalTokensFresh = session.totalTokensFresh !== false;
     const ctx = session.contextTokens ?? 0;
-    const pct = ctx > 0 ? Math.round((input / ctx) * 100) : null;
+    const pct =
+      contextSnapshotTotal !== null && totalTokensFresh && ctx > 0
+        ? Math.round((contextSnapshotTotal / ctx) * 100)
+        : null;
+    const totalDisplay =
+      cumulativeTotal === null
+        ? "n/a"
+        : `${totalTokensFresh ? "" : "~"}${fmtTokens(cumulativeTotal)}`;
 
     const lines = [
       "**Session Usage**",
       `Input: **${fmtTokens(input)}** tokens`,
       `Output: **${fmtTokens(output)}** tokens`,
-      `Total: **${fmtTokens(total)}** tokens`,
+      `Total: **${totalDisplay}** tokens`,
     ];
     if (pct !== null) {
       lines.push(`Context: **${pct}%** of ${fmtTokens(ctx)}`);
@@ -373,6 +440,7 @@ async function executeKill(
   args: string,
 ): Promise<SlashCommandResult> {
   const target = args.trim();
+  const normalizedTarget = normalizeLowercaseStringOrEmpty(target);
   if (!target) {
     return { content: "Usage: `/kill <id|all>`" };
   }
@@ -382,7 +450,7 @@ async function executeKill(
     if (matched.length === 0) {
       return {
         content:
-          target.toLowerCase() === "all"
+          normalizedTarget === "all"
             ? "No active sub-agent sessions found."
             : `No matching sub-agent sessions found for \`${target}\`.`,
       };
@@ -402,7 +470,7 @@ async function executeKill(
       if (rejected.length === 0) {
         return {
           content:
-            target.toLowerCase() === "all"
+            normalizedTarget === "all"
               ? "No active sub-agent runs to abort."
               : `No active runs matched \`${target}\`.`,
         };
@@ -410,7 +478,7 @@ async function executeKill(
       throw rejected[0]?.reason ?? new Error("abort failed");
     }
 
-    if (target.toLowerCase() === "all") {
+    if (normalizedTarget === "all") {
       return {
         content:
           successCount === matched.length
@@ -435,13 +503,13 @@ function resolveKillTargets(
   currentSessionKey: string,
   target: string,
 ): string[] {
-  const normalizedTarget = target.trim().toLowerCase();
+  const normalizedTarget = normalizeLowercaseStringOrEmpty(target);
   if (!normalizedTarget) {
     return [];
   }
 
   const keys = new Set<string>();
-  const normalizedCurrentSessionKey = currentSessionKey.trim().toLowerCase();
+  const normalizedCurrentSessionKey = normalizeLowercaseStringOrEmpty(currentSessionKey);
   const currentParsed = parseAgentSessionKey(normalizedCurrentSessionKey);
   const currentAgentId =
     currentParsed?.agentId ??
@@ -452,7 +520,7 @@ function resolveKillTargets(
     if (!key || !isSubagentSessionKey(key)) {
       continue;
     }
-    const normalizedKey = key.toLowerCase();
+    const normalizedKey = normalizeLowercaseStringOrEmpty(key);
     const parsed = parseAgentSessionKey(normalizedKey);
     const belongsToCurrentSession = isWithinCurrentSessionSubtree(
       normalizedKey,
@@ -517,8 +585,7 @@ function buildSessionIndex(sessions: GatewaySessionRow[]): Map<string, GatewaySe
 }
 
 function normalizeSessionKey(key?: string | null): string | undefined {
-  const normalized = key?.trim().toLowerCase();
-  return normalized || undefined;
+  return normalizeOptionalLowercaseString(key);
 }
 
 function resolveEquivalentSessionKeys(
@@ -541,12 +608,87 @@ function formatDirectiveOptions(text: string, options: string): string {
   return `${text}\nOptions: ${options}.`;
 }
 
+function formatThinkingOptionsForSession(
+  session: GatewaySessionRow | undefined,
+  defaults?: SessionsListResult["defaults"],
+  separator = ", ",
+): string {
+  return resolveThinkingLevelOptionsForSession(session, defaults)
+    .map((level) => level.label)
+    .join(separator);
+}
+
+function resolveThinkingLevelInput(
+  rawLevel: string,
+  session: GatewaySessionRow | undefined,
+  defaults: SessionsListResult["defaults"] | undefined,
+): string | undefined {
+  const normalized = normalizeThinkLevel(rawLevel);
+  if (normalized) {
+    return normalized;
+  }
+  const rawKey = normalizeLowercaseStringOrEmpty(rawLevel);
+  return resolveThinkingLevelOptionsForSession(session, defaults)
+    .map((option) => ({
+      id: normalizeThinkLevel(option.id) ?? normalizeLowercaseStringOrEmpty(option.id),
+      label: normalizeLowercaseStringOrEmpty(option.label),
+    }))
+    .find((option) => option.id === rawKey || option.label === rawKey)?.id;
+}
+
+function isThinkingLevelOptionForSession(
+  session: GatewaySessionRow | undefined,
+  defaults: SessionsListResult["defaults"] | undefined,
+  level: string,
+): boolean {
+  return resolveThinkingLevelOptionsForSession(session, defaults).some((option) => {
+    const id = normalizeThinkLevel(option.id) ?? normalizeLowercaseStringOrEmpty(option.id);
+    return id === level || normalizeThinkLevel(option.label) === level;
+  });
+}
+
+function resolveThinkingLevelOptionsForSession(
+  session: GatewaySessionRow | undefined,
+  defaults: SessionsListResult["defaults"] | undefined,
+): GatewayThinkingLevelOption[] {
+  if (session?.thinkingLevels?.length) {
+    return session.thinkingLevels;
+  }
+  if (defaults?.thinkingLevels?.length) {
+    return defaults.thinkingLevels;
+  }
+  const labels =
+    session?.thinkingOptions?.length || defaults?.thinkingOptions?.length
+      ? (session?.thinkingOptions ?? defaults?.thinkingOptions ?? [])
+      : formatThinkingLevels(
+          session?.modelProvider ?? defaults?.modelProvider,
+          session?.model ?? defaults?.model,
+        ).split(/\s*,\s*/);
+  return labels.filter(Boolean).map((label) => ({
+    id: normalizeThinkLevel(label) ?? normalizeLowercaseStringOrEmpty(label),
+    label,
+  }));
+}
+
 async function loadCurrentSession(
   client: GatewayBrowserClient,
   sessionKey: string,
 ): Promise<GatewaySessionRow | undefined> {
+  return (await loadCurrentSessionState(client, sessionKey)).session;
+}
+
+async function loadCurrentSessionState(
+  client: GatewayBrowserClient,
+  sessionKey: string,
+): Promise<{
+  session: GatewaySessionRow | undefined;
+  defaults: SessionsListResult["defaults"] | undefined;
+}> {
   const sessions = await client.request<SessionsListResult>("sessions.list", {});
-  return resolveCurrentSession(sessions, sessionKey);
+  return {
+    session: resolveCurrentSession(sessions, sessionKey),
+    defaults: sessions?.defaults,
+  };
 }
 
 function resolveCurrentSession(
@@ -573,6 +715,7 @@ async function loadThinkingCommandState(client: GatewayBrowserClient, sessionKey
   ]);
   return {
     session: resolveCurrentSession(sessions, sessionKey),
+    defaults: sessions?.defaults,
     models,
   };
 }
@@ -594,18 +737,31 @@ async function loadModelCatalog(
 
 function resolveCurrentThinkingLevel(
   session: GatewaySessionRow | undefined,
+  defaults: SessionsListResult["defaults"] | undefined,
   models: ModelCatalogEntry[],
 ): string {
   const persisted = normalizeThinkLevel(session?.thinkingLevel);
   if (persisted) {
-    return persisted;
+    return (
+      resolveThinkingLevelOptionsForSession(session, defaults).find(
+        (level) => normalizeThinkLevel(level.id) === persisted,
+      )?.label ?? persisted
+    );
   }
-  if (!session?.modelProvider || !session.model) {
+  if (session?.thinkingDefault) {
+    return session.thinkingDefault;
+  }
+  if (defaults?.thinkingDefault) {
+    return defaults.thinkingDefault;
+  }
+  const provider = session?.modelProvider ?? defaults?.modelProvider;
+  const model = session?.model ?? defaults?.model;
+  if (!provider || !model) {
     return "off";
   }
   return resolveThinkingDefaultForModel({
-    provider: session.modelProvider,
-    model: session.model,
+    provider,
+    model,
     catalog: models,
   });
 }
@@ -625,11 +781,11 @@ function resolveSteerSubagent(
   currentSessionKey: string,
   target: string,
 ): string[] {
-  const normalizedTarget = target.trim().toLowerCase();
+  const normalizedTarget = normalizeLowercaseStringOrEmpty(target);
   if (!normalizedTarget) {
     return [];
   }
-  const normalizedCurrentSessionKey = currentSessionKey.trim().toLowerCase();
+  const normalizedCurrentSessionKey = normalizeLowercaseStringOrEmpty(currentSessionKey);
   const currentParsed = parseAgentSessionKey(normalizedCurrentSessionKey);
   const currentAgentId =
     currentParsed?.agentId ??
@@ -642,7 +798,7 @@ function resolveSteerSubagent(
     if (!key || !isSubagentSessionKey(key)) {
       continue;
     }
-    const normalizedKey = key.toLowerCase();
+    const normalizedKey = normalizeLowercaseStringOrEmpty(key);
     const parsed = parseAgentSessionKey(normalizedKey);
     const belongsToCurrentSession = isWithinCurrentSessionSubtree(
       normalizedKey,
@@ -659,7 +815,7 @@ function resolveSteerSubagent(
       normalizedKey === normalizedTarget ||
       normalizedKey.endsWith(`:subagent:${normalizedTarget}`) ||
       normalizedKey === `subagent:${normalizedTarget}` ||
-      (session.label ?? "").toLowerCase() === normalizedTarget;
+      normalizeLowercaseStringOrEmpty(session.label) === normalizedTarget;
     if (isMatch) {
       keys.add(key);
     }
@@ -690,14 +846,16 @@ async function resolveSteerTarget(
     return { error: "empty" };
   }
   const spaceIdx = trimmed.indexOf(" ");
+  let resolvedSessions: SessionsListResult | undefined;
   if (spaceIdx > 0) {
     const maybeTarget = trimmed.slice(0, spaceIdx);
     const rest = trimmed.slice(spaceIdx + 1).trim();
     // Skip "all" — resolveKillTargets treats it as a wildcard, but steer/redirect
     // target a single session, so "all good now" should not match subagents.
-    if (rest && maybeTarget.toLowerCase() !== "all") {
+    if (rest && normalizeLowercaseStringOrEmpty(maybeTarget) !== "all") {
       const sessions =
         context.sessionsResult ?? (await client.request<SessionsListResult>("sessions.list", {}));
+      resolvedSessions = sessions;
       const matched = resolveSteerSubagent(sessions?.sessions ?? [], sessionKey, maybeTarget);
       if (matched.length === 1) {
         return { key: matched[0], message: rest, label: maybeTarget, sessions };
@@ -707,7 +865,11 @@ async function resolveSteerTarget(
       }
     }
   }
-  return { key: sessionKey, message: trimmed };
+  return {
+    key: sessionKey,
+    message: trimmed,
+    sessions: resolvedSessions ?? context.sessionsResult ?? undefined,
+  };
 }
 
 function isActiveSteerSession(session: GatewaySessionRow | undefined): boolean {

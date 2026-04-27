@@ -369,6 +369,49 @@ describe("resolveMemoryFlushContextWindowTokens", () => {
   it("falls back to agent config or default tokens", () => {
     expect(resolveMemoryFlushContextWindowTokens({ agentCfgContextTokens: 42_000 })).toBe(42_000);
   });
+
+  it("uses provider-specific configured limits when the same model id exists on multiple providers", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "provider-a": { models: [{ id: "shared-model", contextWindow: 200_000 }] },
+          "provider-b": { models: [{ id: "shared-model", contextWindow: 512_000 }] },
+        },
+      },
+    };
+    expect(
+      resolveMemoryFlushContextWindowTokens({
+        cfg: cfg as never,
+        provider: "provider-b",
+        modelId: "shared-model",
+      }),
+    ).toBe(512_000);
+    expect(
+      resolveMemoryFlushContextWindowTokens({
+        cfg: cfg as never,
+        provider: "provider-a",
+        modelId: "shared-model",
+      }),
+    ).toBe(200_000);
+  });
+
+  it("prefers agent contextTokens override over the provider configured window", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "provider-b": { models: [{ id: "shared-model", contextWindow: 512_000 }] },
+        },
+      },
+    };
+    expect(
+      resolveMemoryFlushContextWindowTokens({
+        cfg: cfg as never,
+        provider: "provider-b",
+        modelId: "shared-model",
+        agentCfgContextTokens: 100_000,
+      }),
+    ).toBe(100_000);
+  });
 });
 
 describe("incrementCompactionCount", () => {
@@ -437,14 +480,14 @@ describe("incrementCompactionCount", () => {
     );
   });
 
-  it("falls back to the derived transcript path when rewritten absolute sessionFile is unsafe", async () => {
+  it("keeps rewritten absolute sessionFile paths that stay inside the sessions directory", async () => {
     const { stored, sessionKey, expectedDir } = await rotateCompactionSessionFile({
       tempPrefix: "openclaw-compact-unsafe-",
       sessionFile: (tmp) => path.join(tmp, "outside", "s1.jsonl"),
       newSessionId: "s2",
     });
     expect(stored[sessionKey].sessionId).toBe("s2");
-    expect(stored[sessionKey].sessionFile).toBe(path.join(expectedDir, "s2.jsonl"));
+    expect(stored[sessionKey].sessionFile).toBe(path.join(expectedDir, "outside", "s2.jsonl"));
   });
 
   it("increments compaction count by an explicit amount", async () => {
@@ -510,6 +553,31 @@ describe("incrementCompactionCount", () => {
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].sessionId).toBe("same-id");
     expect(stored[sessionKey].sessionFile).toBe("same-id.jsonl");
+    expect(stored[sessionKey].compactionCount).toBe(1);
+  });
+
+  it("updates sessionFile when rotation keeps the same sessionId", async () => {
+    const entry = {
+      sessionId: "same-id",
+      sessionFile: "same-id.jsonl",
+      updatedAt: Date.now(),
+      compactionCount: 0,
+    } as SessionEntry;
+    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+    const rotatedSessionFile = path.join(path.dirname(storePath), "rotated-same-id.jsonl");
+
+    await incrementCompactionCount({
+      sessionEntry: entry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      newSessionId: "same-id",
+      newSessionFile: rotatedSessionFile,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].sessionId).toBe("same-id");
+    expect(stored[sessionKey].sessionFile).toBe(rotatedSessionFile);
     expect(stored[sessionKey].compactionCount).toBe(1);
   });
 

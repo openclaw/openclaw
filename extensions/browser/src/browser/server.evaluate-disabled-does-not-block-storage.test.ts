@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getBrowserTestFetch } from "./test-fetch.js";
 import { getFreePort } from "./test-port.js";
 
@@ -35,20 +35,22 @@ const routeCtxMocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
+vi.mock("../config/config.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+  const loadConfig = () => ({
+    browser: {
+      enabled: true,
+      evaluateEnabled: false,
+      defaultProfile: "openclaw",
+      profiles: {
+        openclaw: { cdpPort: testPort + 1, color: "#FF4500" },
+      },
+    },
+  });
   return {
     ...actual,
-    loadConfig: () => ({
-      browser: {
-        enabled: true,
-        evaluateEnabled: false,
-        defaultProfile: "openclaw",
-        profiles: {
-          openclaw: { cdpPort: testPort + 1, color: "#FF4500" },
-        },
-      },
-    }),
+    getRuntimeConfig: loadConfig,
+    loadConfig,
     writeConfigFile: vi.fn(async () => {}),
   };
 });
@@ -57,24 +59,18 @@ vi.mock("./pw-ai-module.js", () => ({
   getPwAiModule: vi.fn(async () => pwMocks),
 }));
 
-vi.mock("./server-context.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./server-context.js")>();
+vi.mock("./server-context.js", async () => {
+  const actual = await vi.importActual<typeof import("./server-context.js")>("./server-context.js");
   return {
     ...actual,
     createBrowserRouteContext: routeCtxMocks.createBrowserRouteContext,
   };
 });
 
-let startBrowserControlServerFromConfig: typeof import("./server.js").startBrowserControlServerFromConfig;
-let stopBrowserControlServer: typeof import("./server.js").stopBrowserControlServer;
+const { startBrowserControlServerFromConfig, stopBrowserControlServer } =
+  await import("../server.js");
 
 describe("browser control evaluate gating", () => {
-  beforeAll(async () => {
-    vi.resetModules();
-    ({ startBrowserControlServerFromConfig, stopBrowserControlServer } =
-      await import("./server.js"));
-  });
-
   beforeEach(async () => {
     testPort = await getFreePort();
     prevGatewayPort = process.env.OPENCLAW_GATEWAY_PORT;

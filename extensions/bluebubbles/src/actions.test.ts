@@ -1,7 +1,8 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { importFreshModule } from "../../../test/helpers/import-fresh.js";
 import { sendBlueBubblesAttachment } from "./attachments.js";
 import { editBlueBubblesMessage, setGroupIconBlueBubbles } from "./chat.js";
-import { resolveBlueBubblesMessageId } from "./monitor.js";
+import { resolveBlueBubblesMessageId } from "./monitor-reply-cache.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import { sendBlueBubblesReaction } from "./reactions.js";
 import type { OpenClawConfig } from "./runtime-api.js";
@@ -35,7 +36,7 @@ vi.mock("./attachments.js", () => ({
   sendBlueBubblesAttachment: vi.fn().mockResolvedValue({ messageId: "att-msg-123" }),
 }));
 
-vi.mock("./monitor.js", () => ({
+vi.mock("./monitor-reply-cache.js", () => ({
   resolveBlueBubblesMessageId: vi.fn((id: string) => id),
 }));
 
@@ -44,14 +45,29 @@ vi.mock("./probe.js", () => ({
   getCachedBlueBubblesPrivateApiStatus: vi.fn().mockReturnValue(null),
 }));
 
-const freshActionsModulePath = "./actions.js?actions-test";
-const { bluebubblesMessageActions } = await import(freshActionsModulePath);
+const { bluebubblesMessageActions } = await importFreshModule<typeof import("./actions.js")>(
+  import.meta.url,
+  "./actions.js?actions-test",
+);
+
+function requireDefined<T>(value: T | undefined, name: string): T {
+  if (value === undefined) {
+    throw new Error(`${name} is not registered`);
+  }
+  return value;
+}
 
 describe("bluebubblesMessageActions", () => {
-  const describeMessageTool = bluebubblesMessageActions.describeMessageTool!;
-  const supportsAction = bluebubblesMessageActions.supportsAction!;
-  const extractToolSend = bluebubblesMessageActions.extractToolSend!;
-  const handleAction = bluebubblesMessageActions.handleAction!;
+  const describeMessageTool = requireDefined(
+    bluebubblesMessageActions.describeMessageTool,
+    "describeMessageTool",
+  );
+  const supportsAction = requireDefined(bluebubblesMessageActions.supportsAction, "supportsAction");
+  const extractToolSend = requireDefined(
+    bluebubblesMessageActions.extractToolSend,
+    "extractToolSend",
+  );
+  const handleAction = requireDefined(bluebubblesMessageActions.handleAction, "handleAction");
   const callHandleAction = (ctx: Omit<Parameters<typeof handleAction>[0], "channel">) =>
     handleAction({ channel: "bluebubbles", ...ctx });
   const blueBubblesConfig = (): OpenClawConfig => ({
@@ -123,6 +139,28 @@ describe("bluebubblesMessageActions", () => {
       // Other actions should still be present
       expect(actions).toContain("edit");
       expect(actions).toContain("unsend");
+    });
+
+    it("honors account-scoped action gates during discovery", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          bluebubbles: {
+            serverUrl: "http://localhost:1234",
+            password: "test-password",
+            actions: { reactions: false },
+            accounts: {
+              work: {
+                serverUrl: "http://localhost:5678",
+                password: "work-password",
+                actions: { reactions: true },
+              },
+            },
+          },
+        },
+      };
+
+      expect(describeMessageTool({ cfg, accountId: "default" })?.actions).not.toContain("react");
+      expect(describeMessageTool({ cfg, accountId: "work" })?.actions).toContain("react");
     });
 
     it("hides private-api actions when private API is disabled", () => {

@@ -1,6 +1,6 @@
 ---
-title: "AGENTS.md Template"
 summary: "Workspace template for AGENTS.md"
+title: "AGENTS.md template"
 read_when:
   - Bootstrapping a workspace manually
 ---
@@ -15,14 +15,19 @@ If `BOOTSTRAP.md` exists, that's your birth certificate. Follow it, figure out w
 
 ## Session Startup
 
-Before doing anything else:
+Use runtime-provided startup context first.
 
-1. Read `SOUL.md` — this is who you are
-2. Read `USER.md` — this is who you're helping
-3. Read `memory/YYYY-MM-DD.md` (today + yesterday) for recent context
-4. **If in MAIN SESSION** (direct chat with your human): Also read `MEMORY.md`
+That context may already include:
 
-Don't ask permission. Just do it.
+- `AGENTS.md`, `SOUL.md`, and `USER.md`
+- recent daily memory such as `memory/YYYY-MM-DD.md`
+- `MEMORY.md` when this is the main session
+
+Do not manually reread startup files unless:
+
+1. The user explicitly asks
+2. The provided context is missing something you need
+3. You need a deeper follow-up read beyond the provided startup context
 
 ## Memory
 
@@ -136,9 +141,6 @@ Skills provide your tools. When you need one, check its `SKILL.md`. Keep local n
 
 When you receive a heartbeat poll (message matches the configured heartbeat prompt), don't just reply `HEARTBEAT_OK` every time. Use heartbeats productively!
 
-Default heartbeat prompt:
-`Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
-
 You are free to edit `HEARTBEAT.md` with a short checklist or reminders. Keep it small to limit token burn.
 
 ### Heartbeat vs Cron: When to Use Each
@@ -217,3 +219,7 @@ The goal: Be helpful without being annoying. Check in a few times a day, do usef
 ## Make It Yours
 
 This is a starting point. Add your own conventions, style, and rules as you figure out what works.
+
+## Related
+
+- [Default AGENTS.md](/reference/AGENTS.default)

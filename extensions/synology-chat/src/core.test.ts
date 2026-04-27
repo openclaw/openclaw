@@ -7,7 +7,6 @@ import {
   type WizardPrompter,
 } from "../../../test/helpers/plugins/setup-wizard.js";
 import { listAccountIds, resolveAccount } from "./accounts.js";
-import { synologyChatPlugin } from "./channel.js";
 import { SynologyChatChannelConfigSchema } from "./config-schema.js";
 import {
   authorizeUserForDm,
@@ -17,9 +16,42 @@ import {
   validateToken,
 } from "./security.js";
 import { buildSynologyChatInboundSessionKey } from "./session-key.js";
+import { synologyChatSetupWizard } from "./setup-surface.js";
 
-const synologyChatConfigure = createPluginSetupWizardConfigure(synologyChatPlugin);
+const synologyChatSetupPlugin = {
+  id: "synology-chat",
+  meta: { label: "Synology Chat" },
+  setupWizard: synologyChatSetupWizard,
+  config: {
+    listAccountIds,
+    defaultAccountId: () => "default",
+    resolveAllowFrom: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string }) =>
+      resolveAccount(cfg, accountId).allowedUserIds,
+  },
+};
+
+const synologyChatConfigure = createPluginSetupWizardConfigure(synologyChatSetupPlugin);
 const originalEnv = { ...process.env };
+
+function createSynologySetupPrompter(params: { allowedUserIds?: string } = {}) {
+  return createTestWizardPrompter({
+    text: vi.fn(async ({ message }: { message: string }) => {
+      if (message === "Enter Synology Chat outgoing webhook token") {
+        return "synology-token";
+      }
+      if (message === "Incoming webhook URL") {
+        return "https://nas.example.com/webapi/entry.cgi?token=incoming";
+      }
+      if (message === "Outgoing webhook path (optional)") {
+        return "";
+      }
+      if (params.allowedUserIds && message === "Allowed Synology Chat user ids") {
+        return params.allowedUserIds;
+      }
+      throw new Error(`Unexpected prompt: ${message}`);
+    }) as WizardPrompter["text"],
+  });
+}
 
 describe("synology-chat core", () => {
   beforeEach(() => {
@@ -71,20 +103,7 @@ describe("synology-chat core", () => {
   });
 
   it("configures token and incoming webhook for the default account", async () => {
-    const prompter = createTestWizardPrompter({
-      text: vi.fn(async ({ message }: { message: string }) => {
-        if (message === "Enter Synology Chat outgoing webhook token") {
-          return "synology-token";
-        }
-        if (message === "Incoming webhook URL") {
-          return "https://nas.example.com/webapi/entry.cgi?token=incoming";
-        }
-        if (message === "Outgoing webhook path (optional)") {
-          return "";
-        }
-        throw new Error(`Unexpected prompt: ${message}`);
-      }) as WizardPrompter["text"],
-    });
+    const prompter = createSynologySetupPrompter();
 
     const result = await runSetupWizardConfigure({
       configure: synologyChatConfigure,
@@ -102,22 +121,8 @@ describe("synology-chat core", () => {
   });
 
   it("records allowed user ids when setup forces allowFrom", async () => {
-    const prompter = createTestWizardPrompter({
-      text: vi.fn(async ({ message }: { message: string }) => {
-        if (message === "Enter Synology Chat outgoing webhook token") {
-          return "synology-token";
-        }
-        if (message === "Incoming webhook URL") {
-          return "https://nas.example.com/webapi/entry.cgi?token=incoming";
-        }
-        if (message === "Outgoing webhook path (optional)") {
-          return "";
-        }
-        if (message === "Allowed Synology Chat user ids") {
-          return "123456, synology-chat:789012";
-        }
-        throw new Error(`Unexpected prompt: ${message}`);
-      }) as WizardPrompter["text"],
+    const prompter = createSynologySetupPrompter({
+      allowedUserIds: "123456, synology-chat:789012",
     });
 
     const result = await runSetupWizardConfigure({
