@@ -748,7 +748,10 @@ function buildAssistantText(
   if (/session memory ranking check/i.test(prompt) && orbitCode) {
     return `Protocol note: I checked memory and the current Project Nebula codename is ${orbitCode}.`;
   }
-  if (/thread memory check/i.test(allInputText) && orbitCode) {
+  if (
+    (/thread memory check/i.test(prompt) || /thread memory check/i.test(allInputText)) &&
+    orbitCode
+  ) {
     return `Protocol note: I checked memory in-thread and the hidden thread codename is ${orbitCode}.`;
   }
   if (/switch(?:ing)? models?/i.test(prompt)) {
