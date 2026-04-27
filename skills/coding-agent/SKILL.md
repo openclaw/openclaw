@@ -258,13 +258,17 @@ git worktree remove /tmp/issue-99
 2. **Respect tool choice** - if user asks for Codex, use Codex.
    - Orchestrator mode: do NOT hand-code patches yourself.
    - If an agent fails/hangs, respawn it or ask the user for direction, but don't silently take over.
-3. **Be patient** - don't kill sessions because they're "slow"
-4. **Monitor with process:log** - check progress without interfering
-5. **--full-auto for building** - auto-approves changes
-6. **vanilla for reviewing** - no special flags needed
-7. **Parallel is OK** - run many Codex processes at once for batch work
-8. **NEVER start Codex inside your OpenClaw state directory** (`$OPENCLAW_STATE_DIR`, default `~/.openclaw`) - it'll read your soul docs and get weird ideas about the org chart!
-9. **NEVER checkout branches in ~/Projects/openclaw/** - that's the LIVE OpenClaw instance!
+3. **Do not leave orphan WIP in a shared tree**.
+   - Start work on a named branch or isolated worktree when the task is expected to touch multiple files or last more than one turn.
+   - Before you report completion, either commit the finished work, or if it is intentionally not ready to commit, stop and tell the user the tree is still dirty and exactly what remains.
+   - Never quietly leave multi-file uncommitted changes behind in vendor trees or long-lived shared repos.
+4. **Be patient** - don't kill sessions because they're "slow"
+5. **Monitor with process:log** - check progress without interfering
+6. **--full-auto for building** - auto-approves changes
+7. **vanilla for reviewing** - no special flags needed
+8. **Parallel is OK** - run many Codex processes at once for batch work
+9. **NEVER start Codex inside your OpenClaw state directory** (`$OPENCLAW_STATE_DIR`, default `~/.openclaw`) - it'll read your soul docs and get weird ideas about the org chart!
+10. **NEVER checkout branches in ~/Projects/openclaw/** - that's the LIVE OpenClaw instance!
 
 ---
 
