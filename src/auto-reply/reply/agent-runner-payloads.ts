@@ -124,7 +124,8 @@ export async function buildReplyPayloads(params: {
   normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
 }): Promise<{ replyPayloads: ReplyPayload[]; didLogHeartbeatStrip: boolean }> {
   let didLogHeartbeatStrip = params.didLogHeartbeatStrip;
-  const preserveRawEmotionTtsText = isEmotionModeEnabled(params.emotionMode);
+  const emotionMode = params.emotionMode ?? "off";
+  const preserveRawEmotionTtsText = isEmotionModeEnabled(emotionMode);
   const sanitizedPayloads: EmotionTaggedPayload[] = params.isHeartbeat
     ? params.payloads
     : params.payloads.flatMap((payload) => {
@@ -140,7 +141,7 @@ export async function buildReplyPayloads(params: {
             if (preserveRawEmotionTtsText) {
               rawEmotionTtsText = text;
             }
-            const emotionSanitized = sanitizeEmotionTagsForMode(text, params.emotionMode);
+            const emotionSanitized = sanitizeEmotionTagsForMode(text, emotionMode);
             text = emotionSanitized.text;
           }
           return [
@@ -172,7 +173,7 @@ export async function buildReplyPayloads(params: {
         if (preserveRawEmotionTtsText) {
           rawEmotionTtsText = stripped.text;
         }
-        const emotionSanitized = sanitizeEmotionTagsForMode(stripped.text, params.emotionMode);
+        const emotionSanitized = sanitizeEmotionTagsForMode(stripped.text, emotionMode);
         return [
           {
             ...payload,

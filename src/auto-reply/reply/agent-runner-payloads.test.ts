@@ -573,4 +573,20 @@ describe("buildReplyPayloads media filter integration", () => {
     }
     expect(getReplyPayloadMetadata(payload)?.ttsSourceText).toBeUndefined();
   });
+
+  it("defaults omitted emotion mode to off for payload text", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      emotionMode: undefined,
+      payloads: [{ text: "[warmly] hello there" }],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    const [payload] = replyPayloads;
+    expect(payload?.text).toBe("hello there");
+    if (!payload) {
+      throw new Error("expected payload");
+    }
+    expect(getReplyPayloadMetadata(payload)?.ttsSourceText).toBeUndefined();
+  });
 });
