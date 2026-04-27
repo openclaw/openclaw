@@ -283,6 +283,7 @@ describe("executeNodeHostCommand", () => {
           approved: true,
           approvalDecision: "allow-once",
           systemRunPlan: preparedPlan,
+          timeoutMs: 30_000,
         }),
       }),
     );
@@ -372,6 +373,7 @@ describe("executeNodeHostCommand", () => {
           command: ["bash", "-lc", "bun ./script.ts"],
           rawCommand: "bun ./script.ts",
           suppressNotifyOnExit: true,
+          timeoutMs: 30_000,
         }),
       }),
     );
@@ -383,6 +385,42 @@ describe("executeNodeHostCommand", () => {
           systemRunPlan: expect.anything(),
         }),
       }),
+    );
+  });
+
+  it("marks node timeout payloads as timed out in tool details", async () => {
+    callGatewayToolMock.mockImplementationOnce(async () => ({
+      payload: {
+        success: false,
+        stdout: "",
+        stderr: "",
+        error: "Command timed out after 30 seconds.",
+        exitCode: null,
+        timedOut: true,
+      },
+    }));
+
+    const result = await executeNodeHostCommand({
+      command: "bun ./script.ts",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "off",
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+      notifyOnExit: false,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "failed",
+      exitCode: null,
+      timedOut: true,
+    });
+    expect(result.content[0]?.type === "text" ? result.content[0].text : "").toContain(
+      "Command timed out",
     );
   });
 

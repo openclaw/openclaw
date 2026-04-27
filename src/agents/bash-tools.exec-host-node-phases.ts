@@ -27,6 +27,7 @@ export type NodeExecutionTarget = {
   platform?: string | null;
   argv: string[];
   env: Record<string, string> | undefined;
+  timeoutSec: number;
   invokeTimeoutMs: number;
   supportsSystemRunPrepare: boolean;
 };
@@ -73,6 +74,7 @@ export function formatNodeRunToolResult(params: {
   const errorText = typeof payloadObj.error === "string" ? payloadObj.error : "";
   const success = typeof payloadObj.success === "boolean" ? payloadObj.success : false;
   const exitCode = typeof payloadObj.exitCode === "number" ? payloadObj.exitCode : null;
+  const timedOut = payloadObj.timedOut === true;
   return {
     content: [
       {
@@ -81,10 +83,11 @@ export function formatNodeRunToolResult(params: {
       },
     ],
     details: {
-      status: success ? "completed" : "failed",
+      status: success && !timedOut ? "completed" : "failed",
       exitCode,
       durationMs: Date.now() - params.startedAt,
       aggregated: [stdout, stderr, errorText].filter(Boolean).join("\n"),
+      timedOut: timedOut || undefined,
       cwd: params.cwd,
     } satisfies ExecToolDetails,
   };
@@ -136,6 +139,7 @@ export async function resolveNodeExecutionTarget(
     platform: nodeInfo?.platform,
     argv: buildNodeShellCommand(params.command, nodeInfo?.platform),
     env: params.requestedEnv ? { ...params.requestedEnv } : undefined,
+    timeoutSec: invokeTimeoutSec,
     invokeTimeoutMs: Math.max(10_000, invokeTimeoutSec * 1000 + 5_000),
     supportsSystemRunPrepare: declaredCommands.includes("system.run.prepare"),
   };
@@ -194,7 +198,7 @@ export async function invokeNodeSystemRunDirect(params: {
       command: params.target.argv,
       rawCommand: params.request.command,
       cwd: params.request.workdir,
-      timeoutSec: params.request.timeoutSec,
+      timeoutSec: params.target.timeoutSec,
       agentId: params.request.agentId,
       sessionKey: params.request.sessionKey,
       notifyOnExit: params.request.notifyOnExit,
