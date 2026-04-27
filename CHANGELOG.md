@@ -11,13 +11,11 @@ Docs: https://docs.openclaw.ai
 - Channels/QQBot: add full group chat support (history tracking, @-mention gating, activation modes, per-group config, FIFO message queue with deliver debounce), C2C `stream_messages` streaming with a `StreamingController` lifecycle manager, unified `sendMedia` with chunked upload for large files, and refactor the engine into pipeline stages, focused outbound submodules, builtin slash-command modules, and explicit DI ports via `createEngineAdapters()`. (#70624) Thanks @cxyhhhhh.
 - Gateway/runtime: reuse the current plugin metadata snapshot for provider discovery so repeated model-provider discovery avoids rebuilding plugin manifest metadata. Thanks @shakkernerd.
 - Gateway/startup: pass the plugin metadata snapshot from config validation into plugin bootstrap so startup reuses one manifest product instead of rebuilding plugin metadata. Thanks @shakkernerd.
-- ACP/runtime: add an opt-in bundled Coven backend extension that routes ACP coding sessions through a local Coven daemon when `acp.backend="coven"`, while preserving the existing ACPX backend as the default fallback path. Thanks @BunsDev.
 - Matrix: attach versioned structured approval metadata to pending approval messages so capable Matrix clients can render richer approval UI while body text and reaction fallback keep working. (#72432) Thanks @kakahu2015.
 
 ### Fixes
 
 - Gateway/startup: keep hot Gateway boot paths on leaf config imports and add max-RSS reporting to the gateway startup bench so low-memory startup regressions are visible before release. Thanks @vincentkoc.
-- ACP/runtime: harden the opt-in Coven backend with workspace-confined launch paths, home-expanded Coven socket config, bounded socket responses, sanitized daemon output, and controlled polling failure handling. Thanks @BunsDev.
 - Agents/LSP: terminate bundled stdio LSP process trees during runtime disposal and Gateway shutdown, so nested children such as `tsserver` do not survive stop or restart. Fixes #72357. Thanks @ai-hpc and @bittoby.
 
 ## 2026.4.26
