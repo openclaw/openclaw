@@ -33,6 +33,7 @@ type PluginHostRuntimeState = {
 
 const PLUGIN_HOST_RUNTIME_STATE_KEY = Symbol.for("openclaw.pluginHostRuntimeState");
 const CLOSED_RUN_IDS_MAX = 512;
+export const PLUGIN_TERMINAL_EVENT_CLEANUP_WAIT_MS = 5_000;
 const log = createSubsystemLogger("plugins/host-hooks");
 
 function getPluginHostRuntimeState(): PluginHostRuntimeState {
@@ -80,6 +81,28 @@ function trackAgentEventHandler(runId: string, pending: Promise<void>): void {
     if (handlers.size === 0) {
       state.pendingAgentEventHandlersByRunId.delete(runId);
     }
+  });
+}
+
+function waitForTerminalEventHandlers(pendingHandlers: Set<Promise<void>>): Promise<void> {
+  if (pendingHandlers.size === 0) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    const timeout = setTimeout(resolveOnce, PLUGIN_TERMINAL_EVENT_CLEANUP_WAIT_MS);
+    timeout.unref?.();
+
+    function resolveOnce() {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      resolve();
+    }
+
+    void Promise.allSettled(pendingHandlers).then(resolveOnce);
   });
 }
 
@@ -273,7 +296,7 @@ export function dispatchPluginAgentEventSubscriptions(params: {
     const pendingForRun =
       getPluginHostRuntimeState().pendingAgentEventHandlersByRunId.get(params.event.runId) ??
       new Set(pendingHandlers);
-    void Promise.allSettled(pendingForRun).then(() => {
+    void waitForTerminalEventHandlers(pendingForRun).then(() => {
       clearPluginRunContext({ runId: params.event.runId });
     });
   }
