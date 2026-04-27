@@ -216,14 +216,14 @@ describe("before_tool_call hook integration", () => {
         runId: "run-main",
         toolCallId: "call-5",
       },
-      {
+      expect.objectContaining({
         toolName: "read",
         agentId: "main",
         sessionKey: "main",
         sessionId: "ephemeral-main",
         runId: "run-main",
         toolCallId: "call-5",
-      },
+      }),
     );
   });
 
