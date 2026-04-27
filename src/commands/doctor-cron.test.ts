@@ -121,6 +121,44 @@ describe("maybeRepairLegacyCronStore", () => {
     );
   });
 
+  it("repairs malformed persisted cron ids before list rendering sees them", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCronStore(storePath, [
+      createLegacyCronJob({
+        id: 42,
+        jobId: undefined,
+        notify: false,
+      }),
+      createLegacyCronJob({
+        id: undefined,
+        jobId: undefined,
+        name: "Missing id",
+        notify: false,
+      }),
+    ]);
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
+      jobs: Array<Record<string, unknown>>;
+    };
+    expect(persisted.jobs[0]?.id).toBe("42");
+    expect(typeof persisted.jobs[1]?.id).toBe("string");
+    expect(String(persisted.jobs[1]?.id)).toMatch(/^cron-/);
+    expect(noteMock).toHaveBeenCalledWith(
+      expect.stringContaining("stores `id` as a non-string value"),
+      "Cron",
+    );
+    expect(noteMock).toHaveBeenCalledWith(
+      expect.stringContaining("missing a canonical string `id`"),
+      "Cron",
+    );
+  });
+
   it("warns instead of replacing announce delivery for notify fallback jobs", async () => {
     const storePath = await makeTempStorePath();
     await fs.mkdir(path.dirname(storePath), { recursive: true });
@@ -295,5 +333,55 @@ describe("maybeRepairLegacyCronStore", () => {
       to: "-1001234567890",
       threadId: "99",
     });
+  });
+
+  it("rewrites stale managed dreaming jobs to the isolated agentTurn shape", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCronStore(storePath, [
+      {
+        id: "memory-dreaming",
+        name: "Memory Dreaming Promotion",
+        description:
+          "[managed-by=memory-core.short-term-promotion] Promote weighted short-term recalls.",
+        enabled: true,
+        createdAtMs: Date.parse("2026-04-01T00:00:00.000Z"),
+        updatedAtMs: Date.parse("2026-04-01T00:00:00.000Z"),
+        schedule: { kind: "cron", expr: "0 3 * * *", tz: "UTC" },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: {
+          kind: "systemEvent",
+          text: "__openclaw_memory_core_short_term_promotion_dream__",
+        },
+        state: {},
+      },
+    ]);
+
+    const noteSpy = noteMock;
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
+      jobs: Array<Record<string, unknown>>;
+    };
+    const [job] = persisted.jobs;
+    expect(job).toMatchObject({
+      sessionTarget: "isolated",
+      payload: {
+        kind: "agentTurn",
+        message: "__openclaw_memory_core_short_term_promotion_dream__",
+        lightContext: true,
+      },
+      delivery: { mode: "none" },
+    });
+    expect(noteSpy).toHaveBeenCalledWith(expect.stringContaining("managed dreaming job"), "Cron");
+    expect(noteSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Rewrote 1 managed dreaming job"),
+      "Doctor changes",
+    );
   });
 });

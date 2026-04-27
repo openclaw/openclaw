@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { captureEnv } from "../../test-utils/env.js";
@@ -205,8 +208,10 @@ describe("gatherDaemonStatus", () => {
       }),
     );
     expect(status.gateway?.probeUrl).toBe("wss://127.0.0.1:19001");
+    expect(status.gateway?.tlsEnabled).toBe(true);
     expect(status.rpc?.url).toBe("wss://127.0.0.1:19001");
     expect(status.rpc?.ok).toBe(true);
+    expect(inspectGatewayRestart).not.toHaveBeenCalled();
   });
 
   it("forwards requireRpc and configPath to the daemon probe", async () => {
@@ -336,6 +341,52 @@ describe("gatherDaemonStatus", () => {
       status: "running",
       detail: "19001",
     });
+  });
+
+  it("uses the fast config path for plain same-file status reads", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-status-config-"));
+    const configPath = path.join(tmp, "openclaw.json");
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({
+        gateway: {
+          bind: "custom",
+          customBindHost: "10.0.0.5",
+          controlUi: { enabled: true },
+        },
+      }),
+    );
+    process.env.OPENCLAW_STATE_DIR = tmp;
+    process.env.OPENCLAW_CONFIG_PATH = configPath;
+    serviceReadCommand.mockResolvedValueOnce({
+      programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
+      environment: {
+        OPENCLAW_STATE_DIR: tmp,
+        OPENCLAW_CONFIG_PATH: configPath,
+      },
+    });
+
+    try {
+      const status = await gatherDaemonStatus({
+        rpc: {},
+        probe: false,
+        deep: false,
+      });
+
+      expect(readConfigFileSnapshotCalls).not.toHaveBeenCalled();
+      expect(loadConfigCalls).not.toHaveBeenCalled();
+      expect(status.config?.cli).toMatchObject({
+        path: configPath,
+        exists: true,
+        valid: true,
+        controlUi: { enabled: true },
+      });
+      expect(status.config?.daemon).toBe(status.config?.cli);
+      expect(status.gateway?.bindMode).toBe("custom");
+      expect(status.gateway?.customBindHost).toBe("10.0.0.5");
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
   });
 
   it("resolves daemon gateway auth password SecretRef values before probing", async () => {
@@ -542,7 +593,12 @@ describe("gatherDaemonStatus", () => {
     expect(status.rpc).toBeUndefined();
   });
 
-  it("surfaces stale gateway listener pids from restart health inspection", async () => {
+  it("surfaces stale gateway listener pids from restart health inspection when probe fails", async () => {
+    callGatewayStatusProbe.mockResolvedValueOnce({
+      ok: false,
+      url: "ws://127.0.0.1:19001",
+      error: "timeout",
+    });
     inspectGatewayRestart.mockResolvedValueOnce({
       runtime: { status: "running", pid: 8000 },
       portUsage: {

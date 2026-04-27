@@ -243,16 +243,18 @@ function resolveDiscordGuildNativeCommandAuthorized(params: {
     configured: hasAccessRestrictions,
     allowed: memberAllowed,
   };
-  const fallbackAuthorizers = [policyAuthorizer, ownerAuthorizer, memberAuthorizer];
+  const hasStricterAccessRestrictions = ownerAuthorizer.configured || memberAuthorizer.configured;
+  const policyFallbackAuthorizer = {
+    configured: policyAuthorizer.configured && !hasStricterAccessRestrictions,
+    allowed: policyAuthorizer.allowed,
+  };
+  const fallbackAuthorizers = [policyFallbackAuthorizer, ownerAuthorizer, memberAuthorizer];
+  const authorizers = params.commandsAllowFromAccess.configured
+    ? [commandAllowlistAuthorizer]
+    : fallbackAuthorizers;
   return resolveCommandAuthorizedFromAuthorizers({
     useAccessGroups: params.useAccessGroups,
-    authorizers: params.useAccessGroups
-      ? params.commandsAllowFromAccess.configured
-        ? [commandAllowlistAuthorizer]
-        : fallbackAuthorizers
-      : params.commandsAllowFromAccess.configured
-        ? [commandAllowlistAuthorizer]
-        : fallbackAuthorizers,
+    authorizers,
     modeWhenAccessGroupsOff: "configured",
   });
 }
@@ -989,10 +991,25 @@ async function dispatchDiscordCommandInteraction(params: {
     }
   }
 
+  const menuNeedsModelContext =
+    !(commandArgs?.raw && !commandArgs.values) &&
+    command.args?.some(
+      (arg) => typeof arg.choices === "function" && commandArgs?.values?.[arg.name] == null,
+    );
+  const menuModelContext = menuNeedsModelContext
+    ? await resolveDiscordNativeChoiceContext({
+        interaction: interaction as CommandInteraction,
+        cfg,
+        accountId,
+        threadBindings,
+      })
+    : null;
   const menu = resolveCommandArgMenu({
     command,
     args: commandArgs,
     cfg,
+    provider: menuModelContext?.provider,
+    model: menuModelContext?.model,
   });
   if (menu) {
     const menuPayload = buildDiscordCommandArgMenu({

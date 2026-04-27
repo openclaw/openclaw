@@ -4,16 +4,20 @@ import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-sup
 
 vi.mock("../model-suppression.js", () => ({
   shouldSuppressBuiltInModel: ({ provider, id }: { provider?: string; id?: string }) =>
-    (provider === "openai" || provider === "azure-openai-responses") &&
+    (provider === "openai" ||
+      provider === "azure-openai-responses" ||
+      provider === "openai-codex") &&
     id?.trim().toLowerCase() === "gpt-5.3-codex-spark",
   buildSuppressedBuiltInModelError: ({ provider, id }: { provider?: string; id?: string }) => {
     if (
-      (provider !== "openai" && provider !== "azure-openai-responses") ||
+      (provider !== "openai" &&
+        provider !== "azure-openai-responses" &&
+        provider !== "openai-codex") ||
       id?.trim().toLowerCase() !== "gpt-5.3-codex-spark"
     ) {
       return undefined;
     }
-    return `Unknown model: ${provider}/gpt-5.3-codex-spark. gpt-5.3-codex-spark is only supported via openai-codex OAuth. Use openai-codex/gpt-5.3-codex-spark.`;
+    return `Unknown model: ${provider}/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.`;
   },
 }));
 
@@ -365,6 +369,180 @@ describe("resolveModel", () => {
     expect(result.model?.maxTokens).toBe(32768);
   });
 
+  it("merges configured model params with agent defaults for resolved models", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "ollama",
+      modelId: "qwen3:32b",
+      templateModel: {
+        ...makeModel("qwen3:32b"),
+        provider: "ollama",
+        params: { num_ctx: 4096, keep_alive: "1m" },
+      },
+    });
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "OLLAMA/qwen3:32B": {
+              params: { num_ctx: 8192, thinking: "low" },
+            },
+          },
+        },
+      },
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434",
+            models: [
+              {
+                ...makeModel("qwen3:32b"),
+                params: { num_ctx: 16384 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("ollama", "qwen3:32b", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect((result.model as { params?: Record<string, unknown> } | undefined)?.params).toEqual({
+      num_ctx: 16384,
+      keep_alive: "1m",
+      thinking: "low",
+    });
+  });
+
+  it("resolves provider request timeout metadata for configured provider models", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "ollama",
+      modelId: "qwen3:32b",
+      templateModel: {
+        ...makeModel("qwen3:32b"),
+        provider: "ollama",
+      },
+    });
+    const cfg = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434",
+            timeoutSeconds: 300,
+            models: [makeModel("qwen3:32b")],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("ollama", "qwen3:32b", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect((result.model as { requestTimeoutMs?: number } | undefined)?.requestTimeoutMs).toBe(
+      300_000,
+    );
+  });
+
+  it("uses provider-level context defaults over discovered metadata", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "ollama",
+      modelId: "qwen3.5:9b",
+      templateModel: {
+        ...makeModel("qwen3.5:9b"),
+        provider: "ollama",
+        contextWindow: 216_000,
+        contextTokens: 216_000,
+        maxTokens: 65_536,
+      },
+    });
+    const cfg = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434",
+            contextWindow: 8_192,
+            contextTokens: 8_000,
+            models: [{ id: "qwen3.5:9b", name: "qwen3.5:9b" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("ollama", "qwen3.5:9b", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model?.contextWindow).toBe(8_192);
+    expect((result.model as { contextTokens?: number } | undefined)?.contextTokens).toBe(8_000);
+    expect(result.model?.maxTokens).toBe(8_192);
+  });
+
+  it("keeps per-model context values above provider-level defaults", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "ollama",
+      modelId: "qwen3.5:9b",
+      templateModel: {
+        ...makeModel("qwen3.5:9b"),
+        provider: "ollama",
+        contextWindow: 216_000,
+        maxTokens: 65_536,
+      },
+    });
+    const cfg = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434",
+            contextWindow: 8_192,
+            maxTokens: 4_096,
+            models: [
+              {
+                id: "qwen3.5:9b",
+                name: "qwen3.5:9b",
+                contextWindow: 16_384,
+                maxTokens: 12_000,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("ollama", "qwen3.5:9b", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model?.contextWindow).toBe(16_384);
+    expect(result.model?.maxTokens).toBe(12_000);
+  });
+
+  it("applies agent default model params without explicit provider config", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "ollama",
+      modelId: "llama3.2",
+      templateModel: {
+        ...makeModel("llama3.2"),
+        provider: "ollama",
+      },
+    });
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "ollama/llama3.2": {
+              params: { num_ctx: 32768 },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("ollama", "llama3.2", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect((result.model as { params?: Record<string, unknown> } | undefined)?.params).toEqual({
+      num_ctx: 32768,
+    });
+  });
+
   it("propagates reasoning from matching configured fallback model", () => {
     const cfg = {
       models: {
@@ -415,6 +593,122 @@ describe("resolveModel", () => {
     const result = resolveModelForTest("custom", "model-b", "/tmp/agent", cfg);
 
     expect(result.model?.input).toEqual(["text", "image"]);
+  });
+
+  it("propagates image input when configured model ids include the provider prefix", () => {
+    const cfg = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "http://localhost:9000",
+            api: "openai-completions",
+            models: [
+              {
+                ...makeModel("custom/vision-model"),
+                input: ["text", "image"],
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("custom", "vision-model", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "custom",
+      id: "custom/vision-model",
+      input: ["text", "image"],
+    });
+  });
+
+  it("matches provider-prefixed configured model ids through provider aliases", () => {
+    const cfg = {
+      models: {
+        providers: {
+          volcengine: {
+            baseUrl: "http://localhost:9000",
+            api: "openai-completions",
+            models: [
+              {
+                ...makeModel("volcengine/vision-model"),
+                input: ["text", "image"],
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("bytedance", "vision-model", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      id: "volcengine/vision-model",
+      input: ["text", "image"],
+    });
+  });
+
+  it("does not treat arbitrary namespaced model ids as provider prefixes", () => {
+    const cfg = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "http://localhost:9000",
+            api: "openai-completions",
+            models: [
+              {
+                ...makeModel("meta/vision-model"),
+                input: ["text", "image"],
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("custom", "vision-model", "/tmp/agent", cfg);
+
+    expect(result.model?.id).toBe("vision-model");
+    expect(result.model?.input).toEqual(["text"]);
+  });
+
+  it("prefers provider-prefixed configured metadata over discovered text-only models", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "custom",
+      modelId: "vision-model",
+      templateModel: {
+        ...makeModel("vision-model"),
+        provider: "custom",
+        input: ["text"],
+      },
+    });
+    const cfg = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "http://localhost:9000",
+            api: "openai-completions",
+            models: [
+              {
+                ...makeModel("custom/vision-model"),
+                input: ["text", "image"],
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("custom", "vision-model", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "custom",
+      id: "custom/vision-model",
+      input: ["text", "image"],
+    });
   });
 
   it("keeps unknown fallback models text-only instead of borrowing image input from another configured model", () => {
@@ -987,18 +1281,18 @@ describe("resolveModel", () => {
     expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.4-mini"));
   });
 
-  it("builds an openai-codex fallback for gpt-5.3-codex-spark", () => {
+  it("does not build an openai-codex fallback for removed gpt-5.3-codex-spark", () => {
     mockOpenAICodexTemplateModel(discoverModels);
 
     const result = resolveModelForTest("openai-codex", "gpt-5.3-codex-spark", "/tmp/agent");
 
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject(
-      buildOpenAICodexForwardCompatExpectation("gpt-5.3-codex-spark"),
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe(
+      "Unknown model: openai-codex/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
     );
   });
 
-  it("keeps openai-codex gpt-5.3-codex-spark when discovery provides it", () => {
+  it("rejects stale openai-codex gpt-5.3-codex-spark discovery rows", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "openai-codex",
       modelId: "gpt-5.3-codex-spark",
@@ -1011,13 +1305,10 @@ describe("resolveModel", () => {
 
     const result = resolveModelForTest("openai-codex", "gpt-5.3-codex-spark", "/tmp/agent");
 
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({
-      provider: "openai-codex",
-      id: "gpt-5.3-codex-spark",
-      api: "openai-codex-responses",
-      baseUrl: "https://chatgpt.com/backend-api",
-    });
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe(
+      "Unknown model: openai-codex/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
+    );
   });
 
   it("prefers runtime-resolved openai-codex gpt-5.4 metadata when it has a larger context window", () => {
@@ -1043,6 +1334,169 @@ describe("resolveModel", () => {
       baseUrl: "https://chatgpt.com/backend-api",
       contextWindow: 1_050_000,
       contextTokens: 272_000,
+    });
+  });
+
+  it("lets official openai-codex metadata override stale configured model rows", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+      templateModel: {
+        ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+        name: "GPT-5.4",
+      },
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://chatgpt.com/backend-api",
+            api: "openai-codex-responses",
+            models: [
+              {
+                ...makeModel("gpt-5.5-pro"),
+                api: "openai-codex-responses",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+                contextWindow: 400_000,
+                contextTokens: 64_000,
+                maxTokens: 32_000,
+                metadataSource: "models-add",
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("openai-codex", "gpt-5.5-pro", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.5-pro",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      contextTokens: 272_000,
+      maxTokens: 128_000,
+    });
+  });
+
+  it("lets official openai-codex metadata override legacy unmarked models-add rows", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "openai-codex",
+      modelId: "gpt-5.5",
+      templateModel: {
+        ...buildOpenAICodexForwardCompatExpectation("gpt-5.5"),
+        name: "GPT-5.5",
+        cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+        contextWindow: 400_000,
+      },
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://chatgpt.com/backend-api",
+            api: "openai-codex-responses",
+            models: [
+              {
+                ...makeModel("gpt-5.5"),
+                api: "openai-codex-responses",
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+                contextWindow: 400_000,
+                contextTokens: 272_000,
+                maxTokens: 128_000,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("openai-codex", "gpt-5.5", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.5",
+      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+      contextWindow: 400_000,
+      maxTokens: 128_000,
+    });
+  });
+
+  it("resolves openai-codex gpt-5.5 even when discovery omits the OAuth catalog row", () => {
+    const result = resolveModelForTest("openai-codex", "gpt-5.5");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.5",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 400_000,
+      contextTokens: 272_000,
+      maxTokens: 128_000,
+    });
+  });
+
+  it("preserves unmarked manual openai-codex metadata overrides", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "openai-codex",
+      modelId: "gpt-5.5",
+      templateModel: {
+        ...buildOpenAICodexForwardCompatExpectation("gpt-5.5"),
+        name: "GPT-5.5",
+        cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+        contextWindow: 400_000,
+      },
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://chatgpt.com/backend-api",
+            api: "openai-codex-responses",
+            models: [
+              {
+                ...makeModel("gpt-5.5"),
+                api: "openai-codex-responses",
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 9, output: 99, cacheRead: 0.9, cacheWrite: 0 },
+                contextWindow: 555_555,
+                contextTokens: 111_111,
+                maxTokens: 22_222,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("openai-codex", "gpt-5.5", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.5",
+      cost: { input: 9, output: 99, cacheRead: 0.9, cacheWrite: 0 },
+      contextWindow: 555_555,
+      contextTokens: 111_111,
+      maxTokens: 22_222,
     });
   });
 
@@ -1260,7 +1714,7 @@ describe("resolveModel", () => {
 
     expect(result.model).toBeUndefined();
     expect(result.error).toBe(
-      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is only supported via openai-codex OAuth. Use openai-codex/gpt-5.3-codex-spark.",
+      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
     );
   });
 

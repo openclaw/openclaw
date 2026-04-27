@@ -17,6 +17,7 @@ vi.mock("node:child_process", async () => {
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import { parseSystemdExecStart } from "./systemd-unit.js";
 import {
+  installSystemdService,
   isNonFatalSystemdInstallProbeError,
   isSystemdServiceEnabled,
   isSystemdUserServiceAvailable,
@@ -26,6 +27,7 @@ import {
   resolveSystemdUserUnitPath,
   stageSystemdService,
   stopSystemdService,
+  uninstallSystemdService,
 } from "./systemd.js";
 
 type ExecFileError = Error & {
@@ -36,6 +38,7 @@ type ExecFileError = Error & {
 const TEST_SERVICE_HOME = "/home/test";
 const TEST_MANAGED_HOME = "/tmp/openclaw-test-home";
 const GATEWAY_SERVICE = "openclaw-gateway.service";
+const NODE_SERVICE = "openclaw-node.service";
 
 const createExecFileError = (
   message: string,
@@ -745,6 +748,227 @@ describe("stageSystemdService", () => {
       expect(unit).toContain(`EnvironmentFile=-${envFilePath}`);
       expect(unit).toContain("Environment=OPENCLAW_GATEWAY_TOKEN=fresh-token");
       expect(envFile).toBe("LLM_API_KEY=dotenv-key\n");
+    });
+  });
+});
+
+describe("systemd service install and uninstall", () => {
+  async function withNodeSystemdFixture(
+    run: (context: { env: Record<string, string>; unitPath: string }) => Promise<void>,
+  ): Promise<void> {
+    const tempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-node-systemd-"));
+    const home = path.join(tempHomeRoot, "home");
+    const stateDir = path.join(home, ".openclaw");
+    const env = {
+      HOME: home,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_SYSTEMD_UNIT: "openclaw-node",
+    };
+    const unitPath = resolveSystemdUserUnitPath(env);
+
+    try {
+      await fs.mkdir(stateDir, { recursive: true });
+      await run({ env, unitPath });
+    } finally {
+      await fs.rm(tempHomeRoot, { recursive: true, force: true });
+    }
+  }
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    execFileMock.mockReset();
+  });
+
+  it("activates the OPENCLAW_SYSTEMD_UNIT override during install", async () => {
+    await withNodeSystemdFixture(async ({ env, unitPath }) => {
+      execFileMock
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "status");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "daemon-reload");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "enable", NODE_SERVICE);
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "restart", NODE_SERVICE);
+          cb(null, "", "");
+        });
+
+      await installSystemdService({
+        env,
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        programArguments: ["/usr/bin/openclaw", "node", "run"],
+        workingDirectory: "/tmp",
+        environment: {
+          OPENCLAW_SYSTEMD_UNIT: "openclaw-node",
+        },
+      });
+
+      const unit = await fs.readFile(unitPath, "utf8");
+      expect(unitPath).toMatch(/openclaw-node\.service$/);
+      expect(unit).toContain("openclaw node run");
+      expect(execFileMock).toHaveBeenCalledTimes(4);
+    });
+  });
+
+  it("retries enable after reloading again when systemd cannot see the written unit yet", async () => {
+    await withNodeSystemdFixture(async ({ env }) => {
+      execFileMock
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "status");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "daemon-reload");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "enable", NODE_SERVICE);
+          cb(
+            createExecFileError("enable failed"),
+            "",
+            "Unit file openclaw-node.service does not exist.",
+          );
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "daemon-reload");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "enable", NODE_SERVICE);
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "restart", NODE_SERVICE);
+          cb(null, "", "");
+        });
+
+      await installSystemdService({
+        env,
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        programArguments: ["/usr/bin/openclaw", "node", "run"],
+        workingDirectory: "/tmp",
+        environment: {
+          OPENCLAW_SYSTEMD_UNIT: "openclaw-node",
+        },
+      });
+
+      expect(execFileMock).toHaveBeenCalledTimes(6);
+    });
+  });
+
+  it("falls back to machine user scope when install activation hits a no-medium user bus failure", async () => {
+    await withNodeSystemdFixture(async ({ env }) => {
+      const installEnv = { ...env, USER: "debian" };
+      execFileMock
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "status");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "daemon-reload");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "enable", NODE_SERVICE);
+          cb(
+            createExecFileError("Failed to connect to bus: No medium found", {
+              stderr: "Failed to connect to bus: No medium found",
+            }),
+            "",
+            "",
+          );
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertMachineUserSystemctlArgs(args, "debian", "enable", NODE_SERVICE);
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "restart", NODE_SERVICE);
+          cb(null, "", "");
+        });
+
+      await installSystemdService({
+        env: installEnv,
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        programArguments: ["/usr/bin/openclaw", "node", "run"],
+        workingDirectory: "/tmp",
+        environment: {
+          OPENCLAW_SYSTEMD_UNIT: "openclaw-node",
+        },
+      });
+
+      expect(execFileMock).toHaveBeenCalledTimes(5);
+    });
+  });
+
+  it("surfaces install activation user-bus failures as systemd unavailable errors", async () => {
+    await withNodeSystemdFixture(async ({ env }) => {
+      vi.spyOn(os, "userInfo").mockImplementation(() => {
+        throw new Error("no user info");
+      });
+      execFileMock
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "status");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "daemon-reload");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "enable", NODE_SERVICE);
+          cb(
+            createExecFileError("Failed to connect to bus: No medium found", {
+              stderr: "Failed to connect to bus: No medium found",
+            }),
+            "",
+            "",
+          );
+        });
+
+      await expect(
+        installSystemdService({
+          env,
+          stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+          programArguments: ["/usr/bin/openclaw", "node", "run"],
+          workingDirectory: "/tmp",
+          environment: {
+            OPENCLAW_SYSTEMD_UNIT: "openclaw-node",
+          },
+        }),
+      ).rejects.toThrow("systemctl --user unavailable: Failed to connect to bus: No medium found");
+
+      expect(execFileMock).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  it("disables the OPENCLAW_SYSTEMD_UNIT override during uninstall", async () => {
+    await withNodeSystemdFixture(async ({ env, unitPath }) => {
+      await fs.mkdir(path.dirname(unitPath), { recursive: true });
+      await fs.writeFile(unitPath, "[Unit]\nDescription=OpenClaw Node\n", "utf8");
+
+      execFileMock
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "status");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "disable", "--now", NODE_SERVICE);
+          cb(null, "", "");
+        });
+
+      const { write, stdout } = createWritableStreamMock();
+      await uninstallSystemdService({ env, stdout });
+
+      await expect(fs.access(unitPath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(String(write.mock.calls[0]?.[0])).toContain("Removed systemd service");
+      expect(execFileMock).toHaveBeenCalledTimes(2);
     });
   });
 });

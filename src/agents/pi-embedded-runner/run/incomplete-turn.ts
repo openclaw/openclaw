@@ -1,15 +1,29 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import {
+  isSilentReplyPayloadText,
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+} from "../../../auto-reply/tokens.js";
 import type { EmbeddedPiExecutionContract } from "../../../config/types.agent-defaults.js";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
-import { isStrictAgenticSupportedProviderModel } from "../../execution-contract.js";
+import { collectTextContentBlocks } from "../../content-blocks.js";
+import {
+  isStrictAgenticSupportedProviderModel,
+  stripProviderPrefix,
+} from "../../execution-contract.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
+import { isZeroUsageEmptyStopAssistantTurn } from "../empty-assistant-turn.js";
 import { assessLastAssistantMessage } from "../thinking.js";
 import type { EmbeddedRunLivenessState } from "../types.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 type ReplayMetadataAttempt = Pick<
   EmbeddedRunAttemptResult,
-  "toolMetas" | "didSendViaMessagingTool" | "successfulCronAdds"
+  | "toolMetas"
+  | "didSendViaMessagingTool"
+  | "messagingToolSentTexts"
+  | "messagingToolSentMediaUrls"
+  | "successfulCronAdds"
 >;
 
 type IncompleteTurnAttempt = Pick<
@@ -19,6 +33,9 @@ type IncompleteTurnAttempt = Pick<
   | "currentAttemptAssistant"
   | "yieldDetected"
   | "didSendDeterministicApprovalPrompt"
+  | "didSendViaMessagingTool"
+  | "messagingToolSentTexts"
+  | "messagingToolSentMediaUrls"
   | "lastToolError"
   | "lastAssistant"
   | "replayMetadata"
@@ -40,10 +57,25 @@ type PlanningOnlyAttempt = Pick<
   | "toolMetas"
 >;
 
+type SilentToolResultAttempt = Pick<
+  EmbeddedRunAttemptResult,
+  | "clientToolCall"
+  | "yieldDetected"
+  | "didSendDeterministicApprovalPrompt"
+  | "lastToolError"
+  | "messagesSnapshot"
+  | "toolMetas"
+>;
+
 type RunLivenessAttempt = Pick<
   EmbeddedRunAttemptResult,
   "lastAssistant" | "promptErrorSource" | "replayMetadata" | "timedOutDuringCompaction"
 >;
+
+const REPLAY_UNSAFE_FALLBACK_METADATA: EmbeddedRunAttemptResult["replayMetadata"] = {
+  hadPotentialSideEffects: true,
+  replaySafe: false,
+};
 
 export function isIncompleteTerminalAssistantTurn(params: {
   hasAssistantVisibleText: boolean;
@@ -75,6 +107,16 @@ const SINGLE_ACTION_RETRY_SAFE_TOOL_NAMES = new Set([
   "glob",
   "ls",
 ]);
+const GEMINI_INCOMPLETE_TURN_PROVIDER_IDS = new Set([
+  "google",
+  "google-vertex",
+  "google-antigravity",
+  "google-gemini-cli",
+]);
+const GEMINI_INCOMPLETE_TURN_MODEL_ID_PATTERN = /^gemini(?:[.-]|$)/;
+// Ollama native `/api/chat` can finish with only thinking/internal blocks when
+// constrained, but it should not inherit the stricter planning-only/ack prompts.
+const OLLAMA_INCOMPLETE_TURN_PROVIDER_ID_PATTERN = /^ollama(?:-|$)/;
 const DEFAULT_PLANNING_ONLY_RETRY_LIMIT = 1;
 const STRICT_AGENTIC_PLANNING_ONLY_RETRY_LIMIT = 2;
 // Allow one immediate continuation plus one follow-up continuation before
@@ -143,16 +185,41 @@ export type PlanningOnlyPlanDetails = {
   steps: string[];
 };
 
+function hasStringEntry(values: readonly unknown[] | undefined): boolean {
+  return (
+    Array.isArray(values) &&
+    values.some((value) => typeof value === "string" && value.trim().length > 0)
+  );
+}
+
+export function hasCommittedUserVisibleToolDelivery(
+  attempt: Pick<EmbeddedRunAttemptResult, "messagingToolSentTexts" | "messagingToolSentMediaUrls">,
+): boolean {
+  return (
+    hasStringEntry(attempt.messagingToolSentTexts) ||
+    hasStringEntry(attempt.messagingToolSentMediaUrls)
+  );
+}
+
 export function buildAttemptReplayMetadata(
   params: ReplayMetadataAttempt,
 ): EmbeddedRunAttemptResult["replayMetadata"] {
   const hadMutatingTools = params.toolMetas.some((t) => isLikelyMutatingToolName(t.toolName));
   const hadPotentialSideEffects =
-    hadMutatingTools || params.didSendViaMessagingTool || (params.successfulCronAdds ?? 0) > 0;
+    hadMutatingTools ||
+    params.didSendViaMessagingTool ||
+    hasCommittedUserVisibleToolDelivery(params) ||
+    (params.successfulCronAdds ?? 0) > 0;
   return {
     hadPotentialSideEffects,
     replaySafe: !hadPotentialSideEffects,
   };
+}
+
+export function resolveAttemptReplayMetadata(attempt: {
+  replayMetadata?: EmbeddedRunAttemptResult["replayMetadata"] | null;
+}): EmbeddedRunAttemptResult["replayMetadata"] {
+  return attempt.replayMetadata ?? REPLAY_UNSAFE_FALLBACK_METADATA;
 }
 
 export function resolveIncompleteTurnPayloadText(params: {
@@ -170,6 +237,14 @@ export function resolveIncompleteTurnPayloadText(params: {
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.lastToolError
   ) {
+    return null;
+  }
+
+  if (hasOnlySilentAssistantReply(params.attempt.assistantTexts)) {
+    return null;
+  }
+
+  if (hasCommittedUserVisibleToolDelivery(params.attempt)) {
     return null;
   }
 
@@ -194,9 +269,92 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
-  return params.attempt.replayMetadata.hadPotentialSideEffects
+  return resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects
     ? "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying."
     : "⚠️ Agent couldn't generate a response. Please try again.";
+}
+
+function hasOnlySilentAssistantReply(assistantTexts: readonly string[]): boolean {
+  const nonEmptyTexts = assistantTexts.filter((text) => text.trim().length > 0);
+  return (
+    nonEmptyTexts.length > 0 &&
+    nonEmptyTexts.every((text) => isSilentReplyPayloadText(text, SILENT_REPLY_TOKEN))
+  );
+}
+
+function isToolResultRole(role: string): boolean {
+  return role === "toolresult" || role === "tool_result" || role === "tool";
+}
+
+function readMessageTextContent(message: AgentMessage): string | undefined {
+  const content = (message as { content?: unknown }).content;
+  if (typeof content === "string") {
+    const trimmed = content.trim();
+    return trimmed || undefined;
+  }
+  const text = collectTextContentBlocks(content)
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0)
+    .join("\n");
+  return text || undefined;
+}
+
+function readToolResultAggregatedText(message: AgentMessage): string | undefined {
+  const aggregated = (message as { details?: { aggregated?: unknown } }).details?.aggregated;
+  if (typeof aggregated !== "string") {
+    return undefined;
+  }
+  const trimmed = aggregated.trim();
+  return trimmed || undefined;
+}
+
+function hasTrailingSilentToolResult(messages: readonly AgentMessage[]): boolean {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (!message) {
+      continue;
+    }
+    const role = normalizeLowercaseStringOrEmpty(message?.role);
+    if (isToolResultRole(role)) {
+      if ((message as { isError?: boolean }).isError === true) {
+        return false;
+      }
+      const text = readMessageTextContent(message) ?? readToolResultAggregatedText(message);
+      return isSilentReplyText(text, SILENT_REPLY_TOKEN);
+    }
+    if (role === "assistant" && !readMessageTextContent(message)) {
+      continue;
+    }
+    return false;
+  }
+  return false;
+}
+
+export function resolveSilentToolResultReplyPayload(params: {
+  isCronTrigger: boolean;
+  payloadCount: number;
+  aborted: boolean;
+  timedOut: boolean;
+  attempt: SilentToolResultAttempt;
+}): { text: typeof SILENT_REPLY_TOKEN } | null {
+  if (
+    !params.isCronTrigger ||
+    params.payloadCount !== 0 ||
+    params.aborted ||
+    params.timedOut ||
+    params.attempt.toolMetas.length === 0 ||
+    params.attempt.clientToolCall ||
+    params.attempt.yieldDetected ||
+    params.attempt.didSendDeterministicApprovalPrompt ||
+    params.attempt.lastToolError ||
+    params.attempt.messagesSnapshot.length === 0
+  ) {
+    return null;
+  }
+
+  return hasTrailingSilentToolResult(params.attempt.messagesSnapshot)
+    ? { text: SILENT_REPLY_TOKEN }
+    : null;
 }
 
 export function resolveReplayInvalidFlag(params: {
@@ -204,7 +362,7 @@ export function resolveReplayInvalidFlag(params: {
   incompleteTurnText?: string | null;
 }): boolean {
   return (
-    !params.attempt.replayMetadata.replaySafe ||
+    !resolveAttemptReplayMetadata(params.attempt).replaySafe ||
     params.attempt.promptErrorSource === "compaction" ||
     params.attempt.timedOutDuringCompaction ||
     Boolean(params.incompleteTurnText)
@@ -275,6 +433,37 @@ function isEmptyResponseAssistantTurn(params: {
   return true;
 }
 
+function isNonVisibleAssistantTurnEligibleForSilentReply(params: {
+  payloadCount: number;
+  attempt: Pick<
+    IncompleteTurnAttempt,
+    "assistantTexts" | "currentAttemptAssistant" | "lastAssistant"
+  >;
+}): boolean {
+  if (isEmptyResponseAssistantTurn(params)) {
+    return true;
+  }
+  if (params.payloadCount !== 0) {
+    return false;
+  }
+  if (params.attempt.assistantTexts.join("\n\n").trim().length > 0) {
+    return false;
+  }
+  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
+  if (!assistant || assistant.stopReason === "error") {
+    return false;
+  }
+  if (
+    isIncompleteTerminalAssistantTurn({
+      hasAssistantVisibleText: false,
+      lastAssistant: assistant,
+    })
+  ) {
+    return false;
+  }
+  return isReasoningOnlyAssistantTurn(assistant);
+}
+
 function shouldSkipPlanningOnlyRetry(params: {
   aborted: boolean;
   timedOut: boolean;
@@ -287,13 +476,33 @@ function shouldSkipPlanningOnlyRetry(params: {
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.lastToolError ||
-    params.attempt.replayMetadata.hadPotentialSideEffects,
+    resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects,
   );
+}
+
+export function shouldTreatEmptyAssistantReplyAsSilent(params: {
+  allowEmptyAssistantReplyAsSilent?: boolean;
+  payloadCount: number;
+  aborted: boolean;
+  timedOut: boolean;
+  attempt: IncompleteTurnAttempt;
+}): boolean {
+  if (!params.allowEmptyAssistantReplyAsSilent || shouldSkipPlanningOnlyRetry(params)) {
+    return false;
+  }
+  if (hasCommittedUserVisibleToolDelivery(params.attempt)) {
+    return false;
+  }
+  return isNonVisibleAssistantTurnEligibleForSilentReply({
+    payloadCount: params.payloadCount,
+    attempt: params.attempt,
+  });
 }
 
 export function resolveReasoningOnlyRetryInstruction(params: {
   provider?: string;
   modelId?: string;
+  executionContract?: string;
   aborted: boolean;
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
@@ -303,9 +512,10 @@ export function resolveReasoningOnlyRetryInstruction(params: {
   }
 
   if (
-    !shouldApplyPlanningOnlyRetryGuard({
+    !shouldApplyNonVisibleTurnRetryGuard({
       provider: params.provider,
       modelId: params.modelId,
+      executionContract: params.executionContract,
     })
   ) {
     return null;
@@ -328,21 +538,13 @@ export function resolveReasoningOnlyRetryInstruction(params: {
 export function resolveEmptyResponseRetryInstruction(params: {
   provider?: string;
   modelId?: string;
+  executionContract?: string;
   payloadCount: number;
   aborted: boolean;
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
 }): string | null {
   if (shouldSkipPlanningOnlyRetry(params)) {
-    return null;
-  }
-
-  if (
-    !shouldApplyPlanningOnlyRetryGuard({
-      provider: params.provider,
-      modelId: params.modelId,
-    })
-  ) {
     return null;
   }
 
@@ -355,17 +557,74 @@ export function resolveEmptyResponseRetryInstruction(params: {
     return null;
   }
 
-  return EMPTY_RESPONSE_RETRY_INSTRUCTION;
+  if (
+    shouldApplyNonVisibleTurnRetryGuard({
+      provider: params.provider,
+      modelId: params.modelId,
+      executionContract: params.executionContract,
+    }) ||
+    // Keep the generic zero-usage stop retry for providers that expose a
+    // provider-neutral "nothing was generated" signal, even outside the
+    // provider allowlist above.
+    isZeroUsageEmptyStopAssistantTurn(
+      params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant ?? null,
+    )
+  ) {
+    return EMPTY_RESPONSE_RETRY_INSTRUCTION;
+  }
+
+  return null;
 }
 
 function shouldApplyPlanningOnlyRetryGuard(params: {
   provider?: string;
   modelId?: string;
+  executionContract?: string;
 }): boolean {
-  return isStrictAgenticSupportedProviderModel({
+  if (params.executionContract === "strict-agentic") {
+    return true;
+  }
+  return isIncompleteTurnRecoverySupportedProviderModel({
     provider: params.provider,
     modelId: params.modelId,
   });
+}
+
+function shouldApplyNonVisibleTurnRetryGuard(params: {
+  provider?: string;
+  modelId?: string;
+  executionContract?: string;
+}): boolean {
+  if (shouldApplyPlanningOnlyRetryGuard(params)) {
+    return true;
+  }
+  // Non-visible final turns are narrower than planning-only turns: there is no
+  // user text to classify, just a replay-safe empty/thinking-only result. Ollama
+  // gets this continuation guard without getting the planning-only or ack
+  // fast-path wording, which would be too opinionated for local models.
+  return OLLAMA_INCOMPLETE_TURN_PROVIDER_ID_PATTERN.test(
+    normalizeLowercaseStringOrEmpty(params.provider ?? ""),
+  );
+}
+
+function isIncompleteTurnRecoverySupportedProviderModel(params: {
+  provider?: string;
+  modelId?: string;
+}): boolean {
+  if (
+    isStrictAgenticSupportedProviderModel({
+      provider: params.provider,
+      modelId: params.modelId,
+    })
+  ) {
+    return true;
+  }
+  const provider = normalizeLowercaseStringOrEmpty(params.provider ?? "");
+  if (!GEMINI_INCOMPLETE_TURN_PROVIDER_IDS.has(provider)) {
+    return false;
+  }
+  const modelId = typeof params.modelId === "string" ? params.modelId : "";
+  return GEMINI_INCOMPLETE_TURN_MODEL_ID_PATTERN.test(stripProviderPrefix(modelId));
 }
 
 function normalizeAckPrompt(text: string): string {
@@ -518,6 +777,7 @@ export function resolvePlanningOnlyRetryLimit(
 export function resolvePlanningOnlyRetryInstruction(params: {
   provider?: string;
   modelId?: string;
+  executionContract?: string;
   prompt?: string;
   aborted: boolean;
   timedOut: boolean;
@@ -534,6 +794,7 @@ export function resolvePlanningOnlyRetryInstruction(params: {
     !shouldApplyPlanningOnlyRetryGuard({
       provider: params.provider,
       modelId: params.modelId,
+      executionContract: params.executionContract,
     }) ||
     (typeof params.prompt === "string" && !isLikelyActionableUserPrompt(params.prompt)) ||
     params.aborted ||
@@ -546,7 +807,7 @@ export function resolvePlanningOnlyRetryInstruction(params: {
     (hasNonPlanToolActivity(params.attempt.toolMetas) && !allowSingleActionRetryBypass) ||
     (params.attempt.itemLifecycle.startedCount > planOnlyToolMetaCount &&
       !allowSingleActionRetryBypass) ||
-    params.attempt.replayMetadata.hadPotentialSideEffects
+    resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects
   ) {
     return null;
   }

@@ -209,7 +209,10 @@ async function runStatusCommand(params: {
   spawn: (cmd: string, args: string[]) => ReturnType<typeof createExitedProcess>;
   spawnSync?: (cmd: string, args: string[]) => { status: number; stdout: string };
   env?: Record<string, string>;
-  runRuntimePostBuild?: (params?: { cwd?: string }) => void | Promise<void>;
+  runRuntimePostBuild?: (params?: {
+    cwd?: string;
+    env?: Record<string, string | undefined>;
+  }) => void | Promise<void>;
 }) {
   return await runNodeMain({
     cwd: params.tmp,
@@ -232,7 +235,10 @@ async function runQaCommand(params: {
   spawn: (cmd: string, args: string[]) => ReturnType<typeof createExitedProcess>;
   spawnSync?: (cmd: string, args: string[]) => { status: number; stdout: string };
   env?: Record<string, string>;
-  runRuntimePostBuild?: (params?: { cwd?: string }) => void | Promise<void>;
+  runRuntimePostBuild?: (params?: {
+    cwd?: string;
+    env?: Record<string, string | undefined>;
+  }) => void | Promise<void>;
 }) {
   return await runNodeMain({
     cwd: params.tmp,
@@ -571,6 +577,37 @@ describe("run-node script", () => {
     });
   });
 
+  it("passes the synthesized private QA env into runtime postbuild staging", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [QA_LAB_PLUGIN_SDK_ENTRY]: "export const qaLab = true;\n",
+        },
+        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE, QA_LAB_PLUGIN_SDK_ENTRY],
+        buildPaths: [DIST_ENTRY, BUILD_STAMP],
+      });
+
+      const runRuntimePostBuild = vi.fn();
+      const { spawn, spawnSync } = createSpawnRecorder({
+        gitHead: "abc123\n",
+        gitStatus: "",
+      });
+      const exitCode = await runQaCommand({ tmp, spawn, spawnSync, runRuntimePostBuild });
+
+      expect(exitCode).toBe(0);
+      expect(runRuntimePostBuild).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cwd: tmp,
+          env: expect.objectContaining({
+            OPENCLAW_BUILD_PRIVATE_QA: "1",
+            OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
+          }),
+        }),
+      );
+    });
+  });
+
   it("derives private QA facade checks from distRoot for direct freshness checks", async () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       await setupTrackedProject(tmp, {
@@ -767,6 +804,40 @@ describe("run-node script", () => {
       });
 
       expect(exitCode).toBe(23);
+    });
+  });
+
+  it("returns failure and releases the build lock when the compiler spawn errors", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      const spawn = (cmd: string, args: string[] = []) => {
+        if (cmd === process.execPath && args[0] === "scripts/tsdown-build.mjs") {
+          const events = new EventEmitter();
+          queueMicrotask(() => events.emit("error", new Error("spawn failed")));
+          return {
+            on: (event: string, cb: (code: number | null, signal: string | null) => void) => {
+              events.on(event, cb);
+              return undefined;
+            },
+          };
+        }
+        return createExitedProcess(0);
+      };
+
+      const exitCode = await runNodeMain({
+        cwd: tmp,
+        args: ["status"],
+        env: {
+          ...process.env,
+          OPENCLAW_FORCE_BUILD: "1",
+          OPENCLAW_RUNNER_LOG: "0",
+        },
+        spawn,
+        execPath: process.execPath,
+        platform: process.platform,
+      });
+
+      expect(exitCode).toBe(1);
+      expect(fsSync.existsSync(path.join(tmp, ".artifacts", "run-node-build.lock"))).toBe(false);
     });
   });
 

@@ -1,4 +1,4 @@
-import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
+import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/run-state.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CanvasHostServer } from "../canvas-host/server.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
@@ -19,15 +19,20 @@ import {
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { clearAgentRunContext } from "../infra/agent-events.js";
-import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
+import {
+  isDiagnosticsEnabled,
+  setDiagnosticsEnabledForProcess,
+} from "../infra/diagnostic-events.js";
 import { isTruthyEnvValue, isVitestRuntimeEnv, logAcceptedEnvOption } from "../infra/env.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
+import type { VoiceWakeRoutingConfig } from "../infra/voicewake-routing.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
+import { getActiveBundledRuntimeDepsInstallCount } from "../plugins/bundled-runtime-deps-activity.js";
 import { runGlobalGatewayStopSafely } from "../plugins/hook-runner-global.js";
-import { createPluginRuntime } from "../plugins/runtime/index.js";
+import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
@@ -38,10 +43,8 @@ import {
   getInspectableTaskRegistrySummary,
   stopTaskRegistryMaintenance,
 } from "../tasks/task-registry.maintenance.js";
-import { runSetupWizard } from "../wizard/setup.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
-import { closeMcpLoopbackServer } from "./mcp-http.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
 import { createChannelManager } from "./server-channels.js";
 import { createGatewayCloseHandler, runGatewayClosePrelude } from "./server-close.js";
@@ -50,8 +53,8 @@ import { buildGatewayCronService } from "./server-cron.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayServerLiveState, type GatewayServerLiveState } from "./server-live-state.js";
 import { GATEWAY_EVENTS } from "./server-methods-list.js";
-import { coreGatewayHandlers } from "./server-methods.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
+import { bootstrapGatewayNetworkRuntime } from "./server-network-runtime.js";
 import { createGatewayNodeSessionRuntime } from "./server-node-session-runtime.js";
 import { setFallbackGatewayContextResolver } from "./server-plugins.js";
 import { startManagedGatewayConfigReloader } from "./server-reload-handlers.js";
@@ -113,11 +116,18 @@ const logDiscovery = log.child("discovery");
 const logTailscale = log.child("tailscale");
 const logChannels = log.child("channels");
 
-let cachedChannelRuntime: ReturnType<typeof createPluginRuntime>["channel"] | null = null;
+let cachedChannelRuntimePromise: Promise<PluginRuntime["channel"]> | null = null;
 
 function getChannelRuntime() {
-  cachedChannelRuntime ??= createPluginRuntime().channel;
-  return cachedChannelRuntime;
+  cachedChannelRuntimePromise ??= import("../plugins/runtime/runtime-channel.js").then(
+    ({ createRuntimeChannel }) => createRuntimeChannel(),
+  );
+  return cachedChannelRuntimePromise;
+}
+
+async function closeMcpLoopbackServerOnDemand(): Promise<void> {
+  const { closeMcpLoopbackServer } = await import("./mcp-http.js");
+  await closeMcpLoopbackServer();
 }
 
 const logHealth = log.child("health");
@@ -227,19 +237,29 @@ export type GatewayServerOptions = {
     prompter: import("../wizard/prompts.js").WizardPrompter,
   ) => Promise<void>;
   /**
-   * Test-only: wait for post-listen sidecars such as plugin services before returning.
+   * Let post-listen sidecars (channels, plugin services) finish in the background.
+   * Defaults to false so gateway startup waits until sidecars are ready.
    */
-  awaitStartupSidecars?: boolean;
+  deferStartupSidecars?: boolean;
   /**
    * Optional startup timestamp used for concise readiness logging.
    */
   startupStartedAt?: number;
 };
 
+type SetupWizardRunner = NonNullable<GatewayServerOptions["wizardRunner"]>;
+
+const runDefaultSetupWizard: SetupWizardRunner = async (...args) => {
+  const { runSetupWizard } = await import("../wizard/setup.js");
+  return runSetupWizard(...args);
+};
+
 export async function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
+  bootstrapGatewayNetworkRuntime();
+
   const minimalTestGateway =
     isVitestRuntimeEnv() && process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1";
 
@@ -288,6 +308,7 @@ export async function startGatewayServer(
       authOverride: opts.auth,
       tailscaleOverride: opts.tailscale,
       activateRuntimeSecrets,
+      persistStartupAuth: startupConfigLoad.degradedProviderApi !== true,
     }),
   );
   cfgAtStart = authBootstrap.cfg;
@@ -303,6 +324,7 @@ export async function startGatewayServer(
     }
   }
   const diagnosticsEnabled = isDiagnosticsEnabled(cfgAtStart);
+  setDiagnosticsEnabledForProcess(diagnosticsEnabled);
   if (diagnosticsEnabled) {
     startDiagnosticHeartbeat(undefined, { getConfig: getRuntimeConfig });
   }
@@ -312,6 +334,7 @@ export async function startGatewayServer(
       getTotalQueueSize() +
       getTotalPendingReplies() +
       getActiveEmbeddedRunCount() +
+      getActiveBundledRuntimeDepsInstallCount() +
       getInspectableTaskRegistrySummary().active,
   );
   // Unconditional startup migration: seed gateway.controlUi.allowedOrigins for existing
@@ -323,6 +346,8 @@ export async function startGatewayServer(
           config: cfgAtStart,
           writeConfig: writeConfigFile,
           log,
+          runtimeBind: opts.bind,
+          runtimePort: port,
         }),
       );
   cfgAtStart = controlUiSeed.config;
@@ -446,7 +471,7 @@ export async function startGatewayServer(
     }),
   );
 
-  const wizardRunner = opts.wizardRunner ?? runSetupWizard;
+  const wizardRunner = opts.wizardRunner ?? runDefaultSetupWizard;
   const { wizardSessions, findRunningWizard, purgeWizardSession } = createWizardSessionTracker();
 
   const deps = createDefaultDeps();
@@ -573,7 +598,7 @@ export async function startGatewayServer(
       stopModelPricingRefresh: runtimeState.stopModelPricingRefresh,
       stopChannelHealthMonitor: () => runtimeState?.channelHealthMonitor?.stop(),
       clearSecretsRuntimeSnapshot,
-      closeMcpServer: async () => await closeMcpLoopbackServer(),
+      closeMcpServer: closeMcpLoopbackServerOnDemand,
     });
   const { getRuntimeSnapshot, startChannels, startChannel, stopChannel, markChannelLoggedOut } =
     channelManager;
@@ -611,6 +636,9 @@ export async function startGatewayServer(
     await runClosePrelude();
     await createCloseHandler()({ reason: "gateway startup failed" });
   };
+  const broadcastVoiceWakeRoutingChanged = (config: VoiceWakeRoutingConfig) => {
+    broadcast("voicewake.routing.changed", { config }, { dropIfSlow: true });
+  };
 
   try {
     const earlyRuntime = await startupTrace.measure("runtime.early", () =>
@@ -623,6 +651,7 @@ export async function startGatewayServer(
         log,
         logDiscovery,
         nodeRegistry,
+        pluginRegistry,
         broadcast,
         nodeSendToAllSubscribed,
         getPresenceVersion,
@@ -691,6 +720,9 @@ export async function startGatewayServer(
       sharedGatewaySessionGenerationState,
       resolveSharedGatewaySessionGenerationForConfig,
       clients,
+      startChannel,
+      stopChannel,
+      logChannels,
     });
 
     const canvasHostServerPort = (canvasHostServer as CanvasHostServer | null)?.port;
@@ -757,6 +789,7 @@ export async function startGatewayServer(
       wizardRunner,
       broadcastVoiceWakeChanged,
       unavailableGatewayMethods,
+      broadcastVoiceWakeRoutingChanged,
     });
 
     setFallbackGatewayContextResolver(() => gatewayRequestContext);
@@ -768,7 +801,7 @@ export async function startGatewayServer(
           cfg: gatewayPluginConfigAtStart,
           workspaceDir: defaultWorkspaceDir,
           log,
-          coreGatewayHandlers,
+          coreGatewayMethodNames: baseMethods,
           baseMethods,
           pluginIds: startupPluginIds,
           logDiagnostics: false,
@@ -802,6 +835,7 @@ export async function startGatewayServer(
     });
     await startListening();
     startupTrace.mark("http.bound");
+    const sessionDeliveryRecoveryMaxEnqueuedAt = Date.now();
     ({
       stopGatewayUpdateCheck: runtimeState.stopGatewayUpdateCheck,
       tailscaleCleanup: runtimeState.tailscaleCleanup,
@@ -837,15 +871,16 @@ export async function startGatewayServer(
           startupSidecarsReady = true;
         },
         startupTrace,
-        awaitSidecars: opts.awaitStartupSidecars,
+        deferSidecars: opts.deferStartupSidecars === true,
       }),
     ));
     startupTrace.mark("ready");
 
-    // HTTP is live before sidecars finish; /readyz stays red until the startup sidecars settle.
     const activated = activateGatewayScheduledServices({
       minimalTestGateway,
       cfgAtStart,
+      deps,
+      sessionDeliveryRecoveryMaxEnqueuedAt,
       cron: runtimeState.cronState.cron,
       logCron,
       log,
@@ -855,6 +890,7 @@ export async function startGatewayServer(
     runtimeState.configReloader = startManagedGatewayConfigReloader({
       minimalTestGateway,
       initialConfig: cfgAtStart,
+      initialCompareConfig: startupLastGoodSnapshot.sourceConfig,
       initialInternalWriteHash: startupInternalWriteHash,
       watchPath: configSnapshot.path,
       readSnapshot: readConfigFileSnapshot,

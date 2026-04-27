@@ -350,14 +350,11 @@ export async function parseAndSendMediaTags(
     return { handled: false, normalizedText: text };
   }
 
-  const tagCounts = mediaTagMatches.reduce(
-    (acc, m) => {
-      const t = normalizeLowercaseStringOrEmpty(m[1]);
-      acc[t] = (acc[t] ?? 0) + 1;
-      return acc;
-    },
-    {} as Record<string, number>,
-  );
+  const tagCounts = mediaTagMatches.reduce<Record<string, number>>((acc, m) => {
+    const t = normalizeLowercaseStringOrEmpty(m[1]);
+    acc[t] = (acc[t] ?? 0) + 1;
+    return acc;
+  }, {});
   log?.debug?.(
     `Detected media tags: ${Object.entries(tagCounts)
       .map(([k, v]) => `${v} <${k}>`)
@@ -465,6 +462,7 @@ export interface PlainReplyPayload {
   text?: string;
   mediaUrls?: string[];
   mediaUrl?: string;
+  audioAsVoice?: boolean;
 }
 
 /**

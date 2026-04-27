@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  PluginHookGatewayContext,
+  PluginHookGatewayStartEvent,
+} from "../plugins/hook-types.js";
 
 const hoisted = vi.hoisted(() => {
   const startPluginServices = vi.fn(async () => null);
@@ -16,6 +20,7 @@ const hoisted = vi.hoisted(() => {
   const scheduleSubagentOrphanRecovery = vi.fn();
   const shouldWakeFromRestartSentinel = vi.fn(() => false);
   const scheduleRestartSentinelWake = vi.fn();
+  const getAcpRuntimeBackend = vi.fn<(id?: string) => unknown>(() => null);
   const reconcilePendingSessionIdentities = vi.fn(async () => ({
     checked: 0,
     resolved: 0,
@@ -37,6 +42,7 @@ const hoisted = vi.hoisted(() => {
     scheduleSubagentOrphanRecovery,
     shouldWakeFromRestartSentinel,
     scheduleRestartSentinelWake,
+    getAcpRuntimeBackend,
     reconcilePendingSessionIdentities,
   };
 });
@@ -93,6 +99,10 @@ vi.mock("../acp/control-plane/manager.js", () => ({
   })),
 }));
 
+vi.mock("../acp/runtime/registry.js", () => ({
+  getAcpRuntimeBackend: hoisted.getAcpRuntimeBackend,
+}));
+
 vi.mock("./server-restart-sentinel.js", () => ({
   scheduleRestartSentinelWake: hoisted.scheduleRestartSentinelWake,
   shouldWakeFromRestartSentinel: hoisted.shouldWakeFromRestartSentinel,
@@ -139,15 +149,19 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.scheduleSubagentOrphanRecovery.mockClear();
     hoisted.shouldWakeFromRestartSentinel.mockReturnValue(false);
     hoisted.scheduleRestartSentinelWake.mockClear();
+    hoisted.getAcpRuntimeBackend.mockReset();
+    hoisted.getAcpRuntimeBackend.mockReturnValue(null);
     hoisted.reconcilePendingSessionIdentities.mockClear();
   });
 
   it("re-enables startup-gated methods after post-attach sidecars start", async () => {
     const unavailableGatewayMethods = new Set<string>(["chat.history", "models.list"]);
     const onSidecarsReady = vi.fn();
+    const log = { info: vi.fn(), warn: vi.fn() };
 
     await startGatewayPostAttachRuntime({
       ...createPostAttachParams(),
+      log,
       unavailableGatewayMethods,
       onSidecarsReady,
     });
@@ -162,6 +176,7 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(hoisted.logGatewayStartup).toHaveBeenCalledWith(
       expect.objectContaining({ loadedPluginIds: ["beta", "alpha"] }),
     );
+    expect(log.info).toHaveBeenCalledWith("gateway ready");
     expect(hoisted.startGatewayMemoryBackend).not.toHaveBeenCalled();
   });
 
@@ -179,6 +194,34 @@ describe("startGatewayPostAttachRuntime", () => {
     });
   });
 
+  it("waits for sidecars by default before returning", async () => {
+    let resumeSidecars!: () => void;
+    const sidecarsReady = new Promise<{ pluginServices: null }>((resolve) => {
+      resumeSidecars = () => resolve({ pluginServices: null });
+    });
+    const startGatewaySidecars = vi.fn(async () => {
+      return await sidecarsReady;
+    });
+    let returned = false;
+
+    const runtimePromise = startGatewayPostAttachRuntime(
+      createPostAttachParams(),
+      createPostAttachRuntimeDeps({ startGatewaySidecars }),
+    ).then(() => {
+      returned = true;
+    });
+
+    await vi.waitFor(() => {
+      expect(startGatewaySidecars).toHaveBeenCalledTimes(1);
+    });
+    await Promise.resolve();
+    expect(returned).toBe(false);
+
+    resumeSidecars();
+    await runtimePromise;
+    expect(returned).toBe(true);
+  });
+
   it("keeps startup-gated methods unavailable while sidecars are still resuming", async () => {
     let resumeSidecars!: () => void;
     const sidecarsReady = new Promise<{ pluginServices: null }>((resolve) => {
@@ -193,6 +236,7 @@ describe("startGatewayPostAttachRuntime", () => {
       {
         ...createPostAttachParams(),
         unavailableGatewayMethods,
+        deferSidecars: true,
       },
       createPostAttachRuntimeDeps({ startGatewaySidecars }),
     );
@@ -259,6 +303,97 @@ describe("startGatewayPostAttachRuntime", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("waits for a healthy ACP runtime backend before startup identity reconcile", async () => {
+    let healthy = false;
+    hoisted.getAcpRuntimeBackend.mockImplementation((id?: string) => ({
+      id: id ?? "acpx",
+      runtime: {},
+      healthy: () => healthy,
+    }));
+
+    await startGatewaySidecars({
+      cfg: {
+        hooks: { internal: { enabled: false } },
+        acp: { enabled: true, backend: "acpx" },
+      } as never,
+      pluginRegistry: createPostAttachParams().pluginRegistry,
+      defaultWorkspaceDir: "/tmp/openclaw-workspace",
+      deps: {} as never,
+      startChannels: vi.fn(async () => undefined),
+      log: { warn: vi.fn() },
+      logHooks: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+      logChannels: {
+        info: vi.fn(),
+        error: vi.fn(),
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(hoisted.getAcpRuntimeBackend).toHaveBeenCalledWith("acpx");
+    });
+    expect(hoisted.reconcilePendingSessionIdentities).not.toHaveBeenCalled();
+
+    healthy = true;
+    await vi.waitFor(() => {
+      expect(hoisted.reconcilePendingSessionIdentities).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("passes typed gateway_start context with config, workspace dir, and a live cron getter", async () => {
+    const runGatewayStart = vi.fn<
+      (event: PluginHookGatewayStartEvent, ctx: PluginHookGatewayContext) => Promise<void>
+    >(async () => undefined);
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "gateway_start"),
+      runGatewayStart,
+    };
+    const initialCron = { list: vi.fn(), add: vi.fn(), update: vi.fn(), remove: vi.fn() };
+    const params = createPostAttachParams({
+      gatewayPluginConfigAtStart: {
+        hooks: { internal: { enabled: false } },
+        plugins: { entries: { demo: { enabled: true } } },
+      } as never,
+      deps: { cron: initialCron } as never,
+    });
+
+    await startGatewayPostAttachRuntime(
+      params,
+      createPostAttachRuntimeDeps({
+        getGlobalHookRunner: vi.fn(async () => hookRunner as never),
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(runGatewayStart).toHaveBeenCalledTimes(1);
+    });
+
+    const firstCall = runGatewayStart.mock.calls[0];
+    if (!firstCall) {
+      throw new Error("gateway_start was not invoked");
+    }
+    const [event, ctx] = firstCall;
+    expect(event).toEqual({ port: 18789 });
+    expect(ctx).toMatchObject({
+      port: 18789,
+      config: params.gatewayPluginConfigAtStart,
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+    expect(typeof ctx.getCron).toBe("function");
+    const getCron = ctx.getCron;
+    if (!getCron) {
+      throw new Error("gateway_start context did not expose getCron");
+    }
+    expect(getCron()).toBe(initialCron);
+
+    const reloadedCron = { list: vi.fn(), add: vi.fn(), update: vi.fn(), remove: vi.fn() };
+    params.deps.cron = reloadedCron as never;
+    expect(getCron()).toBe(reloadedCron);
   });
 });
 

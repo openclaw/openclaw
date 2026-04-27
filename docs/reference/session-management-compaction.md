@@ -4,29 +4,27 @@ read_when:
   - You need to debug session ids, transcript JSONL, or sessions.json fields
   - You are changing auto-compaction behavior or adding “pre-compaction” housekeeping
   - You want to implement memory flushes or silent system turns
-title: "Session Management Deep Dive"
+title: "Session management deep dive"
 ---
 
-# Session Management & Compaction (Deep Dive)
-
-This document explains how OpenClaw manages sessions end-to-end:
+OpenClaw manages sessions end-to-end across these areas:
 
 - **Session routing** (how inbound messages map to a `sessionKey`)
 - **Session store** (`sessions.json`) and what it tracks
 - **Transcript persistence** (`*.jsonl`) and its structure
 - **Transcript hygiene** (provider-specific fixups before runs)
 - **Context limits** (context window vs tracked tokens)
-- **Compaction** (manual + auto-compaction) and where to hook pre-compaction work
-- **Silent housekeeping** (e.g. memory writes that shouldn’t produce user-visible output)
+- **Compaction** (manual and auto-compaction) and where to hook pre-compaction work
+- **Silent housekeeping** (memory writes that should not produce user-visible output)
 
 If you want a higher-level overview first, start with:
 
-- [/concepts/session](/concepts/session)
-- [/concepts/compaction](/concepts/compaction)
-- [/concepts/memory](/concepts/memory)
-- [/concepts/memory-search](/concepts/memory-search)
-- [/concepts/session-pruning](/concepts/session-pruning)
-- [/reference/transcript-hygiene](/reference/transcript-hygiene)
+- [Session management](/concepts/session)
+- [Compaction](/concepts/compaction)
+- [Memory overview](/concepts/memory)
+- [Memory search](/concepts/memory-search)
+- [Session pruning](/concepts/session-pruning)
+- [Transcript hygiene](/reference/transcript-hygiene)
 
 ---
 
@@ -103,6 +101,14 @@ Isolated cron runs also create session entries/transcripts, and they have dedica
 - `cron.sessionRetention` (default `24h`) prunes old isolated cron run sessions from the session store (`false` disables).
 - `cron.runLog.maxBytes` + `cron.runLog.keepLines` prune `~/.openclaw/cron/runs/<jobId>.jsonl` files (defaults: `2_000_000` bytes and `2000` lines).
 
+When cron force-creates a new isolated run session, it sanitizes the previous
+`cron:<jobId>` session entry before writing the new row. It carries safe
+preferences such as thinking/fast/verbose settings, labels, and explicit
+user-selected model/auth overrides. It drops ambient conversation context such
+as channel/group routing, send or queue policy, elevation, origin, and ACP
+runtime binding so a fresh isolated run cannot inherit stale delivery or
+runtime authority from an older run.
+
 ---
 
 ## Session keys (`sessionKey`)
@@ -130,6 +136,7 @@ Rules of thumb:
 - **Reset** (`/new`, `/reset`) creates a new `sessionId` for that `sessionKey`.
 - **Daily reset** (default 4:00 AM local time on the gateway host) creates a new `sessionId` on the next message after the reset boundary.
 - **Idle expiry** (`session.reset.idleMinutes` or legacy `session.idleMinutes`) creates a new `sessionId` when a message arrives after the idle window. When daily + idle are both configured, whichever expires first wins.
+- **System events** (heartbeat, cron wakeups, exec notifications, gateway bookkeeping) may mutate the session row but do not extend daily/idle reset freshness. Reset rollover discards queued system-event notices for the previous session before the fresh prompt is built.
 - **Thread parent fork guard** (`session.parentForkMaxTokens`, default `100000`) skips parent transcript forking when the parent session is already too large; the new thread starts fresh. Set `0` to disable.
 
 Implementation detail: the decision happens in `initSessionState()` in `src/auto-reply/reply/session.ts`.
@@ -143,7 +150,14 @@ The store’s value type is `SessionEntry` in `src/config/sessions.ts`.
 Key fields (not exhaustive):
 
 - `sessionId`: current transcript id (filename is derived from this unless `sessionFile` is set)
-- `updatedAt`: last activity timestamp
+- `sessionStartedAt`: start timestamp for the current `sessionId`; daily reset
+  freshness uses this. Legacy rows may derive it from the JSONL session header.
+- `lastInteractionAt`: last real user/channel interaction timestamp; idle reset
+  freshness uses this so heartbeat, cron, and exec events do not keep sessions
+  alive. Legacy rows without this field fall back to the recovered session start
+  time for idle freshness.
+- `updatedAt`: last store-row mutation timestamp, used for listing, pruning, and
+  bookkeeping. It is not the authority for daily/idle reset freshness.
 - `sessionFile`: optional explicit transcript path override
 - `chatType`: `direct | group | room` (helps UIs and send policy)
 - `provider`, `subject`, `room`, `space`, `displayName`: metadata for group/channel labeling
@@ -245,6 +259,13 @@ Where:
 
 These are Pi runtime semantics (OpenClaw consumes the events, but Pi decides when to compact).
 
+OpenClaw can also trigger a preflight local compaction before opening the next
+run when `agents.defaults.compaction.maxActiveTranscriptBytes` is set and the
+active transcript file reaches that size. This is a file-size guard for local
+reopen cost, not raw archival: OpenClaw still runs normal semantic compaction,
+and it requires `truncateAfterCompaction` so the compacted summary can become a
+new successor transcript.
+
 ---
 
 ## Compaction settings (`reserveTokens`, `keepRecentTokens`)
@@ -267,6 +288,19 @@ OpenClaw also enforces a safety floor for embedded runs:
 - Default floor is `20000` tokens.
 - Set `agents.defaults.compaction.reserveTokensFloor: 0` to disable the floor.
 - If it’s already higher, OpenClaw leaves it alone.
+- Manual `/compact` honors an explicit `agents.defaults.compaction.keepRecentTokens`
+  and keeps Pi's recent-tail cut point. Without an explicit keep budget,
+  manual compaction remains a hard checkpoint and rebuilt context starts from
+  the new summary.
+- Set `agents.defaults.compaction.maxActiveTranscriptBytes` to a byte value or
+  string such as `"20mb"` to run local compaction before a turn when the active
+  transcript gets large. This guard is active only when
+  `truncateAfterCompaction` is also enabled. Leave it unset or set `0` to
+  disable.
+- When `agents.defaults.compaction.truncateAfterCompaction` is enabled,
+  OpenClaw rotates the active transcript to a compacted successor JSONL after
+  compaction. The old full transcript remains archived and linked from the
+  compaction checkpoint instead of being rewritten in place.
 
 Why: leave enough headroom for multi-turn “housekeeping” (like memory writes) before compaction becomes unavoidable.
 
@@ -283,6 +317,10 @@ Plugins can register a compaction provider via `registerCompactionProvider()` on
 - Setting a `provider` forces `mode: "safeguard"`.
 - Providers receive the same compaction instructions and identifier-preservation policy as the built-in path.
 - The safeguard still preserves recent-turn and split-turn suffix context after provider output.
+- Built-in safeguard summarization re-distills prior summaries with new messages
+  instead of preserving the full previous summary verbatim.
+- Safeguard mode enables summary quality audits by default; set
+  `qualityGuard.enabled: false` to skip retry-on-malformed-output behavior.
 - If the provider fails or returns an empty result, OpenClaw falls back to built-in LLM summarization automatically.
 - Abort/timeout signals are re-thrown (not swallowed) to respect caller cancellation.
 
@@ -365,3 +403,9 @@ flush logic lives on the Gateway side today.
   - compaction settings (`reserveTokens` too high for the model window can cause earlier compaction)
   - tool-result bloat: enable/tune session pruning
 - Silent turns leaking? Confirm the reply starts with `NO_REPLY` (case-insensitive exact token) and you’re on a build that includes the streaming suppression fix.
+
+## Related
+
+- [Session management](/concepts/session)
+- [Session pruning](/concepts/session-pruning)
+- [Context engine](/concepts/context-engine)

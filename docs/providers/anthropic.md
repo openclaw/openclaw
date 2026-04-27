@@ -5,8 +5,6 @@ read_when:
 title: "Anthropic"
 ---
 
-# Anthropic (Claude)
-
 Anthropic builds the **Claude** model family. OpenClaw supports two auth routes:
 
 - **API key** — direct Anthropic API access with usage-based billing (`anthropic/*` models)
@@ -26,7 +24,8 @@ Anthropic's current public docs:
 - [Claude Agent SDK overview](https://platform.claude.com/docs/en/agent-sdk/overview)
 - [Using Claude Code with your Pro or Max plan](https://support.claude.com/en/articles/11145838-using-claude-code-with-your-pro-or-max-plan)
 - [Using Claude Code with your Team or Enterprise plan](https://support.anthropic.com/en/articles/11845131-using-claude-code-with-your-team-or-enterprise-plan/)
-  </Warning>
+
+</Warning>
 
 ## Getting started
 
@@ -97,6 +96,25 @@ Anthropic's current public docs:
     <Note>
     Setup and runtime details for the Claude CLI backend are in [CLI Backends](/gateway/cli-backends).
     </Note>
+
+    ### Config example
+
+    Prefer the canonical Anthropic model ref plus a CLI runtime override:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-7" },
+          agentRuntime: { id: "claude-cli" },
+        },
+      },
+    }
+    ```
+
+    Legacy `claude-cli/claude-opus-4-7` model refs still work for
+    compatibility, but new config should keep provider/model selection as
+    `anthropic/*` and put the execution backend in `agentRuntime.id`.
 
     <Tip>
     If you want the clearest billing path, use an Anthropic API key instead. OpenClaw also supports subscription-style options from [OpenAI Codex](/providers/openai), [Qwen Cloud](/providers/qwen), [MiniMax](/providers/minimax), and [Z.AI / GLM](/providers/glm).
@@ -261,10 +279,19 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
 
     OpenClaw maps this to `anthropic-beta: context-1m-2025-08-07` on requests.
 
+    `params.context1m: true` also applies to the Claude CLI backend
+    (`claude-cli/*`) for eligible Opus and Sonnet models, expanding the runtime
+    context window for those CLI sessions to match the direct-API behavior.
+
     <Warning>
     Requires long-context access on your Anthropic credential. Legacy token auth (`sk-ant-oat-*`) is rejected for 1M context requests — OpenClaw logs a warning and falls back to the standard context window.
     </Warning>
 
+  </Accordion>
+
+  <Accordion title="Claude Opus 4.7 1M context">
+    `anthropic/claude-opus-4.7` and its `claude-cli` variant have a 1M context
+    window by default — no `params.context1m: true` needed.
   </Accordion>
 </AccordionGroup>
 
@@ -272,11 +299,11 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
 
 <AccordionGroup>
   <Accordion title="401 errors / token suddenly invalid">
-    Anthropic token auth can expire or be revoked. For new setups, migrate to an Anthropic API key.
+    Anthropic token auth expires and can be revoked. For new setups, use an Anthropic API key instead.
   </Accordion>
 
   <Accordion title='No API key found for provider "anthropic"'>
-    Auth is **per agent**. New agents don't inherit the main agent's keys. Re-run onboarding for that agent, or configure an API key on the gateway host, then verify with `openclaw models status`.
+    Anthropic auth is **per agent** — new agents do not inherit the main agent's keys. Re-run onboarding for that agent (or configure an API key on the gateway host), then verify with `openclaw models status`.
   </Accordion>
 
   <Accordion title='No credentials found for profile "anthropic:default"'>

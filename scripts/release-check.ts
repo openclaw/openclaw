@@ -1,14 +1,28 @@
 #!/usr/bin/env -S node --import tsx
 
 import { execFileSync, execSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  realpathSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  isBundledRuntimeDepsInstallStagePath,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   writePackageDistInventory,
 } from "../src/infra/package-dist-inventory.ts";
+import {
+  resolveBundledRuntimeDependencyInstallRoot,
+  resolveBundledRuntimeDependencyPackageInstallRoot,
+} from "../src/plugins/bundled-runtime-deps.ts";
 import {
   collectBundledExtensionManifestErrors,
   type BundledExtension,
@@ -27,8 +41,10 @@ import {
   runInstalledWorkspaceBootstrapSmoke,
   WORKSPACE_TEMPLATE_PACK_PATHS,
 } from "./lib/workspace-bootstrap-smoke.mjs";
+import { discoverBundledPluginRuntimeDeps } from "./postinstall-bundled-plugins.mjs";
 import { listStaticExtensionAssetOutputs } from "./runtime-postbuild.mjs";
 import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
+import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
 
 export { collectBundledExtensionManifestErrors } from "./lib/bundled-extension-manifest.ts";
 export {
@@ -57,29 +73,33 @@ const requiredPathGroups = [
   "dist/build-info.json",
   "dist/channel-catalog.json",
   "dist/control-ui/index.html",
-  "dist/extensions/qa-channel/runtime-api.js",
-  "dist/extensions/qa-lab/runtime-api.js",
 ];
-const legacyUpdateCompatPackPaths = new Set([
-  "dist/extensions/qa-channel/runtime-api.js",
-  "dist/extensions/qa-lab/runtime-api.js",
-]);
 const forbiddenPrefixes = [
   "dist-runtime/",
   "dist/OpenClaw.app/",
+  "dist/extensions/qa-channel/",
   "dist/extensions/qa-lab/",
+  "dist/plugin-sdk/extensions/qa-channel/",
   "dist/plugin-sdk/extensions/qa-lab/",
+  "dist/plugin-sdk/qa-channel.",
+  "dist/plugin-sdk/qa-channel-protocol.",
   "dist/plugin-sdk/qa-lab.",
   "dist/plugin-sdk/qa-runtime.",
+  "dist/plugin-sdk/src/plugin-sdk/qa-channel.d.ts",
+  "dist/plugin-sdk/src/plugin-sdk/qa-channel-protocol.d.ts",
   "dist/plugin-sdk/src/plugin-sdk/qa-lab.d.ts",
   "dist/plugin-sdk/src/plugin-sdk/qa-runtime.d.ts",
   "dist/qa-runtime-",
   "dist/plugin-sdk/.tsbuildinfo",
   "docs/.generated/",
+  "docs/channels/qa-channel.md",
   "qa/",
 ];
 const forbiddenPrivateQaContentMarkers = [
   "//#region extensions/qa-lab/",
+  "qa-channel/runtime-api.js",
+  "qa-channel.js",
+  "qa-channel-protocol.js",
   "qa-lab/cli.js",
   "qa-lab/runtime-api.js",
 ] as const;
@@ -87,6 +107,13 @@ const forbiddenPrivateQaContentScanPrefixes = ["dist/"] as const;
 const appcastPath = resolve("appcast.xml");
 const laneBuildMin = 1_000_000_000;
 const laneFloorAdoptionDateKey = 20260227;
+const SAFE_UNIX_SMOKE_PATH = "/usr/bin:/bin";
+export const PACKED_CLI_SMOKE_COMMANDS = [
+  ["--help"],
+  ["status", "--json", "--timeout", "1"],
+  ["config", "schema"],
+  ["models", "list", "--provider", "amazon-bedrock"],
+] as const;
 
 function collectBundledExtensions(): BundledExtension[] {
   const extensionsDir = resolve("extensions");
@@ -204,13 +231,64 @@ function resolveGlobalRoot(prefixDir: string, cwd: string): string {
   }).trim();
 }
 
+function resolveInstalledBinaryPath(prefixDir: string): string {
+  return process.platform === "win32"
+    ? join(prefixDir, "openclaw.cmd")
+    : join(prefixDir, "bin", "openclaw");
+}
+
 export function createPackedBundledPluginPostinstallEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
   return {
     ...env,
     OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
-    OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS: "1",
+  };
+}
+
+export function createPackedCliSmokeEnv(
+  env: NodeJS.ProcessEnv,
+  overrides: NodeJS.ProcessEnv = {},
+): NodeJS.ProcessEnv {
+  const allowlistedEnvEntries = [
+    "HOME",
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+    "SystemRoot",
+    "ComSpec",
+    "PATHEXT",
+    "WINDIR",
+  ] as const;
+  const windowsRoot = env.SystemRoot ?? env.WINDIR ?? "C:\\Windows";
+  const nodeBinDir = dirname(process.execPath);
+  const trustedCmdPath = join(windowsRoot, "System32", "cmd.exe");
+  const safePath =
+    process.platform === "win32"
+      ? `${nodeBinDir};${windowsRoot}\\System32;${windowsRoot}`
+      : `${nodeBinDir}:${SAFE_UNIX_SMOKE_PATH}`;
+  const homeDir = overrides.HOME ?? env.HOME ?? overrides.USERPROFILE ?? env.USERPROFILE ?? "";
+
+  return {
+    ...Object.fromEntries(
+      allowlistedEnvEntries.flatMap((key) => {
+        const value = env[key];
+        return typeof value === "string" && value.length > 0 ? [[key, value]] : [];
+      }),
+    ),
+    PATH: safePath,
+    HOME: homeDir,
+    USERPROFILE: homeDir,
+    ComSpec: trustedCmdPath,
+    APPDATA: homeDir ? join(homeDir, "AppData", "Roaming") : undefined,
+    LOCALAPPDATA: homeDir ? join(homeDir, "AppData", "Local") : undefined,
+    AWS_EC2_METADATA_DISABLED: "true",
+    AWS_SHARED_CREDENTIALS_FILE: homeDir ? join(homeDir, ".aws", "credentials") : undefined,
+    AWS_CONFIG_FILE: homeDir ? join(homeDir, ".aws", "config") : undefined,
+    OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
+    OPENCLAW_NO_ONBOARD: "1",
+    OPENCLAW_SUPPRESS_NOTES: "1",
+    ...overrides,
   };
 }
 
@@ -220,6 +298,216 @@ function runPackedBundledPluginPostinstall(packageRoot: string): void {
     stdio: "inherit",
     env: createPackedBundledPluginPostinstallEnv(),
   });
+}
+
+export function collectInstalledBundledPluginRuntimeDepErrors(packageRoot: string): string[] {
+  const extensionsDir = join(packageRoot, "dist", "extensions");
+  if (!existsSync(extensionsDir)) {
+    return [];
+  }
+  const runtimeDeps = discoverBundledPluginRuntimeDeps({ extensionsDir });
+  return runtimeDeps
+    .filter((dep) => !existsSync(join(packageRoot, dep.sentinelPath)))
+    .map((dep) => {
+      const owners = dep.pluginIds.length > 0 ? dep.pluginIds.join(", ") : "unknown";
+      return `bundled plugin runtime dependency '${dep.name}@${dep.version}' (owners: ${owners}) is missing at ${dep.sentinelPath}.`;
+    })
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+function bundledRuntimeDependencySentinelPath(
+  packageRoot: string,
+  pluginId: string,
+  dependencyName: string,
+): string {
+  return join(
+    packageRoot,
+    "dist",
+    "extensions",
+    pluginId,
+    "node_modules",
+    ...dependencyName.split("/"),
+    "package.json",
+  );
+}
+
+export function bundledRuntimeDependencySentinelCandidates(
+  packageRoot: string,
+  pluginId: string,
+  dependencyName: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const dependencyParts = dependencyName.split("/");
+  const packageRoots = [
+    packageRoot,
+    (() => {
+      try {
+        return realpathSync(packageRoot);
+      } catch {
+        return packageRoot;
+      }
+    })(),
+  ];
+  const runtimeRoots = packageRoots.flatMap((root) => [
+    resolveBundledRuntimeDependencyPackageInstallRoot(root, { env }),
+    resolveBundledRuntimeDependencyInstallRoot(join(root, "dist", "extensions", pluginId), {
+      env,
+    }),
+  ]);
+  return [
+    bundledRuntimeDependencySentinelPath(packageRoot, pluginId, dependencyName),
+    join(packageRoot, "dist", "extensions", "node_modules", ...dependencyParts, "package.json"),
+    join(packageRoot, "node_modules", ...dependencyParts, "package.json"),
+    ...runtimeRoots.map((root) => join(root, "node_modules", ...dependencyParts, "package.json")),
+  ].filter((candidate, index, candidates) => candidates.indexOf(candidate) === index);
+}
+
+function assertBundledRuntimeDependencyAbsent(params: {
+  packageRoot: string;
+  pluginId: string;
+  dependencyName: string;
+  env?: NodeJS.ProcessEnv;
+}): void {
+  const sentinelPath = bundledRuntimeDependencySentinelCandidates(
+    params.packageRoot,
+    params.pluginId,
+    params.dependencyName,
+    params.env,
+  ).find((candidate) => existsSync(candidate));
+  if (sentinelPath) {
+    throw new Error(
+      `release-check: ${params.pluginId} runtime dependency ${params.dependencyName} was installed before plugin activation (${sentinelPath}).`,
+    );
+  }
+}
+
+function assertBundledRuntimeDependencyPresent(params: {
+  packageRoot: string;
+  pluginId: string;
+  dependencyName: string;
+  env?: NodeJS.ProcessEnv;
+}): void {
+  const sentinelPath = bundledRuntimeDependencySentinelCandidates(
+    params.packageRoot,
+    params.pluginId,
+    params.dependencyName,
+    params.env,
+  ).find((candidate) => existsSync(candidate));
+  if (sentinelPath) {
+    return;
+  }
+  throw new Error(
+    `release-check: ${params.pluginId} runtime dependency ${params.dependencyName} was not installed during plugin activation.`,
+  );
+}
+
+function writePackedBundledPluginActivationConfig(homeDir: string): void {
+  const configPath = join(homeDir, ".openclaw", "openclaw.json");
+  mkdirSync(join(homeDir, ".openclaw"), { recursive: true });
+  writeFileSync(
+    configPath,
+    `${JSON.stringify(
+      {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-4.1-mini" },
+          },
+        },
+        channels: {
+          feishu: {
+            enabled: true,
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              apiKey: "sk-openclaw-release-check",
+              baseUrl: "https://api.openai.com/v1",
+              models: [],
+            },
+          },
+        },
+        plugins: {
+          enabled: true,
+          entries: {
+            feishu: {
+              enabled: true,
+            },
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+}
+
+function runPackedBundledPluginActivationSmoke(packageRoot: string, tmpRoot: string): void {
+  const lazyDeps = [
+    { pluginId: "browser", dependencyName: "playwright-core" },
+    { pluginId: "feishu", dependencyName: "@larksuiteoapi/node-sdk" },
+  ] as const;
+
+  const homeDir = join(tmpRoot, "activation-home");
+  mkdirSync(homeDir, { recursive: true });
+  const env = createPackedCliSmokeEnv(process.env, {
+    HOME: homeDir,
+    OPENAI_API_KEY: "sk-openclaw-release-check",
+  });
+  for (const dep of lazyDeps) {
+    assertBundledRuntimeDependencyAbsent({ packageRoot, env, ...dep });
+  }
+
+  writePackedBundledPluginActivationConfig(homeDir);
+  execFileSync(process.execPath, [join(packageRoot, "openclaw.mjs"), "plugins", "doctor"], {
+    cwd: packageRoot,
+    stdio: "inherit",
+    env,
+  });
+
+  for (const dep of lazyDeps) {
+    assertBundledRuntimeDependencyPresent({ packageRoot, env, ...dep });
+  }
+}
+
+function runPackedCliSmoke(params: {
+  prefixDir: string;
+  cwd: string;
+  homeDir: string;
+  stateDir: string;
+}): void {
+  const binaryPath = resolveInstalledBinaryPath(params.prefixDir);
+  const env = createPackedCliSmokeEnv(process.env, {
+    HOME: params.homeDir,
+    OPENCLAW_STATE_DIR: params.stateDir,
+    OPENAI_API_KEY: "sk-openclaw-release-check",
+  });
+  const windowsRoot = env.SystemRoot ?? env.WINDIR ?? "C:\\Windows";
+  const trustedCmdPath = join(windowsRoot, "System32", "cmd.exe");
+
+  for (const args of PACKED_CLI_SMOKE_COMMANDS) {
+    if (process.platform === "win32") {
+      execFileSync(
+        trustedCmdPath,
+        ["/d", "/s", "/c", buildCmdExeCommandLine(binaryPath, [...args])],
+        {
+          cwd: params.cwd,
+          stdio: "inherit",
+          env,
+          shell: false,
+          windowsVerbatimArguments: true,
+        },
+      );
+      continue;
+    }
+    execFileSync(binaryPath, [...args], {
+      cwd: params.cwd,
+      stdio: "inherit",
+      env,
+      shell: false,
+    });
+  }
 }
 
 function runPackedBundledChannelEntrySmoke(): void {
@@ -234,7 +522,17 @@ function runPackedBundledChannelEntrySmoke(): void {
     installPackedTarball(prefixDir, tarballPath, tmpRoot);
 
     const packageRoot = join(resolveGlobalRoot(prefixDir, tmpRoot), "openclaw");
+    const homeDir = join(tmpRoot, "home");
+    const stateDir = join(tmpRoot, "state");
+    mkdirSync(homeDir, { recursive: true });
+    runPackedCliSmoke({
+      prefixDir,
+      cwd: packageRoot,
+      homeDir,
+      stateDir,
+    });
     runPackedBundledPluginPostinstall(packageRoot);
+    runPackedBundledPluginActivationSmoke(packageRoot, tmpRoot);
     execFileSync(
       process.execPath,
       [
@@ -251,9 +549,6 @@ function runPackedBundledChannelEntrySmoke(): void {
       },
     );
 
-    const homeDir = join(tmpRoot, "home");
-    const stateDir = join(tmpRoot, "state");
-    mkdirSync(homeDir, { recursive: true });
     execFileSync(
       process.execPath,
       [join(packageRoot, "openclaw.mjs"), "completion", "--write-state"],
@@ -295,13 +590,36 @@ export function collectMissingPackPaths(paths: Iterable<string>): string[] {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+export function resolveMissingPackBuildHint(missing: readonly string[]): string | null {
+  const needsControlUiBuild = missing.includes("dist/control-ui/index.html");
+  const needsRuntimeBuild = missing.some(
+    (path) =>
+      path !== "dist/control-ui/index.html" &&
+      (path === "dist/build-info.json" || path.startsWith("dist/")),
+  );
+
+  if (!needsControlUiBuild && !needsRuntimeBuild) {
+    return null;
+  }
+
+  if (needsControlUiBuild && needsRuntimeBuild) {
+    return "release-check: build and Control UI artifacts are missing. Run `pnpm build && pnpm ui:build` before `pnpm release:check`.";
+  }
+  if (needsControlUiBuild) {
+    return "release-check: Control UI artifacts are missing. Run `pnpm ui:build` before `pnpm release:check`.";
+  }
+  return "release-check: build artifacts are missing. Run `pnpm build` before `pnpm release:check`.";
+}
+
 export function collectForbiddenPackPaths(paths: Iterable<string>): string[] {
   return [...paths]
     .filter(
       (path) =>
-        !legacyUpdateCompatPackPaths.has(path) &&
-        (forbiddenPrefixes.some((prefix) => path.startsWith(prefix)) ||
-          /node_modules\//.test(path)),
+        isBundledRuntimeDepsInstallStagePath(path) ||
+        forbiddenPrefixes.some((prefix) => path.startsWith(prefix)) ||
+        /(^|\/)\.openclaw-runtime-deps-[^/]+(\/|$)/u.test(path) ||
+        path.endsWith("/.openclaw-runtime-deps-stamp.json") ||
+        path.includes("node_modules/"),
     )
     .toSorted((left, right) => left.localeCompare(right));
 }
@@ -313,9 +631,6 @@ export function collectForbiddenPackContentPaths(
   const textPathPattern = /\.(?:[cm]?js|d\.ts|json|md|mjs|cjs)$/u;
   return [...paths]
     .filter((packedPath) => {
-      if (packedPath === PACKAGE_DIST_INVENTORY_RELATIVE_PATH) {
-        return false;
-      }
       if (!forbiddenPrivateQaContentScanPrefixes.some((prefix) => packedPath.startsWith(prefix))) {
         return false;
       }
@@ -523,17 +838,9 @@ async function main() {
       for (const path of missing) {
         console.error(`  - ${path}`);
       }
-      if (
-        missing.some(
-          (path) =>
-            path === "dist/build-info.json" ||
-            path === "dist/control-ui/index.html" ||
-            path.startsWith("dist/"),
-        )
-      ) {
-        console.error(
-          "release-check: build artifacts are missing. Run `pnpm build` before `pnpm release:check`.",
-        );
+      const buildHint = resolveMissingPackBuildHint(missing);
+      if (buildHint) {
+        console.error(buildHint);
       }
     }
     if (forbidden.length > 0) {

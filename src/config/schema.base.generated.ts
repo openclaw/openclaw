@@ -132,7 +132,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             type: "boolean",
             title: "Diagnostics Enabled",
             description:
-              "Master toggle for diagnostics instrumentation output in logs and telemetry wiring paths. Keep enabled for normal observability, and disable only in tightly constrained environments.",
+              "Master toggle for diagnostics instrumentation output in logs and telemetry wiring paths. Defaults to enabled; set false only in tightly constrained environments.",
           },
           flags: {
             type: "array",
@@ -165,6 +165,24 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 title: "OpenTelemetry Endpoint",
                 description:
                   "Collector endpoint URL used for OpenTelemetry export transport, including scheme and port. Use a reachable, trusted collector endpoint and monitor ingestion errors after rollout.",
+              },
+              tracesEndpoint: {
+                type: "string",
+                title: "OpenTelemetry Traces Endpoint",
+                description:
+                  "Signal-specific OTLP/HTTP trace endpoint. When set, this overrides diagnostics.otel.endpoint and OTEL_EXPORTER_OTLP_ENDPOINT for trace export only.",
+              },
+              metricsEndpoint: {
+                type: "string",
+                title: "OpenTelemetry Metrics Endpoint",
+                description:
+                  "Signal-specific OTLP/HTTP metrics endpoint. When set, this overrides diagnostics.otel.endpoint and OTEL_EXPORTER_OTLP_ENDPOINT for metrics export only.",
+              },
+              logsEndpoint: {
+                type: "string",
+                title: "OpenTelemetry Logs Endpoint",
+                description:
+                  "Signal-specific OTLP/HTTP logs endpoint. When set, this overrides diagnostics.otel.endpoint and OTEL_EXPORTER_OTLP_ENDPOINT for log export only.",
               },
               protocol: {
                 anyOf: [
@@ -232,6 +250,58 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 title: "OpenTelemetry Flush Interval (ms)",
                 description:
                   "Interval in milliseconds for periodic telemetry flush from buffers to the collector. Increase to reduce export chatter, or lower for faster visibility during active incident response.",
+              },
+              captureContent: {
+                anyOf: [
+                  {
+                    type: "boolean",
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      enabled: {
+                        type: "boolean",
+                        title: "OpenTelemetry Content Capture Enabled",
+                        description:
+                          "Master switch for granular OTEL content capture fields. Keep disabled unless your collector is approved for raw prompt, response, or tool content.",
+                      },
+                      inputMessages: {
+                        type: "boolean",
+                        title: "OpenTelemetry Input Messages Capture",
+                        description:
+                          "Capture model input message text on OTEL spans when content capture is enabled.",
+                      },
+                      outputMessages: {
+                        type: "boolean",
+                        title: "OpenTelemetry Output Messages Capture",
+                        description:
+                          "Capture model output message text on OTEL spans when content capture is enabled.",
+                      },
+                      toolInputs: {
+                        type: "boolean",
+                        title: "OpenTelemetry Tool Inputs Capture",
+                        description:
+                          "Capture tool input text on OTEL spans when content capture is enabled.",
+                      },
+                      toolOutputs: {
+                        type: "boolean",
+                        title: "OpenTelemetry Tool Outputs Capture",
+                        description:
+                          "Capture tool output text on OTEL spans when content capture is enabled.",
+                      },
+                      systemPrompt: {
+                        type: "boolean",
+                        title: "OpenTelemetry System Prompt Capture",
+                        description:
+                          "Capture system prompt text on OTEL spans when content capture is enabled. This remains off unless explicitly enabled.",
+                      },
+                    },
+                    additionalProperties: false,
+                  },
+                ],
+                title: "OpenTelemetry Content Capture",
+                description:
+                  "Opt-in OTEL span content capture. Defaults to off; boolean true captures non-system message/tool content, while the object form lets you enable specific content classes.",
               },
             },
             additionalProperties: false,
@@ -396,7 +466,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             ],
             title: "Sensitive Data Redaction Mode",
             description:
-              'Sensitive redaction mode: "off" disables built-in masking, while "tools" redacts sensitive tool/config payload fields. Keep "tools" in shared logs unless you have isolated secure log sinks.',
+              'Sensitive redaction mode: "off" disables built-in masking, while "tools" redacts sensitive tool/config payload fields in log sinks and persisted transcript text. Keep "tools" enabled unless logs and transcripts are isolated.',
           },
           redactPatterns: {
             type: "array",
@@ -405,7 +475,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             },
             title: "Custom Redaction Patterns",
             description:
-              "Additional custom redact regex patterns applied to log output before emission/storage. Use this to mask org-specific tokens and identifiers not covered by built-in redaction rules.",
+              "Additional custom redact regex patterns applied to log output and persisted transcript text before storage. Use this to mask org-specific tokens and identifiers not covered by built-in redaction rules.",
           },
         },
         additionalProperties: false,
@@ -449,6 +519,37 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
         title: "CLI",
         description:
           "CLI presentation controls for local command output behavior such as banner and tagline style. Use this section to keep startup output aligned with operator preference without changing runtime behavior.",
+      },
+      crestodian: {
+        type: "object",
+        properties: {
+          rescue: {
+            type: "object",
+            properties: {
+              enabled: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "auto",
+                  },
+                  {
+                    type: "boolean",
+                  },
+                ],
+              },
+              ownerDmOnly: {
+                type: "boolean",
+              },
+              pendingTtlMinutes: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
+            },
+            additionalProperties: false,
+          },
+        },
+        additionalProperties: false,
       },
       update: {
         type: "object",
@@ -551,6 +652,30 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Timeout in milliseconds for post-connect CDP handshake readiness checks against remote browser targets. Raise this for slow-start remote browsers and lower to fail fast in automation loops.",
           },
+          localLaunchTimeoutMs: {
+            type: "integer",
+            exclusiveMinimum: 0,
+            maximum: 120000,
+            title: "Browser Local Launch Timeout (ms)",
+            description:
+              "Timeout in milliseconds for locally launched managed Chrome to expose its CDP HTTP endpoint after process start. Raise this on slow single-board computers or older hosts.",
+          },
+          localCdpReadyTimeoutMs: {
+            type: "integer",
+            exclusiveMinimum: 0,
+            maximum: 120000,
+            title: "Browser Local CDP Ready Timeout (ms)",
+            description:
+              "Timeout in milliseconds for a locally launched managed browser to finish CDP websocket readiness after the process is discovered. Raise this when Chrome starts but browser start still reports CDP not reachable.",
+          },
+          actionTimeoutMs: {
+            type: "integer",
+            exclusiveMinimum: 0,
+            maximum: 9007199254740991,
+            title: "Browser Action Timeout (ms)",
+            description:
+              "Default timeout in milliseconds for browser act requests before the client gives up waiting. Raise this when healthy waits or UI interactions exceed the default request budget.",
+          },
           color: {
             type: "string",
             title: "Browser Accent Color",
@@ -561,7 +686,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             type: "string",
             title: "Browser Executable Path",
             description:
-              "Explicit browser executable path when auto-discovery is insufficient for your host environment. Use absolute stable paths so launch behavior stays deterministic across restarts.",
+              "Explicit browser executable path when auto-discovery is insufficient for your host environment. Use an absolute stable path, or a path starting with ~ for your OS home directory, so launch behavior stays deterministic across restarts.",
           },
           headless: {
             type: "boolean",
@@ -671,7 +796,22 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   type: "string",
                   title: "Browser Profile User Data Dir",
                   description:
-                    "Per-profile Chromium user data directory for existing-session attachment through Chrome DevTools MCP. Use this for Brave, Edge, Chromium, or non-default Chrome profiles when the built-in auto-connect path would pick the wrong browser data directory on the selected host or browser node.",
+                    "Per-profile Chromium user data directory for existing-session attachment through Chrome DevTools MCP. Use this for Brave, Edge, Chromium, or non-default Chrome profiles when the built-in auto-connect path would pick the wrong browser data directory on the selected host or browser node. Paths starting with ~ expand to the OS home directory.",
+                },
+                mcpCommand: {
+                  type: "string",
+                  title: "Browser Profile Chrome MCP Command",
+                  description:
+                    "Per-profile Chrome DevTools MCP command for existing-session attachment. Defaults to npx.",
+                },
+                mcpArgs: {
+                  type: "array",
+                  items: {
+                    type: "string",
+                  },
+                  title: "Browser Profile Chrome MCP Args",
+                  description:
+                    "Extra per-profile Chrome DevTools MCP arguments for existing-session attachment, such as --no-usage-statistics. Endpoint arguments here override the built-in auto-connect or browser URL selection.",
                 },
                 driver: {
                   anyOf: [
@@ -691,6 +831,18 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   title: "Browser Profile Driver",
                   description:
                     'Per-profile browser driver mode. Use "openclaw" (or legacy "clawd") for CDP-based profiles, or use "existing-session" for Chrome DevTools MCP attachment on the selected host or browser node.',
+                },
+                headless: {
+                  type: "boolean",
+                  title: "Browser Profile Headless Mode",
+                  description:
+                    "Per-profile headless override for locally launched browser instances. Use this when one profile should stay headless without forcing browser.headless for every other profile.",
+                },
+                executablePath: {
+                  type: "string",
+                  title: "Browser Profile Executable Path",
+                  description:
+                    "Per-profile browser executable path for locally launched managed browser profiles. Overrides browser.executablePath and accepts paths starting with ~ for the OS home directory.",
                 },
                 attachOnly: {
                   type: "boolean",
@@ -747,7 +899,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               },
               avatar: {
                 type: "string",
-                maxLength: 200,
+                maxLength: 2000000,
                 title: "Assistant Avatar",
                 description:
                   "Assistant avatar image source used in UI surfaces (URL, path, or data URI depending on runtime support). Use trusted assets and consistent branding dimensions for clean rendering.",
@@ -823,6 +975,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       type: "integer",
                       exclusiveMinimum: 0,
                       maximum: 20971520,
+                    },
+                    allowInsecurePath: {
+                      type: "boolean",
                     },
                   },
                   required: ["source", "path"],
@@ -1398,6 +1553,36 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   title: "Model Provider API Adapter",
                   description:
                     "Provider API adapter selection controlling request/response compatibility handling for model calls. Use the adapter that matches your upstream provider protocol to avoid feature mismatch.",
+                },
+                contextWindow: {
+                  type: "number",
+                  exclusiveMinimum: 0,
+                  title: "Model Provider Context Window",
+                  description:
+                    "Default native context window applied to models under this provider when a model entry does not set contextWindow. Use model-level contextWindow for per-model overrides.",
+                },
+                contextTokens: {
+                  type: "integer",
+                  exclusiveMinimum: 0,
+                  maximum: 9007199254740991,
+                  title: "Model Provider Context Tokens",
+                  description:
+                    "Default effective runtime context cap applied to models under this provider when a model entry does not set contextTokens. Use this when runtime should budget below the native contextWindow.",
+                },
+                maxTokens: {
+                  type: "number",
+                  exclusiveMinimum: 0,
+                  title: "Model Provider Max Tokens",
+                  description:
+                    "Default maximum output token budget applied to models under this provider when a model entry does not set maxTokens.",
+                },
+                timeoutSeconds: {
+                  type: "integer",
+                  exclusiveMinimum: 0,
+                  maximum: 9007199254740991,
+                  title: "Model Provider Request Timeout",
+                  description:
+                    "Optional per-provider model request timeout in seconds. Applies to provider HTTP fetches, including connect, headers, body, and total request abort handling. Use this for slow local or self-hosted model servers instead of changing global agent timeouts.",
                 },
                 injectNumCtxForOpenAICompat: {
                   type: "boolean",
@@ -2734,6 +2919,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           "azure-openai-responses",
                         ],
                       },
+                      baseUrl: {
+                        type: "string",
+                        minLength: 1,
+                      },
                       reasoning: {
                         type: "boolean",
                       },
@@ -2748,6 +2937,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                             {
                               type: "string",
                               const: "image",
+                            },
+                            {
+                              type: "string",
+                              const: "video",
+                            },
+                            {
+                              type: "string",
+                              const: "audio",
                             },
                           ],
                         },
@@ -2828,6 +3025,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         type: "number",
                         exclusiveMinimum: 0,
                       },
+                      params: {
+                        type: "object",
+                        propertyNames: {
+                          type: "string",
+                        },
+                        additionalProperties: {},
+                      },
                       headers: {
                         type: "object",
                         propertyNames: {
@@ -2895,6 +3099,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                               },
                               {
                                 type: "string",
+                                const: "deepseek",
+                              },
+                              {
+                                type: "string",
                                 const: "zai",
                               },
                               {
@@ -2941,13 +3149,17 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         },
                         additionalProperties: false,
                       },
+                      metadataSource: {
+                        type: "string",
+                        const: "models-add",
+                      },
                     },
                     required: ["id", "name"],
                     additionalProperties: false,
                   },
                   title: "Model Provider Model List",
                   description:
-                    "Declared model list for a provider including identifiers, metadata, and optional compatibility/cost hints. Keep IDs exact to provider catalog values so selection and fallback resolve correctly.",
+                    "Declared model list for a provider including identifiers, metadata, provider-specific params, and optional compatibility/cost hints. Keep IDs exact to provider catalog values so selection and fallback resolve correctly.",
                 },
               },
               required: ["baseUrl", "models"],
@@ -3009,27 +3221,47 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 },
                 additionalProperties: {},
               },
+              agentRuntime: {
+                type: "object",
+                properties: {
+                  id: {
+                    type: "string",
+                    title: "Default Agent Runtime",
+                    description:
+                      "Agent runtime id: pi, auto, a registered plugin harness id such as codex, or a supported CLI backend alias such as claude-cli. Omitted id uses built-in OpenClaw Pi.",
+                  },
+                  fallback: {
+                    type: "string",
+                    enum: ["pi", "none"],
+                    title: "Default Agent Runtime Fallback",
+                    description:
+                      "Agent runtime fallback when no plugin harness matches. Auto mode defaults to pi; explicit plugin runtimes default to none and do not inherit broader fallback settings. Selected plugin harness failures surface directly.",
+                  },
+                },
+                additionalProperties: false,
+                title: "Default Agent Runtime Settings",
+                description:
+                  "Default agent runtime policy. Omitted id uses built-in OpenClaw Pi. Use id=auto for plugin harness selection, a registered harness id such as codex, or a supported CLI backend alias such as claude-cli.",
+              },
               embeddedHarness: {
                 type: "object",
                 properties: {
                   runtime: {
                     type: "string",
-                    title: "Default Embedded Harness Runtime",
-                    description:
-                      "Embedded harness runtime: auto, pi, or a registered plugin harness id such as codex.",
+                    title: "Default Legacy Embedded Harness Runtime",
+                    description: "Legacy input for agents.defaults.agentRuntime.id.",
                   },
                   fallback: {
                     type: "string",
                     enum: ["pi", "none"],
-                    title: "Default Embedded Harness Fallback",
-                    description:
-                      "Embedded harness fallback when no plugin harness matches. Selected plugin harness failures surface directly. Set none to disable automatic PI fallback.",
+                    title: "Default Legacy Embedded Harness Fallback",
+                    description: "Legacy input for agents.defaults.agentRuntime.fallback.",
                   },
                 },
                 additionalProperties: false,
-                title: "Default Embedded Harness",
+                title: "Default Legacy Embedded Harness Settings",
                 description:
-                  "Default embedded agent harness policy. Use runtime=auto for plugin harness selection, runtime=pi for built-in PI, or a registered harness id such as codex.",
+                  "Legacy input for agents.defaults.agentRuntime. Run openclaw doctor --fix to rewrite it to agentRuntime.",
               },
               model: {
                 anyOf: [
@@ -3052,6 +3284,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         title: "Model Fallbacks",
                         description:
                           "Ordered fallback models (provider/model). Used when the primary model fails.",
+                      },
+                      timeoutMs: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
                       },
                     },
                     additionalProperties: false,
@@ -3080,6 +3317,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         title: "Image Model Fallbacks",
                         description: "Ordered fallback image models (provider/model).",
                       },
+                      timeoutMs: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
+                      },
                     },
                     additionalProperties: false,
                   },
@@ -3106,6 +3348,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         },
                         title: "Image Generation Model Fallbacks",
                         description: "Ordered fallback image-generation models (provider/model).",
+                      },
+                      timeoutMs: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
+                        title: "Image Generation Timeout (ms)",
+                        description:
+                          "Default provider request timeout in milliseconds for image_generate calls. Per-call timeoutMs overrides this.",
                       },
                     },
                     additionalProperties: false,
@@ -3134,6 +3384,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         title: "Video Generation Model Fallbacks",
                         description: "Ordered fallback video-generation models (provider/model).",
                       },
+                      timeoutMs: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
+                      },
                     },
                     additionalProperties: false,
                   },
@@ -3160,6 +3415,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         },
                         title: "Music Generation Model Fallbacks",
                         description: "Ordered fallback music-generation models (provider/model).",
+                      },
+                      timeoutMs: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
                       },
                     },
                     additionalProperties: false,
@@ -3193,6 +3453,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         },
                         title: "PDF Model Fallbacks",
                         description: "Ordered fallback PDF models (provider/model).",
+                      },
+                      timeoutMs: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
                       },
                     },
                     additionalProperties: false,
@@ -3321,6 +3586,43 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               systemPromptOverride: {
                 type: "string",
               },
+              promptOverlays: {
+                type: "object",
+                properties: {
+                  gpt5: {
+                    type: "object",
+                    properties: {
+                      personality: {
+                        anyOf: [
+                          {
+                            type: "string",
+                            const: "friendly",
+                          },
+                          {
+                            type: "string",
+                            const: "on",
+                          },
+                          {
+                            type: "string",
+                            const: "off",
+                          },
+                        ],
+                        title: "GPT-5 Personality Overlay",
+                        description:
+                          'Friendly interaction-style layer for GPT-5-family models ("friendly" or "on" enables it; "off" disables only that layer). The tagged behavior contract remains enabled for matching GPT-5 models.',
+                      },
+                    },
+                    additionalProperties: false,
+                    title: "GPT-5 Prompt Overlay",
+                    description:
+                      "Shared GPT-5-family prompt overlay applied to matching model ids across providers such as OpenAI, OpenRouter, OpenCode, Codex, and compatible gateways.",
+                  },
+                },
+                additionalProperties: false,
+                title: "Prompt Overlays",
+                description:
+                  "Provider-independent prompt overlays applied by model family before provider-specific prompt hooks.",
+              },
               skipBootstrap: {
                 type: "boolean",
               },
@@ -3333,6 +3635,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   {
                     type: "string",
                     const: "continuation-skip",
+                  },
+                  {
+                    type: "string",
+                    const: "never",
                   },
                 ],
                 title: "Context Injection",
@@ -3606,6 +3912,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       type: "string",
                       const: "claude-stream-json",
                     },
+                    liveSession: {
+                      type: "string",
+                      const: "claude-stdio",
+                    },
                     input: {
                       anyOf: [
                         {
@@ -3688,6 +3998,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       },
                     },
                     systemPromptArg: {
+                      type: "string",
+                    },
+                    systemPromptFileArg: {
                       type: "string",
                     },
                     systemPromptFileConfigArg: {
@@ -4122,6 +4435,22 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       modelCacheDir: {
                         type: "string",
                       },
+                      contextSize: {
+                        anyOf: [
+                          {
+                            type: "integer",
+                            exclusiveMinimum: 0,
+                            maximum: 9007199254740991,
+                          },
+                          {
+                            type: "string",
+                            const: "auto",
+                          },
+                        ],
+                        title: "Local Embedding Context Size",
+                        description:
+                          'Context window size passed to node-llama-cpp when creating the embedding context (default: 4096). 4096 safely covers typical memory-search chunks (128–512 tokens) while keeping non-weight VRAM bounded. Lower to 1024–2048 on resource-constrained hosts. Set to "auto" to let node-llama-cpp use the model\'s trained maximum — not recommended for large models (e.g. Qwen3-Embedding-8B trained on 40 960 tokens can push VRAM from ~8.8 GB to ~32 GB).',
+                      },
                     },
                     additionalProperties: false,
                   },
@@ -4232,6 +4561,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         type: "integer",
                         minimum: 0,
                         maximum: 9007199254740991,
+                      },
+                      embeddingBatchTimeoutSeconds: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
+                        title: "Embedding Batch Timeout (s)",
+                        description:
+                          "Overrides the timeout for inline embedding batches during memory indexing. Leave unset to use provider defaults: 600 seconds for local/self-hosted providers such as local, Ollama, and LM Studio, and 120 seconds for hosted providers.",
                       },
                       sessions: {
                         type: "object",
@@ -4592,7 +4929,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         type: "boolean",
                         title: "Compaction Quality Guard Enabled",
                         description:
-                          "Enables summary quality audits and regeneration retries for safeguard compaction. Default: false, so safeguard mode alone does not turn on retry behavior.",
+                          "Enables summary quality audits and regeneration retries for safeguard compaction. Default: true in safeguard mode.",
                       },
                       maxRetries: {
                         type: "integer",
@@ -4606,7 +4943,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     additionalProperties: false,
                     title: "Compaction Quality Guard",
                     description:
-                      "Optional quality-audit retry settings for safeguard compaction summaries. Leave this disabled unless you explicitly want summary audits and one-shot regeneration on failed checks.",
+                      "Quality-audit retry settings for safeguard compaction summaries. Safeguard mode enables this by default; set enabled: false to skip summary audits and regeneration.",
                   },
                   postIndexSync: {
                     type: "string",
@@ -4687,6 +5024,27 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     title: "Compaction Memory Flush",
                     description:
                       "Pre-compaction memory flush settings that run an agentic memory write before heavy compaction. Keep enabled for long sessions so salient context is persisted before aggressive trimming.",
+                  },
+                  truncateAfterCompaction: {
+                    type: "boolean",
+                    title: "Rotate Transcript After Compaction",
+                    description:
+                      "When enabled, rotates the active session JSONL file after compaction so future turns load only the summary and unsummarized tail while the previous full transcript remains archived. Prevents unbounded active transcript growth in long-running sessions. Default: false.",
+                  },
+                  maxActiveTranscriptBytes: {
+                    anyOf: [
+                      {
+                        type: "integer",
+                        minimum: 0,
+                        maximum: 9007199254740991,
+                      },
+                      {
+                        type: "string",
+                      },
+                    ],
+                    title: "Compaction Active Transcript Size Threshold",
+                    description:
+                      'Triggers normal local compaction when the active session transcript reaches this size (bytes or strings like "20mb"). Requires truncateAfterCompaction so successful compaction can rotate to a smaller successor transcript; set to 0 or leave unset to disable. This never splits raw transcript bytes.',
                   },
                   notifyUser: {
                     type: "boolean",
@@ -5116,6 +5474,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                             items: {
                               type: "string",
                             },
+                          },
+                          timeoutMs: {
+                            type: "integer",
+                            exclusiveMinimum: 0,
+                            maximum: 9007199254740991,
                           },
                         },
                         additionalProperties: false,
@@ -5701,27 +6064,47 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 systemPromptOverride: {
                   type: "string",
                 },
+                agentRuntime: {
+                  type: "object",
+                  properties: {
+                    id: {
+                      type: "string",
+                      title: "Agent Runtime",
+                      description:
+                        "Per-agent agent runtime id: pi, auto, a registered plugin harness id such as codex, or a supported CLI backend alias such as claude-cli. Omitted id inherits the default OpenClaw Pi behavior.",
+                    },
+                    fallback: {
+                      type: "string",
+                      enum: ["pi", "none"],
+                      title: "Agent Runtime Fallback",
+                      description:
+                        "Per-agent agent runtime fallback. Auto mode defaults to pi; explicit plugin runtimes default to none and do not inherit broader fallback settings.",
+                    },
+                  },
+                  additionalProperties: false,
+                  title: "Agent Runtime",
+                  description:
+                    "Per-agent agent runtime policy override. Use id=codex to force Codex for one agent while defaults stay in auto mode.",
+                },
                 embeddedHarness: {
                   type: "object",
                   properties: {
                     runtime: {
                       type: "string",
-                      title: "Agent Embedded Harness Runtime",
-                      description:
-                        "Per-agent embedded harness runtime: auto, pi, or a registered plugin harness id such as codex.",
+                      title: "Agent Legacy Embedded Harness Runtime",
+                      description: "Legacy input for agents.list.*.agentRuntime.id.",
                     },
                     fallback: {
                       type: "string",
                       enum: ["pi", "none"],
-                      title: "Agent Embedded Harness Fallback",
-                      description:
-                        "Per-agent embedded harness fallback. Set none to disable automatic PI fallback for this agent.",
+                      title: "Agent Legacy Embedded Harness Fallback",
+                      description: "Legacy input for agents.list.*.agentRuntime.fallback.",
                     },
                   },
                   additionalProperties: false,
-                  title: "Agent Embedded Harness",
+                  title: "Agent Legacy Embedded Harness",
                   description:
-                    "Per-agent embedded harness policy override. Use fallback=none to make missing plugin harness selection fail instead of falling back to PI.",
+                    "Legacy input for agents.list.*.agentRuntime. Run openclaw doctor --fix to rewrite it to agentRuntime.",
                 },
                 model: {
                   anyOf: [
@@ -5739,6 +6122,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           items: {
                             type: "string",
                           },
+                        },
+                        timeoutMs: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
                         },
                       },
                       additionalProperties: false,
@@ -6002,6 +6390,19 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         modelCacheDir: {
                           type: "string",
                         },
+                        contextSize: {
+                          anyOf: [
+                            {
+                              type: "integer",
+                              exclusiveMinimum: 0,
+                              maximum: 9007199254740991,
+                            },
+                            {
+                              type: "string",
+                              const: "auto",
+                            },
+                          ],
+                        },
                       },
                       additionalProperties: false,
                     },
@@ -6084,6 +6485,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         intervalMinutes: {
                           type: "integer",
                           minimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        embeddingBatchTimeoutSeconds: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
                           maximum: 9007199254740991,
                         },
                         sessions: {
@@ -6225,6 +6631,352 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   },
                   additionalProperties: false,
                 },
+                tts: {
+                  type: "object",
+                  properties: {
+                    auto: {
+                      type: "string",
+                      enum: ["off", "always", "inbound", "tagged"],
+                    },
+                    enabled: {
+                      type: "boolean",
+                    },
+                    mode: {
+                      type: "string",
+                      enum: ["final", "all"],
+                    },
+                    provider: {
+                      type: "string",
+                      minLength: 1,
+                    },
+                    persona: {
+                      type: "string",
+                    },
+                    personas: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          label: {
+                            type: "string",
+                          },
+                          description: {
+                            type: "string",
+                          },
+                          provider: {
+                            type: "string",
+                            minLength: 1,
+                          },
+                          fallbackPolicy: {
+                            anyOf: [
+                              {
+                                type: "string",
+                                const: "preserve-persona",
+                              },
+                              {
+                                type: "string",
+                                const: "provider-defaults",
+                              },
+                              {
+                                type: "string",
+                                const: "fail",
+                              },
+                            ],
+                          },
+                          prompt: {
+                            type: "object",
+                            properties: {
+                              profile: {
+                                type: "string",
+                              },
+                              scene: {
+                                type: "string",
+                              },
+                              sampleContext: {
+                                type: "string",
+                              },
+                              style: {
+                                type: "string",
+                              },
+                              accent: {
+                                type: "string",
+                              },
+                              pacing: {
+                                type: "string",
+                              },
+                              constraints: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                            },
+                            additionalProperties: false,
+                          },
+                          providers: {
+                            type: "object",
+                            propertyNames: {
+                              type: "string",
+                            },
+                            additionalProperties: {
+                              type: "object",
+                              properties: {
+                                apiKey: {
+                                  anyOf: [
+                                    {
+                                      type: "string",
+                                    },
+                                    {
+                                      oneOf: [
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "env",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "file",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "exec",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                      ],
+                                    },
+                                  ],
+                                },
+                              },
+                              additionalProperties: {
+                                anyOf: [
+                                  {
+                                    type: "string",
+                                  },
+                                  {
+                                    type: "number",
+                                  },
+                                  {
+                                    type: "boolean",
+                                  },
+                                  {
+                                    type: "null",
+                                  },
+                                  {
+                                    type: "array",
+                                    items: {},
+                                  },
+                                  {
+                                    type: "object",
+                                    propertyNames: {
+                                      type: "string",
+                                    },
+                                    additionalProperties: {},
+                                  },
+                                ],
+                              },
+                            },
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    summaryModel: {
+                      type: "string",
+                    },
+                    modelOverrides: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                        allowText: {
+                          type: "boolean",
+                        },
+                        allowProvider: {
+                          type: "boolean",
+                        },
+                        allowVoice: {
+                          type: "boolean",
+                        },
+                        allowModelId: {
+                          type: "boolean",
+                        },
+                        allowVoiceSettings: {
+                          type: "boolean",
+                        },
+                        allowNormalization: {
+                          type: "boolean",
+                        },
+                        allowSeed: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    providers: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          apiKey: {
+                            anyOf: [
+                              {
+                                type: "string",
+                              },
+                              {
+                                oneOf: [
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "env",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "file",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "exec",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                ],
+                              },
+                            ],
+                          },
+                        },
+                        additionalProperties: {
+                          anyOf: [
+                            {
+                              type: "string",
+                            },
+                            {
+                              type: "number",
+                            },
+                            {
+                              type: "boolean",
+                            },
+                            {
+                              type: "null",
+                            },
+                            {
+                              type: "array",
+                              items: {},
+                            },
+                            {
+                              type: "object",
+                              propertyNames: {
+                                type: "string",
+                              },
+                              additionalProperties: {},
+                            },
+                          ],
+                        },
+                      },
+                    },
+                    prefsPath: {
+                      type: "string",
+                    },
+                    maxTextLength: {
+                      type: "integer",
+                      minimum: 1,
+                      maximum: 9007199254740991,
+                    },
+                    timeoutMs: {
+                      type: "integer",
+                      minimum: 1000,
+                      maximum: 120000,
+                    },
+                  },
+                  additionalProperties: false,
+                },
                 skillsLimits: {
                   type: "object",
                   properties: {
@@ -6282,6 +7034,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   title: "Agent Context Limits",
                   description:
                     "Optional per-agent overrides for the focused context budget knobs. Omitted fields inherit agents.defaults.contextLimits.",
+                },
+                contextTokens: {
+                  type: "integer",
+                  exclusiveMinimum: 0,
+                  maximum: 9007199254740991,
                 },
                 heartbeat: {
                   type: "object",
@@ -17749,6 +18506,38 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   description:
                     "Match rule object for deciding when a binding applies, including channel and optional account/peer constraints. Keep rules narrow to avoid accidental agent takeover across contexts.",
                 },
+                session: {
+                  type: "object",
+                  properties: {
+                    dmScope: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "main",
+                        },
+                        {
+                          type: "string",
+                          const: "per-peer",
+                        },
+                        {
+                          type: "string",
+                          const: "per-channel-peer",
+                        },
+                        {
+                          type: "string",
+                          const: "per-account-channel-peer",
+                        },
+                      ],
+                      title: "Binding Session DM Scope",
+                      description:
+                        'Optional DM session scope override for this route binding. For example, keep global session.dmScope="main" while using "per-account-channel-peer" for selected direct peers.',
+                    },
+                  },
+                  additionalProperties: false,
+                  title: "Binding Session",
+                  description:
+                    "Optional route session overrides for conversations matched by this binding. Use this when a narrow route should keep the same agent but isolate session continuity differently.",
+                },
               },
               required: ["agentId", "match"],
               additionalProperties: false,
@@ -18601,6 +19390,196 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               provider: {
                 type: "string",
                 minLength: 1,
+              },
+              persona: {
+                type: "string",
+                title: "TTS Persona",
+                description:
+                  "Default TTS persona id. Local TTS persona preferences can override this per host.",
+              },
+              personas: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    label: {
+                      type: "string",
+                    },
+                    description: {
+                      type: "string",
+                    },
+                    provider: {
+                      type: "string",
+                      minLength: 1,
+                    },
+                    fallbackPolicy: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "preserve-persona",
+                        },
+                        {
+                          type: "string",
+                          const: "provider-defaults",
+                        },
+                        {
+                          type: "string",
+                          const: "fail",
+                        },
+                      ],
+                    },
+                    prompt: {
+                      type: "object",
+                      properties: {
+                        profile: {
+                          type: "string",
+                        },
+                        scene: {
+                          type: "string",
+                        },
+                        sampleContext: {
+                          type: "string",
+                        },
+                        style: {
+                          type: "string",
+                        },
+                        accent: {
+                          type: "string",
+                        },
+                        pacing: {
+                          type: "string",
+                        },
+                        constraints: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                      },
+                      additionalProperties: false,
+                      title: "TTS Persona Prompt",
+                      description:
+                        "Provider-neutral persona prompt intent. Providers decide whether and how to map this into request instructions.",
+                    },
+                    providers: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          apiKey: {
+                            anyOf: [
+                              {
+                                type: "string",
+                              },
+                              {
+                                oneOf: [
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "env",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "file",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "exec",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                ],
+                              },
+                            ],
+                          },
+                        },
+                        additionalProperties: {
+                          anyOf: [
+                            {
+                              type: "string",
+                            },
+                            {
+                              type: "number",
+                            },
+                            {
+                              type: "boolean",
+                            },
+                            {
+                              type: "null",
+                            },
+                            {
+                              type: "array",
+                              items: {},
+                            },
+                            {
+                              type: "object",
+                              propertyNames: {
+                                type: "string",
+                              },
+                              additionalProperties: {},
+                            },
+                          ],
+                        },
+                      },
+                      title: "TTS Persona Provider Bindings",
+                      description:
+                        "Provider-specific TTS persona bindings keyed by speech provider id. These merge over messages.tts.providers for the active persona.",
+                    },
+                  },
+                  additionalProperties: false,
+                  title: "TTS Persona",
+                  description:
+                    "One TTS persona. Use provider-specific bindings for exact voices/models and prompt templates.",
+                },
+                title: "TTS Personas",
+                description:
+                  "Named TTS personas that define stable spoken identity plus provider-specific speech bindings.",
               },
               summaryModel: {
                 type: "string",
@@ -19919,6 +20898,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 minimum: 0,
                 maximum: 9007199254740991,
               },
+              includeSkipped: {
+                type: "boolean",
+              },
               mode: {
                 type: "string",
                 enum: ["announce", "webhook"],
@@ -20795,6 +21777,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Provider-specific Talk settings keyed by provider id. During migration, prefer this over legacy talk.* keys.",
           },
+          speechLocale: {
+            type: "string",
+            title: "Talk Speech Locale",
+            description:
+              'BCP 47 locale id for Talk speech recognition on device nodes, for example "ru-RU". Leave unset to use each device default.',
+          },
           interruptOnSpeech: {
             type: "boolean",
             title: "Talk Interrupt on Speech",
@@ -21244,7 +22232,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             maximum: 9007199254740991,
             title: "Gateway Channel Stale Event Threshold (min)",
             description:
-              "How many minutes a connected channel can go without receiving any event before the health monitor treats it as a stale socket and triggers a restart. Default: 30.",
+              "How many minutes a connected channel can go without provider-proven transport activity before the health monitor treats it as a stale socket and triggers a restart. Default: 30.",
           },
           channelMaxRestartsPerHour: {
             type: "integer",
@@ -21511,7 +22499,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 maximum: 9007199254740991,
                 title: "Restart Deferral Timeout (ms)",
                 description:
-                  "Maximum time (ms) to wait for in-flight operations to complete before forcing a SIGUSR1 restart. Default: 300000 (5 minutes). Lower values risk aborting active subagent LLM calls.",
+                  "Optional maximum time (ms) to wait for in-flight operations before forcing a restart. Omit or set 0 to wait indefinitely with periodic still-pending warnings. Lower positive values risk aborting active subagent LLM calls.",
               },
             },
             additionalProperties: false,
@@ -21882,6 +22870,24 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   },
                 },
                 additionalProperties: false,
+              },
+              pairing: {
+                type: "object",
+                properties: {
+                  autoApproveCidrs: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                    title: "Gateway Node Pairing Auto-Approve CIDRs",
+                    description:
+                      "Opt-in CIDR/IP allowlist for auto-approving first-time node-role device pairing with no requested scopes. Disabled when unset. Operator, browser, Control UI, and any role, scope, metadata, or public-key upgrade pairing still require manual approval.",
+                  },
+                },
+                additionalProperties: false,
+                title: "Gateway Node Pairing",
+                description:
+                  "Node pairing policy settings. Defaults keep CIDR auto-approval disabled; enable only with explicit trusted CIDR/IP allowlists you control.",
               },
               allowCommands: {
                 type: "array",
@@ -22324,6 +23330,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Named MCP server definitions. OpenClaw stores them in its own config and runtime adapters decide which transports are supported at execution time.",
           },
+          sessionIdleTtlMs: {
+            type: "number",
+            minimum: 0,
+            title: "MCP Runtime Idle TTL",
+            description:
+              "Idle TTL in milliseconds for session-scoped bundled MCP runtimes. Defaults to 10 minutes; set 0 to disable idle eviction.",
+          },
         },
         additionalProperties: false,
         title: "MCP",
@@ -22614,6 +23627,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       description:
                         "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
                     },
+                    allowConversationAccess: {
+                      type: "boolean",
+                      title: "Allow Conversation Access Hooks",
+                      description:
+                        "Controls whether this plugin may read raw conversation content from typed hooks such as `llm_input`, `llm_output`, `before_agent_finalize`, and `agent_end`. Non-bundled plugins must opt in explicitly.",
+                    },
                   },
                   additionalProperties: false,
                   title: "Plugin Hook Policy",
@@ -22660,164 +23679,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             title: "Plugin Entries",
             description:
               "Per-plugin settings keyed by plugin ID including enablement and plugin-specific runtime configuration payloads. Use this for scoped plugin tuning without changing global loader policy.",
-          },
-          installs: {
-            type: "object",
-            propertyNames: {
-              type: "string",
-            },
-            additionalProperties: {
-              type: "object",
-              properties: {
-                source: {
-                  anyOf: [
-                    {
-                      anyOf: [
-                        {
-                          type: "string",
-                          const: "npm",
-                        },
-                        {
-                          type: "string",
-                          const: "archive",
-                        },
-                        {
-                          type: "string",
-                          const: "path",
-                        },
-                        {
-                          type: "string",
-                          const: "clawhub",
-                        },
-                      ],
-                    },
-                    {
-                      type: "string",
-                      const: "marketplace",
-                    },
-                  ],
-                  title: "Plugin Install Source",
-                  description: 'Install source ("npm", "archive", or "path").',
-                },
-                spec: {
-                  type: "string",
-                  title: "Plugin Install Spec",
-                  description: "Original npm spec used for install (if source is npm).",
-                },
-                sourcePath: {
-                  type: "string",
-                  title: "Plugin Install Source Path",
-                  description: "Original archive/path used for install (if any).",
-                },
-                installPath: {
-                  type: "string",
-                  title: "Plugin Install Path",
-                  description: "Resolved install directory for the installed plugin bundle.",
-                },
-                version: {
-                  type: "string",
-                  title: "Plugin Install Version",
-                  description: "Version recorded at install time (if available).",
-                },
-                resolvedName: {
-                  type: "string",
-                  title: "Plugin Resolved Package Name",
-                  description: "Resolved npm package name from the fetched artifact.",
-                },
-                resolvedVersion: {
-                  type: "string",
-                  title: "Plugin Resolved Package Version",
-                  description:
-                    "Resolved npm package version from the fetched artifact (useful for non-pinned specs).",
-                },
-                resolvedSpec: {
-                  type: "string",
-                  title: "Plugin Resolved Package Spec",
-                  description:
-                    "Resolved exact npm spec (<name>@<version>) from the fetched artifact.",
-                },
-                integrity: {
-                  type: "string",
-                  title: "Plugin Resolved Integrity",
-                  description:
-                    "Resolved npm dist integrity hash for the fetched artifact (if reported by npm).",
-                },
-                shasum: {
-                  type: "string",
-                  title: "Plugin Resolved Shasum",
-                  description:
-                    "Resolved npm dist shasum for the fetched artifact (if reported by npm).",
-                },
-                resolvedAt: {
-                  type: "string",
-                  title: "Plugin Resolution Time",
-                  description:
-                    "ISO timestamp when npm package metadata was last resolved for this install record.",
-                },
-                installedAt: {
-                  type: "string",
-                  title: "Plugin Install Time",
-                  description: "ISO timestamp of last install/update.",
-                },
-                clawhubUrl: {
-                  type: "string",
-                },
-                clawhubPackage: {
-                  type: "string",
-                },
-                clawhubFamily: {
-                  anyOf: [
-                    {
-                      type: "string",
-                      const: "code-plugin",
-                    },
-                    {
-                      type: "string",
-                      const: "bundle-plugin",
-                    },
-                  ],
-                },
-                clawhubChannel: {
-                  anyOf: [
-                    {
-                      type: "string",
-                      const: "official",
-                    },
-                    {
-                      type: "string",
-                      const: "community",
-                    },
-                    {
-                      type: "string",
-                      const: "private",
-                    },
-                  ],
-                },
-                marketplaceName: {
-                  type: "string",
-                  title: "Plugin Marketplace Name",
-                  description:
-                    "Marketplace display name recorded for marketplace-backed plugin installs (if available).",
-                },
-                marketplaceSource: {
-                  type: "string",
-                  title: "Plugin Marketplace Source",
-                  description:
-                    "Original marketplace source used to resolve the install (for example a repo path or Git URL).",
-                },
-                marketplacePlugin: {
-                  type: "string",
-                  title: "Plugin Marketplace Plugin",
-                  description:
-                    "Plugin entry name inside the source marketplace, used for later updates.",
-                },
-              },
-              required: ["source"],
-              additionalProperties: false,
-            },
-            title: "Plugin Install Records",
-            description:
-              "CLI-managed install metadata (used by `openclaw plugins update` to locate install sources).",
           },
         },
         additionalProperties: false,
@@ -23176,12 +24037,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "logging.redactSensitive": {
       label: "Sensitive Data Redaction Mode",
-      help: 'Sensitive redaction mode: "off" disables built-in masking, while "tools" redacts sensitive tool/config payload fields. Keep "tools" in shared logs unless you have isolated secure log sinks.',
+      help: 'Sensitive redaction mode: "off" disables built-in masking, while "tools" redacts sensitive tool/config payload fields in log sinks and persisted transcript text. Keep "tools" enabled unless logs and transcripts are isolated.',
       tags: ["privacy", "observability"],
     },
     "logging.redactPatterns": {
       label: "Custom Redaction Patterns",
-      help: "Additional custom redact regex patterns applied to log output before emission/storage. Use this to mask org-specific tokens and identifiers not covered by built-in redaction rules.",
+      help: "Additional custom redact regex patterns applied to log output and persisted transcript text before storage. Use this to mask org-specific tokens and identifiers not covered by built-in redaction rules.",
       tags: ["privacy", "observability"],
     },
     "cli.banner": {
@@ -23226,7 +24087,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "diagnostics.enabled": {
       label: "Diagnostics Enabled",
-      help: "Master toggle for diagnostics instrumentation output in logs and telemetry wiring paths. Keep enabled for normal observability, and disable only in tightly constrained environments.",
+      help: "Master toggle for diagnostics instrumentation output in logs and telemetry wiring paths. Defaults to enabled; set false only in tightly constrained environments.",
       tags: ["observability"],
     },
     "diagnostics.flags": {
@@ -23247,6 +24108,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "diagnostics.otel.endpoint": {
       label: "OpenTelemetry Endpoint",
       help: "Collector endpoint URL used for OpenTelemetry export transport, including scheme and port. Use a reachable, trusted collector endpoint and monitor ingestion errors after rollout.",
+      tags: ["observability"],
+    },
+    "diagnostics.otel.tracesEndpoint": {
+      label: "OpenTelemetry Traces Endpoint",
+      help: "Signal-specific OTLP/HTTP trace endpoint. When set, this overrides diagnostics.otel.endpoint and OTEL_EXPORTER_OTLP_ENDPOINT for trace export only.",
+      tags: ["observability"],
+    },
+    "diagnostics.otel.metricsEndpoint": {
+      label: "OpenTelemetry Metrics Endpoint",
+      help: "Signal-specific OTLP/HTTP metrics endpoint. When set, this overrides diagnostics.otel.endpoint and OTEL_EXPORTER_OTLP_ENDPOINT for metrics export only.",
+      tags: ["observability"],
+    },
+    "diagnostics.otel.logsEndpoint": {
+      label: "OpenTelemetry Logs Endpoint",
+      help: "Signal-specific OTLP/HTTP logs endpoint. When set, this overrides diagnostics.otel.endpoint and OTEL_EXPORTER_OTLP_ENDPOINT for log export only.",
       tags: ["observability"],
     },
     "diagnostics.otel.protocol": {
@@ -23288,6 +24164,41 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "OpenTelemetry Flush Interval (ms)",
       help: "Interval in milliseconds for periodic telemetry flush from buffers to the collector. Increase to reduce export chatter, or lower for faster visibility during active incident response.",
       tags: ["observability", "performance"],
+    },
+    "diagnostics.otel.captureContent": {
+      label: "OpenTelemetry Content Capture",
+      help: "Opt-in OTEL span content capture. Defaults to off; boolean true captures non-system message/tool content, while the object form lets you enable specific content classes.",
+      tags: ["observability"],
+    },
+    "diagnostics.otel.captureContent.enabled": {
+      label: "OpenTelemetry Content Capture Enabled",
+      help: "Master switch for granular OTEL content capture fields. Keep disabled unless your collector is approved for raw prompt, response, or tool content.",
+      tags: ["observability"],
+    },
+    "diagnostics.otel.captureContent.inputMessages": {
+      label: "OpenTelemetry Input Messages Capture",
+      help: "Capture model input message text on OTEL spans when content capture is enabled.",
+      tags: ["observability"],
+    },
+    "diagnostics.otel.captureContent.outputMessages": {
+      label: "OpenTelemetry Output Messages Capture",
+      help: "Capture model output message text on OTEL spans when content capture is enabled.",
+      tags: ["observability"],
+    },
+    "diagnostics.otel.captureContent.toolInputs": {
+      label: "OpenTelemetry Tool Inputs Capture",
+      help: "Capture tool input text on OTEL spans when content capture is enabled.",
+      tags: ["observability"],
+    },
+    "diagnostics.otel.captureContent.toolOutputs": {
+      label: "OpenTelemetry Tool Outputs Capture",
+      help: "Capture tool output text on OTEL spans when content capture is enabled.",
+      tags: ["observability"],
+    },
+    "diagnostics.otel.captureContent.systemPrompt": {
+      label: "OpenTelemetry System Prompt Capture",
+      help: "Capture system prompt text on OTEL spans when content capture is enabled. This remains off unless explicitly enabled.",
+      tags: ["observability"],
     },
     "diagnostics.cacheTrace.enabled": {
       label: "Cache Trace Enabled",
@@ -23404,19 +24315,34 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Default max characters retained from AGENTS.md during post-compaction context refresh injection. Lower this to make compaction recovery cheaper, or raise it for agents that depend on longer startup guidance.",
       tags: ["performance"],
     },
+    "agents.defaults.agentRuntime": {
+      label: "Default Agent Runtime Settings",
+      help: "Default agent runtime policy. Omitted id uses built-in OpenClaw Pi. Use id=auto for plugin harness selection, a registered harness id such as codex, or a supported CLI backend alias such as claude-cli.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.agentRuntime.id": {
+      label: "Default Agent Runtime",
+      help: "Agent runtime id: pi, auto, a registered plugin harness id such as codex, or a supported CLI backend alias such as claude-cli. Omitted id uses built-in OpenClaw Pi.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.agentRuntime.fallback": {
+      label: "Default Agent Runtime Fallback",
+      help: "Agent runtime fallback when no plugin harness matches. Auto mode defaults to pi; explicit plugin runtimes default to none and do not inherit broader fallback settings. Selected plugin harness failures surface directly.",
+      tags: ["reliability"],
+    },
     "agents.defaults.embeddedHarness": {
-      label: "Default Embedded Harness",
-      help: "Default embedded agent harness policy. Use runtime=auto for plugin harness selection, runtime=pi for built-in PI, or a registered harness id such as codex.",
+      label: "Default Legacy Embedded Harness Settings",
+      help: "Legacy input for agents.defaults.agentRuntime. Run openclaw doctor --fix to rewrite it to agentRuntime.",
       tags: ["advanced"],
     },
     "agents.defaults.embeddedHarness.runtime": {
-      label: "Default Embedded Harness Runtime",
-      help: "Embedded harness runtime: auto, pi, or a registered plugin harness id such as codex.",
+      label: "Default Legacy Embedded Harness Runtime",
+      help: "Legacy input for agents.defaults.agentRuntime.id.",
       tags: ["advanced"],
     },
     "agents.defaults.embeddedHarness.fallback": {
-      label: "Default Embedded Harness Fallback",
-      help: "Embedded harness fallback when no plugin harness matches. Selected plugin harness failures surface directly. Set none to disable automatic PI fallback.",
+      label: "Default Legacy Embedded Harness Fallback",
+      help: "Legacy input for agents.defaults.agentRuntime.fallback.",
       tags: ["reliability"],
     },
     "agents.list": {
@@ -23459,19 +24385,34 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Per-agent override for the post-compaction AGENTS.md excerpt budget.",
       tags: ["performance"],
     },
+    "agents.list.*.agentRuntime": {
+      label: "Agent Runtime",
+      help: "Per-agent agent runtime policy override. Use id=codex to force Codex for one agent while defaults stay in auto mode.",
+      tags: ["advanced"],
+    },
+    "agents.list.*.agentRuntime.id": {
+      label: "Agent Runtime",
+      help: "Per-agent agent runtime id: pi, auto, a registered plugin harness id such as codex, or a supported CLI backend alias such as claude-cli. Omitted id inherits the default OpenClaw Pi behavior.",
+      tags: ["advanced"],
+    },
+    "agents.list.*.agentRuntime.fallback": {
+      label: "Agent Runtime Fallback",
+      help: "Per-agent agent runtime fallback. Auto mode defaults to pi; explicit plugin runtimes default to none and do not inherit broader fallback settings.",
+      tags: ["reliability"],
+    },
     "agents.list.*.embeddedHarness": {
-      label: "Agent Embedded Harness",
-      help: "Per-agent embedded harness policy override. Use fallback=none to make missing plugin harness selection fail instead of falling back to PI.",
+      label: "Agent Legacy Embedded Harness",
+      help: "Legacy input for agents.list.*.agentRuntime. Run openclaw doctor --fix to rewrite it to agentRuntime.",
       tags: ["advanced"],
     },
     "agents.list.*.embeddedHarness.runtime": {
-      label: "Agent Embedded Harness Runtime",
-      help: "Per-agent embedded harness runtime: auto, pi, or a registered plugin harness id such as codex.",
+      label: "Agent Legacy Embedded Harness Runtime",
+      help: "Legacy input for agents.list.*.agentRuntime.id.",
       tags: ["advanced"],
     },
     "agents.list.*.embeddedHarness.fallback": {
-      label: "Agent Embedded Harness Fallback",
-      help: "Per-agent embedded harness fallback. Set none to disable automatic PI fallback for this agent.",
+      label: "Agent Legacy Embedded Harness Fallback",
+      help: "Legacy input for agents.list.*.agentRuntime.fallback.",
       tags: ["reliability"],
     },
     "gateway.port": {
@@ -23561,7 +24502,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "gateway.channelStaleEventThresholdMinutes": {
       label: "Gateway Channel Stale Event Threshold (min)",
-      help: "How many minutes a connected channel can go without receiving any event before the health monitor treats it as a stale socket and triggers a restart. Default: 30.",
+      help: "How many minutes a connected channel can go without provider-proven transport activity before the health monitor treats it as a stale socket and triggers a restart. Default: 30.",
       tags: ["network"],
     },
     "gateway.channelMaxRestartsPerHour": {
@@ -23706,6 +24647,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Remote CDP websocket URL used to attach to an externally managed browser instance. Use this for centralized browser hosts and keep URL access restricted to trusted network paths.",
       tags: ["advanced", "url-secret"],
     },
+    "browser.actionTimeoutMs": {
+      label: "Browser Action Timeout (ms)",
+      help: "Default timeout in milliseconds for browser act requests before the client gives up waiting. Raise this when healthy waits or UI interactions exceed the default request budget.",
+      tags: ["performance"],
+    },
+    "browser.localLaunchTimeoutMs": {
+      label: "Browser Local Launch Timeout (ms)",
+      help: "Timeout in milliseconds for locally launched managed Chrome to expose its CDP HTTP endpoint after process start. Raise this on slow single-board computers or older hosts.",
+      tags: ["performance"],
+    },
+    "browser.localCdpReadyTimeoutMs": {
+      label: "Browser Local CDP Ready Timeout (ms)",
+      help: "Timeout in milliseconds for a locally launched managed browser to finish CDP websocket readiness after the process is discovered. Raise this when Chrome starts but browser start still reports CDP not reachable.",
+      tags: ["performance"],
+    },
     "browser.color": {
       label: "Browser Accent Color",
       help: "Default accent color used for browser profile/UI cues where colored identity hints are displayed. Use consistent colors to help operators identify active browser profile context quickly.",
@@ -23713,7 +24669,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "browser.executablePath": {
       label: "Browser Executable Path",
-      help: "Explicit browser executable path when auto-discovery is insufficient for your host environment. Use absolute stable paths so launch behavior stays deterministic across restarts.",
+      help: "Explicit browser executable path when auto-discovery is insufficient for your host environment. Use an absolute stable path, or a path starting with ~ for your OS home directory, so launch behavior stays deterministic across restarts.",
       tags: ["storage"],
     },
     "browser.headless": {
@@ -23758,12 +24714,32 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "browser.profiles.*.userDataDir": {
       label: "Browser Profile User Data Dir",
-      help: "Per-profile Chromium user data directory for existing-session attachment through Chrome DevTools MCP. Use this for Brave, Edge, Chromium, or non-default Chrome profiles when the built-in auto-connect path would pick the wrong browser data directory on the selected host or browser node.",
+      help: "Per-profile Chromium user data directory for existing-session attachment through Chrome DevTools MCP. Use this for Brave, Edge, Chromium, or non-default Chrome profiles when the built-in auto-connect path would pick the wrong browser data directory on the selected host or browser node. Paths starting with ~ expand to the OS home directory.",
+      tags: ["storage"],
+    },
+    "browser.profiles.*.mcpCommand": {
+      label: "Browser Profile Chrome MCP Command",
+      help: "Per-profile Chrome DevTools MCP command for existing-session attachment. Defaults to npx.",
+      tags: ["storage"],
+    },
+    "browser.profiles.*.mcpArgs": {
+      label: "Browser Profile Chrome MCP Args",
+      help: "Extra per-profile Chrome DevTools MCP arguments for existing-session attachment, such as --no-usage-statistics. Endpoint arguments here override the built-in auto-connect or browser URL selection.",
       tags: ["storage"],
     },
     "browser.profiles.*.driver": {
       label: "Browser Profile Driver",
       help: 'Per-profile browser driver mode. Use "openclaw" (or legacy "clawd") for CDP-based profiles, or use "existing-session" for Chrome DevTools MCP attachment on the selected host or browser node.',
+      tags: ["storage"],
+    },
+    "browser.profiles.*.executablePath": {
+      label: "Browser Profile Executable Path",
+      help: "Per-profile browser executable path for locally launched managed browser profiles. Overrides browser.executablePath and accepts paths starting with ~ for the OS home directory.",
+      tags: ["storage"],
+    },
+    "browser.profiles.*.headless": {
+      label: "Browser Profile Headless Mode",
+      help: "Per-profile headless override for locally launched browser instances. Use this when one profile should stay headless without forcing browser.headless for every other profile.",
       tags: ["storage"],
     },
     "browser.profiles.*.attachOnly": {
@@ -24664,7 +25640,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "gateway.reload.deferralTimeoutMs": {
       label: "Restart Deferral Timeout (ms)",
-      help: "Maximum time (ms) to wait for in-flight operations to complete before forcing a SIGUSR1 restart. Default: 300000 (5 minutes). Lower values risk aborting active subagent LLM calls.",
+      help: "Optional maximum time (ms) to wait for in-flight operations before forcing a restart. Omit or set 0 to wait indefinitely with periodic still-pending warnings. Lower positive values risk aborting active subagent LLM calls.",
       tags: ["network", "reliability", "performance"],
     },
     "gateway.nodes.browser.mode": {
@@ -24676,6 +25652,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Gateway Node Browser Pin",
       help: "Pin browser routing to a specific node id or name (optional).",
       tags: ["network"],
+    },
+    "gateway.nodes.pairing": {
+      label: "Gateway Node Pairing",
+      help: "Node pairing policy settings. Defaults keep CIDR auto-approval disabled; enable only with explicit trusted CIDR/IP allowlists you control.",
+      tags: ["network"],
+    },
+    "gateway.nodes.pairing.autoApproveCidrs": {
+      label: "Gateway Node Pairing Auto-Approve CIDRs",
+      help: "Opt-in CIDR/IP allowlist for auto-approving first-time node-role device pairing with no requested scopes. Disabled when unset. Operator, browser, Control UI, and any role, scope, metadata, or public-key upgrade pairing still require manual approval.",
+      tags: ["security", "access", "network", "advanced"],
     },
     "gateway.nodes.allowCommands": {
       label: "Gateway Node Allowlist (Extra Commands)",
@@ -24746,6 +25732,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Binding Agent ID",
       help: "Target agent ID that receives traffic when the corresponding binding match rule is satisfied. Use valid configured agent IDs only so routing does not fail at runtime.",
       tags: ["advanced"],
+    },
+    "bindings[].session": {
+      label: "Binding Session",
+      help: "Optional route session overrides for conversations matched by this binding. Use this when a narrow route should keep the same agent but isolate session continuity differently.",
+      tags: ["storage"],
+    },
+    "bindings[].session.dmScope": {
+      label: "Binding Session DM Scope",
+      help: 'Optional DM session scope override for this route binding. For example, keep global session.dmScope="main" while using "per-account-channel-peer" for selected direct peers.',
+      tags: ["storage"],
     },
     "bindings[].match": {
       label: "Binding Match Rule",
@@ -24855,6 +25851,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "agents.defaults.repoRoot": {
       label: "Repo Root",
       help: "Optional repository root shown in the system prompt runtime line (overrides auto-detect).",
+      tags: ["advanced"],
+    },
+    "agents.defaults.promptOverlays": {
+      label: "Prompt Overlays",
+      help: "Provider-independent prompt overlays applied by model family before provider-specific prompt hooks.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.promptOverlays.gpt5": {
+      label: "GPT-5 Prompt Overlay",
+      help: "Shared GPT-5-family prompt overlay applied to matching model ids across providers such as OpenAI, OpenRouter, OpenCode, Codex, and compatible gateways.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.promptOverlays.gpt5.personality": {
+      label: "GPT-5 Personality Overlay",
+      help: 'Friendly interaction-style layer for GPT-5-family models ("friendly" or "on" enables it; "off" disables only that layer). The tagged behavior contract remains enabled for matching GPT-5 models.',
       tags: ["advanced"],
     },
     "agents.defaults.contextInjection": {
@@ -25073,6 +26084,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Specifies the local embedding model source for local memory search, such as a GGUF file path or `hf:` URI. Use this only when provider is `local`, and verify model compatibility before large index rebuilds.",
       tags: ["storage"],
     },
+    "agents.defaults.memorySearch.local.contextSize": {
+      label: "Local Embedding Context Size",
+      help: 'Context window size passed to node-llama-cpp when creating the embedding context (default: 4096). 4096 safely covers typical memory-search chunks (128–512 tokens) while keeping non-weight VRAM bounded. Lower to 1024–2048 on resource-constrained hosts. Set to "auto" to let node-llama-cpp use the model\'s trained maximum — not recommended for large models (e.g. Qwen3-Embedding-8B trained on 40 960 tokens can push VRAM from ~8.8 GB to ~32 GB).',
+      tags: ["advanced"],
+    },
     "agents.defaults.memorySearch.store.path": {
       label: "Memory Search Index Path",
       help: "Sets where the SQLite memory index is stored on disk for each agent. Keep the default `~/.openclaw/memory/{agentId}.sqlite` unless you need custom storage placement or backup policy alignment.",
@@ -25117,6 +26133,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Memory Watch Debounce (ms)",
       help: "Debounce window in milliseconds for coalescing rapid file-watch events before reindex runs. Increase to reduce churn on frequently-written files, or lower for faster freshness.",
       tags: ["performance", "automation"],
+    },
+    "agents.defaults.memorySearch.sync.embeddingBatchTimeoutSeconds": {
+      label: "Embedding Batch Timeout (s)",
+      help: "Overrides the timeout for inline embedding batches during memory indexing. Leave unset to use provider defaults: 600 seconds for local/self-hosted providers such as local, Ollama, and LM Studio, and 120 seconds for hosted providers.",
+      tags: ["performance"],
     },
     "agents.defaults.memorySearch.sync.sessions.deltaBytes": {
       label: "Session Delta Bytes",
@@ -25489,6 +26510,26 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Provider API adapter selection controlling request/response compatibility handling for model calls. Use the adapter that matches your upstream provider protocol to avoid feature mismatch.",
       tags: ["models"],
     },
+    "models.providers.*.contextWindow": {
+      label: "Model Provider Context Window",
+      help: "Default native context window applied to models under this provider when a model entry does not set contextWindow. Use model-level contextWindow for per-model overrides.",
+      tags: ["models"],
+    },
+    "models.providers.*.contextTokens": {
+      label: "Model Provider Context Tokens",
+      help: "Default effective runtime context cap applied to models under this provider when a model entry does not set contextTokens. Use this when runtime should budget below the native contextWindow.",
+      tags: ["security", "auth", "models"],
+    },
+    "models.providers.*.maxTokens": {
+      label: "Model Provider Max Tokens",
+      help: "Default maximum output token budget applied to models under this provider when a model entry does not set maxTokens.",
+      tags: ["security", "auth", "performance", "models"],
+    },
+    "models.providers.*.timeoutSeconds": {
+      label: "Model Provider Request Timeout",
+      help: "Optional per-provider model request timeout in seconds. Applies to provider HTTP fetches, including connect, headers, body, and total request abort handling. Use this for slow local or self-hosted model servers instead of changing global agent timeouts.",
+      tags: ["performance", "models"],
+    },
     "models.providers.*.injectNumCtxForOpenAICompat": {
       label: "Model Provider Inject num_ctx (OpenAI Compat)",
       help: "Controls whether OpenClaw injects `options.num_ctx` for Ollama providers configured with the OpenAI-compatible adapter (`openai-completions`). Default is true. Set false only if your proxy/upstream rejects unknown `options` payload fields.",
@@ -25646,7 +26687,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "models.providers.*.models": {
       label: "Model Provider Model List",
-      help: "Declared model list for a provider including identifiers, metadata, and optional compatibility/cost hints. Keep IDs exact to provider catalog values so selection and fallback resolve correctly.",
+      help: "Declared model list for a provider including identifiers, metadata, provider-specific params, and optional compatibility/cost hints. Keep IDs exact to provider catalog values so selection and fallback resolve correctly.",
       tags: ["models"],
     },
     "auth.cooldowns.billingBackoffHours": {
@@ -25728,6 +26769,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Image Generation Model Fallbacks",
       help: "Ordered fallback image-generation models (provider/model).",
       tags: ["reliability", "media"],
+    },
+    "agents.defaults.imageGenerationModel.timeoutMs": {
+      label: "Image Generation Timeout (ms)",
+      help: "Default provider request timeout in milliseconds for image_generate calls. Per-call timeoutMs overrides this.",
+      tags: ["performance", "media"],
     },
     "agents.defaults.videoGenerationModel.primary": {
       label: "Video Generation Model",
@@ -25851,12 +26897,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "agents.defaults.compaction.qualityGuard": {
       label: "Compaction Quality Guard",
-      help: "Optional quality-audit retry settings for safeguard compaction summaries. Leave this disabled unless you explicitly want summary audits and one-shot regeneration on failed checks.",
+      help: "Quality-audit retry settings for safeguard compaction summaries. Safeguard mode enables this by default; set enabled: false to skip summary audits and regeneration.",
       tags: ["advanced"],
     },
     "agents.defaults.compaction.qualityGuard.enabled": {
       label: "Compaction Quality Guard Enabled",
-      help: "Enables summary quality audits and regeneration retries for safeguard compaction. Default: false, so safeguard mode alone does not turn on retry behavior.",
+      help: "Enables summary quality audits and regeneration retries for safeguard compaction. Default: true in safeguard mode.",
       tags: ["advanced"],
     },
     "agents.defaults.compaction.qualityGuard.maxRetries": {
@@ -25885,9 +26931,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["models"],
     },
     "agents.defaults.compaction.truncateAfterCompaction": {
-      label: "Truncate After Compaction",
-      help: "When enabled, rewrites the session JSONL file after compaction to remove entries that were summarized. Prevents unbounded file growth in long-running sessions with many compaction cycles. Default: false.",
+      label: "Rotate Transcript After Compaction",
+      help: "When enabled, rotates the active session JSONL file after compaction so future turns load only the summary and unsummarized tail while the previous full transcript remains archived. Prevents unbounded active transcript growth in long-running sessions. Default: false.",
       tags: ["advanced"],
+    },
+    "agents.defaults.compaction.maxActiveTranscriptBytes": {
+      label: "Compaction Active Transcript Size Threshold",
+      help: 'Triggers normal local compaction when the active session transcript reaches this size (bytes or strings like "20mb"). Requires truncateAfterCompaction so successful compaction can rotate to a smaller successor transcript; set to 0 or leave unset to disable. This never splits raw transcript bytes.',
+      tags: ["performance"],
     },
     "agents.defaults.compaction.notifyUser": {
       label: "Compaction Notify User",
@@ -26088,6 +27139,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Named MCP server definitions. OpenClaw stores them in its own config and runtime adapters decide which transports are supported at execution time.",
       tags: ["advanced"],
     },
+    "mcp.sessionIdleTtlMs": {
+      label: "MCP Runtime Idle TTL",
+      help: "Idle TTL in milliseconds for session-scoped bundled MCP runtimes. Defaults to 10 minutes; set 0 to disable idle eviction.",
+      tags: ["storage"],
+    },
     "ui.seamColor": {
       label: "Accent Color",
       help: "Primary accent color used by UI surfaces for emphasis, badges, and visual identity cues. Use high-contrast values that remain readable across light/dark themes.",
@@ -26121,6 +27177,31 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "browser.snapshotDefaults.mode": {
       label: "Browser Snapshot Mode",
       help: "Default snapshot extraction mode controlling how page content is transformed for agent consumption. Choose the mode that balances readability, fidelity, and token footprint for your workflows.",
+      tags: ["advanced"],
+    },
+    "browser.tabCleanup": {
+      label: "Browser Tab Cleanup",
+      help: "Best-effort cleanup policy for browser tabs opened by primary-agent sessions. Keep enabled to avoid stale sandbox or managed-browser tabs accumulating across long-lived gateways.",
+      tags: ["advanced"],
+    },
+    "browser.tabCleanup.enabled": {
+      label: "Browser Tab Cleanup Enabled",
+      help: "Enables cleanup of idle tracked browser tabs for primary-agent sessions. Disable only when external tooling owns tab lifecycle completely.",
+      tags: ["advanced"],
+    },
+    "browser.tabCleanup.idleMinutes": {
+      label: "Browser Tab Cleanup Idle Minutes",
+      help: "Minutes of inactivity before a tracked primary-agent browser tab is eligible for closure. Set 0 to disable idle-time cleanup while keeping the per-session tab cap.",
+      tags: ["advanced"],
+    },
+    "browser.tabCleanup.maxTabsPerSession": {
+      label: "Browser Tab Cleanup Max Tabs Per Session",
+      help: "Maximum tracked browser tabs kept per primary-agent session. Oldest inactive tabs are closed first. Set 0 to disable the cap.",
+      tags: ["performance", "storage"],
+    },
+    "browser.tabCleanup.sweepMinutes": {
+      label: "Browser Tab Cleanup Sweep Minutes",
+      help: "Minutes between browser tab cleanup sweeps. Keep this modest so idle tabs are reclaimed without adding frequent background work.",
       tags: ["advanced"],
     },
     "browser.ssrfPolicy": {
@@ -26827,6 +27908,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Enables automatic live-reload behavior for canvas assets during development workflows. Keep disabled in production-like environments where deterministic output is preferred.",
       tags: ["reliability"],
     },
+    "talk.speechLocale": {
+      label: "Talk Speech Locale",
+      help: 'BCP 47 locale id for Talk speech recognition on device nodes, for example "ru-RU". Leave unset to use each device default.',
+      tags: ["media"],
+    },
     "talk.interruptOnSpeech": {
       label: "Talk Interrupt on Speech",
       help: "If true (default), stop assistant speech when the user starts speaking in Talk mode. Keep enabled for conversational turn-taking.",
@@ -26955,6 +28041,31 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "messages.tts": {
       label: "Message Text-to-Speech",
       help: "Text-to-speech policy for reading agent replies aloud on supported voice or audio surfaces. Keep disabled unless voice playback is part of your operator/user workflow.",
+      tags: ["media"],
+    },
+    "messages.tts.persona": {
+      label: "TTS Persona",
+      help: "Default TTS persona id. Local TTS persona preferences can override this per host.",
+      tags: ["media"],
+    },
+    "messages.tts.personas": {
+      label: "TTS Personas",
+      help: "Named TTS personas that define stable spoken identity plus provider-specific speech bindings.",
+      tags: ["media"],
+    },
+    "messages.tts.personas.*": {
+      label: "TTS Persona",
+      help: "One TTS persona. Use provider-specific bindings for exact voices/models and prompt templates.",
+      tags: ["media"],
+    },
+    "messages.tts.personas.*.prompt": {
+      label: "TTS Persona Prompt",
+      help: "Provider-neutral persona prompt intent. Providers decide whether and how to map this into request instructions.",
+      tags: ["media"],
+    },
+    "messages.tts.personas.*.providers": {
+      label: "TTS Persona Provider Bindings",
+      help: "Provider-specific TTS persona bindings keyed by speech provider id. These merge over messages.tts.providers for the active persona.",
       tags: ["media"],
     },
     "messages.tts.providers": {
@@ -27130,6 +28241,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
       tags: ["advanced"],
     },
+    "plugins.entries.*.hooks.allowConversationAccess": {
+      label: "Allow Conversation Access Hooks",
+      help: "Controls whether this plugin may read raw conversation content from typed hooks such as `llm_input`, `llm_output`, `before_agent_finalize`, and `agent_end`. Non-bundled plugins must opt in explicitly.",
+      tags: ["access"],
+    },
     "plugins.entries.*.hooks.allowPromptInjection": {
       label: "Allow Prompt Injection Hooks",
       help: "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
@@ -27165,86 +28281,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Plugin-defined configuration payload interpreted by that plugin's own schema and validation rules. Use only documented fields from the plugin to prevent ignored or invalid settings.",
       tags: ["advanced"],
     },
-    "plugins.installs": {
-      label: "Plugin Install Records",
-      help: "CLI-managed install metadata (used by `openclaw plugins update` to locate install sources).",
-      tags: ["advanced"],
-    },
-    "plugins.installs.*.source": {
-      label: "Plugin Install Source",
-      help: 'Install source ("npm", "archive", or "path").',
-      tags: ["advanced"],
-    },
-    "plugins.installs.*.spec": {
-      label: "Plugin Install Spec",
-      help: "Original npm spec used for install (if source is npm).",
-      tags: ["advanced"],
-    },
-    "plugins.installs.*.sourcePath": {
-      label: "Plugin Install Source Path",
-      help: "Original archive/path used for install (if any).",
-      tags: ["storage"],
-    },
-    "plugins.installs.*.installPath": {
-      label: "Plugin Install Path",
-      help: "Resolved install directory for the installed plugin bundle.",
-      tags: ["storage"],
-    },
-    "plugins.installs.*.version": {
-      label: "Plugin Install Version",
-      help: "Version recorded at install time (if available).",
-      tags: ["advanced"],
-    },
-    "plugins.installs.*.resolvedName": {
-      label: "Plugin Resolved Package Name",
-      help: "Resolved npm package name from the fetched artifact.",
-      tags: ["advanced"],
-    },
-    "plugins.installs.*.resolvedVersion": {
-      label: "Plugin Resolved Package Version",
-      help: "Resolved npm package version from the fetched artifact (useful for non-pinned specs).",
-      tags: ["advanced"],
-    },
-    "plugins.installs.*.resolvedSpec": {
-      label: "Plugin Resolved Package Spec",
-      help: "Resolved exact npm spec (<name>@<version>) from the fetched artifact.",
-      tags: ["advanced"],
-    },
-    "plugins.installs.*.integrity": {
-      label: "Plugin Resolved Integrity",
-      help: "Resolved npm dist integrity hash for the fetched artifact (if reported by npm).",
-      tags: ["advanced"],
-    },
-    "plugins.installs.*.shasum": {
-      label: "Plugin Resolved Shasum",
-      help: "Resolved npm dist shasum for the fetched artifact (if reported by npm).",
-      tags: ["advanced"],
-    },
-    "plugins.installs.*.resolvedAt": {
-      label: "Plugin Resolution Time",
-      help: "ISO timestamp when npm package metadata was last resolved for this install record.",
-      tags: ["advanced"],
-    },
-    "plugins.installs.*.installedAt": {
-      label: "Plugin Install Time",
-      help: "ISO timestamp of last install/update.",
-      tags: ["advanced"],
-    },
-    "plugins.installs.*.marketplaceName": {
-      label: "Plugin Marketplace Name",
-      help: "Marketplace display name recorded for marketplace-backed plugin installs (if available).",
-      tags: ["advanced"],
-    },
-    "plugins.installs.*.marketplaceSource": {
-      label: "Plugin Marketplace Source",
-      help: "Original marketplace source used to resolve the install (for example a repo path or Git URL).",
-      tags: ["advanced"],
-    },
-    "plugins.installs.*.marketplacePlugin": {
-      label: "Plugin Marketplace Plugin",
-      help: "Plugin entry name inside the source marketplace, used for later updates.",
-      tags: ["advanced"],
-    },
     "models.providers.*.headers.*": {
       sensitive: true,
       tags: ["security", "models"],
@@ -27268,6 +28304,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "agents.list[].memorySearch.remote.apiKey": {
       sensitive: true,
       tags: ["security", "auth"],
+    },
+    "agents.list[].tts.personas.*.providers.*.apiKey": {
+      sensitive: true,
+      tags: ["security", "auth", "media"],
+    },
+    "agents.list[].tts.providers.*.apiKey": {
+      sensitive: true,
+      tags: ["security", "auth", "media"],
     },
     "agents.list[].sandbox.ssh.identityData": {
       sensitive: true,
@@ -27589,6 +28633,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       sensitive: true,
       tags: ["security", "media", "tools"],
     },
+    "messages.tts.personas.*.providers.*.apiKey": {
+      sensitive: true,
+      tags: ["security", "auth", "media"],
+    },
     "mcp.servers.*.headers.*": {
       sensitive: true,
       tags: ["security"],
@@ -27596,6 +28644,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "skills.entries.*.apiKey": {
       sensitive: true,
       tags: ["security", "auth"],
+    },
+    "models.providers.*.models[].baseUrl": {
+      tags: ["models", "url-secret"],
     },
     "agents.list[].memorySearch.remote.baseUrl": {
       tags: ["advanced", "url-secret"],
@@ -27646,6 +28697,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.4.22",
+  version: "2026.4.26",
   generatedAt: "2026-03-22T21:17:33.302Z",
 };

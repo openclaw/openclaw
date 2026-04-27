@@ -294,6 +294,18 @@ function isSystemdUnitNotEnabled(detail: string): boolean {
   );
 }
 
+function isSystemdUnitMissingDetail(detail: string): boolean {
+  if (!detail) {
+    return false;
+  }
+  const normalized = normalizeLowercaseStringOrEmpty(detail);
+  return (
+    (normalized.includes("unit file") && normalized.includes("does not exist")) ||
+    normalized.includes("not-found") ||
+    normalized.includes("could not be found")
+  );
+}
+
 const isSystemctlBusUnavailable = isSystemdUserBusUnavailableDetail;
 
 function isSystemdUserScopeUnavailable(detail: string): boolean {
@@ -539,21 +551,44 @@ export async function stageSystemdService({
 }
 
 async function activateSystemdService(params: { env: GatewayServiceEnv }) {
-  const serviceName = resolveGatewaySystemdServiceName(params.env.OPENCLAW_PROFILE);
+  const serviceName = resolveSystemdServiceName(params.env);
   const unitName = `${serviceName}.service`;
-  const reload = await execSystemctlUser(params.env, ["daemon-reload"]);
+  const reloadSystemd = async () => await execSystemctlUser(params.env, ["daemon-reload"]);
+  const throwActivationFailure = (
+    action: "daemon-reload" | "enable" | "restart",
+    result: { stdout: string; stderr: string },
+  ): never => {
+    const detail = readSystemctlDetail(result);
+    if (isSystemdUserScopeUnavailable(detail)) {
+      throw new Error(`systemctl --user unavailable: ${detail || "unknown error"}`.trim());
+    }
+    throw new Error(`systemctl ${action} failed: ${detail || "unknown error"}`.trim());
+  };
+  const reload = await reloadSystemd();
   if (reload.code !== 0) {
-    throw new Error(`systemctl daemon-reload failed: ${reload.stderr || reload.stdout}`.trim());
+    throwActivationFailure("daemon-reload", reload);
   }
 
-  const enable = await execSystemctlUser(params.env, ["enable", unitName]);
+  const runAfterReloadRetry = async (action: "enable" | "restart") => {
+    const result = await execSystemctlUser(params.env, [action, unitName]);
+    if (result.code === 0 || !isSystemdUnitMissingDetail(readSystemctlDetail(result))) {
+      return result;
+    }
+    const retryReload = await reloadSystemd();
+    if (retryReload.code !== 0) {
+      throwActivationFailure("daemon-reload", retryReload);
+    }
+    return await execSystemctlUser(params.env, [action, unitName]);
+  };
+
+  const enable = await runAfterReloadRetry("enable");
   if (enable.code !== 0) {
-    throw new Error(`systemctl enable failed: ${enable.stderr || enable.stdout}`.trim());
+    throwActivationFailure("enable", enable);
   }
 
-  const restart = await execSystemctlUser(params.env, ["restart", unitName]);
+  const restart = await runAfterReloadRetry("restart");
   if (restart.code !== 0) {
-    throw new Error(`systemctl restart failed: ${restart.stderr || restart.stdout}`.trim());
+    throwActivationFailure("restart", restart);
   }
 }
 
@@ -588,7 +623,7 @@ export async function uninstallSystemdService({
   stdout,
 }: GatewayServiceManageArgs): Promise<void> {
   await assertSystemdAvailable(env);
-  const serviceName = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
+  const serviceName = resolveSystemdServiceName(env);
   const unitName = `${serviceName}.service`;
   await execSystemctlUser(env, ["disable", "--now", unitName]);
 

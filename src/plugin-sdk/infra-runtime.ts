@@ -31,7 +31,13 @@ export async function drainPendingDeliveries(opts: DrainPendingDeliveriesOptions
 export * from "../infra/backoff.js";
 export * from "../infra/channel-activity.js";
 export * from "../infra/dedupe.js";
-export * from "../infra/diagnostic-events.js";
+export type * from "../infra/diagnostic-events.js";
+export {
+  areDiagnosticsEnabledForProcess,
+  emitDiagnosticEvent,
+  isDiagnosticsEnabled,
+  onDiagnosticEvent,
+} from "../infra/diagnostic-events.js";
 export * from "../infra/diagnostic-flags.js";
 export * from "../infra/env.js";
 export * from "../infra/errors.js";
@@ -42,6 +48,7 @@ export * from "../infra/exec-approval-session-target.ts";
 export * from "../infra/exec-approvals.ts";
 export * from "../infra/approval-native-delivery.ts";
 export * from "../infra/approval-native-runtime.ts";
+export * from "../infra/approval-display-paths.ts";
 export * from "../infra/plugin-approvals.ts";
 export * from "../infra/fetch.js";
 export * from "../infra/file-lock.js";

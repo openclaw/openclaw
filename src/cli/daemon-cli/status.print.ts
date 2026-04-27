@@ -165,6 +165,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
         bind: status.gateway.bindMode,
         customBindHost: status.gateway.customBindHost,
         basePath: status.config?.daemon?.controlUi?.basePath,
+        tlsEnabled: status.gateway.tlsEnabled === true,
       });
       defaultRuntime.log(`${label("Dashboard:")} ${infoText(links.httpUrl)}`);
     }
@@ -248,6 +249,15 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
   if (service.runtime?.missingUnit) {
     defaultRuntime.error(errorText("Service unit not found."));
     for (const hint of renderRuntimeHints(service.runtime, process.env, status.logFile)) {
+      defaultRuntime.error(errorText(hint));
+    }
+  } else if (service.runtime?.missingSupervision) {
+    defaultRuntime.error(errorText("LaunchAgent plist exists but launchd has no loaded job."));
+    for (const hint of renderRuntimeHints(
+      service.runtime,
+      service.command?.environment ?? process.env,
+      status.logFile,
+    )) {
       defaultRuntime.error(errorText(hint));
     }
   } else if (service.loaded && service.runtime?.status === "stopped") {

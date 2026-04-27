@@ -1,14 +1,12 @@
 ---
-title: "Plugin Testing"
-sidebarTitle: "Testing"
 summary: "Testing utilities and patterns for OpenClaw plugins"
+title: "Plugin testing"
+sidebarTitle: "Testing"
 read_when:
   - You are writing tests for a plugin
   - You need test utilities from the plugin SDK
   - You want to understand contract tests for bundled plugins
 ---
-
-# Plugin Testing
 
 Reference for test utilities, patterns, and lint enforcement for OpenClaw
 plugins.
@@ -82,6 +80,19 @@ describe("my-channel target resolution", () => {
 ```
 
 ## Testing patterns
+
+### Testing registration contracts
+
+Unit tests that pass a hand-written `api` mock to `register(api)` do not exercise
+OpenClaw's loader acceptance gates. Add at least one loader-backed smoke test
+for each registration surface your plugin depends on, especially hooks and
+exclusive capabilities such as memory.
+
+The real loader fails plugin registration when required metadata is missing or a
+plugin calls a capability API it does not own. For example,
+`api.registerHook(...)` requires a hook name, and
+`api.registerMemoryCapability(...)` requires the plugin manifest or exported
+entry to declare `kind: "memory"`.
 
 ### Unit testing a channel plugin
 

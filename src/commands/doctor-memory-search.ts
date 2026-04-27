@@ -14,8 +14,8 @@ import {
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { DEFAULT_LOCAL_MODEL } from "../memory-host-sdk/engine-embeddings.js";
 import { checkQmdBinaryAvailability } from "../memory-host-sdk/engine-qmd.js";
+import { DEFAULT_LOCAL_MODEL } from "../memory-host-sdk/host/embedding-defaults.js";
 import { hasConfiguredMemorySecretInput } from "../memory-host-sdk/secret.js";
 import {
   auditDreamingArtifacts,
@@ -34,6 +34,7 @@ import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import { resolveUserPath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+import { maybeRepairWorkspaceMemoryHealth, noteWorkspaceMemoryHealth } from "./doctor-workspace.js";
 import { isRecord } from "./doctor/shared/legacy-config-record-shared.js";
 
 type RuntimeMemoryAuditContext = {
@@ -125,6 +126,10 @@ function resolveSuggestedRemoteMemoryProvider(): string | undefined {
   return listAutoSelectMemoryEmbeddingProviderDoctorMetadata().find(
     (provider) => provider.transport === "remote",
   )?.providerId;
+}
+
+function isKeyOptionalMemoryProvider(providerId: string): boolean {
+  return providerId === "local" || providerId === "ollama" || providerId === "lmstudio";
 }
 
 async function resolveRuntimeMemoryAuditContext(
@@ -224,6 +229,8 @@ export async function maybeRepairMemoryRecallHealth(params: {
   cfg: OpenClawConfig;
   prompter: DoctorPrompter;
 }): Promise<void> {
+  await maybeRepairWorkspaceMemoryHealth(params);
+
   try {
     const context = await resolveRuntimeMemoryAuditContext(params.cfg);
     const workspaceDir = context?.workspaceDir?.trim();
@@ -312,6 +319,8 @@ export async function noteMemorySearchHealth(
     };
   },
 ): Promise<void> {
+  await noteWorkspaceMemoryHealth(cfg);
+
   const agentId = resolveDefaultAgentId(cfg);
   const agentDir = resolveAgentDir(cfg, agentId);
   const resolved = resolveMemorySearchConfig(cfg, agentId);
@@ -397,7 +406,7 @@ export async function noteMemorySearchHealth(
       );
       return;
     }
-    if (resolved.provider === "lmstudio") {
+    if (isKeyOptionalMemoryProvider(resolved.provider)) {
       if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
         return;
       }
@@ -405,8 +414,8 @@ export async function noteMemorySearchHealth(
       note(
         [
           gatewayProbeWarning
-            ? 'Memory search provider "lmstudio" is configured, but the gateway reports embeddings are not ready.'
-            : 'Memory search provider "lmstudio" is configured, but the gateway could not confirm embeddings are ready.',
+            ? `Memory search provider "${resolved.provider}" is configured, but the gateway reports embeddings are not ready.`
+            : `Memory search provider "${resolved.provider}" is configured, but the gateway could not confirm embeddings are ready.`,
           gatewayProbeWarning,
           `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
         ]

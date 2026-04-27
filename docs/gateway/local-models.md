@@ -4,10 +4,8 @@ read_when:
   - You want to serve models from your own GPU box
   - You are wiring LM Studio or an OpenAI-compatible proxy
   - You need the safest local model guidance
-title: "Local Models"
+title: "Local models"
 ---
-
-# Local models
 
 Local is doable, but OpenClaw expects large context + strong defenses against prompt injection. Small cards truncate context and leak safety. Aim high: **≥2 maxed-out Mac Studios or equivalent GPU rig (~$30k+)**. A single **24 GB** GPU works only for lighter prompts with higher latency. Use the **largest / full-size model variant you can run**; aggressively quantized or “small” checkpoints raise prompt-injection risk (see [Security](/gateway/security)).
 
@@ -21,26 +19,26 @@ Best current local stack. Load a large model in LM Studio (for example, a full-s
 {
   agents: {
     defaults: {
-      model: { primary: “lmstudio/my-local-model” },
+      model: { primary: "lmstudio/my-local-model" },
       models: {
-        “anthropic/claude-opus-4-6”: { alias: “Opus” },
-        “lmstudio/my-local-model”: { alias: “Local” },
+        "anthropic/claude-opus-4-6": { alias: "Opus" },
+        "lmstudio/my-local-model": { alias: "Local" },
       },
     },
   },
   models: {
-    mode: “merge”,
+    mode: "merge",
     providers: {
       lmstudio: {
-        baseUrl: “http://127.0.0.1:1234/v1”,
-        apiKey: “lmstudio”,
-        api: “openai-responses”,
+        baseUrl: "http://127.0.0.1:1234/v1",
+        apiKey: "lmstudio",
+        api: "openai-responses",
         models: [
           {
-            id: “my-local-model”,
-            name: “Local Model”,
+            id: "my-local-model",
+            name: "Local Model",
             reasoning: false,
-            input: [“text”],
+            input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 196608,
             maxTokens: 8192,
@@ -126,6 +124,7 @@ vLLM, LiteLLM, OAI-proxy, or custom gateways work if they expose an OpenAI-style
         baseUrl: "http://127.0.0.1:8000/v1",
         apiKey: "sk-local",
         api: "openai-responses",
+        timeoutSeconds: 300,
         models: [
           {
             id: "my-local-model",
@@ -144,6 +143,10 @@ vLLM, LiteLLM, OAI-proxy, or custom gateways work if they expose an OpenAI-style
 ```
 
 Keep `models.mode: "merge"` so hosted models stay available as fallbacks.
+Use `models.providers.<id>.timeoutSeconds` for slow local or remote model
+servers before raising `agents.defaults.timeoutSeconds`. The provider timeout
+applies only to model HTTP requests, including connect, headers, body streaming,
+and the total guarded-fetch abort.
 
 Behavior note for local/proxied `/v1` backends:
 
@@ -187,3 +190,8 @@ Compatibility notes for stricter OpenAI-compatible backends:
   `compat.supportsTools: false`, then retest. If the server still crashes only
   on larger OpenClaw prompts, treat it as an upstream server/model limitation.
 - Safety: local models skip provider-side filters; keep agents narrow and compaction on to limit prompt injection blast radius.
+
+## Related
+
+- [Configuration reference](/gateway/configuration-reference)
+- [Model failover](/concepts/model-failover)

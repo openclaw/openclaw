@@ -25,7 +25,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   resolveOutboundSendDep,
   type OutboundSendDeps,
-} from "openclaw/plugin-sdk/outbound-runtime";
+} from "openclaw/plugin-sdk/outbound-send-deps";
 import { type RoutePeer } from "openclaw/plugin-sdk/routing";
 import {
   createComputedAccountStatusAdapter,
@@ -761,7 +761,6 @@ export const telegramPlugin = createChatChannelPlugin({
     actions: telegramMessageActions,
     status: createComputedAccountStatusAdapter<ResolvedTelegramAccount, TelegramProbe>({
       defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
-      staleSocketHealthCheckModes: ["polling"],
       collectStatusIssues: collectTelegramStatusIssues,
       buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
       probeAccount: async ({ account, timeoutMs }) =>

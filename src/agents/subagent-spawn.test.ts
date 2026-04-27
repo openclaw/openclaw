@@ -121,8 +121,8 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(result.childSessionKey).toMatch(/^agent:main:subagent:/);
 
     const childSessionKey = result.childSessionKey as string;
-    expect(hoisted.pruneLegacyStoreKeysMock).toHaveBeenCalledTimes(1);
-    expect(hoisted.updateSessionStoreMock).toHaveBeenCalledTimes(1);
+    expect(hoisted.pruneLegacyStoreKeysMock).toHaveBeenCalledTimes(3);
+    expect(hoisted.updateSessionStoreMock).toHaveBeenCalledTimes(3);
     expect(hoisted.registerSubagentRunMock).toHaveBeenCalledWith(
       expect.objectContaining({
         runId: "run-1",
@@ -156,11 +156,19 @@ describe("spawnSubagentDirect seam flow", () => {
       provider: "openai-codex",
       model: "gpt-5.4",
     });
-    expect(operations.indexOf("gateway:sessions.patch")).toBeGreaterThan(-1);
-    expect(operations.indexOf("store:update")).toBeGreaterThan(
-      operations.indexOf("gateway:sessions.patch"),
+    expect(operations.indexOf("store:update")).toBeGreaterThan(-1);
+    expect(operations.indexOf("gateway:agent")).toBeGreaterThan(
+      operations.lastIndexOf("store:update"),
     );
-    expect(operations.indexOf("gateway:agent")).toBeGreaterThan(operations.indexOf("store:update"));
+    expect(hoisted.callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({
+          sessionKey: childSessionKey,
+          cleanupBundleMcpOnRunEnd: true,
+        }),
+      }),
+    );
   });
 
   it("omits requesterOrigin threadId when no requester thread is provided", async () => {
@@ -280,16 +288,45 @@ describe("spawnSubagentDirect seam flow", () => {
     });
   });
 
-  it("returns an error when the initial model patch is rejected", async () => {
+  it("does not duplicate long subagent task text in the initial user message (#72019)", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
     hoisted.callGatewayMock.mockImplementation(
       async (request: { method?: string; params?: unknown }) => {
-        if (request.method === "sessions.patch") {
-          const model = (request.params as { model?: unknown } | undefined)?.model;
-          if (model === "bad-model") {
-            throw new Error("invalid model: bad-model");
-          }
+        calls.push(request);
+        if (request.method === "agent") {
+          return { runId: "run-no-dup", status: "accepted", acceptedAt: 1000 };
+        }
+        if (request.method?.startsWith("sessions.")) {
           return { ok: true };
         }
+        return {};
+      },
+    );
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock);
+
+    const task = "UNIQUE_LONG_SUBAGENT_TASK_TOKEN\n  keep indentation";
+    const result = await spawnSubagentDirect(
+      {
+        task,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    const agentCall = calls.find((call) => call.method === "agent");
+    const params = agentCall?.params as { message?: string; extraSystemPrompt?: string };
+    expect(params.message).not.toContain("UNIQUE_LONG_SUBAGENT_TASK_TOKEN");
+    expect(params.message).not.toContain("[Subagent Task]:");
+    expect(params.message).toContain("**Your Role**");
+    expect(params.extraSystemPrompt).toBe("system-prompt");
+  });
+
+  it("returns an error when the initial child session patch is rejected", async () => {
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: { method?: string; params?: unknown }) => {
         if (request.method === "agent") {
           return { runId: "run-1", status: "accepted", acceptedAt: 1000 };
         }
@@ -299,6 +336,7 @@ describe("spawnSubagentDirect seam flow", () => {
         return {};
       },
     );
+    hoisted.updateSessionStoreMock.mockRejectedValueOnce(new Error("invalid model: bad-model"));
 
     const result = await spawnSubagentDirect(
       {

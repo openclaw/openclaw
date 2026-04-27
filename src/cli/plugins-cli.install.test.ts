@@ -21,10 +21,12 @@ import {
   recordHookInstall,
   recordPluginInstall,
   resetPluginsCliTestState,
+  replaceConfigFile,
   runPluginsCommand,
   runtimeErrors,
   runtimeLogs,
   writeConfigFile,
+  writePersistedInstalledPluginIndexInstallRecords,
 } from "./plugins-cli-test-helpers.js";
 
 const CLI_STATE_ROOT = "/tmp/openclaw-state";
@@ -49,22 +51,6 @@ function createEmptyPluginConfig(): OpenClawConfig {
   return {
     plugins: {
       entries: {},
-    },
-  } as OpenClawConfig;
-}
-
-function createClawHubInstalledConfig(params: {
-  pluginId: string;
-  install: Record<string, unknown>;
-}): OpenClawConfig {
-  const enabledCfg = createEnabledPluginConfig(params.pluginId);
-  return {
-    ...enabledCfg,
-    plugins: {
-      ...enabledCfg.plugins,
-      installs: {
-        [params.pluginId]: params.install,
-      },
     },
   } as OpenClawConfig;
 }
@@ -305,7 +291,7 @@ describe("plugins cli install", () => {
     expect(writeConfigFile).not.toHaveBeenCalled();
   });
 
-  it("installs marketplace plugins and persists config", async () => {
+  it("installs marketplace plugins and persists plugin index", async () => {
     const cfg = {
       plugins: {
         entries: {},
@@ -320,19 +306,6 @@ describe("plugins cli install", () => {
         },
       },
     } as OpenClawConfig;
-    const installedCfg = {
-      ...enabledCfg,
-      plugins: {
-        ...enabledCfg.plugins,
-        installs: {
-          alpha: {
-            source: "marketplace",
-            installPath: cliInstallPath("alpha"),
-          },
-        },
-      },
-    } as OpenClawConfig;
-
     loadConfig.mockReturnValue(cfg);
     installPluginFromMarketplace.mockResolvedValue({
       ok: true,
@@ -345,20 +318,31 @@ describe("plugins cli install", () => {
       marketplacePlugin: "alpha",
     });
     enablePluginInConfig.mockReturnValue({ config: enabledCfg });
-    recordPluginInstall.mockReturnValue(installedCfg);
     buildPluginDiagnosticsReport.mockReturnValue({
       plugins: [{ id: "alpha", kind: "provider" }],
       diagnostics: [],
     });
     applyExclusiveSlotSelection.mockReturnValue({
-      config: installedCfg,
+      config: enabledCfg,
       warnings: ["slot adjusted"],
     });
 
     await runPluginsCommand(["plugins", "install", "alpha", "--marketplace", "local/repo"]);
 
     expect(clearPluginManifestRegistryCache).toHaveBeenCalledTimes(1);
-    expect(writeConfigFile).toHaveBeenCalledWith(installedCfg);
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({
+      alpha: expect.objectContaining({
+        source: "marketplace",
+        installPath: cliInstallPath("alpha"),
+      }),
+    });
+    expect(writeConfigFile).toHaveBeenCalledWith(enabledCfg);
+    expect(replaceConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseHash: "mock",
+        nextConfig: enabledCfg,
+      }),
+    );
     expect(runtimeLogs.some((line) => line.includes("slot adjusted"))).toBe(true);
     expect(runtimeLogs.some((line) => line.includes("Installed plugin: alpha"))).toBe(true);
   });
@@ -384,18 +368,6 @@ describe("plugins cli install", () => {
       },
     } as OpenClawConfig;
     const enabledCfg = createEnabledPluginConfig("demo");
-    const installedCfg = createClawHubInstalledConfig({
-      pluginId: "demo",
-      install: {
-        source: "clawhub",
-        spec: "clawhub:demo@1.2.3",
-        installPath: cliInstallPath("demo"),
-        clawhubPackage: "demo",
-        clawhubFamily: "code-plugin",
-        clawhubChannel: "official",
-      },
-    });
-
     loadConfig.mockReturnValue(cfg);
     parseClawHubPluginSpec.mockReturnValue({ name: "demo" });
     installPluginFromClawHub.mockResolvedValue(
@@ -407,9 +379,8 @@ describe("plugins cli install", () => {
       }),
     );
     enablePluginInConfig.mockReturnValue({ config: enabledCfg });
-    recordPluginInstall.mockReturnValue(installedCfg);
     applyExclusiveSlotSelection.mockReturnValue({
-      config: installedCfg,
+      config: enabledCfg,
       warnings: [],
     });
 
@@ -420,18 +391,17 @@ describe("plugins cli install", () => {
         spec: "clawhub:demo",
       }),
     );
-    expect(recordPluginInstall).toHaveBeenCalledWith(
-      enabledCfg,
-      expect.objectContaining({
-        pluginId: "demo",
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({
+      demo: expect.objectContaining({
         source: "clawhub",
         spec: "clawhub:demo@1.2.3",
+        installPath: cliInstallPath("demo"),
         clawhubPackage: "demo",
         clawhubFamily: "code-plugin",
         clawhubChannel: "official",
       }),
-    );
-    expect(writeConfigFile).toHaveBeenCalledWith(installedCfg);
+    });
+    expect(writeConfigFile).toHaveBeenCalledWith(enabledCfg);
     expect(runtimeLogs.some((line) => line.includes("Installed plugin: demo"))).toBe(true);
     expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
   });
@@ -478,16 +448,6 @@ describe("plugins cli install", () => {
       },
     } as OpenClawConfig;
     const enabledCfg = createEnabledPluginConfig("demo");
-    const installedCfg = createClawHubInstalledConfig({
-      pluginId: "demo",
-      install: {
-        source: "clawhub",
-        spec: "clawhub:demo@1.2.3",
-        installPath: cliInstallPath("demo"),
-        clawhubPackage: "demo",
-      },
-    });
-
     loadConfig.mockReturnValue(cfg);
     installPluginFromClawHub.mockResolvedValue(
       createClawHubInstallResult({
@@ -498,9 +458,8 @@ describe("plugins cli install", () => {
       }),
     );
     enablePluginInConfig.mockReturnValue({ config: enabledCfg });
-    recordPluginInstall.mockReturnValue(installedCfg);
     applyExclusiveSlotSelection.mockReturnValue({
-      config: installedCfg,
+      config: enabledCfg,
       warnings: [],
     });
 
@@ -512,7 +471,15 @@ describe("plugins cli install", () => {
       }),
     );
     expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
-    expect(writeConfigFile).toHaveBeenCalledWith(installedCfg);
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({
+      demo: expect.objectContaining({
+        source: "clawhub",
+        spec: "clawhub:demo@1.2.3",
+        installPath: cliInstallPath("demo"),
+        clawhubPackage: "demo",
+      }),
+    });
+    expect(writeConfigFile).toHaveBeenCalledWith(enabledCfg);
   });
 
   it("falls back to npm when ClawHub does not have the package", async () => {
@@ -676,6 +643,29 @@ describe("plugins cli install", () => {
         mode: "update",
       }),
     );
+  });
+
+  it("suggests update or --force when npm plugin install target already exists", async () => {
+    loadConfig.mockReturnValue({} as OpenClawConfig);
+    mockClawHubPackageNotFound("@example/lossless-claw");
+    installPluginFromNpmSpec.mockResolvedValue({
+      ok: false,
+      error:
+        "plugin already exists: /home/openclaw/.openclaw/extensions/lossless-claw (delete it first)",
+    });
+    installHooksFromNpmSpec.mockResolvedValue({
+      ok: false,
+      error: "package.json missing openclaw.hooks",
+    });
+
+    await expect(
+      runPluginsCommand(["plugins", "install", "@example/lossless-claw"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors.at(-1)).toContain(
+      "Use `openclaw plugins update <id-or-npm-spec>` to upgrade the tracked plugin, or rerun install with `--force` to replace it.",
+    );
+    expect(runtimeErrors.at(-1)).not.toContain("Also not a valid hook pack");
   });
 
   it("passes the install logger to the --link dry-run probe", async () => {

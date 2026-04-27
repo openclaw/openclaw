@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { normalizeModelRef, parseModelRef } from "../agents/model-selection.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { BundledRuntimeDepsInstallParams } from "../plugins/bundled-runtime-deps.js";
 import { resolveGatewayStartupPluginIds } from "../plugins/channel-plugin-ids.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
@@ -16,7 +17,6 @@ import { ADMIN_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import type { ErrorShape } from "./protocol/index.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
-import { handleGatewayRequest } from "./server-methods.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandler,
@@ -266,6 +266,7 @@ async function dispatchGatewayMethod<T>(
   }
 
   let result: { ok: boolean; payload?: unknown; error?: ErrorShape } | undefined;
+  const { handleGatewayRequest } = await import("./server-methods.js");
   await handleGatewayRequest({
     req: {
       type: "req",
@@ -338,6 +339,7 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
           ...(allowOverride && params.model && { model: params.model }),
           ...(params.extraSystemPrompt && { extraSystemPrompt: params.extraSystemPrompt }),
           ...(params.lane && { lane: params.lane }),
+          ...(params.lightContext === true && { bootstrapContextMode: "lightweight" }),
           // The gateway `agent` schema requires `idempotencyKey: NonEmptyString`,
           // so fall back to a generated UUID when the caller omits it. Without
           // this, plugin subagent runs (for example memory-core dreaming
@@ -384,6 +386,37 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
   };
 }
 
+export function createGatewayNodesRuntime(): PluginRuntime["nodes"] {
+  return {
+    async list(params) {
+      const payload = await dispatchGatewayMethod<{ nodes?: unknown[] }>("node.list", {});
+      const nodes = Array.isArray(payload?.nodes) ? payload.nodes : [];
+      const filteredNodes =
+        params?.connected === true
+          ? nodes.filter(
+              (node) =>
+                node !== null &&
+                typeof node === "object" &&
+                (node as { connected?: unknown }).connected === true,
+            )
+          : nodes;
+      return {
+        nodes: filteredNodes as Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"],
+      };
+    },
+    async invoke(params) {
+      const payload = await dispatchGatewayMethod<unknown>("node.invoke", {
+        nodeId: params.nodeId,
+        command: params.command,
+        ...(params.params !== undefined && { params: params.params }),
+        timeoutMs: params.timeoutMs,
+        idempotencyKey: params.idempotencyKey || randomUUID(),
+      });
+      return payload;
+    },
+  };
+}
+
 // ── Plugin loading ──────────────────────────────────────────────────
 
 function createGatewayPluginRegistrationLogger(params?: {
@@ -410,11 +443,13 @@ export function loadGatewayPlugins(params: {
     error: (msg: string) => void;
     debug: (msg: string) => void;
   };
-  coreGatewayHandlers: Record<string, GatewayRequestHandler>;
+  coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
+  coreGatewayMethodNames?: readonly string[];
   baseMethods: string[];
   pluginIds?: string[];
   preferSetupRuntimeForChannelPlugins?: boolean;
   suppressPluginInfoLogs?: boolean;
+  bundledRuntimeDepsInstaller?: (params: BundledRuntimeDepsInstallParams) => void;
 }) {
   const activationAutoEnabled =
     params.activationSourceConfig !== undefined
@@ -467,11 +502,17 @@ export function loadGatewayPlugins(params: {
     logger: createGatewayPluginRegistrationLogger({
       suppressInfoLogs: params.suppressPluginInfoLogs,
     }),
-    coreGatewayHandlers: params.coreGatewayHandlers,
+    ...(params.coreGatewayHandlers !== undefined && {
+      coreGatewayHandlers: params.coreGatewayHandlers,
+    }),
+    ...(params.coreGatewayMethodNames !== undefined && {
+      coreGatewayMethodNames: params.coreGatewayMethodNames,
+    }),
     runtimeOptions: {
       allowGatewaySubagentBinding: true,
     },
     preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
+    bundledRuntimeDepsInstaller: params.bundledRuntimeDepsInstaller,
   });
   const pluginMethods = Object.keys(pluginRegistry.gatewayHandlers);
   const gatewayMethods = Array.from(new Set([...params.baseMethods, ...pluginMethods]));

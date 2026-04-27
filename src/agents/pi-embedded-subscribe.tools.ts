@@ -75,10 +75,7 @@ function extractErrorField(value: unknown): string | undefined {
     return undefined;
   }
   const record = value as Record<string, unknown>;
-  const direct =
-    readErrorCandidate(record.error) ??
-    readErrorCandidate(record.message) ??
-    readErrorCandidate(record.reason);
+  const direct = extractDirectErrorField(record);
   if (direct) {
     return direct;
   }
@@ -87,6 +84,34 @@ function extractErrorField(value: unknown): string | undefined {
     return undefined;
   }
   return normalizeToolErrorText(status);
+}
+
+function extractDirectErrorField(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    readErrorCandidate(record.error) ??
+    readErrorCandidate(record.message) ??
+    readErrorCandidate(record.reason)
+  );
+}
+
+function extractAggregatedErrorField(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  return readErrorCandidate(record.aggregated);
+}
+
+function isHostDenialToolText(text: string): boolean {
+  const normalized = text.trim();
+  if (normalized.includes("SYSTEM_RUN_DENIED") || normalized.includes("INVALID_REQUEST")) {
+    return true;
+  }
+  return normalized.toLowerCase().includes("approval cannot safely bind");
 }
 
 export function sanitizeToolResult(result: unknown): unknown {
@@ -239,7 +264,7 @@ export function filterToolResultMediaUrls(
  *
  * Strategy (first match wins):
  * 1. Read structured `details.media` attachments from tool details.
- * 2. Parse legacy `MEDIA:` tokens from text content blocks.
+ * 2. Parse `MEDIA:` directive tokens from text content blocks.
  * 3. Fall back to `details.path` when image content exists (legacy imageResult).
  *
  * Returns an empty array when no media is found (e.g. Pi SDK `read` tool
@@ -249,6 +274,7 @@ export function filterToolResultMediaUrls(
 export type ToolResultMediaArtifact = {
   mediaUrls: string[];
   audioAsVoice?: boolean;
+  trustedLocalMedia?: boolean;
 };
 
 function readToolResultDetailsMedia(
@@ -278,6 +304,44 @@ function collectStructuredMediaUrls(media: Record<string, unknown>): string[] {
   return Array.from(new Set(urls));
 }
 
+function extractTextContentMediaArtifact(content: unknown[]): {
+  mediaUrls: string[];
+  audioAsVoice?: boolean;
+  hasImageContent: boolean;
+} {
+  const mediaUrls: string[] = [];
+  let audioAsVoice = false;
+  let hasImageContent = false;
+
+  for (const item of content) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const entry = item as Record<string, unknown>;
+    if (entry.type === "image") {
+      hasImageContent = true;
+      continue;
+    }
+    if (entry.type !== "text" || typeof entry.text !== "string") {
+      continue;
+    }
+
+    const parsed = splitMediaFromOutput(entry.text);
+    if (parsed.audioAsVoice) {
+      audioAsVoice = true;
+    }
+    if (parsed.mediaUrls?.length) {
+      mediaUrls.push(...parsed.mediaUrls);
+    }
+  }
+
+  return {
+    mediaUrls,
+    ...(audioAsVoice ? { audioAsVoice: true } : {}),
+    hasImageContent,
+  };
+}
+
 export function extractToolResultMediaArtifact(
   result: unknown,
 ): ToolResultMediaArtifact | undefined {
@@ -292,6 +356,7 @@ export function extractToolResultMediaArtifact(
       return {
         mediaUrls,
         ...(detailsMedia.audioAsVoice === true ? { audioAsVoice: true } : {}),
+        ...(detailsMedia.trustedLocalMedia === true ? { trustedLocalMedia: true } : {}),
       };
     }
   }
@@ -301,35 +366,18 @@ export function extractToolResultMediaArtifact(
     return undefined;
   }
 
-  // Extract legacy MEDIA: paths from text content blocks using the shared
-  // parser so directive matching and validation stay in sync with outbound
-  // reply parsing.
-  const paths: string[] = [];
-  let hasImageContent = false;
-  for (const item of content) {
-    if (!item || typeof item !== "object") {
-      continue;
-    }
-    const entry = item as Record<string, unknown>;
-    if (entry.type === "image") {
-      hasImageContent = true;
-      continue;
-    }
-    if (entry.type === "text" && typeof entry.text === "string") {
-      const parsed = splitMediaFromOutput(entry.text);
-      if (parsed.mediaUrls?.length) {
-        paths.push(...parsed.mediaUrls);
-      }
-    }
-  }
+  const textMedia = extractTextContentMediaArtifact(content);
 
-  if (paths.length > 0) {
-    return { mediaUrls: paths };
+  if (textMedia.mediaUrls.length > 0) {
+    return {
+      mediaUrls: textMedia.mediaUrls,
+      ...(textMedia.audioAsVoice ? { audioAsVoice: true } : {}),
+    };
   }
 
   // Fall back to legacy details.path when image content exists but no
   // structured media details or MEDIA: text.
-  if (hasImageContent) {
+  if (textMedia.hasImageContent) {
     const details = record.details as Record<string, unknown> | undefined;
     const p = normalizeOptionalString(details?.path) ?? "";
     if (p) {
@@ -365,28 +413,42 @@ export function extractToolErrorMessage(result: unknown): string | undefined {
     return undefined;
   }
   const record = result as Record<string, unknown>;
-  const fromDetails = extractErrorField(record.details);
+  const fromDetails = extractDirectErrorField(record.details);
   if (fromDetails) {
     return fromDetails;
   }
-  const fromRoot = extractErrorField(record);
+  const fromDetailsAggregated = extractAggregatedErrorField(record.details);
+  if (fromDetailsAggregated) {
+    return fromDetailsAggregated;
+  }
+  const fromRoot = extractDirectErrorField(record);
   if (fromRoot) {
     return fromRoot;
   }
   const text = extractToolResultText(result);
-  if (!text) {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(text) as unknown;
-    const fromJson = extractErrorField(parsed);
-    if (fromJson) {
-      return fromJson;
+  if (text) {
+    try {
+      const parsed = JSON.parse(text) as unknown;
+      const fromJson = extractErrorField(parsed);
+      if (fromJson) {
+        return fromJson;
+      }
+    } catch {
+      // Fall through to status/text fallback.
     }
-  } catch {
-    // Fall through to first-line text fallback.
+    if (isHostDenialToolText(text)) {
+      return normalizeToolErrorText(text);
+    }
   }
-  return normalizeToolErrorText(text);
+  const fromDetailsStatus = extractErrorField(record.details);
+  if (fromDetailsStatus) {
+    return fromDetailsStatus;
+  }
+  const fromRootStatus = extractErrorField(record);
+  if (fromRootStatus) {
+    return fromRootStatus;
+  }
+  return text ? normalizeToolErrorText(text) : undefined;
 }
 
 function resolveMessageToolTarget(args: Record<string, unknown>): string | undefined {

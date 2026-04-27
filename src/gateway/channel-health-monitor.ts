@@ -1,4 +1,3 @@
-import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -19,10 +18,10 @@ const DEFAULT_MAX_RESTARTS_PER_HOUR = 10;
 const ONE_HOUR_MS = 60 * 60_000;
 
 /**
- * How long a connected channel can go without receiving any event before
+ * How long a connected channel can go without proven transport activity before
  * the health monitor treats it as a "stale socket" and triggers a restart.
- * This catches the half-dead WebSocket scenario where the connection appears
- * alive (health checks pass) but Slack silently stops delivering events.
+ * Providers should only publish that timestamp from transport/heartbeat/poll
+ * signals, not from ordinary app messages.
  */
 export type ChannelHealthTimingPolicy = {
   monitorStartupGraceMs: number;
@@ -125,14 +124,11 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           if (channelManager.isManuallyStopped(channelId as ChannelId, accountId)) {
             continue;
           }
-          const channelPluginStatus = getChannelPlugin(channelId)?.status;
           const healthPolicy: ChannelHealthPolicy = {
             channelId,
             now,
             staleEventThresholdMs: timing.staleEventThresholdMs,
             channelConnectGraceMs: timing.channelConnectGraceMs,
-            skipStaleSocketCheck: channelPluginStatus?.skipStaleSocketHealthCheck,
-            staleSocketHealthCheckModes: channelPluginStatus?.staleSocketHealthCheckModes,
           };
           const health = evaluateChannelHealth(status, healthPolicy);
           if (health.healthy) {
@@ -161,15 +157,16 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
 
           log.info?.(`[${channelId}:${accountId}] health-monitor: restarting (reason: ${reason})`);
 
+          record.lastRestartAt = now;
+          record.restartsThisHour.push({ at: now });
+          restartRecords.set(key, record);
+
           try {
             if (status.running) {
               await channelManager.stopChannel(channelId as ChannelId, accountId);
             }
             channelManager.resetRestartAttempts(channelId as ChannelId, accountId);
             await channelManager.startChannel(channelId as ChannelId, accountId);
-            record.lastRestartAt = now;
-            record.restartsThisHour.push({ at: now });
-            restartRecords.set(key, record);
           } catch (err) {
             log.error?.(
               `[${channelId}:${accountId}] health-monitor: restart failed: ${String(err)}`,

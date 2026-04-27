@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Type } from "@sinclair/typebox";
 import Ajv from "ajv";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { Type } from "typebox";
 import {
   formatThinkingLevels,
   isThinkingLevelSupported,
@@ -36,6 +36,16 @@ function toModelKey(provider?: string, model?: string): string | undefined {
     return undefined;
   }
   return `${p}/${m}`;
+}
+
+function stripDuplicateProviderPrefix(provider: string | undefined, model: string | undefined) {
+  const p = provider?.trim();
+  const m = model?.trim();
+  if (!p || !m) {
+    return m || undefined;
+  }
+  const prefix = `${p}/`;
+  return m.startsWith(prefix) ? m.slice(prefix.length) : m;
 }
 
 type PluginCfg = {
@@ -109,11 +119,12 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         primaryProvider ||
         undefined;
 
-      const model =
+      const rawModel =
         (typeof params.model === "string" && params.model.trim()) ||
         (typeof pluginCfg.defaultModel === "string" && pluginCfg.defaultModel.trim()) ||
         primaryModel ||
         undefined;
+      const model = stripDuplicateProviderPrefix(provider, rawModel);
 
       const authProfileId =
         (typeof params.authProfileId === "string" && params.authProfileId.trim()) ||

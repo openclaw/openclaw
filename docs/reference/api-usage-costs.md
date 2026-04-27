@@ -4,7 +4,7 @@ read_when:
   - You want to understand which features may call paid APIs
   - You need to audit keys, costs, and usage visibility
   - You’re explaining /status or /usage cost reporting
-title: "API Usage and Costs"
+title: "API usage and costs"
 ---
 
 # API usage & costs
@@ -132,7 +132,7 @@ See [Memory](/concepts/memory).
 - **Grok (xAI)**: `XAI_API_KEY` or `plugins.entries.xai.config.webSearch.apiKey`
 - **Kimi (Moonshot)**: `KIMI_API_KEY`, `MOONSHOT_API_KEY`, or `plugins.entries.moonshot.config.webSearch.apiKey`
 - **MiniMax Search**: `MINIMAX_CODE_PLAN_KEY`, `MINIMAX_CODING_API_KEY`, `MINIMAX_API_KEY`, or `plugins.entries.minimax.config.webSearch.apiKey`
-- **Ollama Web Search**: key-free by default, but requires a reachable Ollama host plus `ollama signin`; can also reuse normal Ollama provider bearer auth when the host requires it
+- **Ollama Web Search**: key-free for a reachable signed-in local Ollama host; direct `https://ollama.com` search uses `OLLAMA_API_KEY`, and auth-protected hosts can reuse normal Ollama provider bearer auth
 - **Perplexity Search API**: `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `plugins.entries.perplexity.config.webSearch.apiKey`
 - **Tavily**: `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey`
 - **DuckDuckGo**: key-free fallback (no API billing, but unofficial and HTML-based)
@@ -153,7 +153,7 @@ See [Web tools](/tools/web).
 
 - `FIRECRAWL_API_KEY` or `plugins.entries.firecrawl.config.webFetch.apiKey`
 
-If Firecrawl isn’t configured, the tool falls back to direct fetch + readability (no paid API).
+If Firecrawl isn’t configured, the tool falls back to direct fetch plus the bundled `web-readability` plugin (no paid API). Disable `plugins.entries.web-readability.enabled` to skip local Readability extraction.
 
 See [Web tools](/tools/web).
 
@@ -195,3 +195,9 @@ Skills can store `apiKey` in `skills.entries.<name>.apiKey`. If a skill uses tha
 APIs, it can incur costs according to the skill’s provider.
 
 See [Skills](/tools/skills).
+
+## Related
+
+- [Token use and costs](/reference/token-use)
+- [Prompt caching](/reference/prompt-caching)
+- [Usage tracking](/concepts/usage-tracking)

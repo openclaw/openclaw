@@ -702,6 +702,126 @@ describe("lmstudio setup", () => {
     ]);
   });
 
+  it("interactive setup accepts a blank API key for unauthenticated local LM Studio", async () => {
+    const { prompter, text } = createQueuedWizardPrompterHarness([
+      "http://localhost:1234/api/v1/",
+      "",
+      "",
+    ]);
+
+    const result = await promptAndConfigureLmstudioInteractive({
+      config: buildConfig(),
+      prompter,
+    });
+
+    expect(text).toHaveBeenCalledTimes(3);
+    expect(fetchLmstudioModelsMock).toHaveBeenCalledWith({
+      baseUrl: "http://localhost:1234/v1",
+      apiKey: LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
+      timeoutMs: 5000,
+    });
+    expect(removeProviderAuthProfilesWithLockMock).toHaveBeenCalledWith({
+      provider: "lmstudio",
+      agentDir: undefined,
+    });
+    expect(result.profiles).toEqual([]);
+    expect(result.configPatch?.models?.providers?.lmstudio).toMatchObject({
+      baseUrl: "http://localhost:1234/v1",
+      api: "openai-completions",
+      apiKey: LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
+      models: [
+        {
+          id: "qwen3-8b-instruct",
+        },
+      ],
+    });
+    expect(result.configPatch?.models?.providers?.lmstudio).not.toHaveProperty("auth");
+  });
+
+  it("interactive setup uses existing Authorization headers when the API key is blank", async () => {
+    const config = {
+      models: {
+        providers: {
+          lmstudio: {
+            baseUrl: "http://localhost:1234/v1",
+            api: "openai-completions",
+            apiKey: "stale-config-key",
+            auth: "api-key",
+            headers: {
+              Authorization: "Bearer proxy-token",
+            },
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const { prompter } = createQueuedWizardPrompterHarness([
+      "http://localhost:1234/api/v1/",
+      "",
+      "",
+    ]);
+
+    const result = await promptAndConfigureLmstudioInteractive({
+      config,
+      prompter,
+    });
+
+    expect(fetchLmstudioModelsMock).toHaveBeenCalledWith({
+      baseUrl: "http://localhost:1234/v1",
+      apiKey: undefined,
+      headers: {
+        Authorization: "Bearer proxy-token",
+      },
+      timeoutMs: 5000,
+    });
+    expect(removeProviderAuthProfilesWithLockMock).toHaveBeenCalledWith({
+      provider: "lmstudio",
+      agentDir: undefined,
+    });
+    expect(result.profiles).toEqual([]);
+    expect(result.configPatch?.models?.providers?.lmstudio).toMatchObject({
+      baseUrl: "http://localhost:1234/v1",
+      api: "openai-completions",
+      headers: {
+        Authorization: "Bearer proxy-token",
+      },
+      models: [
+        {
+          id: "qwen3-8b-instruct",
+        },
+      ],
+    });
+    expect(result.configPatch?.models?.providers?.lmstudio).not.toHaveProperty("apiKey");
+    expect(result.configPatch?.models?.providers?.lmstudio).not.toHaveProperty("auth");
+  });
+
+  it("interactive setup without a wizard accepts a blank API key for local LM Studio", async () => {
+    const promptText = vi
+      .fn()
+      .mockResolvedValueOnce("http://localhost:1234/api/v1/")
+      .mockResolvedValueOnce("");
+
+    const result = await promptAndConfigureLmstudioInteractive({
+      config: buildConfig(),
+      promptText,
+    });
+
+    expect(fetchLmstudioModelsMock).toHaveBeenCalledWith({
+      baseUrl: "http://localhost:1234/v1",
+      apiKey: LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
+      timeoutMs: 5000,
+    });
+    expect(removeProviderAuthProfilesWithLockMock).toHaveBeenCalledWith({
+      provider: "lmstudio",
+      agentDir: undefined,
+    });
+    expect(result.profiles).toEqual([]);
+    expect(result.configPatch?.models?.providers?.lmstudio).toMatchObject({
+      apiKey: LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
+    });
+    expect(result.configPatch?.models?.providers?.lmstudio).not.toHaveProperty("auth");
+  });
+
   it("interactive setup overwrites existing config apiKey during re-auth", async () => {
     const config = {
       models: {

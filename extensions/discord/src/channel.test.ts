@@ -6,6 +6,7 @@ import { createStartAccountContext } from "../../../test/helpers/plugins/start-a
 import type { ResolvedDiscordAccount } from "./accounts.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 import * as sendModule from "./send.js";
+import { EMPTY_DISCORD_TEST_CONFIG } from "./test-support/config.js";
 let discordPlugin: typeof import("./channel.js").discordPlugin;
 let setDiscordRuntime: typeof import("./runtime.js").setDiscordRuntime;
 
@@ -114,6 +115,34 @@ describe("discordPlugin outbound", () => {
     expect(source).not.toContain('require("./channel-actions.js")');
   });
 
+  it("prefers final assistant text for text-only cron announce delivery", () => {
+    expect(discordPlugin.outbound?.preferFinalAssistantVisibleText).toBe(true);
+  });
+
+  it("preserves normalized explicit Discord targets for delivery routing", () => {
+    const parseExplicitTarget = discordPlugin.messaging?.parseExplicitTarget;
+    if (!parseExplicitTarget) {
+      throw new Error("Expected discordPlugin.messaging.parseExplicitTarget to be defined");
+    }
+
+    expect(parseExplicitTarget({ raw: "user:123" })).toEqual({
+      to: "user:123",
+      chatType: "direct",
+    });
+    expect(parseExplicitTarget({ raw: "<@!456>" })).toEqual({
+      to: "user:456",
+      chatType: "direct",
+    });
+    expect(parseExplicitTarget({ raw: "channel:789" })).toEqual({
+      to: "channel:789",
+      chatType: "channel",
+    });
+    expect(parseExplicitTarget({ raw: "1470130713209602050" })).toEqual({
+      to: "channel:1470130713209602050",
+      chatType: "channel",
+    });
+  });
+
   it("honors per-account replyToMode overrides", () => {
     const resolveReplyToMode = discordPlugin.threading?.resolveReplyToMode;
     if (!resolveReplyToMode) {
@@ -144,7 +173,7 @@ describe("discordPlugin outbound", () => {
     const mediaReadFile = vi.fn(async () => Buffer.from("media"));
 
     const result = await discordPlugin.outbound!.sendMedia!({
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       to: "channel:123",
       text: "hi",
       mediaUrl: "/tmp/image.png",
@@ -178,7 +207,7 @@ describe("discordPlugin outbound", () => {
       .mockResolvedValueOnce({ messageId: "video-1" });
 
     const result = await discordPlugin.outbound!.sendMedia!({
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       to: "channel:123",
       text: "done - tiny cyber-lobster clip incoming",
       mediaUrl: "/tmp/molty.mp4",
@@ -218,7 +247,7 @@ describe("discordPlugin outbound", () => {
     const sendPollSpy = vi.spyOn(sendModule, "sendPollDiscord").mockImplementation(sendPollDiscord);
     try {
       const result = await discordPlugin.outbound!.sendPoll!({
-        cfg: {} as OpenClawConfig,
+        cfg: EMPTY_DISCORD_TEST_CONFIG,
         to: "channel:123",
         poll: {
           question: "Best shell?",

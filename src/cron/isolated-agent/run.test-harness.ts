@@ -69,6 +69,7 @@ export const resolveHeartbeatAckMaxCharsMock = createMock();
 export const resolveSessionAuthProfileOverrideMock = createMock();
 export const resolveFastModeStateMock = createMock();
 export const getChannelPluginMock = createMock();
+export const retireSessionMcpRuntimeMock = createMock();
 
 const resolveBootstrapWarningSignaturesSeenMock = createMock();
 const resolveCronStyleNowMock = createMock();
@@ -194,6 +195,10 @@ vi.mock("./run-subagent-registry.runtime.js", () => ({
 
 vi.mock("../../agents/cli-runner.runtime.js", () => ({
   setCliSessionId: vi.fn(),
+}));
+
+vi.mock("../../agents/pi-bundle-mcp-tools.js", () => ({
+  retireSessionMcpRuntime: retireSessionMcpRuntimeMock,
 }));
 
 vi.mock("../../config/sessions/store.runtime.js", () => ({
@@ -357,21 +362,70 @@ function resetRunOutcomeMocks(): void {
   pickLastNonEmptyTextFromPayloadsMock.mockReturnValue("test output");
   resolveCronPayloadOutcomeMock.mockReset();
   resolveCronPayloadOutcomeMock.mockImplementation(
-    ({ payloads }: { payloads: Array<{ isError?: boolean }> }) => {
-      const outputText = pickLastNonEmptyTextFromPayloadsMock(payloads);
+    ({
+      payloads,
+      failureSignal,
+      runLevelError,
+    }: {
+      payloads: Array<{ isError?: boolean }>;
+      failureSignal?: { fatalForCron?: boolean; message?: string };
+      runLevelError?: unknown;
+    }) => {
+      const runLevelErrorMessage =
+        typeof runLevelError === "string" && runLevelError.trim()
+          ? `cron isolated run failed: ${runLevelError.trim()}`
+          : runLevelError && typeof runLevelError === "object"
+            ? (() => {
+                const record = runLevelError as { message?: unknown; kind?: unknown };
+                const message =
+                  typeof record.message === "string" && record.message.trim()
+                    ? record.message.trim()
+                    : undefined;
+                if (message) {
+                  return `cron isolated run failed: ${message}`;
+                }
+                const kind =
+                  typeof record.kind === "string" && record.kind.trim()
+                    ? record.kind.trim()
+                    : undefined;
+                return kind ? `cron isolated run failed: ${kind}` : "cron isolated run failed";
+              })()
+            : undefined;
+      const failureMessage =
+        failureSignal?.fatalForCron === true
+          ? (failureSignal.message ?? "cron isolated run returned a fatal failure signal")
+          : undefined;
+      const errorPayloadMessage = payloads.some((payload) => payload?.isError === true)
+        ? "cron isolated run returned an error payload"
+        : undefined;
+      const outputText =
+        errorPayloadMessage ??
+        failureMessage ??
+        runLevelErrorMessage ??
+        pickLastNonEmptyTextFromPayloadsMock(payloads);
       const synthesizedText = outputText?.trim() || "summary";
-      const hasFatalErrorPayload = payloads.some((payload) => payload?.isError === true);
+      const hasFatalErrorPayload =
+        errorPayloadMessage !== undefined ||
+        failureMessage !== undefined ||
+        runLevelErrorMessage !== undefined;
+      const deliveryPayload =
+        errorPayloadMessage || failureMessage || runLevelErrorMessage
+          ? { text: errorPayloadMessage ?? failureMessage ?? runLevelErrorMessage, isError: true }
+          : undefined;
       return {
-        summary: "summary",
+        summary: errorPayloadMessage ?? failureMessage ?? runLevelErrorMessage ?? "summary",
         outputText,
         synthesizedText,
-        deliveryPayload: undefined,
-        deliveryPayloads: synthesizedText ? [{ text: synthesizedText }] : [],
+        deliveryPayload,
+        deliveryPayloads: deliveryPayload
+          ? [deliveryPayload]
+          : synthesizedText
+            ? [{ text: synthesizedText }]
+            : [],
         deliveryPayloadHasStructuredContent: false,
         hasFatalErrorPayload,
-        embeddedRunError: hasFatalErrorPayload
-          ? "cron isolated run returned an error payload"
-          : undefined,
+        embeddedRunError:
+          errorPayloadMessage ?? failureMessage ?? runLevelErrorMessage ?? undefined,
       };
     },
   );
@@ -433,6 +487,8 @@ function resetRunSessionMocks(): void {
   updateSessionStoreMock.mockResolvedValue(undefined);
   resolveCronSessionMock.mockReset();
   resolveCronSessionMock.mockReturnValue(makeCronSession());
+  retireSessionMcpRuntimeMock.mockReset();
+  retireSessionMcpRuntimeMock.mockResolvedValue(true);
 }
 
 export function resetRunCronIsolatedAgentTurnHarness(): void {

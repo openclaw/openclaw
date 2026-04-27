@@ -58,6 +58,28 @@ export type MatrixQaScenarioId =
   | "matrix-e2ee-thread-follow-up"
   | "matrix-e2ee-bootstrap-success"
   | "matrix-e2ee-recovery-key-lifecycle"
+  | "matrix-e2ee-recovery-owner-verification-required"
+  | "matrix-e2ee-cli-account-add-enable-e2ee"
+  | "matrix-e2ee-cli-encryption-setup"
+  | "matrix-e2ee-cli-encryption-setup-idempotent"
+  | "matrix-e2ee-cli-encryption-setup-bootstrap-failure"
+  | "matrix-e2ee-cli-recovery-key-setup"
+  | "matrix-e2ee-cli-recovery-key-invalid"
+  | "matrix-e2ee-cli-encryption-setup-multi-account"
+  | "matrix-e2ee-cli-setup-then-gateway-reply"
+  | "matrix-e2ee-cli-self-verification"
+  | "matrix-e2ee-state-loss-external-recovery-key"
+  | "matrix-e2ee-state-loss-stored-recovery-key"
+  | "matrix-e2ee-state-loss-no-recovery-key"
+  | "matrix-e2ee-stale-recovery-key-after-backup-reset"
+  | "matrix-e2ee-server-backup-deleted-local-state-intact"
+  | "matrix-e2ee-server-backup-deleted-local-reupload-restores"
+  | "matrix-e2ee-corrupt-crypto-idb-snapshot"
+  | "matrix-e2ee-server-device-deleted-local-state-intact"
+  | "matrix-e2ee-server-device-deleted-relogin-recovers"
+  | "matrix-e2ee-sync-state-loss-crypto-intact"
+  | "matrix-e2ee-wrong-account-recovery-key"
+  | "matrix-e2ee-history-exists-backup-empty"
   | "matrix-e2ee-device-sas-verification"
   | "matrix-e2ee-qr-verification"
   | "matrix-e2ee-stale-device-hygiene"
@@ -74,6 +96,15 @@ export type MatrixQaScenarioDefinition = LiveTransportScenarioDefinition<MatrixQ
   topology?: MatrixQaTopologySpec;
 };
 
+export type MatrixQaProfile =
+  | "all"
+  | "e2ee-cli"
+  | "e2ee-deep"
+  | "e2ee-smoke"
+  | "fast"
+  | "media"
+  | "transport";
+
 export const MATRIX_QA_BLOCK_ROOM_KEY = "block";
 export const MATRIX_QA_DRIVER_DM_ROOM_KEY = "driver-dm";
 export const MATRIX_QA_DRIVER_DM_SHARED_ROOM_KEY = "driver-dm-shared";
@@ -85,6 +116,12 @@ export const MATRIX_QA_MEDIA_ROOM_KEY = "media";
 export const MATRIX_QA_MEMBERSHIP_ROOM_KEY = "membership";
 export const MATRIX_QA_RESTART_ROOM_KEY = "restart";
 export const MATRIX_QA_SECONDARY_ROOM_KEY = "secondary";
+export const MATRIX_QA_STALE_SYNC_ROOM_KEY = "stale-sync";
+
+const MATRIX_QA_LIVE_MODEL_TIMEOUT_MS = 120_000;
+const MATRIX_QA_IMAGE_GENERATION_TIMEOUT_MS = 180_000;
+const MATRIX_QA_E2EE_REPLY_TIMEOUT_MS = 150_000;
+const MATRIX_QA_E2EE_MEDIA_TIMEOUT_MS = 180_000;
 
 function buildMatrixQaDmTopology(
   rooms: Array<{
@@ -189,6 +226,12 @@ const MATRIX_QA_RESTART_ROOM_TOPOLOGY = buildMatrixQaSingleGroupTopology({
   requireMention: true,
 });
 
+const MATRIX_QA_STALE_SYNC_ROOM_TOPOLOGY = buildMatrixQaSingleGroupTopology({
+  key: MATRIX_QA_STALE_SYNC_ROOM_KEY,
+  name: "Matrix QA Stale Sync Room",
+  requireMention: true,
+});
+
 const MATRIX_QA_HOMESERVER_ROOM_TOPOLOGY = buildMatrixQaSingleGroupTopology({
   key: MATRIX_QA_HOMESERVER_ROOM_KEY,
   name: "Matrix QA Homeserver Restart Room",
@@ -210,6 +253,11 @@ const MATRIX_QA_E2EE_VERIFICATION_DM_TOPOLOGY: MatrixQaTopologySpec = {
 
 const MATRIX_QA_E2EE_CONFIG = {
   encryption: true,
+  startupVerification: "off",
+} satisfies MatrixQaConfigOverrides;
+
+const MATRIX_QA_E2EE_CLI_SETUP_CONFIG = {
+  encryption: false,
   startupVerification: "off",
 } satisfies MatrixQaConfigOverrides;
 
@@ -238,13 +286,13 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
   },
   {
     id: "matrix-subagent-thread-spawn",
-    timeoutMs: 75_000,
+    timeoutMs: MATRIX_QA_LIVE_MODEL_TIMEOUT_MS,
     title: "Matrix sessions_spawn thread=true creates a bound child thread",
     configOverrides: {
       groupsByKey: {
         [MATRIX_QA_MAIN_ROOM_KEY]: {
           tools: {
-            allow: ["sessions_spawn"],
+            allow: ["sessions_spawn", "sessions_yield"],
           },
         },
       },
@@ -279,7 +327,7 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
   },
   {
     id: "matrix-room-block-streaming",
-    timeoutMs: 45_000,
+    timeoutMs: 75_000,
     title: "Matrix block streaming preserves completed quiet preview blocks",
     topology: MATRIX_QA_BLOCK_ROOM_TOPOLOGY,
     configOverrides: {
@@ -307,7 +355,7 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
   },
   {
     id: "matrix-room-generated-image-delivery",
-    timeoutMs: 60_000,
+    timeoutMs: MATRIX_QA_IMAGE_GENERATION_TIMEOUT_MS,
     title: "Matrix generated images deliver as real image attachments while streaming",
     topology: MATRIX_QA_MEDIA_ROOM_TOPOLOGY,
     configOverrides: {
@@ -445,7 +493,7 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     id: "matrix-stale-sync-replay-dedupe",
     timeoutMs: 90_000,
     title: "Matrix stale sync replay is absorbed by inbound dedupe",
-    topology: MATRIX_QA_RESTART_ROOM_TOPOLOGY,
+    topology: MATRIX_QA_STALE_SYNC_ROOM_TOPOLOGY,
   },
   {
     id: "matrix-room-membership-loss",
@@ -556,6 +604,215 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     configOverrides: MATRIX_QA_E2EE_CONFIG,
   },
   {
+    id: "matrix-e2ee-recovery-owner-verification-required",
+    timeoutMs: 90_000,
+    title: "Matrix E2EE recovery key backup access still requires Matrix identity trust",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-recovery-owner-verification-required",
+      name: "Matrix QA E2EE Recovery Owner Verification Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-cli-account-add-enable-e2ee",
+    timeoutMs: 120_000,
+    title: "Matrix E2EE CLI account add enables encryption and bootstraps verification",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-cli-account-add-enable-e2ee",
+      name: "Matrix QA E2EE CLI Account Add Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-cli-encryption-setup",
+    timeoutMs: 120_000,
+    title: "Matrix E2EE CLI encryption setup upgrades an existing account",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-cli-encryption-setup",
+      name: "Matrix QA E2EE CLI Encryption Setup Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-cli-encryption-setup-idempotent",
+    timeoutMs: 120_000,
+    title: "Matrix E2EE CLI encryption setup is idempotent on encrypted accounts",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-cli-encryption-setup-idempotent",
+      name: "Matrix QA E2EE CLI Encryption Setup Idempotent Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-cli-encryption-setup-bootstrap-failure",
+    timeoutMs: 120_000,
+    title: "Matrix E2EE CLI encryption setup reports bootstrap failures",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-cli-encryption-setup-bootstrap-failure",
+      name: "Matrix QA E2EE CLI Encryption Setup Failure Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-cli-recovery-key-setup",
+    timeoutMs: 120_000,
+    title: "Matrix E2EE CLI encryption setup accepts a recovery key on a second device",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-cli-recovery-key-setup",
+      name: "Matrix QA E2EE CLI Recovery Key Setup Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-cli-recovery-key-invalid",
+    timeoutMs: 120_000,
+    title: "Matrix E2EE CLI encryption setup rejects an invalid recovery key",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-cli-recovery-key-invalid",
+      name: "Matrix QA E2EE CLI Invalid Recovery Key Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-cli-encryption-setup-multi-account",
+    timeoutMs: 120_000,
+    title: "Matrix E2EE CLI encryption setup targets one account in a multi-account config",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-cli-encryption-setup-multi-account",
+      name: "Matrix QA E2EE CLI Multi Account Setup Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-cli-setup-then-gateway-reply",
+    timeoutMs: 180_000,
+    title: "Matrix E2EE CLI setup leaves the gateway able to reply in encrypted rooms",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-cli-setup-then-gateway-reply",
+      name: "Matrix QA E2EE CLI Setup Gateway Reply Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CLI_SETUP_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-cli-self-verification",
+    timeoutMs: 180_000,
+    title: "Matrix E2EE CLI interactive self-verification establishes identity trust",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-cli-self-verification",
+      name: "Matrix QA E2EE CLI Self Verification Room",
+    }),
+  },
+  {
+    id: "matrix-e2ee-state-loss-external-recovery-key",
+    timeoutMs: 180_000,
+    title: "Matrix E2EE total state loss restores backup with an external recovery key",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-state-loss-external-recovery-key",
+      name: "Matrix QA E2EE State Loss External Key Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-state-loss-stored-recovery-key",
+    timeoutMs: 180_000,
+    title: "Matrix E2EE crypto state loss restores backup from a surviving recovery key",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-state-loss-stored-recovery-key",
+      name: "Matrix QA E2EE State Loss Stored Key Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-state-loss-no-recovery-key",
+    timeoutMs: 120_000,
+    title: "Matrix E2EE total state loss without a recovery key fails closed",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-state-loss-no-recovery-key",
+      name: "Matrix QA E2EE State Loss No Key Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-stale-recovery-key-after-backup-reset",
+    timeoutMs: 180_000,
+    title: "Matrix E2EE stale recovery key is rejected after server backup reset",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-stale-recovery-key-after-backup-reset",
+      name: "Matrix QA E2EE Stale Recovery Key Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-server-backup-deleted-local-state-intact",
+    timeoutMs: 120_000,
+    title: "Matrix E2EE local crypto survives server backup deletion",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-server-backup-deleted-local-state-intact",
+      name: "Matrix QA E2EE Server Backup Deleted Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-server-backup-deleted-local-reupload-restores",
+    timeoutMs: 180_000,
+    title: "Matrix E2EE local keys re-upload after server backup deletion",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-server-backup-deleted-local-reupload-restores",
+      name: "Matrix QA E2EE Server Backup Reupload Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-corrupt-crypto-idb-snapshot",
+    timeoutMs: 180_000,
+    title: "Matrix E2EE corrupt crypto snapshot repairs through backup restore",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-corrupt-crypto-idb-snapshot",
+      name: "Matrix QA E2EE Corrupt IDB Snapshot Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-server-device-deleted-local-state-intact",
+    timeoutMs: 120_000,
+    title: "Matrix E2EE server-side device deletion invalidates surviving local state",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-server-device-deleted-local-state-intact",
+      name: "Matrix QA E2EE Server Device Deleted Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-server-device-deleted-relogin-recovers",
+    timeoutMs: 180_000,
+    title: "Matrix E2EE server-side device deletion recovers through re-login and backup restore",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-server-device-deleted-relogin-recovers",
+      name: "Matrix QA E2EE Server Device Relogin Recovery Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-sync-state-loss-crypto-intact",
+    timeoutMs: MATRIX_QA_E2EE_REPLY_TIMEOUT_MS,
+    title: "Matrix E2EE sync cursor loss keeps crypto decryptability intact",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-sync-state-loss-crypto-intact",
+      name: "Matrix QA E2EE Sync State Loss Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-history-exists-backup-empty",
+    timeoutMs: 180_000,
+    title: "Matrix E2EE backup reset preserves encrypted history via local key re-upload",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-history-exists-backup-empty",
+      name: "Matrix QA E2EE Empty Backup Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
     id: "matrix-e2ee-device-sas-verification",
     timeoutMs: 90_000,
     title: "Matrix E2EE device verification completes SAS emoji compare",
@@ -594,7 +851,7 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
   },
   {
     id: "matrix-e2ee-restart-resume",
-    timeoutMs: 90_000,
+    timeoutMs: MATRIX_QA_E2EE_REPLY_TIMEOUT_MS,
     title: "Matrix E2EE encrypted rooms resume after gateway restart",
     topology: buildMatrixQaE2eeScenarioTopology({
       scenarioId: "matrix-e2ee-restart-resume",
@@ -614,7 +871,7 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
   },
   {
     id: "matrix-e2ee-artifact-redaction",
-    timeoutMs: 75_000,
+    timeoutMs: MATRIX_QA_E2EE_REPLY_TIMEOUT_MS,
     title: "Matrix E2EE decrypted payloads stay out of default event artifacts",
     topology: buildMatrixQaE2eeScenarioTopology({
       scenarioId: "matrix-e2ee-artifact-redaction",
@@ -624,7 +881,7 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
   },
   {
     id: "matrix-e2ee-media-image",
-    timeoutMs: 90_000,
+    timeoutMs: MATRIX_QA_E2EE_MEDIA_TIMEOUT_MS,
     title: "Matrix E2EE encrypted image attachments reach the model vision path",
     topology: buildMatrixQaE2eeScenarioTopology({
       scenarioId: "matrix-e2ee-media-image",
@@ -642,6 +899,16 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     }),
     configOverrides: MATRIX_QA_E2EE_CONFIG,
   },
+  {
+    id: "matrix-e2ee-wrong-account-recovery-key",
+    timeoutMs: 180_000,
+    title: "Matrix E2EE rejects a recovery key from a different account",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-wrong-account-recovery-key",
+      name: "Matrix QA E2EE Wrong Account Key Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
 ];
 
 export const MATRIX_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScenarioCoverage({
@@ -649,13 +916,116 @@ export const MATRIX_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScena
   scenarios: MATRIX_QA_SCENARIOS,
 });
 
-export function findMatrixQaScenarios(ids?: string[]) {
+export const MATRIX_QA_PROFILE_NAMES: readonly MatrixQaProfile[] = [
+  "all",
+  "fast",
+  "transport",
+  "media",
+  "e2ee-smoke",
+  "e2ee-deep",
+  "e2ee-cli",
+] as const;
+
+const MATRIX_QA_FAST_PROFILE_SCENARIO_IDS = [
+  "matrix-thread-follow-up",
+  "matrix-thread-isolation",
+  "matrix-top-level-reply-shape",
+  "matrix-reaction-notification",
+  "matrix-restart-resume",
+  "matrix-mention-gating",
+  "matrix-allowlist-block",
+  "matrix-e2ee-basic-reply",
+] satisfies MatrixQaScenarioId[];
+
+const MATRIX_QA_MEDIA_PROFILE_SCENARIO_IDS = [
+  "matrix-room-image-understanding-attachment",
+  "matrix-room-generated-image-delivery",
+  "matrix-media-type-coverage",
+  "matrix-attachment-only-ignored",
+  "matrix-unsupported-media-safe",
+  "matrix-e2ee-media-image",
+] satisfies MatrixQaScenarioId[];
+
+const MATRIX_QA_E2EE_SMOKE_PROFILE_SCENARIO_IDS = [
+  "matrix-e2ee-basic-reply",
+  "matrix-e2ee-thread-follow-up",
+  "matrix-e2ee-bootstrap-success",
+  "matrix-e2ee-recovery-key-lifecycle",
+  "matrix-e2ee-recovery-owner-verification-required",
+  "matrix-e2ee-restart-resume",
+  "matrix-e2ee-artifact-redaction",
+  "matrix-e2ee-key-bootstrap-failure",
+] satisfies MatrixQaScenarioId[];
+
+function isMatrixQaE2eeScenarioId(id: MatrixQaScenarioId): id is MatrixQaE2eeScenarioId {
+  return id.startsWith("matrix-e2ee-");
+}
+
+function isMatrixQaCliE2eeScenarioId(id: MatrixQaScenarioId) {
+  return id.startsWith("matrix-e2ee-cli-");
+}
+
+function buildMatrixQaScenarioIdSet(ids: readonly MatrixQaScenarioId[]) {
+  return new Set<MatrixQaScenarioId>(ids);
+}
+
+function normalizeMatrixQaProfile(profile?: string): MatrixQaProfile {
+  const normalized = profile?.trim().toLowerCase() || "all";
+  if (MATRIX_QA_PROFILE_NAMES.includes(normalized as MatrixQaProfile)) {
+    return normalized as MatrixQaProfile;
+  }
+  throw new Error(
+    `unknown Matrix QA profile "${profile}"; expected one of: ${MATRIX_QA_PROFILE_NAMES.join(", ")}`,
+  );
+}
+
+function getMatrixQaProfileScenarioIds(profile: MatrixQaProfile): MatrixQaScenarioId[] {
+  const allIds = MATRIX_QA_SCENARIOS.map((scenario) => scenario.id);
+  const mediaIds = buildMatrixQaScenarioIdSet(MATRIX_QA_MEDIA_PROFILE_SCENARIO_IDS);
+  const smokeIds = buildMatrixQaScenarioIdSet(MATRIX_QA_E2EE_SMOKE_PROFILE_SCENARIO_IDS);
+  switch (profile) {
+    case "all":
+      return allIds;
+    case "fast":
+      return [...MATRIX_QA_FAST_PROFILE_SCENARIO_IDS];
+    case "transport":
+      return allIds.filter((id) => !isMatrixQaE2eeScenarioId(id) && !mediaIds.has(id));
+    case "media":
+      return [...MATRIX_QA_MEDIA_PROFILE_SCENARIO_IDS];
+    case "e2ee-smoke":
+      return [...MATRIX_QA_E2EE_SMOKE_PROFILE_SCENARIO_IDS];
+    case "e2ee-cli":
+      return allIds.filter(isMatrixQaCliE2eeScenarioId);
+    case "e2ee-deep":
+      return allIds.filter(
+        (id) =>
+          isMatrixQaE2eeScenarioId(id) &&
+          !isMatrixQaCliE2eeScenarioId(id) &&
+          !mediaIds.has(id) &&
+          !smokeIds.has(id),
+      );
+    default: {
+      const exhaustiveProfile: never = profile;
+      return exhaustiveProfile;
+    }
+  }
+}
+
+export function findMatrixQaScenarios(ids?: string[], profile?: string) {
+  const normalizedProfile = normalizeMatrixQaProfile(profile);
+  const selectedIds =
+    ids && ids.length > 0 ? ids : getMatrixQaProfileScenarioIds(normalizedProfile);
   return selectLiveTransportScenarios({
-    ids,
+    ids: selectedIds,
     laneLabel: "Matrix",
     scenarios: MATRIX_QA_SCENARIOS,
   });
 }
+
+export const __matrixQaProfileTesting = {
+  getMatrixQaProfileScenarioIds,
+  normalizeMatrixQaProfile,
+};
 
 export function buildMatrixQaTopologyForScenarios(params: {
   defaultRoomName: string;
