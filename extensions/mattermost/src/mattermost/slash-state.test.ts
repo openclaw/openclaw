@@ -57,8 +57,7 @@ describe("slash-state token routing", () => {
     });
 
     const match = resolveSlashHandlerForToken("tok-a");
-    expect(match.kind).toBe("single");
-    expect(match.accountIds).toEqual(["a1"]);
+    expect(match).toMatchObject({ kind: "single", source: "token", accountIds: ["a1"] });
   });
 
   it("returns ambiguous when same token exists in multiple accounts", () => {
@@ -78,7 +77,11 @@ describe("slash-state token routing", () => {
 
     const match = resolveSlashHandlerForToken("tok-shared");
     expect(match.kind).toBe("ambiguous");
-    expect(match.accountIds?.toSorted()).toEqual(["a1", "a2"]);
+    if (match.kind !== "ambiguous") {
+      throw new Error("expected ambiguous match");
+    }
+    expect(match.source).toBe("token");
+    expect(match.accountIds.toSorted()).toEqual(["a1", "a2"]);
   });
 
   it("routes by registered team and command when token lookup misses", () => {
@@ -95,8 +98,7 @@ describe("slash-state token routing", () => {
       command: "/oc_status",
     });
 
-    expect(match.kind).toBe("single");
-    expect(match.accountIds).toEqual(["a1"]);
+    expect(match).toMatchObject({ kind: "single", source: "command", accountIds: ["a1"] });
   });
 
   it("returns ambiguous when registered team and command match multiple accounts", () => {
@@ -120,6 +122,10 @@ describe("slash-state token routing", () => {
     });
 
     expect(match.kind).toBe("ambiguous");
-    expect(match.accountIds?.toSorted()).toEqual(["a1", "a2"]);
+    if (match.kind !== "ambiguous") {
+      throw new Error("expected ambiguous match");
+    }
+    expect(match.source).toBe("command");
+    expect(match.accountIds.toSorted()).toEqual(["a1", "a2"]);
   });
 });

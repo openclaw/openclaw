@@ -305,6 +305,62 @@ describe("slash-http", () => {
     ).resolves.toBe(true);
   });
 
+  it("rate-limits sequential current-command lookups without caching successes", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-27T00:00:00Z"));
+    try {
+      const registeredCommand = createRegisteredCommand({ token: "valid-token" });
+      const command = {
+        id: "cmd-1",
+        token: "valid-token",
+        team_id: "t1",
+        trigger: "oc_status",
+        method: MATTERMOST_SLASH_POST_METHOD,
+        url: "https://gateway.example.com/slash",
+        auto_complete: true,
+        delete_at: 0,
+      };
+      const client = createCommandLookupClient({ command });
+      const payload = {
+        token: "valid-token",
+        team_id: "t1",
+        channel_id: "c1",
+        user_id: "u1",
+        command: "/oc_status",
+        text: "",
+      };
+      const log = vi.fn();
+
+      for (let i = 0; i < 20; i += 1) {
+        await expect(
+          validateMattermostSlashCommandToken({
+            accountId: "default",
+            client,
+            registeredCommand,
+            payload,
+            log,
+          }),
+        ).resolves.toBe(true);
+      }
+      await expect(
+        validateMattermostSlashCommandToken({
+          accountId: "default",
+          client,
+          registeredCommand,
+          payload,
+          log,
+        }),
+      ).resolves.toBe(false);
+
+      expect(client.requests).toHaveLength(20);
+      expect(log).toHaveBeenCalledWith(
+        "mattermost: slash command validation lookup rate-limited for /oc_status",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("rechecks matching current commands so startup tokens are not accepted after rotation", async () => {
     const registeredCommand = createRegisteredCommand({ token: "valid-token" });
     let command = {

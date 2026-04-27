@@ -69,12 +69,23 @@ const BODY_READ_TIMEOUT_MS = 5_000;
 const COMMAND_LOOKUP_TIMEOUT_MS = 1_000;
 const COMMAND_VALIDATION_FAILURE_CACHE_MS = 5_000;
 const COMMAND_VALIDATION_FAILURE_CACHE_MAX_KEYS = 2_000;
+const COMMAND_VALIDATION_LOOKUP_BURST = 20;
+const COMMAND_VALIDATION_LOOKUP_REFILL_MS = 500;
+const COMMAND_VALIDATION_LOOKUP_LIMIT_LOG_MS = 5_000;
+const COMMAND_VALIDATION_LOOKUP_RATE_LIMIT_MAX_KEYS = 2_000;
 type CommandLookupInflightEntry = {
   accountId: string;
   promise: Promise<MattermostCommandResponse | null>;
 };
+type CommandValidationRateLimitEntry = {
+  accountId: string;
+  tokens: number;
+  updatedAt: number;
+  lastLimitedLogAt: number;
+};
 const commandLookupInflight = new Map<string, CommandLookupInflightEntry>();
 const commandValidationFailureCache = new Map<string, { accountId: string; expiresAt: number }>();
+const commandValidationLookupRateLimit = new Map<string, CommandValidationRateLimitEntry>();
 
 /**
  * Read the full request body as a string.
@@ -148,6 +159,7 @@ function commandLookupKey(
 export function resetMattermostSlashCommandValidationCacheForTests(): void {
   commandLookupInflight.clear();
   commandValidationFailureCache.clear();
+  commandValidationLookupRateLimit.clear();
 }
 
 export function clearMattermostSlashCommandValidationCacheForAccount(accountId: string): void {
@@ -159,6 +171,11 @@ export function clearMattermostSlashCommandValidationCacheForAccount(accountId: 
   for (const [key, entry] of commandLookupInflight) {
     if (entry.accountId === accountId) {
       commandLookupInflight.delete(key);
+    }
+  }
+  for (const [key, entry] of commandValidationLookupRateLimit) {
+    if (entry.accountId === accountId) {
+      commandValidationLookupRateLimit.delete(key);
     }
   }
 }
@@ -197,6 +214,56 @@ function cacheCommandValidationFailure(key: string, accountId: string): void {
     accountId,
     expiresAt: Date.now() + COMMAND_VALIDATION_FAILURE_CACHE_MS,
   });
+}
+
+function sweepCommandValidationLookupRateLimit(now = Date.now()): void {
+  const staleAfterMs = COMMAND_VALIDATION_LOOKUP_REFILL_MS * COMMAND_VALIDATION_LOOKUP_BURST * 2;
+  for (const [key, entry] of commandValidationLookupRateLimit) {
+    if (now - entry.updatedAt > staleAfterMs) {
+      commandValidationLookupRateLimit.delete(key);
+    }
+  }
+  while (commandValidationLookupRateLimit.size > COMMAND_VALIDATION_LOOKUP_RATE_LIMIT_MAX_KEYS) {
+    const oldestKey = commandValidationLookupRateLimit.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+    commandValidationLookupRateLimit.delete(oldestKey);
+  }
+}
+
+function reserveCommandValidationLookup(params: {
+  key: string;
+  accountId: string;
+  now?: number;
+}): { allowed: true } | { allowed: false; shouldLog: boolean } {
+  const now = params.now ?? Date.now();
+  sweepCommandValidationLookupRateLimit(now);
+  const existing = commandValidationLookupRateLimit.get(params.key);
+  if (!existing) {
+    commandValidationLookupRateLimit.set(params.key, {
+      accountId: params.accountId,
+      tokens: COMMAND_VALIDATION_LOOKUP_BURST - 1,
+      updatedAt: now,
+      lastLimitedLogAt: 0,
+    });
+    return { allowed: true };
+  }
+
+  const refill = Math.floor((now - existing.updatedAt) / COMMAND_VALIDATION_LOOKUP_REFILL_MS);
+  if (refill > 0) {
+    existing.tokens = Math.min(COMMAND_VALIDATION_LOOKUP_BURST, existing.tokens + refill);
+    existing.updatedAt += refill * COMMAND_VALIDATION_LOOKUP_REFILL_MS;
+  }
+  if (existing.tokens <= 0) {
+    const shouldLog = now - existing.lastLimitedLogAt >= COMMAND_VALIDATION_LOOKUP_LIMIT_LOG_MS;
+    if (shouldLog) {
+      existing.lastLimitedLogAt = now;
+    }
+    return { allowed: false, shouldLog };
+  }
+  existing.tokens -= 1;
+  return { allowed: true };
 }
 
 async function fetchCurrentMattermostCommandUncached(params: {
@@ -277,6 +344,20 @@ export async function validateMattermostSlashCommandToken(params: {
   const lookupKey = commandLookupKey(params.client, params.registeredCommand, params.accountId);
   if (hasCachedCommandValidationFailure(lookupKey)) {
     return false;
+  }
+  if (!commandLookupInflight.has(lookupKey)) {
+    const reservation = reserveCommandValidationLookup({
+      key: lookupKey,
+      accountId: params.accountId,
+    });
+    if (!reservation.allowed) {
+      if (reservation.shouldLog) {
+        params.log?.(
+          `mattermost: slash command validation lookup rate-limited for /${sanitizeMattermostLogValue(params.registeredCommand.trigger)}`,
+        );
+      }
+      return false;
+    }
   }
   const current = await fetchCurrentMattermostCommand({
     accountId: params.accountId,

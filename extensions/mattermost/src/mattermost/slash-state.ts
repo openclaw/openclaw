@@ -32,6 +32,20 @@ import {
 
 const MULTI_ACCOUNT_BODY_MAX_BYTES = 64 * 1024;
 const MULTI_ACCOUNT_BODY_TIMEOUT_MS = 5_000;
+type SlashHandlerMatchSource = "token" | "command";
+type SlashHandlerMatch =
+  | { kind: "none" }
+  | {
+      kind: "single";
+      source: SlashHandlerMatchSource;
+      handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
+      accountIds: string[];
+    }
+  | {
+      kind: "ambiguous";
+      source: SlashHandlerMatchSource;
+      accountIds: string[];
+    };
 
 // ─── Per-account state ───────────────────────────────────────────────────────
 
@@ -51,11 +65,7 @@ export type SlashCommandAccountState = {
 /** Map from accountId → per-account slash command state. */
 const accountStates = new Map<string, SlashCommandAccountState>();
 
-export function resolveSlashHandlerForToken(token: string): {
-  kind: "none" | "single" | "ambiguous";
-  handler?: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
-  accountIds?: string[];
-} {
+export function resolveSlashHandlerForToken(token: string): SlashHandlerMatch {
   const matches: Array<{
     accountId: string;
     handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
@@ -71,20 +81,25 @@ export function resolveSlashHandlerForToken(token: string): {
     return { kind: "none" };
   }
   if (matches.length === 1) {
-    return { kind: "single", handler: matches[0].handler, accountIds: [matches[0].accountId] };
+    return {
+      kind: "single",
+      source: "token",
+      handler: matches[0].handler,
+      accountIds: [matches[0].accountId],
+    };
   }
 
   return {
     kind: "ambiguous",
+    source: "token",
     accountIds: matches.map((entry) => entry.accountId),
   };
 }
 
-export function resolveSlashHandlerForCommand(params: { teamId: string; command: string }): {
-  kind: "none" | "single" | "ambiguous";
-  handler?: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
-  accountIds?: string[];
-} {
+export function resolveSlashHandlerForCommand(params: {
+  teamId: string;
+  command: string;
+}): SlashHandlerMatch {
   const trigger = normalizeSlashCommandTrigger(params.command);
   if (!trigger) {
     return { kind: "none" };
@@ -110,11 +125,17 @@ export function resolveSlashHandlerForCommand(params: { teamId: string; command:
     return { kind: "none" };
   }
   if (matches.length === 1) {
-    return { kind: "single", handler: matches[0].handler, accountIds: [matches[0].accountId] };
+    return {
+      kind: "single",
+      source: "command",
+      handler: matches[0].handler,
+      accountIds: [matches[0].accountId],
+    };
   }
 
   return {
     kind: "ambiguous",
+    source: "command",
     accountIds: matches.map((entry) => entry.accountId),
   };
 }
@@ -310,7 +331,7 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
       // parse failed — will be caught by handler
     }
 
-    let match = token ? resolveSlashHandlerForToken(token) : { kind: "none" as const };
+    let match: SlashHandlerMatch = token ? resolveSlashHandlerForToken(token) : { kind: "none" };
     if (match.kind === "none") {
       const payload = parseSlashCommandPayload(bodyStr, ct);
       if (payload) {
@@ -336,20 +357,24 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
 
     if (match.kind === "ambiguous") {
       api.logger.warn?.(
-        `mattermost: slash callback token matched multiple accounts (${match.accountIds?.join(", ")})`,
+        `mattermost: slash callback matched multiple accounts via ${match.source} (${match.accountIds.join(", ")})`,
       );
+      const conflictText =
+        match.source === "token"
+          ? "Conflict: command token is not unique across accounts."
+          : "Conflict: slash command is not unique across accounts.";
       res.statusCode = 409;
       res.setHeader("Content-Type", "application/json; charset=utf-8");
       res.end(
         JSON.stringify({
           response_type: "ephemeral",
-          text: "Conflict: command token is not unique across accounts.",
+          text: conflictText,
         }),
       );
       return;
     }
 
-    const matchedHandler = match.handler!;
+    const matchedHandler = match.handler;
 
     // Replay: create a synthetic readable that re-emits the buffered body
     const syntheticReq = new Readable({
