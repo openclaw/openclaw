@@ -438,6 +438,25 @@ function mergeInstallableRuntimeDeps(
   });
 }
 
+function mergeRuntimeDepEntries(deps: readonly RuntimeDepEntry[]): RuntimeDepEntry[] {
+  const bySpec = new Map<string, RuntimeDepEntry>();
+  for (const dep of deps) {
+    const spec = `${dep.name}@${dep.version}`;
+    const existing = bySpec.get(spec);
+    if (!existing) {
+      bySpec.set(spec, { ...dep, pluginIds: [...dep.pluginIds] });
+      continue;
+    }
+    existing.pluginIds = [...new Set([...existing.pluginIds, ...dep.pluginIds])].toSorted(
+      (left, right) => left.localeCompare(right),
+    );
+  }
+  return [...bySpec.values()].toSorted((left, right) => {
+    const nameOrder = left.name.localeCompare(right.name);
+    return nameOrder === 0 ? left.version.localeCompare(right.version) : nameOrder;
+  });
+}
+
 function isSourceCheckoutRoot(packageRoot: string): boolean {
   return (
     (fs.existsSync(path.join(packageRoot, ".git")) ||
@@ -1178,9 +1197,7 @@ export function scanBundledPluginRuntimeDeps(params: {
           pluginIds: [MIRRORED_PACKAGE_RUNTIME_DEP_PLUGIN_ID],
         }))
       : [];
-  const allDeps = [...deps, ...packageRuntimeDeps].toSorted((left, right) =>
-    left.name.localeCompare(right.name),
-  );
+  const allDeps = mergeRuntimeDepEntries([...deps, ...packageRuntimeDeps]);
   const packageInstallRoot = resolveBundledRuntimeDependencyPackageInstallRoot(params.packageRoot, {
     env: params.env,
   });

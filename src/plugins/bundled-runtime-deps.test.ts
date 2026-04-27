@@ -754,6 +754,37 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
       "tslog@^4.10.2",
     ]);
   });
+
+  it("deduplicates mirrored core runtime deps already declared by a plugin", () => {
+    const packageRoot = makeTempDir();
+    const stageDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        version: "2026.4.25",
+        dependencies: { tslog: "^4.10.2" },
+      }),
+    );
+    writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "logger-plugin",
+      deps: { tslog: "^4.10.2" },
+      enabledByDefault: true,
+    });
+
+    const result = scanBundledPluginRuntimeDeps({
+      packageRoot,
+      config: {},
+      env: { OPENCLAW_PLUGIN_STAGE_DIR: stageDir },
+    });
+
+    expect(result.deps.map((dep) => `${dep.name}@${dep.version}`)).toEqual(["tslog@^4.10.2"]);
+    expect(result.deps[0]?.pluginIds).toEqual(["logger-plugin", "openclaw-core"]);
+    expect(result.missing.map((dep) => `${dep.name}@${dep.version}`)).toEqual([
+      "tslog@^4.10.2",
+    ]);
+  });
 });
 
 describe("ensureBundledPluginRuntimeDeps", () => {
