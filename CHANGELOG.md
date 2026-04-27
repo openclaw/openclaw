@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Control UI: polish the quick settings dashboard grid so common cards align across desktop, tablet, and mobile layouts without wasting horizontal space. Thanks @BunsDev.
 - Matrix/E2EE: add `openclaw matrix encryption setup` to enable Matrix encryption, bootstrap recovery, and print verification status from one setup flow. Thanks @gumadeiras.
 - Agents/compaction: add an opt-in `agents.defaults.compaction.maxActiveTranscriptBytes` preflight trigger that runs normal local compaction when the active JSONL grows too large, requiring transcript rotation so successful compaction moves future turns onto a smaller successor file instead of raw byte-splitting history. Thanks @vincentkoc.
 
