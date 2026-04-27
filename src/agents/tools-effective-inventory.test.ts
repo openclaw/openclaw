@@ -51,6 +51,7 @@ vi.mock("./pi-tools.js", () => ({
 
 vi.mock("../plugins/tools.js", () => ({
   getPluginToolMeta: (tool: { name: string }) => effectiveInventoryState.pluginMeta[tool.name],
+  buildPluginToolMetadataKey: (pluginId: string, toolName: string) => `${pluginId}${toolName}`,
 }));
 
 vi.mock("./channel-tools.js", () => ({

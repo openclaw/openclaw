@@ -40,7 +40,7 @@ export function copyPluginToolMeta(source: AnyAgentTool, target: AnyAgentTool): 
 // src/gateway/server-methods/tools-catalog.ts. Keeping the separator + builder
 // here prevents drift between callers; if the keying scheme changes, both
 // consumers update together.
-const PLUGIN_TOOL_METADATA_KEY_SEPARATOR = "\u0000";
+const PLUGIN_TOOL_METADATA_KEY_SEPARATOR = "\uE000";
 
 export function buildPluginToolMetadataKey(pluginId: string, toolName: string): string {
   return `${pluginId}${PLUGIN_TOOL_METADATA_KEY_SEPARATOR}${toolName}`;

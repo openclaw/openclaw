@@ -483,10 +483,11 @@ export async function projectPluginSessionExtensions(params: {
       discardUnexpectedPromiseProjection(projected);
       continue;
     }
-    if (
-      projected !== undefined &&
-      (registration.extension.project === undefined || isPluginJsonValue(projected))
-    ) {
+    if (projected !== undefined && isPluginJsonValue(projected)) {
+      // Validate the projection in both branches: with a projector the
+      // projector might return arbitrary values; without one the persisted
+      // state could be hand-edited or malformed. Always run the size + shape
+      // check before pushing into pluginExtensions.
       projections.push({
         pluginId: registration.pluginId,
         namespace: registration.extension.namespace,
