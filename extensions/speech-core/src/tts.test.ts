@@ -156,6 +156,7 @@ async function expectTtsPayloadResult(params: {
     expect(synthesizeMock).toHaveBeenCalledWith(expect.objectContaining({ target: params.target }));
     expect(result.audioAsVoice).toBe(params.audioAsVoice);
     expect(result.mediaUrl).toMatch(new RegExp(`voice-\\d+\\.${params.mediaExtension ?? "ogg"}$`));
+    expect(result.spokenText).toBe(params.text);
 
     mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
   } finally {

@@ -7,9 +7,9 @@ import { createDiscordRequestClient } from "./proxy-request-client.js";
 
 const makeProxyFetchMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/infra-runtime")>(
-    "openclaw/plugin-sdk/infra-runtime",
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/fetch-runtime")>(
+    "openclaw/plugin-sdk/fetch-runtime",
   );
   makeProxyFetchMock.mockImplementation((proxyUrl: string) => {
     if (proxyUrl === "bad-proxy") {

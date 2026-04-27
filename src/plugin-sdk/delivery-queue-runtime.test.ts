@@ -13,9 +13,9 @@ vi.mock("../infra/outbound/deliver-runtime.js", () => ({
   deliverOutboundPayloads: mocks.deliverOutboundPayloads,
 }));
 
-type InfraRuntimeModule = typeof import("./infra-runtime.js");
+type DeliveryQueueRuntimeModule = typeof import("./delivery-queue-runtime.js");
 
-let drainPendingDeliveries: InfraRuntimeModule["drainPendingDeliveries"];
+let drainPendingDeliveries: DeliveryQueueRuntimeModule["drainPendingDeliveries"];
 
 const log = {
   info: vi.fn(),
@@ -24,7 +24,7 @@ const log = {
 };
 
 beforeAll(async () => {
-  ({ drainPendingDeliveries } = await import("./infra-runtime.js"));
+  ({ drainPendingDeliveries } = await import("./delivery-queue-runtime.js"));
 });
 
 beforeEach(() => {
@@ -35,7 +35,7 @@ beforeEach(() => {
   log.error.mockClear();
 });
 
-describe("plugin-sdk drainPendingDeliveries", () => {
+describe("plugin-sdk delivery queue drainPendingDeliveries", () => {
   it("injects the lazy outbound deliver runtime when no deliver fn is provided", async () => {
     await drainPendingDeliveries({
       drainKey: "demo:test",

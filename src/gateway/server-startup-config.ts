@@ -1,23 +1,24 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import {
-  type ConfigFileSnapshot,
-  type GatewayAuthConfig,
-  type GatewayTailscaleConfig,
-  type OpenClawConfig,
-  applyConfigOverrides,
-  isNixMode,
-  readConfigFileSnapshot,
+  readConfigFileSnapshotWithPluginMetadata,
   recoverConfigFromLastKnownGood,
   recoverConfigFromJsonRootSuffix,
-  replaceConfigFile,
-  isPluginLocalInvalidConfigSnapshot,
-  shouldAttemptLastKnownGoodRecovery,
-  validateConfigObjectWithPlugins,
-} from "../config/config.js";
+} from "../config/io.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { asResolvedSourceConfig, materializeRuntimeConfig } from "../config/materialize.js";
+import { replaceConfigFile } from "../config/mutate.js";
+import { isNixMode } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import {
+  isPluginLocalInvalidConfigSnapshot,
+  shouldAttemptLastKnownGoodRecovery,
+} from "../config/recovery-policy.js";
+import { applyConfigOverrides } from "../config/runtime-overrides.js";
+import type { GatewayAuthConfig, GatewayTailscaleConfig } from "../config/types.gateway.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import { validateConfigObjectWithPlugins } from "../config/validation.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   GATEWAY_AUTH_SURFACE_PATHS,
   evaluateGatewayAuthSurfaceStates,
@@ -61,6 +62,7 @@ type GatewayStartupConfigMeasure = <T>(name: string, run: () => T | Promise<T>) 
 export type GatewayStartupConfigSnapshotLoadResult = {
   snapshot: ConfigFileSnapshot;
   wroteConfig: boolean;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
   degradedProviderApi?: boolean;
   degradedPluginConfig?: boolean;
 };
@@ -192,7 +194,11 @@ export async function loadGatewayStartupConfigSnapshot(params: {
   measure?: GatewayStartupConfigMeasure;
 }): Promise<GatewayStartupConfigSnapshotLoadResult> {
   const measure = params.measure ?? (async (_name, run) => await run());
-  let configSnapshot = await measure("config.snapshot.read", () => readConfigFileSnapshot());
+  let snapshotRead = await measure("config.snapshot.read", () =>
+    readConfigFileSnapshotWithPluginMetadata({ measure }),
+  );
+  let configSnapshot = snapshotRead.snapshot;
+  let pluginMetadataSnapshot = snapshotRead.pluginMetadataSnapshot;
   let wroteConfig = false;
   let degradedStartupConfig = false;
   let degradedPluginConfig = false;
@@ -240,9 +246,11 @@ export async function loadGatewayStartupConfigSnapshot(params: {
         params.log.warn(
           `gateway: invalid config was restored from last-known-good backup: ${configSnapshot.path}`,
         );
-        configSnapshot = await measure("config.snapshot.recovery-read", () =>
-          readConfigFileSnapshot(),
+        snapshotRead = await measure("config.snapshot.recovery-read", () =>
+          readConfigFileSnapshotWithPluginMetadata({ measure }),
         );
+        configSnapshot = snapshotRead.snapshot;
+        pluginMetadataSnapshot = snapshotRead.pluginMetadataSnapshot;
         if (configSnapshot.valid) {
           enqueueConfigRecoveryNotice({
             cfg: configSnapshot.config,
@@ -257,9 +265,11 @@ export async function loadGatewayStartupConfigSnapshot(params: {
         params.log.warn(
           `gateway: invalid config was repaired by stripping a non-JSON prefix: ${configSnapshot.path}`,
         );
-        configSnapshot = await measure("config.snapshot.prefix-recovery-read", () =>
-          readConfigFileSnapshot(),
+        snapshotRead = await measure("config.snapshot.prefix-recovery-read", () =>
+          readConfigFileSnapshotWithPluginMetadata({ measure }),
         );
+        configSnapshot = snapshotRead.snapshot;
+        pluginMetadataSnapshot = snapshotRead.pluginMetadataSnapshot;
       }
     }
     assertValidGatewayStartupConfigSnapshot(configSnapshot, { includeDoctorHint: true });
@@ -269,12 +279,19 @@ export async function loadGatewayStartupConfigSnapshot(params: {
     params.minimalTestGateway || degradedStartupConfig || degradedPluginConfig
       ? { config: configSnapshot.config, changes: [] as string[] }
       : await measure("config.snapshot.auto-enable", () =>
-          applyPluginAutoEnable({ config: configSnapshot.sourceConfig, env: process.env }),
+          applyPluginAutoEnable({
+            config: configSnapshot.sourceConfig,
+            env: process.env,
+            ...(pluginMetadataSnapshot?.manifestRegistry
+              ? { manifestRegistry: pluginMetadataSnapshot.manifestRegistry }
+              : {}),
+          }),
         );
   if (autoEnable.changes.length === 0) {
     return {
       snapshot: configSnapshot,
       wroteConfig,
+      ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
       ...(degradedStartupConfig ? { degradedProviderApi: true } : {}),
       ...(degradedPluginConfig ? { degradedPluginConfig: true } : {}),
     };
@@ -286,9 +303,11 @@ export async function loadGatewayStartupConfigSnapshot(params: {
       afterWrite: { mode: "auto" },
     });
     wroteConfig = true;
-    configSnapshot = await measure("config.snapshot.auto-enable-read", () =>
-      readConfigFileSnapshot(),
+    snapshotRead = await measure("config.snapshot.auto-enable-read", () =>
+      readConfigFileSnapshotWithPluginMetadata({ measure }),
     );
+    configSnapshot = snapshotRead.snapshot;
+    pluginMetadataSnapshot = snapshotRead.pluginMetadataSnapshot;
     assertValidGatewayStartupConfigSnapshot(configSnapshot);
     params.log.info(
       `gateway: auto-enabled plugins:\n${autoEnable.changes.map((entry) => `- ${entry}`).join("\n")}`,
@@ -300,6 +319,7 @@ export async function loadGatewayStartupConfigSnapshot(params: {
   return {
     snapshot: configSnapshot,
     wroteConfig,
+    ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
     ...(degradedStartupConfig ? { degradedProviderApi: true } : {}),
     ...(degradedPluginConfig ? { degradedPluginConfig: true } : {}),
   };

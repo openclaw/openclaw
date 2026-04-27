@@ -6,8 +6,8 @@ import type {
 } from "openclaw/plugin-sdk/config-types";
 import type { SessionScope } from "openclaw/plugin-sdk/config-types";
 import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/config-types";
+import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { createDedupeCache } from "openclaw/plugin-sdk/infra-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";

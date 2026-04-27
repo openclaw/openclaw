@@ -13,6 +13,17 @@ const GOOGLE_API_KEY =
 const LIVE = isLiveTestEnabled() && GOOGLE_API_KEY.length > 0;
 const describeLive = LIVE ? describe : describe.skip;
 
+function isTransientGeminiSearchError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  if (error.name === "AbortError") {
+    return true;
+  }
+  const message = error.message.toLowerCase();
+  return message.includes("timeout") || message.includes("aborted");
+}
+
 const registerGooglePlugin = () =>
   registerProviderPlugin({
     plugin,
@@ -87,10 +98,26 @@ describeLive("google plugin live", () => {
     const provider = createGeminiWebSearchProvider();
     const tool = provider.createTool?.({
       config: {},
-      searchConfig: { gemini: { apiKey: GOOGLE_API_KEY }, cacheTtlMinutes: 0 },
+      searchConfig: { gemini: { apiKey: GOOGLE_API_KEY }, cacheTtlMinutes: 0, timeoutSeconds: 90 },
     } as never);
 
-    const result = await tool?.execute({ query: "OpenClaw GitHub", count: 1 });
+    let result: { provider?: string; content?: unknown; citations?: unknown } | undefined;
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        result = await tool?.execute({ query: "OpenClaw GitHub", count: 1 });
+        lastError = undefined;
+        break;
+      } catch (error) {
+        lastError = error;
+        if (!isTransientGeminiSearchError(error) || attempt === 1) {
+          throw error;
+        }
+      }
+    }
+    if (lastError) {
+      throw lastError;
+    }
 
     expect(result?.provider).toBe("gemini");
     expect(typeof result?.content).toBe("string");

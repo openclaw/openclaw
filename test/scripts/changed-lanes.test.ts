@@ -259,6 +259,7 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands.map((command) => command.name)).toEqual([
       "conflict markers",
       "changelog attributions",
+      "guarded extension wildcard re-exports",
       "plugin-sdk wildcard re-exports",
       "typecheck core tests",
       "lint core",
@@ -547,6 +548,7 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands.map((command) => command.args[0])).toEqual([
       "check:no-conflict-markers",
       "check:changelog-attributions",
+      "lint:extensions:no-guarded-wildcard-reexports",
       "lint:extensions:no-plugin-sdk-wildcard-reexports",
       "release-metadata:check",
       "ios:version:check",
@@ -680,6 +682,10 @@ describe("scripts/changed-lanes", () => {
       { name: "conflict markers", args: ["check:no-conflict-markers"] },
       { name: "changelog attributions", args: ["check:changelog-attributions"] },
       {
+        name: "guarded extension wildcard re-exports",
+        args: ["lint:extensions:no-guarded-wildcard-reexports"],
+      },
+      {
         name: "plugin-sdk wildcard re-exports",
         args: ["lint:extensions:no-plugin-sdk-wildcard-reexports"],
       },
@@ -694,6 +700,10 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands).toEqual([
       { name: "conflict markers", args: ["check:no-conflict-markers"] },
       { name: "changelog attributions", args: ["check:changelog-attributions"] },
+      {
+        name: "guarded extension wildcard re-exports",
+        args: ["lint:extensions:no-guarded-wildcard-reexports"],
+      },
       {
         name: "plugin-sdk wildcard re-exports",
         args: ["lint:extensions:no-plugin-sdk-wildcard-reexports"],

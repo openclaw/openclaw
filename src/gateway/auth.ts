@@ -1,5 +1,5 @@
 import type { IncomingMessage } from "node:http";
-import type { GatewayAuthConfig, GatewayTrustedProxyConfig } from "../config/config.js";
+import type { GatewayAuthConfig, GatewayTrustedProxyConfig } from "../config/types.gateway.js";
 import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import {
