@@ -140,17 +140,17 @@ Per-agent override: `agents.list[].tools.profile`.
 
 | Profile     | What it includes                                                                                                                                  |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `full`      | No restriction (same as unset)                                                                                                                    |
+| `full`      | Unrestricted baseline for broader command/control access; same as leaving `tools.profile` unset                                                   |
 | `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `image`, `image_generate`, `music_generate`, `video_generate` |
 | `messaging` | `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status`                                                         |
 | `minimal`   | `session_status` only                                                                                                                             |
 
 <Note>
-`messaging` is intentionally narrow for channel-focused agents. It leaves out
-broader command/control tools such as filesystem, runtime, browser, canvas,
-nodes, cron, and gateway control. Use `tools.profile: "full"` when you want
-the unrestricted baseline and prefer to trim access with `tools.allow` /
-`tools.deny`.
+`tools.profile: "messaging"` is intentionally narrow for channel-focused
+agents. It leaves out broader command/control tools such as filesystem, runtime,
+browser, canvas, nodes, cron, and gateway control. Use `tools.profile: "full"`
+as the unrestricted baseline for broader command/control access, then trim
+access with `tools.allow` / `tools.deny` when needed.
 </Note>
 
 `coding` includes lightweight web tools (`web_search`, `web_fetch`, `x_search`)
