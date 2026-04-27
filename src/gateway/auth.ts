@@ -13,6 +13,7 @@ import {
 } from "./auth-rate-limit.js";
 import { type ResolvedGatewayAuth } from "./auth-resolve.js";
 import {
+  isLocalishHost,
   isLoopbackAddress,
   resolveRequestClientIp,
   isTrustedProxyAddress,
@@ -82,6 +83,14 @@ export type AuthorizeGatewayConnectParams = {
   };
 };
 
+type SharedSecretAuthParams = {
+  auth: ResolvedGatewayAuth;
+  connectAuth?: ConnectAuth | null;
+  limiter?: AuthRateLimiter;
+  ip?: string;
+  rateLimitScope: string;
+};
+
 type TailscaleUser = {
   login: string;
   name: string;
@@ -133,16 +142,25 @@ export function hasForwardedRequestHeaders(req?: IncomingMessage): boolean {
 
 export function isLocalDirectRequest(
   req?: IncomingMessage,
-  _trustedProxies?: string[],
-  _allowRealIpFallback = false,
+  trustedProxies?: string[],
+  allowRealIpFallback = false,
 ): boolean {
   if (!req) {
     return false;
   }
-  if (!hasForwardedRequestHeaders(req)) {
-    return isLoopbackAddress(req.socket?.remoteAddress);
+  const clientIp = resolveRequestClientIp(req, trustedProxies, allowRealIpFallback) ?? "";
+  if (!isLoopbackAddress(clientIp)) {
+    return false;
   }
-  return false;
+
+  const hasForwarded = Boolean(
+    req.headers?.["x-forwarded-for"] ||
+    req.headers?.["x-real-ip"] ||
+    req.headers?.["x-forwarded-host"],
+  );
+  const remoteAddr = req.socket?.remoteAddress;
+  const remoteIsTrustedProxy = isTrustedProxyAddress(remoteAddr, trustedProxies);
+  return isLocalishHost(req.headers?.host) && (!hasForwarded || remoteIsTrustedProxy);
 }
 
 function getTailscaleUser(req?: IncomingMessage): TailscaleUser | null {
@@ -275,7 +293,13 @@ function authorizeTrustedProxy(params: {
   if (!remoteAddr || !isTrustedProxyAddress(remoteAddr, trustedProxies)) {
     return { reason: "trusted_proxy_untrusted_source" };
   }
-  if (isLoopbackAddress(remoteAddr)) {
+  // Permit loopback only when the request arrives through a legitimate same-host
+  // reverse proxy: a non-local-ish Host header combined with standard forwarding
+  // headers indicates nginx (or equivalent) is forwarding on behalf of an external
+  // client.  Plain loopback connections — and loopback requests that spoof a
+  // non-local Host without forwarding context — are still rejected.
+  const appearsProxied = !isLocalishHost(req.headers?.host) && hasAnyProxyForwardingContext(req);
+  if (isLoopbackAddress(remoteAddr) && !appearsProxied) {
     return { reason: "trusted_proxy_loopback_source" };
   }
 
@@ -358,6 +382,78 @@ function authorizeTokenAuth(params: {
   return { ok: true, method: "token" };
 }
 
+function authorizeSharedSecretFallback(params: SharedSecretAuthParams): GatewayAuthResult | null {
+  const { auth, connectAuth, limiter, ip, rateLimitScope } = params;
+
+  // HTTP bearer auth paths populate both token and password with the same
+  // bearer token value, so prefer token auth when both shared secrets exist.
+  if (auth.token && connectAuth?.token) {
+    if (!safeEqualSecret(connectAuth.token, auth.token)) {
+      limiter?.recordFailure(ip, rateLimitScope);
+      return { ok: false, reason: "token_mismatch" };
+    }
+    limiter?.reset(ip, rateLimitScope);
+    return { ok: true, method: "token" };
+  }
+
+  if (auth.password && connectAuth?.password) {
+    if (!safeEqualSecret(connectAuth.password, auth.password)) {
+      limiter?.recordFailure(ip, rateLimitScope);
+      return { ok: false, reason: "password_mismatch" };
+    }
+    limiter?.reset(ip, rateLimitScope);
+    return { ok: true, method: "password" };
+  }
+
+  return null;
+}
+
+function hasConfiguredTrustedProxyHeaders(
+  req: IncomingMessage | undefined,
+  trustedProxyConfig: GatewayTrustedProxyConfig | undefined,
+): boolean {
+  if (!req || !trustedProxyConfig) {
+    return false;
+  }
+
+  const headers = [trustedProxyConfig.userHeader, ...(trustedProxyConfig.requiredHeaders ?? [])]
+    .map((header) => header?.trim().toLowerCase())
+    .filter((header): header is string => Boolean(header));
+
+  return headers.some((header) => {
+    const value = headerValue(req.headers[header]);
+    return typeof value === "string" && value.trim() !== "";
+  });
+}
+
+function hasAnyProxyForwardingContext(req?: IncomingMessage): boolean {
+  if (!req) {
+    return false;
+  }
+  return Boolean(
+    req.headers.forwarded ||
+    req.headers["x-forwarded-for"] ||
+    req.headers["x-real-ip"] ||
+    req.headers["x-forwarded-host"] ||
+    req.headers["x-forwarded-proto"],
+  );
+}
+
+function shouldAllowTrustedProxySharedSecretFallback(
+  req: IncomingMessage | undefined,
+  trustedProxyConfig: GatewayTrustedProxyConfig | undefined,
+): boolean {
+  if (!req) {
+    return false;
+  }
+  return (
+    isLocalishHost(req.headers?.host) &&
+    isLoopbackAddress(req.socket?.remoteAddress) &&
+    !hasAnyProxyForwardingContext(req) &&
+    !hasConfiguredTrustedProxyHeaders(req, trustedProxyConfig)
+  );
+}
+
 export async function authorizeGatewayConnect(
   params: AuthorizeGatewayConnectParams,
 ): Promise<GatewayAuthResult> {
@@ -411,8 +507,37 @@ async function authorizeGatewayConnectCore(
     trustedProxies,
     params.allowRealIpFallback === true,
   );
+  const localTrustedProxyFallback = shouldAllowTrustedProxySharedSecretFallback(
+    req,
+    auth.trustedProxy,
+  );
 
   if (auth.mode === "trusted-proxy") {
+    if (localTrustedProxyFallback && limiter) {
+      const rlCheck: RateLimitCheckResult = limiter.check(ip, rateLimitScope);
+      if (!rlCheck.allowed) {
+        return {
+          ok: false,
+          reason: "rate_limited",
+          rateLimited: true,
+          retryAfterMs: rlCheck.retryAfterMs,
+        };
+      }
+    }
+
+    if (localTrustedProxyFallback) {
+      const sharedSecretFallback = authorizeSharedSecretFallback({
+        auth,
+        connectAuth,
+        limiter,
+        ip,
+        rateLimitScope,
+      });
+      if (sharedSecretFallback) {
+        return sharedSecretFallback;
+      }
+    }
+
     // Same-host reverse proxies may forward identity headers without a full
     // forwarded chain; keep those on the trusted-proxy path so allowUsers and
     // requiredHeaders still apply.

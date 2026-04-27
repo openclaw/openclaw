@@ -704,6 +704,157 @@ describe("trusted-proxy auth", () => {
     });
   });
 
+  it("allows local-direct shared-token auth in trusted-proxy mode", async () => {
+    const localToken = await authorizeGatewayConnect({
+      auth: {
+        mode: "trusted-proxy",
+        allowTailscale: false,
+        token: "secret",
+        trustedProxy: trustedProxyConfig,
+      },
+      connectAuth: { token: "secret" },
+      trustedProxies: ["127.0.0.1"],
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: {
+          host: "127.0.0.1:19001",
+        },
+      } as never,
+    });
+
+    expect(localToken.ok).toBe(true);
+    expect(localToken.method).toBe("token");
+  });
+
+  it("prefers token auth when bearer-style fallback populates both token and password", async () => {
+    const res = await authorizeGatewayConnect({
+      auth: {
+        mode: "trusted-proxy",
+        allowTailscale: false,
+        token: "secret",
+        password: "different-password",
+        trustedProxy: trustedProxyConfig,
+      },
+      connectAuth: { token: "secret", password: "secret" },
+      trustedProxies: ["127.0.0.1"],
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: {
+          host: "127.0.0.1:19001",
+        },
+      } as never,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.method).toBe("token");
+  });
+
+  it("does not let local fallback preempt valid trusted-proxy header auth", async () => {
+    const res = await authorizeGatewayConnect({
+      auth: {
+        mode: "trusted-proxy",
+        allowTailscale: false,
+        token: "secret",
+        trustedProxy: trustedProxyConfig,
+      },
+      connectAuth: { token: "wrong" },
+      trustedProxies: ["127.0.0.1"],
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: {
+          host: "gateway.local",
+          "x-forwarded-user": "nick@example.com",
+          "x-forwarded-proto": "https",
+        },
+      } as never,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.method).toBe("trusted-proxy");
+    expect(res.user).toBe("nick@example.com");
+  });
+
+  it("applies rate limiting before trusted-proxy local shared-secret fallback", async () => {
+    const limiter = createLimiterSpy();
+    limiter.check.mockReturnValue({
+      allowed: false,
+      remaining: 0,
+      retryAfterMs: 60_000,
+    });
+
+    const res = await authorizeGatewayConnect({
+      auth: {
+        mode: "trusted-proxy",
+        allowTailscale: false,
+        token: "secret",
+        trustedProxy: trustedProxyConfig,
+      },
+      connectAuth: { token: "secret" },
+      trustedProxies: ["127.0.0.1"],
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: {
+          host: "127.0.0.1:19001",
+        },
+      } as never,
+      rateLimiter: limiter,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("rate_limited");
+    expect(limiter.check).toHaveBeenCalled();
+  });
+
+  it("does not allow shared-secret fallback for same-host proxied external requests", async () => {
+    const res = await authorizeGatewayConnect({
+      auth: {
+        mode: "trusted-proxy",
+        allowTailscale: false,
+        token: "secret",
+        trustedProxy: trustedProxyConfig,
+      },
+      connectAuth: { token: "secret" },
+      trustedProxies: ["127.0.0.1"],
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: {
+          host: "gateway.local",
+          "x-forwarded-for": "203.0.113.9",
+          "x-forwarded-proto": "https",
+        },
+      } as never,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("trusted_proxy_user_missing");
+  });
+
+  it("rejects loopback requests that carry proxy-forwarding context but arrive on a local host", async () => {
+    // host is local-ish (127.0.0.1:19001) so the request cannot be a legitimate
+    // same-host nginx forward - even with x-forwarded-proto present the loopback
+    // guard fires before header validation.
+    const res = await authorizeGatewayConnect({
+      auth: {
+        mode: "trusted-proxy",
+        allowTailscale: false,
+        token: "secret",
+        trustedProxy: trustedProxyConfig,
+      },
+      connectAuth: { token: "secret" },
+      trustedProxies: ["127.0.0.1"],
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: {
+          host: "127.0.0.1:19001",
+          "x-forwarded-proto": "https",
+        },
+      } as never,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("trusted_proxy_loopback_source");
+  });
+
   it("rejects request from untrusted source", async () => {
     const res = await authorizeTrustedProxy({
       remoteAddress: "192.168.1.100",
@@ -931,20 +1082,6 @@ describe("trusted-proxy auth", () => {
         },
       },
       {
-        name: "with a valid token",
-        options: {
-          token: "secret",
-          connectToken: "secret",
-        },
-      },
-      {
-        name: "with a wrong token",
-        options: {
-          token: "secret",
-          connectToken: "wrong",
-        },
-      },
-      {
         name: "when no local token is configured",
         options: {
           connectToken: "secret",
@@ -954,6 +1091,23 @@ describe("trusted-proxy auth", () => {
       const res = await authorizeLocalDirect(options);
       expect(res.ok).toBe(false);
       expect(res.reason).toBe("trusted_proxy_loopback_source");
+    });
+
+    it("accepts local-direct request with a valid token in trusted-proxy mode", async () => {
+      // Same-host loopback connections with a matching shared token are allowed.
+      // This is the openclaw-node-on-same-machine use-case: the node process
+      // connects directly to the gateway without going through nginx.
+      const res = await authorizeLocalDirect({ token: "secret", connectToken: "secret" });
+      expect(res.ok).toBe(true);
+      expect(res.method).toBe("token");
+    });
+
+    it("rejects local-direct request with a wrong token", async () => {
+      // A wrong token on a loopback connection is a credential failure, not a
+      // source-address policy failure - give the caller the precise reason.
+      const res = await authorizeLocalDirect({ token: "secret", connectToken: "wrong" });
+      expect(res.ok).toBe(false);
+      expect(res.reason).toBe("token_mismatch");
     });
 
     it("rejects trusted-proxy identity headers from loopback sources", async () => {
@@ -1046,24 +1200,29 @@ describe("trusted-proxy auth", () => {
       expect(res.reason).toBe("trusted_proxy_loopback_source");
     });
 
-    it("still fails closed when trusted-proxy config is missing", async () => {
+    it("allows token auth when trusted-proxy config is missing but token is valid", async () => {
+      // trustedProxy config controls the proxy-header auth path, not the token
+      // fallback path. A valid token is still sufficient for a loopback direct
+      // connection even when no trustedProxy block is configured.
       const res = await authorizeLocalDirect({
         token: "secret",
         connectToken: "secret",
         trustedProxy: undefined,
       });
-      expect(res.ok).toBe(false);
-      expect(res.reason).toBe("trusted_proxy_config_missing");
+      expect(res.ok).toBe(true);
+      expect(res.method).toBe("token");
     });
 
-    it("still fails closed when trusted proxies are not configured", async () => {
+    it("allows token auth when trusted proxies list is empty but token is valid", async () => {
+      // An empty trustedProxies list disables the proxy-header auth path, but
+      // the token fallback for direct loopback connections still applies.
       const res = await authorizeLocalDirect({
         token: "secret",
         connectToken: "secret",
         trustedProxies: [],
       });
-      expect(res.ok).toBe(false);
-      expect(res.reason).toBe("trusted_proxy_no_proxies_configured");
+      expect(res.ok).toBe(true);
+      expect(res.method).toBe("token");
     });
   });
 });
