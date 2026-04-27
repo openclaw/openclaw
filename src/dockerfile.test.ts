@@ -122,7 +122,7 @@ describe("Dockerfile", () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     const runtimeStageIndex = dockerfile.lastIndexOf("FROM base-runtime");
     const stateDirIndex = dockerfile.indexOf(
-      "RUN install -d -m 0700 -o node -g node /home/node/.openclaw",
+      "RUN install -d -m 0700 -o node -g node /home/node/.openclaw && \\",
       runtimeStageIndex,
     );
     const userIndex = dockerfile.indexOf("USER node", runtimeStageIndex);
@@ -132,5 +132,8 @@ describe("Dockerfile", () => {
     expect(userIndex).toBeGreaterThan(-1);
     expect(stateDirIndex).toBeGreaterThan(runtimeStageIndex);
     expect(stateDirIndex).toBeLessThan(userIndex);
+    expect(dockerfile).toContain(
+      "stat -c '%U:%G %a' /home/node/.openclaw | grep -qx 'node:node 700'",
+    );
   });
 });
