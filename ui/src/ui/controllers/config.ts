@@ -23,6 +23,7 @@ export type ConfigState = {
   configApplying: boolean;
   updateRunning: boolean;
   configSnapshot: ConfigSnapshot | null;
+  configDraftBaseHash?: string | null;
   configSchema: unknown;
   configSchemaVersion: string | null;
   configSchemaLoading: boolean;
@@ -88,8 +89,9 @@ export function applyConfigSnapshot(
   snapshot: ConfigSnapshot,
   options: LoadConfigOptions = {},
 ) {
-  state.configSnapshot = snapshot;
   const preservePendingChanges = state.configFormDirty && options.discardPendingChanges !== true;
+  const draftBaseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash ?? null;
+  state.configSnapshot = snapshot;
   const rawAvailable = typeof snapshot.raw === "string";
   if (!rawAvailable && state.configFormMode === "raw") {
     state.configFormMode = "form";
@@ -115,6 +117,9 @@ export function applyConfigSnapshot(
     state.configFormOriginal = cloneConfigObject(snapshot.config ?? {});
     state.configRawOriginal = rawFromSnapshot;
     state.configFormDirty = false;
+    state.configDraftBaseHash = snapshot.hash ?? null;
+  } else {
+    state.configDraftBaseHash = draftBaseHash;
   }
 }
 
@@ -197,13 +202,14 @@ async function submitConfigChange(
   state.lastError = null;
   try {
     const raw = serializeFormForSubmit(state);
-    const baseHash = state.configSnapshot?.hash;
+    const baseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash;
     if (!baseHash) {
       state.lastError = "Config hash missing; reload and retry.";
       return false;
     }
     await state.client.request(method, { raw, baseHash, ...extraParams });
     state.configFormDirty = false;
+    state.configDraftBaseHash = null;
     await loadConfig(state);
     return true;
   } catch (err) {
@@ -308,6 +314,7 @@ export function resetConfigPendingChanges(state: ConfigState) {
     state.configRawOriginal ??
     serializeConfigForm(state.configFormOriginal ?? state.configSnapshot?.config ?? {});
   state.configFormDirty = false;
+  state.configDraftBaseHash = state.configSnapshot?.hash ?? null;
 }
 
 export function removeConfigFormValue(state: ConfigState, path: Array<string | number>) {
