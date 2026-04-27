@@ -34,6 +34,7 @@ import { loadSessions, type SessionsState } from "./controllers/sessions.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import { normalizeBasePath } from "./navigation.ts";
 import { parseAgentSessionKey } from "./session-key.ts";
+import { loadLocalAssistantIdentity } from "./storage.ts";
 import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 import type { ChatModelOverride, ModelCatalogEntry } from "./types.ts";
 import type { SessionsListResult } from "./types.ts";
@@ -683,6 +684,10 @@ type SessionDefaultsSnapshot = {
 
 const chatAvatarObjectUrls = new WeakMap<object, string>();
 
+export type ChatAvatarUrlState = {
+  chatAvatarUrl?: string | null;
+};
+
 function beginChatAvatarRequest(host: ChatHost): number {
   const key = host as object;
   const nextVersion = (chatAvatarRequestVersions.get(key) ?? 0) + 1;
@@ -714,7 +719,7 @@ function buildAvatarMetaUrl(basePath: string, agentId: string): string {
   return base ? `${base}/avatar/${encoded}?meta=1` : `/avatar/${encoded}?meta=1`;
 }
 
-function clearChatAvatarUrl(host: ChatHost) {
+export function clearChatAvatarUrl(host: ChatAvatarUrlState) {
   const key = host as object;
   const previousBlobUrl = chatAvatarObjectUrls.get(key);
   if (previousBlobUrl) {
@@ -731,7 +736,7 @@ function clearChatAvatarState(host: ChatHost) {
   host.chatAvatarReason = null;
 }
 
-function setChatAvatarUrl(host: ChatHost, nextUrl: string | null) {
+export function setChatAvatarUrl(host: ChatAvatarUrlState, nextUrl: string | null) {
   const key = host as object;
   const previousBlobUrl = chatAvatarObjectUrls.get(key);
   if (previousBlobUrl && previousBlobUrl !== nextUrl) {
@@ -778,6 +783,18 @@ function isLocalControlUiAvatarUrl(avatarUrl: string): boolean {
   return avatarUrl.startsWith("/");
 }
 
+function applyLocalAssistantAvatarOverride(host: ChatHost): boolean {
+  const localAvatar = loadLocalAssistantIdentity().avatar;
+  if (!localAvatar) {
+    return false;
+  }
+  clearChatAvatarUrl(host);
+  host.chatAvatarSource = localAvatar;
+  host.chatAvatarStatus = "data";
+  host.chatAvatarReason = null;
+  return true;
+}
+
 export async function refreshChatAvatar(host: ChatHost) {
   if (!host.connected) {
     clearChatAvatarState(host);
@@ -785,6 +802,9 @@ export async function refreshChatAvatar(host: ChatHost) {
   }
   const sessionKey = host.sessionKey;
   const requestVersion = beginChatAvatarRequest(host);
+  if (applyLocalAssistantAvatarOverride(host)) {
+    return;
+  }
   const agentId = resolveAgentIdForSession(host);
   if (!agentId) {
     if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
@@ -814,6 +834,9 @@ export async function refreshChatAvatar(host: ChatHost) {
     if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
       return;
     }
+    if (applyLocalAssistantAvatarOverride(host)) {
+      return;
+    }
     setChatAvatarMeta(host, data);
     const avatarUrl = typeof data.avatarUrl === "string" ? data.avatarUrl.trim() : "";
     if (!avatarUrl || !isRenderableControlUiAvatarUrl(avatarUrl)) {
@@ -836,6 +859,10 @@ export async function refreshChatAvatar(host: ChatHost) {
     }
     const blobUrl = URL.createObjectURL(await avatarRes.blob());
     if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
+      URL.revokeObjectURL(blobUrl);
+      return;
+    }
+    if (applyLocalAssistantAvatarOverride(host)) {
       URL.revokeObjectURL(blobUrl);
       return;
     }

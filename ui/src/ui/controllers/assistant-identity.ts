@@ -1,3 +1,4 @@
+import { clearChatAvatarUrl, setChatAvatarUrl } from "../app-chat.ts";
 import { normalizeAssistantIdentity } from "../assistant-identity.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import { loadLocalAssistantIdentity, saveLocalAssistantIdentity } from "../storage.ts";
@@ -19,6 +20,10 @@ export type AssistantAvatarOverrideState = {
   assistantAvatarSource?: string | null;
   assistantAvatarStatus?: "none" | "local" | "remote" | "data" | null;
   assistantAvatarReason?: string | null;
+  chatAvatarUrl?: string | null;
+  chatAvatarSource?: string | null;
+  chatAvatarStatus?: "none" | "local" | "remote" | "data" | null;
+  chatAvatarReason?: string | null;
 };
 
 const assistantIdentityRequestVersions = new WeakMap<object, number>();
@@ -89,9 +94,18 @@ export function setAssistantAvatarOverride(
     state.assistantAvatarSource = avatar;
     state.assistantAvatarStatus = "data";
     state.assistantAvatarReason = null;
+    setChatAvatarUrl(state, avatar);
+    state.chatAvatarSource = avatar;
+    state.chatAvatarStatus = "data";
+    state.chatAvatarReason = null;
   } else {
+    state.assistantAvatar = null;
     state.assistantAvatarSource = null;
     state.assistantAvatarStatus = null;
     state.assistantAvatarReason = null;
+    clearChatAvatarUrl(state);
+    state.chatAvatarSource = null;
+    state.chatAvatarStatus = null;
+    state.chatAvatarReason = null;
   }
 }

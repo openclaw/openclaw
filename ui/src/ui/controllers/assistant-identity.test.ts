@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { setChatAvatarUrl } from "../app-chat.ts";
 import { loadLocalAssistantIdentity } from "../storage.ts";
 import { loadAssistantIdentity, setAssistantAvatarOverride } from "./assistant-identity.ts";
 
@@ -74,6 +75,10 @@ describe("setAssistantAvatarOverride", () => {
     expect(state.assistantAvatarSource).toBe("data:image/png;base64,YXZhdGFy");
     expect(state.assistantAvatarStatus).toBe("data");
     expect(state.assistantAvatarReason).toBeNull();
+    expect(state.chatAvatarUrl).toBe("data:image/png;base64,YXZhdGFy");
+    expect(state.chatAvatarSource).toBe("data:image/png;base64,YXZhdGFy");
+    expect(state.chatAvatarStatus).toBe("data");
+    expect(state.chatAvatarReason).toBeNull();
     expect(loadLocalAssistantIdentity().avatar).toBe("data:image/png;base64,YXZhdGFy");
   });
 
@@ -82,14 +87,43 @@ describe("setAssistantAvatarOverride", () => {
       assistantAvatar: "data:image/png;base64,YXZhdGFy",
       assistantAvatarSource: "data:image/png;base64,YXZhdGFy",
       assistantAvatarStatus: "data",
+      chatAvatarUrl: "blob:server-avatar",
+      chatAvatarSource: "server-avatar.png",
+      chatAvatarStatus: "local",
     };
     setAssistantAvatarOverride(state, "data:image/png;base64,YXZhdGFy");
 
     setAssistantAvatarOverride(state, null);
 
+    expect(state.assistantAvatar).toBeNull();
     expect(state.assistantAvatarSource).toBeNull();
     expect(state.assistantAvatarStatus).toBeNull();
     expect(state.assistantAvatarReason).toBeNull();
+    expect(state.chatAvatarUrl).toBeNull();
+    expect(state.chatAvatarSource).toBeNull();
+    expect(state.chatAvatarStatus).toBeNull();
+    expect(state.chatAvatarReason).toBeNull();
     expect(loadLocalAssistantIdentity().avatar).toBeNull();
+  });
+
+  it("revokes managed blob URLs when changing or clearing the override", () => {
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static revokeObjectURL = revokeObjectURL;
+      },
+    );
+    const state: Parameters<typeof setAssistantAvatarOverride>[0] = {};
+
+    setChatAvatarUrl(state, "blob:server-avatar");
+    setAssistantAvatarOverride(state, "data:image/png;base64,YXZhdGFy");
+
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:server-avatar");
+
+    setChatAvatarUrl(state, "blob:next-server-avatar");
+    setAssistantAvatarOverride(state, null);
+
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:next-server-avatar");
   });
 });

@@ -200,9 +200,14 @@ export function normalizeAgentLabel(agent: {
 }
 
 const CONTROL_UI_AVATAR_URL_RE = /^(data:image\/|\/(?!\/))/i;
+const LOCAL_ASSISTANT_IMAGE_AVATAR_RE = /^(?:data:image\/|blob:)/i;
 
 export function isRenderableControlUiAvatarUrl(value: string): boolean {
   return CONTROL_UI_AVATAR_URL_RE.test(value);
+}
+
+function isLocalAssistantImageAvatar(value: string): boolean {
+  return LOCAL_ASSISTANT_IMAGE_AVATAR_RE.test(value.trim());
 }
 
 export function resolveAgentAvatarUrl(
@@ -234,6 +239,10 @@ export function resolveChatAvatarRenderUrl(
   agent: { identity?: { avatar?: string; avatarUrl?: string } },
   agentIdentity?: AgentIdentityResult | null,
 ): string | null {
+  const identityAvatar = normalizeOptionalString(agent.identity?.avatar);
+  if (identityAvatar && isLocalAssistantImageAvatar(identityAvatar)) {
+    return identityAvatar;
+  }
   const trimmed = normalizeOptionalString(candidate);
   if (trimmed?.startsWith("blob:")) {
     return trimmed;
