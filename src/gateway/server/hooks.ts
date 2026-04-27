@@ -1,26 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { sanitizeInboundSystemTags } from "../../auto-reply/reply/inbound-text.js";
 import type { CliDeps } from "../../cli/deps.types.js";
-import { loadConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { runCronIsolatedAgentTurn } from "../../cron/isolated-agent.js";
 import type { CronJob } from "../../cron/types.js";
 import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { type HookAgentDispatchPayload, type HooksConfigResolved } from "../hooks.js";
-import { createHooksRequestHandler, type HookClientIpConfig } from "../server-http.js";
+import { createHooksRequestHandler, type HookClientIpConfig } from "./hooks-request-handler.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
-
-export function resolveHookClientIpConfig(cfg: OpenClawConfig): HookClientIpConfig {
-  return {
-    trustedProxies: cfg.gateway?.trustedProxies,
-    allowRealIpFallback: cfg.gateway?.allowRealIpFallback === true,
-  };
-}
 
 export function createGatewayHooksRequestHandler(params: {
   deps: CliDeps;
@@ -79,7 +70,8 @@ export function createGatewayHooksRequestHandler(params: {
     const runId = randomUUID();
     void (async () => {
       try {
-        const cfg = loadConfig();
+        const cfg = getRuntimeConfig();
+        const { runCronIsolatedAgentTurn } = await import("../../cron/isolated-agent.js");
         const result = await runCronIsolatedAgentTurn({
           cfg,
           deps,

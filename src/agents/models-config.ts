@@ -2,10 +2,10 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  getRuntimeConfig,
   getRuntimeConfigSourceSnapshot,
   projectConfigOntoRuntimeSourceSnapshot,
   type OpenClawConfig,
-  loadConfig,
 } from "../config/config.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
 import { isRecord } from "../utils.js";
@@ -161,7 +161,7 @@ function resolveModelsConfigInput(config?: OpenClawConfig): {
 } {
   const runtimeSource = getRuntimeConfigSourceSnapshot();
   if (!config) {
-    const loaded = loadConfig();
+    const loaded = getRuntimeConfig();
     return {
       config: runtimeSource ?? loaded,
       sourceConfigForSecrets: runtimeSource ?? loaded,

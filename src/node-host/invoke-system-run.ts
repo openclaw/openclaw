@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayClient } from "../gateway/client.js";
 import {
@@ -189,15 +190,14 @@ export type HandleSystemRunInvokeOptions = {
   sendInvokeResult: (result: SystemRunInvokeResult) => Promise<void>;
   sendExecFinishedEvent: (params: ExecFinishedEventParams) => Promise<void>;
   preferMacAppExecHost: boolean;
-  loadConfig?: () => OpenClawConfig;
+  getRuntimeConfig?: () => OpenClawConfig;
 };
 
 async function loadSystemRunConfig(opts: HandleSystemRunInvokeOptions): Promise<OpenClawConfig> {
-  if (opts.loadConfig) {
-    return opts.loadConfig();
+  if (opts.getRuntimeConfig) {
+    return opts.getRuntimeConfig();
   }
-  const { loadConfig } = await import("../config/config.js");
-  return loadConfig();
+  return getRuntimeConfig();
 }
 
 async function sendSystemRunDenied(

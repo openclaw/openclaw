@@ -221,10 +221,90 @@ trap 'status=$?; dump_hotpath_logs "$status"; exit "$status"' ERR
 
 command -v openclaw
 openclaw --version
-# The mounted QA harness imports openclaw/plugin-sdk; point that package import
-# at the installed package without copying source into the test image.
 mkdir -p /app/node_modules
-ln -sfn /npm-global/lib/node_modules/openclaw /app/node_modules/openclaw
+openclaw_package_dir="/npm-global/lib/node_modules/openclaw"
+# The mounted QA harness imports openclaw/plugin-sdk and package dependencies;
+# point those imports at the installed package without copying source into the test image.
+rm -rf /app/node_modules/openclaw
+ln -sfnT "$openclaw_package_dir" /app/node_modules/openclaw
+rm -rf /app/dist
+ln -sfnT "$openclaw_package_dir/dist" /app/dist
+cp "$openclaw_package_dir/package.json" /app/package.json
+rm -rf "$openclaw_package_dir/extensions"
+ln -sfnT /app/extensions "$openclaw_package_dir/extensions"
+node --input-type=module <<'NODE'
+import fs from "node:fs";
+
+for (const packageJsonPath of [
+  "/app/package.json",
+  "/app/node_modules/openclaw/package.json",
+]) {
+  const pkg = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+  pkg.exports = pkg.exports && typeof pkg.exports === "object" ? pkg.exports : {};
+  pkg.exports["./plugin-sdk/qa-channel"] = {
+    types: "./extensions/qa-channel/api.ts",
+    default: "./extensions/qa-channel/api.ts",
+  };
+  pkg.exports["./plugin-sdk/qa-channel-protocol"] = {
+    types: "./extensions/qa-channel/src/protocol.ts",
+    default: "./extensions/qa-channel/src/protocol.ts",
+  };
+  if (!pkg.exports["./plugin-sdk/gateway-runtime"]) {
+    pkg.exports["./plugin-sdk/gateway-runtime"] = {
+      types: "./dist/plugin-sdk/browser-node-runtime.d.ts",
+      default: "./dist/plugin-sdk/browser-node-runtime.js",
+    };
+  }
+  fs.writeFileSync(packageJsonPath, `${JSON.stringify(pkg, null, 2)}\n`);
+}
+NODE
+for deps_dir in "$openclaw_package_dir/node_modules" /npm-global/lib/node_modules; do
+  [ -d "$deps_dir" ] || continue
+  for dependency_dir in "$deps_dir"/*; do
+    [ -e "$dependency_dir" ] || continue
+    dependency_name="$(basename "$dependency_dir")"
+    case "$dependency_name" in
+      .bin | openclaw)
+        continue
+        ;;
+      @*)
+        [ -d "$dependency_dir" ] || continue
+        mkdir -p "/app/node_modules/$dependency_name"
+        for scoped_dependency_dir in "$dependency_dir"/*; do
+          [ -e "$scoped_dependency_dir" ] || continue
+          scoped_dependency_name="$(basename "$scoped_dependency_dir")"
+          rm -rf "/app/node_modules/$dependency_name/$scoped_dependency_name"
+          ln -sfnT "$scoped_dependency_dir" "/app/node_modules/$dependency_name/$scoped_dependency_name"
+        done
+        ;;
+      *)
+        rm -rf "/app/node_modules/$dependency_name"
+        ln -sfnT "$dependency_dir" "/app/node_modules/$dependency_name"
+        ;;
+    esac
+  done
+done
+
+link_installed_package_dependency() {
+  local name="$1"
+  local source="/npm-global/lib/node_modules/openclaw/node_modules/$name"
+  local target="/app/node_modules/$name"
+  if [ ! -e "$source" ]; then
+    echo "Installed package dependency is missing: $name" >&2
+    return 1
+  fi
+  mkdir -p "$(dirname "$target")"
+  ln -sfn "$source" "$target"
+}
+
+# QA Lab is intentionally mounted as harness source, so its package-local
+# runtime imports must resolve from the installed package dependency tree.
+for dependency in \
+  @modelcontextprotocol/sdk \
+  yaml \
+  zod; do
+  link_installed_package_dependency "$dependency"
+done
 
 echo "Running installed-package onboarding recovery hot path..."
 OPENAI_API_KEY="${OPENAI_API_KEY:-sk-openclaw-npm-telegram-hotpath}" openclaw onboard --non-interactive --accept-risk \

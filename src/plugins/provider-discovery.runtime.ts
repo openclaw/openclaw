@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
+import { loadPluginRegistrySnapshot } from "./plugin-registry.js";
 import { resolveDiscoveredProviderPluginIds } from "./providers.js";
 import { resolvePluginProviders } from "./providers.runtime.js";
 import { createPluginSourceLoader } from "./source-loader.js";
@@ -76,13 +77,21 @@ function resolveProviderDiscoveryEntryPlugins(params: {
   requireCompleteDiscoveryEntryCoverage?: boolean;
   discoveryEntriesOnly?: boolean;
 }): ProviderDiscoveryEntryResult {
-  const pluginIds = resolveDiscoveredProviderPluginIds(params);
-  const pluginIdSet = new Set(pluginIds);
-  const pluginRecords = loadPluginManifestRegistryForPluginRegistry({
-    ...params,
-    pluginIds,
+  const registry = loadPluginRegistrySnapshot(params);
+  const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
+    index: registry,
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
     includeDisabled: true,
-  }).plugins.filter((plugin) => pluginIdSet.has(plugin.id));
+  });
+  const pluginIds = resolveDiscoveredProviderPluginIds({
+    ...params,
+    registry,
+    manifestRegistry,
+  });
+  const pluginIdSet = new Set(pluginIds);
+  const pluginRecords = manifestRegistry.plugins.filter((plugin) => pluginIdSet.has(plugin.id));
   const entryRecords = pluginRecords.filter((plugin) => plugin.providerDiscoverySource);
   const entryPluginIds = new Set(entryRecords.map((plugin) => plugin.id));
   if (entryRecords.length === 0) {

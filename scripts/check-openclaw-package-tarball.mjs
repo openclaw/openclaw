@@ -38,6 +38,7 @@ const normalized = entries.map((entry) => entry.replace(/^package\//u, ""));
 const entrySet = new Set(normalized);
 const errors = [];
 const warnings = [];
+const LEGACY_PACKAGE_ACCEPTANCE_COMPAT_MAX = { year: 2026, month: 4, day: 25 };
 
 const LEGACY_OMITTED_PRIVATE_QA_INVENTORY_PREFIXES = [
   "dist/extensions/qa-channel/",
@@ -66,6 +67,32 @@ function isLegacyOmittedPrivateQaInventoryEntry(relativePath) {
     LEGACY_OMITTED_PRIVATE_QA_INVENTORY_FILES.has(relativePath) ||
     LEGACY_OMITTED_PRIVATE_QA_INVENTORY_PREFIXES.some((prefix) => relativePath.startsWith(prefix))
   );
+}
+
+function parseCalver(version) {
+  const match = /^(\d{4})\.(\d{1,2})\.(\d{1,2})(?:[-+].*)?$/u.exec(version);
+  if (!match) {
+    return null;
+  }
+  return {
+    year: Number(match[1]),
+    month: Number(match[2]),
+    day: Number(match[3]),
+  };
+}
+
+function compareCalver(left, right) {
+  for (const key of ["year", "month", "day"]) {
+    if (left[key] !== right[key]) {
+      return left[key] - right[key];
+    }
+  }
+  return 0;
+}
+
+function isLegacyPackageAcceptanceCompatVersion(version) {
+  const parsed = parseCalver(version);
+  return parsed ? compareCalver(parsed, LEGACY_PACKAGE_ACCEPTANCE_COMPAT_MAX) <= 0 : false;
 }
 
 function readTarEntry(entryPath) {
@@ -99,6 +126,10 @@ if (!entrySet.has("dist/postinstall-inventory.json")) {
 }
 if (entrySet.has("dist/postinstall-inventory.json")) {
   try {
+    const packageJson = JSON.parse(readTarEntry("package.json"));
+    const packageVersion = typeof packageJson.version === "string" ? packageJson.version : "";
+    const allowLegacyPrivateQaInventoryOmissions =
+      isLegacyPackageAcceptanceCompatVersion(packageVersion);
     const inventory = JSON.parse(readTarEntry("dist/postinstall-inventory.json"));
     if (!Array.isArray(inventory) || inventory.some((entry) => typeof entry !== "string")) {
       errors.push("invalid dist/postinstall-inventory.json");
@@ -106,7 +137,10 @@ if (entrySet.has("dist/postinstall-inventory.json")) {
       for (const inventoryEntry of inventory) {
         const normalizedEntry = inventoryEntry.replace(/\\/gu, "/");
         if (!entrySet.has(normalizedEntry)) {
-          if (isLegacyOmittedPrivateQaInventoryEntry(normalizedEntry)) {
+          if (
+            allowLegacyPrivateQaInventoryOmissions &&
+            isLegacyOmittedPrivateQaInventoryEntry(normalizedEntry)
+          ) {
             warnings.push(
               `legacy inventory references omitted private QA tar entry ${normalizedEntry}`,
             );

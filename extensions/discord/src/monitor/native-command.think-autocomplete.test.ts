@@ -2,8 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ChannelType, type AutocompleteInteraction } from "@buape/carbon";
-import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import { clearSessionStoreCacheForTest } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { clearSessionStoreCacheForTest } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
@@ -92,7 +92,7 @@ vi.mock("openclaw/plugin-sdk/conversation-binding-runtime", async () => {
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
   normalizeProviderId: (value: string) => value.trim().toLowerCase(),
-  resolveDefaultModelForAgent: (params: { cfg: ReturnType<typeof loadConfig> }) => {
+  resolveDefaultModelForAgent: (params: { cfg: OpenClawConfig }) => {
     const configuredModel = params.cfg.agents?.defaults?.model;
     const primary =
       typeof configuredModel === "string"
@@ -216,7 +216,7 @@ describe("discord native /think autocomplete", () => {
       session: {
         store: STORE_PATH,
       },
-    } as ReturnType<typeof loadConfig>;
+    } as OpenClawConfig;
   }
 
   it("uses the session override context for /think choices", async () => {

@@ -83,6 +83,9 @@ function createManifestRegistryFixture() {
       {
         id: "browser",
         channels: [],
+        activation: {
+          onConfigPaths: ["browser"],
+        },
         origin: "bundled",
         enabledByDefault: true,
         providers: [],
@@ -482,6 +485,98 @@ describe("resolveGatewayStartupPluginIds", () => {
       config: effectiveConfig,
       activationSourceConfig: rawConfig,
       expected: ["browser"],
+    });
+  });
+
+  it("does not let runtime-default plugin entries bypass the authored startup allowlist", () => {
+    const activationSourceConfig = {
+      channels: {},
+      plugins: {
+        allow: ["bench-plugin"],
+        entries: {
+          browser: {
+            enabled: false,
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const runtimeConfig = {
+      ...activationSourceConfig,
+      plugins: {
+        ...activationSourceConfig.plugins,
+        entries: {
+          ...activationSourceConfig.plugins?.entries,
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: false,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expectStartupPluginIdsCase({
+      config: runtimeConfig,
+      activationSourceConfig,
+      expected: [],
+    });
+  });
+
+  it("starts bundled sidecars selected by root config activation paths", () => {
+    const rawConfig = {
+      browser: {
+        enabled: true,
+        defaultProfile: "docker-cdp",
+      },
+      channels: {},
+    } satisfies OpenClawConfig;
+    const effectiveConfig = {
+      ...rawConfig,
+      plugins: {
+        entries: {
+          browser: {
+            enabled: true,
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expectStartupPluginIdsCase({
+      config: effectiveConfig,
+      activationSourceConfig: rawConfig,
+      expected: ["browser", "memory-core"],
+    });
+  });
+
+  it("lets bundled root config activation paths bypass restrictive allowlists", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        browser: {
+          enabled: true,
+        },
+        channels: {},
+        plugins: {
+          allow: ["telegram"],
+        },
+      },
+      expected: ["browser"],
+    });
+  });
+
+  it("does not bypass restrictive allowlists for disabled root config activation paths", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        browser: {
+          enabled: false,
+        },
+        channels: {},
+        plugins: {
+          allow: ["telegram"],
+        },
+      },
+      expected: [],
     });
   });
 

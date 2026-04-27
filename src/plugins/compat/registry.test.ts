@@ -46,6 +46,11 @@ const knownDeprecatedSurfaceMarkers = [
     marker: "AgentToolResultMiddlewareHarness",
   },
   {
+    code: "runtime-config-load-write",
+    file: "src/plugins/runtime/runtime-config.ts",
+    marker: "RUNTIME_CONFIG_LOAD_WRITE_COMPAT_CODE",
+  },
+  {
     code: "runtime-taskflow-legacy-alias",
     file: "src/plugins/runtime/types-core.ts",
     marker: "taskFlow",

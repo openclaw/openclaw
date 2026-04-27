@@ -2,11 +2,13 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { fireAndForgetBoundedHook } from "../../../hooks/fire-and-forget.js";
 import {
   diagnosticErrorCategory,
+  diagnosticErrorFailureKind,
   diagnosticProviderRequestIdHash,
 } from "../../../infra/diagnostic-error-metadata.js";
 import {
   emitTrustedDiagnosticEvent,
   type DiagnosticEventInput,
+  type DiagnosticMemoryUsage,
 } from "../../../infra/diagnostic-events.js";
 import {
   createChildDiagnosticTraceContext,
@@ -41,7 +43,7 @@ type ModelCallEventBase = Omit<
 >;
 type ModelCallErrorFields = Pick<
   Extract<DiagnosticEventInput, { type: "model.call.error" }>,
-  "errorCategory" | "upstreamRequestIdHash"
+  "errorCategory" | "failureKind" | "memory" | "upstreamRequestIdHash"
 >;
 type ModelCallEndedHookFields = Pick<
   PluginHookModelCallEndedEvent,
@@ -51,6 +53,7 @@ type ModelCallEndedHookFields = Pick<
   | "requestPayloadBytes"
   | "responseStreamBytes"
   | "timeToFirstByteMs"
+  | "failureKind"
   | "upstreamRequestIdHash"
 >;
 type ModelCallSizeTimingFields = Pick<
@@ -152,10 +155,27 @@ function baseModelCallEvent(
 
 function modelCallErrorFields(err: unknown): ModelCallErrorFields {
   const upstreamRequestIdHash = diagnosticProviderRequestIdHash(err);
+  const failureKind = diagnosticErrorFailureKind(err);
   return {
     errorCategory: diagnosticErrorCategory(err),
+    ...(failureKind ? { failureKind, memory: processMemoryUsageSnapshot() } : {}),
     ...(upstreamRequestIdHash ? { upstreamRequestIdHash } : {}),
   };
+}
+
+function processMemoryUsageSnapshot(): DiagnosticMemoryUsage | undefined {
+  try {
+    const memory = process.memoryUsage();
+    return {
+      rssBytes: memory.rss,
+      heapTotalBytes: memory.heapTotal,
+      heapUsedBytes: memory.heapUsed,
+      externalBytes: memory.external,
+      arrayBuffersBytes: memory.arrayBuffers,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function modelCallHookEventBase(eventBase: ModelCallEventBase): PluginHookModelCallStartedEvent {

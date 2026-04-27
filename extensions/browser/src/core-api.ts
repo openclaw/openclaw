@@ -85,7 +85,7 @@ export {
   theme,
 } from "openclaw/plugin-sdk/browser-setup-tools";
 export {
-  loadConfig,
+  getRuntimeConfig,
   normalizePluginsConfig,
   parseBooleanValue,
   resolveEffectiveEnableState,

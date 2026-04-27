@@ -94,8 +94,8 @@ import {
   buildMatrixReplyArtifact,
   buildMatrixReplyDetails,
   buildMentionPrompt,
-  NO_REPLY_WINDOW_MS,
   readMatrixQaSyncCursor,
+  resolveMatrixQaNoReplyWindowMs,
   runNoReplyExpectedScenario,
   runTopologyScopedTopLevelScenario,
   writeMatrixQaSyncCursor,
@@ -167,7 +167,7 @@ async function runMultiActorOrderingScenario(context: MatrixQaScenarioContext) {
     body: buildMentionPrompt(context.sutUserId, blockedToken),
     mentionUserIds: [context.sutUserId],
     context,
-    timeoutMs: Math.min(NO_REPLY_WINDOW_MS, context.timeoutMs),
+    timeoutMs: resolveMatrixQaNoReplyWindowMs(context.timeoutMs),
     token: blockedToken,
   });
   const accepted = await runDriverTopologyScopedScenario({

@@ -327,8 +327,8 @@ describe("scoped vitest configs", () => {
     }
 
     expect(defaultUiConfig.test?.pool).toBe("threads");
-    expect(defaultUiConfig.test?.isolate).toBe(true);
-    expect(defaultUiConfig.test?.runner).toBeUndefined();
+    expect(defaultUiConfig.test?.isolate).toBe(false);
+    expect(normalizeConfigPath(defaultUiConfig.test?.runner)).toBe("test/non-isolated-runner.ts");
   });
 
   it("keeps the process lane off the openclaw runtime setup", () => {
