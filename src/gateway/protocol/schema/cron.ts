@@ -187,13 +187,13 @@ const CronDeliverySharedProperties = {
   bestEffort: Type.Optional(Type.Boolean()),
   failureDestination: Type.Optional(CronFailureDestinationSchema),
   threadId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
-  to: Type.Optional(Type.String()),
 };
 
 const CronDeliveryNoopSchema = Type.Object(
   {
     mode: Type.Literal("none"),
     ...CronDeliverySharedProperties,
+    to: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );
@@ -202,6 +202,7 @@ const CronDeliveryAnnounceSchema = Type.Object(
   {
     mode: Type.Literal("announce"),
     ...CronDeliverySharedProperties,
+    to: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );
@@ -227,6 +228,7 @@ export const CronDeliveryPatchSchema = Type.Object(
       Type.Union([Type.Literal("none"), Type.Literal("announce"), Type.Literal("webhook")]),
     ),
     ...CronDeliverySharedProperties,
+    to: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );
@@ -380,6 +382,4 @@ export const CronRunLogEntrySchema = Type.Object(
   },
   { additionalProperties: false },
 );
-
-
 
