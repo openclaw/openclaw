@@ -52,7 +52,6 @@ export {
   getRuntimeConfigSnapshot,
   loadConfig,
   readConfigFileSnapshotForWrite,
-  selectApplicableRuntimeConfig,
   setRuntimeConfigSnapshot,
   writeConfigFile,
 } from "../config/io.js";
