@@ -92,12 +92,7 @@ function isDefaultMemoryPath(relPath: string): boolean {
   if (!normalized) {
     return false;
   }
-  if (
-    normalized === "MEMORY.md" ||
-    normalized === "memory.md" ||
-    normalized === "DREAMS.md" ||
-    normalized === "dreams.md"
-  ) {
+  if (normalized === "MEMORY.md" || normalized === "DREAMS.md" || normalized === "dreams.md") {
     return true;
   }
   return normalized.startsWith("memory/");
@@ -338,7 +333,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private attemptedNullByteCollectionRepair = false;
   private attemptedDuplicateDocumentRepair = false;
   private readonly sessionWarm = new Set<string>();
-  private collectionPatternFlag: QmdCollectionPatternFlag | null = "--glob";
+  private collectionPatternFlag: QmdCollectionPatternFlag | null = "--mask";
 
   private constructor(params: {
     agentId: string;
@@ -514,12 +509,22 @@ export class QmdMemoryManager implements MemorySearchManager {
       } catch (err) {
         const message = formatErrorMessage(err);
         if (this.isCollectionAlreadyExistsError(message)) {
-          const rebound = await this.tryRebindConflictingCollection({
-            collection,
-            existing,
-            addErrorMessage: message,
-          });
-          if (!rebound) {
+          const rebound =
+            (await this.tryRebindSameNameCollection({
+              collection,
+              addErrorMessage: message,
+            })) ||
+            (await this.tryRebindConflictingCollection({
+              collection,
+              existing,
+              addErrorMessage: message,
+            }));
+          if (rebound) {
+            existing.set(collection.name, {
+              path: collection.path,
+              pattern: collection.pattern,
+            });
+          } else {
             log.warn(`qmd collection add skipped for ${collection.name}: ${message}`);
           }
           continue;
@@ -527,6 +532,49 @@ export class QmdMemoryManager implements MemorySearchManager {
         log.warn(`qmd collection add failed for ${collection.name}: ${message}`);
       }
     }
+  }
+
+  private async tryRebindSameNameCollection(params: {
+    collection: ManagedCollection;
+    addErrorMessage: string;
+  }): Promise<boolean> {
+    const { collection, addErrorMessage } = params;
+    if (!this.isSameNameCollectionAlreadyExistsError(collection.name, addErrorMessage)) {
+      return false;
+    }
+    log.warn(
+      `qmd collection add conflict for ${collection.name}: collection name already exists; recreating managed collection`,
+    );
+    try {
+      await this.removeCollection(collection.name);
+    } catch (removeErr) {
+      const removeMessage = formatErrorMessage(removeErr);
+      if (!this.isCollectionMissingError(removeMessage)) {
+        log.warn(`qmd collection remove failed for ${collection.name}: ${removeMessage}`);
+        return false;
+      }
+    }
+
+    try {
+      await this.ensureCollectionPath(collection);
+      await this.addCollection(collection.path, collection.name, collection.pattern);
+      return true;
+    } catch (retryErr) {
+      const retryMessage = formatErrorMessage(retryErr);
+      log.warn(
+        `qmd collection add failed for ${collection.name} after recreating same-name collection: ${retryMessage} (initial: ${addErrorMessage})`,
+      );
+      return false;
+    }
+  }
+
+  private isSameNameCollectionAlreadyExistsError(name: string, message: string): boolean {
+    const lowerName = normalizeLowercaseStringOrEmpty(name);
+    const lowerMessage = normalizeLowercaseStringOrEmpty(message);
+    return (
+      lowerMessage.includes(`collection '${lowerName}' already exists`) ||
+      lowerMessage.includes(`collection "${lowerName}" already exists`)
+    );
   }
 
   private async listCollectionsBestEffort(): Promise<Map<string, ListedCollection>> {
@@ -894,29 +942,22 @@ export class QmdMemoryManager implements MemorySearchManager {
       return false;
     }
     try {
-      let sawCanonical = false;
-      let sawLegacyFallback = false;
       for (const entry of fsSync.readdirSync(collectionPath, { withFileTypes: true })) {
         if (entry.isSymbolicLink() || !entry.isFile()) {
           continue;
         }
         if (entry.name === "MEMORY.md") {
-          sawCanonical = true;
-        } else if (entry.name === "memory.md") {
-          sawLegacyFallback = true;
+          return true;
         }
       }
-      if (sawCanonical && sawLegacyFallback) {
-        return false;
-      }
-      return sawCanonical || sawLegacyFallback;
+      return false;
     } catch {
       return false;
     }
   }
 
   private isDefaultMemoryRootPattern(pattern: string): boolean {
-    return pattern === "MEMORY.md" || pattern === "memory.md";
+    return pattern === "MEMORY.md";
   }
 
   private pathsMatch(left: string, right: string): boolean {
@@ -1017,6 +1058,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       sessionKey?: string;
       qmdSearchModeOverride?: "query" | "search" | "vsearch";
       onDebug?: (debug: MemorySearchRuntimeDebug) => void;
+      sources?: MemorySource[];
     },
   ): Promise<MemorySearchResult[]> {
     if (!this.isScopeAllowed(opts?.sessionKey)) {
@@ -1030,11 +1072,13 @@ export class QmdMemoryManager implements MemorySearchManager {
     await this.maybeWarmSession(opts?.sessionKey);
     await this.maybeSyncDirtySearchState();
     await this.waitForPendingUpdateBeforeSearch();
-    const limit = Math.min(
+    const resultLimit = Math.min(
       this.qmd.limits.maxResults,
       opts?.maxResults ?? this.qmd.limits.maxResults,
     );
-    const collectionNames = this.listManagedCollectionNames();
+    const requestedSources = opts?.sources?.length ? [...new Set(opts.sources)] : undefined;
+    const collectionNames = this.listManagedCollectionNames(requestedSources);
+    const limit = resultLimit;
     if (collectionNames.length === 0) {
       log.warn("qmd query skipped: no managed collections configured");
       return [];
@@ -1108,8 +1152,6 @@ export class QmdMemoryManager implements MemorySearchManager {
         }
         const args = this.buildSearchArgs(qmdSearchCommand, trimmed, limit);
         args.push(...this.buildCollectionFilterArgs(collectionNames));
-        // Always scope to managed collections (default + custom). Even for `search`/`vsearch`,
-        // pass collection filters; if a given QMD build rejects these flags, we fall back to `query`.
         const result = await this.runQmd(args, { timeoutMs: this.qmd.limits.timeoutMs });
         return parseQmdQueryJson(result.stdout, result.stderr);
       } catch (err) {
@@ -1188,7 +1230,12 @@ export class QmdMemoryManager implements MemorySearchManager {
       effectiveMode: effectiveSearchMode,
       fallback: searchFallbackReason,
     });
-    return this.clampResultsByInjectedChars(this.diversifyResultsBySource(results, limit));
+    let ranked = results;
+    if (opts?.sources?.length) {
+      const allow = new Set(opts.sources);
+      ranked = results.filter((r) => allow.has(r.source));
+    }
+    return this.clampResultsByInjectedChars(this.diversifyResultsBySource(ranked, resultLimit));
   }
 
   async sync(params?: {
@@ -2933,8 +2980,15 @@ export class QmdMemoryManager implements MemorySearchManager {
     return [...bestByDocId.values()].toSorted((a, b) => (b.score ?? 0) - (a.score ?? 0));
   }
 
-  private listManagedCollectionNames(): string[] {
-    return this.managedCollectionNames;
+  private listManagedCollectionNames(sources?: MemorySource[]): string[] {
+    if (!sources?.length) {
+      return this.managedCollectionNames;
+    }
+    const allowed = new Set(sources);
+    return this.managedCollectionNames.filter((name) => {
+      const source = this.collectionRoots.get(name)?.kind;
+      return source ? allowed.has(source) : false;
+    });
   }
 
   private computeManagedCollectionNames(): string[] {

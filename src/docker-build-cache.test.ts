@@ -28,7 +28,6 @@ describe("docker build cache layout", () => {
   it("uses pnpm cache mounts in Dockerfiles that install repo dependencies", async () => {
     for (const path of [
       "Dockerfile",
-      "scripts/e2e/Dockerfile",
       "scripts/e2e/Dockerfile.qr-import",
       "scripts/docker/cleanup-smoke/Dockerfile",
     ]) {
@@ -89,37 +88,17 @@ describe("docker build cache layout", () => {
     }
   });
 
-  it("copies only install inputs before pnpm install in the e2e image", async () => {
+  it("keeps the shared e2e image on the packaged tarball install path", async () => {
     const dockerfile = await readRepoFile("scripts/e2e/Dockerfile");
-    const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
-    const expectPatternBeforeInstall = (pattern: RegExp) => {
-      const index = indexOfPattern(dockerfile, pattern);
-      expect(index).toBeGreaterThan(-1);
-      expect(index).toBeLessThan(installIndex);
-    };
-    const expectPatternAfterInstall = (pattern: RegExp) => {
-      const index = indexOfPattern(dockerfile, pattern);
-      expect(index).toBeGreaterThan(installIndex);
-    };
 
-    expectPatternBeforeInstall(
-      /^COPY(?:\s+--chown=\S+)?\s+package\.json pnpm-lock\.yaml pnpm-workspace\.yaml \.npmrc \.\/$/m,
+    expect(dockerfile).not.toContain("pnpm install --frozen-lockfile");
+    expect(dockerfile).not.toContain("COPY . .");
+    expect(dockerfile).toMatch(
+      /^COPY --from=openclaw_package --chown=appuser:appuser openclaw-current\.tgz \/tmp\/openclaw-current\.tgz$/m,
     );
-    expectPatternBeforeInstall(
-      /^COPY(?:\s+--chown=\S+)?\s+ui\/package\.json \.\/ui\/package\.json$/m,
+    expect(dockerfile).toContain(
+      "npm install -g --prefix /tmp/openclaw-prefix /tmp/openclaw-current.tgz --no-fund --no-audit",
     );
-    expectPatternBeforeInstall(/^COPY(?:\s+--chown=\S+)?\s+extensions \.\/extensions$/m);
-    expectPatternBeforeInstall(/^COPY(?:\s+--chown=\S+)?\s+patches \.\/patches$/m);
-    expectPatternBeforeInstall(
-      /^COPY(?:\s+--chown=\S+)?\s+scripts\/postinstall-bundled-plugins\.mjs scripts\/preinstall-package-manager-warning\.mjs scripts\/npm-runner\.mjs scripts\/windows-cmd-helpers\.mjs \.\/scripts\/$/m,
-    );
-    expectPatternAfterInstall(
-      /^COPY(?:\s+--chown=\S+)?\s+tsconfig\.json tsconfig\.plugin-sdk\.dts\.json tsdown\.config\.ts vitest\.config\.ts openclaw\.mjs \.\/$/m,
-    );
-    expectPatternAfterInstall(/^COPY(?:\s+--chown=\S+)?\s+src \.\/src$/m);
-    expectPatternAfterInstall(/^COPY(?:\s+--chown=\S+)?\s+test \.\/test$/m);
-    expectPatternAfterInstall(/^COPY(?:\s+--chown=\S+)?\s+scripts \.\/scripts$/m);
-    expectPatternAfterInstall(/^COPY(?:\s+--chown=\S+)?\s+ui \.\/ui$/m);
   });
 
   it("copies manifests before install in the qr-import image", async () => {
@@ -138,9 +117,7 @@ describe("docker build cache layout", () => {
         /^COPY(?:\s+--chown=\S+)?\s+ui\/package\.json \.\/ui\/package\.json$/m,
       ),
     ).toBeLessThan(installIndex);
-    expect(dockerfile).toContain(
-      "This image only exercises the root qrcode-terminal dependency path.",
-    );
+    expect(dockerfile).toContain("This image only exercises the root QR runtime dependency path.");
     expect(
       indexOfPattern(
         dockerfile,

@@ -3,7 +3,7 @@ summary: "Move (migrate) an OpenClaw install from one machine to another"
 read_when:
   - You are moving OpenClaw to a new laptop/server
   - You want to preserve sessions, auth, and channel logins (WhatsApp, etc.)
-title: "Migration Guide"
+title: "Migration guide"
 ---
 
 # Migrating OpenClaw to a New Machine
@@ -110,3 +110,9 @@ On the new machine, confirm:
 - [ ] Channels are still connected (no re-pairing needed)
 - [ ] The dashboard opens and shows existing sessions
 - [ ] Workspace files (memory, configs) are present
+
+## Related
+
+- [Install overview](/install)
+- [Matrix migration](/install/migrating-matrix)
+- [Uninstall](/install/uninstall)

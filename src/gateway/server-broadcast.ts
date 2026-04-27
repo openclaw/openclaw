@@ -1,3 +1,4 @@
+import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
 import {
   ADMIN_SCOPE,
   APPROVALS_SCOPE,
@@ -35,6 +36,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "talk.mode": [WRITE_SCOPE],
   "update.available": [],
   "voicewake.changed": [READ_SCOPE],
+  "voicewake.routing.changed": [READ_SCOPE],
   "device.pair.requested": [PAIRING_SCOPE],
   "device.pair.resolved": [PAIRING_SCOPE],
   "node.pair.requested": [PAIRING_SCOPE],
@@ -47,7 +49,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
 // Events that node-role sessions must receive even when the event's operator
 // scope would otherwise reject non-operator roles. Nodes act on these updates
 // (e.g. reconfiguring wake-word triggers).
-const NODE_ALLOWED_EVENTS = new Set<string>(["voicewake.changed"]);
+const NODE_ALLOWED_EVENTS = new Set<string>(["voicewake.changed", "voicewake.routing.changed"]);
 
 export type {
   GatewayBroadcastFn,
@@ -91,6 +93,7 @@ function hasEventScope(client: GatewayWsClient, event: string): boolean {
 
 export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient> }) {
   const clientSeq = new WeakMap<GatewayWsClient, number>();
+  const reportedSlowPayloadClients = new WeakSet<GatewayWsClient>();
 
   const broadcastInternal = (
     event: string,
@@ -126,6 +129,17 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
       }
       const nextSeq = (clientSeq.get(c) ?? 0) + 1;
       const slow = c.socket.bufferedAmount > MAX_BUFFERED_BYTES;
+      if (!slow) {
+        reportedSlowPayloadClients.delete(c);
+      } else if (!reportedSlowPayloadClients.has(c)) {
+        reportedSlowPayloadClients.add(c);
+        logRejectedLargePayload({
+          surface: "gateway.ws.outbound_buffer",
+          bytes: c.socket.bufferedAmount,
+          limitBytes: MAX_BUFFERED_BYTES,
+          reason: opts?.dropIfSlow ? "ws_send_buffer_drop" : "ws_send_buffer_close",
+        });
+      }
       if (slow && opts?.dropIfSlow) {
         if (!isTargeted) {
           clientSeq.set(c, nextSeq);

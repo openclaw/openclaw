@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-OPENCLAW_DOCKER_LIVE_AUTH_ALL=(.gemini .minimax)
+OPENCLAW_DOCKER_LIVE_AUTH_ALL=(.factory .gemini .minimax)
 OPENCLAW_DOCKER_LIVE_AUTH_FILES_ALL=(
   .codex/auth.json
   .codex/config.toml
@@ -49,6 +49,9 @@ openclaw_live_should_include_auth_dir_for_provider() {
   local provider
   provider="$(openclaw_live_trim "${1:-}")"
   case "$provider" in
+    droid | factory | factory-droid)
+      printf '%s\n' ".factory"
+      ;;
     gemini | gemini-cli | google-gemini-cli)
       printf '%s\n' ".gemini"
       ;;
@@ -161,6 +164,18 @@ openclaw_live_join_csv() {
       printf ',%s' "$value"
     fi
   done
+}
+
+openclaw_live_append_array() {
+  local target_array="${1:?target array required}"
+  local source_array="${2:?source array required}"
+  local count
+
+  eval "count=\${#$source_array[@]}"
+  if ((count == 0)); then
+    return 0
+  fi
+  eval "$target_array+=(\"\${$source_array[@]}\")"
 }
 
 openclaw_live_stage_auth_into_home() {

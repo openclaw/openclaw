@@ -1,6 +1,6 @@
 ---
-title: "BOOTSTRAP.md Template"
 summary: "First-run ritual for new agents"
+title: "BOOTSTRAP.md template"
 read_when:
   - Bootstrapping a workspace manually
 ---
@@ -60,3 +60,7 @@ Delete this file. You don't need a bootstrap script anymore — you're you now.
 ---
 
 _Good luck out there. Make it count._
+
+## Related
+
+- [Agent workspace](/concepts/agent-workspace)

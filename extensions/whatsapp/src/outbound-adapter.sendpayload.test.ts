@@ -75,6 +75,53 @@ describe("whatsappOutbound sendPayload", () => {
     });
   });
 
+  it("preserves audioAsVoice from payload media sends", async () => {
+    const sendWhatsApp = vi.fn(async () => ({ messageId: "wa-1", toJid: "jid" }));
+
+    await whatsappOutbound.sendPayload!({
+      cfg: {},
+      to: "5511999999999@c.us",
+      text: "",
+      payload: { text: "voice", mediaUrl: "/tmp/voice.ogg", audioAsVoice: true },
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledWith("5511999999999@c.us", "voice", {
+      verbose: false,
+      cfg: {},
+      mediaUrl: "/tmp/voice.ogg",
+      mediaLocalRoots: undefined,
+      audioAsVoice: true,
+      accountId: undefined,
+      gifPlayback: undefined,
+    });
+  });
+
+  it("drops blank mediaUrls before sending payload media", async () => {
+    const sendWhatsApp = vi.fn(async () => ({ messageId: "wa-1", toJid: "jid" }));
+
+    await whatsappOutbound.sendPayload!({
+      cfg: {},
+      to: "5511999999999@c.us",
+      text: "",
+      payload: {
+        text: "\n\ncaption",
+        mediaUrls: ["   ", " /tmp/voice.ogg "],
+      },
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+    expect(sendWhatsApp).toHaveBeenCalledWith("5511999999999@c.us", "caption", {
+      verbose: false,
+      cfg: {},
+      mediaUrl: "/tmp/voice.ogg",
+      mediaLocalRoots: undefined,
+      accountId: undefined,
+      gifPlayback: undefined,
+    });
+  });
+
   it("skips whitespace-only text payloads", async () => {
     const sendWhatsApp = vi.fn();
 

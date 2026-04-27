@@ -113,6 +113,16 @@ describe("discord config schema", () => {
     expect(cfg.guilds?.["123"]?.channels?.general?.autoThread).toBe(true);
   });
 
+  it("accepts voice model override field", () => {
+    const cfg = expectValidDiscordConfig({
+      voice: {
+        model: "openai/gpt-5.4-mini",
+      },
+    });
+
+    expect(cfg.voice?.model).toBe("openai/gpt-5.4-mini");
+  });
+
   it("coerces safe-integer numeric allowlist entries to strings", () => {
     const cfg = expectValidDiscordConfig({
       allowFrom: [123],
@@ -220,6 +230,30 @@ describe("discord config schema", () => {
     });
 
     expect(res.success).toBe(true);
+  });
+
+  it("accepts thread.inheritParent at top-level and account scope", () => {
+    const cases = [
+      {
+        thread: {
+          inheritParent: true,
+        },
+      },
+      {
+        accounts: {
+          work: {
+            thread: {
+              inheritParent: true,
+            },
+          },
+        },
+      },
+    ] as const;
+
+    for (const config of cases) {
+      const res = DiscordConfigSchema.safeParse(config);
+      expect(res.success).toBe(true);
+    }
   });
 
   it("rejects unknown fields under agentComponents", () => {

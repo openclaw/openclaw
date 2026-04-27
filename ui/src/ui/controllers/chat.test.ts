@@ -624,6 +624,53 @@ describe("loadChatHistory", () => {
 });
 
 describe("sendChatMessage", () => {
+  it("serializes non-image chat attachments as files", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "run-1", status: "started" });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const result = await sendChatMessage(state, "summarize", [
+      {
+        id: "att-1",
+        dataUrl: `data:application/pdf;base64,${Buffer.from("%PDF-1.4\n").toString("base64")}`,
+        mimeType: "application/pdf",
+        fileName: "brief.pdf",
+      },
+    ]);
+
+    expect(result).toEqual(expect.any(String));
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        message: "summarize",
+        attachments: [
+          {
+            type: "file",
+            mimeType: "application/pdf",
+            fileName: "brief.pdf",
+            content: Buffer.from("%PDF-1.4\n").toString("base64"),
+          },
+        ],
+      }),
+    );
+    expect(state.chatMessages[0]).toMatchObject({
+      role: "user",
+      content: [
+        { type: "text", text: "summarize" },
+        {
+          type: "attachment",
+          attachment: {
+            kind: "document",
+            label: "brief.pdf",
+            mimeType: "application/pdf",
+          },
+        },
+      ],
+    });
+  });
+
   it("formats structured non-auth connect failures for chat send", async () => {
     const request = vi.fn().mockRejectedValue(
       new GatewayRequestError({
@@ -751,6 +798,128 @@ describe("loadChatHistory", () => {
     expect(state.chatThinkingLevel).toBe("low");
     expect(state.chatLoading).toBe(false);
     expect(state.lastError).toBeNull();
+  });
+
+  it("filters heartbeat acknowledgements and internal-only user messages", async () => {
+    const request = vi.fn().mockResolvedValue({
+      messages: [
+        { role: "assistant", content: [{ type: "text", text: "HEARTBEAT_OK" }] },
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: [
+                "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+                "subagent completion payload",
+                "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+              ].join("\n"),
+            },
+          ],
+        },
+        { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
+      ],
+      thinkingLevel: "low",
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
+    ]);
+  });
+
+  it("keeps local optimistic tail messages when history reload returns a stale snapshot", async () => {
+    const persistedUser = {
+      role: "user",
+      content: [{ type: "text", text: "first" }],
+      __openclaw: { seq: 1 },
+    };
+    const optimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "latest ask" }],
+      timestamp: 10,
+    };
+    const optimisticAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "latest answer" }],
+      timestamp: 11,
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [persistedUser],
+      thinkingLevel: "low",
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [persistedUser, optimisticUser, optimisticAssistant],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([persistedUser, optimisticUser, optimisticAssistant]);
+    expect(state.chatStream).toBeNull();
+  });
+
+  it("keeps local optimistic messages when history reload returns empty", async () => {
+    const optimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "first ask" }],
+      timestamp: 10,
+    };
+    const optimisticAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "first answer" }],
+      timestamp: 11,
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [],
+      thinkingLevel: "low",
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [optimisticUser, optimisticAssistant],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([optimisticUser, optimisticAssistant]);
+    expect(state.chatStream).toBeNull();
+  });
+
+  it("does not duplicate optimistic tail messages after history catches up", async () => {
+    const optimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "latest ask" }],
+      timestamp: 10,
+    };
+    const historyUser = {
+      role: "user",
+      content: [{ type: "text", text: "latest ask" }],
+      __openclaw: { seq: 1 },
+    };
+    const historyAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "latest answer" }],
+      __openclaw: { seq: 2 },
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [historyUser, historyAssistant],
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [optimisticUser],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([historyUser, historyAssistant]);
   });
 
   it("shows a targeted message when chat history is unauthorized", async () => {

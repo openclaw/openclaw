@@ -4,6 +4,7 @@ import { resolveStorePath } from "../config/sessions/paths.js";
 import { readSessionStoreReadOnly } from "../config/sessions/store-read.js";
 import { resolveSessionTotalTokens, type SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { resolveCronStorePath } from "../cron/store.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { peekSystemEvents } from "../infra/system-events.js";
@@ -118,14 +119,15 @@ export async function getStatusSummary(
     resolveSessionModelRef,
   } = await loadStatusSummaryRuntimeModule();
   const cfg = options.config ?? (await loadConfigIoModule()).loadConfig();
+  const channelScopeConfig =
+    options.sourceConfig === undefined
+      ? { config: cfg }
+      : { config: cfg, activationSourceConfig: options.sourceConfig };
   const needsChannelPlugins =
-    includeChannelSummary &&
-    hasConfiguredChannelsForReadOnlyScope({
-      config: cfg,
-    });
+    includeChannelSummary && hasConfiguredChannelsForReadOnlyScope(channelScopeConfig);
   const linkContext = needsChannelPlugins
     ? await loadLinkChannelModule().then(({ resolveLinkChannelContext }) =>
-        resolveLinkChannelContext(cfg),
+        resolveLinkChannelContext(cfg, { sourceConfig: options.sourceConfig }),
       )
     : null;
   const agentList = listGatewayAgentsBasic(cfg);
@@ -150,6 +152,9 @@ export async function getStatusSummary(
   const mainSessionKey = resolveMainSessionKey(cfg);
   const queuedSystemEvents = peekSystemEvents(mainSessionKey);
   const taskMaintenanceModule = await loadTaskRegistryMaintenanceModule();
+  taskMaintenanceModule.configureTaskRegistryMaintenance({
+    cronStorePath: resolveCronStorePath(cfg.cron?.store),
+  });
   const tasks = taskMaintenanceModule.getInspectableTaskRegistrySummary();
   const taskAudit = taskMaintenanceModule.getInspectableTaskAuditSummary();
 

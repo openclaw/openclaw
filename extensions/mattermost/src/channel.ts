@@ -196,6 +196,7 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
     const result = await (
       await loadMattermostChannelRuntime()
     ).sendMessageMattermost(to, message, {
+      cfg,
       accountId: resolvedAccountId,
       replyToId,
       buttons: presentation

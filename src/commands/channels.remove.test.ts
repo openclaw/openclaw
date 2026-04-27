@@ -19,6 +19,10 @@ const catalogMocks = vi.hoisted(() => ({
   listChannelPluginCatalogEntries: vi.fn((): ChannelPluginCatalogEntry[] => []),
 }));
 
+const registryRefreshMocks = vi.hoisted(() => ({
+  refreshPluginRegistryAfterConfigMutation: vi.fn(async () => undefined),
+}));
+
 vi.mock("../channels/plugins/catalog.js", async () => {
   const actual = await vi.importActual<typeof import("../channels/plugins/catalog.js")>(
     "../channels/plugins/catalog.js",
@@ -48,6 +52,8 @@ vi.mock("./channel-setup/plugin-install.js", async () => {
   return createMockChannelSetupPluginInstallModule(actual);
 });
 
+vi.mock("../cli/plugins-registry-refresh.js", () => registryRefreshMocks);
+
 const runtime = createTestRuntime();
 
 describe("channelsRemoveCommand", () => {
@@ -73,11 +79,13 @@ describe("channelsRemoveCommand", () => {
     vi.mocked(ensureChannelSetupPluginInstalled).mockImplementation(async ({ cfg }) => ({
       cfg,
       installed: true,
+      status: "installed",
     }));
     vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockClear();
     vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
       createTestRegistry(),
     );
+    registryRefreshMocks.refreshPluginRegistryAfterConfigMutation.mockClear();
     setActivePluginRegistry(createTestRegistry());
   });
 
@@ -122,6 +130,11 @@ describe("channelsRemoveCommand", () => {
       expect.objectContaining({ entry: catalogEntry }),
     );
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(2);
+    expect(registryRefreshMocks.refreshPluginRegistryAfterConfigMutation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: "source-changed",
+      }),
+    );
     expect(configMocks.writeConfigFile).toHaveBeenCalledWith(
       expect.not.objectContaining({
         channels: expect.objectContaining({
