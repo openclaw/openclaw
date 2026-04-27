@@ -72,6 +72,14 @@ vi.mock("../config/config.js", async () => {
   };
 });
 
+vi.mock("../config/io.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
+  return {
+    ...actual,
+    getRuntimeConfig: () => loadConfigMock(),
+  };
+});
+
 vi.mock("../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
@@ -152,6 +160,77 @@ describe("buildGatewayCronService", () => {
           getCron: expect.any(Function),
         }),
       );
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("cron_changed removed events include the deleted job snapshot", async () => {
+    const cfg = createCronConfig("server-cron-hook-removed");
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "to-be-removed",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: 1_000 },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "will be removed" },
+      });
+
+      runCronChangedMock.mockClear();
+      await state.cron.remove(job.id);
+
+      expect(runCronChangedMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: "removed",
+          jobId: job.id,
+          job: expect.objectContaining({
+            id: job.id,
+            name: "to-be-removed",
+          }),
+        }),
+        expect.objectContaining({
+          getCron: expect.any(Function),
+        }),
+      );
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("cron_changed hook context uses runtime config from getRuntimeConfig()", async () => {
+    const startupCfg = createCronConfig("server-cron-hook-runtime-cfg");
+    const runtimeCfg = { ...startupCfg, _marker: "runtime" };
+    loadConfigMock.mockReturnValue(runtimeCfg);
+
+    const state = buildGatewayCronService({
+      cfg: startupCfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      await state.cron.add({
+        name: "runtime-cfg-check",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: 1_000 },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "cfg check" },
+      });
+
+      // The hook context should use getRuntimeConfig() (runtimeCfg), not startupCfg
+      expect(runCronChangedMock).toHaveBeenCalledTimes(1);
+      const calls = runCronChangedMock.mock.calls as unknown[][];
+      const hookCtx = calls[0]?.[1] as { config?: unknown } | undefined;
+      expect(hookCtx?.config).toBe(runtimeCfg);
+      expect(hookCtx?.config).not.toBe(startupCfg);
     } finally {
       state.cron.stop();
     }

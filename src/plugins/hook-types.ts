@@ -602,7 +602,7 @@ export type PluginHookGatewayCronDeliveryStatus =
   | "not-requested"
   | "delivered"
   | "not-delivered"
-  | "error";
+  | "unknown";
 
 export type PluginHookGatewayCronJobState = {
   nextRunAtMs?: number;
@@ -620,17 +620,17 @@ export type PluginHookGatewayCronJob = {
   enabled?: boolean;
   schedule?:
     | {
-        kind?: "cron" | string;
+        kind: "cron";
         expr?: string;
         tz?: string;
         staggerMs?: number;
       }
     | {
-        kind?: "at" | string;
+        kind: "at";
         at?: string;
       }
     | {
-        kind?: "every" | string;
+        kind: "every";
         everyMs?: number;
         anchorMs?: number;
       };
