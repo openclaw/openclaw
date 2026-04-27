@@ -14,7 +14,7 @@ vi.mock("../plugins/plugin-registry.js", () => ({
     plugins: [
       {
         origin: "bundled",
-        nonSecretAuthMarkers: ["gcp-vertex-credentials"],
+        nonSecretAuthMarkers: ["gcp-vertex-credentials", "ollama-local"],
       },
     ],
   }),
@@ -96,6 +96,16 @@ vi.mock("../plugins/provider-runtime.js", async () => {
           apiKey: "native-cli-access-token",
           source: "Native CLI auth",
           mode: "oauth" as const,
+        };
+      }
+      if (
+        params.context.providerConfig?.api === "ollama" &&
+        params.context.providerConfig.baseUrl?.startsWith("http://192.168.")
+      ) {
+        return {
+          apiKey: "ollama-local",
+          source: `models.providers.${params.provider} (synthetic local key)`,
+          mode: "api-key" as const,
         };
       }
       return undefined;
@@ -865,6 +875,41 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
         },
       }),
     ).rejects.toThrow("No API key found");
+  });
+
+  it("resolves custom named Ollama providers with explicit local marker auth", async () => {
+    const auth = await resolveApiKeyForProvider({
+      provider: "ollama-remote",
+      cfg: {
+        models: {
+          providers: {
+            "ollama-remote": {
+              baseUrl: "http://192.168.178.122:11434",
+              api: "ollama",
+              apiKey: "ollama-local",
+              models: [
+                {
+                  id: "qwen3.5:27b",
+                  name: "Qwen 3.5 27B",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 8192,
+                  maxTokens: 4096,
+                },
+              ],
+            },
+          },
+        },
+      },
+      store: { version: 1, profiles: {} },
+    });
+
+    expect(auth).toMatchObject({
+      apiKey: "ollama-local",
+      source: "models.providers.ollama-remote (synthetic local key)",
+      mode: "api-key",
+    });
   });
 
   it("does not synthesize local auth when apiKey is explicitly configured but unresolved", async () => {

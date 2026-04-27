@@ -214,6 +214,22 @@ jobs:
       OPENCLAW_GEMINI_SETTINGS_JSON: ${{ secrets.OPENCLAW_GEMINI_SETTINGS_JSON }}
       FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
 
+  package_acceptance_release_checks:
+    name: Run package acceptance
+    needs: [resolve_target]
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+      pull-requests: read
+    uses: ./.github/workflows/package-acceptance.yml
+    with:
+      workflow_ref: ${{ github.ref_name }}
+      source: ref
+      package_ref: ${{ needs.resolve_target.outputs.ref }}
+      suite_profile: package
+      telegram_mode: none
+
   qa_lab_parity_release_checks:
     name: Run QA Lab parity gate
     needs: [resolve_target]
@@ -441,3 +457,40 @@ jobs:
           path: ${{ steps.run_lane.outputs.output_dir }}
           retention-days: 14
           if-no-files-found: warn
+
+  summary:
+    name: Verify release checks
+    needs:
+      - install_smoke_release_checks
+      - cross_os_release_checks
+      - live_and_e2e_release_checks
+      - package_acceptance_release_checks
+      - qa_lab_parity_release_checks
+      - qa_live_matrix_release_checks
+      - qa_live_telegram_release_checks
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Verify release check results
+        shell: bash
+        run: |
+          set -euo pipefail
+          failed=0
+          for item in \
+            "install_smoke_release_checks=${{ needs.install_smoke_release_checks.result }}" \
+            "cross_os_release_checks=${{ needs.cross_os_release_checks.result }}" \
+            "live_and_e2e_release_checks=${{ needs.live_and_e2e_release_checks.result }}" \
+            "package_acceptance_release_checks=${{ needs.package_acceptance_release_checks.result }}" \
+            "qa_lab_parity_release_checks=${{ needs.qa_lab_parity_release_checks.result }}" \
+            "qa_live_matrix_release_checks=${{ needs.qa_live_matrix_release_checks.result }}" \
+            "qa_live_telegram_release_checks=${{ needs.qa_live_telegram_release_checks.result }}"
+          do
+            name="${item%%=*}"
+            result="${item#*=}"
+            if [[ "$result" != "success" && "$result" != "skipped" ]]; then
+              echo "::error::${name} ended with ${result}"
+              failed=1
+            fi
+          done
+          exit "$failed"

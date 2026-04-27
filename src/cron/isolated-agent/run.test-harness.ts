@@ -362,21 +362,40 @@ function resetRunOutcomeMocks(): void {
   pickLastNonEmptyTextFromPayloadsMock.mockReturnValue("test output");
   resolveCronPayloadOutcomeMock.mockReset();
   resolveCronPayloadOutcomeMock.mockImplementation(
-    ({ payloads }: { payloads: Array<{ isError?: boolean }> }) => {
-      const outputText = pickLastNonEmptyTextFromPayloadsMock(payloads);
+    ({
+      payloads,
+      failureSignal,
+    }: {
+      payloads: Array<{ isError?: boolean }>;
+      failureSignal?: { fatalForCron?: boolean; message?: string };
+    }) => {
+      const failureMessage =
+        failureSignal?.fatalForCron === true
+          ? (failureSignal.message ?? "cron isolated run returned a fatal failure signal")
+          : undefined;
+      const outputText = failureMessage ?? pickLastNonEmptyTextFromPayloadsMock(payloads);
       const synthesizedText = outputText?.trim() || "summary";
-      const hasFatalErrorPayload = payloads.some((payload) => payload?.isError === true);
+      const hasFatalErrorPayload =
+        payloads.some((payload) => payload?.isError === true) || failureMessage !== undefined;
+      const deliveryPayload = failureMessage ? { text: failureMessage, isError: true } : undefined;
       return {
-        summary: "summary",
+        summary: failureMessage ?? "summary",
         outputText,
         synthesizedText,
-        deliveryPayload: undefined,
-        deliveryPayloads: synthesizedText ? [{ text: synthesizedText }] : [],
+        deliveryPayload,
+        deliveryPayloads: deliveryPayload
+          ? [deliveryPayload]
+          : synthesizedText
+            ? [{ text: synthesizedText }]
+            : [],
         deliveryPayloadHasStructuredContent: false,
         hasFatalErrorPayload,
-        embeddedRunError: hasFatalErrorPayload
-          ? "cron isolated run returned an error payload"
-          : undefined,
+        embeddedRunError:
+          failureMessage !== undefined
+            ? failureMessage
+            : hasFatalErrorPayload
+              ? "cron isolated run returned an error payload"
+              : undefined,
       };
     },
   );

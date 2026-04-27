@@ -57,10 +57,11 @@ Note: if an isolated cron run returns only the silent token (`NO_REPLY` /
 `no_reply`), cron suppresses direct outbound delivery and the fallback queued
 summary path as well, so nothing is posted back to chat.
 
-Note: isolated cron runs treat known denial markers in final output, such as
-`SYSTEM_RUN_DENIED`, `INVALID_REQUEST`, and approval-binding refusal phrases, as
-errors. `cron list` and run history then surface the matched token in the error
-reason instead of reporting a blocked command as `ok`.
+Note: isolated cron runs prefer structured execution-denial metadata from the
+embedded run, then fall back to known denial markers in final output, such as
+`SYSTEM_RUN_DENIED`, `INVALID_REQUEST`, and approval-binding refusal phrases.
+`cron list` and run history surface the denial reason instead of reporting a
+blocked command as `ok`.
 
 Note: `cron add|edit --model ...` uses that selected allowed model for the job.
 If the model is not allowed, cron warns and falls back to the job's agent/default

@@ -52,11 +52,29 @@ OpenClaw has three public release lanes:
 - Run the manual `Full Release Validation` workflow before release approval
   when you need the whole release validation suite from one entrypoint. It
   accepts a branch, tag, or full commit SHA, dispatches manual `CI`, and
-  dispatches `OpenClaw Release Checks` for install smoke, Docker release-path
-  suites, live/E2E, OpenWebUI, QA Lab parity, Matrix, and Telegram lanes.
+  dispatches `OpenClaw Release Checks` for install smoke, package acceptance,
+  Docker release-path suites, live/E2E, OpenWebUI, QA Lab parity, Matrix, and
+  Telegram lanes.
   Provide `npm_telegram_package_spec` only after a package has been published
   and the post-publish Telegram E2E should run too.
   Example: `gh workflow run full-release-validation.yml --ref main -f ref=release/YYYY.M.D`
+- Run the manual `Package Acceptance` workflow when you want side-channel proof
+  for a package candidate while release work continues. Use `source=npm` for
+  `openclaw@beta`, `openclaw@latest`, or an exact release version; `source=ref`
+  to pack a trusted `package_ref` branch/tag/SHA with the current
+  `workflow_ref` harness; `source=url` for an HTTPS tarball with a required
+  SHA-256; or `source=artifact` for a tarball uploaded by another GitHub
+  Actions run. The workflow resolves the candidate to
+  `package-under-test`, reuses the Docker E2E release scheduler against that
+  tarball, and can optionally run published-npm Telegram QA.
+  Example: `gh workflow run package-acceptance.yml --ref main -f workflow_ref=main -f source=npm -f package_spec=openclaw@beta -f suite_profile=product`
+  Common profiles:
+  - `smoke`: install/channel/agent, gateway network, and config reload lanes
+  - `package`: package/update/plugin lanes without OpenWebUI
+  - `product`: package profile plus MCP channels, cron/subagent cleanup,
+    OpenAI web search, and OpenWebUI
+  - `full`: Docker release-path chunks with OpenWebUI
+  - `custom`: exact `docker_lanes` selection for a focused rerun
 - Run the manual `CI` workflow directly when you only need full normal CI
   coverage for the release candidate. Manual CI dispatches bypass changed
   scoping and force the Linux Node shards, bundled-plugin shards, channel

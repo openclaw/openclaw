@@ -84,6 +84,7 @@ import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js
 import { runPostCompactionSideEffects } from "./compaction-hooks.js";
 import { buildEmbeddedCompactionRuntimeContext } from "./compaction-runtime-context.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
+import { resolveEmbeddedRunFailureSignal } from "./failure-signal.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModelAsync } from "./model.js";
@@ -1853,6 +1854,10 @@ export async function runEmbeddedPiAgent(
             toolMetas: attempt.toolMetas,
             hadFailure: Boolean(attempt.lastToolError),
           });
+          const failureSignal = resolveEmbeddedRunFailureSignal({
+            trigger: params.trigger,
+            lastToolError: attempt.lastToolError,
+          });
 
           // Timeout aborts can leave the run without any assistant payloads.
           // Emit an explicit timeout error instead of silently completing, so
@@ -1893,6 +1898,7 @@ export async function runEmbeddedPiAgent(
                 replayInvalid,
                 livenessState,
                 toolSummary: attemptToolSummary,
+                ...(failureSignal ? { failureSignal } : {}),
                 agentHarnessResultClassification: attempt.agentHarnessResultClassification,
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
@@ -2070,6 +2076,7 @@ export async function runEmbeddedPiAgent(
                 replayInvalid,
                 livenessState,
                 toolSummary: attemptToolSummary,
+                ...(failureSignal ? { failureSignal } : {}),
                 agentHarnessResultClassification: attempt.agentHarnessResultClassification,
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
@@ -2119,6 +2126,7 @@ export async function runEmbeddedPiAgent(
                 replayInvalid,
                 livenessState,
                 toolSummary: attemptToolSummary,
+                ...(failureSignal ? { failureSignal } : {}),
                 agentHarnessResultClassification: attempt.agentHarnessResultClassification,
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
@@ -2227,6 +2235,7 @@ export async function runEmbeddedPiAgent(
                 replayInvalid,
                 livenessState,
                 toolSummary: attemptToolSummary,
+                ...(failureSignal ? { failureSignal } : {}),
                 agentHarnessResultClassification: attempt.agentHarnessResultClassification,
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
@@ -2334,6 +2343,7 @@ export async function runEmbeddedPiAgent(
                 ...(params.blockReplyBreak ? { blockStreaming: params.blockReplyBreak } : {}),
               },
               toolSummary: attemptToolSummary,
+              ...(failureSignal ? { failureSignal } : {}),
               completion: {
                 ...(stopReason ? { stopReason } : {}),
                 ...(stopReason ? { finishReason: stopReason } : {}),

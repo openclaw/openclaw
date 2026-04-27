@@ -28,6 +28,11 @@ on:
         required: false
         default: ""
         type: string
+      package_artifact_name:
+        description: Existing workflow artifact containing openclaw-current.tgz; blank packs the selected ref
+        required: false
+        default: ""
+        type: string
       include_live_suites:
         description: Whether to run live-provider coverage
         required: false
@@ -66,6 +71,11 @@ on:
         type: boolean
       docker_lanes:
         description: Comma/space separated Docker scheduler lane names to run against the prepared image
+        required: false
+        default: ""
+        type: string
+      package_artifact_name:
+        description: Existing workflow artifact containing openclaw-current.tgz; blank packs the selected ref
         required: false
         default: ""
         type: string
@@ -190,7 +200,6 @@ jobs:
     outputs:
       selected_sha: ${{ steps.validate.outputs.selected_sha }}
       trusted_reason: ${{ steps.validate.outputs.trusted_reason }}
-      live_model_matrix: ${{ steps.live_model_matrix.outputs.matrix }}
     steps:
       - name: Checkout selected ref
         uses: actions/checkout@v6
@@ -233,89 +242,6 @@ jobs:
             echo "Validated ref: \`${INPUT_REF}\`"
             echo "Resolved SHA: \`$selected_sha\`"
             echo "Trust reason: \`$trusted_reason\`"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Resolve live model provider matrix
-        id: live_model_matrix
-        env:
-          INPUT_LIVE_MODEL_PROVIDERS: ${{ inputs.live_model_providers }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          all_providers=(anthropic google minimax openai opencode-go openrouter xai zai fireworks)
-
-          provider_label() {
-            case "$1" in
-              anthropic) echo "Anthropic" ;;
-              google) echo "Google" ;;
-              minimax) echo "MiniMax" ;;
-              openai) echo "OpenAI" ;;
-              opencode-go) echo "OpenCode" ;;
-              openrouter) echo "OpenRouter" ;;
-              xai) echo "xAI" ;;
-              zai) echo "Z.ai" ;;
-              fireworks) echo "Fireworks" ;;
-              *) return 1 ;;
-            esac
-          }
-
-          normalize_provider() {
-            local value="${1,,}"
-            case "$value" in
-              z.ai|z-ai) echo "zai" ;;
-              opencode|opencode-go) echo "opencode-go" ;;
-              open-router|openrouter) echo "openrouter" ;;
-              *) echo "$value" ;;
-            esac
-          }
-
-          is_known_provider() {
-            local value="$1"
-            local provider
-            for provider in "${all_providers[@]}"; do
-              [[ "$provider" == "$value" ]] && return 0
-            done
-            return 1
-          }
-
-          selected=()
-          declare -A seen=()
-          raw="${INPUT_LIVE_MODEL_PROVIDERS:-}"
-          normalized_all="${raw,,}"
-          normalized_all="${normalized_all//[[:space:],]/}"
-          if [[ -z "$normalized_all" || "$normalized_all" == "all" ]]; then
-            selected=("${all_providers[@]}")
-          else
-            while IFS= read -r entry; do
-              [[ -z "$entry" ]] && continue
-              provider="$(normalize_provider "$entry")"
-              if ! is_known_provider "$provider"; then
-                echo "Unknown live model provider '${entry}'. Expected one of: ${all_providers[*]}" >&2
-                exit 1
-              fi
-              if [[ -z "${seen[$provider]:-}" ]]; then
-                selected+=("$provider")
-                seen[$provider]=1
-              fi
-            done < <(printf '%s\n' "$raw" | tr ',' '\n' | tr '[:space:]' '\n')
-          fi
-
-          if [[ "${#selected[@]}" -eq 0 ]]; then
-            echo "No live model providers selected." >&2
-            exit 1
-          fi
-
-          matrix_entries="[]"
-          for provider in "${selected[@]}"; do
-            label="$(provider_label "$provider")"
-            matrix_entries="$(jq -c --arg label "$label" --arg provider "$provider" '. + [{provider_label: $label, providers: $provider}]' <<<"$matrix_entries")"
-          done
-          matrix="$(jq -c --argjson include "$matrix_entries" '{include: $include}')"
-          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
-          {
-            echo
-            echo "Live model providers: \`$(IFS=,; echo "${selected[*]}")\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
   validate_release_live_cache:
@@ -561,6 +487,7 @@ jobs:
           mode: chunk
           chunk: ${{ matrix.chunk_id }}
           include-openwebui: ${{ inputs.include_openwebui }}
+          package-artifact-name: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
 
       - name: Run Docker E2E chunk
         shell: bash
@@ -687,6 +614,7 @@ jobs:
           mode: targeted
           lanes: ${{ inputs.docker_lanes }}
           include-openwebui: ${{ inputs.include_openwebui }}
+          package-artifact-name: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
 
       - name: Run targeted Docker E2E lanes
         shell: bash
@@ -797,23 +725,6 @@ jobs:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
-      - name: Resolve shared Docker E2E image tags
-        id: image
-        shell: bash
-        env:
-          SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
-        run: |
-          set -euo pipefail
-          repository="${GITHUB_REPOSITORY,,}"
-          bare_image="ghcr.io/${repository}-docker-e2e-bare:${SELECTED_SHA}"
-          functional_image="ghcr.io/${repository}-docker-e2e-functional:${SELECTED_SHA}"
-          image="$functional_image"
-          echo "image=$image" >> "$GITHUB_OUTPUT"
-          echo "bare_image=$bare_image" >> "$GITHUB_OUTPUT"
-          echo "functional_image=$functional_image" >> "$GITHUB_OUTPUT"
-          echo "Shared Docker E2E bare image: \`$bare_image\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "Shared Docker E2E functional image: \`$functional_image\`" >> "$GITHUB_STEP_SUMMARY"
-
       - name: Plan Docker E2E images
         id: plan
         uses: ./.github/actions/docker-e2e-plan
@@ -825,15 +736,22 @@ jobs:
           hydrate-artifacts: "false"
 
       - name: Setup Node environment
-        if: steps.plan.outputs.needs_package == '1'
+        if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_name == ''
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
           pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
+      - name: Download provided OpenClaw Docker E2E package
+        if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_name != ''
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.package_artifact_name }}
+          path: .artifacts/docker-e2e-package
+
       - name: Pack OpenClaw package for Docker E2E
-        if: steps.plan.outputs.needs_package == '1'
+        if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_name == ''
         shell: bash
         run: |
           set -euo pipefail
@@ -842,13 +760,59 @@ jobs:
             --output-dir .artifacts/docker-e2e-package \
             --output-name openclaw-current.tgz
 
-      - name: Upload OpenClaw Docker E2E package
+      - name: Validate OpenClaw Docker E2E package
+        id: package
         if: steps.plan.outputs.needs_package == '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .artifacts/docker-e2e-package
+          target=".artifacts/docker-e2e-package/openclaw-current.tgz"
+          if [[ ! -f "$target" ]]; then
+            mapfile -t tgzs < <(find .artifacts/docker-e2e-package -type f -name '*.tgz' | sort)
+            if [[ "${#tgzs[@]}" -ne 1 ]]; then
+              echo "Expected exactly one package tarball in .artifacts/docker-e2e-package; found ${#tgzs[@]}." >&2
+              printf '%s\n' "${tgzs[@]}" >&2
+              exit 1
+            fi
+            cp "${tgzs[0]}" "$target"
+          fi
+          node scripts/check-openclaw-package-tarball.mjs "$target"
+          digest="$(sha256sum "$target" | awk '{print $1}')"
+          tag="pkg-${digest:0:32}"
+          echo "sha256=$digest" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          {
+            echo "Docker E2E package: \`$target\`"
+            echo "Docker E2E package SHA-256: \`$digest\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload OpenClaw Docker E2E package
+        if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_name == ''
         uses: actions/upload-artifact@v7
         with:
           name: docker-e2e-package
           path: .artifacts/docker-e2e-package/openclaw-current.tgz
           if-no-files-found: error
+
+      - name: Resolve shared Docker E2E image tags
+        id: image
+        shell: bash
+        env:
+          PACKAGE_TAG: ${{ steps.package.outputs.tag }}
+          SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+        run: |
+          set -euo pipefail
+          repository="${GITHUB_REPOSITORY,,}"
+          image_tag="${PACKAGE_TAG:-$SELECTED_SHA}"
+          bare_image="ghcr.io/${repository}-docker-e2e-bare:${image_tag}"
+          functional_image="ghcr.io/${repository}-docker-e2e-functional:${image_tag}"
+          image="$functional_image"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "bare_image=$bare_image" >> "$GITHUB_OUTPUT"
+          echo "functional_image=$functional_image" >> "$GITHUB_OUTPUT"
+          echo "Shared Docker E2E bare image: \`$bare_image\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Shared Docker E2E functional image: \`$functional_image\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Log in to GHCR
         if: steps.plan.outputs.needs_e2e_image == '1'
@@ -931,12 +895,31 @@ jobs:
   validate_live_models_docker:
     name: Docker live models (${{ matrix.provider_label }})
     needs: validate_selected_ref
-    if: inputs.include_live_suites
+    if: inputs.include_live_suites && inputs.live_model_providers == ''
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.validate_selected_ref.outputs.live_model_matrix) }}
+      matrix:
+        include:
+          - provider_label: Anthropic
+            providers: anthropic
+          - provider_label: Google
+            providers: google
+          - provider_label: MiniMax
+            providers: minimax
+          - provider_label: OpenAI
+            providers: openai
+          - provider_label: OpenCode
+            providers: opencode-go
+          - provider_label: OpenRouter
+            providers: openrouter
+          - provider_label: xAI
+            providers: xai
+          - provider_label: Z.ai
+            providers: zai
+          - provider_label: Fireworks
+            providers: fireworks
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
@@ -1022,6 +1005,163 @@ jobs:
               exit 1
               ;;
           esac
+
+      - name: Run Docker live model sweep
+        run: pnpm test:docker:live-models
+
+  validate_live_models_docker_targeted:
+    name: Docker live models (selected providers)
+    needs: validate_selected_ref
+    if: inputs.include_live_suites && inputs.live_model_providers != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
+      ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
+      BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
+      CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+      DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+      MODELSTUDIO_API_KEY: ${{ secrets.MODELSTUDIO_API_KEY }}
+      MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+      MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+      OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+      XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+      ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+      Z_AI_API_KEY: ${{ secrets.Z_AI_API_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      OPENCLAW_CODEX_AUTH_JSON: ${{ secrets.OPENCLAW_CODEX_AUTH_JSON }}
+      OPENCLAW_CODEX_CONFIG_TOML: ${{ secrets.OPENCLAW_CODEX_CONFIG_TOML }}
+      OPENCLAW_CLAUDE_JSON: ${{ secrets.OPENCLAW_CLAUDE_JSON }}
+      OPENCLAW_CLAUDE_CREDENTIALS_JSON: ${{ secrets.OPENCLAW_CLAUDE_CREDENTIALS_JSON }}
+      OPENCLAW_CLAUDE_SETTINGS_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_JSON }}
+      OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON }}
+      OPENCLAW_GEMINI_SETTINGS_JSON: ${{ secrets.OPENCLAW_GEMINI_SETTINGS_JSON }}
+      FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+      REQUESTED_LIVE_MODEL_PROVIDERS: ${{ inputs.live_model_providers }}
+      OPENCLAW_VITEST_MAX_WORKERS: "2"
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+
+      - name: Normalize provider allowlist
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          all_providers=(anthropic google minimax openai opencode-go openrouter xai zai fireworks)
+
+          normalize_provider() {
+            local value="${1,,}"
+            case "$value" in
+              z.ai|z-ai) echo "zai" ;;
+              opencode|opencode-go) echo "opencode-go" ;;
+              open-router|openrouter) echo "openrouter" ;;
+              *) echo "$value" ;;
+            esac
+          }
+
+          is_known_provider() {
+            local value="$1"
+            local provider
+            for provider in "${all_providers[@]}"; do
+              [[ "$provider" == "$value" ]] && return 0
+            done
+            return 1
+          }
+
+          selected=()
+          declare -A seen=()
+          raw="${REQUESTED_LIVE_MODEL_PROVIDERS:-}"
+          normalized_all="${raw,,}"
+          normalized_all="${normalized_all//[[:space:],]/}"
+          if [[ -z "$normalized_all" || "$normalized_all" == "all" ]]; then
+            selected=("${all_providers[@]}")
+          else
+            while IFS= read -r entry; do
+              [[ -z "$entry" ]] && continue
+              provider="$(normalize_provider "$entry")"
+              if ! is_known_provider "$provider"; then
+                echo "Unknown live model provider '${entry}'. Expected one of: ${all_providers[*]}" >&2
+                exit 1
+              fi
+              if [[ -z "${seen[$provider]:-}" ]]; then
+                selected+=("$provider")
+                seen[$provider]=1
+              fi
+            done < <(printf '%s\n' "$raw" | tr ',' '\n' | tr '[:space:]' '\n')
+          fi
+
+          if [[ "${#selected[@]}" -eq 0 ]]; then
+            echo "No live model providers selected." >&2
+            exit 1
+          fi
+
+          providers_csv="$(IFS=,; echo "${selected[*]}")"
+          echo "OPENCLAW_LIVE_PROVIDERS=$providers_csv" >> "$GITHUB_ENV"
+          {
+            echo "Live model providers: \`$providers_csv\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Hydrate live auth/profile inputs
+        run: bash scripts/ci-hydrate-live-auth.sh
+
+      - name: Validate provider credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          require_any() {
+            local label="$1"
+            shift
+            local key
+            for key in "$@"; do
+              if [[ -n "${!key:-}" ]]; then
+                return 0
+              fi
+            done
+            echo "Missing credential for ${label}: expected one of $*" >&2
+            exit 1
+          }
+
+          IFS=',' read -r -a providers <<<"${OPENCLAW_LIVE_PROVIDERS}"
+          for provider in "${providers[@]}"; do
+            case "$provider" in
+              anthropic) require_any Anthropic ANTHROPIC_API_KEY ANTHROPIC_API_KEY_OLD ANTHROPIC_API_TOKEN ;;
+              google) require_any Google GEMINI_API_KEY GOOGLE_API_KEY ;;
+              minimax) require_any MiniMax MINIMAX_API_KEY ;;
+              openai) require_any OpenAI OPENAI_API_KEY ;;
+              opencode-go) require_any OpenCode OPENCODE_API_KEY OPENCODE_ZEN_API_KEY ;;
+              openrouter) require_any OpenRouter OPENROUTER_API_KEY ;;
+              xai) require_any xAI XAI_API_KEY ;;
+              zai) require_any Z.ai ZAI_API_KEY Z_AI_API_KEY ;;
+              fireworks) require_any Fireworks FIREWORKS_API_KEY ;;
+              *)
+                echo "Unhandled live model provider shard: ${provider}" >&2
+                exit 1
+                ;;
+            esac
+          done
 
       - name: Run Docker live model sweep
         run: pnpm test:docker:live-models

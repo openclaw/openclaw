@@ -613,6 +613,13 @@ describe("installBundledRuntimeDeps", () => {
 });
 
 describe("scanBundledPluginRuntimeDeps config policy", () => {
+  type RuntimeDepsConfigCase = {
+    name: string;
+    config: Parameters<typeof scanBundledPluginRuntimeDeps>[0]["config"];
+    includeConfiguredChannels: boolean;
+    expectedDeps: string[];
+  };
+
   function setupPolicyPackageRoot(): string {
     const packageRoot = makeTempDir();
     writeBundledPluginPackage({
@@ -630,7 +637,7 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
     return packageRoot;
   }
 
-  it.each([
+  const cases: RuntimeDepsConfigCase[] = [
     {
       name: "includes default-enabled bundled plugins",
       config: {},
@@ -662,6 +669,33 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
       expectedDeps: [],
     },
     {
+      name: "lets plugin deny override explicit bundled channel enablement",
+      config: {
+        plugins: { deny: ["telegram"] },
+        channels: { telegram: { enabled: true } },
+      },
+      includeConfiguredChannels: false,
+      expectedDeps: ["alpha-runtime@1.0.0"],
+    },
+    {
+      name: "lets the plugin master toggle suppress explicit bundled channel enablement",
+      config: {
+        plugins: { enabled: false },
+        channels: { telegram: { enabled: true } },
+      },
+      includeConfiguredChannels: false,
+      expectedDeps: [],
+    },
+    {
+      name: "lets plugin entry disablement override explicit bundled channel enablement",
+      config: {
+        plugins: { entries: { telegram: { enabled: false } } },
+        channels: { telegram: { enabled: true } },
+      },
+      includeConfiguredChannels: false,
+      expectedDeps: ["alpha-runtime@1.0.0"],
+    },
+    {
       name: "lets explicit bundled channel enablement bypass restrictive allowlists",
       config: {
         plugins: { allow: ["browser"] },
@@ -691,7 +725,9 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
       includeConfiguredChannels: true,
       expectedDeps: ["alpha-runtime@1.0.0"],
     },
-  ])("$name", ({ config, includeConfiguredChannels, expectedDeps }) => {
+  ];
+
+  it.each(cases)("$name", ({ config, includeConfiguredChannels, expectedDeps }) => {
     const result = scanBundledPluginRuntimeDeps({
       packageRoot: setupPolicyPackageRoot(),
       config,
@@ -700,6 +736,41 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
 
     expect(result.deps.map((dep) => `${dep.name}@${dep.version}`)).toEqual(expectedDeps);
     expect(result.conflicts).toEqual([]);
+  });
+
+  it("honors deny and disabled entries when scanning an explicit effective plugin set", () => {
+    const packageRoot = setupPolicyPackageRoot();
+
+    const denied = scanBundledPluginRuntimeDeps({
+      packageRoot,
+      pluginIds: ["telegram"],
+      config: {
+        plugins: { deny: ["telegram"] },
+        channels: { telegram: { enabled: true } },
+      },
+    });
+    const disabled = scanBundledPluginRuntimeDeps({
+      packageRoot,
+      pluginIds: ["telegram"],
+      config: {
+        plugins: { entries: { telegram: { enabled: false } } },
+        channels: { telegram: { enabled: true } },
+      },
+    });
+    const allowed = scanBundledPluginRuntimeDeps({
+      packageRoot,
+      pluginIds: ["telegram"],
+      config: {
+        plugins: { entries: { telegram: { enabled: true } } },
+        channels: { telegram: { enabled: true } },
+      },
+    });
+
+    expect(denied.deps).toEqual([]);
+    expect(disabled.deps).toEqual([]);
+    expect(allowed.deps.map((dep) => `${dep.name}@${dep.version}`)).toEqual([
+      "telegram-runtime@2.0.0",
+    ]);
   });
 
   it("reads each bundled plugin manifest once per runtime-deps scan", () => {

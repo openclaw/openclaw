@@ -20,6 +20,29 @@ on:
         description: Optional comma-separated Telegram scenario ids
         required: false
         type: string
+  workflow_call:
+    inputs:
+      package_spec:
+        description: Published OpenClaw package spec to test
+        required: true
+        type: string
+      provider_mode:
+        description: QA provider mode
+        required: false
+        default: mock-openai
+        type: string
+      scenario:
+        description: Optional comma-separated Telegram scenario ids
+        required: false
+        default: ""
+        type: string
+    secrets:
+      OPENAI_API_KEY:
+        required: false
+      OPENCLAW_QA_CONVEX_SITE_URL:
+        required: false
+      OPENCLAW_QA_CONVEX_SECRET_CI:
+        required: false
 
 permissions:
   contents: read
@@ -90,6 +113,13 @@ jobs:
             echo "package_spec must be openclaw@beta, openclaw@latest, or an exact OpenClaw release version; got: ${PACKAGE_SPEC}" >&2
             exit 1
           fi
+          case "${PROVIDER_MODE}" in
+            mock-openai | live-frontier) ;;
+            *)
+              echo "provider_mode must be mock-openai or live-frontier; got: ${PROVIDER_MODE}" >&2
+              exit 1
+              ;;
+          esac
 
           require_var() {
             local key="$1"
