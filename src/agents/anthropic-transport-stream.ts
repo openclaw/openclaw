@@ -651,13 +651,13 @@ function buildAnthropicParams(
       },
     ];
   }
- if (
-  options?.temperature !== undefined &&
-  !options.thinkingEnabled &&
-  !isClaudeOpus47Model(model.id)
-) {
-  params.temperature = options.temperature;
-}
+  if (
+    options?.temperature !== undefined &&
+    !options.thinkingEnabled &&
+    !isClaudeOpus47Model(model.id)
+  ) {
+    params.temperature = options.temperature;
+  }
   if (context.tools) {
     params.tools = convertAnthropicTools(context.tools, isOAuthToken);
   }

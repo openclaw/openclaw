@@ -413,4 +413,68 @@ describe("anthropic transport stream", () => {
       output_config: { effort: "xhigh" },
     });
   });
+  it("omits temperature for claude-opus-4-7", async () => {
+    const model = makeAnthropicTransportModel({
+      id: "claude-opus-4-7",
+      name: "Claude Opus 4.7",
+      maxTokens: 8192,
+    });
+
+    await runTransportStream(
+      model,
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+        temperature: 0.2,
+      } as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequest().payload).not.toHaveProperty("temperature");
+  });
+
+  it("omits temperature for claude-opus-4.7 spelling variant", async () => {
+    const model = makeAnthropicTransportModel({
+      id: "claude-opus-4.7",
+      name: "Claude Opus 4.7",
+      maxTokens: 8192,
+    });
+
+    await runTransportStream(
+      model,
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+        temperature: 0.2,
+      } as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequest().payload).not.toHaveProperty("temperature");
+  });
+
+  it("preserves temperature for supported models", async () => {
+    const model = makeAnthropicTransportModel({
+      id: "claude-sonnet-4-5",
+      name: "Claude Sonnet 4.5",
+      maxTokens: 8192,
+    });
+
+    await runTransportStream(
+      model,
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+        temperature: 0.7,
+      } as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequest().payload).toMatchObject({
+      temperature: 0.7,
+    });
+  });
 });
