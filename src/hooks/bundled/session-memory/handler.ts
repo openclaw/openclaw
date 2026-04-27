@@ -597,7 +597,9 @@ const saveSessionToMemory: HookHandler = async (event) => {
         }
         throw err;
       }
-      log.debug("Memory file written successfully (redirected)");
+      // "inline write completed (redirected)" — not yet final. The post-
+      // hook drain may still retract this file (blockSessionSave set late).
+      log.debug("Memory file written inline (redirected, pre-post-hook, may be retracted)");
       // Resolve the real path of the written file for retraction purposes.
       // writeFileWithinRoot follows symlinks, so the actual data may be at
       // a different location than the lexical redirect path. Retraction must
@@ -607,7 +609,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
       // logged path is consistent regardless of symlinks.
       const writePath = path.resolve(canonicalWorkspace, writeRelativePath);
       const relPath = writePath.replace(os.homedir(), "~");
-      log.info(`Session context saved to ${relPath}`);
+      log.info(`Session context staged at ${relPath} (redirected; final disposition decided by post-hook drain)`);
     } else {
       await fs.mkdir(memoryDir, { recursive: true });
       await writeFileWithinRoot({
@@ -616,10 +618,16 @@ const saveSessionToMemory: HookHandler = async (event) => {
         data: entry,
         encoding: "utf-8",
       });
-      log.debug("Memory file written successfully");
+      // "inline write completed" — not yet final. The post-hook drain
+      // (registered below) may still retract this file (blockSessionSave
+      // set late) or overwrite it (sessionSaveContent set late). Operators
+      // grepping for save success should filter on the post-drain
+      // "Session save retracted" / "replaced" lines emitted from the
+      // post-hook callback, not on these inline logs.
+      log.debug("Memory file written inline (pre-post-hook, may be retracted/replaced)");
 
       const relPath = memoryFilePath.replace(os.homedir(), "~");
-      log.info(`Session context saved to ${relPath}`);
+      log.info(`Session context staged at ${relPath} (final disposition decided by post-hook drain)`);
     }
 
     // Defer retraction/replacement to post-hook phase so that hooks
@@ -647,6 +655,24 @@ const saveSessionToMemory: HookHandler = async (event) => {
       // This applies to both redirected and non-redirected writes —
       // blockSessionSave means "no persistence anywhere."
       if (event.context.blockSessionSave === true && writtenEntry !== null) {
+        // PRIVACY: surface this loudly so operators can assess data egress.
+        // The transcript was already sent to the slug-generation LLM (and
+        // an inline write hit disk) BEFORE the late blockSessionSave hook
+        // fired. The memory file gets retracted from disk, but that does
+        // NOT un-send the data from the model provider's logs / training
+        // pipeline. To prevent transcript egress entirely, hooks must set
+        // blockSessionSave BEFORE the session-memory handler runs.
+        // (clawsweeper review on PR #38162 / #38161.)
+        if (!hasCustomContent && sessionContent) {
+          log.warn(
+            `PRIVACY: blockSessionSave was set by a late hook — memory file ` +
+              `will be retracted from ${writtenFilePath.replace(os.homedir(), "~")}, ` +
+              `BUT transcript content (${sessionContent.length} chars) was ` +
+              `already sent to the configured slug-generation LLM and cannot be ` +
+              `un-sent. To prevent egress entirely, set blockSessionSave BEFORE ` +
+              `the session-memory handler runs.`,
+          );
+        }
         try {
           if (preExistingContent !== null) {
             // Restore prior content rather than deleting — the file existed

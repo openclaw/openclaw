@@ -571,6 +571,32 @@ describe("hooks", () => {
       expect(event.postHookActions!.length).toBe(1);
     });
 
+    it("tolerates manually-constructed events that omit postHookActions (SDK compat)", async () => {
+      // The SDK re-exports InternalHookEvent through plugin-sdk/hook-runtime
+      // so plugins or tests may build events by hand rather than calling
+      // createInternalHookEvent. Pre-postHookActions plugins won't include
+      // the new field. The drainer must tolerate that gracefully (??= [])
+      // rather than throwing on `for..of undefined`. This is the public-
+      // surface compat test clawsweeper review on PR #38162 asked for.
+      let handlerRan = false;
+      registerInternalHook("command:new", () => {
+        handlerRan = true;
+      });
+      // Hand-built event — deliberately no postHookActions field.
+      const legacyEvent = {
+        type: "command" as const,
+        action: "new" as const,
+        sessionKey: "test-session",
+        context: {},
+        timestamp: new Date(),
+        messages: [] as string[],
+        // postHookActions: undefined (omitted on purpose)
+      };
+      // Must not throw despite missing field.
+      await triggerInternalHook(legacyEvent);
+      expect(handlerRan).toBe(true);
+    });
+
     it("snapshots actions registered after the drain begins (multi-handler stacking)", async () => {
       // Sanity: handlers can push actions. All actions registered BEFORE
       // the drain begins must run, in push order; actions registered by
