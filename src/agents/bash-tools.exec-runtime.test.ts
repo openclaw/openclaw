@@ -410,6 +410,18 @@ describe("exec notifyOnExit suppression", () => {
     expect(enqueueSystemEventMock.mock.calls[0]?.[0]).toContain("partial output");
     expect(enqueueSystemEventMock.mock.calls[0]?.[0]).toContain("Command timed out");
   });
+
+  it("preserves timeout guidance in verbose background exit notifications", async () => {
+    await runBackgroundedExit({
+      reason: "overall-timeout",
+      stdout: `${"verbose output ".repeat(40)}\n`,
+    });
+
+    const summary = String(enqueueSystemEventMock.mock.calls[0]?.[0] ?? "");
+    expect(summary).toContain("Exec failed");
+    expect(summary).toContain("Command timed out");
+    expect(summary).toContain("timeout=0");
+  });
 });
 
 describe("emitExecSystemEvent", () => {

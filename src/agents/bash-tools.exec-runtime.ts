@@ -281,7 +281,11 @@ export function normalizeNotifyOutput(value: string) {
   return value.replace(/\s+/g, " ").trim();
 }
 
-function compactNotifyOutput(value: string, maxChars = DEFAULT_NOTIFY_SNIPPET_CHARS) {
+function compactNotifyOutput(
+  value: string,
+  maxChars = DEFAULT_NOTIFY_SNIPPET_CHARS,
+  opts: { preserveEnd?: boolean } = {},
+) {
   const normalized = normalizeNotifyOutput(value);
   if (!normalized) {
     return "";
@@ -290,6 +294,9 @@ function compactNotifyOutput(value: string, maxChars = DEFAULT_NOTIFY_SNIPPET_CH
     return normalized;
   }
   const safe = Math.max(1, maxChars - 1);
+  if (opts.preserveEnd) {
+    return `…${normalized.slice(-safe)}`;
+  }
   return `${normalized.slice(0, safe)}…`;
 }
 
@@ -352,7 +359,13 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   }
   session.exitNotified = true;
   const exitLabel = formatExecSessionExitLabel(session);
-  const output = compactNotifyOutput(formatExecNotifyOutput(session));
+  const hasTimeoutReason =
+    isExecTimeoutExitReason(session.exitReason) && Boolean((session.failureReason || "").trim());
+  const output = compactNotifyOutput(
+    formatExecNotifyOutput(session),
+    hasTimeoutReason ? DEFAULT_NOTIFY_TAIL_CHARS : DEFAULT_NOTIFY_SNIPPET_CHARS,
+    { preserveEnd: hasTimeoutReason },
+  );
   if (status === "failed" && session.exitReason === "manual-cancel" && !output) {
     return;
   }
