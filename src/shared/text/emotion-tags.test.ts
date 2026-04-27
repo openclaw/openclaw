@@ -47,6 +47,19 @@ describe("stripEmotionTags", () => {
 
     expect(result).toEqual({ text: "hello there", changed: true });
   });
+
+  test("does not strip markdown reference link labels", () => {
+    const numberedReference = stripEmotionTags("See [fast][1] before choosing.");
+    const namedReference = stripEmotionTags("Read [clear][docs] next.");
+    const adjacentEmotionTags = stripEmotionTags("[fast][softly] go now.");
+
+    expect(numberedReference).toEqual({
+      text: "See [fast][1] before choosing.",
+      changed: false,
+    });
+    expect(namedReference).toEqual({ text: "Read [clear][docs] next.", changed: false });
+    expect(adjacentEmotionTags).toEqual({ text: "go now.", changed: true });
+  });
 });
 
 describe("sanitizeEmotionTagsForMode", () => {
