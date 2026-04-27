@@ -34,7 +34,7 @@ Docs: https://docs.openclaw.ai
 - Memory-core/dreaming: give narrative generation a 60-second timeout so slower local or remote models can finish instead of timing out at 15 seconds. Fixes #72837. (#72852) Thanks @RayWoo.
 - Plugins/hooks: inject each plugin's resolved config into internal hook event context without mutating the shared event object. (#72888) Thanks @jalapeno777.
 - Agents/ACP: pass the resolved ACP agent directory into media understanding so per-agent media caches and config are used for ACP-dispatched image turns. (#72832) Thanks @luyao618.
-- Gateway/Bonjour: truncate mDNS service names and host labels to the 63-byte DNS label limit without splitting multibyte characters. (#72809) Thanks @luyao618.
+- Gateway/Bonjour: truncate mDNS service names and host labels to the 63-byte DNS label limit at valid UTF-8 boundaries. (#72809) Thanks @luyao618.
 - Feishu: treat groups explicitly configured under channels.feishu.groups as admitted even when groupAllowFrom is empty, so per-group mention overrides work with the default allowlist policy. Fixes #67687. (#72789) Thanks @MoerAI.
 - Gateway/startup: keep hot Gateway boot paths on leaf config imports and add max-RSS reporting to the gateway startup bench so low-memory startup regressions are visible before release. Thanks @vincentkoc.
 - WebChat: read `chat.history` from active transcript branches, drop stale streamed assistant tails once final history catches up, and coalesce duplicate in-flight Control UI submits, so rewritten prompts, completed replies, and rapid send events no longer render or process twice. Fixes #72975, #72963, and #72974. Thanks @dmagdici, @lhtpluto, and @Benjamin5281999.
