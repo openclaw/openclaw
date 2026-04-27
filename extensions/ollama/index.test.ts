@@ -369,6 +369,64 @@ describe("ollama plugin", () => {
     });
   });
 
+  it("skips implicit localhost discovery when a custom remote Ollama provider is configured", async () => {
+    const provider = registerProvider();
+
+    const result = await provider.discovery.run({
+      config: {
+        models: {
+          providers: {
+            "ollama-cloud": {
+              api: "ollama",
+              baseUrl: "https://ollama.com",
+              models: [{ id: "kimi-k2.5", name: "Kimi K2.5" }],
+            },
+          },
+        },
+      },
+      env: { NODE_ENV: "development", OLLAMA_API_KEY: "ollama-live" },
+      resolveProviderApiKey: () => ({ apiKey: "ollama-live" }),
+    } as never);
+
+    expect(result).toBeNull();
+    expect(buildOllamaProviderMock).not.toHaveBeenCalled();
+  });
+
+  it("treats custom 127/8 Ollama providers as loopback for implicit discovery", async () => {
+    const provider = registerProvider();
+    buildOllamaProviderMock.mockResolvedValueOnce({
+      baseUrl: "http://127.0.0.1:11434",
+      api: "ollama",
+      models: [],
+    });
+
+    const result = await provider.discovery.run({
+      config: {
+        models: {
+          providers: {
+            "ollama-alt-local": {
+              api: "ollama",
+              baseUrl: "http://127.0.0.2:11434",
+              models: [{ id: "llama3.2", name: "Llama 3.2" }],
+            },
+          },
+        },
+      },
+      env: { NODE_ENV: "development", OLLAMA_API_KEY: "ollama-live" },
+      resolveProviderApiKey: () => ({ apiKey: "ollama-live" }),
+    } as never);
+
+    expect(result).toMatchObject({
+      provider: {
+        baseUrl: "http://127.0.0.1:11434",
+        api: "ollama",
+      },
+    });
+    expect(buildOllamaProviderMock).toHaveBeenCalledWith(undefined, {
+      quiet: false,
+    });
+  });
+
   it("does not mint synthetic auth for empty default-ish provider stubs", () => {
     const provider = registerProvider();
 

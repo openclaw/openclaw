@@ -50,6 +50,9 @@ const DEFAULT_STALE_MS = 30 * 60 * 1000;
 const DEFAULT_MAX_HOLD_MS = 5 * 60 * 1000;
 const DEFAULT_WATCHDOG_INTERVAL_MS = 60_000;
 const DEFAULT_TIMEOUT_GRACE_MS = 2 * 60 * 1000;
+// A payload-less lock can be left behind if shutdown lands between open("wx")
+// and the owner metadata write. Keep the grace short so 10s callers recover.
+const ORPHAN_LOCK_PAYLOAD_GRACE_MS = 5_000;
 const MAX_LOCK_HOLD_MS = 2_147_000_000;
 
 type CleanupState = {
@@ -416,7 +419,7 @@ async function shouldReclaimContendedLockFile(
   try {
     const stat = await fs.stat(lockPath);
     const ageMs = Math.max(0, nowMs - stat.mtimeMs);
-    return ageMs > staleMs;
+    return ageMs > Math.min(staleMs, ORPHAN_LOCK_PAYLOAD_GRACE_MS);
   } catch (error) {
     const code = (error as { code?: string } | null)?.code;
     return code !== "ENOENT";
@@ -538,13 +541,6 @@ export async function acquireSessionWriteLock(params: {
     let handle: fs.FileHandle | null = null;
     try {
       handle = await fs.open(lockPath, "wx");
-      const createdAt = new Date().toISOString();
-      const starttime = getProcessStartTime(process.pid);
-      const lockPayload: LockFilePayload = { pid: process.pid, createdAt };
-      if (starttime !== null) {
-        lockPayload.starttime = starttime;
-      }
-      await handle.writeFile(JSON.stringify(lockPayload, null, 2), "utf8");
       const createdHeld: HeldLock = {
         count: 1,
         handle,
@@ -553,6 +549,13 @@ export async function acquireSessionWriteLock(params: {
         maxHoldMs,
       };
       HELD_LOCKS.set(normalizedSessionFile, createdHeld);
+      const createdAt = new Date().toISOString();
+      const starttime = getProcessStartTime(process.pid);
+      const lockPayload: LockFilePayload = { pid: process.pid, createdAt };
+      if (starttime !== null) {
+        lockPayload.starttime = starttime;
+      }
+      await handle.writeFile(JSON.stringify(lockPayload, null, 2), "utf8");
       return {
         release: async () => {
           await releaseHeldLock(normalizedSessionFile, createdHeld);
@@ -560,6 +563,13 @@ export async function acquireSessionWriteLock(params: {
       };
     } catch (err) {
       if (handle) {
+        const currentHeld = HELD_LOCKS.get(normalizedSessionFile);
+        if (currentHeld?.handle === handle) {
+          HELD_LOCKS.delete(normalizedSessionFile);
+          if (HELD_LOCKS.size === 0) {
+            stopWatchdogTimer();
+          }
+        }
         try {
           await handle.close();
         } catch {

@@ -1,7 +1,7 @@
 import { type Api, completeSimple, type Model } from "@mariozechner/pi-ai";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { parseLiveCsvFilter } from "../media-generation/live-test-helpers.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
@@ -689,7 +689,7 @@ describeLive("live models (profile keys)", () => {
     async () => {
       logProgress("[live-models] loading config");
       const cfg = await withLiveStageTimeout(
-        Promise.resolve().then(() => loadConfig()),
+        Promise.resolve().then(() => getRuntimeConfig()),
         "[live-models] load config",
       );
       logProgress("[live-models] preparing models.json");

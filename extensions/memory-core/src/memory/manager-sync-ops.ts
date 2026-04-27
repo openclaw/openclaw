@@ -41,7 +41,7 @@ import {
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
 import { runMemoryAtomicReindex } from "./manager-atomic-reindex.js";
-import { openMemoryDatabaseAtPath } from "./manager-db.js";
+import { closeMemoryDatabase, openMemoryDatabaseAtPath } from "./manager-db.js";
 import {
   applyMemoryFallbackProviderState,
   resolveMemoryFallbackProviderRequest,
@@ -1204,8 +1204,8 @@ export abstract class MemoryManagerSyncOps {
           this.writeMeta(meta);
           this.pruneEmbeddingCacheIfNeeded?.();
 
-          this.db.close();
-          originalDb.close();
+          closeMemoryDatabase(this.db);
+          closeMemoryDatabase(originalDb);
           originalDbClosed = true;
           return meta;
         },
@@ -1217,7 +1217,7 @@ export abstract class MemoryManagerSyncOps {
       this.vector.dims = nextMeta?.vectorDims;
     } catch (err) {
       try {
-        this.db.close();
+        closeMemoryDatabase(this.db);
       } catch {}
       restoreOriginalState();
       throw err;

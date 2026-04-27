@@ -1,4 +1,4 @@
-export { loadConfig } from "openclaw/plugin-sdk/browser-config-runtime";
+export { getRuntimeConfig } from "openclaw/plugin-sdk/browser-config-runtime";
 export {
   callGatewayTool,
   imageResultFromFile,

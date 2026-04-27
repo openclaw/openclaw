@@ -585,6 +585,7 @@ Default slash command settings:
     Thread behavior:
 
     - Discord threads route as channel sessions and inherit parent channel config unless overridden.
+    - Thread sessions inherit the parent channel's session-level `/model` selection as a model-only fallback; thread-local `/model` selections still take precedence and parent transcript history is not copied unless transcript inheritance is enabled.
     - `channels.discord.thread.inheritParent` (default `false`) opts new auto-threads into seeding from the parent transcript. Per-account overrides live under `channels.discord.accounts.<id>.thread.inheritParent`.
     - Message-tool reactions can resolve `user:<id>` DM targets.
     - `guilds.<guild>.channels.<channel>.requireMention: false` is preserved during reply-stage activation fallback.

@@ -110,7 +110,7 @@ dispatches:
 
 - manual `CI` for the full normal CI graph
 - `OpenClaw Release Checks` for install smoke, cross-OS release checks, live and
-  E2E checks, Docker release-path suites, OpenWebUI, QA Lab, Matrix, and
+  E2E checks, Docker release-path suites, OpenWebUI, QA Lab, fast Matrix, and
   Telegram release lanes
 - optional post-publish Telegram E2E when a package spec is supplied
 
@@ -122,22 +122,68 @@ gh workflow run full-release-validation.yml \
   --repo openclaw/openclaw \
   --ref main \
   -f ref=<branch-or-sha> \
-  -f workflow_ref=main \
   -f provider=openai \
   -f mode=both
 ```
 
+Run the workflow itself from the trusted current ref, normally `--ref main`;
+child workflows are dispatched from that same ref even when `ref` points at an
+older release branch or tag. Full Release Validation has no separate child
+workflow ref input; choose the trusted harness by choosing the workflow run ref.
+
 If a full run is already active on a newer `origin/main`, prefer watching that
 run over dispatching a duplicate. If you accidentally dispatch a stale duplicate,
 cancel it and monitor the current run.
+
+The child-dispatch jobs record the child run ids. The final
+`Verify full validation` job re-queries those child runs and is the canonical
+parent gate. If a child workflow failed but was later rerun successfully, rerun
+only the failed parent verifier job; do not dispatch a new full umbrella unless
+the release evidence is stale.
+
+### Release Evidence
+
+After release-candidate validation or before a release decision, record the
+important run ids in the private `openclaw/releases-private` evidence ledger.
+Use the manual `OpenClaw Release Evidence`
+(`openclaw-release-evidence.yml`) workflow there. It writes durable summaries
+under `evidence/<release-id>/` and commits:
+
+- `release-evidence.md`
+- `release-evidence.json`
+- `index.json`
+- `runs/<label>.json`
+
+Use one run per line:
+
+```text
+full-release-validation openclaw/openclaw <run-id> blocking
+package-acceptance openclaw/openclaw <run-id> blocking
+release-checks openclaw/openclaw <run-id> blocking
+```
+
+Store summaries, run URLs, artifact metadata, timings, pass/fail state, and
+short release-manager notes there. Do not store raw logs, provider
+prompts/responses, channel transcripts, signing material, or secret-bearing
+config in git; raw logs stay in Actions artifacts.
+
+When `Full Release Validation` completes and
+`OPENCLAW_RELEASES_PRIVATE_DISPATCH_TOKEN` is configured in the public repo, it
+requests the private `OpenClaw Release Evidence From Full Validation` workflow.
+That private workflow reads the parent full-validation run, extracts the child
+CI/release-checks/Telegram run ids from the parent logs, and opens the evidence
+PR automatically. If the token is absent or the run predates this wiring, trigger
+that private workflow manually with the full-validation run id.
 
 ### Release Checks
 
 `OpenClaw Release Checks` (`openclaw-release-checks.yml`) is the release child
 workflow. It is broader than normal CI but narrower than the umbrella because it
 does not dispatch the separate full normal CI child. It runs Package Acceptance
-with `telegram_mode=mock-openai`, so the release package tarball also goes
-through Telegram package QA. Use it when release-path validation is needed
+with artifact-native delta lanes and `telegram_mode=mock-openai`, so the release
+package tarball also goes through offline plugin proof, bundled-channel compat,
+and Telegram package QA. The Docker release-path chunks cover the overlapping
+package/update/plugin lanes. Use it when release-path validation is needed
 without rerunning the entire umbrella.
 
 ```bash
@@ -148,6 +194,24 @@ gh workflow run openclaw-release-checks.yml \
   -f provider=openai \
   -f mode=both
 ```
+
+### QA Lab Matrix Profiles
+
+`pnpm openclaw qa matrix` defaults to `--profile all`. Do not assume the CLI
+default is the fast release path. Use explicit profiles:
+
+- `--profile fast`: release-critical Matrix transport contract; add
+  `--fail-fast` only when the target CLI supports it
+- `--profile transport|media|e2ee-smoke|e2ee-deep|e2ee-cli`: sharded full
+  Matrix proof
+- `OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000`: CI-friendly no-reply quiet
+  window when paired with fast or sharded gates
+
+`QA-Lab - All Lanes` uses explicit fast Matrix on scheduled runs; manual
+dispatch keeps `matrix_profile=all` as the default and always shards that full
+Matrix selection. `OpenClaw Release Checks` uses explicit fast Matrix; run the
+all-lanes workflow when release investigation needs full Matrix media/E2EE
+inventory.
 
 ### Reusable Live/E2E Checks
 
@@ -179,6 +243,19 @@ Useful knobs:
 - `live_model_providers=fireworks` (or comma/space separated providers): run one
   targeted Docker live model job instead of the full provider matrix.
 - blank `live_model_providers`: run the full live-model provider matrix.
+
+When live suites are enabled, the workflow shards broad native `pnpm test:live`
+coverage through `scripts/test-live-shard.mjs` instead of one serial `live-all`
+job:
+
+- `native-live-src-agents`
+- `native-live-src-gateway`
+- `native-live-test`
+- `native-live-extensions-a-k`
+- `native-live-extensions-l-z`
+
+Use `node scripts/test-live-shard.mjs <shard> --list` to see the exact files
+before rerunning a failed native live shard.
 
 For model-list or provider-selection fixes, use `live_models_only=true` plus the
 specific `live_model_providers` allowlist. Confirm logs show the expected
@@ -219,16 +296,34 @@ Multiple lanes are allowed:
 docker_lanes: install-e2e bundled-channel-update-acpx
 ```
 
-That skips the three chunk matrix and runs one targeted Docker job against the
-prepared GHCR images and a fresh OpenClaw npm tarball for the selected ref.
-Reruns usually need that new tarball because the fix being tested changed the
-package contents even if the SHA-tagged GHCR Docker image can be reused.
+That skips the release chunk matrix and runs one targeted Docker job against the
+prepared GHCR images and the selected package artifact. Rerun commands
+generated inside GitHub artifacts include `package_artifact_run_id`,
+`package_artifact_name`, `docker_e2e_bare_image`, and
+`docker_e2e_functional_image` when available, so failed lanes can reuse the
+exact tarball and prepared images from the failed run. When the fix changes
+package contents, omit those reuse inputs so the workflow packs a new tarball.
 Live-only targeted reruns skip the E2E images and build only the live-test
-image. Release-path normal mode remains max three Docker chunk jobs:
+image. Release-path normal mode fans out into four Docker chunk jobs:
 
 - `core`
 - `package-update`
-- `plugins-integrations`
+- `plugins-runtime`
+- `bundled-channels`
+
+OpenWebUI is folded into `plugins-runtime` for full release-path coverage and
+keeps a standalone `openwebui` chunk only for OpenWebUI-only dispatches. The
+legacy `plugins-integrations` chunk still works as an aggregate alias for manual
+reruns, but the release workflow uses the split chunks so plugin runtime checks
+and bundled-channel checks can run on separate machines. The bundled-channel
+runtime-dependency coverage inside `bundled-channels`
+uses the split `bundled-channel-*` and `bundled-channel-update-*` lanes rather
+than the serial `bundled-channel-deps` lane, so failures produce cheap targeted
+reruns for the exact channel/update scenario. The bundled plugin
+install/uninstall sweep is also split into
+`bundled-plugin-install-uninstall-0` through
+`bundled-plugin-install-uninstall-7`; selecting the legacy
+`bundled-plugin-install-uninstall` lane expands to all eight shards.
 
 ## Package Acceptance
 
@@ -289,7 +384,7 @@ Profiles:
   package/update coverage.
 - `product`: package profile plus broader product surfaces: MCP channels,
   cron/subagent cleanup, OpenAI web search, and OpenWebUI.
-- `full`: Docker release-path chunks with OpenWebUI.
+- `full`: split Docker release-path chunks with OpenWebUI.
 - `custom`: exact `docker_lanes` list for a focused rerun.
 
 Candidate sources:
@@ -374,7 +469,7 @@ gh workflow run openclaw-live-and-e2e-checks-reusable.yml \
 That path still runs the prepare job, so it creates a new tarball for `<sha>`.
 If the SHA-tagged GHCR bare/functional image already exists, CI skips rebuilding
 that image and only uploads the fresh package artifact before the targeted lane
-job. Do not rerun the full three-chunk release path unless the failed lane list
+job. Do not rerun the full release path unless the failed lane list
 or touched surface really requires it.
 
 ## Docker Expected Timings
@@ -391,7 +486,7 @@ these rough bands:
   `session-runtime-context` ~20s, `gateway-network` ~34s, `qr` ~44s.
 - Medium deterministic lanes, ~1-5 minutes:
   `npm-onboard-channel-agent` ~96s, `openai-image-auth` ~99s,
-  bundled channel/update lanes usually ~90-300s, `openwebui` ~225s,
+  bundled channel/update lanes usually ~90-300s when split, `openwebui` ~225s,
   `mcp-channels` ~274s.
 - Heavy deterministic lanes, ~6-10 minutes:
   `bundled-channel-root-owned` ~429s,

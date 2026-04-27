@@ -2,6 +2,19 @@
   "id": "opencode-go",
   "enabledByDefault": true,
   "providers": ["opencode-go"],
+  "providerEndpoints": [
+    {
+      "endpointClass": "opencode-native",
+      "hostSuffixes": ["opencode.ai"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "opencode-go": {
+        "family": "opencode"
+      }
+    }
+  },
   "providerAuthEnvVars": {
     "opencode-go": ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"]
   },

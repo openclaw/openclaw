@@ -50,7 +50,7 @@ import {
   buildMentionPrompt,
   doesMatrixQaReplyBodyMatchToken,
   isMatrixQaExactMarkerReply,
-  NO_REPLY_WINDOW_MS,
+  resolveMatrixQaNoReplyWindowMs,
   type MatrixQaScenarioContext,
 } from "./scenario-runtime-shared.js";
 import type { MatrixQaReplyArtifact, MatrixQaScenarioExecution } from "./scenario-types.js";
@@ -3310,14 +3310,14 @@ export async function runMatrixQaE2eeVerificationNoticeNoTriggerScenario(
             token,
           }),
         roomId,
-        timeoutMs: Math.min(NO_REPLY_WINDOW_MS, context.timeoutMs),
+        timeoutMs: resolveMatrixQaNoReplyWindowMs(context.timeoutMs),
       });
       if (result.matched) {
         throw new Error(`unexpected E2EE verification-notice reply: ${result.event.eventId}`);
       }
       return {
         artifacts: {
-          expectedNoReplyWindowMs: Math.min(NO_REPLY_WINDOW_MS, context.timeoutMs),
+          expectedNoReplyWindowMs: resolveMatrixQaNoReplyWindowMs(context.timeoutMs),
           noticeEventId,
           roomKey,
           roomId,
@@ -3326,7 +3326,7 @@ export async function runMatrixQaE2eeVerificationNoticeNoTriggerScenario(
           `encrypted room key: ${roomKey}`,
           `encrypted room id: ${roomId}`,
           `verification notice event: ${noticeEventId}`,
-          `waited ${Math.min(NO_REPLY_WINDOW_MS, context.timeoutMs)}ms with no SUT reply`,
+          `waited ${resolveMatrixQaNoReplyWindowMs(context.timeoutMs)}ms with no SUT reply`,
         ].join("\n"),
       };
     },

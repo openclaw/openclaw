@@ -22,7 +22,19 @@ fi
 
 if [[ "${OPENCLAW_SKIP_DOCKER_BUILD:-}" == "1" ]]; then
   echo "==> Reuse live-test image: $LIVE_IMAGE_NAME"
-  exit 0
+  if docker image inspect "$LIVE_IMAGE_NAME" >/dev/null 2>&1; then
+    exit 0
+  fi
+  echo "==> Live-test image not found locally; pulling: $LIVE_IMAGE_NAME"
+  if docker pull "$LIVE_IMAGE_NAME"; then
+    exit 0
+  fi
+  if ! docker_build_on_missing_enabled; then
+    echo "Live-test image not found: $LIVE_IMAGE_NAME" >&2
+    echo "Build it first or unset OPENCLAW_SKIP_DOCKER_BUILD." >&2
+    exit 1
+  fi
+  echo "==> Live-test image not available; building because OPENCLAW_DOCKER_BUILD_ON_MISSING/OPENCLAW_TESTBOX allows fallback."
 fi
 
 echo "==> Build live-test image: $LIVE_IMAGE_NAME (target=build)"

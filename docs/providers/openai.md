@@ -86,6 +86,30 @@ through PI, `openclaw doctor` warns and leaves the route unchanged.
 | Realtime voice            | Voice Call `realtime.provider: "openai"` / Control UI Talk | Yes                                                    |
 | Embeddings                | memory embedding provider                                  | Yes                                                    |
 
+## Memory embeddings
+
+OpenClaw can use OpenAI, or an OpenAI-compatible embedding endpoint, for
+`memory_search` indexing and query embeddings:
+
+```json5
+{
+  agents: {
+    defaults: {
+      memorySearch: {
+        provider: "openai",
+        model: "text-embedding-3-small",
+      },
+    },
+  },
+}
+```
+
+For OpenAI-compatible endpoints that require asymmetric embedding labels, set
+`queryInputType` and `documentInputType` under `memorySearch`. OpenClaw forwards
+those as provider-specific `input_type` request fields: query embeddings use
+`queryInputType`; indexed memory chunks and batch indexing use
+`documentInputType`. See the [Memory configuration reference](/reference/memory-config#provider-specific-config) for the full example.
+
 ## Getting started
 
 Choose your preferred auth method and follow the setup steps.
@@ -522,7 +546,17 @@ Legacy `plugins.entries.openai.config.personality` is still read as a compatibil
     | API key | `...openai.apiKey` | Falls back to `OPENAI_API_KEY` |
 
     <Note>
-    Supports Azure OpenAI via `azureEndpoint` and `azureDeployment` config keys. Supports bidirectional tool calling. Uses G.711 u-law audio format.
+    Supports Azure OpenAI via `azureEndpoint` and `azureDeployment` config keys for backend realtime bridges. Supports bidirectional tool calling. Uses G.711 u-law audio format.
+    </Note>
+
+    <Note>
+    Control UI Talk uses OpenAI browser realtime sessions with a Gateway-minted
+    ephemeral client secret and a direct browser WebRTC SDP exchange against the
+    OpenAI Realtime API. Maintainer live verification is available with
+    `OPENAI_API_KEY=... GEMINI_API_KEY=... node --import tsx scripts/dev/realtime-talk-live-smoke.ts`;
+    the OpenAI leg mints a client secret in Node, generates a browser SDP offer
+    with fake microphone media, posts it to OpenAI, and applies the SDP answer
+    without logging secrets.
     </Note>
 
   </Accordion>

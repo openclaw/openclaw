@@ -19,6 +19,7 @@ export type CronPayloadOutcome = {
   deliveryPayloadHasStructuredContent: boolean;
   hasFatalErrorPayload: boolean;
   embeddedRunError?: string;
+  pendingPresentationWarningError?: string;
 };
 
 type CronDenialSignal = {
@@ -106,6 +107,26 @@ function formatCronFailureSignal(signal: NormalizedCronFailureSignal): string {
   return `cron classifier: ${kind} failure${source ? ` from ${source}` : ""}${
     code ? ` (${code})` : ""
   }: ${signal.message}`;
+}
+
+function formatCronRunLevelError(error: unknown): string | undefined {
+  const direct = normalizeOptionalString(error);
+  if (direct) {
+    return `cron isolated run failed: ${direct}`;
+  }
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+  const record = error as { message?: unknown; kind?: unknown };
+  const message = normalizeOptionalString(record.message);
+  if (message) {
+    return `cron isolated run failed: ${message}`;
+  }
+  const kind = normalizeOptionalString(record.kind);
+  if (kind) {
+    return `cron isolated run failed: ${kind}`;
+  }
+  return "cron isolated run failed";
 }
 
 export function pickSummaryFromOutput(text: string | undefined) {
@@ -221,6 +242,14 @@ export function resolveHeartbeatAckMaxChars(agentCfg?: { heartbeat?: { ackMaxCha
   return Math.max(0, raw);
 }
 
+function isCronMessagePresentationWarning(text: string | undefined): boolean {
+  const normalized = normalizeOptionalString(text)?.toLowerCase();
+  return (
+    normalized === "⚠️ ✉️ message failed" ||
+    normalized?.startsWith("⚠️ ✉️ message failed:") === true
+  );
+}
+
 export function resolveCronPayloadOutcome(params: {
   payloads: DeliveryPayload[];
   runLevelError?: unknown;
@@ -239,16 +268,33 @@ export function resolveCronPayloadOutcome(params: {
   const lastErrorPayloadIndex = params.payloads.findLastIndex(
     (payload) => payload?.isError === true,
   );
+  const lastErrorPayloadText = [...params.payloads]
+    .toReversed()
+    .find((payload) => payload?.isError === true && Boolean(payload?.text?.trim()))
+    ?.text?.trim();
+  const normalizedFinalAssistantVisibleText = normalizeOptionalString(
+    params.finalAssistantVisibleText,
+  );
   const hasSuccessfulPayloadAfterLastError =
     !params.runLevelError &&
     lastErrorPayloadIndex >= 0 &&
     params.payloads
       .slice(lastErrorPayloadIndex + 1)
       .some((payload) => payload?.isError !== true && Boolean(payload?.text?.trim()));
-  const hasFatalStructuredErrorPayload = hasErrorPayload && !hasSuccessfulPayloadAfterLastError;
-  const normalizedFinalAssistantVisibleText = normalizeOptionalString(
-    params.finalAssistantVisibleText,
-  );
+  const hasSuccessfulPayloadBeforeLastError =
+    !params.runLevelError &&
+    lastErrorPayloadIndex > 0 &&
+    params.payloads
+      .slice(0, lastErrorPayloadIndex)
+      .some((payload) => payload?.isError !== true && Boolean(payload?.text?.trim()));
+  const hasPendingPresentationWarning =
+    !params.runLevelError &&
+    params.failureSignal?.fatalForCron !== true &&
+    lastErrorPayloadIndex >= 0 &&
+    isCronMessagePresentationWarning(lastErrorPayloadText) &&
+    (normalizedFinalAssistantVisibleText !== undefined || hasSuccessfulPayloadBeforeLastError);
+  const hasFatalStructuredErrorPayload =
+    hasErrorPayload && !hasSuccessfulPayloadAfterLastError && !hasPendingPresentationWarning;
   const hasStructuredDeliveryPayloads = selectedDeliveryPayloads.some((payload) =>
     payloadHasStructuredDeliveryContent(payload),
   );
@@ -273,10 +319,6 @@ export function resolveCronPayloadOutcome(params: {
       : synthesizedText
         ? [{ text: synthesizedText }]
         : [];
-  const lastErrorPayloadText = [...params.payloads]
-    .toReversed()
-    .find((payload) => payload?.isError === true && Boolean(payload?.text?.trim()))
-    ?.text?.trim();
   const denialSignal = resolveCronDenialSignal([
     { field: "summary", text: summary },
     { field: "outputText", text: outputText },
@@ -289,33 +331,46 @@ export function resolveCronPayloadOutcome(params: {
     })),
   ]);
   const failureSignal = normalizeCronFailureSignal(params.failureSignal);
+  const runLevelError = formatCronRunLevelError(params.runLevelError);
   const hasFatalErrorPayload =
-    hasFatalStructuredErrorPayload || failureSignal !== undefined || denialSignal !== undefined;
-  const shouldUseFailureSignalPayload =
-    failureSignal !== undefined && !hasFatalStructuredErrorPayload;
-  const failureSignalDeliveryPayload = shouldUseFailureSignalPayload
-    ? ({ text: failureSignal.message, isError: true } satisfies DeliveryPayload)
+    hasFatalStructuredErrorPayload ||
+    failureSignal !== undefined ||
+    denialSignal !== undefined ||
+    runLevelError !== undefined;
+  const structuredErrorText = hasFatalStructuredErrorPayload
+    ? (lastErrorPayloadText ?? "cron isolated run returned an error payload")
+    : undefined;
+  const shouldUseRunLevelErrorPayload =
+    runLevelError !== undefined &&
+    structuredErrorText === undefined &&
+    failureSignal === undefined &&
+    denialSignal === undefined;
+  const fatalDeliveryText =
+    structuredErrorText ??
+    failureSignal?.message ??
+    (shouldUseRunLevelErrorPayload ? runLevelError : undefined);
+  const fatalDeliveryPayload = fatalDeliveryText
+    ? ({ text: fatalDeliveryText, isError: true } satisfies DeliveryPayload)
     : undefined;
   return {
-    summary: shouldUseFailureSignalPayload
-      ? (pickSummaryFromOutput(failureSignal.message) ?? summary)
-      : summary,
-    outputText: shouldUseFailureSignalPayload ? failureSignal.message : outputText,
-    synthesizedText: shouldUseFailureSignalPayload ? failureSignal.message : synthesizedText,
-    deliveryPayload: failureSignalDeliveryPayload ?? deliveryPayload,
-    deliveryPayloads: failureSignalDeliveryPayload
-      ? [failureSignalDeliveryPayload]
-      : resolvedDeliveryPayloads,
-    deliveryPayloadHasStructuredContent: failureSignalDeliveryPayload
+    summary: fatalDeliveryText ? (pickSummaryFromOutput(fatalDeliveryText) ?? summary) : summary,
+    outputText: fatalDeliveryText ?? outputText,
+    synthesizedText: fatalDeliveryText ?? synthesizedText,
+    deliveryPayload: fatalDeliveryPayload ?? deliveryPayload,
+    deliveryPayloads: fatalDeliveryPayload ? [fatalDeliveryPayload] : resolvedDeliveryPayloads,
+    deliveryPayloadHasStructuredContent: fatalDeliveryPayload
       ? false
       : deliveryPayloadHasStructuredContent,
     hasFatalErrorPayload,
-    embeddedRunError: hasFatalStructuredErrorPayload
-      ? (lastErrorPayloadText ?? "cron isolated run returned an error payload")
+    embeddedRunError: structuredErrorText
+      ? structuredErrorText
       : failureSignal
         ? formatCronFailureSignal(failureSignal)
         : denialSignal
           ? formatCronDenialSignal(denialSignal)
-          : undefined,
+          : runLevelError,
+    pendingPresentationWarningError: hasPendingPresentationWarning
+      ? lastErrorPayloadText
+      : undefined,
   };
 }

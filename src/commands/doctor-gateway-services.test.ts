@@ -27,7 +27,7 @@ const mocks = vi.hoisted(() => ({
   readCommand: vi.fn(),
   stage: vi.fn(),
   install: vi.fn(),
-  writeConfigFile: vi.fn().mockResolvedValue(undefined),
+  replaceConfigFile: vi.fn().mockResolvedValue(undefined),
   auditGatewayServiceConfig: vi.fn(),
   buildGatewayInstallPlan: vi.fn(),
   resolveGatewayAuthTokenForService: vi.fn(),
@@ -48,7 +48,7 @@ vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
-    writeConfigFile: mocks.writeConfigFile,
+    replaceConfigFile: mocks.replaceConfigFile,
   };
 });
 
@@ -68,6 +68,10 @@ vi.mock("../daemon/service-audit.js", () => ({
   readEmbeddedGatewayToken: readEmbeddedGatewayTokenForTest,
   SERVICE_AUDIT_CODES: {
     gatewayEntrypointMismatch: testServiceAuditCodes.gatewayEntrypointMismatch,
+    gatewayManagedEnvEmbedded: testServiceAuditCodes.gatewayManagedEnvEmbedded,
+    gatewayPortMismatch: testServiceAuditCodes.gatewayPortMismatch,
+    gatewayProxyEnvEmbedded: testServiceAuditCodes.gatewayProxyEnvEmbedded,
+    gatewayTokenMismatch: testServiceAuditCodes.gatewayTokenMismatch,
   },
 }));
 
@@ -227,6 +231,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     fsMocks.realpath.mockImplementation(async (value: string) => value);
+    mocks.resolveGatewayPort.mockReturnValue(18789);
     mocks.resolveGatewayAuthTokenForService.mockImplementation(async (cfg: OpenClawConfig, env) => {
       const configToken =
         typeof cfg.gateway?.auth?.token === "string" ? cfg.gateway.auth.token.trim() : undefined;
@@ -277,9 +282,122 @@ describe("maybeRepairGatewayServiceConfig", () => {
         }),
       }),
     );
-    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
     expect(mocks.stage).not.toHaveBeenCalled();
     expect(mocks.install).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes planned managed env keys into service audit for legacy inline secret detection", async () => {
+    mocks.readCommand.mockResolvedValue({
+      programArguments: gatewayProgramArguments,
+      environment: {
+        TAVILY_API_KEY: "old-inline-value",
+      },
+    });
+    mocks.buildGatewayInstallPlan.mockResolvedValue({
+      programArguments: gatewayProgramArguments,
+      workingDirectory: "/tmp",
+      environment: {
+        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "TAVILY_API_KEY",
+      },
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: false,
+      issues: [
+        {
+          code: "gateway-managed-env-embedded",
+          message: "Gateway service embeds managed environment values that should load at runtime.",
+          detail: "inline keys: TAVILY_API_KEY",
+          level: "recommended",
+        },
+      ],
+    });
+    mocks.install.mockResolvedValue(undefined);
+
+    await runRepair({ gateway: {} });
+
+    expect(mocks.auditGatewayServiceConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedManagedServiceEnvKeys: new Set(["TAVILY_API_KEY"]),
+      }),
+    );
+    expect(mocks.install).toHaveBeenCalledTimes(1);
+  });
+
+  it("repairs gateway services whose pinned port differs from current config", async () => {
+    mocks.resolveGatewayPort.mockReturnValue(18888);
+    mocks.readCommand.mockResolvedValue({
+      programArguments: gatewayProgramArguments,
+      environment: {},
+    });
+    mocks.buildGatewayInstallPlan.mockResolvedValue({
+      programArguments: ["/usr/bin/node", "/usr/local/bin/openclaw", "gateway", "--port", "18888"],
+      workingDirectory: "/tmp",
+      environment: {},
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: false,
+      issues: [
+        {
+          code: "gateway-port-mismatch",
+          message: "Gateway service port does not match current gateway config.",
+          detail: "18789 -> 18888",
+          level: "recommended",
+        },
+      ],
+    });
+    mocks.install.mockResolvedValue(undefined);
+
+    await runRepair({ gateway: { port: 18888 } });
+
+    expect(mocks.auditGatewayServiceConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedPort: 18888,
+      }),
+    );
+    expect(mocks.install).toHaveBeenCalledWith(
+      expect.objectContaining({
+        programArguments: expect.arrayContaining(["18888"]),
+      }),
+    );
+  });
+
+  it("repairs gateway services with embedded proxy environment values", async () => {
+    mocks.readCommand.mockResolvedValue({
+      programArguments: gatewayProgramArguments,
+      environment: {
+        HTTP_PROXY: "http://proxy.local:7890",
+        HTTPS_PROXY: "https://proxy.local:7890",
+      },
+    });
+    mocks.buildGatewayInstallPlan.mockResolvedValue({
+      programArguments: gatewayProgramArguments,
+      workingDirectory: "/tmp",
+      environment: {},
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: false,
+      issues: [
+        {
+          code: "gateway-proxy-env-embedded",
+          message: "Gateway service embeds proxy environment values that should not be persisted.",
+          detail: "inline keys: HTTP_PROXY, HTTPS_PROXY",
+          level: "recommended",
+        },
+      ],
+    });
+    mocks.install.mockResolvedValue(undefined);
+
+    await runRepair({ gateway: {} });
+
+    expect(mocks.install).toHaveBeenCalledWith(
+      expect.objectContaining({
+        environment: expect.not.objectContaining({
+          HTTP_PROXY: expect.any(String),
+          HTTPS_PROXY: expect.any(String),
+        }),
+      }),
+    );
   });
 
   it("uses OPENCLAW_GATEWAY_TOKEN when config token is missing", async () => {
@@ -308,13 +426,16 @@ describe("maybeRepairGatewayServiceConfig", () => {
           }),
         }),
       );
-      expect(mocks.writeConfigFile).toHaveBeenCalledWith(
+      expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
         expect.objectContaining({
-          gateway: expect.objectContaining({
-            auth: expect.objectContaining({
-              token: "env-token",
+          nextConfig: expect.objectContaining({
+            gateway: expect.objectContaining({
+              auth: expect.objectContaining({
+                token: "env-token",
+              }),
             }),
           }),
+          afterWrite: { mode: "auto" },
         }),
       );
       expect(mocks.stage).not.toHaveBeenCalled();
@@ -531,13 +652,16 @@ describe("maybeRepairGatewayServiceConfig", () => {
             expectedGatewayToken: undefined,
           }),
         );
-        expect(mocks.writeConfigFile).toHaveBeenCalledWith(
+        expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
           expect.objectContaining({
-            gateway: expect.objectContaining({
-              auth: expect.objectContaining({
-                token: "stale-token",
+            nextConfig: expect.objectContaining({
+              gateway: expect.objectContaining({
+                auth: expect.objectContaining({
+                  token: "stale-token",
+                }),
               }),
             }),
+            afterWrite: { mode: "auto" },
           }),
         );
         expect(mocks.buildGatewayInstallPlan).toHaveBeenCalledWith(
@@ -588,7 +712,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
           }),
         );
 
-        expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+        expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
         expect(mocks.stage).toHaveBeenCalledTimes(1);
         expect(mocks.install).not.toHaveBeenCalled();
       },
@@ -627,7 +751,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
 
         await runRepair(cfg);
 
-        expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+        expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
         expect(mocks.buildGatewayInstallPlan).toHaveBeenCalledWith(
           expect.objectContaining({
             config: cfg,
@@ -657,7 +781,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
         EXTERNAL_SERVICE_REPAIR_NOTE,
         "Gateway service config",
       );
-      expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
       expect(mocks.stage).not.toHaveBeenCalled();
       expect(mocks.install).not.toHaveBeenCalled();
     });

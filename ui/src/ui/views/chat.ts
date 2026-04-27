@@ -18,7 +18,7 @@ import {
   renderReadingIndicatorGroup,
   renderStreamingGroup,
 } from "../chat/grouped-render.ts";
-import { InputHistory } from "../chat/input-history.ts";
+import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../chat/input-history.ts";
 import { PinnedMessages } from "../chat/pinned-messages.ts";
 import { getPinnedMessageSummary } from "../chat/pinned-summary.ts";
 import type { RealtimeTalkStatus } from "../chat/realtime-talk.ts";
@@ -100,6 +100,7 @@ export type ChatProps = {
   getDraft?: () => string;
   onDraftChange: (next: string) => void;
   onRequestUpdate?: () => void;
+  onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
   onSend: () => void;
   onCompact?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
@@ -124,14 +125,8 @@ export type ChatProps = {
   basePath?: string;
 };
 
-// Persistent instances keyed by session
-const inputHistories = new Map<string, InputHistory>();
 const pinnedMessagesMap = new Map<string, PinnedMessages>();
 const deletedMessagesMap = new Map<string, DeletedMessages>();
-
-function getInputHistory(sessionKey: string): InputHistory {
-  return getOrCreateSessionCacheValue(inputHistories, sessionKey, () => new InputHistory());
-}
 
 function getPinnedMessages(sessionKey: string): PinnedMessages {
   return getOrCreateSessionCacheValue(
@@ -199,6 +194,18 @@ export const cleanupChatModuleState = resetChatViewState;
 function adjustTextareaHeight(el: HTMLTextAreaElement) {
   el.style.height = "auto";
   el.style.height = `${Math.min(el.scrollHeight, 150)}px`;
+}
+
+function restoreHistoryCaret(target: HTMLTextAreaElement, direction: "up" | "down") {
+  requestAnimationFrame(() => {
+    if (document.activeElement !== target) {
+      return;
+    }
+    adjustTextareaHeight(target);
+    const caret = direction === "up" ? 0 : target.value.length;
+    target.selectionStart = caret;
+    target.selectionEnd = caret;
+  });
 }
 
 function generateAttachmentId(): string {
@@ -726,7 +733,6 @@ export function renderChat(props: ChatProps) {
   };
   const pinned = getPinnedMessages(props.sessionKey);
   const deleted = getDeletedMessages(props.sessionKey);
-  const inputHistory = getInputHistory(props.sessionKey);
   const hasAttachments = (props.attachments?.length ?? 0) > 0;
   const tokens = tokenEstimate(props.draft);
 
@@ -971,20 +977,27 @@ export function renderChat(props: ChatProps) {
       return;
     }
 
-    // Input history (only when input is empty)
-    if (!props.draft.trim()) {
-      if (e.key === "ArrowUp") {
-        const prev = inputHistory.up();
-        if (prev !== null) {
+    if ((e.key === "ArrowUp" || e.key === "ArrowDown") && props.onHistoryKeydown) {
+      const target = e.target as HTMLTextAreaElement;
+      const result = props.onHistoryKeydown({
+        key: e.key,
+        selectionStart: target.selectionStart,
+        selectionEnd: target.selectionEnd,
+        valueLength: target.value.length,
+        altKey: e.altKey,
+        ctrlKey: e.ctrlKey,
+        metaKey: e.metaKey,
+        shiftKey: e.shiftKey,
+        isComposing: e.isComposing,
+        keyCode: e.keyCode,
+      });
+      if (result.handled) {
+        if (result.preventDefault) {
           e.preventDefault();
-          props.onDraftChange(prev);
         }
-        return;
-      }
-      if (e.key === "ArrowDown") {
-        const next = inputHistory.down();
-        e.preventDefault();
-        props.onDraftChange(next ?? "");
+        if (result.restoreCaret) {
+          restoreHistoryCaret(target, result.restoreCaret);
+        }
         return;
       }
     }
@@ -1010,9 +1023,6 @@ export function renderChat(props: ChatProps) {
       }
       e.preventDefault();
       if (canCompose) {
-        if (props.draft.trim()) {
-          inputHistory.push(props.draft);
-        }
         props.onSend();
       }
     }
@@ -1022,7 +1032,6 @@ export function renderChat(props: ChatProps) {
     const target = e.target as HTMLTextAreaElement;
     adjustTextareaHeight(target);
     updateSlashMenu(target.value, requestUpdate);
-    inputHistory.reset();
     props.onDraftChange(target.value);
   };
 
@@ -1246,7 +1255,7 @@ export function renderChat(props: ChatProps) {
             onExport: () => exportMarkdown(props),
             onNewSession: props.onNewSession,
             onSend: props.onSend,
-            onStoreDraft: (draft) => inputHistory.push(draft),
+            onStoreDraft: () => {},
           })}
         </div>
       </div>

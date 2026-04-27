@@ -260,6 +260,16 @@ function resolveProviderTransport(params: {
   };
 }
 
+function resolveConfiguredProviderDefaultApi(
+  providerConfig: InlineProviderConfig | undefined,
+): Api | undefined {
+  const explicit = normalizeResolvedTransportApi(providerConfig?.api);
+  if (explicit) {
+    return explicit;
+  }
+  return providerConfig?.baseUrl ? "openai-completions" : undefined;
+}
+
 function resolveProviderRequestTimeoutMs(timeoutSeconds: unknown): number | undefined {
   if (
     typeof timeoutSeconds !== "number" ||
@@ -483,6 +493,9 @@ function applyConfiguredProviderOverrides(params: {
     !configuredModel &&
     !providerConfig.baseUrl &&
     !providerConfig.api &&
+    providerConfig.contextWindow === undefined &&
+    providerConfig.contextTokens === undefined &&
+    providerConfig.maxTokens === undefined &&
     requestTimeoutMs === undefined &&
     !providerHeaders &&
     !providerRequest
@@ -513,16 +526,25 @@ function applyConfiguredProviderOverrides(params: {
 
   const resolvedTransport = resolveProviderTransport({
     provider: params.provider,
-    api: metadataOverrideModel?.api ?? providerConfig.api ?? discoveredModel.api,
+    api:
+      metadataOverrideModel?.api ??
+      providerConfig.api ??
+      discoveredModel.api ??
+      resolveConfiguredProviderDefaultApi(providerConfig),
     baseUrl: providerConfig.baseUrl ?? discoveredModel.baseUrl,
     cfg: params.cfg,
     runtimeHooks: params.runtimeHooks,
   });
+  const resolvedContextWindow =
+    metadataOverrideModel?.contextWindow ?? providerConfig.contextWindow;
+  const resolvedMaxTokens =
+    metadataOverrideModel?.maxTokens ?? providerConfig.maxTokens ?? discoveredModel.maxTokens;
   const requestConfig = resolveProviderRequestConfig({
     provider: params.provider,
     api:
       resolvedTransport.api ??
       normalizeResolvedTransportApi(discoveredModel.api) ??
+      resolveConfiguredProviderDefaultApi(providerConfig) ??
       "openai-responses",
     baseUrl: resolvedTransport.baseUrl ?? discoveredModel.baseUrl,
     discoveredHeaders,
@@ -541,9 +563,15 @@ function applyConfiguredProviderOverrides(params: {
       reasoning: metadataOverrideModel?.reasoning ?? discoveredModel.reasoning,
       input: normalizedInput,
       cost: metadataOverrideModel?.cost ?? discoveredModel.cost,
-      contextWindow: metadataOverrideModel?.contextWindow ?? discoveredModel.contextWindow,
-      contextTokens: metadataOverrideModel?.contextTokens ?? discoveredModel.contextTokens,
-      maxTokens: metadataOverrideModel?.maxTokens ?? discoveredModel.maxTokens,
+      contextWindow: resolvedContextWindow ?? discoveredModel.contextWindow,
+      contextTokens:
+        metadataOverrideModel?.contextTokens ??
+        providerConfig.contextTokens ??
+        discoveredModel.contextTokens,
+      maxTokens:
+        typeof resolvedContextWindow === "number"
+          ? Math.min(resolvedMaxTokens, resolvedContextWindow)
+          : resolvedMaxTokens,
       ...(resolvedParams ? { params: resolvedParams } : {}),
       ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
       headers: requestConfig.headers,
@@ -737,7 +765,7 @@ function resolveConfiguredFallbackModel(params: {
   }
   const fallbackTransport = resolveProviderTransport({
     provider,
-    api: providerConfig?.api ?? "openai-responses",
+    api: resolveConfiguredProviderDefaultApi(providerConfig) ?? "openai-responses",
     baseUrl: providerConfig?.baseUrl,
     cfg,
     runtimeHooks,
@@ -774,11 +802,16 @@ function resolveConfiguredFallbackModel(params: {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow:
           configuredModel?.contextWindow ??
+          providerConfig?.contextWindow ??
           providerConfig?.models?.[0]?.contextWindow ??
           DEFAULT_CONTEXT_TOKENS,
-        contextTokens: configuredModel?.contextTokens ?? providerConfig?.models?.[0]?.contextTokens,
+        contextTokens:
+          configuredModel?.contextTokens ??
+          providerConfig?.contextTokens ??
+          providerConfig?.models?.[0]?.contextTokens,
         maxTokens:
           configuredModel?.maxTokens ??
+          providerConfig?.maxTokens ??
           providerConfig?.models?.[0]?.maxTokens ??
           DEFAULT_CONTEXT_TOKENS,
         ...(resolvedParams ? { params: resolvedParams } : {}),

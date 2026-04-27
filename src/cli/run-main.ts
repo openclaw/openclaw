@@ -2,42 +2,43 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { CommanderError } from "commander";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeEnv } from "../infra/env.js";
-import { formatUncaughtError } from "../infra/errors.js";
 import { isMainModule } from "../infra/is-main.js";
-import { ensureGlobalUndiciEnvProxyDispatcher } from "../infra/net/undici-global-dispatcher.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
-import { enableConsoleCapture } from "../logging.js";
 import type { PluginManifestCommandAliasRegistry } from "../plugins/manifest-command-aliases.js";
-import { resolveManifestCommandAliasOwner } from "../plugins/manifest-command-aliases.runtime.js";
-import { hasMemoryRuntime } from "../plugins/memory-state.js";
-import { maybeWarnAboutDebugProxyCoverage } from "../proxy-capture/coverage.js";
-import {
-  finalizeDebugProxyCapture,
-  initializeDebugProxyCapture,
-} from "../proxy-capture/runtime.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import {
   shouldRegisterPrimaryCommandOnly,
   shouldSkipPluginCommandRegistration,
 } from "./command-registration-policy.js";
-import { shouldEnsureCliPathForCommandPath } from "./command-startup-policy.js";
 import { maybeRunCliInContainer, parseCliContainerArgs } from "./container-target.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
-import { createCliProgress } from "./progress.js";
-import { tryRouteCli } from "./route.js";
+import {
+  resolveMissingPluginCommandMessage as resolveMissingPluginCommandMessageFromPolicy,
+  rewriteUpdateFlagArgv,
+  shouldEnsureCliPath,
+  shouldStartCrestodianForBareRoot,
+  shouldStartCrestodianForModernOnboard,
+  shouldUseBrowserHelpFastPath,
+  shouldUseRootHelpFastPath,
+} from "./run-main-policy.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
 
+export {
+  rewriteUpdateFlagArgv,
+  shouldEnsureCliPath,
+  shouldStartCrestodianForBareRoot,
+  shouldStartCrestodianForModernOnboard,
+  shouldUseBrowserHelpFastPath,
+  shouldUseRootHelpFastPath,
+} from "./run-main-policy.js";
+
 async function closeCliMemoryManagers(): Promise<void> {
+  const { hasMemoryRuntime } = await import("../plugins/memory-state.js");
   if (!hasMemoryRuntime()) {
     return;
   }
@@ -49,129 +50,16 @@ async function closeCliMemoryManagers(): Promise<void> {
   }
 }
 
-export function rewriteUpdateFlagArgv(argv: string[]): string[] {
-  const index = argv.indexOf("--update");
-  if (index === -1) {
-    return argv;
-  }
-
-  const next = [...argv];
-  next.splice(index, 1, "update");
-  return next;
-}
-
-export function shouldEnsureCliPath(argv: string[]): boolean {
-  const invocation = resolveCliArgvInvocation(argv);
-  if (invocation.hasHelpOrVersion || shouldStartCrestodianForBareRoot(argv)) {
-    return false;
-  }
-  return shouldEnsureCliPathForCommandPath(invocation.commandPath);
-}
-
-export function shouldUseRootHelpFastPath(argv: string[]): boolean {
-  const invocation = resolveCliArgvInvocation(argv);
-  return (
-    process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH !== "1" &&
-    (invocation.isRootHelpInvocation ||
-      (invocation.commandPath.length === 1 &&
-        invocation.commandPath[0] === "help" &&
-        invocation.hasHelpOrVersion))
-  );
-}
-
-export function shouldUseBrowserHelpFastPath(argv: string[]): boolean {
-  if (process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH === "1") {
-    return false;
-  }
-  const invocation = resolveCliArgvInvocation(argv);
-  return (
-    invocation.commandPath.length === 1 &&
-    invocation.commandPath[0] === "browser" &&
-    invocation.hasHelpOrVersion
-  );
-}
-
-export function shouldStartCrestodianForBareRoot(argv: string[]): boolean {
-  const invocation = resolveCliArgvInvocation(argv);
-  return invocation.commandPath.length === 0 && !invocation.hasHelpOrVersion;
-}
-
-export function shouldStartCrestodianForModernOnboard(argv: string[]): boolean {
-  const invocation = resolveCliArgvInvocation(argv);
-  return (
-    invocation.commandPath[0] === "onboard" &&
-    argv.includes("--modern") &&
-    !invocation.hasHelpOrVersion
-  );
-}
-
 export function resolveMissingPluginCommandMessage(
   pluginId: string,
   config?: OpenClawConfig,
   options?: { registry?: PluginManifestCommandAliasRegistry },
 ): string | null {
-  const normalizedPluginId = normalizeLowercaseStringOrEmpty(pluginId);
-  if (!normalizedPluginId) {
-    return null;
-  }
-  const allow =
-    Array.isArray(config?.plugins?.allow) && config.plugins.allow.length > 0
-      ? config.plugins.allow
-          .filter((entry): entry is string => typeof entry === "string")
-          .map((entry) => normalizeOptionalLowercaseString(entry))
-          .filter(Boolean)
-      : [];
-  const commandAlias = resolveManifestCommandAliasOwner({
-    command: normalizedPluginId,
+  return resolveMissingPluginCommandMessageFromPolicy(
+    pluginId,
     config,
-    registry: options?.registry,
-  });
-  const parentPluginId = commandAlias?.pluginId;
-  if (parentPluginId) {
-    if (allow.length > 0 && !allow.includes(parentPluginId)) {
-      return (
-        `"${normalizedPluginId}" is not a plugin; it is a command provided by the ` +
-        `"${parentPluginId}" plugin. Add "${parentPluginId}" to \`plugins.allow\` ` +
-        `instead of "${normalizedPluginId}".`
-      );
-    }
-    if (config?.plugins?.entries?.[parentPluginId]?.enabled === false) {
-      return (
-        `The \`openclaw ${normalizedPluginId}\` command is unavailable because ` +
-        `\`plugins.entries.${parentPluginId}.enabled=false\`. Re-enable that entry if you want ` +
-        "the bundled plugin command surface."
-      );
-    }
-    if (commandAlias.kind === "runtime-slash") {
-      const cliHint = commandAlias.cliCommand
-        ? `Use \`openclaw ${commandAlias.cliCommand}\` for related CLI operations, or `
-        : "Use ";
-      return (
-        `"${normalizedPluginId}" is a runtime slash command (/${normalizedPluginId}), not a CLI command. ` +
-        `It is provided by the "${parentPluginId}" plugin. ` +
-        `${cliHint}\`/${normalizedPluginId}\` in a chat session.`
-      );
-    }
-  }
-
-  if (allow.length > 0 && !allow.includes(normalizedPluginId)) {
-    if (parentPluginId && allow.includes(parentPluginId)) {
-      return null;
-    }
-    return (
-      `The \`openclaw ${normalizedPluginId}\` command is unavailable because ` +
-      `\`plugins.allow\` excludes "${normalizedPluginId}". Add "${normalizedPluginId}" to ` +
-      `\`plugins.allow\` if you want that bundled plugin CLI surface.`
-    );
-  }
-  if (config?.plugins?.entries?.[normalizedPluginId]?.enabled === false) {
-    return (
-      `The \`openclaw ${normalizedPluginId}\` command is unavailable because ` +
-      `\`plugins.entries.${normalizedPluginId}.enabled=false\`. Re-enable that entry if you want ` +
-      "the bundled plugin CLI surface."
-    );
-  }
-  return null;
+    options?.registry ? { registry: options.registry } : undefined,
+  );
 }
 
 function shouldLoadCliDotEnv(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -179,6 +67,33 @@ function shouldLoadCliDotEnv(env: NodeJS.ProcessEnv = process.env): boolean {
     return true;
   }
   return existsSync(path.join(resolveStateDir(env), ".env"));
+}
+
+function isCommanderParseExit(error: unknown): error is { exitCode: number } {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const candidate = error as { code?: unknown; exitCode?: unknown };
+  return (
+    typeof candidate.exitCode === "number" &&
+    Number.isInteger(candidate.exitCode) &&
+    typeof candidate.code === "string" &&
+    candidate.code.startsWith("commander.")
+  );
+}
+
+async function ensureCliEnvProxyDispatcher(): Promise<void> {
+  try {
+    const { hasEnvHttpProxyConfigured } = await import("../infra/net/proxy-env.js");
+    if (!hasEnvHttpProxyConfigured("https")) {
+      return;
+    }
+    const { ensureGlobalUndiciEnvProxyDispatcher } =
+      await import("../infra/net/undici-global-dispatcher.js");
+    ensureGlobalUndiciEnvProxyDispatcher();
+  } catch {
+    // Best-effort proxy bootstrap; CLI startup should continue without it.
+  }
 }
 
 export async function runCli(argv: string[] = process.argv) {
@@ -214,12 +129,6 @@ export async function runCli(argv: string[] = process.argv) {
     loadCliDotEnv({ quiet: true });
   }
   normalizeEnv();
-  initializeDebugProxyCapture("cli");
-  process.once("exit", () => {
-    finalizeDebugProxyCapture();
-  });
-  ensureGlobalUndiciEnvProxyDispatcher();
-  maybeWarnAboutDebugProxyCoverage();
   if (shouldEnsureCliPath(normalizedArgv)) {
     ensureOpenClawCliOnPath();
   }
@@ -244,7 +153,13 @@ export async function runCli(argv: string[] = process.argv) {
       }
     }
 
-    if (shouldStartCrestodianForBareRoot(normalizedArgv)) {
+    const shouldRunBareRootCrestodian = shouldStartCrestodianForBareRoot(normalizedArgv);
+    const shouldRunModernOnboardCrestodian = shouldStartCrestodianForModernOnboard(normalizedArgv);
+    if (shouldRunBareRootCrestodian || shouldRunModernOnboardCrestodian) {
+      await ensureCliEnvProxyDispatcher();
+    }
+
+    if (shouldRunBareRootCrestodian) {
       if (!process.stdin.isTTY || !process.stdout.isTTY) {
         console.error(
           'Crestodian needs an interactive TTY. Use `openclaw crestodian --message "status"` for one command.',
@@ -253,6 +168,7 @@ export async function runCli(argv: string[] = process.argv) {
         return;
       }
       const { runCrestodian } = await import("../crestodian/crestodian.js");
+      const { createCliProgress } = await import("./progress.js");
       const progress = createCliProgress({
         label: "Starting Crestodian…",
         indeterminate: true,
@@ -275,7 +191,7 @@ export async function runCli(argv: string[] = process.argv) {
       return;
     }
 
-    if (shouldStartCrestodianForModernOnboard(normalizedArgv)) {
+    if (shouldRunModernOnboardCrestodian) {
       const { runCrestodian } = await import("../crestodian/crestodian.js");
       const nonInteractive = normalizedArgv.includes("--non-interactive");
       await runCrestodian({
@@ -287,10 +203,26 @@ export async function runCli(argv: string[] = process.argv) {
       return;
     }
 
+    const [
+      { initializeDebugProxyCapture, finalizeDebugProxyCapture },
+      { maybeWarnAboutDebugProxyCoverage },
+    ] = await Promise.all([
+      import("../proxy-capture/runtime.js"),
+      import("../proxy-capture/coverage.js"),
+    ]);
+    initializeDebugProxyCapture("cli");
+    process.once("exit", () => {
+      finalizeDebugProxyCapture();
+    });
+    await ensureCliEnvProxyDispatcher();
+    maybeWarnAboutDebugProxyCoverage();
+
+    const { tryRouteCli } = await import("./route.js");
     if (await tryRouteCli(normalizedArgv)) {
       return;
     }
 
+    const { createCliProgress } = await import("./progress.js");
     const startupProgress = createCliProgress({
       label: "Loading OpenClaw CLI…",
       indeterminate: true,
@@ -308,15 +240,18 @@ export async function runCli(argv: string[] = process.argv) {
 
     try {
       // Capture all console output into structured logs while keeping stdout/stderr behavior.
+      const { enableConsoleCapture } = await import("../logging.js");
       enableConsoleCapture();
 
       const [
         { buildProgram },
+        { formatUncaughtError },
         { runFatalErrorHooks },
         { installUnhandledRejectionHandler, isUncaughtExceptionHandled },
         { restoreTerminalState },
       ] = await Promise.all([
         import("./program.js"),
+        import("../infra/errors.js"),
         import("../infra/fatal-error-hooks.js"),
         import("../infra/unhandled-rejections.js"),
         import("../terminal/restore.js"),
@@ -384,7 +319,15 @@ export async function runCli(argv: string[] = process.argv) {
               (command) => command.name() === primary || command.aliases().includes(primary),
             )
           ) {
-            const missingPluginCommandMessage = resolveMissingPluginCommandMessage(primary, config);
+            const { resolveManifestCommandAliasOwner } =
+              await import("../plugins/manifest-command-aliases.runtime.js");
+            const missingPluginCommandMessage = resolveMissingPluginCommandMessageFromPolicy(
+              primary,
+              config,
+              {
+                resolveCommandAliasOwner: resolveManifestCommandAliasOwner,
+              },
+            );
             if (missingPluginCommandMessage) {
               throw new Error(missingPluginCommandMessage);
             }
@@ -397,7 +340,7 @@ export async function runCli(argv: string[] = process.argv) {
       try {
         await program.parseAsync(parseArgv);
       } catch (error) {
-        if (!(error instanceof CommanderError)) {
+        if (!isCommanderParseExit(error)) {
           throw error;
         }
         process.exitCode = error.exitCode;

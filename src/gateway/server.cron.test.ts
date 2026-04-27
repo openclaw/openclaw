@@ -158,18 +158,22 @@ async function setupCronTestRun(params: {
 type DirectCronState = {
   cron: { stop: () => void };
   storePath: string;
+  getRuntimeConfig: () => import("../config/types.openclaw.js").OpenClawConfig;
 };
 
 async function createDirectCronState(): Promise<DirectCronState> {
-  const [{ loadConfig }, { buildGatewayCronService }] = await Promise.all([
+  const [{ getRuntimeConfig }, { buildGatewayCronService }] = await Promise.all([
     import("../config/config.js"),
     import("./server-cron.js"),
   ]);
-  return buildGatewayCronService({
-    cfg: loadConfig(),
-    deps: {} as never,
-    broadcast: vi.fn(),
-  });
+  return {
+    ...buildGatewayCronService({
+      cfg: getRuntimeConfig(),
+      deps: {} as never,
+      broadcast: vi.fn(),
+    }),
+    getRuntimeConfig: getRuntimeConfig,
+  };
 }
 
 async function directCronReq(
@@ -199,6 +203,7 @@ async function directCronReq(
         warn: vi.fn(),
         error: vi.fn(),
       },
+      getRuntimeConfig: cronState.getRuntimeConfig,
     } as never,
     client: null,
     isWebchatConnect: () => false,
@@ -1331,6 +1336,66 @@ describe("gateway server cron", () => {
           sessionKey: "agent:main:telegram:direct:123:thread:99",
         },
         '⚠️ Cron job "primary delivery fallback" failed: unknown error',
+      );
+    } finally {
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
+    }
+  }, 45_000);
+
+  test("prefers sessionTarget session context for failure announcements over creator sessionKey", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-failure-session-target-",
+      cronEnabled: false,
+    });
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      cronIsolatedRun.mockResolvedValueOnce({ status: "error", summary: "delivery failed" });
+      const addRes = await rpcReq(ws, "cron.add", {
+        name: "session target failure fallback",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "session:agent:avery:feishu:direct:ou_founder",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "test" },
+        delivery: {
+          mode: "announce",
+          channel: "feishu",
+          to: "ou_founder",
+        },
+      });
+      const jobId = expectCronJobIdFromResponse(addRes);
+
+      const updateRes = await rpcReq(ws, "cron.update", {
+        id: jobId,
+        patch: {
+          sessionKey: "agent:avery:feishu:group:oc_group:sender:ou_founder",
+        },
+      });
+      expect(updateRes.ok).toBe(true);
+
+      const finished = waitForCronEvent(
+        ws,
+        (payload) => payload?.jobId === jobId && payload?.action === "finished",
+      );
+      await runCronJobForce(ws, jobId);
+      await finished;
+
+      expect(sendFailureNotificationAnnounceMock).toHaveBeenCalledTimes(1);
+      expect(sendFailureNotificationAnnounceMock).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.any(String),
+        jobId,
+        {
+          channel: "feishu",
+          to: "ou_founder",
+          accountId: undefined,
+          sessionKey: "agent:avery:feishu:direct:ou_founder",
+        },
+        '⚠️ Cron job "session target failure fallback" failed: unknown error',
       );
     } finally {
       await cleanupCronTestRun({ ws, server, prevSkipCron });
