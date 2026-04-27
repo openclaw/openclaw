@@ -247,7 +247,11 @@ export async function runCli(argv: string[] = process.argv) {
         { buildProgram },
         { formatUncaughtError },
         { runFatalErrorHooks },
-        { installUnhandledRejectionHandler, isUncaughtExceptionHandled },
+        {
+          installUnhandledRejectionHandler,
+          isBenignUncaughtExceptionError,
+          isUncaughtExceptionHandled,
+        },
         { restoreTerminalState },
       ] = await Promise.all([
         import("./program.js"),
@@ -264,6 +268,13 @@ export async function runCli(argv: string[] = process.argv) {
 
       process.on("uncaughtException", (error) => {
         if (isUncaughtExceptionHandled(error)) {
+          return;
+        }
+        if (isBenignUncaughtExceptionError(error)) {
+          console.warn(
+            "[openclaw] Non-fatal uncaught exception (continuing):",
+            formatUncaughtError(error),
+          );
           return;
         }
         console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
