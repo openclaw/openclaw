@@ -56,6 +56,30 @@ describe("buildOllamaChatRequest", () => {
       model: "qwen3:14b-q8_0",
     });
   });
+
+  it("strips the active custom provider prefix from chat model ids", () => {
+    expect(
+      buildOllamaChatRequest({
+        modelId: "ollama-spark/qwen3:32b",
+        providerId: "ollama-spark",
+        messages: [{ role: "user", content: "hello" }],
+      }),
+    ).toMatchObject({
+      model: "qwen3:32b",
+    });
+  });
+
+  it("keeps unrelated slash-containing Ollama model ids intact", () => {
+    expect(
+      buildOllamaChatRequest({
+        modelId: "library/qwen3:32b",
+        providerId: "ollama-spark",
+        messages: [{ role: "user", content: "hello" }],
+      }),
+    ).toMatchObject({
+      model: "library/qwen3:32b",
+    });
+  });
 });
 
 describe("createConfiguredOllamaCompatStreamWrapper", () => {
@@ -252,6 +276,109 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
         expect(requestBody.think).toBe("high");
         expect(requestBody.options?.think).toBeUndefined();
         expect(requestBody.options?.num_ctx).toBe(131072);
+      },
+    );
+  });
+
+  it("sends custom-provider Ollama chat requests with the bare Ollama model id", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const streamFn = createOllamaStreamFn("http://ollama-host:11434");
+        const model = {
+          api: "ollama",
+          provider: "ollama-spark",
+          id: "ollama-spark/qwen3:32b",
+          contextWindow: 131072,
+        };
+
+        const stream = await Promise.resolve(
+          streamFn(
+            model as never,
+            {
+              messages: [{ role: "user", content: "hello" }],
+            } as never,
+            {} as never,
+          ),
+        );
+
+        await collectStreamEvents(stream);
+
+        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+        const requestBody = JSON.parse(requestInit.body) as { model?: string };
+        expect(requestBody.model).toBe("qwen3:32b");
+      },
+    );
+  });
+
+  it("adds direct type hints to native Ollama tool schemas before sending them", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const streamFn = createOllamaStreamFn("http://ollama-host:11434");
+        const model = {
+          api: "ollama",
+          provider: "ollama",
+          id: "qwen3:32b",
+          contextWindow: 131072,
+        };
+
+        const stream = await Promise.resolve(
+          streamFn(
+            model as never,
+            {
+              messages: [{ role: "user", content: "hello" }],
+              tools: [
+                {
+                  name: "search",
+                  description: "search",
+                  parameters: {
+                    properties: {
+                      query: {
+                        anyOf: [{ type: "string" }, { type: "null" }],
+                      },
+                      tags: {
+                        items: { type: "string" },
+                      },
+                    },
+                    required: ["query"],
+                  },
+                },
+              ],
+            } as never,
+            {} as never,
+          ),
+        );
+
+        await collectStreamEvents(stream);
+
+        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+        const requestBody = JSON.parse(requestInit.body) as {
+          tools?: Array<{
+            function?: {
+              parameters?: {
+                type?: string;
+                properties?: Record<string, { type?: string }>;
+              };
+            };
+          }>;
+        };
+        const parameters = requestBody.tools?.[0]?.function?.parameters;
+        expect(parameters?.type).toBe("object");
+        expect(parameters?.properties?.query?.type).toBe("string");
+        expect(parameters?.properties?.tags?.type).toBe("array");
       },
     );
   });

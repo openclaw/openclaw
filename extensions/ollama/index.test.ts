@@ -429,7 +429,7 @@ describe("ollama plugin", () => {
     ).toBeUndefined();
   });
 
-  it("owns replay policy for OpenAI-compatible Ollama routes only", () => {
+  it("owns replay policy for OpenAI-compatible and native Ollama routes", () => {
     const provider = registerProvider();
 
     expect(
@@ -466,7 +466,13 @@ describe("ollama plugin", () => {
         modelApi: "ollama",
         modelId: "qwen3.5:9b",
       } as never),
-    ).toBeUndefined();
+    ).toMatchObject({
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
+      applyAssistantFirstOrderingFix: true,
+      validateGeminiTurns: true,
+      validateAnthropicTurns: true,
+    });
   });
 
   it("routes createStreamFn to the correct provider baseUrl for ollama2", () => {

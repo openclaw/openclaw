@@ -318,6 +318,10 @@ Once configured, all your Ollama models are available:
 }
 ```
 
+Custom Ollama provider ids are also supported. When a model ref uses the active
+provider prefix, such as `ollama-spark/qwen3:32b`, OpenClaw strips only that
+prefix before calling Ollama so the server receives `qwen3:32b`.
+
 ## Ollama Web Search
 
 OpenClaw supports **Ollama Web Search** as a bundled `web_search` provider.
@@ -437,7 +441,8 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
   <Accordion title="Memory embeddings">
     The bundled Ollama plugin registers a memory embedding provider for
     [memory search](/concepts/memory). It uses the configured Ollama base URL
-    and API key.
+    and API key, calls Ollama's current `/api/embed` endpoint, and batches
+    multiple memory chunks into one `input` request when possible.
 
     | Property      | Value               |
     | ------------- | ------------------- |

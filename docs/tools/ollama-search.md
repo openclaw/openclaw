@@ -78,18 +78,22 @@ If no explicit Ollama base URL is set, OpenClaw uses `http://127.0.0.1:11434`.
 
 If your Ollama host expects bearer auth, OpenClaw reuses
 `models.providers.ollama.apiKey` (or the matching env-backed provider auth)
-for web-search requests too.
+for requests to that configured host.
 
 ## Notes
 
 - No web-search-specific API key field is required for this provider.
 - If the Ollama host is auth-protected, OpenClaw reuses the normal Ollama
   provider API key when present.
+- If the configured host does not expose web search and `OLLAMA_API_KEY` is set,
+  OpenClaw can fall back to `https://ollama.com/api/web_search` without sending
+  that env key to the local host.
 - OpenClaw warns during setup if Ollama is unreachable or not signed in, but
   it does not block selection.
 - Runtime auto-detect can fall back to Ollama Web Search when no higher-priority
   credentialed provider is configured.
-- The provider uses Ollama's `/api/web_search` endpoint.
+- The provider tries Ollama's `/api/web_search` endpoint first, then the legacy
+  `/api/experimental/web_search` endpoint for older hosts.
 
 ## Related
 

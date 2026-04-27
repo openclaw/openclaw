@@ -8,7 +8,10 @@ import {
   type ProviderDiscoveryContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { buildApiKeyCredential } from "openclaw/plugin-sdk/provider-auth";
-import { OPENAI_COMPATIBLE_REPLAY_HOOKS } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  buildOpenAICompatibleReplayPolicy,
+  OPENAI_COMPATIBLE_REPLAY_HOOKS,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import {
   buildOllamaProvider,
   configureOllamaNonInteractive,
@@ -163,6 +166,10 @@ export default definePluginEntry({
         });
       },
       ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
+      buildReplayPolicy: (ctx) =>
+        ctx.modelApi === "ollama"
+          ? buildOpenAICompatibleReplayPolicy("openai-completions")
+          : buildOpenAICompatibleReplayPolicy(ctx.modelApi),
       contributeResolvedModelCompat: ({ model }) =>
         usesOllamaOpenAICompatTransport(model) ? { supportsUsageInStreaming: true } : undefined,
       resolveReasoningOutputMode: () => "native",
@@ -174,11 +181,12 @@ export default definePluginEntry({
         defaultLevel: "off",
       }),
       wrapStreamFn: createConfiguredOllamaCompatStreamWrapper,
-      createEmbeddingProvider: async ({ config, model, remote }) => {
+      createEmbeddingProvider: async ({ config, model, provider: embeddingProvider, remote }) => {
         const { provider, client } = await createOllamaEmbeddingProvider({
           config,
           remote,
           model: model || DEFAULT_OLLAMA_EMBEDDING_MODEL,
+          provider: embeddingProvider || OLLAMA_PROVIDER_ID,
         });
         return {
           ...provider,
