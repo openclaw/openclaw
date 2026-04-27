@@ -410,7 +410,7 @@ describe("registerPluginCliCommands", () => {
 
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
-        onlyPluginIds: ["memory-core", "memory-wiki"],
+        onlyPluginIds: ["memory-wiki", "memory-core"],
       }),
     );
   });

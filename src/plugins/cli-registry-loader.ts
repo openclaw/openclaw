@@ -92,9 +92,7 @@ function withPrimaryMemorySlotPluginId(
   if (!memorySlotPluginId) {
     return [...pluginIds];
   }
-  return [...new Set([...pluginIds, memorySlotPluginId])].toSorted((left, right) =>
-    left.localeCompare(right),
-  );
+  return [...new Set([...pluginIds, memorySlotPluginId])];
 }
 
 function resolveConfiguredMemorySlotPluginId(config: OpenClawConfig): string | null {

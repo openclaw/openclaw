@@ -193,6 +193,7 @@ function createPrepareArgumentsForTool(
   }
   return (args: unknown) => {
     const prepared = basePrepareArguments ? basePrepareArguments(args) : args;
+    // For empty object schemas, nullish prepared args mean "no arguments".
     return normalizeEmptyObjectArgs && prepared == null ? {} : prepared;
   };
 }
