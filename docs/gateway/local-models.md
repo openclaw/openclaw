@@ -19,26 +19,26 @@ Best current local stack. Load a large model in LM Studio (for example, a full-s
 {
   agents: {
     defaults: {
-      model: { primary: “lmstudio/my-local-model” },
+      model: { primary: "lmstudio/my-local-model" },
       models: {
-        “anthropic/claude-opus-4-6”: { alias: “Opus” },
-        “lmstudio/my-local-model”: { alias: “Local” },
+        "anthropic/claude-opus-4-6": { alias: "Opus" },
+        "lmstudio/my-local-model": { alias: "Local" },
       },
     },
   },
   models: {
-    mode: “merge”,
+    mode: "merge",
     providers: {
       lmstudio: {
-        baseUrl: “http://127.0.0.1:1234/v1”,
-        apiKey: “lmstudio”,
-        api: “openai-responses”,
+        baseUrl: "http://127.0.0.1:1234/v1",
+        apiKey: "lmstudio",
+        api: "openai-responses",
         models: [
           {
-            id: “my-local-model”,
-            name: “Local Model”,
+            id: "my-local-model",
+            name: "Local Model",
             reasoning: false,
-            input: [“text”],
+            input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 196608,
             maxTokens: 8192,

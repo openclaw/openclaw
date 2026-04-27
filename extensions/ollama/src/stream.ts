@@ -355,6 +355,13 @@ type StreamModelDescriptor = {
   id: string;
 };
 
+type OllamaUsageFallback = {
+  input?: number;
+  output?: number;
+};
+
+const CHARS_PER_TOKEN_ESTIMATE = 4;
+
 function buildUsageWithNoCost(params: {
   input?: number;
   output?: number;
@@ -464,6 +471,56 @@ interface OllamaChatResponse {
   prompt_eval_duration?: number;
   eval_count?: number;
   eval_duration?: number;
+}
+
+function safeJsonLength(value: unknown): number {
+  try {
+    const serialized = JSON.stringify(value);
+    return typeof serialized === "string" ? serialized.length : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function estimateTokensFromChars(chars: number): number {
+  if (!Number.isFinite(chars) || chars <= 0) {
+    return 0;
+  }
+  return Math.max(1, Math.round(chars / CHARS_PER_TOKEN_ESTIMATE));
+}
+
+function estimateOllamaPromptTokens(params: {
+  messages: OllamaChatMessage[];
+  tools: OllamaTool[];
+}): number {
+  let chars = 0;
+  for (const message of params.messages) {
+    chars += message.content.length;
+    chars += safeJsonLength(message.images);
+    chars += safeJsonLength(message.tool_calls);
+    chars += message.tool_name?.length ?? 0;
+  }
+  chars += safeJsonLength(params.tools);
+  return estimateTokensFromChars(chars);
+}
+
+function estimateOllamaCompletionTokens(response: OllamaChatResponse): number {
+  const chars =
+    response.message.content.length +
+    (response.message.thinking?.length ?? 0) +
+    (response.message.reasoning?.length ?? 0) +
+    safeJsonLength(response.message.tool_calls);
+  return estimateTokensFromChars(chars);
+}
+
+function resolveUsageCount(value: number | undefined, fallback: number | undefined): number {
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+    return value;
+  }
+  if (typeof fallback === "number" && Number.isFinite(fallback) && fallback > 0) {
+    return fallback;
+  }
+  return 0;
 }
 
 type InputContentPart =
@@ -731,6 +788,7 @@ function extractOllamaTools(tools: Tool[] | undefined): OllamaTool[] {
 export function buildAssistantMessage(
   response: OllamaChatResponse,
   modelInfo: StreamModelDescriptor,
+  usageFallback?: OllamaUsageFallback,
 ): AssistantMessage {
   const content: (TextContent | ThinkingContent | ToolCall)[] = [];
   const thinking = response.message.thinking ?? response.message.reasoning ?? "";
@@ -759,8 +817,8 @@ export function buildAssistantMessage(
     content,
     stopReason: toolCalls && toolCalls.length > 0 ? "toolUse" : "stop",
     usage: buildUsageWithNoCost({
-      input: response.prompt_eval_count ?? 0,
-      output: response.eval_count ?? 0,
+      input: resolveUsageCount(response.prompt_eval_count, usageFallback?.input),
+      output: resolveUsageCount(response.eval_count, usageFallback?.output),
     }),
   });
 }
@@ -1066,7 +1124,11 @@ export function createOllamaStreamFn(
             finalResponse.message.tool_calls = accumulatedToolCalls;
           }
 
-          const assistantMessage = buildAssistantMessage(finalResponse, modelInfo);
+          const usageFallback = {
+            input: estimateOllamaPromptTokens({ messages: ollamaMessages, tools: ollamaTools }),
+            output: estimateOllamaCompletionTokens(finalResponse),
+          };
+          const assistantMessage = buildAssistantMessage(finalResponse, modelInfo, usageFallback);
           closeThinkingBlock();
           closeTextBlock();
 
