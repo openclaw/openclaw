@@ -899,6 +899,15 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/migrate-claude:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/migrate-hermes:
     dependencies:
       yaml:
