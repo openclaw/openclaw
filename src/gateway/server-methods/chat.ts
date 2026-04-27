@@ -1787,7 +1787,8 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const cached = context.dedupe.get(`chat:${clientRunId}`);
+    const chatDedupeKey = `chat:${clientRunId}`;
+    const cached = context.dedupe.get(chatDedupeKey);
     if (cached) {
       respond(cached.ok, cached.payload, cached.error, {
         cached: true,
@@ -1806,20 +1807,30 @@ export const chatHandlers: GatewayRequestHandlers = {
     const explicitOriginTargetsPlugin = explicitOriginTargetsPluginBinding(
       explicitOriginResult.value,
     );
+    const inFlightPayload = { runId: clientRunId, status: "in_flight" as const };
+    setGatewayDedupeEntry({
+      dedupe: context.dedupe,
+      key: chatDedupeKey,
+      entry: {
+        ts: now,
+        ok: true,
+        payload: inFlightPayload,
+      },
+    });
     if (normalizedAttachments.length > 0) {
-      const modelRef = resolveSessionModelRef(cfg, entry, agentId);
-      const supportsSessionModelImages = await resolveGatewayModelSupportsImages({
-        loadGatewayModelCatalog: context.loadGatewayModelCatalog,
-        provider: modelRef.provider,
-        model: modelRef.model,
-      });
-      // Bound plugin sessions own the real recipient model, so keep image
-      // attachments even when the parent OpenClaw session model is text-only.
-      const supportsImages =
-        supportsSessionModelImages ||
-        explicitOriginTargetsAcpSession(explicitOriginResult.value) ||
-        explicitOriginTargetsPlugin;
       try {
+        const modelRef = resolveSessionModelRef(cfg, entry, agentId);
+        const supportsSessionModelImages = await resolveGatewayModelSupportsImages({
+          loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+          provider: modelRef.provider,
+          model: modelRef.model,
+        });
+        // Bound plugin sessions own the real recipient model, so keep image
+        // attachments even when the parent OpenClaw session model is text-only.
+        const supportsImages =
+          supportsSessionModelImages ||
+          explicitOriginTargetsAcpSession(explicitOriginResult.value) ||
+          explicitOriginTargetsPlugin;
         const parsed = await parseMessageWithAttachments(inboundMessage, normalizedAttachments, {
           maxBytes: 5_000_000,
           log: context.logGateway,
@@ -1830,14 +1841,20 @@ export const chatHandlers: GatewayRequestHandlers = {
         imageOrder = parsed.imageOrder;
         offloadedRefs = parsed.offloadedRefs;
       } catch (err) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            err instanceof MediaOffloadError ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
-            String(err),
-          ),
+        const error = errorShape(
+          err instanceof MediaOffloadError ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
+          String(err),
         );
+        setGatewayDedupeEntry({
+          dedupe: context.dedupe,
+          key: chatDedupeKey,
+          entry: {
+            ts: Date.now(),
+            ok: false,
+            error,
+          },
+        });
+        respond(false, undefined, error);
         return;
       }
     }
@@ -1855,6 +1872,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         kind: "chat-send",
       });
       if (!activeRunAbort.registered) {
+        context.dedupe.delete(chatDedupeKey);
         respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
           cached: true,
           runId: clientRunId,
@@ -2314,7 +2332,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           }
           setGatewayDedupeEntry({
             dedupe: context.dedupe,
-            key: `chat:${clientRunId}`,
+            key: chatDedupeKey,
             entry: {
               ts: Date.now(),
               ok: true,
@@ -2336,7 +2354,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
           setGatewayDedupeEntry({
             dedupe: context.dedupe,
-            key: `chat:${clientRunId}`,
+            key: chatDedupeKey,
             entry: {
               ts: Date.now(),
               ok: false,
@@ -2370,7 +2388,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       };
       setGatewayDedupeEntry({
         dedupe: context.dedupe,
-        key: `chat:${clientRunId}`,
+        key: chatDedupeKey,
         entry: {
           ts: Date.now(),
           ok: false,

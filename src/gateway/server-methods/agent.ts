@@ -92,6 +92,7 @@ import {
   validateAgentParams,
   validateAgentWaitParams,
 } from "../protocol/index.js";
+import type { DedupeEntry } from "../server-shared.js";
 import { performGatewaySessionReset } from "../session-reset-service.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
@@ -129,6 +130,14 @@ function resolveAllowModelOverrideFromClient(
 
 function resolveCanResetSessionFromClient(client: GatewayRequestHandlerOptions["client"]): boolean {
   return resolveSenderIsOwnerFromClient(client);
+}
+
+function isActiveChatDedupeEntry(entry: DedupeEntry | undefined): boolean {
+  if (!entry?.ok || !entry.payload || typeof entry.payload !== "object") {
+    return false;
+  }
+  const status = (entry.payload as { status?: unknown }).status;
+  return status === "accepted" || status === "started" || status === "in_flight";
 }
 
 async function runSessionResetFromAgent(params: {
@@ -1288,7 +1297,10 @@ export const agentHandlers: GatewayRequestHandlers = {
     // chat.send specifically — not an agent-kind entry registered by the
     // `agent` RPC for its own abort surface.
     const activeChatEntry = context.chatAbortControllers.get(runId);
-    const hasActiveChatRun = activeChatEntry !== undefined && activeChatEntry.kind !== "agent";
+    const hasRegisteredActiveChatRun =
+      activeChatEntry !== undefined && activeChatEntry.kind !== "agent";
+    const hasPreclaimedActiveChatRun = isActiveChatDedupeEntry(context.dedupe.get(`chat:${runId}`));
+    const hasActiveChatRun = hasRegisteredActiveChatRun || hasPreclaimedActiveChatRun;
 
     const cachedGatewaySnapshot = readTerminalSnapshotFromGatewayDedupe({
       dedupe: context.dedupe,

@@ -12,6 +12,7 @@ import {
   resetTaskRegistryForTests,
 } from "../../tasks/task-registry.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { waitForTerminalGatewayDedupe } from "./agent-wait-dedupe.js";
 import { agentHandlers } from "./agent.js";
 import { chatHandlers } from "./chat.js";
 import { expectSubagentFollowupReactivation } from "./subagent-followup.test-helpers.js";
@@ -2402,6 +2403,57 @@ describe("gateway agent handler chat.abort integration", () => {
     await waitForAssertion(() => {
       expect(context.chatAbortControllers.has(runId)).toBe(false);
     });
+  });
+
+  it("agent.wait ignores stale agent snapshots while chat.send is preclaimed", async () => {
+    const context = makeContext();
+    const runId = "idem-wait-preclaimed-chat";
+    context.dedupe.set(`agent:${runId}`, {
+      ts: 100,
+      ok: true,
+      payload: { runId, status: "ok", startedAt: 1, endedAt: 2 },
+    });
+    context.dedupe.set(`chat:${runId}`, {
+      ts: 200,
+      ok: true,
+      payload: { runId, status: "in_flight" },
+    });
+    const respond = vi.fn();
+
+    await agentHandlers["agent.wait"]({
+      params: { runId, timeoutMs: 0 },
+      respond: respond as never,
+      context,
+      req: { type: "req", id: "agent-wait-preclaimed", method: "agent.wait" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(respond).toHaveBeenCalledWith(true, { runId, status: "timeout" });
+  });
+
+  it("dedupe wait ignores stale agent snapshots while chat.send is preclaimed", async () => {
+    const dedupe = new Map();
+    const runId = "idem-dedupe-preclaimed-chat";
+    dedupe.set(`agent:${runId}`, {
+      ts: 100,
+      ok: true,
+      payload: { runId, status: "ok", startedAt: 1, endedAt: 2 },
+    });
+    dedupe.set(`chat:${runId}`, {
+      ts: 200,
+      ok: true,
+      payload: { runId, status: "in_flight" },
+    });
+
+    await expect(
+      waitForTerminalGatewayDedupe({
+        dedupe,
+        runId,
+        timeoutMs: 0,
+        ignoreAgentTerminalSnapshot: true,
+      }),
+    ).resolves.toBeNull();
   });
 
   it("removes the chatAbortControllers entry after the run errors", async () => {

@@ -220,11 +220,17 @@ describe("gateway server chat", () => {
         expect(context.loadGatewayModelCatalog).toHaveBeenCalledTimes(1);
       }, FAST_WAIT_OPTS);
 
+      expect(context.dedupe.get("chat:idem-attachment-race")?.payload).toEqual({
+        runId: "idem-attachment-race",
+        status: "in_flight",
+      });
+      expect(context.chatAbortControllers.has("idem-attachment-race")).toBe(false);
+
       await callSend("duplicate");
       expect(responses).toContainEqual({
         id: "duplicate",
         ok: true,
-        payload: { runId: "idem-attachment-race", status: "started" },
+        payload: { runId: "idem-attachment-race", status: "in_flight" },
         error: undefined,
       });
 
@@ -241,7 +247,7 @@ describe("gateway server chat", () => {
       expect(responses).toContainEqual({
         id: "first",
         ok: true,
-        payload: { runId: "idem-attachment-race", status: "in_flight" },
+        payload: { runId: "idem-attachment-race", status: "started" },
         error: undefined,
       });
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
