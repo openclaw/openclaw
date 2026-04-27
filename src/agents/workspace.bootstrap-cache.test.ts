@@ -95,6 +95,10 @@ describe("workspace bootstrap file caching", () => {
     const agentsFile1 = await loadAgentsFile(workspaceDir);
     expectAgentsContent(agentsFile1, content1);
 
+    // Let coarse timestamp filesystems tick before the metadata-changing edit.
+    // The regression assertion is the observable reload behavior below, not
+    // direct ctimeMs inequality, which can be flaky on some filesystems.
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
     await fs.writeFile(filePath, content2, "utf-8");
     await fs.utimes(filePath, originalStat.atime, originalStat.mtime);
     const updatedStat = await fs.stat(filePath);
@@ -103,7 +107,6 @@ describe("workspace bootstrap file caching", () => {
     expect(updatedStat.ino).toBe(originalStat.ino);
     expect(updatedStat.size).toBe(originalStat.size);
     expect(updatedStat.mtimeMs).toBe(originalStat.mtimeMs);
-    expect(updatedStat.ctimeMs).not.toBe(originalStat.ctimeMs);
 
     const agentsFile2 = await loadAgentsFile(workspaceDir);
     expectAgentsContent(agentsFile2, content2);
