@@ -155,7 +155,7 @@ When you set `OLLAMA_API_KEY` (or an auth profile) and **do not** define `models
 | Behavior             | Detail                                                                                                                                                              |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Catalog query        | Queries `/api/tags`                                                                                                                                                 |
-| Capability detection | Uses best-effort `/api/show` lookups to read `contextWindow` and detect capabilities (including vision)                                                             |
+| Capability detection | Uses best-effort `/api/show` lookups to read `contextWindow`, expanded `num_ctx` Modelfile parameters, and capabilities including vision/tools                      |
 | Vision models        | Models with a `vision` capability reported by `/api/show` are marked as image-capable (`input: ["text", "image"]`), so OpenClaw auto-injects images into the prompt |
 | Reasoning detection  | Marks `reasoning` with a model-name heuristic (`r1`, `reasoning`, `think`)                                                                                          |
 | Token limits         | Sets `maxTokens` to the default Ollama max-token cap used by OpenClaw                                                                                               |
@@ -399,7 +399,7 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
   </Accordion>
 
   <Accordion title="Context windows">
-    For auto-discovered models, OpenClaw uses the context window reported by Ollama when available, otherwise it falls back to the default Ollama context window used by OpenClaw.
+    For auto-discovered models, OpenClaw uses the context window reported by Ollama when available, including larger `PARAMETER num_ctx` values from custom Modelfiles. Otherwise it falls back to the default Ollama context window used by OpenClaw.
 
     You can override `contextWindow` and `maxTokens` in explicit provider config:
 
