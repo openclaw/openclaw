@@ -16,18 +16,19 @@ import {
   createSearchableSelectList,
   createSettingsList,
 } from "./components/selectors.js";
-import type { GatewayChatClient } from "./gateway-chat.js";
+import type { TuiBackend } from "./tui-backend.js";
 import { sanitizeRenderableText } from "./tui-formatters.js";
 import { formatStatusSummary } from "./tui-status-summary.js";
 import type {
   AgentSummary,
   GatewayStatusSummary,
+  TuiResult,
   TuiOptions,
   TuiStateAccess,
 } from "./tui-types.js";
 
 type CommandHandlerContext = {
-  client: GatewayChatClient;
+  client: TuiBackend;
   chatLog: ChatLog;
   tui: TUI;
   opts: TuiOptions;
@@ -43,11 +44,14 @@ type CommandHandlerContext = {
   setActivityStatus: (text: string) => void;
   formatSessionKey: (key: string) => string;
   applySessionInfoFromPatch: (result: SessionsPatchResult) => void;
-  noteLocalRunId: (runId: string) => void;
+  noteLocalRunId?: (runId: string) => void;
   noteLocalBtwRunId?: (runId: string) => void;
   forgetLocalRunId?: (runId: string) => void;
   forgetLocalBtwRunId?: (runId: string) => void;
-  requestExit: () => void;
+  runAuthFlow?: (params: {
+    provider?: string;
+  }) => Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>;
+  requestExit: (result?: Partial<TuiResult>) => void;
 };
 
 function isBtwCommand(text: string): boolean {
@@ -75,12 +79,14 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     noteLocalBtwRunId,
     forgetLocalRunId,
     forgetLocalBtwRunId,
+    runAuthFlow,
     requestExit,
   } = context;
 
   const setAgent = async (id: string) => {
     state.currentAgentId = normalizeAgentId(id);
     await setSession("");
+    chatLog.addSystem(`agent set to ${state.currentAgentId}; use /crestodian to return`);
   };
 
   const closeOverlayAndRender = () => {
@@ -154,6 +160,30 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     const selector = createSearchableSelectList(items, 9);
     openSelector(selector, async (value) => {
       await setAgent(value);
+    });
+  };
+
+  const openContextModeSelector = () => {
+    const items = [
+      {
+        value: "list",
+        label: "list",
+        description: "Short context breakdown",
+      },
+      {
+        value: "detail",
+        label: "detail",
+        description: "Per-file, per-tool, per-skill, and system prompt size",
+      },
+      {
+        value: "json",
+        label: "json",
+        description: "Machine-readable context report",
+      },
+    ];
+    const selector = createSearchableSelectList(items, 9);
+    openSelector(selector, async (value) => {
+      await sendMessage(`/context ${value}`);
     });
   };
 
@@ -250,11 +280,52 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       case "help":
         chatLog.addSystem(
           helpText({
+            local: opts.local,
             provider: state.sessionInfo.modelProvider,
             model: state.sessionInfo.model,
           }),
         );
         break;
+      case "auth": {
+        if (!runAuthFlow) {
+          chatLog.addSystem("auth login is only available in local embedded mode");
+          break;
+        }
+        if (state.activeChatRunId || state.pendingOptimisticUserMessage) {
+          chatLog.addSystem("abort the current run before /auth");
+          break;
+        }
+        const provider = args.trim() || state.sessionInfo.modelProvider || undefined;
+        chatLog.addSystem(
+          provider
+            ? `opening auth flow for ${provider}; TUI will resume when it exits`
+            : "opening auth flow; TUI will resume when it exits",
+        );
+        tui.requestRender();
+        setActivityStatus("auth");
+        try {
+          const result = await runAuthFlow({ provider });
+          await refreshSessionInfo();
+          if (result.exitCode === 0 && !result.signal) {
+            chatLog.addSystem(
+              provider ? `auth flow finished for ${provider}` : "auth flow finished",
+            );
+            setActivityStatus("idle");
+          } else {
+            const failureSuffix = result.signal
+              ? ` (signal ${result.signal})`
+              : typeof result.exitCode === "number"
+                ? ` (exit ${String(result.exitCode)})`
+                : "";
+            chatLog.addSystem(`auth flow failed${failureSuffix}`);
+            setActivityStatus("error");
+          }
+        } catch (err) {
+          chatLog.addSystem(`auth flow failed: ${sanitizeRenderableText(String(err))}`);
+          setActivityStatus("error");
+        }
+        break;
+      }
       case "gateway-status":
         try {
           const status = await client.getGatewayStatus();
@@ -283,6 +354,22 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         break;
       case "agents":
         await openAgentSelector();
+        break;
+      case "context":
+        if (!args) {
+          openContextModeSelector();
+        } else {
+          await sendMessage(raw);
+        }
+        break;
+      case "crestodian":
+        chatLog.addSystem(
+          args ? `returning to Crestodian with request: ${args}` : "returning to Crestodian",
+        );
+        requestExit({
+          exitReason: "return-to-crestodian",
+          ...(args ? { crestodianMessage: args } : {}),
+        });
         break;
       case "session":
         if (!args) {
@@ -452,7 +539,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           chatLog.addSystem(`elevated failed: ${String(err)}`);
         }
         break;
-      case "activation":
+      case "activation": {
         if (!args) {
           chatLog.addSystem("usage: /activation <mention|always>");
           break;
@@ -474,6 +561,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           chatLog.addSystem(`activation failed: ${String(err)}`);
         }
         break;
+      }
       case "new":
         try {
           // Clear token counts immediately to avoid stale display (#1523)
@@ -526,7 +614,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
 
   const sendMessage = async (text: string) => {
     if (!state.isConnected) {
-      chatLog.addSystem("not connected to gateway — message not sent");
+      chatLog.addSystem(
+        opts.local
+          ? "local runtime not ready — message not sent"
+          : "not connected to gateway — message not sent",
+      );
       setActivityStatus("disconnected");
       tui.requestRender();
       return;

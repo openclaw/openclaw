@@ -6,6 +6,7 @@ describe("terminal ansi helpers", () => {
     expect(stripAnsi("\u001B[31mred\u001B[0m")).toBe("red");
     expect(stripAnsi("\u001B[2K\u001B[1Ared")).toBe("red");
     expect(stripAnsi("\u001B]8;;https://openclaw.ai\u001B\\link\u001B]8;;\u001B\\")).toBe("link");
+    expect(stripAnsi("\u001B]8;;https://openclaw.ai\u0007link\u001B]8;;\u0007")).toBe("link");
   });
 
   it("sanitizes control characters for log-safe interpolation", () => {
@@ -15,8 +16,10 @@ describe("terminal ansi helpers", () => {
       "next" +
       String.fromCharCode(0) +
       "line" +
-      String.fromCharCode(127);
-    expect(sanitizeForLog(input)).toBe("warnnextline");
+      String.fromCharCode(127) +
+      String.fromCharCode(0x9b) +
+      "done";
+    expect(sanitizeForLog(input)).toBe("warnnextlinedone");
   });
 
   it("measures wide graphemes by terminal cell width", () => {

@@ -2,6 +2,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 
 type MonitorTelegramOpts = import("./monitor.js").MonitorTelegramOpts;
 let monitorTelegramProvider: typeof import("./monitor.js").monitorTelegramProvider;
+let resetTelegramPollingLeasesForTests: typeof import("./polling-lease.js").resetTelegramPollingLeasesForTests;
 
 type MockCtx = {
   message: {
@@ -337,9 +338,11 @@ describe("monitorTelegramProvider (grammY)", () => {
 
   beforeAll(async () => {
     ({ monitorTelegramProvider } = await import("./monitor.js"));
+    ({ resetTelegramPollingLeasesForTests } = await import("./polling-lease.js"));
   });
 
   beforeEach(() => {
+    resetTelegramPollingLeasesForTests();
     loadConfig.mockReturnValue({
       agents: { defaults: { maxConcurrent: 2 } },
       channels: { telegram: {} },
@@ -517,6 +520,69 @@ describe("monitorTelegramProvider (grammY)", () => {
 
     expect(createdBotStops.length).toBe(1);
     expect(createdBotStops[0]).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a concurrent same-token polling monitor before starting another runner", async () => {
+    const abort = new AbortController();
+    const firstCycle = mockRunOnceWithStalledPollingRunner();
+
+    const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+    await firstCycle.waitForRunStart();
+
+    await expect(monitorTelegramProvider({ token: "tok" })).rejects.toThrow(
+      "refusing duplicate poller",
+    );
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    abort.abort();
+    await monitor;
+  });
+
+  it("allows concurrent polling monitors for different bot tokens", async () => {
+    const firstAbort = new AbortController();
+    const secondAbort = new AbortController();
+    const firstCycle = mockRunOnceWithStalledPollingRunner();
+    const secondCycle = mockRunOnceWithStalledPollingRunner();
+
+    const firstMonitor = monitorTelegramProvider({
+      token: "tok-a",
+      abortSignal: firstAbort.signal,
+    });
+    await firstCycle.waitForRunStart();
+    const secondMonitor = monitorTelegramProvider({
+      token: "tok-b",
+      abortSignal: secondAbort.signal,
+    });
+    await secondCycle.waitForRunStart();
+
+    expect(runSpy).toHaveBeenCalledTimes(2);
+
+    firstAbort.abort();
+    secondAbort.abort();
+    await Promise.all([firstMonitor, secondMonitor]);
+  });
+
+  it("starts a same-token replacement after the previous monitor releases", async () => {
+    const firstAbort = new AbortController();
+    const secondAbort = new AbortController();
+    const firstCycle = mockRunOnceWithStalledPollingRunner();
+
+    const firstMonitor = monitorTelegramProvider({
+      token: "tok",
+      abortSignal: firstAbort.signal,
+    });
+    await firstCycle.waitForRunStart();
+    firstAbort.abort();
+
+    const secondCycle = mockRunOnceAndAbort(secondAbort);
+    const secondMonitor = monitorTelegramProvider({
+      token: "tok",
+      abortSignal: secondAbort.signal,
+    });
+    await secondCycle.waitForRunStart();
+    await Promise.all([firstMonitor, secondMonitor]);
+
+    expect(runSpy).toHaveBeenCalledTimes(2);
   });
 
   it("clears bounded cleanup timers after a clean stop", async () => {
@@ -763,16 +829,14 @@ describe("monitorTelegramProvider (grammY)", () => {
     vi.useRealTimers();
   });
 
-  it("confirms persisted offset with Telegram before starting runner", async () => {
+  it("does not call getUpdates for offset confirmation (avoids 409 conflicts)", async () => {
     const { order } = await runMonitorAndCaptureStartupOrder({
       persistedOffset: 549076203,
     });
 
-    expect(api.getUpdates).toHaveBeenCalledWith(
-      { offset: 549076204, limit: 1, timeout: 0 },
-      expect.any(AbortSignal),
-    );
-    expect(order).toEqual(["deleteWebhook", "getUpdates", "run"]);
+    // OpenClaw middleware skips duplicates using the persisted update offset.
+    expect(api.getUpdates).not.toHaveBeenCalled();
+    expect(order).toEqual(["deleteWebhook", "run"]);
   });
 
   it("skips offset confirmation when no persisted offset exists", async () => {
@@ -787,16 +851,25 @@ describe("monitorTelegramProvider (grammY)", () => {
     await expectOffsetConfirmationSkipped(Number.MAX_SAFE_INTEGER);
   });
 
-  it("resets webhookCleared latch on 409 conflict so deleteWebhook re-runs", async () => {
+  it("resets webhookCleared latch on 409 conflict so deleteWebhook re-runs, and rebuilds transport for a fresh TCP socket (#69787)", async () => {
     const abort = new AbortController();
     api.deleteWebhook.mockReset();
     api.deleteWebhook.mockResolvedValue(true);
-    const telegramTransport = {
+    const telegramTransport1 = {
       fetch: globalThis.fetch,
       sourceFetch: globalThis.fetch,
       close: vi.fn(async () => undefined),
     };
-    resolveTelegramTransportSpy.mockReturnValueOnce(telegramTransport);
+    const telegramTransport2 = {
+      fetch: globalThis.fetch,
+      sourceFetch: globalThis.fetch,
+      close: vi.fn(async () => undefined),
+    };
+    // First call is the initial cycle; second call is the post-409 rebuild
+    // that forces a fresh TCP connection (see #69787 polling-session fix).
+    resolveTelegramTransportSpy
+      .mockReturnValueOnce(telegramTransport1)
+      .mockReturnValueOnce(telegramTransport2);
 
     const conflictError = Object.assign(
       new Error("Conflict: terminated by other getUpdates request"),
@@ -829,9 +902,14 @@ describe("monitorTelegramProvider (grammY)", () => {
     expect(api.deleteWebhook).toHaveBeenCalledTimes(2);
     expect(pollingCycle).toBe(2);
     expect(runSpy).toHaveBeenCalledTimes(2);
-    expect(resolveTelegramTransportSpy).toHaveBeenCalledTimes(1);
-    expect(createTelegramBotCalls[0]?.telegramTransport).toBe(telegramTransport);
-    expect(createTelegramBotCalls[1]?.telegramTransport).toBe(telegramTransport);
+    // Transport is rebuilt on 409 conflict — the second cycle gets a fresh
+    // transport so Telegram sees a new TCP socket instead of reusing the
+    // keep-alive connection it already terminated.
+    expect(resolveTelegramTransportSpy).toHaveBeenCalledTimes(2);
+    expect(createTelegramBotCalls[0]?.telegramTransport).toBe(telegramTransport1);
+    expect(createTelegramBotCalls[1]?.telegramTransport).toBe(telegramTransport2);
+    expect(telegramTransport1.close).toHaveBeenCalledTimes(1);
+    expect(telegramTransport2.close).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to configured webhookSecret when not passed explicitly", async () => {

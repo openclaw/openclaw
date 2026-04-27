@@ -23,10 +23,20 @@ on:
         required: false
         default: true
         type: boolean
+      docker_lanes:
+        description: Comma/space separated Docker scheduler lane names to run against the prepared image
+        required: false
+        default: ""
+        type: string
       include_live_suites:
         description: Whether to run live-provider coverage
         required: false
         default: true
+        type: boolean
+      live_models_only:
+        description: Whether to run only the Docker live model matrix when live suites are enabled
+        required: false
+        default: false
         type: boolean
   workflow_call:
     inputs:
@@ -49,10 +59,20 @@ on:
         required: false
         default: true
         type: boolean
+      docker_lanes:
+        description: Comma/space separated Docker scheduler lane names to run against the prepared image
+        required: false
+        default: ""
+        type: string
       include_live_suites:
         description: Whether to run live-provider coverage
         required: false
         default: true
+        type: boolean
+      live_models_only:
+        description: Whether to run only the Docker live model matrix when live suites are enabled
+        required: false
+        default: false
         type: boolean
     secrets:
       OPENAI_API_KEY:
@@ -141,9 +161,12 @@ on:
         required: false
       OPENCLAW_GEMINI_SETTINGS_JSON:
         required: false
+      FIREWORKS_API_KEY:
+        required: false
 
 permissions:
   contents: read
+  packages: write
   pull-requests: read
 
 env:
@@ -153,7 +176,7 @@ env:
 
 jobs:
   validate_selected_ref:
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     outputs:
       selected_sha: ${{ steps.validate.outputs.selected_sha }}
       trusted_reason: ${{ steps.validate.outputs.trusted_reason }}
@@ -169,6 +192,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           INPUT_REF: ${{ inputs.ref }}
+          WORKFLOW_REF_NAME: ${{ github.ref_name }}
         shell: bash
         run: |
           set -euo pipefail
@@ -176,9 +200,15 @@ jobs:
           trusted_reason=""
 
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if [[ "${WORKFLOW_REF_NAME}" =~ ^release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]]; then
+            git fetch --no-tags origin "+refs/heads/${WORKFLOW_REF_NAME}:refs/remotes/origin/${WORKFLOW_REF_NAME}"
+          fi
 
           if git merge-base --is-ancestor "$selected_sha" refs/remotes/origin/main; then
             trusted_reason="main-ancestor"
+          elif [[ "${WORKFLOW_REF_NAME}" =~ ^release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]] &&
+            [[ "$selected_sha" == "$(git rev-parse "refs/remotes/origin/${WORKFLOW_REF_NAME}")" ]]; then
+            trusted_reason="release-branch-head"
           elif git tag --points-at "$selected_sha" | grep -Eq '^v'; then
             trusted_reason="release-tag"
           else
@@ -195,7 +225,7 @@ jobs:
 
           if [[ -z "$trusted_reason" ]]; then
             echo "Ref '${INPUT_REF}' resolved to $selected_sha, which is not trusted for secret-bearing live/E2E checks." >&2
-            echo "Allowed refs must be on main, point to a release tag, or match an open PR head in ${GITHUB_REPOSITORY}." >&2
+            echo "Allowed refs must be on main, match the current release branch head, point to a release tag, or match an open PR head in ${GITHUB_REPOSITORY}." >&2
             exit 1
           fi
 
@@ -209,8 +239,8 @@ jobs:
 
   validate_release_live_cache:
     needs: validate_selected_ref
-    if: inputs.include_live_suites
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    if: inputs.include_live_suites && !inputs.live_models_only
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 60
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -222,7 +252,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -258,7 +288,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -275,7 +305,7 @@ jobs:
 
   validate_special_e2e:
     needs: validate_selected_ref
-    if: inputs.include_repo_e2e || inputs.include_live_suites
+    if: inputs.include_repo_e2e || (inputs.include_live_suites && !inputs.live_models_only)
     runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
@@ -290,7 +320,7 @@ jobs:
             requires_live_suites: false
           - suite_id: openai-ws-stream-live-e2e
             label: OpenAI WebSocket live E2E
-            command: pnpm test:e2e -- src/agents/openai-ws-stream.e2e.test.ts
+            command: pnpm test:e2e src/agents/openai-ws-stream.e2e.test.ts
             timeout_minutes: 90
             requires_repo_e2e: false
             requires_live_suites: true
@@ -303,7 +333,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -349,68 +379,24 @@ jobs:
         run: ${{ matrix.command }}
 
   validate_docker_e2e:
-    needs: validate_selected_ref
-    if: inputs.include_release_path_suites || inputs.include_openwebui
+    needs: [validate_selected_ref, prepare_docker_e2e_image]
+    if: inputs.include_release_path_suites && inputs.docker_lanes == ''
+    name: Docker E2E (${{ matrix.label }})
     runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - suite_id: docker-onboard
-            label: Onboarding Docker E2E
-            command: pnpm test:docker:onboard
-            timeout_minutes: 60
-            release_path: true
-            openwebui_only: false
-          - suite_id: docker-gateway-network
-            label: Gateway Network Docker E2E
-            command: pnpm test:docker:gateway-network
-            timeout_minutes: 60
-            release_path: true
-            openwebui_only: false
-          - suite_id: docker-mcp-channels
-            label: MCP Channels Docker E2E
-            command: pnpm test:docker:mcp-channels
-            timeout_minutes: 60
-            release_path: true
-            openwebui_only: false
-          - suite_id: docker-plugins
-            label: Plugins Docker E2E
-            command: pnpm test:docker:plugins
-            timeout_minutes: 75
-            release_path: true
-            openwebui_only: false
-          - suite_id: docker-bundled-channel-deps
-            label: Bundled Channel Runtime Deps Docker E2E
-            command: pnpm test:docker:bundled-channel-deps
-            timeout_minutes: 75
-            release_path: true
-            openwebui_only: false
-          - suite_id: docker-doctor-switch
-            label: Doctor Install Switch Docker E2E
-            command: pnpm test:docker:doctor-switch
-            timeout_minutes: 60
-            release_path: true
-            openwebui_only: false
-          - suite_id: docker-qr
-            label: QR Import Docker E2E
-            command: pnpm test:docker:qr
-            timeout_minutes: 60
-            release_path: true
-            openwebui_only: false
-          - suite_id: docker-install-e2e
-            label: Installer Docker E2E
-            command: pnpm test:install:e2e
+          - chunk_id: core
+            label: core
             timeout_minutes: 120
-            release_path: true
-            openwebui_only: false
-          - suite_id: docker-openwebui
-            label: Open WebUI Docker E2E
-            command: pnpm test:docker:openwebui
-            timeout_minutes: 75
-            release_path: false
-            openwebui_only: true
+          - chunk_id: package-update
+            label: package/update
+            timeout_minutes: 180
+          - chunk_id: plugins-integrations
+            label: plugins/integrations
+            timeout_minutes: 180
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
@@ -455,12 +441,27 @@ jobs:
       OPENCLAW_CLAUDE_SETTINGS_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_JSON }}
       OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON }}
       OPENCLAW_GEMINI_SETTINGS_JSON: ${{ secrets.OPENCLAW_GEMINI_SETTINGS_JSON }}
+      FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+      OPENCLAW_DOCKER_E2E_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.image }}
+      OPENCLAW_DOCKER_E2E_BARE_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.bare_image }}
+      OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.functional_image }}
+      OPENCLAW_CURRENT_PACKAGE_TGZ: .artifacts/docker-e2e-package/openclaw-current.tgz
+      OPENCLAW_SKIP_DOCKER_BUILD: "1"
+      INCLUDE_OPENWEBUI: ${{ inputs.include_openwebui }}
+      DOCKER_E2E_CHUNK: ${{ matrix.chunk_id }}
     steps:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
-          fetch-depth: 0
+          fetch-depth: 1
+
+      - name: Log in to GHCR for shared Docker E2E image
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -472,48 +473,500 @@ jobs:
       - name: Hydrate live auth/profile inputs
         run: bash scripts/ci-hydrate-live-auth.sh
 
-      - name: Configure suite-specific env
-        shell: bash
-        run: |
-          set -euo pipefail
-          case "${{ matrix.suite_id }}" in
-            docker-install-e2e)
-              echo "OPENCLAW_E2E_MODELS=both" >> "$GITHUB_ENV"
-              ;;
-          esac
+      - name: Plan and hydrate Docker E2E chunk
+        id: plan
+        uses: ./.github/actions/docker-e2e-plan
+        with:
+          mode: chunk
+          chunk: ${{ matrix.chunk_id }}
+          include-openwebui: ${{ inputs.include_openwebui }}
 
-      - name: Validate suite credentials
+      - name: Run Docker E2E chunk
         shell: bash
         run: |
           set -euo pipefail
-          case "${{ matrix.suite_id }}" in
-            docker-install-e2e)
-              [[ -n "${OPENAI_API_KEY:-}" ]] || {
-                echo "OPENAI_API_KEY is required for installer Docker E2E." >&2
-                exit 1
-              }
-              if [[ -z "${ANTHROPIC_API_TOKEN:-}" && -z "${ANTHROPIC_API_KEY:-}" ]]; then
-                echo "ANTHROPIC_API_TOKEN or ANTHROPIC_API_KEY is required for installer Docker E2E." >&2
-                exit 1
+          export OPENCLAW_DOCKER_ALL_PROFILE=release-path
+          export OPENCLAW_DOCKER_ALL_CHUNK="${DOCKER_E2E_CHUNK}"
+          export OPENCLAW_DOCKER_ALL_BUILD=0
+          export OPENCLAW_DOCKER_ALL_PREFLIGHT=0
+          export OPENCLAW_DOCKER_ALL_FAIL_FAST=0
+          export OPENCLAW_DOCKER_ALL_INCLUDE_OPENWEBUI="${INCLUDE_OPENWEBUI}"
+          export OPENCLAW_DOCKER_ALL_LOG_DIR=".artifacts/docker-tests/release-${DOCKER_E2E_CHUNK}"
+          export OPENCLAW_DOCKER_ALL_TIMINGS_FILE=".artifacts/docker-tests/release-${DOCKER_E2E_CHUNK}-timings.json"
+          export OPENCLAW_DOCKER_ALL_PNPM_COMMAND="$(command -v pnpm)"
+
+          pnpm test:docker:all
+
+      - name: Summarize Docker E2E chunk
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          summary=".artifacts/docker-tests/release-${DOCKER_E2E_CHUNK}/summary.json"
+          if [[ ! -f "$summary" ]]; then
+            echo "Docker chunk summary missing: \`$summary\`" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          node scripts/docker-e2e.mjs summary "$summary" "Docker E2E chunk: ${DOCKER_E2E_CHUNK:-unknown}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Docker E2E chunk artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: docker-e2e-${{ matrix.chunk_id }}
+          path: .artifacts/docker-tests/
+          if-no-files-found: ignore
+
+  validate_docker_lanes:
+    needs: [validate_selected_ref, prepare_docker_e2e_image]
+    if: inputs.docker_lanes != ''
+    name: Docker E2E targeted lanes
+    runs-on: blacksmith-32vcpu-ubuntu-2404
+    timeout-minutes: 180
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
+      ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
+      BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
+      CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+      DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+      MODELSTUDIO_API_KEY: ${{ secrets.MODELSTUDIO_API_KEY }}
+      MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+      MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+      OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
+      OPENCLAW_LIVE_BROWSER_CDP_URL: ${{ secrets.OPENCLAW_LIVE_BROWSER_CDP_URL }}
+      OPENCLAW_LIVE_SETUP_TOKEN: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN }}
+      OPENCLAW_LIVE_SETUP_TOKEN_MODEL: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN_MODEL }}
+      OPENCLAW_LIVE_SETUP_TOKEN_PROFILE: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN_PROFILE }}
+      OPENCLAW_LIVE_SETUP_TOKEN_VALUE: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN_VALUE }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+      FAL_KEY: ${{ secrets.FAL_KEY }}
+      RUNWAY_API_KEY: ${{ secrets.RUNWAY_API_KEY }}
+      DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
+      TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
+      VYDRA_API_KEY: ${{ secrets.VYDRA_API_KEY }}
+      XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+      ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+      Z_AI_API_KEY: ${{ secrets.Z_AI_API_KEY }}
+      BYTEPLUS_ACCESS_KEY_ID: ${{ secrets.BYTEPLUS_ACCESS_KEY_ID }}
+      BYTEPLUS_SECRET_ACCESS_KEY: ${{ secrets.BYTEPLUS_SECRET_ACCESS_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      OPENCLAW_CODEX_AUTH_JSON: ${{ secrets.OPENCLAW_CODEX_AUTH_JSON }}
+      OPENCLAW_CODEX_CONFIG_TOML: ${{ secrets.OPENCLAW_CODEX_CONFIG_TOML }}
+      OPENCLAW_CLAUDE_JSON: ${{ secrets.OPENCLAW_CLAUDE_JSON }}
+      OPENCLAW_CLAUDE_CREDENTIALS_JSON: ${{ secrets.OPENCLAW_CLAUDE_CREDENTIALS_JSON }}
+      OPENCLAW_CLAUDE_SETTINGS_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_JSON }}
+      OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON }}
+      OPENCLAW_GEMINI_SETTINGS_JSON: ${{ secrets.OPENCLAW_GEMINI_SETTINGS_JSON }}
+      FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+      OPENCLAW_DOCKER_E2E_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.image }}
+      OPENCLAW_DOCKER_E2E_BARE_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.bare_image }}
+      OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.functional_image }}
+      OPENCLAW_CURRENT_PACKAGE_TGZ: .artifacts/docker-e2e-package/openclaw-current.tgz
+      OPENCLAW_SKIP_DOCKER_BUILD: "1"
+      INCLUDE_OPENWEBUI: ${{ inputs.include_openwebui }}
+      DOCKER_E2E_LANES: ${{ inputs.docker_lanes }}
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          fetch-depth: 1
+
+      - name: Log in to GHCR for shared Docker E2E image
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+
+      - name: Hydrate live auth/profile inputs
+        run: bash scripts/ci-hydrate-live-auth.sh
+
+      - name: Plan and hydrate targeted Docker E2E lanes
+        id: plan
+        uses: ./.github/actions/docker-e2e-plan
+        with:
+          mode: targeted
+          lanes: ${{ inputs.docker_lanes }}
+          include-openwebui: ${{ inputs.include_openwebui }}
+
+      - name: Run targeted Docker E2E lanes
+        shell: bash
+        run: |
+          set -euo pipefail
+          export OPENCLAW_DOCKER_ALL_LANES="${DOCKER_E2E_LANES}"
+          export OPENCLAW_DOCKER_ALL_PREFLIGHT=0
+          export OPENCLAW_DOCKER_ALL_FAIL_FAST=0
+          export OPENCLAW_DOCKER_ALL_INCLUDE_OPENWEBUI="${INCLUDE_OPENWEBUI}"
+          export OPENCLAW_DOCKER_ALL_LOG_DIR=".artifacts/docker-tests/targeted"
+          export OPENCLAW_DOCKER_ALL_TIMINGS_FILE=".artifacts/docker-tests/targeted-timings.json"
+          export OPENCLAW_DOCKER_ALL_PNPM_COMMAND="$(command -v pnpm)"
+          if [[ "${{ steps.plan.outputs.needs_live_image }}" == "1" ]]; then
+            pnpm test:docker:live-build
+          fi
+          export OPENCLAW_DOCKER_ALL_BUILD=0
+
+          pnpm test:docker:all
+
+      - name: Summarize targeted Docker E2E lanes
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          summary=".artifacts/docker-tests/targeted/summary.json"
+          if [[ ! -f "$summary" ]]; then
+            echo "Docker targeted summary missing: \`$summary\`" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          node scripts/docker-e2e.mjs summary "$summary" "Docker E2E targeted lanes" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload targeted Docker E2E artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: docker-e2e-targeted
+          path: .artifacts/docker-tests/
+          if-no-files-found: ignore
+
+  validate_docker_openwebui:
+    needs: [validate_selected_ref, prepare_docker_e2e_image]
+    if: inputs.include_openwebui && !inputs.include_release_path_suites && inputs.docker_lanes == ''
+    runs-on: blacksmith-32vcpu-ubuntu-2404
+    timeout-minutes: 75
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+      OPENCLAW_DOCKER_E2E_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.image }}
+      OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.functional_image }}
+      OPENCLAW_SKIP_DOCKER_BUILD: "1"
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          fetch-depth: 1
+
+      - name: Log in to GHCR for shared Docker E2E image
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+
+      - name: Validate Open WebUI credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "${OPENAI_API_KEY:-}" ]] || {
+            echo "OPENAI_API_KEY is required for the Open WebUI Docker smoke." >&2
+            exit 1
+          }
+
+      - name: Run Open WebUI Docker E2E
+        run: pnpm test:docker:openwebui
+
+  prepare_docker_e2e_image:
+    needs: validate_selected_ref
+    if: inputs.include_release_path_suites || inputs.include_openwebui || inputs.docker_lanes != ''
+    runs-on: blacksmith-32vcpu-ubuntu-2404
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+      bare_image: ${{ steps.image.outputs.bare_image }}
+      functional_image: ${{ steps.image.outputs.functional_image }}
+      needs_bare_image: ${{ steps.plan.outputs.needs_bare_image }}
+      needs_e2e_image: ${{ steps.plan.outputs.needs_e2e_image }}
+      needs_functional_image: ${{ steps.plan.outputs.needs_functional_image }}
+      needs_live_image: ${{ steps.plan.outputs.needs_live_image }}
+      needs_package: ${{ steps.plan.outputs.needs_package }}
+    env:
+      DOCKER_BUILD_SUMMARY: "false"
+      DOCKER_BUILD_RECORD_UPLOAD: "false"
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          fetch-depth: 1
+
+      - name: Resolve shared Docker E2E image tags
+        id: image
+        shell: bash
+        env:
+          SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+        run: |
+          set -euo pipefail
+          repository="${GITHUB_REPOSITORY,,}"
+          bare_image="ghcr.io/${repository}-docker-e2e-bare:${SELECTED_SHA}"
+          functional_image="ghcr.io/${repository}-docker-e2e-functional:${SELECTED_SHA}"
+          image="$functional_image"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "bare_image=$bare_image" >> "$GITHUB_OUTPUT"
+          echo "functional_image=$functional_image" >> "$GITHUB_OUTPUT"
+          echo "Shared Docker E2E bare image: \`$bare_image\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Shared Docker E2E functional image: \`$functional_image\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Plan Docker E2E images
+        id: plan
+        uses: ./.github/actions/docker-e2e-plan
+        with:
+          mode: prepare
+          lanes: ${{ inputs.docker_lanes }}
+          include-release-path-suites: ${{ inputs.include_release_path_suites }}
+          include-openwebui: ${{ inputs.include_openwebui }}
+          hydrate-artifacts: "false"
+
+      - name: Setup Node environment
+        if: steps.plan.outputs.needs_package == '1'
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+
+      - name: Pack OpenClaw package for Docker E2E
+        if: steps.plan.outputs.needs_package == '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .artifacts/docker-e2e-package
+          node scripts/package-openclaw-for-docker.mjs \
+            --output-dir .artifacts/docker-e2e-package \
+            --output-name openclaw-current.tgz
+
+      - name: Upload OpenClaw Docker E2E package
+        if: steps.plan.outputs.needs_package == '1'
+        uses: actions/upload-artifact@v7
+        with:
+          name: docker-e2e-package
+          path: .artifacts/docker-e2e-package/openclaw-current.tgz
+          if-no-files-found: error
+
+      - name: Log in to GHCR
+        if: steps.plan.outputs.needs_e2e_image == '1'
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Check existing shared Docker E2E images
+        id: image_exists
+        if: steps.plan.outputs.needs_e2e_image == '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bare_exists=0
+          functional_exists=0
+          needs_build=0
+
+          if [[ "${{ steps.plan.outputs.needs_bare_image }}" == "1" ]]; then
+            if docker manifest inspect "${{ steps.image.outputs.bare_image }}" >/dev/null 2>&1; then
+              bare_exists=1
+              echo "Shared Docker E2E bare image already exists: ${{ steps.image.outputs.bare_image }}"
+            else
+              needs_build=1
+            fi
+          fi
+
+          if [[ "${{ steps.plan.outputs.needs_functional_image }}" == "1" ]]; then
+            if docker manifest inspect "${{ steps.image.outputs.functional_image }}" >/dev/null 2>&1; then
+              functional_exists=1
+              echo "Shared Docker E2E functional image already exists: ${{ steps.image.outputs.functional_image }}"
+            else
+              needs_build=1
+            fi
+          fi
+
+          echo "bare_exists=$bare_exists" >> "$GITHUB_OUTPUT"
+          echo "functional_exists=$functional_exists" >> "$GITHUB_OUTPUT"
+          echo "needs_build=$needs_build" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Docker builder
+        if: steps.image_exists.outputs.needs_build == '1'
+        uses: useblacksmith/setup-docker-builder@ac083cc84672d01c60d5e8561d0a939b697de542 # v1
+
+      - name: Build and push bare Docker E2E image
+        if: steps.plan.outputs.needs_bare_image == '1' && steps.image_exists.outputs.bare_exists != '1'
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: .
+          file: ./scripts/e2e/Dockerfile
+          target: bare
+          platforms: linux/amd64
+          cache-from: type=gha,scope=docker-e2e-bare
+          cache-to: type=gha,mode=max,scope=docker-e2e-bare
+          tags: ${{ steps.image.outputs.bare_image }}
+          sbom: true
+          provenance: mode=max
+          push: true
+
+      - name: Build and push functional Docker E2E image
+        if: steps.plan.outputs.needs_functional_image == '1' && steps.image_exists.outputs.functional_exists != '1'
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: .
+          file: ./scripts/e2e/Dockerfile
+          target: functional
+          build-contexts: |
+            openclaw_package=.artifacts/docker-e2e-package
+          platforms: linux/amd64
+          cache-from: |
+            type=gha,scope=docker-e2e-bare
+            type=gha,scope=docker-e2e-functional
+          cache-to: type=gha,mode=max,scope=docker-e2e-functional
+          tags: ${{ steps.image.outputs.functional_image }}
+          sbom: true
+          provenance: mode=max
+          push: true
+
+  validate_live_models_docker:
+    name: Docker live models (${{ matrix.provider_label }})
+    needs: validate_selected_ref
+    if: inputs.include_live_suites
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - provider_label: Anthropic
+            providers: anthropic
+          - provider_label: Google
+            providers: google
+          - provider_label: MiniMax
+            providers: minimax
+          - provider_label: OpenAI
+            providers: openai
+          - provider_label: OpenCode
+            providers: opencode-go
+          - provider_label: OpenRouter
+            providers: openrouter
+          - provider_label: xAI
+            providers: xai
+          - provider_label: Z.ai
+            providers: zai
+          - provider_label: Fireworks
+            providers: fireworks
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
+      ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
+      BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
+      CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+      DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+      MODELSTUDIO_API_KEY: ${{ secrets.MODELSTUDIO_API_KEY }}
+      MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+      MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+      OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+      XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+      ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+      Z_AI_API_KEY: ${{ secrets.Z_AI_API_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      OPENCLAW_CODEX_AUTH_JSON: ${{ secrets.OPENCLAW_CODEX_AUTH_JSON }}
+      OPENCLAW_CODEX_CONFIG_TOML: ${{ secrets.OPENCLAW_CODEX_CONFIG_TOML }}
+      OPENCLAW_CLAUDE_JSON: ${{ secrets.OPENCLAW_CLAUDE_JSON }}
+      OPENCLAW_CLAUDE_CREDENTIALS_JSON: ${{ secrets.OPENCLAW_CLAUDE_CREDENTIALS_JSON }}
+      OPENCLAW_CLAUDE_SETTINGS_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_JSON }}
+      OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON }}
+      OPENCLAW_GEMINI_SETTINGS_JSON: ${{ secrets.OPENCLAW_GEMINI_SETTINGS_JSON }}
+      FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+      OPENCLAW_LIVE_PROVIDERS: ${{ matrix.providers }}
+      OPENCLAW_VITEST_MAX_WORKERS: "2"
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+
+      - name: Hydrate live auth/profile inputs
+        run: bash scripts/ci-hydrate-live-auth.sh
+
+      - name: Validate provider credential
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          require_any() {
+            local label="$1"
+            shift
+            local key
+            for key in "$@"; do
+              if [[ -n "${!key:-}" ]]; then
+                return 0
               fi
-              ;;
-            docker-openwebui)
-              [[ -n "${OPENAI_API_KEY:-}" ]] || {
-                echo "OPENAI_API_KEY is required for the Open WebUI Docker smoke." >&2
-                exit 1
-              }
+            done
+            echo "Missing credential for ${label}: expected one of $*" >&2
+            exit 1
+          }
+
+          case "${{ matrix.providers }}" in
+            anthropic) require_any Anthropic ANTHROPIC_API_KEY ANTHROPIC_API_KEY_OLD ANTHROPIC_API_TOKEN ;;
+            google) require_any Google GEMINI_API_KEY GOOGLE_API_KEY ;;
+            minimax) require_any MiniMax MINIMAX_API_KEY ;;
+            openai) require_any OpenAI OPENAI_API_KEY ;;
+            opencode-go) require_any OpenCode OPENCODE_API_KEY OPENCODE_ZEN_API_KEY ;;
+            openrouter) require_any OpenRouter OPENROUTER_API_KEY ;;
+            xai) require_any xAI XAI_API_KEY ;;
+            zai) require_any Z.ai ZAI_API_KEY Z_AI_API_KEY ;;
+            fireworks) require_any Fireworks FIREWORKS_API_KEY ;;
+            *)
+              echo "Unhandled live model provider shard: ${{ matrix.providers }}" >&2
+              exit 1
               ;;
           esac
 
-      - name: Run ${{ matrix.label }}
-        if: |
-          (inputs.include_release_path_suites && matrix.release_path) ||
-          (inputs.include_openwebui && matrix.openwebui_only)
-        run: ${{ matrix.command }}
+      - name: Run Docker live model sweep
+        run: pnpm test:docker:live-models
 
   validate_live_provider_suites:
     needs: validate_selected_ref
-    if: inputs.include_live_suites
+    if: inputs.include_live_suites && !inputs.live_models_only
     runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
@@ -524,11 +977,6 @@ jobs:
             label: pnpm test:live
             command: pnpm test:live
             timeout_minutes: 180
-            profile_env_only: false
-          - suite_id: live-models-docker
-            label: Docker live models
-            command: pnpm test:docker:live-models
-            timeout_minutes: 120
             profile_env_only: false
           - suite_id: live-gateway-docker
             label: Docker live gateway
@@ -594,6 +1042,7 @@ jobs:
       OPENCLAW_CLAUDE_SETTINGS_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_JSON }}
       OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON }}
       OPENCLAW_GEMINI_SETTINGS_JSON: ${{ secrets.OPENCLAW_GEMINI_SETTINGS_JSON }}
+      FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
       OPENCLAW_LIVE_VIDEO_GENERATION_SKIP_PROVIDERS: ""
       OPENCLAW_LIVE_VYDRA_VIDEO: "1"
       OPENCLAW_VITEST_MAX_WORKERS: "2"
@@ -602,7 +1051,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -623,7 +1072,7 @@ jobs:
           fi
           case "${{ matrix.suite_id }}" in
             live-cli-backend-docker)
-              echo "OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/gpt-5.4" >> "$GITHUB_ENV"
+              echo "OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/gpt-5.5" >> "$GITHUB_ENV"
               # The CLI backend Docker lane should exercise the same staged
               # Codex auth path Peter uses locally so MCP cron creation and
               # multimodal probes stay covered in CI. Replace the staged

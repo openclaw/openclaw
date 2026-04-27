@@ -1,4 +1,3 @@
-import { normalizeOptionalString, readStringValue } from "openclaw/plugin-sdk/text-runtime";
 import type { ResolvedBrowserProfile } from "../config.js";
 import {
   DEFAULT_AI_SNAPSHOT_EFFICIENT_DEPTH,
@@ -12,10 +11,19 @@ import {
 } from "../profile-capabilities.js";
 import { toBoolean, toNumber, toStringOrEmpty } from "./utils.js";
 
+function readStringValue(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  return readStringValue(value)?.trim() || undefined;
+}
+
 export type BrowserSnapshotPlan = {
   format: "ai" | "aria";
   mode?: "efficient";
   labels?: boolean;
+  urls?: boolean;
   limit?: number;
   resolvedMaxChars?: number;
   interactive?: boolean;
@@ -34,6 +42,7 @@ export function resolveSnapshotPlan(params: {
 }): BrowserSnapshotPlan {
   const mode = params.query.mode === "efficient" ? "efficient" : undefined;
   const labels = toBoolean(params.query.labels) ?? undefined;
+  const urls = toBoolean(params.query.urls) ?? undefined;
   const explicitFormat =
     params.query.format === "aria" ? "aria" : params.query.format === "ai" ? "ai" : undefined;
   const format = resolveDefaultSnapshotFormat({
@@ -75,6 +84,7 @@ export function resolveSnapshotPlan(params: {
     format,
     mode,
     labels,
+    urls,
     limit,
     resolvedMaxChars,
     interactive,
@@ -85,6 +95,7 @@ export function resolveSnapshotPlan(params: {
     frameSelectorValue,
     wantsRoleSnapshot:
       labels === true ||
+      urls === true ||
       mode === "efficient" ||
       interactive === true ||
       compact === true ||

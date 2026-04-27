@@ -334,6 +334,11 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
         reactions: true,
         threads: true,
         media: true,
+        tts: {
+          voice: {
+            synthesisTarget: "voice-note",
+          },
+        },
       },
       reload: { configPrefixes: ["channels.matrix"] },
       configSchema: buildChannelConfigSchema(MatrixConfigSchema),
@@ -520,6 +525,24 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
       doctor: matrixDoctor,
       lifecycle: {
         runStartupMaintenance: runMatrixStartupMaintenance,
+      },
+      heartbeat: {
+        sendTyping: async ({ cfg, to, accountId }) => {
+          await (
+            await loadMatrixChannelRuntime()
+          ).sendTypingMatrix(to, true, {
+            cfg: cfg as CoreConfig,
+            ...(accountId ? { accountId } : {}),
+          });
+        },
+        clearTyping: async ({ cfg, to, accountId }) => {
+          await (
+            await loadMatrixChannelRuntime()
+          ).sendTypingMatrix(to, false, {
+            cfg: cfg as CoreConfig,
+            ...(accountId ? { accountId } : {}),
+          });
+        },
       },
     },
     security: {

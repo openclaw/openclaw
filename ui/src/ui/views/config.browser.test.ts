@@ -33,6 +33,7 @@ describe("config view", () => {
     onSearchChange: vi.fn(),
     onSectionChange: vi.fn(),
     onReload: vi.fn(),
+    onReset: vi.fn(),
     onSave: vi.fn(),
     onApply: vi.fn(),
     onUpdate: vi.fn(),
@@ -42,6 +43,18 @@ describe("config view", () => {
     themeMode: "system" as ThemeMode,
     setTheme: vi.fn(),
     setThemeMode: vi.fn(),
+    hasCustomTheme: false,
+    customThemeLabel: null,
+    customThemeSourceUrl: null,
+    customThemeImportUrl: "",
+    customThemeImportBusy: false,
+    customThemeImportMessage: null,
+    customThemeImportExpanded: false,
+    customThemeImportFocusToken: 0,
+    onCustomThemeImportUrlChange: vi.fn(),
+    onImportCustomTheme: vi.fn(),
+    onClearCustomTheme: vi.fn(),
+    onOpenCustomThemeImport: vi.fn(),
     borderRadius: 50,
     setBorderRadius: vi.fn(),
     gatewayUrl: "",
@@ -49,11 +62,13 @@ describe("config view", () => {
   });
 
   function findActionButtons(container: HTMLElement): {
+    clearButton?: HTMLButtonElement;
     saveButton?: HTMLButtonElement;
     applyButton?: HTMLButtonElement;
   } {
     const buttons = Array.from(container.querySelectorAll("button"));
     return {
+      clearButton: buttons.find((btn) => btn.textContent?.trim() === "Clear"),
       saveButton: buttons.find((btn) => btn.textContent?.trim() === "Save"),
       applyButton: buttons.find((btn) => btn.textContent?.trim() === "Apply"),
     };
@@ -129,22 +144,31 @@ describe("config view", () => {
       raw: "{\n}\n",
       originalRaw: "{\n}\n",
     });
-    ({ saveButton, applyButton } = findActionButtons(container));
+    let clearButton: HTMLButtonElement | undefined;
+    ({ clearButton, saveButton, applyButton } = findActionButtons(container));
+    expect(clearButton).not.toBeUndefined();
     expect(saveButton).not.toBeUndefined();
     expect(applyButton).not.toBeUndefined();
+    expect(clearButton?.disabled).toBe(true);
     expect(saveButton?.disabled).toBe(true);
     expect(applyButton?.disabled).toBe(true);
 
+    const onReset = vi.fn();
     renderCase({
       formMode: "raw",
       raw: '{\n  gateway: { mode: "local" }\n}\n',
       originalRaw: "{\n}\n",
+      onReset,
     });
-    ({ saveButton, applyButton } = findActionButtons(container));
+    ({ clearButton, saveButton, applyButton } = findActionButtons(container));
     expect(saveButton).not.toBeUndefined();
     expect(applyButton).not.toBeUndefined();
+    expect(clearButton?.disabled).toBe(false);
     expect(saveButton?.disabled).toBe(false);
     expect(applyButton?.disabled).toBe(false);
+
+    clearButton?.click();
+    expect(onReset).toHaveBeenCalledTimes(1);
   });
 
   it("switches mode via the sidebar toggle", () => {
@@ -195,6 +219,12 @@ describe("config view", () => {
     );
     expect(formButton?.classList.contains("active")).toBe(true);
     expect(rawButton?.disabled).toBe(true);
+    const rawNotice = container.querySelector(".config-actions__notice");
+    const actionButtons = container.querySelector(".config-actions__buttons");
+    expect(rawNotice).not.toBeNull();
+    expect(actionButtons).not.toBeNull();
+    expect(actionButtons?.textContent).toContain("Reload");
+    expect(actionButtons?.textContent).toContain("Update");
     expect(normalizedText(container)).toContain(
       "Raw mode disabled (snapshot cannot safely round-trip raw text).",
     );
@@ -319,7 +349,80 @@ describe("config view", () => {
     (input as HTMLInputElement).value = "gateway";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onSearchChange).toHaveBeenCalledWith("gateway");
+  });
 
+  it("shows section hero and hides nested card header in single-section form view", () => {
+    const { container } = renderConfigView({
+      activeSection: "auth",
+      schema: {
+        type: "object",
+        properties: {
+          auth: {
+            type: "object",
+            properties: {
+              authPermanentBackoffMinutes: {
+                type: "number",
+              },
+            },
+          },
+        },
+      },
+      formValue: {
+        auth: {
+          authPermanentBackoffMinutes: 10,
+        },
+      },
+      originalValue: {
+        auth: {
+          authPermanentBackoffMinutes: 10,
+        },
+      },
+    });
+
+    const heroTitle = container.querySelector(".config-section-hero__title");
+    expect(heroTitle?.textContent?.trim()).toBe("Authentication");
+    expect(container.querySelector(".config-section-card__header")).toBeNull();
+  });
+
+  it("keeps card headers in multi-section root view", () => {
+    const { container } = renderConfigView({
+      schema: {
+        type: "object",
+        properties: {
+          auth: {
+            type: "object",
+            properties: {},
+          },
+          gateway: {
+            type: "object",
+            properties: {},
+          },
+        },
+      },
+      formValue: {
+        auth: {},
+        gateway: {},
+      },
+      originalValue: {
+        auth: {},
+        gateway: {},
+      },
+    });
+
+    expect(container.querySelectorAll(".config-section-card__header").length).toBeGreaterThan(0);
+  });
+
+  it("clears the active search query", () => {
+    const container = document.createElement("div");
+    const onSearchChange = vi.fn();
+    render(
+      renderConfig({
+        ...baseProps(),
+        searchQuery: "gateway",
+        onSearchChange,
+      }),
+      container,
+    );
     const clearButton = container.querySelector<HTMLButtonElement>(".config-search__clear");
     expect(clearButton).toBeTruthy();
     clearButton?.click();
@@ -483,5 +586,85 @@ describe("config view", () => {
     input.value = "local";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onFormPatch).toHaveBeenCalledWith(["gateway", "mode"], "local");
+  });
+
+  it("opens the tweakcn importer when custom is clicked without an imported theme", () => {
+    const onOpenCustomThemeImport = vi.fn();
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      onOpenCustomThemeImport,
+    });
+
+    const customButton = Array.from(container.querySelectorAll("button")).find(
+      (btn) => btn.textContent?.trim() === "Custom",
+    );
+
+    expect(customButton?.disabled).toBe(false);
+    expect(normalizedText(container)).toContain("Click Custom to import a tweakcn theme");
+
+    customButton?.click();
+
+    expect(onOpenCustomThemeImport).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the tweakcn importer once the custom slot is opened", () => {
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      customThemeImportExpanded: true,
+      customThemeImportFocusToken: 1,
+    });
+
+    const importButton = Array.from(container.querySelectorAll("button")).find((btn) =>
+      btn.textContent?.includes("Import custom theme"),
+    );
+
+    expect(importButton?.disabled).toBe(true);
+    expect(container.querySelector(".settings-theme-import__input")).not.toBeNull();
+  });
+
+  it("shows custom theme actions once a tweakcn import exists", () => {
+    const setTheme = vi.fn();
+    const onClearCustomTheme = vi.fn();
+    const onImportCustomTheme = vi.fn();
+    const onCustomThemeImportUrlChange = vi.fn();
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      hasCustomTheme: true,
+      customThemeLabel: "Light Green",
+      customThemeSourceUrl: "https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z",
+      customThemeImportUrl: "https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z",
+      setTheme,
+      onClearCustomTheme,
+      onImportCustomTheme,
+      onCustomThemeImportUrlChange,
+    });
+
+    const customButton = Array.from(container.querySelectorAll("button")).find(
+      (btn) => btn.textContent?.trim() === "Custom",
+    );
+    expect(customButton?.disabled).toBe(false);
+    customButton?.click();
+    expect(setTheme).toHaveBeenCalledWith("custom", expect.any(Object));
+
+    const replaceButton = Array.from(container.querySelectorAll("button")).find((btn) =>
+      btn.textContent?.includes("Replace custom theme"),
+    );
+    const clearButton = Array.from(container.querySelectorAll("button")).find((btn) =>
+      btn.textContent?.includes("Clear custom theme"),
+    );
+    replaceButton?.click();
+    clearButton?.click();
+
+    expect(onImportCustomTheme).toHaveBeenCalledTimes(1);
+    expect(onClearCustomTheme).toHaveBeenCalledTimes(1);
+    expect(normalizedText(container)).toContain("Loaded Light Green");
+
+    const input = container.querySelector(".settings-theme-import__input") as HTMLInputElement;
+    input.value = "https://tweakcn.com/themes/custom";
+    input.dispatchEvent(new Event("input"));
+    expect(onCustomThemeImportUrlChange).toHaveBeenCalledWith("https://tweakcn.com/themes/custom");
   });
 });

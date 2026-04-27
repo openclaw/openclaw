@@ -8,7 +8,10 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { MediaUnderstandingSkipError } from "../../media-understanding/errors.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
-import { resolveAcpAttachments } from "./dispatch-acp-attachments.js";
+import {
+  resolveAcpAttachments,
+  resolveAcpInlineImageAttachments,
+} from "./dispatch-acp-attachments.js";
 import { tryDispatchAcpReply } from "./dispatch-acp.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -31,7 +34,9 @@ const policyMocks = vi.hoisted(() => ({
 }));
 
 const routeMocks = vi.hoisted(() => ({
-  routeReply: vi.fn(async (_params: unknown) => ({ ok: true, messageId: "mock" })),
+  routeReply: vi.fn<
+    (_params: unknown) => Promise<{ ok: true; messageId: string } | { ok: false; error: string }>
+  >(async () => ({ ok: true, messageId: "mock" })),
 }));
 
 const channelPluginMocks = vi.hoisted(() => ({
@@ -73,6 +78,10 @@ const sessionMetaMocks = vi.hoisted(() => ({
   readAcpSessionEntry: vi.fn<
     (params: { sessionKey: string; cfg?: OpenClawConfig }) => AcpSessionStoreEntry | null
   >(() => null),
+}));
+
+const transcriptMocks = vi.hoisted(() => ({
+  persistAcpDispatchTranscript: vi.fn(async (_params: unknown) => undefined),
 }));
 
 const bindingServiceMocks = vi.hoisted(() => ({
@@ -159,6 +168,11 @@ vi.mock("./dispatch-acp-session.runtime.js", () => ({
     sessionMetaMocks.readAcpSessionEntry(params),
 }));
 
+vi.mock("./dispatch-acp-transcript.runtime.js", () => ({
+  persistAcpDispatchTranscript: (params: unknown) =>
+    transcriptMocks.persistAcpDispatchTranscript(params),
+}));
+
 const sessionKey = "agent:codex-acp:session-1";
 const originalFetch = globalThis.fetch;
 type MockTtsReply = Awaited<ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>>;
@@ -210,6 +224,7 @@ async function runDispatch(params: {
   originatingChannel?: string;
   originatingTo?: string;
   onReplyStart?: () => void;
+  images?: Array<{ data: string; mimeType: string }>;
   ctxOverrides?: Record<string, unknown>;
   sessionKeyOverride?: string;
 }) {
@@ -225,6 +240,7 @@ async function runDispatch(params: {
     cfg: params.cfg ?? createAcpTestConfig(),
     dispatcher: params.dispatcher ?? createDispatcher().dispatcher,
     sessionKey: targetSessionKey,
+    images: params.images,
     inboundAudio: false,
     shouldRouteToOriginating: params.shouldRouteToOriginating ?? false,
     ...(params.shouldRouteToOriginating
@@ -354,6 +370,7 @@ describe("tryDispatchAcpReply", () => {
     mediaUnderstandingMocks.applyMediaUnderstanding.mockResolvedValue(undefined);
     sessionMetaMocks.readAcpSessionEntry.mockReset();
     sessionMetaMocks.readAcpSessionEntry.mockReturnValue(null);
+    transcriptMocks.persistAcpDispatchTranscript.mockClear();
     bindingServiceMocks.listBySession.mockReset();
     bindingServiceMocks.listBySession.mockReturnValue([]);
     bindingServiceMocks.unbind.mockReset();
@@ -380,6 +397,26 @@ describe("tryDispatchAcpReply", () => {
       }),
     );
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("persists ACP transcript when routed delivery fails", async () => {
+    setReadyAcpResolution();
+    mockRoutedTextTurn("hello");
+    routeMocks.routeReply.mockResolvedValue({ ok: false, error: "missing channel adapter" });
+
+    await runDispatch({
+      bodyForAgent: "reply",
+      shouldRouteToOriginating: true,
+    });
+
+    expect(transcriptMocks.persistAcpDispatchTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        promptText: "reply",
+        finalText: "hello",
+      }),
+    );
+    expect(routeMocks.routeReply).toHaveBeenCalledWith(expect.objectContaining({ mirror: false }));
   });
 
   it("edits ACP tool lifecycle updates in place when supported", async () => {
@@ -543,6 +580,38 @@ describe("tryDispatchAcpReply", () => {
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("forwards chat.send inline image attachments into ACP turns", async () => {
+    setReadyAcpResolution();
+    const image = {
+      mimeType: "image/png",
+      data: Buffer.from("image-bytes").toString("base64"),
+    };
+
+    expect(resolveAcpInlineImageAttachments([image])).toEqual([
+      {
+        mediaType: "image/png",
+        data: image.data,
+      },
+    ]);
+
+    await runDispatch({
+      bodyForAgent: "describe image",
+      images: [image],
+    });
+
+    expect(managerMocks.runTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "describe image",
+        attachments: [
+          {
+            mediaType: "image/png",
+            data: image.data,
+          },
+        ],
+      }),
+    );
   });
 
   it("skips ACP attachments outside allowed inbound roots", async () => {

@@ -1,6 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAISpeechProvider } from "./speech-provider.js";
 
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  fetchWithSsrFGuard: async ({
+    url,
+    init,
+  }: {
+    url: string;
+    init?: RequestInit;
+  }): Promise<{ response: Response; release: () => Promise<void> }> => ({
+    response: await globalThis.fetch(url, init),
+    release: vi.fn(async () => {}),
+  }),
+  ssrfPolicyFromHttpBaseUrlAllowedHostname: () => undefined,
+}));
+
 function isSpeechRequestBody(value: unknown): value is { response_format?: string } {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -146,6 +160,40 @@ describe("buildOpenAISpeechProvider", () => {
       model: "tts-1",
       speed: 218 / 175,
     });
+  });
+
+  it("maps persona prompt fields to instructions when instructions are unset", async () => {
+    const provider = buildOpenAISpeechProvider();
+
+    const prepared = await provider.prepareSynthesis?.({
+      text: "hello",
+      cfg: {} as never,
+      providerConfig: {
+        apiKey: "sk-test",
+        model: "gpt-4o-mini-tts",
+        voice: "cedar",
+      },
+      persona: {
+        id: "alfred",
+        label: "Alfred",
+        prompt: {
+          profile: "A brilliant British butler.",
+          scene: "A quiet late-night study.",
+          sampleContext: "The speaker is answering a trusted operator.",
+          style: "Refined and lightly amused.",
+          accent: "British English.",
+          pacing: "Measured.",
+          constraints: ["Do not read configuration values aloud."],
+        },
+      },
+      target: "audio-file",
+      timeoutMs: 1_000,
+    });
+
+    expect(prepared?.providerConfig?.instructions).toContain("Persona: Alfred");
+    expect(prepared?.providerConfig?.instructions).toContain(
+      "Constraint: Do not read configuration values aloud.",
+    );
   });
 
   it("uses wav for Groq-compatible OpenAI TTS endpoints", async () => {
