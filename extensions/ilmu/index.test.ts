@@ -3,6 +3,7 @@ import { resolveProviderPluginChoice } from "../../src/plugins/provider-auth-cho
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import ilmuPlugin from "./index.js";
+import { applyIlmuConfig } from "./onboard.js";
 
 describe("ilmu provider plugin", () => {
   it("registers ILMU with api-key auth wizard metadata", async () => {
@@ -91,5 +92,24 @@ describe("ilmu provider plugin", () => {
         contextWindow: 128000,
       },
     ]);
+  });
+
+  it("seeds reasoning-on agent defaults during onboarding", () => {
+    const cfg = applyIlmuConfig({} as never);
+    expect(cfg.agents?.defaults?.reasoningDefault).toBe("on");
+    expect(cfg.agents?.defaults?.thinkingDefault).toBe("medium");
+  });
+
+  it("preserves existing reasoning/thinking defaults when re-running onboarding", () => {
+    const cfg = applyIlmuConfig({
+      agents: {
+        defaults: {
+          reasoningDefault: "off",
+          thinkingDefault: "high",
+        },
+      },
+    } as never);
+    expect(cfg.agents?.defaults?.reasoningDefault).toBe("off");
+    expect(cfg.agents?.defaults?.thinkingDefault).toBe("high");
   });
 });

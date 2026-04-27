@@ -24,5 +24,20 @@ export function applyIlmuProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
 }
 
 export function applyIlmuConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return applyAgentDefaultModelPrimary(applyIlmuProviderConfig(cfg), ILMU_DEFAULT_MODEL_REF);
+  const withProvider = applyIlmuProviderConfig(cfg);
+  // Seed thinking-on defaults when the user picks ILMU. Use `??` so an
+  // explicit user choice (including "off") is never clobbered by re-running
+  // the wizard.
+  const withDefaults: OpenClawConfig = {
+    ...withProvider,
+    agents: {
+      ...withProvider.agents,
+      defaults: {
+        ...withProvider.agents?.defaults,
+        reasoningDefault: withProvider.agents?.defaults?.reasoningDefault ?? "on",
+        thinkingDefault: withProvider.agents?.defaults?.thinkingDefault ?? "medium",
+      },
+    },
+  };
+  return applyAgentDefaultModelPrimary(withDefaults, ILMU_DEFAULT_MODEL_REF);
 }

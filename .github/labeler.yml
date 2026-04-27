@@ -343,6 +343,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/huggingface/**"
+"extensions: ilmu":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/ilmu/**"
 "extensions: inworld":
   - changed-files:
       - any-glob-to-any-file:
