@@ -561,6 +561,7 @@ enum ExecApprovalsSocketPathKind: Equatable {
 enum ExecApprovalsSocketPathGuardError: LocalizedError {
     case lstatFailed(path: String, code: Int32)
     case parentPathInvalid(path: String, kind: ExecApprovalsSocketPathKind)
+    case parentSymlinkTargetInvalid(path: String, message: String)
     case socketPathInvalid(path: String, kind: ExecApprovalsSocketPathKind)
     case unlinkFailed(path: String, code: Int32)
     case createParentDirectoryFailed(path: String, message: String)
@@ -572,6 +573,8 @@ enum ExecApprovalsSocketPathGuardError: LocalizedError {
             "lstat failed for \(path) (errno \(code))"
         case let .parentPathInvalid(path, kind):
             "socket parent path invalid (\(kind)) at \(path)"
+        case let .parentSymlinkTargetInvalid(path, message):
+            "socket parent symlink target invalid at \(path): \(message)"
         case let .socketPathInvalid(path, kind):
             "socket path invalid (\(kind)) at \(path)"
         case let .unlinkFailed(path, code):
@@ -607,31 +610,74 @@ enum ExecApprovalsSocketPathGuard {
     static func hardenParentDirectory(for socketPath: String) throws {
         let parentURL = URL(fileURLWithPath: socketPath).deletingLastPathComponent()
         let parentPath = parentURL.path
+        let hardenedParentURL: URL
 
         switch try self.pathKind(at: parentPath) {
-        case .missing, .directory:
-            break
+        case .missing:
+            hardenedParentURL = parentURL
+        case .directory:
+            hardenedParentURL = parentURL
+        case .symlink:
+            hardenedParentURL = try self.trustedParentSymlinkTarget(for: parentURL)
         case let kind:
             throw ExecApprovalsSocketPathGuardError.parentPathInvalid(path: parentPath, kind: kind)
         }
 
-        do {
-            try FileManager().createDirectory(at: parentURL, withIntermediateDirectories: true)
-        } catch {
-            throw ExecApprovalsSocketPathGuardError.createParentDirectoryFailed(
-                path: parentPath,
-                message: error.localizedDescription)
+        if hardenedParentURL.path == parentPath {
+            do {
+                try FileManager().createDirectory(at: parentURL, withIntermediateDirectories: true)
+            } catch {
+                throw ExecApprovalsSocketPathGuardError.createParentDirectoryFailed(
+                    path: parentPath,
+                    message: error.localizedDescription)
+            }
         }
 
         do {
             try FileManager().setAttributes(
                 [.posixPermissions: self.parentDirectoryPermissions],
-                ofItemAtPath: parentPath)
+                ofItemAtPath: hardenedParentURL.path)
         } catch {
             throw ExecApprovalsSocketPathGuardError.setParentDirectoryPermissionsFailed(
-                path: parentPath,
+                path: hardenedParentURL.path,
                 message: error.localizedDescription)
         }
+    }
+
+    private static func trustedParentSymlinkTarget(for parentURL: URL) throws -> URL {
+        let parentPath = parentURL.path
+        var status = stat()
+        if stat(parentPath, &status) != 0 {
+            throw ExecApprovalsSocketPathGuardError.parentSymlinkTargetInvalid(
+                path: parentPath,
+                message: "stat failed (errno \(errno))")
+        }
+        let fileType = status.st_mode & mode_t(S_IFMT)
+        guard fileType == mode_t(S_IFDIR) else {
+            throw ExecApprovalsSocketPathGuardError.parentSymlinkTargetInvalid(
+                path: parentPath,
+                message: "target is not a directory")
+        }
+        guard status.st_uid == getuid() else {
+            throw ExecApprovalsSocketPathGuardError.parentSymlinkTargetInvalid(
+                path: parentPath,
+                message: "target is not owned by the current user")
+        }
+        guard (status.st_mode & mode_t(0o022)) == 0 else {
+            throw ExecApprovalsSocketPathGuardError.parentSymlinkTargetInvalid(
+                path: parentPath,
+                message: "target is group/other-writable")
+        }
+        let targetURL = parentURL.resolvingSymlinksInPath()
+        switch try self.pathKind(at: targetURL.path) {
+        case .directory:
+            break
+        case let kind:
+            throw ExecApprovalsSocketPathGuardError.parentSymlinkTargetInvalid(
+                path: parentPath,
+                message: "resolved target kind is \(kind)")
+        }
+        return targetURL
     }
 
     static func removeExistingSocket(at socketPath: String) throws {
