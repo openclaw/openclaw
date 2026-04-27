@@ -108,15 +108,16 @@ export function createTranscriptUpdateBroadcastHandler(params: {
     const messageSeq = entry?.sessionId
       ? readSessionMessages(entry.sessionId, storePath, entry.sessionFile).length
       : undefined;
+    const sessionRow = loadGatewaySessionRow(sessionKey);
     const sessionSnapshot = buildGatewaySessionSnapshot({
-      sessionRow: loadGatewaySessionRow(sessionKey),
+      sessionRow,
       includeSession: true,
     });
     const rawMessage = attachOpenClawTranscriptMeta(update.message, {
       ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
       ...(typeof messageSeq === "number" ? { seq: messageSeq } : {}),
     });
-    const message = projectChatDisplayMessage(rawMessage);
+    const message = projectChatDisplayMessage(rawMessage, { emotionMode: sessionRow?.emotionMode });
     if (message) {
       params.broadcastToConnIds(
         "session.message",
