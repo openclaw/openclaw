@@ -245,13 +245,19 @@ const saveSessionToMemory: HookHandler = async (event) => {
       log.debug("Using fallback timestamp slug", { slug });
     }
 
-    // Append a short random suffix to guarantee filename uniqueness.
-    // LLM-generated slugs are descriptive but not unique — two similar
+    // Append a random suffix to guarantee filename uniqueness. LLM-
+    // generated slugs are descriptive but not unique — two similar
     // sessions on the same day can produce identical slugs, causing the
-    // second write to silently overwrite the first. A 4-char hex suffix
-    // (16 bits of entropy) makes collisions vanishingly unlikely even
-    // under rapid automated /new or multi-channel workloads.
-    const uniqueSuffix = crypto.randomUUID().replace(/-/g, "").slice(0, 4);
+    // second write to silently overwrite the first.
+    //
+    // We use 8 hex chars (32 bits of entropy = ~4.3B possibilities). For
+    // realistic same-day same-slug saves (a few dozen at most), the
+    // birthday-paradox collision probability is < 1 in 1e8. The earlier
+    // 4-char (16-bit) suffix gave only ~65k possibilities, where
+    // collision probability for 256 same-day same-slug saves was already
+    // ~50% — inadequate for the rapid-/new + multi-channel workloads
+    // this is meant to protect against. (Codex review on PR #38161.)
+    const uniqueSuffix = crypto.randomUUID().replace(/-/g, "").slice(0, 8);
     const filename = `${dateStr}-${slug}-${uniqueSuffix}.md`;
     const memoryFilePath = path.join(memoryDir, filename);
     log.debug("Memory file path resolved", {

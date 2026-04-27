@@ -269,7 +269,7 @@ describe("session-memory hook", () => {
       // (LLM and fallback) to guarantee uniqueness; the timestamp portion
       // is what we assert here.
       expect(files).toHaveLength(1);
-      expect(files[0]).toMatch(/^2025-12-31-2330-[0-9a-f]{4}\.md$/);
+      expect(files[0]).toMatch(/^2025-12-31-2330-[0-9a-f]{8}\.md$/);
       expect(memoryContent).toMatch(/^# Session: 2025-12-31 23:30:15(?: EST| GMT-5)?/);
       expect(memoryContent).not.toContain("# Session: 2026-01-01 04:30:15 UTC");
     });
