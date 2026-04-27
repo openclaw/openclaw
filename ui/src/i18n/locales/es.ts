@@ -63,6 +63,7 @@ export const es: TranslationMap = {
     relink: "Volver a vincular",
     waitForScan: "Esperar escaneo",
     logout: "Cerrar sesión",
+    dismiss: "Dismiss",
   },
   channels: {
     health: {
@@ -702,6 +703,7 @@ export const es: TranslationMap = {
     showCronSessions: "Mostrar sesiones de cron",
     showCronSessionsHidden: "Mostrar sesiones de cron ({count} ocultas)",
     onboardingDisabled: "Deshabilitado durante el inicio guiado",
+    settings: "Chat settings",
   },
   languages: {
     en: "Inglés (English)",
@@ -935,6 +937,26 @@ export const es: TranslationMap = {
       systemEventTextRequired: "Texto de evento del sistema requerido.",
       agentMessageRequiredShort: "Mensaje del agente requerido.",
       nameRequiredShort: "Nombre requerido.",
+    },
+  },
+  shell: {
+    searchJump: "Search or jump to… ({shortcut})",
+    openCommandPalette: "Open command palette",
+    docsNewTab: "Docs (opens in new tab)",
+    updateAvailable: "Update available:",
+    runningVersion: "(running v{version}).",
+    updateNow: "Update now",
+    updating: "Updating…",
+    dismissUpdateBanner: "Dismiss update banner",
+    gatewayStatus: "Gateway status: {status}",
+    colorMode: "Color mode",
+    colorModeCurrent: "Color mode: {mode}",
+  },
+  theme: {
+    modes: {
+      system: "System",
+      light: "Light",
+      dark: "Dark",
     },
   },
 };

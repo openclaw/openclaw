@@ -63,6 +63,7 @@ export const zh_TW: TranslationMap = {
     relink: "重新連結",
     waitForScan: "等待掃描",
     logout: "登出",
+    dismiss: "Dismiss",
   },
   channels: {
     health: {
@@ -685,6 +686,7 @@ export const zh_TW: TranslationMap = {
     showCronSessions: "顯示定時任務會話",
     showCronSessionsHidden: "顯示定時任務會話 (已隱藏 {count} 個)",
     onboardingDisabled: "引導期間禁用",
+    settings: "Chat settings",
   },
   languages: {
     en: "英文",
@@ -908,6 +910,26 @@ export const zh_TW: TranslationMap = {
       systemEventTextRequired: "系統事件文字為必填。",
       agentMessageRequiredShort: "Agent 訊息為必填。",
       nameRequiredShort: "名稱為必填。",
+    },
+  },
+  shell: {
+    searchJump: "Search or jump to… ({shortcut})",
+    openCommandPalette: "Open command palette",
+    docsNewTab: "Docs (opens in new tab)",
+    updateAvailable: "Update available:",
+    runningVersion: "(running v{version}).",
+    updateNow: "Update now",
+    updating: "Updating…",
+    dismissUpdateBanner: "Dismiss update banner",
+    gatewayStatus: "Gateway status: {status}",
+    colorMode: "Color mode",
+    colorModeCurrent: "Color mode: {mode}",
+  },
+  theme: {
+    modes: {
+      system: "System",
+      light: "Light",
+      dark: "Dark",
     },
   },
 };

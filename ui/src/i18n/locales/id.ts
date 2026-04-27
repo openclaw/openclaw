@@ -63,6 +63,7 @@ export const id: TranslationMap = {
     relink: "Tautkan ulang",
     waitForScan: "Tunggu pemindaian",
     logout: "Keluar",
+    dismiss: "Dismiss",
   },
   channels: {
     health: {
@@ -697,6 +698,7 @@ export const id: TranslationMap = {
     showCronSessions: "Tampilkan sesi cron",
     showCronSessionsHidden: "Tampilkan sesi cron ({count} disembunyikan)",
     onboardingDisabled: "Dinonaktifkan selama penyiapan",
+    settings: "Chat settings",
   },
   languages: {
     en: "Inggris",
@@ -923,6 +925,26 @@ export const id: TranslationMap = {
       systemEventTextRequired: "Teks peristiwa sistem wajib diisi.",
       agentMessageRequiredShort: "Pesan agen wajib diisi.",
       nameRequiredShort: "Nama wajib diisi.",
+    },
+  },
+  shell: {
+    searchJump: "Search or jump to… ({shortcut})",
+    openCommandPalette: "Open command palette",
+    docsNewTab: "Docs (opens in new tab)",
+    updateAvailable: "Update available:",
+    runningVersion: "(running v{version}).",
+    updateNow: "Update now",
+    updating: "Updating…",
+    dismissUpdateBanner: "Dismiss update banner",
+    gatewayStatus: "Gateway status: {status}",
+    colorMode: "Color mode",
+    colorModeCurrent: "Color mode: {mode}",
+  },
+  theme: {
+    modes: {
+      system: "System",
+      light: "Light",
+      dark: "Dark",
     },
   },
 };

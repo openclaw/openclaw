@@ -63,6 +63,7 @@ export const zh_CN: TranslationMap = {
     relink: "重新关联",
     waitForScan: "等待扫描",
     logout: "退出登录",
+    dismiss: "Dismiss",
   },
   channels: {
     health: {
@@ -684,6 +685,7 @@ export const zh_CN: TranslationMap = {
     showCronSessions: "显示定时任务会话",
     showCronSessionsHidden: "显示定时任务会话 (已隐藏 {count} 个)",
     onboardingDisabled: "引导期间禁用",
+    settings: "聊天设置",
   },
   languages: {
     en: "英语",
@@ -907,6 +909,26 @@ export const zh_CN: TranslationMap = {
       systemEventTextRequired: "系统事件文本为必填。",
       agentMessageRequiredShort: "代理消息为必填。",
       nameRequiredShort: "名称为必填。",
+    },
+  },
+  shell: {
+    searchJump: "搜索或跳转… ({shortcut})",
+    openCommandPalette: "打开命令面板",
+    docsNewTab: "文档 (在新标签页中打开)",
+    updateAvailable: "有可用更新：",
+    runningVersion: "(当前运行 v{version})。",
+    updateNow: "立即更新",
+    updating: "更新中…",
+    dismissUpdateBanner: "关闭更新横幅",
+    gatewayStatus: "网关状态：{status}",
+    colorMode: "颜色模式",
+    colorModeCurrent: "颜色模式：{mode}",
+  },
+  theme: {
+    modes: {
+      system: "跟随系统",
+      light: "浅色",
+      dark: "深色",
     },
   },
 };
