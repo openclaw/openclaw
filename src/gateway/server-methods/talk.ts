@@ -351,8 +351,9 @@ function resolveTalkResponseFromConfig(params: {
 
   const sourceResolved = resolveActiveTalkProviderConfig(normalizedTalk);
   const runtimeResolved = resolveActiveTalkProviderConfig(params.runtimeConfig.talk);
-  const activeProviderId = sourceResolved?.provider ?? runtimeResolved?.provider;
-  const provider = canonicalizeSpeechProviderId(activeProviderId, params.runtimeConfig);
+  const sourceProvider = canonicalizeSpeechProviderId(sourceResolved?.provider, params.runtimeConfig);
+  const runtimeProvider = canonicalizeSpeechProviderId(runtimeResolved?.provider, params.runtimeConfig);
+  const provider = sourceProvider ?? runtimeProvider;
   if (!provider) {
     return payload;
   }
@@ -360,28 +361,41 @@ function resolveTalkResponseFromConfig(params: {
   const speechProvider = getSpeechProvider(provider, params.runtimeConfig);
   const sourceBaseTts = asRecord(params.sourceConfig.messages?.tts) ?? {};
   const runtimeBaseTts = asRecord(params.runtimeConfig.messages?.tts) ?? {};
+  const activeResolved =
+    runtimeProvider === provider && runtimeResolved
+      ? runtimeResolved
+      : sourceProvider === provider && sourceResolved
+        ? sourceResolved
+        : undefined;
   const sourceProviderConfig = sourceResolved?.config ?? {};
-  const runtimeProviderConfig = runtimeResolved?.config ?? {};
-  const selectedBaseTts =
-    Object.keys(runtimeBaseTts).length > 0
-      ? runtimeBaseTts
-      : stripUnresolvedSecretApiKeysFromBaseTtsProviders(sourceBaseTts);
-  // Prefer runtime-resolved provider config (already-substituted secrets) and
-  // fall back to source. Strip any apiKey that is still a SecretRef wrapper —
+  // Resolve providers with runtime-substituted secrets when they match the
+  // source provider. If runtime/source diverge, keep source details redacted
+  // without feeding stale SecretRef wrappers through provider-specific helpers.
+  //
+  // Strip any apiKey that is still a SecretRef wrapper:
   // provider plugins (ElevenLabs/OpenAI) call strict secret helpers that throw
   // on unresolved wrappers, and the discovery path doesn't need the resolved
   // value: the response's apiKey is restored from source so the UI keeps the
   // SecretRef shape, and redaction strips the value when includeSecrets=false.
-  const providerInputConfig = stripUnresolvedSecretApiKey(
-    Object.keys(runtimeProviderConfig).length > 0 ? runtimeProviderConfig : sourceProviderConfig,
-  );
+  const providerInputConfig = stripUnresolvedSecretApiKey(activeResolved?.config ?? {});
+  const baseTtsConfig =
+    activeResolved === runtimeResolved && Object.keys(runtimeBaseTts).length > 0
+      ? runtimeBaseTts
+      : stripUnresolvedSecretApiKeysFromBaseTtsProviders(sourceBaseTts);
   const resolvedConfig =
-    speechProvider?.resolveTalkConfig?.({
-      cfg: params.runtimeConfig,
-      baseTtsConfig: selectedBaseTts,
-      talkProviderConfig: providerInputConfig,
-      timeoutMs: typeof selectedBaseTts.timeoutMs === "number" ? selectedBaseTts.timeoutMs : 30_000,
-    }) ?? providerInputConfig;
+    activeResolved === runtimeResolved
+      ? (speechProvider?.resolveTalkConfig?.({
+          cfg: params.runtimeConfig,
+          baseTtsConfig,
+          talkProviderConfig: providerInputConfig,
+          timeoutMs:
+            typeof baseTtsConfig.timeoutMs === "number"
+              ? baseTtsConfig.timeoutMs
+              : typeof runtimeBaseTts.timeoutMs === "number"
+                ? runtimeBaseTts.timeoutMs
+                : 30_000,
+        }) ?? providerInputConfig)
+      : providerInputConfig;
   const responseConfig =
     sourceProviderConfig.apiKey === undefined
       ? resolvedConfig

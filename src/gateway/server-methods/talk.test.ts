@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { REDACTED_SENTINEL } from "../../config/redact-snapshot.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import { talkHandlers } from "./talk.js";
 
@@ -43,12 +44,12 @@ vi.mock("../talk-realtime-relay.js", async (importOriginal) => {
   };
 });
 
-function createTalkConfig(apiKey: unknown): OpenClawConfig {
+function createTalkConfig(apiKey: unknown, provider = "acme"): OpenClawConfig {
   return {
     talk: {
-      provider: "acme",
+      provider,
       providers: {
-        acme: {
+        [provider]: {
           apiKey,
           voiceId: "stub-default-voice",
         },
@@ -306,6 +307,145 @@ describe("talk.realtime.session handler", () => {
         transport: "gateway-relay",
         relaySessionId: "relay-1",
       }),
+      undefined,
+    );
+  });
+});
+
+describe("talk.config handler", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("redacts source SecretRef api keys while resolving provider details from runtime config", async () => {
+    const runtimeConfig = createTalkConfig("resolved-acme-key");
+    const diskConfig = createTalkConfig({
+      source: "file",
+      provider: "secrets",
+      id: "/skills/acme",
+    });
+
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      path: "/tmp/openclaw.json",
+      hash: "test-hash",
+      valid: true,
+      config: diskConfig,
+    });
+    mocks.getSpeechProvider.mockReturnValue({
+      id: "acme",
+      label: "Acme Speech",
+      resolveTalkConfig: ({
+        talkProviderConfig,
+      }: {
+        talkProviderConfig: { apiKey?: unknown; voiceId?: string };
+      }) => {
+        if (typeof talkProviderConfig.apiKey !== "string") {
+          throw new Error("talk provider received unresolved SecretRef");
+        }
+        return {
+          ...talkProviderConfig,
+          resolvedByProvider: true,
+        };
+      },
+    });
+
+    const respond = vi.fn();
+    await talkHandlers["talk.config"]({
+      req: { type: "req", id: "1", method: "talk.config" },
+      params: {},
+      client: null,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: { getRuntimeConfig: () => runtimeConfig } as never,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        config: {
+          talk: expect.objectContaining({
+            provider: "acme",
+            providers: {
+              acme: {
+                apiKey: {
+                  source: REDACTED_SENTINEL,
+                  provider: REDACTED_SENTINEL,
+                  id: REDACTED_SENTINEL,
+                },
+                voiceId: "stub-default-voice",
+              },
+            },
+            resolved: {
+              provider: "acme",
+              config: {
+                apiKey: REDACTED_SENTINEL,
+                voiceId: "stub-default-voice",
+                resolvedByProvider: true,
+              },
+            },
+          }),
+        },
+      },
+      undefined,
+    );
+  });
+
+  it("does not resolve source provider config when source and runtime providers diverge", async () => {
+    const runtimeConfig = createTalkConfig("resolved-beta-key", "beta");
+    const diskConfig = createTalkConfig(
+      {
+        source: "file",
+        provider: "secrets",
+        id: "/skills/acme",
+      },
+      "acme",
+    );
+
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      path: "/tmp/openclaw.json",
+      hash: "test-hash",
+      valid: true,
+      config: diskConfig,
+    });
+    const resolveTalkConfig = vi.fn();
+    mocks.getSpeechProvider.mockReturnValue({
+      id: "acme",
+      label: "Acme Speech",
+      resolveTalkConfig,
+    });
+
+    const respond = vi.fn();
+    await talkHandlers["talk.config"]({
+      req: { type: "req", id: "1", method: "talk.config" },
+      params: {},
+      client: null,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: { getRuntimeConfig: () => runtimeConfig } as never,
+    });
+
+    expect(mocks.getSpeechProvider).toHaveBeenCalledWith("acme", runtimeConfig);
+    expect(resolveTalkConfig).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        config: {
+          talk: expect.objectContaining({
+            provider: "acme",
+            resolved: {
+              provider: "acme",
+              config: {
+                apiKey: {
+                  source: REDACTED_SENTINEL,
+                  provider: REDACTED_SENTINEL,
+                  id: REDACTED_SENTINEL,
+                },
+                voiceId: "stub-default-voice",
+              },
+            },
+          }),
+        },
+      },
       undefined,
     );
   });
