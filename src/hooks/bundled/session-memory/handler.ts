@@ -167,7 +167,9 @@ const MAX_PRE_EXISTING_SNAPSHOT_BYTES = 4 * 1024 * 1024;
  * deep-review P2-1). Cheap, idempotent, safe on non-string inputs.
  */
 function sanitizePathForLog(p: string | undefined): string {
-  if (typeof p !== "string") return "";
+  if (typeof p !== "string") {
+    return "";
+  }
   const home = os.homedir();
   return home && home !== "/" ? p.split(home).join("~") : p;
 }
@@ -594,7 +596,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
         looksLikeUNC)
     ) {
       log.warn("Redirect path resolves outside workspace, rejecting", {
-        redirectPath: sanitizePathForLog(redirectPath as string),
+        redirectPath: sanitizePathForLog(redirectPath),
         resolvedRelative: writeRelativePath,
         workspace: sanitizePathForLog(canonicalWorkspace),
         windowsTraversal: looksLikeWindowsTraversal,
@@ -757,7 +759,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
       } catch (err) {
         if (err instanceof SafeOpenError) {
           log.warn("Redirect path rejected — failing closed (no fallback)", {
-            redirectPath: sanitizePathForLog(redirectPath as string),
+            redirectPath: sanitizePathForLog(redirectPath),
             reason: err.message,
           });
           return;

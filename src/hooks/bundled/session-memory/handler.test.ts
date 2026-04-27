@@ -1097,7 +1097,6 @@ describe("session-memory hook", () => {
       // Some filesystems (e.g. on certain CI runners) refuse symlinks.
       // Skip the assertion under those conditions — this is a defense-
       // in-depth contract test, not a load-bearing security boundary.
-      // eslint-disable-next-line no-console
       console.warn("skipping symlink-rollback test: fs.symlink failed", err);
       return;
     }
