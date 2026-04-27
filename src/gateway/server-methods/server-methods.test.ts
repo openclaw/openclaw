@@ -471,6 +471,20 @@ describe("projectRecentChatDisplayMessages", () => {
 
     expect(result).toEqual([{ role: "assistant", content: "older answer", timestamp: 2 }]);
   });
+
+  it("strips assistant emotion tags from transcript-backed history", () => {
+    const result = projectRecentChatDisplayMessages([
+      { role: "user", content: "Use [A-Z] in the regex", timestamp: 1 },
+      { role: "assistant", content: "[warmly] hello", timestamp: 2 },
+      { role: "assistant", content: [{ type: "text", text: "[softly] array hello" }], timestamp: 3 },
+    ]);
+
+    expect(result).toEqual([
+      { role: "user", content: "Use [A-Z] in the regex", timestamp: 1 },
+      { role: "assistant", content: "hello", timestamp: 2 },
+      { role: "assistant", content: [{ type: "text", text: "array hello" }], timestamp: 3 },
+    ]);
+  });
 });
 
 describe("resolveEffectiveChatHistoryMaxChars", () => {
