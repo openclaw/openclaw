@@ -1064,7 +1064,6 @@ export function renderApp(state: AppViewState) {
                 .loadAssistantIdentity()
                 .then(() => refreshChatAvatar(state))
                 .finally(() => requestHostUpdate?.());
-              requestHostUpdate?.();
             },
             basePath: state.basePath ?? "",
             configObject: configObj,

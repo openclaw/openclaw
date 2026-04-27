@@ -200,7 +200,7 @@ export function normalizeAgentLabel(agent: {
 }
 
 const CONTROL_UI_AVATAR_URL_RE = /^(data:image\/|\/(?!\/))/i;
-const LOCAL_ASSISTANT_IMAGE_AVATAR_RE = /^(?:data:image\/|blob:)/i;
+const LOCAL_ASSISTANT_IMAGE_AVATAR_RE = /^data:image\//i;
 
 export function isRenderableControlUiAvatarUrl(value: string): boolean {
   return CONTROL_UI_AVATAR_URL_RE.test(value);
