@@ -43,7 +43,7 @@ type MinimalGuildEntry = {
   channels?: Record<string, unknown>;
 };
 
-function sanitizeInstanceKey(value: unknown): string {
+function sanitizeInstanceKey(value: string | null | undefined): string {
   return String(value ?? "")
     .trim()
     .toLowerCase()
@@ -59,12 +59,20 @@ function resolveConfiguredInstanceId(cfg?: OpenClawConfig): string {
 
 function deriveInstanceKeyFromConfigPath(configPath?: string): string {
   const normalized = String(configPath ?? "").trim().replace(/\\/g, "/");
-  if (!normalized) return "";
+  if (!normalized) {
+    return "";
+  }
   const parts = normalized.split("/").filter(Boolean);
   const parent = parts.at(-2) ?? "";
-  if (!parent) return "";
-  if (parent === ".openclaw") return "openclaw-main";
-  if (parent.startsWith(".openclaw-")) return sanitizeInstanceKey(`openclaw-${parent.slice(10)}`);
+  if (!parent) {
+    return "";
+  }
+  if (parent === ".openclaw") {
+    return "openclaw-main";
+  }
+  if (parent.startsWith(".openclaw-")) {
+    return sanitizeInstanceKey(`openclaw-${parent.slice(10)}`);
+  }
   return sanitizeInstanceKey(parent.startsWith(".") ? parent.slice(1) : parent);
 }
 
@@ -78,19 +86,27 @@ export function resolveDiscordInstanceKey(params: {
     sanitizeInstanceKey(params.instanceId) ||
     resolveConfiguredInstanceId(params.cfg) ||
     sanitizeInstanceKey(process.env.OPENCLAW_INSTANCE_ID);
-  if (explicit) return explicit;
+  if (explicit) {
+    return explicit;
+  }
   const fromPath =
     deriveInstanceKeyFromConfigPath(params.configPath) ||
     deriveInstanceKeyFromConfigPath(process.env.OPENCLAW_CONFIG_PATH);
-  if (fromPath) return fromPath;
+  if (fromPath) {
+    return fromPath;
+  }
   return `openclaw-${sanitizeInstanceKey(params.accountId ?? "default") || "default"}`;
 }
 
 function normalizeGuildEntries(
   guildEntries?: Record<string, MinimalGuildEntry> | MinimalGuildEntry[],
 ): Record<string, MinimalGuildEntry> {
-  if (!guildEntries) return {};
-  if (!Array.isArray(guildEntries)) return guildEntries;
+  if (!guildEntries) {
+    return {};
+  }
+  if (!Array.isArray(guildEntries)) {
+    return guildEntries;
+  }
   return Object.fromEntries(
     guildEntries
       .map((guild) => [String(guild?.id ?? guild?.guildId ?? "").trim(), guild] as const)
@@ -105,8 +121,12 @@ function pruneClaimChannels(
   const next: Record<string, DiscordClaimChannelEntry> = {};
   for (const [channelId, claim] of Object.entries(channels ?? {})) {
     const key = String(channelId).trim();
-    if (!/^\d+$/.test(key)) continue;
-    if (!claim || now - Number(claim.updatedAt ?? 0) > DISCORD_CLAIMS_TTL_MS) continue;
+    if (!/^\d+$/.test(key)) {
+      continue;
+    }
+    if (!claim || now - Number(claim.updatedAt ?? 0) > DISCORD_CLAIMS_TTL_MS) {
+      continue;
+    }
     next[key] = claim;
   }
   return next;
@@ -153,7 +173,7 @@ export async function loadDiscordClaimsFile(): Promise<DiscordClaimsFile> {
     if (parsed && typeof parsed === "object" && parsed.instances && typeof parsed.instances === "object") {
       return {
         version: typeof parsed.version === "number" ? parsed.version : DISCORD_CLAIMS_SCHEMA_VERSION,
-        instances: parsed.instances as Record<string, DiscordClaimInstanceEntry>,
+        instances: parsed.instances,
       };
     }
   } catch {}
@@ -192,7 +212,9 @@ function buildClaimEntries(
     }
     for (const channelId of channelKeys) {
       const key = String(channelId).trim();
-      if (!/^\d+$/.test(key)) continue;
+      if (!/^\d+$/.test(key)) {
+        continue;
+      }
       channels[key] = {
         updatedAt: now,
         source: `guild:${guildId}`,
@@ -253,10 +275,14 @@ export async function resolveDiscordClaimOwnership(params: {
     let sawClaims = false;
     for (const botKey of collectBotKeys(instanceEntry.bots)) {
       const botEntry = instanceEntry.bots[botKey];
-      if (!botEntry) continue;
+      if (!botEntry) {
+        continue;
+      }
       const channels = pruneClaimChannels(botEntry.channels, Date.now());
       const guilds = pruneClaimChannels(botEntry.guilds, Date.now());
-      if (Object.keys(channels).length === 0 && Object.keys(guilds).length === 0) continue;
+      if (Object.keys(channels).length === 0 && Object.keys(guilds).length === 0) {
+        continue;
+      }
       sawClaims = true;
       for (const lookupId of lookupIds) {
         if (channels[lookupId]) {
@@ -286,10 +312,14 @@ export async function resolveDiscordClaimOwnership(params: {
     }
   }
   for (const [otherInstanceKey, otherInstanceEntry] of Object.entries(data.instances)) {
-    if (otherInstanceKey === instanceKey) continue;
+    if (otherInstanceKey === instanceKey) {
+      continue;
+    }
     for (const botKey of collectBotKeys(otherInstanceEntry.bots)) {
       const botEntry = otherInstanceEntry.bots[botKey];
-      if (!botEntry) continue;
+      if (!botEntry) {
+        continue;
+      }
       const channels = pruneClaimChannels(botEntry.channels, Date.now());
       const guilds = pruneClaimChannels(botEntry.guilds, Date.now());
       for (const lookupId of lookupIds) {

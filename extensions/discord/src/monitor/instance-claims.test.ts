@@ -15,7 +15,9 @@ vi.mock("node:fs/promises", () => ({
   }),
   rename: vi.fn(async (from: string, to: string) => {
     const value = store.get(from);
-    if (value == null) throw new Error("ENOENT");
+    if (value == null) {
+      throw new Error("ENOENT");
+    }
     store.set(to, value);
     store.delete(from);
   }),
