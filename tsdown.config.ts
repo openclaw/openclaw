@@ -219,6 +219,13 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/pi-model-discovery-runtime": "src/agents/pi-model-discovery-runtime.ts",
     "link-understanding/apply.runtime": "src/link-understanding/apply.runtime.ts",
     "media-understanding/apply.runtime": "src/media-understanding/apply.runtime.ts",
+    "auto-reply/reply/session-reset-model.runtime":
+      "src/auto-reply/reply/session-reset-model.runtime.ts",
+    "auto-reply/reply/stage-sandbox-media.runtime":
+      "src/auto-reply/reply/stage-sandbox-media.runtime.ts",
+    "auto-reply/reply/commands-core.runtime": "src/auto-reply/reply/commands-core.runtime.ts",
+    "plugins/hook-runner-global": "src/plugins/hook-runner-global.ts",
+    "auto-reply/reply/origin-routing": "src/auto-reply/reply/origin-routing.ts",
     "commands/doctor/shared/plugin-registry-migration":
       "src/commands/doctor/shared/plugin-registry-migration.ts",
     "commands/status.summary.runtime": "src/commands/status.summary.runtime.ts",
