@@ -12,7 +12,14 @@ const CODEX_FORWARD_COMPAT_TARGET_IDS = new Set(["gpt-5.4", "gpt-5.3-codex"]);
 const CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.3-codex", "gpt-5.2-codex"] as const;
 
 const DEFAULT_CONTEXT_WINDOW = 128_000;
+const ONE_MILLION_CONTEXT_WINDOW = 1_000_000;
 const DEFAULT_MAX_TOKENS = 8192;
+
+export function resolveCopilotContextWindow(id: string): number {
+  return id.endsWith("-1m") || id.endsWith("-1m-internal")
+    ? ONE_MILLION_CONTEXT_WINDOW
+    : DEFAULT_CONTEXT_WINDOW;
+}
 
 function isCopilotCodexModelId(modelId: string): boolean {
   return /(?:^|[-_.])codex(?:$|[-_.])/.test(modelId);
@@ -77,7 +84,7 @@ export function resolveCopilotForwardCompatModel(
     // image payloads for text-only models rather than failing silently.
     input: ["text", "image"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: DEFAULT_CONTEXT_WINDOW,
+    contextWindow: resolveCopilotContextWindow(trimmedModelId),
     maxTokens: DEFAULT_MAX_TOKENS,
   } as ProviderRuntimeModel);
 }

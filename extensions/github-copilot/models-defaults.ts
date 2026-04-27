@@ -1,8 +1,6 @@
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { resolveCopilotTransportApi } from "./models.js";
+import { resolveCopilotContextWindow, resolveCopilotTransportApi } from "./models.js";
 
-const DEFAULT_CONTEXT_WINDOW = 128_000;
-const ONE_MILLION_CONTEXT_WINDOW = 1_000_000;
 const DEFAULT_MAX_TOKENS = 8192;
 
 // Copilot model ids vary by plan/org and can change.
@@ -33,12 +31,6 @@ const DEFAULT_MODEL_IDS = [
   "raptor-mini",
   "goldeneye",
 ] as const;
-
-function resolveCopilotContextWindow(id: string): number {
-  return id.endsWith("-1m") || id.endsWith("-1m-internal")
-    ? ONE_MILLION_CONTEXT_WINDOW
-    : DEFAULT_CONTEXT_WINDOW;
-}
 
 export function getDefaultCopilotModelIds(): string[] {
   return [...DEFAULT_MODEL_IDS];

@@ -221,6 +221,24 @@ describe("resolveCopilotForwardCompatModel", () => {
     expect((result as unknown as Record<string, unknown>).input).toEqual(["text", "image"]);
   });
 
+  it("synthetic catch-all uses 1M context window for -1m-internal model ids", () => {
+    const ctx = createMockCtx("future-claude-opus-1m-internal");
+    const result = requireResolvedModel(ctx);
+    expect((result as unknown as Record<string, unknown>).contextWindow).toBe(1_000_000);
+  });
+
+  it("synthetic catch-all uses 1M context window for plain -1m model ids", () => {
+    const ctx = createMockCtx("future-model-1m");
+    const result = requireResolvedModel(ctx);
+    expect((result as unknown as Record<string, unknown>).contextWindow).toBe(1_000_000);
+  });
+
+  it("synthetic catch-all keeps 128k context window for non-1m model ids", () => {
+    const ctx = createMockCtx("gpt-5.4-mini");
+    const result = requireResolvedModel(ctx);
+    expect((result as unknown as Record<string, unknown>).contextWindow).toBe(128_000);
+  });
+
   it("infers reasoning=true for o1/o3 model IDs", () => {
     for (const id of ["o1", "o3", "o3-mini", "o1-preview"]) {
       const ctx = createMockCtx(id);
