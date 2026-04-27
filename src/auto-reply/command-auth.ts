@@ -289,6 +289,7 @@ function resolveOwnerAllowFromList(params: {
       const prefix = trimmed.slice(0, separatorIndex);
       const channel = normalizeAnyChannelId(prefix);
       if (channel) {
+        // Channel-prefixed entries require a known matching provider; webchat leaves it unset.
         if (!params.providerId || channel !== params.providerId) {
           continue;
         }
