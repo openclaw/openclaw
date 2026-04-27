@@ -302,7 +302,7 @@ export function describeChannelPluginCatalogEntriesContract() {
                   kind: "channel",
                   openclaw: {
                     channel: {
-                      id: "yuanbao",
+                      id: "openclaw-plugin-yuanbao",
                       label: "Yuanbao",
                       selectionLabel: "Yuanbao (Tencent Yuanbao)",
                       detailLabel: "Yuanbao",
@@ -324,10 +324,10 @@ export function describeChannelPluginCatalogEntriesContract() {
             }),
           );
           return {
-            channelId: "yuanbao",
+            channelId: "openclaw-plugin-yuanbao",
             catalogPaths: [catalogPath],
             expected: {
-              id: "yuanbao",
+              id: "openclaw-plugin-yuanbao",
               meta: {
                 label: "Yuanbao",
                 selectionLabel: "Yuanbao (Tencent Yuanbao)",
