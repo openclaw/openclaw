@@ -21,6 +21,7 @@ export type SlashCommandOptions = {
   cfg?: OpenClawConfig;
   provider?: string;
   model?: string;
+  local?: boolean;
 };
 
 const COMMAND_ALIASES: Record<string, string> = {
@@ -66,8 +67,10 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
     { name: "help", description: "Show slash command help" },
     { name: "gateway-status", description: "Show gateway status summary" },
     { name: "gwstatus", description: "Alias for /gateway-status" },
+    ...(options.local ? [{ name: "auth", description: "Run provider auth/login flow" }] : []),
     { name: "agent", description: "Switch agent (or open picker)" },
     { name: "agents", description: "Open agent picker" },
+    { name: "crestodian", description: "Return to Crestodian" },
     { name: "session", description: "Switch session (or open picker)" },
     { name: "sessions", description: "Open session picker" },
     {
@@ -157,7 +160,9 @@ export function helpText(options: SlashCommandOptions = {}): string {
     "/status",
     "/gateway-status",
     "/gwstatus",
+    ...(options.local ? ["/auth [provider]"] : []),
     "/agent <id> (or /agents)",
+    "/crestodian [request]",
     "/session <key> (or /sessions)",
     "/model <provider/model> (or /models)",
     `/think <${thinkLevels}>`,

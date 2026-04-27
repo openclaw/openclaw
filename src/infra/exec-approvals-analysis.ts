@@ -226,10 +226,7 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
             } else {
               const continued = stripUnquotedHeredocLineContinuation(line);
               unquotedHeredocLogicalChunks.push(continued.line);
-              if (
-                unquotedHeredocLogicalChunks.length >
-                MAX_UNQUOTED_HEREDOC_CONTINUATION_LINES
-              ) {
+              if (unquotedHeredocLogicalChunks.length > MAX_UNQUOTED_HEREDOC_CONTINUATION_LINES) {
                 return {
                   ok: false,
                   reason: "heredoc continuation too long",

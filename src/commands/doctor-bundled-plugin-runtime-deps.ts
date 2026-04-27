@@ -2,8 +2,10 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import {
-  installBundledRuntimeDeps,
+  repairBundledRuntimeDepsInstallRoot,
+  resolveBundledRuntimeDependencyPackageInstallRoot,
   scanBundledPluginRuntimeDeps,
+  type BundledRuntimeDepsInstallParams,
 } from "../plugins/bundled-runtime-deps.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
@@ -15,7 +17,8 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   packageRoot?: string | null;
-  installDeps?: (params: { installRoot: string; missingSpecs: string[] }) => void;
+  includeConfiguredChannels?: boolean;
+  installDeps?: (params: BundledRuntimeDepsInstallParams) => void;
 }): Promise<void> {
   const packageRoot =
     params.packageRoot ??
@@ -28,9 +31,11 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
     return;
   }
 
-  const { missing, conflicts } = scanBundledPluginRuntimeDeps({
+  const { deps, missing, conflicts } = scanBundledPluginRuntimeDeps({
     packageRoot,
     config: params.config,
+    includeConfiguredChannels: params.includeConfiguredChannels,
+    env: params.env ?? process.env,
   });
   if (conflicts.length > 0) {
     const conflictLines = conflicts.flatMap((conflict) =>
@@ -56,6 +61,7 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
   }
 
   const missingSpecs = missing.map((dep) => `${dep.name}@${dep.version}`);
+  const installSpecs = deps.map((dep) => `${dep.name}@${dep.version}`);
   note(
     [
       "Bundled plugin runtime deps are missing.",
@@ -67,6 +73,7 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
 
   const shouldRepair =
     params.prompter.shouldRepair ||
+    params.prompter.repairMode.nonInteractive ||
     (await params.prompter.confirmAutoFix({
       message: "Install missing bundled plugin runtime deps now?",
       initialValue: true,
@@ -76,17 +83,20 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
   }
 
   try {
-    const install =
-      params.installDeps ??
-      ((installParams) =>
-        installBundledRuntimeDeps({
-          installRoot: installParams.installRoot,
-          missingSpecs: installParams.missingSpecs,
-          env: params.env ?? process.env,
-        }));
-    install({ installRoot: packageRoot, missingSpecs });
-    note(`Installed bundled plugin deps: ${missingSpecs.join(", ")}`, "Bundled plugins");
+    const installRoot = resolveBundledRuntimeDependencyPackageInstallRoot(packageRoot, {
+      env: params.env ?? process.env,
+    });
+    const result = repairBundledRuntimeDepsInstallRoot({
+      installRoot,
+      missingSpecs,
+      installSpecs,
+      env: params.env ?? process.env,
+      installDeps: params.installDeps,
+      warn: (message) => params.runtime.log(message),
+    });
+    note(`Installed bundled plugin deps: ${result.installSpecs.join(", ")}`, "Bundled plugins");
   } catch (error) {
     params.runtime.error(`Failed to install bundled plugin runtime deps: ${String(error)}`);
+    throw error instanceof Error ? error : new Error(String(error));
   }
 }

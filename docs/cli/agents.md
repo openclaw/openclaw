@@ -2,7 +2,7 @@
 summary: "CLI reference for `openclaw agents` (list/add/delete/bindings/bind/unbind/set identity)"
 read_when:
   - You want multiple isolated agents (workspaces + routing + auth)
-title: "agents"
+title: "Agents"
 ---
 
 # `openclaw agents`
@@ -37,7 +37,7 @@ Use routing bindings to pin inbound channel traffic to a specific agent.
 If you also want different visible skills per agent, configure
 `agents.defaults.skills` and `agents.list[].skills` in `openclaw.json`. See
 [Skills config](/tools/skills-config) and
-[Configuration Reference](/gateway/configuration-reference#agents-defaults-skills).
+[Configuration Reference](/gateway/config-agents#agents-defaults-skills).
 
 List bindings:
 
@@ -150,6 +150,9 @@ Notes:
 - `main` cannot be deleted.
 - Without `--force`, interactive confirmation is required.
 - Workspace, agent state, and session transcript directories are moved to Trash, not hard-deleted.
+- If another agent's workspace is the same path, inside this workspace, or contains this workspace,
+  the workspace is retained and `--json` reports `workspaceRetained`,
+  `workspaceRetainedReason`, and `workspaceSharedWith`.
 
 ## Identity files
 
@@ -218,3 +221,9 @@ Config sample:
   },
 }
 ```
+
+## Related
+
+- [CLI reference](/cli)
+- [Multi-agent routing](/concepts/multi-agent)
+- [Agent workspace](/concepts/agent-workspace)

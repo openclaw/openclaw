@@ -1,5 +1,4 @@
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import WebSocket from "ws";
 import { isLoopbackHost } from "../gateway/net.js";
 import {
@@ -7,7 +6,6 @@ import {
   type SsrFPolicy,
   resolvePinnedHostnameWithPolicy,
 } from "../infra/net/ssrf.js";
-import { rawDataToString } from "../infra/ws.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { getDirectAgentForCdp, withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
 import { CDP_HTTP_REQUEST_TIMEOUT_MS, CDP_WS_HANDSHAKE_TIMEOUT_MS } from "./cdp-timeouts.js";
@@ -144,6 +142,7 @@ type CdpResponse = {
 type Pending = {
   resolve: (value: unknown) => void;
   reject: (err: Error) => void;
+  timer?: ReturnType<typeof setTimeout>;
 };
 
 export type CdpSendFn = (
@@ -152,12 +151,28 @@ export type CdpSendFn = (
   sessionId?: string,
 ) => Promise<unknown>;
 
+function rawCdpMessageToString(data: WebSocket.RawData): string {
+  if (typeof data === "string") {
+    return data;
+  }
+  if (Buffer.isBuffer(data)) {
+    return data.toString("utf8");
+  }
+  if (Array.isArray(data)) {
+    return Buffer.concat(data).toString("utf8");
+  }
+  if (ArrayBuffer.isView(data)) {
+    return Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString("utf8");
+  }
+  return Buffer.from(data).toString("utf8");
+}
+
 export function getHeadersWithAuth(url: string, headers: Record<string, string> = {}) {
   const mergedHeaders = { ...headers };
   try {
     const parsed = new URL(url);
     const hasAuthHeader = Object.keys(mergedHeaders).some(
-      (key) => normalizeLowercaseStringOrEmpty(key) === "authorization",
+      (key) => key.trim().toLowerCase() === "authorization",
     );
     if (hasAuthHeader) {
       return mergedHeaders;
@@ -207,9 +222,19 @@ type CdpFetchResult = {
   release: () => Promise<void>;
 };
 
-function createCdpSender(ws: WebSocket) {
+function createCdpSender(ws: WebSocket, opts?: { commandTimeoutMs?: number }) {
   let nextId = 1;
   const pending = new Map<number, Pending>();
+  const commandTimeoutMs =
+    typeof opts?.commandTimeoutMs === "number" && Number.isFinite(opts.commandTimeoutMs)
+      ? Math.max(1, Math.floor(opts.commandTimeoutMs))
+      : undefined;
+
+  const clearPendingTimer = (p: Pending) => {
+    if (p.timer !== undefined) {
+      clearTimeout(p.timer);
+    }
+  };
 
   const send: CdpSendFn = (
     method: string,
@@ -218,14 +243,31 @@ function createCdpSender(ws: WebSocket) {
   ) => {
     const id = nextId++;
     const msg = { id, method, params, sessionId };
-    ws.send(JSON.stringify(msg));
     return new Promise<unknown>((resolve, reject) => {
-      pending.set(id, { resolve, reject });
+      if (ws.readyState !== WebSocket.OPEN) {
+        reject(new Error("CDP socket closed"));
+        return;
+      }
+      const entry: Pending = { resolve, reject };
+      if (commandTimeoutMs !== undefined) {
+        entry.timer = setTimeout(() => {
+          closeWithError(new Error(`CDP command ${method} timed out after ${commandTimeoutMs}ms`));
+        }, commandTimeoutMs);
+      }
+      pending.set(id, entry);
+      try {
+        ws.send(JSON.stringify(msg));
+      } catch (err) {
+        pending.delete(id);
+        clearPendingTimer(entry);
+        reject(err instanceof Error ? err : new Error(String(err)));
+      }
     });
   };
 
   const closeWithError = (err: Error) => {
     for (const [, p] of pending) {
+      clearPendingTimer(p);
       p.reject(err);
     }
     pending.clear();
@@ -247,7 +289,7 @@ function createCdpSender(ws: WebSocket) {
 
   ws.on("message", (data) => {
     try {
-      const parsed = JSON.parse(rawDataToString(data)) as CdpResponse;
+      const parsed = JSON.parse(rawCdpMessageToString(data)) as CdpResponse;
       if (typeof parsed.id !== "number") {
         return;
       }
@@ -256,6 +298,7 @@ function createCdpSender(ws: WebSocket) {
         return;
       }
       pending.delete(parsed.id);
+      clearPendingTimer(p);
       if (parsed.error?.message) {
         p.reject(new Error(parsed.error.message));
         return;
@@ -366,42 +409,125 @@ export function openCdpWebSocket(
   });
 }
 
+type CdpSocketOptions = {
+  headers?: Record<string, string>;
+  handshakeTimeoutMs?: number;
+  commandTimeoutMs?: number;
+  handshakeRetries?: number;
+  handshakeRetryDelayMs?: number;
+  handshakeMaxRetryDelayMs?: number;
+};
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function normalizeRetryCount(value: number | undefined, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.max(0, Math.floor(value));
+}
+
+function computeHandshakeRetryDelayMs(attempt: number, opts?: CdpSocketOptions): number {
+  const baseDelayMs =
+    typeof opts?.handshakeRetryDelayMs === "number" && Number.isFinite(opts.handshakeRetryDelayMs)
+      ? Math.max(1, Math.floor(opts.handshakeRetryDelayMs))
+      : 200;
+  const maxDelayMs =
+    typeof opts?.handshakeMaxRetryDelayMs === "number" &&
+    Number.isFinite(opts.handshakeMaxRetryDelayMs)
+      ? Math.max(baseDelayMs, Math.floor(opts.handshakeMaxRetryDelayMs))
+      : 3000;
+  const raw = Math.min(maxDelayMs, baseDelayMs * 2 ** Math.max(0, attempt - 1));
+  const jitterScale = 0.8 + Math.random() * 0.4;
+  return Math.max(1, Math.floor(raw * jitterScale));
+}
+
+function shouldRetryCdpHandshakeError(err: unknown): boolean {
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  const msg = err.message.toLowerCase();
+  if (!msg) {
+    return false;
+  }
+  if (msg.includes("rate limit")) {
+    return false;
+  }
+  const statusMatch = msg.match(/(?:unexpected server response|response):\s*(\d{3})/);
+  if (statusMatch?.[1]) {
+    return Number(statusMatch[1]) >= 500;
+  }
+  return (
+    msg.includes("cdp socket closed") ||
+    msg.includes("econnreset") ||
+    msg.includes("econnrefused") ||
+    msg.includes("econnaborted") ||
+    msg.includes("ehostunreach") ||
+    msg.includes("enetunreach") ||
+    msg.includes("etimedout") ||
+    msg.includes("socket hang up") ||
+    msg.includes("websocket error") ||
+    msg.includes("closed before")
+  );
+}
+
 export async function withCdpSocket<T>(
   wsUrl: string,
   fn: (send: CdpSendFn) => Promise<T>,
-  opts?: { headers?: Record<string, string>; handshakeTimeoutMs?: number },
+  opts?: CdpSocketOptions,
 ): Promise<T> {
-  const ws = openCdpWebSocket(wsUrl, opts);
-  const { send, closeWithError } = createCdpSender(ws);
+  const maxHandshakeRetries = normalizeRetryCount(opts?.handshakeRetries, 2);
+  let lastHandshakeError: unknown;
+  for (let attempt = 0; attempt <= maxHandshakeRetries; attempt += 1) {
+    const ws = openCdpWebSocket(wsUrl, opts);
+    const { send, closeWithError } = createCdpSender(ws, opts);
 
-  const openPromise = new Promise<void>((resolve, reject) => {
-    ws.once("open", () => resolve());
-    ws.once("error", (err) => reject(err));
-    ws.once("close", () => reject(new Error("CDP socket closed")));
-  });
+    const openPromise = new Promise<void>((resolve, reject) => {
+      ws.once("open", () => resolve());
+      ws.once("error", (err) => reject(err));
+      ws.once("close", () => reject(new Error("CDP socket closed")));
+    });
 
-  try {
-    await openPromise;
-  } catch (err) {
-    // openPromise is only rejected via `ws.once('error', err => reject(err))`
-    // or the close event's `new Error(...)`; the former always carries an
-    // Error from Node's `ws` library, the latter is already an Error. The
-    // non-Error wrap is defensive and structurally unreachable.
-    /* c8 ignore next */
-    closeWithError(err instanceof Error ? err : new Error(String(err)));
-    throw err;
-  }
-
-  try {
-    return await fn(send);
-  } catch (err) {
-    closeWithError(err instanceof Error ? err : new Error(String(err)));
-    throw err;
-  } finally {
     try {
-      ws.close();
-    } catch {
-      // ignore
+      await openPromise;
+    } catch (err) {
+      lastHandshakeError = err;
+      // openPromise is only rejected via `ws.once('error', err => reject(err))`
+      // or the close event's `new Error(...)`; the former always carries an
+      // Error from Node's `ws` library, the latter is already an Error. The
+      // non-Error wrap is defensive and structurally unreachable.
+      /* c8 ignore next */
+      closeWithError(err instanceof Error ? err : new Error(String(err)));
+      try {
+        ws.close();
+      } catch {
+        // ignore
+      }
+      if (attempt >= maxHandshakeRetries || !shouldRetryCdpHandshakeError(err)) {
+        throw err;
+      }
+      await sleep(computeHandshakeRetryDelayMs(attempt + 1, opts));
+      continue;
+    }
+
+    try {
+      return await fn(send);
+    } catch (err) {
+      closeWithError(err instanceof Error ? err : new Error(String(err)));
+      throw err;
+    } finally {
+      try {
+        ws.close();
+      } catch {
+        // ignore
+      }
     }
   }
+
+  if (lastHandshakeError instanceof Error) {
+    throw lastHandshakeError;
+  }
+  throw new Error("CDP socket failed to open");
 }

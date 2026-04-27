@@ -24,7 +24,6 @@ import {
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
-import { getPluginCommandSpecs } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import {
   danger,
@@ -110,9 +109,12 @@ type DiscordVoiceManager = import("../voice/manager.js").DiscordVoiceManager;
 
 type DiscordVoiceRuntimeModule = typeof import("../voice/manager.runtime.js");
 type DiscordProviderSessionRuntimeModule = typeof import("./provider-session.runtime.js");
+type GetPluginCommandSpecs =
+  typeof import("openclaw/plugin-sdk/plugin-runtime").getPluginCommandSpecs;
 
 let discordVoiceRuntimePromise: Promise<DiscordVoiceRuntimeModule> | undefined;
 let discordProviderSessionRuntimePromise: Promise<DiscordProviderSessionRuntimeModule> | undefined;
+let pluginRuntimePromise: Promise<typeof import("openclaw/plugin-sdk/plugin-runtime")> | undefined;
 
 let fetchDiscordApplicationIdForTesting: typeof fetchDiscordApplicationId | undefined;
 let createDiscordNativeCommandForTesting: typeof createDiscordNativeCommand | undefined;
@@ -130,7 +132,7 @@ let createClientForTesting:
       plugins: ConstructorParameters<typeof Client>[2],
     ) => Client)
   | undefined;
-let getPluginCommandSpecsForTesting: typeof getPluginCommandSpecs | undefined;
+let getPluginCommandSpecsForTesting: GetPluginCommandSpecs | undefined;
 let resolveDiscordAccountForTesting: typeof resolveDiscordAccount | undefined;
 let resolveNativeCommandsEnabledForTesting: typeof resolveNativeCommandsEnabled | undefined;
 let resolveNativeSkillsEnabledForTesting: typeof resolveNativeSkillsEnabled | undefined;
@@ -153,6 +155,11 @@ async function loadDiscordProviderSessionRuntime(): Promise<DiscordProviderSessi
   }
   discordProviderSessionRuntimePromise ??= import("./provider-session.runtime.js");
   return await discordProviderSessionRuntimePromise;
+}
+
+async function loadPluginRuntime() {
+  pluginRuntimePromise ??= import("openclaw/plugin-sdk/plugin-runtime");
+  return await pluginRuntimePromise;
 }
 
 function normalizeBooleanForTesting(value: unknown): boolean | undefined {
@@ -178,17 +185,18 @@ function formatThreadBindingDurationForConfigLabel(durationMs: number): string {
   return label === "disabled" ? "off" : label;
 }
 
-function appendPluginCommandSpecs(params: {
+async function appendPluginCommandSpecs(params: {
   commandSpecs: NativeCommandSpec[];
   runtime: RuntimeEnv;
-}): NativeCommandSpec[] {
+  cfg: OpenClawConfig;
+}): Promise<NativeCommandSpec[]> {
   const merged = [...params.commandSpecs];
   const existingNames = new Set(
     merged.map((spec) => normalizeLowercaseStringOrEmpty(spec.name)).filter(Boolean),
   );
-  for (const pluginCommand of (getPluginCommandSpecsForTesting ?? getPluginCommandSpecs)(
-    "discord",
-  )) {
+  const getPluginCommandSpecs =
+    getPluginCommandSpecsForTesting ?? (await loadPluginRuntime()).getPluginCommandSpecs;
+  for (const pluginCommand of getPluginCommandSpecs("discord", { config: params.cfg })) {
     const normalizedName = normalizeLowercaseStringOrEmpty(pluginCommand.name);
     if (!normalizedName) {
       continue;
@@ -740,7 +748,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       })
     : [];
   if (nativeEnabled) {
-    commandSpecs = appendPluginCommandSpecs({ commandSpecs, runtime });
+    commandSpecs = await appendPluginCommandSpecs({ commandSpecs, runtime, cfg });
   }
   const initialCommandCount = commandSpecs.length;
   if (nativeEnabled && nativeSkillsEnabled && commandSpecs.length > maxDiscordCommands) {
@@ -749,7 +757,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       cfg,
       { skillCommands: [], provider: "discord" },
     );
-    commandSpecs = appendPluginCommandSpecs({ commandSpecs, runtime });
+    commandSpecs = await appendPluginCommandSpecs({ commandSpecs, runtime, cfg });
     runtime.log?.(
       warn(
         `discord: ${initialCommandCount} commands exceeds limit; removing per-skill commands and keeping /skill.`,
@@ -806,8 +814,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   let lifecycleStarted = false;
   let gatewaySupervisor: ReturnType<typeof createDiscordGatewaySupervisor> | undefined;
   let deactivateMessageHandler: (() => void) | undefined;
-  let autoPresenceController: ReturnType<
-    typeof createDiscordMonitorClient
+  let autoPresenceController: Awaited<
+    ReturnType<typeof createDiscordMonitorClient>
   >["autoPresenceController"] = null;
   let lifecycleGateway: MutableDiscordGateway | undefined;
   let earlyGatewayEmitter = gatewaySupervisor?.emitter;
@@ -927,7 +935,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       gatewaySupervisor: createdGatewaySupervisor,
       autoPresenceController: createdAutoPresenceController,
       eventQueueOpts,
-    } = createDiscordMonitorClient({
+    } = await createDiscordMonitorClient({
       accountId: account.accountId,
       applicationId,
       token,
@@ -1066,6 +1074,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     const trackInboundEvent = opts.setStatus
       ? () => {
           const at = Date.now();
+          // Carbon handles gateway heartbeats internally but does not expose a
+          // stable heartbeat-ack event, so Discord app events stay app-level only.
           opts.setStatus?.({ lastEventAt: at, lastInboundAt: at });
         }
       : undefined;
@@ -1199,7 +1209,7 @@ export const __testing = {
   ) {
     createClientForTesting = mock;
   },
-  setGetPluginCommandSpecs(mock?: typeof getPluginCommandSpecs) {
+  setGetPluginCommandSpecs(mock?: GetPluginCommandSpecs) {
     getPluginCommandSpecsForTesting = mock;
   },
   setResolveDiscordAccount(mock?: typeof resolveDiscordAccount) {

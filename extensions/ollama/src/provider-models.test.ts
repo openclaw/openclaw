@@ -203,13 +203,26 @@ describe("ollama provider models", () => {
       "vision",
       "completion",
       "tools",
+      "thinking",
     ]);
     expect(visionModel.input).toEqual(["text", "image"]);
+    expect(visionModel.reasoning).toBe(true);
+    expect(visionModel.compat?.supportsTools).toBe(true);
 
     const textModel = buildOllamaModelDefinition("glm-5.1:cloud", 202752, ["completion", "tools"]);
     expect(textModel.input).toEqual(["text"]);
+    expect(textModel.reasoning).toBe(false);
+    expect(textModel.compat?.supportsTools).toBe(true);
 
     const noCapabilities = buildOllamaModelDefinition("unknown-model", 65536);
     expect(noCapabilities.input).toEqual(["text"]);
+    expect(noCapabilities.compat).toBeUndefined();
+  });
+
+  it("disables tool support when Ollama capabilities omit tools", () => {
+    const model = buildOllamaModelDefinition("embeddinggemma:latest", 2048, ["embedding"]);
+
+    expect(model.reasoning).toBe(false);
+    expect(model.compat?.supportsTools).toBe(false);
   });
 });

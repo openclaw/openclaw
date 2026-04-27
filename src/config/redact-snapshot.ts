@@ -1,4 +1,5 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { type ConfigUiHints } from "../shared/config-ui-hints-types.js";
 import {
   hasSensitiveUrlHintTag,
   isSensitiveUrlConfigPath,
@@ -10,7 +11,7 @@ import {
   shouldFallbackToStructuredRawRedaction,
 } from "./redact-snapshot.raw.js";
 import { isSecretRefShape, redactSecretRefId } from "./redact-snapshot.secret-ref.js";
-import { isSensitiveConfigPath, type ConfigUiHints } from "./schema.hints.js";
+import { isSensitiveConfigPath } from "./sensitive-paths.js";
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
 
 const log = createSubsystemLogger("config/redaction");
@@ -19,9 +20,8 @@ const ENV_VAR_PLACEHOLDER_PATTERN = /^\$\{[^}]*\}$/;
 function isSensitivePath(path: string): boolean {
   if (path.endsWith("[]")) {
     return isSensitiveConfigPath(path.slice(0, -2));
-  } else {
-    return isSensitiveConfigPath(path);
   }
+  return isSensitiveConfigPath(path);
 }
 
 function isEnvVarPlaceholder(value: string): boolean {
@@ -146,9 +146,8 @@ function redactObject(obj: unknown, hints?: ConfigUiHints): unknown {
     return lookup.has("")
       ? redactObjectWithLookup(obj, lookup, "", [], hints)
       : redactObjectGuessing(obj, "", [], hints);
-  } else {
-    return redactObjectGuessing(obj, "", []);
   }
+  return redactObjectGuessing(obj, "", []);
 }
 
 /**

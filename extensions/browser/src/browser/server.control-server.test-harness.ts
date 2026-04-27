@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, vi } from "vitest";
 import { deriveDefaultBrowserCdpPortRange } from "../config/port-defaults.js";
-import * as browserServerModule from "../server.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import { installChromeUserDataDirHooks } from "./chrome-user-data-dir.test-harness.js";
 import { getFreePort } from "./test-port.js";
@@ -91,10 +90,23 @@ const cdpMocks = vi.hoisted(() => ({
   snapshotAria: vi.fn(async () => ({
     nodes: [{ ref: "1", role: "link", name: "x", depth: 0 }],
   })),
+  snapshotRoleViaCdp: vi.fn(async () => ({
+    snapshot: '- button "Fallback" [ref=e1]',
+    refs: { e1: { role: "button", name: "Fallback" } },
+    stats: { lines: 1, chars: 29, refs: 1, interactive: 1 },
+  })),
 }));
 
-export function getCdpMocks(): { createTargetViaCdp: MockFn; snapshotAria: MockFn } {
-  return cdpMocks as unknown as { createTargetViaCdp: MockFn; snapshotAria: MockFn };
+export function getCdpMocks(): {
+  createTargetViaCdp: MockFn;
+  snapshotAria: MockFn;
+  snapshotRoleViaCdp: MockFn;
+} {
+  return cdpMocks as unknown as {
+    createTargetViaCdp: MockFn;
+    snapshotAria: MockFn;
+    snapshotRoleViaCdp: MockFn;
+  };
 }
 
 type ExecuteActMockAction = { kind: string } & Record<string, unknown>;
@@ -148,6 +160,7 @@ const pwMocks = vi.hoisted(() => ({
   armDialogViaPlaywright: vi.fn(async () => {}),
   armFileUploadViaPlaywright: vi.fn(async () => {}),
   batchViaPlaywright: vi.fn(async (_opts?: unknown) => ({ results: [] })),
+  clickCoordsViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
   clickViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
   closePageViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
   closePlaywrightBrowserConnection: vi.fn(async () => {}),
@@ -175,6 +188,12 @@ const pwMocks = vi.hoisted(() => ({
   selectOptionViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
   setInputFilesViaPlaywright: vi.fn(async () => {}),
   snapshotAiViaPlaywright: vi.fn(async () => ({ snapshot: "ok" })),
+  snapshotRoleViaPlaywright: vi.fn(async () => ({
+    snapshot: '- button "Role" [ref=e1]',
+    refs: { e1: { role: "button", name: "Role" } },
+    stats: { lines: 1, chars: 24, refs: 1, interactive: 1 },
+  })),
+  storeAriaSnapshotRefsViaPlaywright: vi.fn(async () => {}),
   traceStopViaPlaywright: vi.fn(async () => {}),
   takeScreenshotViaPlaywright: vi.fn(async () => ({
     buffer: Buffer.from("png"),
@@ -193,6 +212,11 @@ const passThroughActDispatch: Record<string, PassThroughActDispatch> = {
   click: {
     mock: pwMocks.clickViaPlaywright,
     fields: ["ref", "selector", "doubleClick", "button", "modifiers", "delayMs", "timeoutMs"],
+    includeSsrf: true,
+  },
+  clickCoords: {
+    mock: pwMocks.clickCoordsViaPlaywright,
+    fields: ["x", "y", "doubleClick", "button", "delayMs", "timeoutMs"],
     includeSsrf: true,
   },
   type: {
@@ -302,6 +326,7 @@ export function getPwMocks(): Record<string, MockFn> {
 }
 
 const chromeMcpMocks = vi.hoisted(() => ({
+  clickChromeMcpCoords: vi.fn(async () => {}),
   clickChromeMcpElement: vi.fn(async () => {}),
   closeChromeMcpSession: vi.fn(async () => true),
   closeChromeMcpTab: vi.fn(async () => {}),
@@ -438,6 +463,7 @@ vi.mock("./cdp.js", () => ({
   createTargetViaCdp: cdpMocks.createTargetViaCdp,
   normalizeCdpWsUrl: vi.fn((wsUrl: string) => wsUrl),
   snapshotAria: cdpMocks.snapshotAria,
+  snapshotRoleViaCdp: cdpMocks.snapshotRoleViaCdp,
   getHeadersWithAuth: vi.fn(() => ({})),
   appendCdpPath: vi.fn((cdpUrl: string, cdpPath: string) => {
     const base = cdpUrl.replace(/\/$/, "");
@@ -466,12 +492,19 @@ vi.mock("./screenshot.js", () => ({
   })),
 }));
 
+let browserServerModulePromise: Promise<typeof import("../server.js")> | undefined;
+
+async function loadBrowserServerModule() {
+  browserServerModulePromise ??= import("../server.js");
+  return await browserServerModulePromise;
+}
+
 export async function startBrowserControlServerFromConfig() {
-  return await browserServerModule.startBrowserControlServerFromConfig();
+  return await (await loadBrowserServerModule()).startBrowserControlServerFromConfig();
 }
 
 export async function stopBrowserControlServer(): Promise<void> {
-  await browserServerModule.stopBrowserControlServer();
+  await (await loadBrowserServerModule()).stopBrowserControlServer();
 }
 
 export function makeResponse(

@@ -238,6 +238,19 @@ describe("buildQaRuntimeEnv", () => {
     expect(env.OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN).toBeUndefined();
   });
 
+  it("does not pass Convex credential broker secrets to the gateway child env", () => {
+    const env = buildQaRuntimeEnv({
+      ...createParams({
+        OPENCLAW_QA_CONVEX_SECRET_CI: "convex-ci-secret",
+        OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "convex-maintainer-secret",
+      }),
+      providerMode: "live-frontier",
+    });
+
+    expect(env.OPENCLAW_QA_CONVEX_SECRET_CI).toBeUndefined();
+    expect(env.OPENCLAW_QA_CONVEX_SECRET_MAINTAINER).toBeUndefined();
+  });
+
   it("requires an Anthropic key for live Claude CLI API-key mode", async () => {
     const hostHome = await mkdtemp(path.join(os.tmpdir(), "qa-host-home-"));
     cleanups.push(async () => {
@@ -564,7 +577,17 @@ describe("buildQaRuntimeEnv", () => {
     await mkdir(path.dirname(artifactDir), { recursive: true });
     await writeFile(
       stdoutLogPath,
-      'OPENCLAW_GATEWAY_TOKEN=qa-suite-token\nOPENAI_API_KEY="openai-live"\nurl=http://127.0.0.1:18789/#token=abc123',
+      [
+        "OPENCLAW_GATEWAY_TOKEN=qa-suite-token",
+        'OPENAI_API_KEY="openai-live"',
+        "OPENCLAW_QA_CONVEX_SECRET_CI=convex-ci-secret",
+        "OPENCLAW_QA_CONVEX_SECRET_MAINTAINER=convex-maintainer-secret",
+        "botToken=12345:AbCdEfGhIjKl",
+        '"driverToken":"12345:driver-secr3t"',
+        "sutToken='12345:sut-secr3t'",
+        "leaseToken=lease-12345",
+        "url=http://127.0.0.1:18789/#token=abc123",
+      ].join("\n"),
       "utf8",
     );
     await writeFile(stderrLogPath, "Authorization: Bearer secret+/token=123456", "utf8");
@@ -585,7 +608,17 @@ describe("buildQaRuntimeEnv", () => {
       "gateway.stdout.log",
     ]);
     await expect(readFile(path.join(artifactDir, "gateway.stdout.log"), "utf8")).resolves.toBe(
-      "OPENCLAW_GATEWAY_TOKEN=<redacted>\nOPENAI_API_KEY=<redacted>\nurl=http://127.0.0.1:18789/#token=<redacted>",
+      [
+        "OPENCLAW_GATEWAY_TOKEN=<redacted>",
+        "OPENAI_API_KEY=<redacted>",
+        "OPENCLAW_QA_CONVEX_SECRET_CI=<redacted>",
+        "OPENCLAW_QA_CONVEX_SECRET_MAINTAINER=<redacted>",
+        "botToken=<redacted>",
+        '"driverToken":"<redacted>"',
+        "sutToken=<redacted>",
+        "leaseToken=<redacted>",
+        "url=http://127.0.0.1:18789/#token=<redacted>",
+      ].join("\n"),
     );
     await expect(readFile(path.join(artifactDir, "gateway.stderr.log"), "utf8")).resolves.toBe(
       "Authorization: Bearer <redacted>",
@@ -855,6 +888,57 @@ describe("qa bundled plugin dir", () => {
         ),
       ),
     ).resolves.toBeTruthy();
+  });
+
+  it("skips transient runtime dependency artifacts while staging built bundled plugins", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-runtime-deps-"));
+    cleanups.push(async () => {
+      await rm(repoRoot, { recursive: true, force: true });
+    });
+    await writeFile(
+      path.join(repoRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", type: "module" }, null, 2),
+      "utf8",
+    );
+    const pluginDir = path.join(repoRoot, "dist", "extensions", "qa-channel");
+    await mkdir(path.join(pluginDir, ".openclaw-runtime-deps-copy-active", "node_modules"), {
+      recursive: true,
+    });
+    await writeFile(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({ name: "@openclaw/qa-channel", type: "module" }, null, 2),
+      "utf8",
+    );
+    await writeFile(path.join(pluginDir, "index.js"), "export const ok = true;\n", "utf8");
+    await writeFile(path.join(pluginDir, ".openclaw-runtime-deps.json"), "{}\n", "utf8");
+    await writeFile(path.join(pluginDir, ".openclaw-runtime-deps-stamp.json"), "{}\n", "utf8");
+    await writeFile(
+      path.join(pluginDir, ".openclaw-runtime-deps-copy-active", "node_modules", "transient.js"),
+      "export {};\n",
+      "utf8",
+    );
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-runtime-deps-target-"));
+    cleanups.push(async () => {
+      await rm(tempRoot, { recursive: true, force: true });
+    });
+
+    const { bundledPluginsDir } = await __testing.createQaBundledPluginsDir({
+      repoRoot,
+      tempRoot,
+      allowedPluginIds: ["qa-channel"],
+    });
+
+    const stagedPluginDir = path.join(bundledPluginsDir, "qa-channel");
+    await expect(readFile(path.join(stagedPluginDir, "index.js"), "utf8")).resolves.toContain("ok");
+    await expect(lstat(path.join(stagedPluginDir, ".openclaw-runtime-deps.json"))).rejects.toThrow(
+      /ENOENT/u,
+    );
+    await expect(
+      lstat(path.join(stagedPluginDir, ".openclaw-runtime-deps-stamp.json")),
+    ).rejects.toThrow(/ENOENT/u);
+    await expect(
+      lstat(path.join(stagedPluginDir, ".openclaw-runtime-deps-copy-active")),
+    ).rejects.toThrow(/ENOENT/u);
   });
 
   it("preserves dist-runtime-only root chunks when dist also exists", async () => {

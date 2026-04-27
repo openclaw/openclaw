@@ -1,4 +1,10 @@
-export type SubagentDeliveryPath = "queued" | "steered" | "direct" | "none";
+export type SubagentDeliveryPath =
+  | "queued"
+  | "steered"
+  | "direct"
+  | "direct-fallback"
+  | "direct-thread-fallback"
+  | "none";
 
 export type SubagentAnnounceQueueOutcome = "steered" | "queued" | "none" | "dropped";
 
