@@ -650,6 +650,7 @@ Each list is optional:
 | `webFetchProviders`              | `string[]` | Web-fetch provider ids this plugin owns.                              |
 | `webSearchProviders`             | `string[]` | Web-search provider ids this plugin owns.                             |
 | `migrationProviders`             | `string[]` | Import provider ids this plugin owns for `openclaw migrate`.          |
+| `secretProviders`                | `string[]` | SecretRef source ids this plugin owns (for example `gcp`, `keyring`). |
 | `tools`                          | `string[]` | Agent tool names this plugin owns.                                    |
 
 `contracts.embeddedExtensionFactories` is retained for bundled Codex

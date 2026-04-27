@@ -163,7 +163,9 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | `plugin-sdk/ssrf-policy` | Host allowlist and private-network SSRF policy helpers |
     | `plugin-sdk/ssrf-dispatcher` | Narrow pinned-dispatcher helpers without the broad infra runtime surface |
     | `plugin-sdk/ssrf-runtime` | Pinned-dispatcher, SSRF-guarded fetch, SSRF error, and SSRF policy helpers |
-    | `plugin-sdk/secret-input` | Secret input parsing helpers |
+    | `plugin-sdk/secret-input` | Secret input parsing helpers including built-in source type guards (`isEnvSecretProviderConfig`, `isFileSecretProviderConfig`, `isExecSecretProviderConfig`) for narrowing the open `SecretProviderConfig` union |
+    | `plugin-sdk/secret-input-runtime` | Runtime variant of the above; same exports without the broad eager surface |
+    | `plugin-sdk/secret-provider` | `SecretProviderPlugin`, `SecretProviderResolveContext`, `PluginSecretProviderEntry` types for plugins that own a SecretRef source (e.g. `gcp`, `keyring`). Plugins ship a `secret-provider.ts` factory artifact and declare `contracts.secretProviders: [...]` in the manifest |
     | `plugin-sdk/webhook-ingress` | Webhook request/target helpers and raw websocket/body coercion |
     | `plugin-sdk/webhook-request-guards` | Request body size/timeout helpers |
   </Accordion>
