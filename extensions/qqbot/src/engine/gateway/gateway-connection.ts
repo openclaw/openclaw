@@ -28,6 +28,7 @@ import { dispatchEvent } from "./event-dispatcher.js";
 import { createMessageQueue, type QueuedMessage } from "./message-queue.js";
 import { ReconnectState } from "./reconnect.js";
 import type { GatewayAccount, EngineLogger, GatewayPluginRuntime, WSPayload } from "./types.js";
+import { createQQWSClient } from "./ws-client.js";
 
 // ============ Connection context ============
 
@@ -188,9 +189,9 @@ export class GatewayConnection {
       log?.info(`✅ Access token obtained successfully`);
       const gatewayUrl = await getGatewayUrl(accessToken, account.appId);
       log?.info(`Connecting to ${gatewayUrl}`);
-
-      const ws = new WebSocket(gatewayUrl, {
-        headers: { "User-Agent": getPluginUserAgent() },
+      const ws = await createQQWSClient({
+        gatewayUrl,
+        userAgent: getPluginUserAgent(),
       });
       this.currentWs = ws;
 
