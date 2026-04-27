@@ -1,10 +1,10 @@
 import { completeSimple, type Model } from "@mariozechner/pi-ai";
-import { describe, expect, it } from "vitest";
 import {
   createSingleUserPromptMessage,
   extractNonEmptyAssistantText,
   isLiveTestEnabled,
-} from "../../src/agents/live-test-helpers.js";
+} from "openclaw/plugin-sdk/testing";
+import { describe, expect, it } from "vitest";
 import { BYTEPLUS_CODING_BASE_URL, BYTEPLUS_DEFAULT_COST } from "./models.js";
 
 const BYTEPLUS_KEY = process.env.BYTEPLUS_API_KEY ?? "";

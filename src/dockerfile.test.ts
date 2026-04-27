@@ -30,6 +30,23 @@ describe("Dockerfile", () => {
     expect(dockerfile).not.toContain("OPENCLAW_VARIANT");
   });
 
+  it("installs CA certificates in the slim runtime stage", async () => {
+    const dockerfile = await readFile(dockerfilePath, "utf8");
+    const collapsed = collapseDockerContinuations(dockerfile);
+    const runtimeIndex = collapsed.indexOf(
+      "FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-runtime",
+    );
+    const caInstallIndex = collapsed.indexOf(
+      "ca-certificates procps hostname curl git lsof openssl",
+    );
+
+    expect(runtimeIndex).toBeGreaterThan(-1);
+    expect(caInstallIndex).toBeGreaterThan(runtimeIndex);
+    expect(caInstallIndex).toBeLessThan(collapsed.indexOf("RUN chown node:node /app"));
+    expect(collapsed).toMatch(/apt-get install -y --no-install-recommends\s+ca-certificates/);
+    expect(collapsed).toContain("update-ca-certificates");
+  });
+
   it("installs optional browser dependencies after pnpm install", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");

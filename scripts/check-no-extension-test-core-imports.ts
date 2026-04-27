@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { collectFilesSync, relativeToCwd } from "./check-file-utils.js";
 
+type Offender = { file: string; hint: string; line?: number; specifier?: string };
+
 const FORBIDDEN_PATTERNS: Array<{ pattern: RegExp; hint: string }> = [
   {
     pattern: /["']openclaw\/plugin-sdk["']/,
@@ -33,13 +35,10 @@ const FORBIDDEN_PATTERNS: Array<{ pattern: RegExp; hint: string }> = [
   },
 ];
 
-const FORBIDDEN_TEST_SUPPORT_PATTERNS: Array<{ pattern: RegExp; hint: string }> = [
-  {
-    pattern:
-      /\b(?:import|export)\b[\s\S]*?\bfrom\s*["'](?:\.\.\/){2,}src\/(?:agents|channels|config|infra|plugins|routing|security|test-helpers|test-utils)\/[^"']+["']/,
-    hint: "Use openclaw/plugin-sdk/testing or a focused plugin-sdk test/runtime subpath instead of core internals.",
-  },
-];
+const STATIC_RELATIVE_MODULE_PATTERN = /\b(?:import|export)\b[\s\S]*?\bfrom\s*["']([^"']+)["']/g;
+
+const RELATIVE_CORE_HINT =
+  "Use openclaw/plugin-sdk/testing or a focused plugin-sdk test/runtime subpath instead of core internals.";
 
 function isExtensionTestFile(filePath: string): boolean {
   return /\.test\.[cm]?[jt]sx?$/u.test(filePath) || /\.e2e\.test\.[cm]?[jt]sx?$/u.test(filePath);
@@ -56,23 +55,57 @@ function collectExtensionTestFiles(rootDir: string): string[] {
   });
 }
 
+function lineNumberForOffset(content: string, offset: number): number {
+  let line = 1;
+  for (let index = 0; index < offset; index += 1) {
+    if (content.charCodeAt(index) === 10) {
+      line += 1;
+    }
+  }
+  return line;
+}
+
+function resolvesToRepoSrc(filePath: string, specifier: string): boolean {
+  if (!specifier.startsWith(".")) {
+    return false;
+  }
+  const resolved = path.resolve(path.dirname(filePath), specifier);
+  const repoRelative = path.relative(process.cwd(), resolved).replaceAll(path.sep, "/");
+  return repoRelative === "src" || repoRelative.startsWith("src/");
+}
+
+function collectRelativeCoreImportOffenders(filePath: string, content: string): Offender[] {
+  const offenders: Offender[] = [];
+  for (const match of content.matchAll(STATIC_RELATIVE_MODULE_PATTERN)) {
+    const specifier = match[1];
+    if (!specifier || !resolvesToRepoSrc(filePath, specifier)) {
+      continue;
+    }
+    offenders.push({
+      file: filePath,
+      hint: RELATIVE_CORE_HINT,
+      line: lineNumberForOffset(content, match.index ?? 0),
+      specifier,
+    });
+  }
+  return offenders;
+}
+
 function main() {
   const extensionsDir = path.join(process.cwd(), "extensions");
   const files = collectExtensionTestFiles(extensionsDir);
-  const offenders: Array<{ file: string; hint: string }> = [];
+  const offenders: Offender[] = [];
 
   for (const file of files) {
     const content = fs.readFileSync(file, "utf8");
-    const rules = isExtensionTestSupportFile(file)
-      ? [...FORBIDDEN_PATTERNS, ...FORBIDDEN_TEST_SUPPORT_PATTERNS]
-      : FORBIDDEN_PATTERNS;
-    for (const rule of rules) {
+    for (const rule of FORBIDDEN_PATTERNS) {
       if (!rule.pattern.test(content)) {
         continue;
       }
       offenders.push({ file, hint: rule.hint });
       break;
     }
+    offenders.push(...collectRelativeCoreImportOffenders(file, content));
   }
 
   if (offenders.length > 0) {
@@ -80,7 +113,11 @@ function main() {
       "Extension test files must stay on extension test bridges or public plugin-sdk surfaces.",
     );
     for (const offender of offenders.toSorted((a, b) => a.file.localeCompare(b.file))) {
-      console.error(`- ${relativeToCwd(offender.file)}: ${offender.hint}`);
+      const location = offender.line
+        ? `${relativeToCwd(offender.file)}:${offender.line}`
+        : relativeToCwd(offender.file);
+      const specifier = offender.specifier ? ` (${offender.specifier})` : "";
+      console.error(`- ${location}${specifier}: ${offender.hint}`);
     }
     process.exit(1);
   }

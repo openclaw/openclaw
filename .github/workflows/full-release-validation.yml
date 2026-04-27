@@ -31,6 +31,11 @@ on:
         required: false
         default: ""
         type: string
+      evidence_package_spec:
+        description: Optional published package spec to prove in the private release evidence report
+        required: false
+        default: ""
+        type: string
       npm_telegram_provider_mode:
         description: Provider mode for the optional post-publish Telegram E2E lane
         required: false
@@ -83,6 +88,7 @@ jobs:
           TARGET_SHA: ${{ steps.resolve.outputs.sha }}
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
           NPM_TELEGRAM_PACKAGE_SPEC: ${{ inputs.npm_telegram_package_spec }}
+          EVIDENCE_PACKAGE_SPEC: ${{ inputs.evidence_package_spec }}
         run: |
           {
             echo "## Full release validation"
@@ -96,6 +102,9 @@ jobs:
               echo "- Post-publish Telegram E2E: \`${NPM_TELEGRAM_PACKAGE_SPEC}\`"
             else
               echo "- Post-publish Telegram E2E: skipped because no published package spec was provided"
+            fi
+            if [[ -n "${EVIDENCE_PACKAGE_SPEC// }" ]]; then
+              echo "- Private evidence package proof: \`${EVIDENCE_PACKAGE_SPEC}\`"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -352,7 +361,7 @@ jobs:
         env:
           RELEASE_PRIVATE_DISPATCH_TOKEN: ${{ secrets.OPENCLAW_RELEASES_PRIVATE_DISPATCH_TOKEN }}
           TARGET_REF: ${{ inputs.ref }}
-          PACKAGE_SPEC: ${{ inputs.npm_telegram_package_spec }}
+          PACKAGE_SPEC: ${{ inputs.evidence_package_spec || inputs.npm_telegram_package_spec }}
           GITHUB_RUN_ID_VALUE: ${{ github.run_id }}
         run: |
           set -euo pipefail

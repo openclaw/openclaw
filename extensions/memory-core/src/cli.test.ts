@@ -2,13 +2,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   firstWrittenJsonArg,
   spyRuntimeErrors,
   spyRuntimeJson,
   spyRuntimeLogs,
-} from "../../../src/cli/test-runtime-capture.js";
+} from "openclaw/plugin-sdk/testing";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { readShortTermRecallEntries, recordShortTermRecalls } from "./short-term-promotion.js";
 
 const getMemorySearchManager = vi.hoisted(() => vi.fn());

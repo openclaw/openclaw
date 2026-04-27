@@ -4,7 +4,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
 let clearPluginCommands: typeof import("../../../src/plugins/commands.js").clearPluginCommands;
 let registerPluginCommand: typeof import("../../../src/plugins/commands.js").registerPluginCommand;
-let setActivePluginRegistry: typeof import("../../../src/plugins/runtime.js").setActivePluginRegistry;
+let setActivePluginRegistry: typeof import("openclaw/plugin-sdk/testing").setActivePluginRegistry;
 let createCommandBot: typeof import("./bot-native-commands.menu-test-support.js").createCommandBot;
 let createNativeCommandTestParams: typeof import("./bot-native-commands.menu-test-support.js").createNativeCommandTestParams;
 let createPrivateCommandContext: typeof import("./bot-native-commands.menu-test-support.js").createPrivateCommandContext;
@@ -115,7 +115,7 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
   beforeAll(async () => {
     ({ clearPluginCommands, registerPluginCommand } =
       await import("../../../src/plugins/commands.js"));
-    ({ setActivePluginRegistry } = await import("../../../src/plugins/runtime.js"));
+    ({ setActivePluginRegistry } = await import("openclaw/plugin-sdk/testing"));
     ({ registerTelegramNativeCommands } = await import("./bot-native-commands.js"));
     ({
       createCommandBot,

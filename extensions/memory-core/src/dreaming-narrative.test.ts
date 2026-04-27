@@ -5,11 +5,11 @@ import {
   RequestScopedSubagentRuntimeError,
   SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE,
 } from "openclaw/plugin-sdk/error-runtime";
+import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import * as memoryCoreHostRuntimeCoreModule from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import * as runtimeConfigSnapshotModule from "openclaw/plugin-sdk/runtime-config-snapshot";
 import * as sessionStoreRuntimeModule from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveGlobalMap } from "../../../src/shared/global-singleton.js";
 import {
   appendNarrativeEntry,
   buildBackfillDiaryEntry,

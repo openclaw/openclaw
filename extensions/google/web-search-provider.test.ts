@@ -1,6 +1,6 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { withEnv } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../src/config/config.js";
 import { __testing, createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
 
 describe("google web search provider", () => {

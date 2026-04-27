@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
   resolveMemoryWikiConfig: vi.fn(),
 }));
 
-vi.mock("../../src/config/config.js", () => ({
+vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
   getRuntimeConfig: mocks.loadConfig,
   loadConfig: mocks.loadConfig,
 }));

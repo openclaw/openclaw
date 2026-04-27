@@ -64,7 +64,7 @@ vi.mock("./embeddings.js", () => ({
 
 type MemoryIndexModule = typeof import("./index.js");
 type MemoryEmbeddingProvidersModule =
-  typeof import("../../../../src/plugins/memory-embedding-providers.js");
+  typeof import("openclaw/plugin-sdk/memory-core-host-engine-embeddings");
 
 let getMemorySearchManager: MemoryIndexModule["getMemorySearchManager"];
 let closeAllMemorySearchManagers: MemoryIndexModule["closeAllMemorySearchManagers"];
@@ -82,7 +82,7 @@ describe("memory watcher config", () => {
     ({
       clearMemoryEmbeddingProviders: clearRegistry,
       registerMemoryEmbeddingProvider: registerAdapter,
-    } = await import("../../../../src/plugins/memory-embedding-providers.js"));
+    } = await import("openclaw/plugin-sdk/memory-core-host-engine-embeddings"));
   });
 
   beforeEach(async () => {
