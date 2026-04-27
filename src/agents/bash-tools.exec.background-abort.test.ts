@@ -207,7 +207,7 @@ test("background exec is not killed when tool signal aborts", async () => {
   const tool = createTestExecTool({ allowBackground: true, backgroundMs: 0 });
   await expectBackgroundSessionSurvivesAbort({
     tool,
-    executeParams: { command: BACKGROUND_HOLD_CMD, background: true },
+    executeParams: { command: BACKGROUND_HOLD_CMD, background: true, timeout: 0 },
   });
 });
 
@@ -215,7 +215,7 @@ test("pty background exec is not killed when tool signal aborts", async () => {
   const tool = createTestExecTool({ allowBackground: true, backgroundMs: 0 });
   await expectBackgroundSessionSurvivesAbort({
     tool,
-    executeParams: { command: BACKGROUND_HOLD_CMD, background: true, pty: true },
+    executeParams: { command: BACKGROUND_HOLD_CMD, background: true, pty: true, timeout: 0 },
   });
 });
 

@@ -33,7 +33,7 @@ Background the command immediately instead of waiting for `yieldMs`.
 </ParamField>
 
 <ParamField path="timeout" type="number" default="1800">
-Kill the command after this many seconds.
+Kill the command after this many seconds. Use `0` to disable the timeout for a single exec call.
 </ParamField>
 
 <ParamField path="pty" type="boolean" default="false">

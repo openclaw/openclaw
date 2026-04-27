@@ -474,6 +474,7 @@ describe("formatExecFailureReason", () => {
       timeoutSec: 45,
     });
 
+    expect(reason).toContain("timeout=0");
     expect(reason).toContain("background=true");
     expect(reason).toContain("yieldMs");
     expect(reason).toContain("Do not rely on shell backgrounding");
