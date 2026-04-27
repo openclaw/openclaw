@@ -59,6 +59,23 @@ describe("Hermes migration provider", () => {
     });
   });
 
+  it("rejects missing Hermes sources before planning", async () => {
+    const root = await makeTempRoot();
+    const source = path.join(root, "missing-hermes");
+
+    const provider = buildHermesMigrationProvider();
+
+    await expect(
+      provider.plan(
+        makeContext({
+          source,
+          stateDir: path.join(root, "state"),
+          workspaceDir: path.join(root, "workspace"),
+        }),
+      ),
+    ).rejects.toThrow(`Hermes state was not found at ${source}`);
+  });
+
   it("plans model, workspace, memory, skill, and secret items without importing secrets by default", async () => {
     const root = await makeTempRoot();
     const source = path.join(root, "hermes");
