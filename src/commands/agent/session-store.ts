@@ -99,7 +99,11 @@ export async function updateSessionStoreAfterAgentRun(params: {
     }
     next.cacheRead = usage.cacheRead ?? 0;
     next.cacheWrite = usage.cacheWrite ?? 0;
-  } else if (typeof compactionTokensAfter === "number" && compactionTokensAfter > 0) {
+  } else if (
+    typeof compactionTokensAfter === "number" &&
+    Number.isFinite(compactionTokensAfter) &&
+    compactionTokensAfter > 0
+  ) {
     next.totalTokens = compactionTokensAfter;
     next.totalTokensFresh = true;
   }
