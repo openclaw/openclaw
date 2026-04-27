@@ -45,6 +45,14 @@ describe("bundled capability metadata", () => {
       .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId));
 
     expect(BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS).toEqual(expected);
+    expect(BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: "hermes-migration",
+          migrationProviderIds: ["hermes"],
+        }),
+      ]),
+    );
   });
 
   it("keeps lightweight alias maps aligned with bundled plugin manifests", () => {

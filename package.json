@@ -442,6 +442,14 @@
       "types": "./dist/plugin-sdk/logging-core.d.ts",
       "default": "./dist/plugin-sdk/logging-core.js"
     },
+    "./plugin-sdk/migration": {
+      "types": "./dist/plugin-sdk/migration.d.ts",
+      "default": "./dist/plugin-sdk/migration.js"
+    },
+    "./plugin-sdk/migration-runtime": {
+      "types": "./dist/plugin-sdk/migration-runtime.d.ts",
+      "default": "./dist/plugin-sdk/migration-runtime.js"
+    },
     "./plugin-sdk/markdown-table-runtime": {
       "types": "./dist/plugin-sdk/markdown-table-runtime.d.ts",
       "default": "./dist/plugin-sdk/markdown-table-runtime.js"

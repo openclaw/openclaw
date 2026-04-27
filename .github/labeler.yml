@@ -35,6 +35,11 @@
       - any-glob-to-any-file:
           - "extensions/google-meet/**"
           - "docs/plugins/google-meet.md"
+"plugin: hermes-migration":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/hermes-migration/**"
+          - "docs/cli/migrate.md"
 "plugin: bonjour":
   - changed-files:
       - any-glob-to-any-file:

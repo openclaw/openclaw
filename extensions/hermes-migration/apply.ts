@@ -1,0 +1,54 @@
+import path from "node:path";
+import { summarizeMigrationItems } from "openclaw/plugin-sdk/migration";
+import { copyMigrationFileItem, writeMigrationReport } from "openclaw/plugin-sdk/migration-runtime";
+import type {
+  MigrationApplyResult,
+  MigrationItem,
+  MigrationPlan,
+  MigrationProviderContext,
+} from "openclaw/plugin-sdk/plugin-entry";
+import { appendItem } from "./helpers.js";
+import { applyModelItem } from "./model.js";
+import { buildHermesPlan } from "./plan.js";
+import { applySecretItem } from "./secrets.js";
+import { resolveTargets } from "./targets.js";
+
+export async function applyHermesPlan(params: {
+  ctx: MigrationProviderContext;
+  plan?: MigrationPlan;
+  runtime?: MigrationProviderContext["runtime"];
+}): Promise<MigrationApplyResult> {
+  const plan = params.plan ?? (await buildHermesPlan(params.ctx));
+  const reportDir = params.ctx.reportDir ?? path.join(params.ctx.stateDir, "migration", "hermes");
+  const targets = resolveTargets(params.ctx);
+  const items: MigrationItem[] = [];
+  for (const item of plan.items) {
+    if (item.status !== "planned") {
+      items.push(item);
+      continue;
+    }
+    if (item.id === "config:default-model") {
+      items.push(
+        await applyModelItem(
+          { ...params.ctx, runtime: params.ctx.runtime ?? params.runtime },
+          item,
+        ),
+      );
+    } else if (item.kind === "secret") {
+      items.push(await applySecretItem(params.ctx, item, targets));
+    } else if (item.action === "append") {
+      items.push(await appendItem(item));
+    } else {
+      items.push(await copyMigrationFileItem(item, reportDir, { overwrite: params.ctx.overwrite }));
+    }
+  }
+  const result: MigrationApplyResult = {
+    ...plan,
+    items,
+    summary: summarizeMigrationItems(items),
+    backupPath: params.ctx.backupPath,
+    reportDir,
+  };
+  await writeMigrationReport(result, { title: "Hermes Migration Report" });
+  return result;
+}

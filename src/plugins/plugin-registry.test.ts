@@ -388,6 +388,42 @@ describe("plugin registry facade", () => {
     ]);
   });
 
+  it("derives a fresh registry without dropping persisted install records", async () => {
+    const stateDir = makeTempDir();
+    const rootDir = makeTempDir();
+    const candidate = createCandidate(rootDir);
+    await writePersistedInstalledPluginIndex(
+      createIndex("persisted", {
+        installRecords: {
+          persisted: {
+            source: "npm",
+            spec: "persisted-plugin@1.0.0",
+            installPath: path.join(stateDir, "plugins", "persisted"),
+          },
+        },
+      }),
+      { stateDir },
+    );
+
+    const result = loadPluginRegistrySnapshotWithMetadata({
+      stateDir,
+      candidates: [candidate],
+      env: hermeticEnv(),
+      preferPersisted: false,
+    });
+
+    expect(result.source).toBe("derived");
+    expect(listPluginRecords({ index: result.snapshot }).map((plugin) => plugin.pluginId)).toEqual([
+      "demo",
+    ]);
+    expect(result.snapshot.installRecords).toMatchObject({
+      persisted: {
+        source: "npm",
+        spec: "persisted-plugin@1.0.0",
+      },
+    });
+  });
+
   it("exposes explicit persisted registry inspect and refresh operations", async () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "plugins", "demo");

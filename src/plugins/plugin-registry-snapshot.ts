@@ -76,10 +76,11 @@ export function loadPluginRegistrySnapshotWithMetadata(
   const disabledByCaller = params.preferPersisted === false;
   const disabledByEnv = hasEnvFlag(env, DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV);
   const persistedReadsEnabled = !disabledByCaller && !disabledByEnv;
+  const persistedInstallRecordReadsEnabled = !disabledByEnv;
   let persistedIndex: InstalledPluginIndex | null = null;
-  if (persistedReadsEnabled) {
+  if (persistedInstallRecordReadsEnabled) {
     persistedIndex = readPersistedInstalledPluginIndexSync(params);
-    if (persistedIndex) {
+    if (persistedReadsEnabled && persistedIndex) {
       if (
         params.config &&
         persistedIndex.policyHash !== resolveInstalledPluginIndexPolicyHash(params.config)
@@ -97,7 +98,7 @@ export function loadPluginRegistrySnapshotWithMetadata(
           diagnostics,
         };
       }
-    } else {
+    } else if (persistedReadsEnabled) {
       diagnostics.push({
         level: "info",
         code: "persisted-registry-missing",
