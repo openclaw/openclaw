@@ -45,6 +45,22 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.lanes.map((lane) => lane.name)).not.toContain("openwebui");
   });
 
+  it("plans Open WebUI only when release-path coverage requests it", () => {
+    const withoutOpenWebUI = planFor({
+      includeOpenWebUI: false,
+      planReleaseAll: true,
+      profile: RELEASE_PATH_PROFILE,
+    });
+    const withOpenWebUI = planFor({
+      includeOpenWebUI: true,
+      planReleaseAll: true,
+      profile: RELEASE_PATH_PROFILE,
+    });
+
+    expect(withoutOpenWebUI.lanes.map((lane) => lane.name)).not.toContain("openwebui");
+    expect(withOpenWebUI.lanes.map((lane) => lane.name)).toContain("openwebui");
+  });
+
   it("plans a live-only selected lane without package e2e images", () => {
     const plan = planFor({ selectedLaneNames: ["live-models"] });
 

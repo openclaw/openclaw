@@ -39,7 +39,20 @@ cat > \"\$HOME/.openclaw/extensions/lossless-claw/package.json\" <<'JSON'
 JSON
 cat > \"\$HOME/.openclaw/openclaw.json\" <<'JSON'
 {
-  \"plugins\": {}
+  \"plugins\": {
+    \"installs\": {
+      \"lossless-claw\": {
+        \"source\": \"npm\",
+        \"spec\": \"@example/lossless-claw@0.9.0\",
+        \"installPath\": \"~/.openclaw/extensions/lossless-claw\",
+        \"resolvedName\": \"@example/lossless-claw\",
+        \"resolvedVersion\": \"0.9.0\",
+        \"resolvedSpec\": \"@example/lossless-claw@0.9.0\",
+        \"integrity\": \"sha512-same\",
+        \"shasum\": \"same\"
+      }
+    }
+  }
 }
 JSON
 mkdir -p \"\$HOME/.openclaw/plugins\"
@@ -128,31 +141,74 @@ if [ \"\$registry_ready\" -ne 1 ]; then
   exit 1
 fi
 
-before_hash=\$(node --input-type=module -e '
-  import crypto from \"node:crypto\";
+node --input-type=module > /tmp/plugin-update-before.json <<'NODE'
   import fs from \"node:fs\";
   import os from \"node:os\";
   import path from \"node:path\";
-  const file = path.join(os.homedir(), \".openclaw\", \"openclaw.json\");
-  process.stdout.write(crypto.createHash(\"sha256\").update(fs.readFileSync(file)).digest(\"hex\"));
-')
+
+  const readJson = (file) => {
+    try {
+      return JSON.parse(fs.readFileSync(file, \"utf8\"));
+    } catch {
+      return {};
+    }
+  };
+  const home = os.homedir();
+  const config = readJson(path.join(home, \".openclaw\", \"openclaw.json\"));
+  const index = readJson(path.join(home, \".openclaw\", \"plugins\", \"installs.json\"));
+  const records = index.installRecords ?? index.records ?? config.plugins?.installs ?? {};
+  const record = records[\"lossless-claw\"] ?? records[\"@example/lossless-claw\"];
+  if (!record) {
+    throw new Error(\"missing seeded plugin install record\");
+  }
+  const snapshot = {
+    source: record.source,
+    spec: record.spec,
+    resolvedName: record.resolvedName,
+    resolvedVersion: record.resolvedVersion,
+    resolvedSpec: record.resolvedSpec,
+    integrity: record.integrity,
+    shasum: record.shasum
+  };
+  process.stdout.write(JSON.stringify(snapshot, null, 2));
+NODE
 
 node \"\$entry\" plugins update @example/lossless-claw > /tmp/plugin-update-output.log 2>&1
 
-after_hash=\$(node --input-type=module -e '
-  import crypto from \"node:crypto\";
+node --input-type=module <<'NODE'
   import fs from \"node:fs\";
   import os from \"node:os\";
   import path from \"node:path\";
-  const file = path.join(os.homedir(), \".openclaw\", \"openclaw.json\");
-  process.stdout.write(crypto.createHash(\"sha256\").update(fs.readFileSync(file)).digest(\"hex\"));
-')
 
-if [ \"\$before_hash\" != \"\$after_hash\" ]; then
-  echo \"Config changed unexpectedly\"
-  cat /tmp/plugin-update-output.log
-  exit 1
-fi
+  const readJson = (file) => {
+    try {
+      return JSON.parse(fs.readFileSync(file, \"utf8\"));
+    } catch {
+      return {};
+    }
+  };
+  const home = os.homedir();
+  const before = readJson(\"/tmp/plugin-update-before.json\");
+  const config = readJson(path.join(home, \".openclaw\", \"openclaw.json\"));
+  const index = readJson(path.join(home, \".openclaw\", \"plugins\", \"installs.json\"));
+  const records = index.installRecords ?? index.records ?? config.plugins?.installs ?? {};
+  const record = records[\"lossless-claw\"] ?? records[\"@example/lossless-claw\"];
+  if (!record) {
+    throw new Error(\"missing plugin install record after update\");
+  }
+  const after = {
+    source: record.source,
+    spec: record.spec,
+    resolvedName: record.resolvedName,
+    resolvedVersion: record.resolvedVersion,
+    resolvedSpec: record.resolvedSpec,
+    integrity: record.integrity,
+    shasum: record.shasum
+  };
+  if (JSON.stringify(before) !== JSON.stringify(after)) {
+    throw new Error(\"plugin install record changed unexpectedly: \" + JSON.stringify({ before, after }));
+  }
+NODE
 if grep -q 'Downloading @example/lossless-claw' /tmp/plugin-update-output.log; then
   echo \"Unexpected npm download/reinstall path\"
   cat /tmp/plugin-update-output.log

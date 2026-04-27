@@ -139,6 +139,49 @@ LOGINCTL
 	    fi
 	  }
 
+  assert_exec_arg() {
+    local unit_path="$1"
+    local index="$2"
+    local expected="$3"
+    local exec_line=""
+    local actual=""
+    exec_line=$(grep -m1 "^ExecStart=" "$unit_path" || true)
+    if [ -z "$exec_line" ]; then
+      echo "Missing ExecStart in $unit_path"
+      exit 1
+    fi
+    exec_line="${exec_line#ExecStart=}"
+    actual=$(echo "$exec_line" | awk -v field="$index" "{print \$field}")
+    actual="${actual%\"}"
+    actual="${actual#\"}"
+    if [ "$actual" != "$expected" ]; then
+      echo "Expected ExecStart arg $index to be $expected, got $actual"
+      cat "$unit_path"
+      exit 1
+    fi
+  }
+
+  assert_env_value() {
+    local unit_path="$1"
+    local key="$2"
+    local expected="$3"
+    if ! grep -Fxq "Environment=${key}=${expected}" "$unit_path"; then
+      echo "Expected Environment=${key}=${expected} in $unit_path"
+      cat "$unit_path"
+      exit 1
+    fi
+  }
+
+  assert_no_env_key() {
+    local unit_path="$1"
+    local key="$2"
+    if grep -q "^Environment=${key}=" "$unit_path"; then
+      echo "Expected no Environment=${key}= line in $unit_path"
+      cat "$unit_path"
+      exit 1
+    fi
+  }
+
   # Each flow: install service with one variant, run doctor from the other,
   # and verify ExecStart entrypoint switches accordingly.
   run_flow() {
@@ -191,4 +234,87 @@ LOGINCTL
     "$git_entry" \
     "$npm_bin doctor --repair --force --yes" \
     "$npm_entry"
+
+  run_wrapper_flow() {
+    local name="wrapper-persistence"
+    local install_log="/tmp/openclaw-doctor-switch-${name}-install.log"
+    local reinstall_log="/tmp/openclaw-doctor-switch-${name}-reinstall.log"
+    local env_repair_log="/tmp/openclaw-doctor-switch-${name}-env-repair.log"
+    local doctor_log="/tmp/openclaw-doctor-switch-${name}-doctor.log"
+    local clear_log="/tmp/openclaw-doctor-switch-${name}-clear.log"
+    local command_timeout="${OPENCLAW_DOCKER_DOCTOR_SWITCH_COMMAND_TIMEOUT:-300s}"
+
+    echo "== Flow: $name =="
+    home_dir=$(mktemp -d "/tmp/openclaw-switch-${name}.XXXXXX")
+    export HOME="$home_dir"
+    export USER="testuser"
+    mkdir -p "$HOME/.local/bin"
+    local wrapper="$HOME/.local/bin/openclaw-wrapper"
+    cat > "$wrapper" <<WRAPPER
+#!/usr/bin/env bash
+set -euo pipefail
+printf "%s\n" "\$@" >> "$HOME/openclaw-wrapper-argv.log"
+exec "$npm_bin" "\$@"
+WRAPPER
+    chmod +x "$wrapper"
+
+    local unit_path="$HOME/.config/systemd/user/openclaw-gateway.service"
+
+    if ! timeout "$command_timeout" "$npm_bin" gateway install --wrapper "$wrapper" --force >"$install_log" 2>&1; then
+      cat "$install_log"
+      exit 1
+    fi
+    assert_exec_arg "$unit_path" 1 "$wrapper"
+    assert_exec_arg "$unit_path" 2 "gateway"
+    assert_env_value "$unit_path" "OPENCLAW_WRAPPER" "$wrapper"
+
+    if ! timeout "$command_timeout" "$npm_bin" gateway install --force >"$reinstall_log" 2>&1; then
+      cat "$reinstall_log"
+      exit 1
+    fi
+    assert_exec_arg "$unit_path" 1 "$wrapper"
+    assert_exec_arg "$unit_path" 2 "gateway"
+    assert_env_value "$unit_path" "OPENCLAW_WRAPPER" "$wrapper"
+
+    sed -i "/^Environment=OPENCLAW_WRAPPER=/d" "$unit_path"
+    if ! timeout "$command_timeout" "$npm_bin" gateway install --wrapper "$wrapper" >"$env_repair_log" 2>&1; then
+      cat "$env_repair_log"
+      exit 1
+    fi
+    assert_exec_arg "$unit_path" 1 "$wrapper"
+    assert_env_value "$unit_path" "OPENCLAW_WRAPPER" "$wrapper"
+
+    sed -i "s#^Environment=OPENCLAW_WRAPPER=.*#Environment=OPENCLAW_WRAPPER=/tmp/stale-openclaw-wrapper#" "$unit_path"
+    if ! timeout "$command_timeout" "$npm_bin" gateway install --wrapper "$wrapper" >"$env_repair_log" 2>&1; then
+      cat "$env_repair_log"
+      exit 1
+    fi
+    assert_exec_arg "$unit_path" 1 "$wrapper"
+    assert_env_value "$unit_path" "OPENCLAW_WRAPPER" "$wrapper"
+
+    if ! timeout "$command_timeout" node "$git_cli" doctor --repair --force --yes >"$doctor_log" 2>&1; then
+      cat "$doctor_log"
+      exit 1
+    fi
+    if ! grep -Fq "Gateway service invokes OPENCLAW_WRAPPER:" "$doctor_log"; then
+      echo "Expected doctor to report active wrapper"
+      cat "$doctor_log"
+      exit 1
+    fi
+    assert_exec_arg "$unit_path" 1 "$wrapper"
+    assert_env_value "$unit_path" "OPENCLAW_WRAPPER" "$wrapper"
+
+    if ! timeout "$command_timeout" env OPENCLAW_WRAPPER= "$npm_bin" gateway install --force >"$clear_log" 2>&1; then
+      cat "$clear_log"
+      exit 1
+    fi
+    assert_no_env_key "$unit_path" "OPENCLAW_WRAPPER"
+    assert_entrypoint "$unit_path" "$npm_entry"
+  }
+
+  if "$npm_bin" gateway install --help 2>&1 | grep -q -- "--wrapper"; then
+    run_wrapper_flow
+  else
+    echo "Skipping wrapper persistence; package gateway install does not support --wrapper."
+  fi
 '

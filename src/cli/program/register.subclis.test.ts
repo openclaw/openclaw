@@ -174,8 +174,17 @@ describe("registerSubCliCommands", () => {
     expect(acpAction).toHaveBeenCalledTimes(1);
   });
 
-  it("does not preload plugin CLI registrations for builtin plugins update", async () => {
-    process.argv = ["node", "openclaw", "plugins", "update", "lossless-claw"];
+  it.each([
+    ["plugins update", ["plugins", "update", "lossless-claw"]],
+    ["plugins update --all", ["plugins", "update", "--all"]],
+    ["plugins install", ["plugins", "install", "lossless-claw"]],
+    ["plugins list", ["plugins", "list"]],
+    ["plugins inspect", ["plugins", "inspect", "lossless-claw"]],
+    ["plugins registry --refresh", ["plugins", "registry", "--refresh"]],
+    ["plugins doctor", ["plugins", "doctor"]],
+    ["plugins --help", ["plugins", "--help"]],
+  ])("does not preload plugin CLI registrations for builtin %s", async (_label, args) => {
+    process.argv = ["node", "openclaw", ...args];
     const program = new Command().name("openclaw");
 
     await registerSubCliByName(program, "plugins");

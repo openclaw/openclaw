@@ -1,7 +1,12 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
+import {
+  isSilentReplyPayloadText,
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+} from "../../../auto-reply/tokens.js";
 import type { EmbeddedPiExecutionContract } from "../../../config/types.agent-defaults.js";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
+import { collectTextContentBlocks } from "../../content-blocks.js";
 import {
   isStrictAgenticSupportedProviderModel,
   stripProviderPrefix,
@@ -52,10 +57,25 @@ type PlanningOnlyAttempt = Pick<
   | "toolMetas"
 >;
 
+type SilentToolResultAttempt = Pick<
+  EmbeddedRunAttemptResult,
+  | "clientToolCall"
+  | "yieldDetected"
+  | "didSendDeterministicApprovalPrompt"
+  | "lastToolError"
+  | "messagesSnapshot"
+  | "toolMetas"
+>;
+
 type RunLivenessAttempt = Pick<
   EmbeddedRunAttemptResult,
   "lastAssistant" | "promptErrorSource" | "replayMetadata" | "timedOutDuringCompaction"
 >;
+
+const REPLAY_UNSAFE_FALLBACK_METADATA: EmbeddedRunAttemptResult["replayMetadata"] = {
+  hadPotentialSideEffects: true,
+  replaySafe: false,
+};
 
 export function isIncompleteTerminalAssistantTurn(params: {
   hasAssistantVisibleText: boolean;
@@ -94,6 +114,9 @@ const GEMINI_INCOMPLETE_TURN_PROVIDER_IDS = new Set([
   "google-gemini-cli",
 ]);
 const GEMINI_INCOMPLETE_TURN_MODEL_ID_PATTERN = /^gemini(?:[.-]|$)/;
+// Ollama native `/api/chat` can finish with only thinking/internal blocks when
+// constrained, but it should not inherit the stricter planning-only/ack prompts.
+const OLLAMA_INCOMPLETE_TURN_PROVIDER_ID_PATTERN = /^ollama(?:-|$)/;
 const DEFAULT_PLANNING_ONLY_RETRY_LIMIT = 1;
 const STRICT_AGENTIC_PLANNING_ONLY_RETRY_LIMIT = 2;
 // Allow one immediate continuation plus one follow-up continuation before
@@ -193,6 +216,12 @@ export function buildAttemptReplayMetadata(
   };
 }
 
+export function resolveAttemptReplayMetadata(attempt: {
+  replayMetadata?: EmbeddedRunAttemptResult["replayMetadata"] | null;
+}): EmbeddedRunAttemptResult["replayMetadata"] {
+  return attempt.replayMetadata ?? REPLAY_UNSAFE_FALLBACK_METADATA;
+}
+
 export function resolveIncompleteTurnPayloadText(params: {
   payloadCount: number;
   aborted: boolean;
@@ -240,7 +269,7 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
-  return params.attempt.replayMetadata.hadPotentialSideEffects
+  return resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects
     ? "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying."
     : "⚠️ Agent couldn't generate a response. Please try again.";
 }
@@ -253,12 +282,87 @@ function hasOnlySilentAssistantReply(assistantTexts: readonly string[]): boolean
   );
 }
 
+function isToolResultRole(role: string): boolean {
+  return role === "toolresult" || role === "tool_result" || role === "tool";
+}
+
+function readMessageTextContent(message: AgentMessage): string | undefined {
+  const content = (message as { content?: unknown }).content;
+  if (typeof content === "string") {
+    const trimmed = content.trim();
+    return trimmed || undefined;
+  }
+  const text = collectTextContentBlocks(content)
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0)
+    .join("\n");
+  return text || undefined;
+}
+
+function readToolResultAggregatedText(message: AgentMessage): string | undefined {
+  const aggregated = (message as { details?: { aggregated?: unknown } }).details?.aggregated;
+  if (typeof aggregated !== "string") {
+    return undefined;
+  }
+  const trimmed = aggregated.trim();
+  return trimmed || undefined;
+}
+
+function hasTrailingSilentToolResult(messages: readonly AgentMessage[]): boolean {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (!message) {
+      continue;
+    }
+    const role = normalizeLowercaseStringOrEmpty(message?.role);
+    if (isToolResultRole(role)) {
+      if ((message as { isError?: boolean }).isError === true) {
+        return false;
+      }
+      const text = readMessageTextContent(message) ?? readToolResultAggregatedText(message);
+      return isSilentReplyText(text, SILENT_REPLY_TOKEN);
+    }
+    if (role === "assistant" && !readMessageTextContent(message)) {
+      continue;
+    }
+    return false;
+  }
+  return false;
+}
+
+export function resolveSilentToolResultReplyPayload(params: {
+  isCronTrigger: boolean;
+  payloadCount: number;
+  aborted: boolean;
+  timedOut: boolean;
+  attempt: SilentToolResultAttempt;
+}): { text: typeof SILENT_REPLY_TOKEN } | null {
+  if (
+    !params.isCronTrigger ||
+    params.payloadCount !== 0 ||
+    params.aborted ||
+    params.timedOut ||
+    params.attempt.toolMetas.length === 0 ||
+    params.attempt.clientToolCall ||
+    params.attempt.yieldDetected ||
+    params.attempt.didSendDeterministicApprovalPrompt ||
+    params.attempt.lastToolError ||
+    params.attempt.messagesSnapshot.length === 0
+  ) {
+    return null;
+  }
+
+  return hasTrailingSilentToolResult(params.attempt.messagesSnapshot)
+    ? { text: SILENT_REPLY_TOKEN }
+    : null;
+}
+
 export function resolveReplayInvalidFlag(params: {
   attempt: RunLivenessAttempt;
   incompleteTurnText?: string | null;
 }): boolean {
   return (
-    !params.attempt.replayMetadata.replaySafe ||
+    !resolveAttemptReplayMetadata(params.attempt).replaySafe ||
     params.attempt.promptErrorSource === "compaction" ||
     params.attempt.timedOutDuringCompaction ||
     Boolean(params.incompleteTurnText)
@@ -372,7 +476,7 @@ function shouldSkipPlanningOnlyRetry(params: {
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.lastToolError ||
-    params.attempt.replayMetadata.hadPotentialSideEffects,
+    resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects,
   );
 }
 
@@ -408,7 +512,7 @@ export function resolveReasoningOnlyRetryInstruction(params: {
   }
 
   if (
-    !shouldApplyPlanningOnlyRetryGuard({
+    !shouldApplyNonVisibleTurnRetryGuard({
       provider: params.provider,
       modelId: params.modelId,
       executionContract: params.executionContract,
@@ -454,11 +558,14 @@ export function resolveEmptyResponseRetryInstruction(params: {
   }
 
   if (
-    shouldApplyPlanningOnlyRetryGuard({
+    shouldApplyNonVisibleTurnRetryGuard({
       provider: params.provider,
       modelId: params.modelId,
       executionContract: params.executionContract,
     }) ||
+    // Keep the generic zero-usage stop retry for providers that expose a
+    // provider-neutral "nothing was generated" signal, even outside the
+    // provider allowlist above.
     isZeroUsageEmptyStopAssistantTurn(
       params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant ?? null,
     )
@@ -481,6 +588,23 @@ function shouldApplyPlanningOnlyRetryGuard(params: {
     provider: params.provider,
     modelId: params.modelId,
   });
+}
+
+function shouldApplyNonVisibleTurnRetryGuard(params: {
+  provider?: string;
+  modelId?: string;
+  executionContract?: string;
+}): boolean {
+  if (shouldApplyPlanningOnlyRetryGuard(params)) {
+    return true;
+  }
+  // Non-visible final turns are narrower than planning-only turns: there is no
+  // user text to classify, just a replay-safe empty/thinking-only result. Ollama
+  // gets this continuation guard without getting the planning-only or ack
+  // fast-path wording, which would be too opinionated for local models.
+  return OLLAMA_INCOMPLETE_TURN_PROVIDER_ID_PATTERN.test(
+    normalizeLowercaseStringOrEmpty(params.provider ?? ""),
+  );
 }
 
 function isIncompleteTurnRecoverySupportedProviderModel(params: {
@@ -683,7 +807,7 @@ export function resolvePlanningOnlyRetryInstruction(params: {
     (hasNonPlanToolActivity(params.attempt.toolMetas) && !allowSingleActionRetryBypass) ||
     (params.attempt.itemLifecycle.startedCount > planOnlyToolMetaCount &&
       !allowSingleActionRetryBypass) ||
-    params.attempt.replayMetadata.hadPotentialSideEffects
+    resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects
   ) {
     return null;
   }

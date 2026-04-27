@@ -37,6 +37,36 @@ const entries = list.stdout
 const normalized = entries.map((entry) => entry.replace(/^package\//u, ""));
 const entrySet = new Set(normalized);
 const errors = [];
+const warnings = [];
+
+const LEGACY_OMITTED_PRIVATE_QA_INVENTORY_PREFIXES = [
+  "dist/extensions/qa-channel/",
+  "dist/extensions/qa-lab/",
+  "dist/extensions/qa-matrix/",
+  "dist/plugin-sdk/extensions/qa-channel/",
+  "dist/plugin-sdk/extensions/qa-lab/",
+];
+const LEGACY_OMITTED_PRIVATE_QA_INVENTORY_FILES = new Set([
+  "dist/plugin-sdk/qa-channel.d.ts",
+  "dist/plugin-sdk/qa-channel.js",
+  "dist/plugin-sdk/qa-channel-protocol.d.ts",
+  "dist/plugin-sdk/qa-channel-protocol.js",
+  "dist/plugin-sdk/qa-lab.d.ts",
+  "dist/plugin-sdk/qa-lab.js",
+  "dist/plugin-sdk/qa-runtime.d.ts",
+  "dist/plugin-sdk/qa-runtime.js",
+  "dist/plugin-sdk/src/plugin-sdk/qa-channel.d.ts",
+  "dist/plugin-sdk/src/plugin-sdk/qa-channel-protocol.d.ts",
+  "dist/plugin-sdk/src/plugin-sdk/qa-lab.d.ts",
+  "dist/plugin-sdk/src/plugin-sdk/qa-runtime.d.ts",
+]);
+
+function isLegacyOmittedPrivateQaInventoryEntry(relativePath) {
+  return (
+    LEGACY_OMITTED_PRIVATE_QA_INVENTORY_FILES.has(relativePath) ||
+    LEGACY_OMITTED_PRIVATE_QA_INVENTORY_PREFIXES.some((prefix) => relativePath.startsWith(prefix))
+  );
+}
 
 function readTarEntry(entryPath) {
   const candidates = [entryPath, `package/${entryPath}`];
@@ -76,6 +106,12 @@ if (entrySet.has("dist/postinstall-inventory.json")) {
       for (const inventoryEntry of inventory) {
         const normalizedEntry = inventoryEntry.replace(/\\/gu, "/");
         if (!entrySet.has(normalizedEntry)) {
+          if (isLegacyOmittedPrivateQaInventoryEntry(normalizedEntry)) {
+            warnings.push(
+              `legacy inventory references omitted private QA tar entry ${normalizedEntry}`,
+            );
+            continue;
+          }
           errors.push(`inventory references missing tar entry ${normalizedEntry}`);
         }
       }
@@ -93,4 +129,7 @@ if (errors.length > 0) {
   fail(`OpenClaw package tarball integrity failed:\n${errors.join("\n")}`);
 }
 
+for (const warning of warnings) {
+  console.warn(`OpenClaw package tarball integrity warning: ${warning}`);
+}
 console.log("OpenClaw package tarball integrity passed.");

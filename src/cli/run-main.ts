@@ -69,9 +69,13 @@ export function shouldEnsureCliPath(argv: string[]): boolean {
 }
 
 export function shouldUseRootHelpFastPath(argv: string[]): boolean {
+  const invocation = resolveCliArgvInvocation(argv);
   return (
     process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH !== "1" &&
-    resolveCliArgvInvocation(argv).isRootHelpInvocation
+    (invocation.isRootHelpInvocation ||
+      (invocation.commandPath.length === 1 &&
+        invocation.commandPath[0] === "help" &&
+        invocation.hasHelpOrVersion))
   );
 }
 
