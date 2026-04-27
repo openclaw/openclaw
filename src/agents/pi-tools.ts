@@ -29,6 +29,7 @@ import { filterToolsByMessageProvider } from "./pi-tools.message-provider-policy
 import {
   isToolAllowedByPolicies,
   resolveEffectiveToolPolicy,
+  resolveExplicitToolsAlsoAllow,
   resolveGroupToolPolicy,
   resolveSubagentToolPolicyForSession,
 } from "./pi-tools.policy.js";
@@ -670,7 +671,13 @@ export function createOpenClawCodingTools(options?: {
   });
   // Security: treat unknown/undefined as unauthorized (opt-in, not opt-out)
   const senderIsOwner = options?.senderIsOwner === true;
-  const toolsByAuthorization = applyOwnerOnlyToolPolicy(toolsForModelProvider, senderIsOwner);
+  const explicitAlsoAllow = resolveExplicitToolsAlsoAllow({
+    config: options?.config,
+    agentId: agentId ?? options?.agentId,
+  });
+  const toolsByAuthorization = applyOwnerOnlyToolPolicy(toolsForModelProvider, senderIsOwner, {
+    alsoAllow: explicitAlsoAllow,
+  });
   const subagentFiltered = applyToolPolicyPipeline({
     tools: toolsByAuthorization,
     toolMeta: (tool) => getPluginToolMeta(tool),

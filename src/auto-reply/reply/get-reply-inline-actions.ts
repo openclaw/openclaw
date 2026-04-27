@@ -1,6 +1,7 @@
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import type { BlockReplyChunking } from "../../agents/pi-embedded-block-chunker.js";
 import type { SkillCommandSpec } from "../../agents/skills.js";
+import { resolveExplicitToolsAlsoAllow } from "../../agents/pi-tools.policy.js";
 import { applyOwnerOnlyToolPolicy } from "../../agents/tool-policy.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -281,7 +282,9 @@ export async function handleInlineActions(params: {
         allowGatewaySubagentBinding: true,
         senderIsOwner: command.senderIsOwner,
       });
-      const authorizedTools = applyOwnerOnlyToolPolicy(tools, command.senderIsOwner);
+      const authorizedTools = applyOwnerOnlyToolPolicy(tools, command.senderIsOwner, {
+        alsoAllow: resolveExplicitToolsAlsoAllow({ config: cfg, agentId }),
+      });
 
       const tool = authorizedTools.find((candidate) => candidate.name === dispatch.toolName);
       if (!tool) {
