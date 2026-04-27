@@ -2,7 +2,8 @@ import {
   resolveApiKeyForProvider,
   resolveOpenClawAgentDir,
 } from "openclaw/plugin-sdk/agent-runtime";
-import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   DEFAULT_LIVE_MUSIC_MODELS,
   collectProviderApiKeys,
@@ -132,7 +133,7 @@ describeLive("music generation provider live", () => {
   it(
     "covers generate plus declared edit paths with shell/profile auth",
     async () => {
-      const cfg = withPluginsEnabled(loadConfig());
+      const cfg = withPluginsEnabled(getRuntimeConfig());
       const configuredModels = resolveConfiguredLiveMusicModels(cfg);
       const agentDir = resolveOpenClawAgentDir();
       const attempted: string[] = [];

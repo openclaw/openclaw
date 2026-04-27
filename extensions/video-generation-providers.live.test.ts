@@ -2,7 +2,8 @@ import {
   resolveApiKeyForProvider,
   resolveOpenClawAgentDir,
 } from "openclaw/plugin-sdk/agent-runtime";
-import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   DEFAULT_LIVE_VIDEO_MODELS,
   canRunBufferBackedImageToVideoLiveLane,
@@ -326,7 +327,7 @@ function resolveLiveSmokeDurationSeconds(params: {
 }
 
 async function runLiveVideoProviderCase(testCase: LiveProviderCase): Promise<void> {
-  const cfg = withPluginsEnabled(loadConfig());
+  const cfg = withPluginsEnabled(getRuntimeConfig());
   const configuredModels = resolveConfiguredLiveVideoModels(cfg);
   const agentDir = resolveOpenClawAgentDir();
   const attempted: string[] = [];
