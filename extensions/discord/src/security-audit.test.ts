@@ -127,6 +127,28 @@ describe("Discord security audit findings", () => {
       } satisfies OpenClawConfig,
       expectFinding: false,
     },
+    {
+      name: "does not flag when top-level allowFrom includes a Discord snowflake id",
+      cfg: {
+        commands: { native: true },
+        channels: {
+          discord: {
+            enabled: true,
+            token: "t",
+            allowFrom: ["387380367612706819"],
+            groupPolicy: "allowlist",
+            guilds: {
+              "123": {
+                channels: {
+                  general: { enabled: true },
+                },
+              },
+            },
+          },
+        },
+      } satisfies OpenClawConfig,
+      expectFinding: false,
+    },
   ])("$name", async (testCase) => {
     const findings = await collectFindings({
       cfg: testCase.cfg,
