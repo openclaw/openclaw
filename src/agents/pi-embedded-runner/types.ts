@@ -115,6 +115,10 @@ export type EmbeddedRunFailureSignal = {
 export type EmbeddedPiRunMeta = {
   durationMs: number;
   agentMeta?: EmbeddedPiAgentMeta;
+  /** Transport that produced a CLI-visible result envelope. */
+  transport?: "embedded";
+  /** Source transport that failed before falling back to this embedded run. */
+  fallbackFrom?: "gateway";
   aborted?: boolean;
   systemPromptReport?: SessionSystemPromptReport;
   finalPromptText?: string;

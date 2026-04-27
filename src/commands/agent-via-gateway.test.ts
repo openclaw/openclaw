@@ -158,6 +158,12 @@ describe("agentCliCommand", () => {
 
       expect(callGateway).toHaveBeenCalledTimes(1);
       expect(agentCommand).toHaveBeenCalledTimes(1);
+      expect(agentCommand.mock.calls[0]?.[0]).toMatchObject({
+        resultMetaOverrides: {
+          transport: "embedded",
+          fallbackFrom: "gateway",
+        },
+      });
       expect(runtime.error).toHaveBeenCalledWith(
         expect.stringContaining("EMBEDDED FALLBACK: Gateway agent failed"),
       );
@@ -165,16 +171,26 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("marks JSON embedded fallback output while keeping diagnostics on stderr", async () => {
+  it("passes fallback metadata into JSON embedded fallback output", async () => {
     await withTempStore(async () => {
       callGateway.mockRejectedValue(new Error("gateway not connected"));
-      agentCommand.mockImplementationOnce(async (_opts, rt) => {
+      agentCommand.mockImplementationOnce(async (opts, rt) => {
         expect(loggingState.forceConsoleToStderr).toBe(true);
+        const resultMetaOverrides = (
+          opts as {
+            resultMetaOverrides?: { transport?: string; fallbackFrom?: string };
+          }
+        ).resultMetaOverrides;
+        const meta = {
+          durationMs: 1,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+          ...resultMetaOverrides,
+        };
         rt?.log?.(
           JSON.stringify(
             {
               payloads: [{ text: "local" }],
-              meta: { durationMs: 1, agentMeta: { sessionId: "s", provider: "p", model: "m" } },
+              meta,
             },
             null,
             2,
@@ -182,13 +198,19 @@ describe("agentCliCommand", () => {
         );
         return {
           payloads: [{ text: "local" }],
-          meta: { durationMs: 1, agentMeta: { sessionId: "s", provider: "p", model: "m" } },
+          meta,
         } as unknown as Awaited<ReturnType<typeof AgentCommand>>;
       });
 
       const result = await agentCliCommand({ message: "hi", to: "+1555", json: true }, jsonRuntime);
 
       expect(agentCommand).toHaveBeenCalledTimes(1);
+      expect(agentCommand.mock.calls[0]?.[0]).toMatchObject({
+        resultMetaOverrides: {
+          transport: "embedded",
+          fallbackFrom: "gateway",
+        },
+      });
       expect(jsonRuntime.error).toHaveBeenCalledWith(
         expect.stringContaining("EMBEDDED FALLBACK: Gateway agent failed"),
       );
@@ -231,6 +253,7 @@ describe("agentCliCommand", () => {
       expect(agentCommand.mock.calls[0]?.[0]).toMatchObject({
         cleanupBundleMcpOnRunEnd: true,
       });
+      expect(agentCommand.mock.calls[0]?.[0]).not.toHaveProperty("resultMetaOverrides");
       expect(runtime.log).toHaveBeenCalledWith("local");
     });
   });

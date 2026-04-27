@@ -4,6 +4,7 @@ import type { PromptMode } from "../../agents/system-prompt.types.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
+import type { EmbeddedPiRunMeta } from "../pi-embedded-runner/types.js";
 import type { AgentStreamParams, ClientToolDefinition } from "./shared-types.js";
 
 /** Image content block for Claude API multimodal messages. */
@@ -13,6 +14,10 @@ export type ImageContent = {
   mimeType: string;
 };
 export type { AgentStreamParams } from "./shared-types.js";
+
+export type AgentCommandResultMetaOverrides = Partial<
+  Pick<EmbeddedPiRunMeta, "transport" | "fallbackFrom">
+>;
 
 export type AgentRunContext = {
   messageChannel?: string;
@@ -94,6 +99,8 @@ export type AgentCommandOpts = {
   workspaceDir?: SpawnedRunMetadata["workspaceDir"];
   /** Force bundled MCP teardown when a one-shot local run completes. */
   cleanupBundleMcpOnRunEnd?: boolean;
+  /** Internal local CLI callers can annotate result metadata before JSON/text output. */
+  resultMetaOverrides?: AgentCommandResultMetaOverrides;
   /** Internal one-shot model probe mode: no tools, no workspace/chat prompt policy. */
   modelRun?: boolean;
   /** Internal prompt-mode override for trusted local/gateway callsites. */
@@ -102,7 +109,7 @@ export type AgentCommandOpts = {
 
 export type AgentCommandIngressOpts = Omit<
   AgentCommandOpts,
-  "senderIsOwner" | "allowModelOverride"
+  "senderIsOwner" | "allowModelOverride" | "resultMetaOverrides"
 > & {
   /** Ingress callsites must always pass explicit owner-tool authorization state. */
   senderIsOwner: boolean;
