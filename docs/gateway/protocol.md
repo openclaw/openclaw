@@ -385,7 +385,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
   </Accordion>
 
   <Accordion title="Automation, skills, and tools">
-    - Automation: `wake` schedules an immediate or next-heartbeat wake text injection; `cron.list`, `cron.status`, `cron.add`, `cron.update`, `cron.remove`, `cron.run`, `cron.runs` manage scheduled work.
+    - Automation: `wake` schedules an immediate or next-heartbeat wake text injection; `cron.list`, `cron.status`, `cron.add`, `cron.update`, `cron.remove`, `cron.run`, `cron.runs` manage scheduled work. `cron.add` accepts an optional string `id`; valid cron ids become stable job ids, while invalid or omitted ids fall back to generated UUIDs.
     - Skills and tools: `commands.list`, `skills.*`, `tools.catalog`, `tools.effective`.
   </Accordion>
 </AccordionGroup>

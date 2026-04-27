@@ -439,6 +439,15 @@ export function normalizeCronJobInput(
   const base = unwrapJob(raw);
   const next: UnknownRecord = { ...base };
 
+  if ("id" in base && typeof base.id === "string") {
+    const trimmed = base.id.trim();
+    if (trimmed) {
+      next.id = trimmed;
+    } else {
+      delete next.id;
+    }
+  }
+
   if ("agentId" in base) {
     const agentId = base.agentId;
     if (agentId === null) {

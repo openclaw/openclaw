@@ -58,6 +58,7 @@ const CRON_FLAT_SCHEDULE_KEYS = [
   "exact",
 ] as const;
 const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
+  "id",
   "name",
   "schedule",
   "sessionTarget",

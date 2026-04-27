@@ -284,8 +284,12 @@ export const CronListParamsSchema = Type.Object(
 
 export const CronStatusParamsSchema = Type.Object({}, { additionalProperties: false });
 
+/** Optional stable job id. Service validation decides whether to keep it or fall back to a UUID. */
+const CronJobIdSchema = Type.Optional(Type.String());
+
 export const CronAddParamsSchema = Type.Object(
   {
+    id: CronJobIdSchema,
     name: NonEmptyString,
     ...CronCommonOptionalFields,
     schedule: CronScheduleSchema,

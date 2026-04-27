@@ -17,6 +17,7 @@ Cron is the Gateway's built-in scheduler. It persists jobs, wakes the agent at t
     ```bash
     openclaw cron add \
       --name "Reminder" \
+      --id reminder-check-cron-docs \
       --at "2026-02-01T16:00:00Z" \
       --session main \
       --system-event "Reminder: check the cron docs draft" \
@@ -36,6 +37,10 @@ Cron is the Gateway's built-in scheduler. It persists jobs, wakes the agent at t
     ```
   </Step>
 </Steps>
+
+`--id` is optional. Valid custom ids use 1-128 characters from `a-z`, `A-Z`,
+`0-9`, `_`, and `-`; invalid or omitted ids fall back to generated UUIDs.
+OpenClaw rejects duplicate ids case-insensitively.
 
 ## How cron works
 

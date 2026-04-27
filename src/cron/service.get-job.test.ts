@@ -44,6 +44,72 @@ describe("CronService.getJob", () => {
     }
   });
 
+  it("uses custom id when provided and rejects duplicate id on add", async () => {
+    const { storePath } = await makeStorePath();
+    const cron = createCronService(storePath);
+    await cron.start();
+
+    try {
+      const added = await cron.add({
+        id: "stable-job-id",
+        name: "custom-id-job",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "ping" },
+      });
+      expect(added.id).toBe("stable-job-id");
+      expect(cron.getJob("stable-job-id")?.id).toBe("stable-job-id");
+
+      await expect(
+        cron.add({
+          id: "stable-job-id",
+          name: "duplicate",
+          enabled: true,
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "pong" },
+        }),
+      ).rejects.toThrow('cron job with id "stable-job-id" already exists');
+    } finally {
+      cron.stop();
+    }
+  });
+
+  it("rejects cron ids that differ only by case", async () => {
+    const { storePath } = await makeStorePath();
+    const cron = createCronService(storePath);
+    await cron.start();
+
+    try {
+      await cron.add({
+        id: "MyJob",
+        name: "first",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "ping" },
+      });
+
+      await expect(
+        cron.add({
+          id: "myjob",
+          name: "second",
+          enabled: true,
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "pong" },
+        }),
+      ).rejects.toThrow('cron job with id "myjob" already exists');
+    } finally {
+      cron.stop();
+    }
+  });
+
   it("preserves webhook delivery on create", async () => {
     const { storePath } = await makeStorePath();
     const cron = createCronService(storePath);
