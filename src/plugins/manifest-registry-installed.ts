@@ -15,15 +15,18 @@ import {
   type PackageManifest,
 } from "./manifest.js";
 
-const INSTALLED_MANIFEST_REGISTRY_CACHE_MAX_ENTRIES = 64;
+const INSTALLED_MANIFEST_REGISTRY_FALLBACK_CACHE_MAX_ENTRIES = 64;
 
 type InstalledManifestRegistryCacheEntry = {
   registry: PluginManifestRegistry;
   lastUsed: number;
 };
 
-const installedManifestRegistryCache = new Map<string, InstalledManifestRegistryCacheEntry>();
-let installedManifestRegistryCacheTick = 0;
+const installedManifestRegistryFallbackCache = new Map<
+  string,
+  InstalledManifestRegistryCacheEntry
+>();
+let installedManifestRegistryFallbackCacheTick = 0;
 
 function normalizePluginIdFilter(pluginIds: readonly string[] | undefined): string[] | undefined {
   if (!pluginIds?.length) {
@@ -131,11 +134,11 @@ function buildInstalledManifestRegistryCacheKey(params: {
 }
 
 function getCachedInstalledManifestRegistry(cacheKey: string): PluginManifestRegistry | undefined {
-  const cached = installedManifestRegistryCache.get(cacheKey);
+  const cached = installedManifestRegistryFallbackCache.get(cacheKey);
   if (!cached) {
     return undefined;
   }
-  cached.lastUsed = ++installedManifestRegistryCacheTick;
+  cached.lastUsed = ++installedManifestRegistryFallbackCacheTick;
   return cached.registry;
 }
 
@@ -144,29 +147,31 @@ function setCachedInstalledManifestRegistry(
   registry: PluginManifestRegistry,
 ): void {
   if (
-    !installedManifestRegistryCache.has(cacheKey) &&
-    installedManifestRegistryCache.size >= INSTALLED_MANIFEST_REGISTRY_CACHE_MAX_ENTRIES
+    !installedManifestRegistryFallbackCache.has(cacheKey) &&
+    installedManifestRegistryFallbackCache.size >=
+      INSTALLED_MANIFEST_REGISTRY_FALLBACK_CACHE_MAX_ENTRIES
   ) {
     let oldestKey: string | undefined;
     let oldestTick = Number.POSITIVE_INFINITY;
-    for (const [key, entry] of installedManifestRegistryCache) {
+    for (const [key, entry] of installedManifestRegistryFallbackCache) {
       if (entry.lastUsed < oldestTick) {
         oldestKey = key;
         oldestTick = entry.lastUsed;
       }
     }
     if (oldestKey) {
-      installedManifestRegistryCache.delete(oldestKey);
+      installedManifestRegistryFallbackCache.delete(oldestKey);
     }
   }
-  installedManifestRegistryCache.set(cacheKey, {
+  installedManifestRegistryFallbackCache.set(cacheKey, {
     registry,
-    lastUsed: ++installedManifestRegistryCacheTick,
+    lastUsed: ++installedManifestRegistryFallbackCacheTick,
   });
 }
 
 export function clearInstalledManifestRegistryCache(): void {
-  installedManifestRegistryCache.clear();
+  installedManifestRegistryFallbackCache.clear();
+  installedManifestRegistryFallbackCacheTick = 0;
 }
 
 function resolveInstalledPluginRootDir(record: InstalledPluginIndexRecord): string {

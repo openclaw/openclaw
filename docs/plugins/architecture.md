@@ -159,6 +159,8 @@ The lookup table keeps repeated startup decisions on the fast path:
 
 The safety boundary is snapshot replacement, not mutation. Rebuild the table when config, plugin inventory, install records, or persisted index policy changes. Do not treat it as a broad mutable global registry, and do not keep unbounded historical tables. Runtime plugin loading remains separate from lookup-table metadata so stale runtime state cannot be hidden behind a metadata cache.
 
+Some cold-path callers still reconstruct manifest registries directly from the persisted installed plugin index instead of receiving a Gateway `PluginLookUpTable`. That fallback path keeps a small bounded in-memory cache keyed by the installed index, request shape, config policy, runtime roots, and manifest/package file signatures. It is a fallback safety net for repeated index reconstruction, not the preferred Gateway hot path. Prefer passing the current lookup table or an explicit manifest registry through runtime flows when a caller already has one.
+
 ### Activation planning
 
 Activation planning is part of the control plane. Callers can ask which plugins are relevant to a concrete command, provider, channel, route, agent harness, or capability before loading broader runtime registries.

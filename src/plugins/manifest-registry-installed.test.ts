@@ -137,6 +137,33 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     });
   });
 
+  it("bypasses the installed-index manifest registry cache when disabled", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+    const index = createIndex(rootDir);
+    const readFileSync = vi.spyOn(fs, "readFileSync");
+    const env = {
+      OPENCLAW_DISABLE_INSTALLED_PLUGIN_MANIFEST_REGISTRY_CACHE: "1",
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+
+    const first = loadPluginManifestRegistryForInstalledIndex({
+      index,
+      env,
+      includeDisabled: true,
+    });
+    const readsAfterFirstLoad = readFileSync.mock.calls.length;
+    const second = loadPluginManifestRegistryForInstalledIndex({
+      index,
+      env,
+      includeDisabled: true,
+    });
+
+    expect(second).not.toBe(first);
+    expect(readFileSync.mock.calls.length).toBeGreaterThan(readsAfterFirstLoad);
+  });
+
   it("loads manifest metadata only for plugins present in the installed index", () => {
     const installedRoot = makeTempDir();
     const unrelatedRoot = makeTempDir();
