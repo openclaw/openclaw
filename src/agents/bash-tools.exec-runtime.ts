@@ -43,6 +43,9 @@ import {
 } from "./bash-tools.shared.js";
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
 import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
+import { normalizeEventRoutingKey } from "../security/dm-policy-shared.js";
+import { loadConfig } from "../config/config.js"; 
+import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 
 export { execSchema } from "./bash-tools.schemas.js";
 
@@ -315,31 +318,54 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   if (!session.backgrounded || !session.notifyOnExit || session.exitNotified) {
     return;
   }
-  const sessionKey = session.sessionKey?.trim();
+
+  let sessionKey = session.sessionKey?.trim();
   if (!sessionKey) {
     return;
   }
-  session.exitNotified = true;
+
   const exitLabel = session.exitSignal
     ? `signal ${session.exitSignal}`
     : `code ${session.exitCode ?? 0}`;
+
   const output = compactNotifyOutput(
     tail(session.tail || session.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
   );
+
   if (status === "failed" && session.exitReason === "manual-cancel" && !output) {
     return;
   }
   if (status === "completed" && !output && session.notifyOnExitEmptySuccess !== true) {
     return;
   }
+
+  const cfg = loadConfig();
+  const agentsCfg = cfg.agents;
+  const defaults = agentsCfg 
+    ? (agentsCfg.defaults as (typeof agentsCfg.defaults & { allowFrom?: Array<string | number> }))
+    : undefined;
+
+  sessionKey = normalizeEventRoutingKey({
+    sessionKey: sessionKey,
+    dmScope: cfg.session?.scope,
+    allowFrom: defaults?.allowFrom ?? [],
+    normalizeEntry: (entry) => entry.toLowerCase(),
+    resolveAgentMainSessionKey: (key) => 
+      resolveAgentMainSessionKey({ cfg, agentId: session.scopeKey || "" }),
+  });
+
+  session.exitNotified = true;
+
   const summary = output
     ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
     : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
+
   enqueueSystemEvent(summary, {
     sessionKey,
     deliveryContext: session.notifyDeliveryContext,
     trusted: false,
   });
+
   requestHeartbeatNow(
     scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event", coalesceMs: 0 }),
   );
@@ -407,17 +433,34 @@ export function resolveApprovalRunningNoticeMs(value?: number) {
 
 export function emitExecSystemEvent(
   text: string,
-  opts: { sessionKey?: string; contextKey?: string; deliveryContext?: DeliveryContext },
+  opts: { 
+    sessionKey?: string; 
+    contextKey?: string; 
+    deliveryContext?: DeliveryContext;
+    agentId?: string; 
+  },
 ) {
-  const sessionKey = opts.sessionKey?.trim();
-  if (!sessionKey) {
-    return;
-  }
+  let sessionKey = opts.sessionKey?.trim(); 
+  if (!sessionKey) return;
+
+  const cfg = loadConfig();
+  sessionKey = normalizeEventRoutingKey({
+    sessionKey: sessionKey,
+    dmScope: cfg.session?.scope,
+    allowFrom: (cfg.agents?.defaults as any)?.allowFrom ?? [],
+    normalizeEntry: (entry) => entry.toLowerCase(),
+    resolveAgentMainSessionKey: (key) => resolveAgentMainSessionKey({ 
+        cfg, 
+        agentId: opts.agentId || "" 
+    }), 
+  });
+
   enqueueSystemEvent(text, {
-    sessionKey,
+    sessionKey, 
     contextKey: opts.contextKey,
     deliveryContext: opts.deliveryContext,
   });
+  
   requestHeartbeatNow(
     scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event", coalesceMs: 0 }),
   );
