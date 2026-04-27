@@ -769,6 +769,7 @@ export const telegramPlugin = createChatChannelPlugin({
           proxyUrl: account.config.proxy,
           network: account.config.network,
           apiRoot: account.config.apiRoot,
+          includeWebhookInfo: Boolean(account.config.webhookUrl),
         }),
       formatCapabilitiesProbe: ({ probe }) => {
         const lines = [];
@@ -885,6 +886,7 @@ export const telegramPlugin = createChatChannelPlugin({
             proxyUrl: account.config.proxy,
             network: account.config.network,
             apiRoot: account.config.apiRoot,
+            includeWebhookInfo: false,
           });
           const username = probe.ok ? probe.bot?.username?.trim() : null;
           if (username) {

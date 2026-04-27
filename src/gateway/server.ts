@@ -13,5 +13,5 @@ export async function startGatewayServer(
 
 export async function __resetModelCatalogCacheForTest(): Promise<void> {
   const mod = await loadServerImpl();
-  mod.__resetModelCatalogCacheForTest();
+  await mod.__resetModelCatalogCacheForTest();
 }

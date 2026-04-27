@@ -196,9 +196,9 @@ vi.mock("./daemon.js", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/infra-runtime")>(
-    "openclaw/plugin-sdk/infra-runtime",
+vi.mock("openclaw/plugin-sdk/system-event-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/system-event-runtime")>(
+    "openclaw/plugin-sdk/system-event-runtime",
   );
   return {
     ...actual,
@@ -206,15 +206,18 @@ vi.mock("openclaw/plugin-sdk/infra-runtime", async () => {
       enqueueSystemEventMock(...args);
       return actual.enqueueSystemEvent(...args);
     },
-    waitForTransportReady: (...args: unknown[]) => waitForTransportReadyMock(...args),
   };
 });
+
+vi.mock("openclaw/plugin-sdk/transport-ready-runtime", () => ({
+  waitForTransportReady: (...args: unknown[]) => waitForTransportReadyMock(...args),
+}));
 
 export function installSignalToolResultTestHooks() {
   beforeEach(async () => {
     const [{ resetInboundDedupe }, { resetSystemEventsForTest }] = await Promise.all([
       import("openclaw/plugin-sdk/reply-runtime"),
-      import("openclaw/plugin-sdk/infra-runtime"),
+      import("openclaw/plugin-sdk/system-event-runtime"),
     ]);
     resetInboundDedupe();
     config = {

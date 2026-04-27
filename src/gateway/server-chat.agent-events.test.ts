@@ -8,7 +8,7 @@ vi.mock("./server-chat.persist-session-lifecycle.runtime.js", () => ({
     persistGatewaySessionLifecycleEventMock(...args),
 }));
 
-vi.mock("../config/config.js", () => ({
+vi.mock("../config/io.js", () => ({
   getRuntimeConfig: vi.fn(() => ({})),
 }));
 
@@ -24,7 +24,7 @@ vi.mock("./server-chat.load-gateway-session-row.runtime.js", () => ({
   loadGatewaySessionRow: vi.fn(),
 }));
 
-import { getRuntimeConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/io.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import {
   createAgentEventHandler,

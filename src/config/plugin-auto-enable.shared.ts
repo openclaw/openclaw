@@ -283,7 +283,7 @@ function collectPluginIdsForConfiguredChannel(
 }
 
 function collectCandidateChannelIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
-  return listPotentialConfiguredChannelIds(cfg, env).map(
+  return listPotentialConfiguredChannelIds(cfg, env, { includePersistedAuthState: false }).map(
     (channelId) => normalizeChatChannelId(channelId) ?? channelId,
   );
 }
@@ -499,7 +499,7 @@ export function configMayNeedPluginAutoEnable(
   if (hasConfiguredPluginConfigEntry(cfg)) {
     return true;
   }
-  if (hasPotentialConfiguredChannels(cfg, env)) {
+  if (hasPotentialConfiguredChannels(cfg, env, { includePersistedAuthState: false })) {
     return true;
   }
   if (hasConfiguredProviderModelOrHarness(cfg, env)) {

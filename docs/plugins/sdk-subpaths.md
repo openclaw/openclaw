@@ -205,7 +205,18 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | `plugin-sdk/native-command-registry` | Native command registry/build/serialize helpers |
     | `plugin-sdk/agent-harness` | Experimental trusted-plugin surface for low-level agent harnesses: harness types, active-run steer/abort helpers, OpenClaw tool bridge helpers, runtime-plan tool policy helpers, terminal outcome classification, tool progress formatting/detail helpers, and attempt result utilities |
     | `plugin-sdk/provider-zai-endpoint` | Z.AI endpoint detection helpers |
-    | `plugin-sdk/infra-runtime` | System event/heartbeat helpers |
+    | `plugin-sdk/async-lock-runtime` | Process-local async lock helper for small runtime state files |
+    | `plugin-sdk/channel-activity-runtime` | Channel activity telemetry helper |
+    | `plugin-sdk/concurrency-runtime` | Bounded async task concurrency helper |
+    | `plugin-sdk/dedupe-runtime` | In-memory dedupe cache helpers |
+    | `plugin-sdk/delivery-queue-runtime` | Outbound pending-delivery drain helper |
+    | `plugin-sdk/file-access-runtime` | Safe local-file and media-source path helpers |
+    | `plugin-sdk/heartbeat-runtime` | Heartbeat event and visibility helpers |
+    | `plugin-sdk/number-runtime` | Numeric coercion helper |
+    | `plugin-sdk/secure-random-runtime` | Secure token/UUID helpers |
+    | `plugin-sdk/system-event-runtime` | System event queue helpers |
+    | `plugin-sdk/transport-ready-runtime` | Transport readiness wait helper |
+    | `plugin-sdk/infra-runtime` | Deprecated compatibility shim; use the focused runtime subpaths above |
     | `plugin-sdk/collection-runtime` | Small bounded cache helpers |
     | `plugin-sdk/diagnostic-runtime` | Diagnostic flag, event, and trace-context helpers |
     | `plugin-sdk/error-runtime` | Error graph, formatting, shared error classification helpers, `isApprovalNotFoundError` |

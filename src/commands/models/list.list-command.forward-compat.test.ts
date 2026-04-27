@@ -110,16 +110,19 @@ let listRowsModule: typeof import("./list.rows.js");
 let listRegistryModule: typeof import("./list.registry.js");
 
 function installModelsListCommandForwardCompatMocks() {
+  const suppressOpenAiSpark = ({
+    provider,
+    id,
+  }: {
+    provider?: string | null;
+    id?: string | null;
+  }) =>
+    (provider === "openai" || provider === "azure-openai-responses") &&
+    id === "gpt-5.3-codex-spark";
+
   vi.doMock("../../agents/model-suppression.js", () => ({
-    shouldSuppressBuiltInModel: ({
-      provider,
-      id,
-    }: {
-      provider?: string | null;
-      id?: string | null;
-    }) =>
-      (provider === "openai" || provider === "azure-openai-responses") &&
-      id === "gpt-5.3-codex-spark",
+    shouldSuppressBuiltInModel: suppressOpenAiSpark,
+    shouldSuppressBuiltInModelFromManifest: suppressOpenAiSpark,
   }));
 
   vi.doMock("./load-config.js", () => ({

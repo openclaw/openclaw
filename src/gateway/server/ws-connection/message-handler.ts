@@ -1,7 +1,7 @@
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import type { RawData, WebSocket } from "ws";
-import { getRuntimeConfig } from "../../../config/config.js";
+import { getRuntimeConfig } from "../../../config/io.js";
 import {
   getBoundDeviceBootstrapProfile,
   getDeviceBootstrapTokenProfile,
@@ -112,7 +112,6 @@ import {
   getHealthCache,
   getHealthVersion,
   incrementPresenceVersion,
-  refreshGatewayHealthSnapshot,
 } from "../health-state.js";
 import { resolveSharedGatewaySessionGeneration } from "../ws-shared-generation.js";
 import type { GatewayWsClient } from "../ws-types.js";
@@ -196,6 +195,7 @@ export function attachGatewayWsMessageHandler(params: {
   events: string[];
   extraHandlers: GatewayRequestHandlers;
   buildRequestContext: () => GatewayRequestContext;
+  refreshHealthSnapshot: GatewayRequestContext["refreshHealthSnapshot"];
   send: (obj: unknown) => void;
   close: (code?: number, reason?: string) => void;
   isClosed: () => boolean;
@@ -234,6 +234,7 @@ export function attachGatewayWsMessageHandler(params: {
     events,
     extraHandlers,
     buildRequestContext,
+    refreshHealthSnapshot,
     send,
     close,
     isClosed,
@@ -1491,7 +1492,7 @@ export function attachGatewayWsMessageHandler(params: {
           presence: snapshot.presence.length,
           stateVersion: snapshot.stateVersion.presence,
         });
-        void refreshGatewayHealthSnapshot({ probe: true }).catch((err) =>
+        void refreshHealthSnapshot({ probe: true }).catch((err) =>
           logHealth.error(`post-connect health refresh failed: ${formatError(err)}`),
         );
         return;
