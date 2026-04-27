@@ -1,0 +1,81 @@
+{
+  "id": "ilmu",
+  "enabledByDefault": true,
+  "providerDiscoveryEntry": "./provider-discovery.ts",
+  "providers": ["ilmu"],
+  "modelCatalog": {
+    "providers": {
+      "ilmu": {
+        "baseUrl": "https://api.ilmu.ai/v1",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "nemo-super",
+            "name": "ILMU Nemo Super",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 256000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "ilmu-nemo-nano",
+            "name": "ILMU Nemo Nano",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 256000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "maxTokensField": "max_tokens"
+            }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "ilmu": "static"
+    }
+  },
+  "modelSupport": {
+    "modelPrefixes": ["nemo-", "ilmu-"]
+  },
+  "providerAuthEnvVars": {
+    "ilmu": ["ILMU_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "ilmu",
+      "method": "api-key",
+      "choiceId": "ilmu-api-key",
+      "choiceLabel": "ILMU API key",
+      "groupId": "ilmu",
+      "groupLabel": "ILMU",
+      "groupHint": "API key",
+      "optionKey": "ilmuApiKey",
+      "cliFlag": "--ilmu-api-key",
+      "cliOption": "--ilmu-api-key <key>",
+      "cliDescription": "ILMU API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

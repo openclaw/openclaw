@@ -57,5 +57,32 @@ export const OPENCLAW_PROVIDER_INDEX = {
         ],
       },
     },
+    ilmu: {
+      id: "ilmu",
+      name: "ILMU",
+      plugin: {
+        id: "ilmu",
+      },
+      docs: "/providers/ilmu",
+      categories: ["cloud", "llm"],
+      previewCatalog: {
+        models: [
+          {
+            id: "nemo-super",
+            name: "ILMU Nemo Super",
+            input: ["text"],
+            reasoning: true,
+            contextWindow: 256000,
+          },
+          {
+            id: "ilmu-nemo-nano",
+            name: "ILMU Nemo Nano",
+            input: ["text"],
+            reasoning: true,
+            contextWindow: 256000,
+          },
+        ],
+      },
+    },
   },
 } satisfies OpenClawProviderIndex;
