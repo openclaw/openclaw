@@ -143,16 +143,16 @@ export function createOpenClawTools(
       ? { root: options.sandboxRoot, bridge: options.sandboxFsBridge }
       : undefined;
   const imageTool = options?.agentDir?.trim()
-    ? memoizeToolFactory(
-        "createImageTool",
-        options?.config,
-        [
+    ? memoizeToolFactory({
+        label: "createImageTool",
+        cfg: options?.config,
+        scalars: [
           options?.agentDir,
           options?.workspaceDir,
           options?.sandboxRoot ?? null,
           !!options?.modelHasVision,
         ],
-        () =>
+        factory: () =>
           createImageTool({
             config: options?.config,
             agentDir: options.agentDir,
@@ -161,13 +161,13 @@ export function createOpenClawTools(
             fsPolicy: options?.fsPolicy,
             modelHasVision: options?.modelHasVision,
           }),
-      )
+      })
     : null;
-  const imageGenerateTool = memoizeToolFactory(
-    "createImageGenerateTool",
-    options?.config,
-    [options?.agentDir, options?.workspaceDir, options?.sandboxRoot ?? null],
-    () =>
+  const imageGenerateTool = memoizeToolFactory({
+    label: "createImageGenerateTool",
+    cfg: options?.config,
+    scalars: [options?.agentDir, options?.workspaceDir, options?.sandboxRoot ?? null],
+    factory: () =>
       createImageGenerateTool({
         config: options?.config,
         agentDir: options?.agentDir,
@@ -175,17 +175,17 @@ export function createOpenClawTools(
         sandbox,
         fsPolicy: options?.fsPolicy,
       }),
-  );
-  const videoGenerateTool = memoizeToolFactory(
-    "createVideoGenerateTool",
-    options?.config,
-    [
+  });
+  const videoGenerateTool = memoizeToolFactory({
+    label: "createVideoGenerateTool",
+    cfg: options?.config,
+    scalars: [
       options?.agentDir,
       options?.agentSessionKey,
       options?.workspaceDir,
       options?.sandboxRoot ?? null,
     ],
-    () =>
+    factory: () =>
       createVideoGenerateTool({
         config: options?.config,
         agentDir: options?.agentDir,
@@ -195,17 +195,17 @@ export function createOpenClawTools(
         sandbox,
         fsPolicy: options?.fsPolicy,
       }),
-  );
-  const musicGenerateTool = memoizeToolFactory(
-    "createMusicGenerateTool",
-    options?.config,
-    [
+  });
+  const musicGenerateTool = memoizeToolFactory({
+    label: "createMusicGenerateTool",
+    cfg: options?.config,
+    scalars: [
       options?.agentDir,
       options?.agentSessionKey,
       options?.workspaceDir,
       options?.sandboxRoot ?? null,
     ],
-    () =>
+    factory: () =>
       createMusicGenerateTool({
         config: options?.config,
         agentDir: options?.agentDir,
@@ -215,13 +215,13 @@ export function createOpenClawTools(
         sandbox,
         fsPolicy: options?.fsPolicy,
       }),
-  );
+  });
   const pdfTool = options?.agentDir?.trim()
-    ? memoizeToolFactory(
-        "createPdfTool",
-        options?.config,
-        [options?.agentDir, options?.workspaceDir, options?.sandboxRoot ?? null],
-        () =>
+    ? memoizeToolFactory({
+        label: "createPdfTool",
+        cfg: options?.config,
+        scalars: [options?.agentDir, options?.workspaceDir, options?.sandboxRoot ?? null],
+        factory: () =>
           createPdfTool({
             config: options?.config,
             agentDir: options.agentDir,
@@ -229,30 +229,32 @@ export function createOpenClawTools(
             sandbox,
             fsPolicy: options?.fsPolicy,
           }),
-      )
+      })
     : null;
-  const webSearchTool = memoizeToolFactory(
-    "createWebSearchTool",
-    options?.config,
-    [options?.agentDir, !!options?.sandboxed],
-    () =>
+  const webSearchTool = memoizeToolFactory({
+    label: "createWebSearchTool",
+    cfg: options?.config,
+    deps: runtimeWebTools,
+    scalars: [options?.agentDir, !!options?.sandboxed],
+    factory: () =>
       createWebSearchTool({
         config: options?.config,
         sandboxed: options?.sandboxed,
         runtimeWebSearch: runtimeWebTools?.search,
       }),
-  );
-  const webFetchTool = memoizeToolFactory(
-    "createWebFetchTool",
-    options?.config,
-    [options?.agentDir, !!options?.sandboxed],
-    () =>
+  });
+  const webFetchTool = memoizeToolFactory({
+    label: "createWebFetchTool",
+    cfg: options?.config,
+    deps: runtimeWebTools,
+    scalars: [options?.agentDir, !!options?.sandboxed],
+    factory: () =>
       createWebFetchTool({
         config: options?.config,
         sandboxed: options?.sandboxed,
         runtimeWebFetch: runtimeWebTools?.fetch,
       }),
-  );
+  });
   const messageTool = options?.disableMessageTool
     ? null
     : createMessageTool({
