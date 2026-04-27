@@ -840,6 +840,37 @@ describe("speech-core native voice-note routing", () => {
     }
   });
 
+  it("does not resolve provider config for tagged replies that should skip TTS", async () => {
+    const resolveConfig = vi.fn(() => {
+      throw new Error("provider config should not be resolved");
+    });
+    installSpeechProviders([
+      createMockSpeechProvider("mock", {
+        resolveConfig,
+      }),
+    ]);
+
+    const result = await maybeApplyTtsToPayload({
+      payload: { text: "Visible reply without a TTS directive." } satisfies ReplyPayload,
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            auto: "tagged",
+            provider: "mock",
+            prefsPath: "/tmp/openclaw-tts-tagged-skip-preflight-test.json",
+          },
+        },
+      },
+      channel: "slack",
+      kind: "final",
+    });
+
+    expect(result).toEqual({ text: "Visible reply without a TTS directive." });
+    expect(resolveConfig).not.toHaveBeenCalled();
+    expect(synthesizeMock).not.toHaveBeenCalled();
+  });
+
   it("respects expressiveTagsModels allowlist — strips tags when active model is not in the allowlist", async () => {
     const elevenSynthesize = vi.fn(synthesizeMock);
     const eleven = createMockSpeechProvider("elevenlabs", {
