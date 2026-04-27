@@ -1,3 +1,4 @@
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { describe, expect, it } from "vitest";
 import {
   buildGoogleVertexProvider,
@@ -45,13 +46,9 @@ describe("buildGoogleVertexProvider", () => {
 });
 
 describe("mergeImplicitGoogleVertexProvider", () => {
-  const implicit = {
-    baseUrl: "https://aiplatform.googleapis.com",
-    api: "google-generative-ai",
-    apiKey: "gcp-vertex-credentials",
-    headers: { "x-goog-user-project": "implicit-project" },
-    models: [{ id: "gemini-3-pro-preview", name: "Gemini 3 Pro" }],
-  } as ReturnType<typeof buildGoogleVertexProvider>;
+  const implicit = buildGoogleVertexProvider({
+    env: { GOOGLE_CLOUD_PROJECT: "implicit-project" } as NodeJS.ProcessEnv,
+  });
 
   it("returns the implicit provider when no existing config", () => {
     expect(mergeImplicitGoogleVertexProvider({ implicit })).toEqual(implicit);
@@ -64,7 +61,7 @@ describe("mergeImplicitGoogleVertexProvider", () => {
         api: "google-generative-ai",
         apiKey: "gcp-vertex-credentials",
         headers: { "x-goog-user-project": "user-project" },
-      } as ReturnType<typeof buildGoogleVertexProvider>,
+      } as unknown as ModelProviderConfig,
       implicit,
     });
     expect(merged.baseUrl).toBe("https://us-east1-aiplatform.googleapis.com");
@@ -77,7 +74,7 @@ describe("mergeImplicitGoogleVertexProvider", () => {
         baseUrl: "https://aiplatform.googleapis.com",
         api: "google-generative-ai",
         apiKey: "gcp-vertex-credentials",
-      } as ReturnType<typeof buildGoogleVertexProvider>,
+      } as unknown as ModelProviderConfig,
       implicit,
     });
     expect(merged.models).toEqual(implicit.models);
@@ -90,7 +87,7 @@ describe("mergeImplicitGoogleVertexProvider", () => {
         api: "google-generative-ai",
         apiKey: "gcp-vertex-credentials",
         models: [{ id: "custom-model", name: "Custom" }],
-      } as ReturnType<typeof buildGoogleVertexProvider>,
+      } as unknown as ModelProviderConfig,
       implicit,
     });
     expect(merged.models).toEqual([{ id: "custom-model", name: "Custom" }]);
