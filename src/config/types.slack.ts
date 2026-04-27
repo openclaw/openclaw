@@ -209,6 +209,14 @@ export type SlackConfig = {
   accounts?: Record<string, SlackAccountConfig>;
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;
+  /**
+   * Forwarded to bolt's App constructor as `logLevel`. Lets operators
+   * silence designed-and-benign sub-library WARNs (e.g. socket-mode's
+   * unconditional pong-timeout notice). Values match bolt's `LogLevel`
+   * enum string values; default INFO matches bolt's own default.
+   * Mirrors `logLevel` on the runtime zod schema (#71531).
+   */
+  logLevel?: "debug" | "info" | "warn" | "error";
 } & SlackAccountConfig;
 
 declare module "./types.channels.js" {
