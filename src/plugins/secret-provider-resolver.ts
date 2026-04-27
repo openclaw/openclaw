@@ -2,6 +2,19 @@ import { resolveBundledPluginIdForSecretProviderSource } from "./contracts/regis
 import { loadBundledSecretProviderEntriesFromDir } from "./secret-provider-public-artifacts.js";
 import type { PluginSecretProviderEntry } from "./secret-provider-types.js";
 
+// Dispatch shape vs document-extractor: this seam intentionally has no
+// `secret-providers.runtime.ts` (no runtime registry materialization). The
+// secrets resolver at `src/secrets/resolve.ts` dispatches directly into this
+// helper via dynamic import the first time a non-built-in source is referenced.
+// That keeps the cold path manifest-only and avoids materializing an unused
+// runtime registry; document-extractor takes a different shape because its
+// caller iterates all enabled extractors per request.
+//
+// Cache is per-source. The lookup is currently fully synchronous after the
+// initial dynamic import in `resolve.ts`, so concurrent first-time lookups for
+// the same source cannot double-load the artifact today. If a future refactor
+// makes `loadBundledSecretProviderEntriesFromDir` async, switch this Map to
+// cache promises (`Map<string, Promise<...>>`) to avoid a load race.
 const cache = new Map<string, PluginSecretProviderEntry>();
 
 export function _resetSecretProviderResolverCache(): void {

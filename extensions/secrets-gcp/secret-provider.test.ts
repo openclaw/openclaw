@@ -104,6 +104,57 @@ describe("secrets-gcp createGcpSecretProvider", () => {
     expect(out.get("openclaw-gateway-token")).toBe("ok");
   });
 
+  it("resolve() rejects ref ids longer than 255 characters", async () => {
+    vi.resetModules();
+    let clientCreated = false;
+    vi.doMock("@google-cloud/secret-manager", () => ({
+      SecretManagerServiceClient: class {
+        constructor() {
+          clientCreated = true;
+        }
+        async accessSecretVersion() {
+          throw new Error("should not be reached");
+        }
+      },
+    }));
+    const { createGcpSecretProvider: freshFactory } = await import("./secret-provider.js");
+    const provider = freshFactory();
+    await expect(
+      provider.resolve({
+        refs: [{ source: "gcp", provider: "myGcp", id: "a".repeat(256) }],
+        providerName: "myGcp",
+        providerConfig: { source: "gcp", project: "my-project" },
+        env: process.env,
+      }),
+    ).rejects.toThrow(/ref id .*must match/);
+    expect(clientCreated).toBe(false);
+  });
+
+  it("resolve() accepts a leading-hyphen ref id (GCP grammar permits it; URL-only flow makes it safe)", async () => {
+    // GCP secret ids may begin with a hyphen per grammar. Unlike the keyring
+    // plugin which guards against argv-injection, this plugin only ever
+    // interpolates the id into a URL path, so leading dashes are safe.
+    vi.resetModules();
+    let receivedName = "";
+    vi.doMock("@google-cloud/secret-manager", () => ({
+      SecretManagerServiceClient: class {
+        async accessSecretVersion({ name }: { name: string }) {
+          receivedName = name;
+          return [{ payload: { data: "ok" } }];
+        }
+      },
+    }));
+    const { createGcpSecretProvider: freshFactory } = await import("./secret-provider.js");
+    const provider = freshFactory();
+    await provider.resolve({
+      refs: [{ source: "gcp", provider: "myGcp", id: "-leading" }],
+      providerName: "myGcp",
+      providerConfig: { source: "gcp", project: "my-project" },
+      env: process.env,
+    });
+    expect(receivedName).toBe("projects/my-project/secrets/-leading/versions/latest");
+  });
+
   it("resolve() rejects ref ids with disallowed characters before spawning client", async () => {
     vi.resetModules();
     let clientCreated = false;
