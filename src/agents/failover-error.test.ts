@@ -81,6 +81,19 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ status: 522 })).toBeNull();
     expect(resolveFailoverReasonFromError({ status: 523 })).toBeNull();
     expect(resolveFailoverReasonFromError({ status: 524 })).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        message:
+          "521 <!DOCTYPE html><html><head><title>Web server is down</title></head><body>Cloudflare</body></html>",
+      }),
+    ).toBe("timeout");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 524,
+        message:
+          "<!DOCTYPE html><html><head><title>A timeout occurred</title></head><body>Cloudflare</body></html>",
+      }),
+    ).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 529 })).toBe("overloaded");
   });
 

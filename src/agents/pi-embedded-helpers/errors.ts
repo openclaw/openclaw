@@ -604,6 +604,12 @@ function classifyFailoverClassificationFromHttpStatus(
   if (status === 500 || status === 502 || status === 504) {
     return toReasonClassification("timeout");
   }
+  if (status === 521 || status === 522 || status === 523 || status === 524) {
+    if (message && isHtmlErrorResponse(message, status)) {
+      return toReasonClassification("timeout");
+    }
+    return null;
+  }
   if (status === 529) {
     return toReasonClassification("overloaded");
   }
