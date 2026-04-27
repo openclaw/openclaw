@@ -2,6 +2,7 @@ import type { ChannelRuntimeSurface } from "../channels/plugins/channel-runtime-
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import {
   type ChannelId,
+  type ChannelPlugin,
   getChannelPlugin,
   getLoadedChannelPluginOrigin,
   listChannelPlugins,
@@ -684,7 +685,18 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   };
 
   const startChannels = async () => {
-    const pending = [...listChannelPlugins()];
+    const cfg = loadConfig();
+    const byId = new Map<ChannelId, ChannelPlugin>();
+    for (const plugin of listChannelPlugins()) {
+      byId.set(plugin.id, plugin);
+    }
+    for (const channelId of Object.keys(cfg.channels ?? {}) as ChannelId[]) {
+      const plugin = getChannelPlugin(channelId);
+      if (plugin) {
+        byId.set(plugin.id, plugin);
+      }
+    }
+    const pending = [...byId.values()];
     const workerCount = Math.min(8, pending.length);
     await Promise.all(
       Array.from({ length: workerCount }, async () => {

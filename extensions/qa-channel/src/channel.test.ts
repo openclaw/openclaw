@@ -197,6 +197,40 @@ describe("qa-channel plugin", () => {
     }
   });
 
+  it(
+    "roundtrips inbound channel thread traffic through the qa bus",
+    { timeout: 20_000 },
+    async () => {
+      const harness = await startQaChannelTestHarness({ allowFrom: ["*"] });
+
+      try {
+        const thread = harness.state.createThread({
+          conversationId: "qa-room",
+          title: "QA thread",
+        });
+        harness.state.addInboundMessage({
+          conversation: { id: "qa-room", kind: "channel", title: "QA Room" },
+          senderId: "alice",
+          senderName: "Alice",
+          text: "thread hello",
+          threadId: thread.id,
+          threadTitle: thread.title,
+        });
+
+        const outbound = await harness.state.waitFor({
+          kind: "message-text",
+          textIncludes: "qa-echo: thread hello",
+          direction: "outbound",
+          timeoutMs: 15_000,
+        });
+        expect("text" in outbound && outbound.text).toContain("qa-echo: thread hello");
+        expect("threadId" in outbound && outbound.threadId).toBe(thread.id);
+      } finally {
+        await harness.stop();
+      }
+    },
+  );
+
   it("stages inbound image attachments into agent media payload", { timeout: 20_000 }, async () => {
     let dispatchedCtx: Record<string, unknown> | null = null;
     const harness = await startQaChannelTestHarness({
