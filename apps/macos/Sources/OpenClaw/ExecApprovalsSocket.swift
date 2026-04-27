@@ -726,11 +726,24 @@ enum ExecApprovalsSocketPathGuard {
         for path in ancestors.reversed() {
             let kind = try self.pathKind(at: path)
             if kind == .symlink {
+                if try self.isTrustedSystemSymlink(at: path) {
+                    continue
+                }
                 throw ExecApprovalsSocketPathGuardError.parentSymlinkTargetInvalid(
                     path: reportedPath,
                     message: "target resolves through another symlink at \(path)")
             }
         }
+    }
+
+    private static func isTrustedSystemSymlink(at path: String) throws -> Bool {
+        var status = stat()
+        if lstat(path, &status) != 0 {
+            throw ExecApprovalsSocketPathGuardError.parentSymlinkTargetInvalid(
+                path: path,
+                message: "symlink lstat failed (errno \(errno))")
+        }
+        return status.st_uid == 0
     }
 
     private static func validateResolvedAncestorChain(for targetURL: URL, reportedPath: String)

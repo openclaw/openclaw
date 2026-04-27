@@ -46,6 +46,34 @@ struct ExecApprovalsSocketPathGuardTests {
     }
 
     @Test
+    func `harden parent directory accepts secure symlink parent under system tmp path`() throws {
+        let root = FileManager().temporaryDirectory.resolvingSymlinksInPath()
+            .appendingPathComponent("openclaw-socket-guard-\(UUID().uuidString)", isDirectory: true)
+        let rawTargetRoot = URL(fileURLWithPath: "/tmp", isDirectory: true)
+            .appendingPathComponent("openclaw-socket-target-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            try? FileManager().removeItem(at: root)
+            try? FileManager().removeItem(at: rawTargetRoot)
+        }
+        let target = rawTargetRoot.appendingPathComponent("state-target", isDirectory: true)
+        let linkedState = root.appendingPathComponent(".openclaw", isDirectory: true)
+        try FileManager().createDirectory(at: target, withIntermediateDirectories: true)
+        try FileManager().setAttributes([.posixPermissions: 0o700], ofItemAtPath: target.path)
+        try FileManager().createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager().createSymbolicLink(at: linkedState, withDestinationURL: target)
+
+        let socketPath = linkedState
+            .appendingPathComponent("exec-approvals.sock", isDirectory: false)
+            .path
+
+        try ExecApprovalsSocketPathGuard.hardenParentDirectory(for: socketPath)
+
+        let attrs = try FileManager().attributesOfItem(atPath: target.path)
+        let permissions = (attrs[.posixPermissions] as? NSNumber)?.intValue ?? -1
+        #expect(permissions & 0o777 == 0o700)
+    }
+
+    @Test
     func `harden parent directory rejects writable symlink parent target`() throws {
         let root = FileManager().temporaryDirectory.resolvingSymlinksInPath()
             .appendingPathComponent("openclaw-socket-guard-\(UUID().uuidString)", isDirectory: true)

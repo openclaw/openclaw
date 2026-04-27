@@ -366,11 +366,18 @@ function assertNoAdditionalOpenClawSymlinkTargetHops(targetPath: string, linkPat
     current = path.join(current, segment);
     const stat = fs.lstatSync(current);
     if (stat.isSymbolicLink()) {
+      if (isTrustedSystemSymlink(stat)) {
+        continue;
+      }
       throw new UnsafeExecApprovalsPathError(
         `Refusing to use exec approvals .openclaw symlink target that resolves through another symlink: ${current} (${linkPath})`,
       );
     }
   }
+}
+
+function isTrustedSystemSymlink(stat: fs.Stats): boolean {
+  return process.platform !== "win32" && stat.uid === 0;
 }
 
 function assertStableResolvedOpenClawSymlinkTarget(
@@ -667,19 +674,26 @@ export function restoreExecApprovalsSnapshot(snapshot: ExecApprovalsSnapshot): v
 }
 
 export function ensureExecApprovals(): ExecApprovalsFile {
-  const loaded = loadExecApprovals();
-  const next = normalizeExecApprovals(loaded);
-  const socketPath = next.socket?.path?.trim();
-  const token = next.socket?.token?.trim();
-  const updated: ExecApprovalsFile = {
-    ...next,
-    socket: {
-      path: socketPath && socketPath.length > 0 ? socketPath : resolveExecApprovalsSocketPath(),
-      token: token && token.length > 0 ? token : generateToken(),
-    },
-  };
-  saveExecApprovals(updated);
-  return updated;
+  try {
+    const loaded = loadExecApprovals();
+    const next = normalizeExecApprovals(loaded);
+    const socketPath = next.socket?.path?.trim();
+    const token = next.socket?.token?.trim();
+    const updated: ExecApprovalsFile = {
+      ...next,
+      socket: {
+        path: socketPath && socketPath.length > 0 ? socketPath : resolveExecApprovalsSocketPath(),
+        token: token && token.length > 0 ? token : generateToken(),
+      },
+    };
+    saveExecApprovals(updated);
+    return updated;
+  } catch (err) {
+    if (isUnsafeOrMissingApprovalsPathError(err)) {
+      return closedExecApprovalsFile();
+    }
+    throw err;
+  }
 }
 
 function isExecSecurity(value: unknown): value is ExecSecurity {

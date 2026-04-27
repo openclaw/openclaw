@@ -24,6 +24,7 @@ let readExecApprovalsSnapshot: ExecApprovalsModule["readExecApprovalsSnapshot"];
 let recordAllowlistMatchesUse: ExecApprovalsModule["recordAllowlistMatchesUse"];
 let recordAllowlistUse: ExecApprovalsModule["recordAllowlistUse"];
 let requestExecApprovalViaSocket: ExecApprovalsModule["requestExecApprovalViaSocket"];
+let resolveExecApprovals: ExecApprovalsModule["resolveExecApprovals"];
 let resolveExecApprovalsPath: ExecApprovalsModule["resolveExecApprovalsPath"];
 let resolveExecApprovalsSocketPath: ExecApprovalsModule["resolveExecApprovalsSocketPath"];
 let saveExecApprovals: ExecApprovalsModule["saveExecApprovals"];
@@ -44,6 +45,7 @@ beforeAll(async () => {
     recordAllowlistMatchesUse,
     recordAllowlistUse,
     requestExecApprovalViaSocket,
+    resolveExecApprovals,
     resolveExecApprovalsPath,
     resolveExecApprovalsSocketPath,
     saveExecApprovals,
@@ -88,6 +90,12 @@ function expectUnsafeApprovalsReadFailsClosed(pattern: RegExp) {
     agents: {},
   });
   expect(loadExecApprovals()).toEqual(closed);
+  expect(ensureExecApprovals()).toEqual(closed);
+  expect(resolveExecApprovals("main").agent).toMatchObject({
+    security: "deny",
+    ask: "always",
+    askFallback: "deny",
+  });
   expect(() => readExecApprovalsSnapshot()).toThrow(pattern);
 }
 
@@ -229,6 +237,25 @@ describe("exec approvals store helpers", () => {
       '"security": "full"',
     );
   });
+
+  it.runIf(process.platform !== "win32")(
+    "accepts a trusted first-level .openclaw symlink target under a system tmp path",
+    () => {
+      const dir = createHomeDir();
+      const rawTargetRoot = fs.mkdtempSync(path.join("/tmp", "openclaw-approvals-target-"));
+      tempDirs.push(rawTargetRoot);
+      const linkedStateTarget = path.join(rawTargetRoot, "state-target");
+      fs.mkdirSync(linkedStateTarget, { recursive: true, mode: 0o700 });
+      fs.chmodSync(linkedStateTarget, 0o700);
+      fs.symlinkSync(linkedStateTarget, path.join(dir, ".openclaw"), "dir");
+
+      saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} });
+
+      expect(
+        fs.readFileSync(path.join(linkedStateTarget, "exec-approvals.json"), "utf8"),
+      ).toContain('"security": "full"');
+    },
+  );
 
   it.runIf(process.platform !== "win32")(
     "refuses a group-writable first-level .openclaw symlink target",
