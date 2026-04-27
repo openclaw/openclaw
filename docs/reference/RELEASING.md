@@ -321,6 +321,8 @@ Release Docker coverage includes:
 - release-path Docker chunks: `core`, `package-update`, and
   `plugins-integrations`
 - OpenWebUI coverage inside the `plugins-integrations` chunk when requested
+- split bundled-channel dependency lanes inside `plugins-integrations` instead
+  of the serial all-in-one bundled-channel lane
 - live/E2E provider suites and Docker live model coverage when release checks
   include live suites
 

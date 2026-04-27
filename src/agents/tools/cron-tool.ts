@@ -211,6 +211,9 @@ const CronFailureAlertSchema = Type.Optional(
       channel: Type.Optional(Type.String({ description: "Alert channel" })),
       to: Type.Optional(Type.String({ description: "Alert target" })),
       cooldownMs: Type.Optional(Type.Number({ description: "Cooldown between alerts in ms" })),
+      includeSkipped: Type.Optional(
+        Type.Boolean({ description: "Count consecutive skipped runs toward alerting" }),
+      ),
       mode: optionalStringEnum(["announce", "webhook"] as const),
       accountId: Type.Optional(Type.String()),
     },

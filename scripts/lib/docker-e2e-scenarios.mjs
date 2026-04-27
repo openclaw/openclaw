@@ -388,11 +388,7 @@ const releasePathChunks = {
       weight: 6,
     }),
     npmLane("plugin-update", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugin-update"),
-    npmLane(
-      "bundled-channel-deps",
-      "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:bundled-channel-deps",
-      { resources: ["service"], weight: 3 },
-    ),
+    ...bundledScenarioLanes,
     serviceLane(
       "cron-mcp-cleanup",
       "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:cron-mcp-cleanup",

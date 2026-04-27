@@ -20898,6 +20898,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 minimum: 0,
                 maximum: 9007199254740991,
               },
+              includeSkipped: {
+                type: "boolean",
+              },
               mode: {
                 type: "string",
                 enum: ["announce", "webhook"],

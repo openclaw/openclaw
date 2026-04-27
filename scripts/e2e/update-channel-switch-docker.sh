@@ -130,7 +130,7 @@ fixture_sha="$(git -C "$git_root" rev-parse HEAD)"
 pkg_tgz_path="$package_tgz"
 
 npm install -g --prefix /tmp/npm-prefix --omit=optional "$pkg_tgz_path"
-package_version="$(node -p "require('/tmp/npm-prefix/lib/node_modules/openclaw/package.json').version")"
+package_version="$(node -p "JSON.parse(require(\"node:fs\").readFileSync(\"/tmp/npm-prefix/lib/node_modules/openclaw/package.json\", \"utf8\")).version")"
 OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT="$(
   node - "$package_version" <<"NODE"
 const version = process.argv[2] || "";

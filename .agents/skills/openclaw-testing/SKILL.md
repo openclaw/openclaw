@@ -286,6 +286,10 @@ image. Release-path normal mode remains max three Docker chunk jobs:
 
 OpenWebUI is folded into `plugins-integrations` for full release-path coverage
 and keeps a standalone `openwebui` chunk only for OpenWebUI-only dispatches.
+The bundled-channel runtime-dependency coverage inside `plugins-integrations`
+uses the split `bundled-channel-*` and `bundled-channel-update-*` lanes rather
+than the serial `bundled-channel-deps` lane, so failures produce cheap targeted
+reruns for the exact channel/update scenario.
 
 ## Package Acceptance
 
@@ -448,7 +452,7 @@ these rough bands:
   `session-runtime-context` ~20s, `gateway-network` ~34s, `qr` ~44s.
 - Medium deterministic lanes, ~1-5 minutes:
   `npm-onboard-channel-agent` ~96s, `openai-image-auth` ~99s,
-  bundled channel/update lanes usually ~90-300s, `openwebui` ~225s,
+  bundled channel/update lanes usually ~90-300s when split, `openwebui` ~225s,
   `mcp-channels` ~274s.
 - Heavy deterministic lanes, ~6-10 minutes:
   `bundled-channel-root-owned` ~429s,
