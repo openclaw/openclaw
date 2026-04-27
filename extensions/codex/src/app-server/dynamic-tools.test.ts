@@ -518,7 +518,7 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     expect(result).toEqual({
-      success: false,
+      success: true,
       contentItems: [{ type: "inputText", text: "blocked by policy" }],
     });
     expect(execute).not.toHaveBeenCalled();
@@ -534,7 +534,14 @@ describe("createCodexDynamicToolBridge", () => {
             provider: "telegram",
             to: "chat-1",
           },
-          error: "blocked by policy",
+          result: expect.objectContaining({
+            content: [{ type: "text", text: "blocked by policy" }],
+            details: {
+              status: "blocked",
+              deniedReason: "plugin-before-tool-call",
+              reason: "blocked by policy",
+            },
+          }),
         }),
         expect.objectContaining({
           runId: "run-blocked",

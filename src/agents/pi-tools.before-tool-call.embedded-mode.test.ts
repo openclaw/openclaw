@@ -68,7 +68,10 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
 
     expect(result).toEqual({
       blocked: true,
+      kind: "failure",
+      deniedReason: "plugin-approval",
       reason: "Plugin approval required (gateway unavailable)",
+      params: { command: "ls" },
     });
     expect(mockCallGatewayTool).toHaveBeenCalledWith(
       "plugin.approval.request",
