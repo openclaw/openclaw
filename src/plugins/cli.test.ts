@@ -280,7 +280,7 @@ describe("registerPluginCliCommands", () => {
     );
   });
 
-  it("keeps runtime CLI command registration on the full plugin loader for legacy channel plugins", async () => {
+  it("keeps full CLI loading for lazy registration when no plugin primary is selected", async () => {
     const { rawConfig, autoEnabledConfig } = createAutoEnabledCliFixture();
     mocks.applyPluginAutoEnable.mockReturnValue({
       config: autoEnabledConfig,
@@ -361,6 +361,7 @@ describe("registerPluginCliCommands", () => {
     });
 
     expect(mocks.memoryRegister).toHaveBeenCalledTimes(1);
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
   });
 
   it("registers a selected plugin primary eagerly during lazy startup", async () => {
@@ -400,6 +401,16 @@ describe("registerPluginCliCommands", () => {
         onlyPluginIds: expect.anything(),
       }),
     );
+    expect(mocks.loadOpenClawPluginCliRegistry).not.toHaveBeenCalled();
+  });
+
+  it("does not duplicate primary plugin resolution during eager registration", async () => {
+    await registerPluginCliCommands(createProgram(), {} as OpenClawConfig, undefined, undefined, {
+      mode: "eager",
+      primary: "gateway",
+    });
+
+    expect(mocks.resolveManifestActivationPluginIds).toHaveBeenCalledTimes(1);
   });
 
   it("returns null for validated plugin CLI config when the snapshot is invalid", async () => {
@@ -418,10 +429,26 @@ describe("registerPluginCliCommands", () => {
       valid: true,
       config: loadedConfig,
     });
-    mocks.loadConfig.mockReturnValueOnce(loadedConfig);
 
     await expect(loadValidatedConfigForPluginRegistration()).resolves.toBe(loadedConfig);
-    expect(mocks.loadConfig).toHaveBeenCalledTimes(1);
+    expect(mocks.loadConfig).not.toHaveBeenCalled();
+  });
+
+  it("uses metadata-only plugin CLI loading for lazy builtin commands", async () => {
+    const program = createProgram();
+
+    await registerPluginCliCommands(program, {} as OpenClawConfig, undefined, undefined, {
+      mode: "lazy",
+      primary: "gateway",
+    });
+
+    expect(mocks.resolveManifestActivationPluginIds).toHaveBeenCalledWith(
+      expect.objectContaining({
+        trigger: { kind: "command", command: "gateway" },
+      }),
+    );
+    expect(mocks.loadOpenClawPluginCliRegistry).toHaveBeenCalledTimes(1);
+    expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
   });
 
   it("skips plugin CLI registration from validated config when the snapshot is invalid", async () => {

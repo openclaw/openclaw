@@ -1,10 +1,14 @@
 import type { Command } from "commander";
-import { loadConfig, readConfigFileSnapshot } from "../config/config.js";
+import { cliCommandCatalog } from "../cli/command-catalog.js";
+import { matchesCommandPath } from "../cli/command-path-matches.js";
+import { readConfigFileSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createPluginCliLogger,
   loadPluginCliDescriptors,
+  loadPluginCliMetadataEntries,
   loadPluginCliRegistrationEntriesWithDefaults,
+  resolvePrimaryCommandPluginIdsForCli,
   type PluginCliLoaderOptions,
 } from "./cli-registry-loader.js";
 import { registerPluginCliCommandGroups } from "./register-plugin-cli-command-groups.js";
@@ -19,13 +23,19 @@ type RegisterPluginCliOptions = {
 
 const logger = createPluginCliLogger();
 
+function isKnownCoreCommandPath(commandPath: string[]): boolean {
+  return cliCommandCatalog.some((entry) =>
+    matchesCommandPath(entry.commandPath.slice(), commandPath),
+  );
+}
+
 export const loadValidatedConfigForPluginRegistration =
   async (): Promise<OpenClawConfig | null> => {
     const snapshot = await readConfigFileSnapshot();
     if (!snapshot.valid) {
       return null;
     }
-    return loadConfig();
+    return snapshot.config;
   };
 
 export async function getPluginCliCommandDescriptors(
@@ -45,22 +55,42 @@ export async function registerPluginCliCommands(
 ) {
   const mode = options?.mode ?? "eager";
   const primary = options?.primary ?? undefined;
+  const primaryPluginIds =
+    mode === "lazy" && primary
+      ? resolvePrimaryCommandPluginIdsForCli({
+          cfg,
+          env,
+          logger,
+          primaryCommand: primary,
+        })
+      : [];
+  const shouldUseMetadataOnlyEntries =
+    mode === "lazy" &&
+    !!primary &&
+    primaryPluginIds.length === 0 &&
+    isKnownCoreCommandPath([primary]);
+  const entries = shouldUseMetadataOnlyEntries
+    ? await loadPluginCliMetadataEntries({
+        cfg,
+        env,
+        loaderOptions,
+        primaryCommand: primary,
+        logger,
+      })
+    : await loadPluginCliRegistrationEntriesWithDefaults({
+        cfg,
+        env,
+        loaderOptions,
+        primaryCommand: primary,
+        logger,
+      });
 
-  await registerPluginCliCommandGroups(
-    program,
-    await loadPluginCliRegistrationEntriesWithDefaults({
-      cfg,
-      env,
-      loaderOptions,
-      primaryCommand: primary,
-    }),
-    {
-      mode,
-      primary,
-      existingCommands: new Set(program.commands.map((cmd) => cmd.name())),
-      logger,
-    },
-  );
+  await registerPluginCliCommandGroups(program, entries, {
+    mode,
+    primary,
+    existingCommands: new Set(program.commands.map((cmd) => cmd.name())),
+    logger,
+  });
 }
 
 export async function registerPluginCliCommandsFromValidatedConfig(
