@@ -976,9 +976,17 @@ export function buildAgentSystemPrompt(params: {
   }
 
   const contextFiles = params.contextFiles ?? [];
-  const validContextFiles = contextFiles.filter(
-    (file) => typeof file.path === "string" && file.path.trim().length > 0,
-  );
+  const shouldIncludeVoiceLibrary =
+    !isMinimal && (params.emotionMode === "on" || params.emotionMode === "full");
+  const validContextFiles = contextFiles.filter((file) => {
+    if (typeof file.path !== "string" || file.path.trim().length === 0) {
+      return false;
+    }
+    if (getContextFileBasename(file.path) !== "voice.md") {
+      return true;
+    }
+    return shouldIncludeVoiceLibrary;
+  });
   const orderedContextFiles = sortContextFilesForPrompt(validContextFiles);
   const stableContextFiles = orderedContextFiles.filter((file) => !isDynamicContextFile(file.path));
   const dynamicContextFiles = orderedContextFiles.filter((file) => isDynamicContextFile(file.path));

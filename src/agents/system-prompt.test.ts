@@ -694,6 +694,24 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).not.toContain("## Speech Preparation Contract");
+    expect(prompt).not.toContain("## ./voice.md");
+    expect(prompt).not.toContain("Voice library");
+  });
+
+  it("omits voice.md from the prompt when emotions are off", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [
+        { path: "./voice.md", content: "Voice library" },
+        { path: "./SOUL.md", content: "Persona" },
+      ],
+    });
+
+    expect(prompt).toContain("## ./SOUL.md");
+    expect(prompt).toContain("Persona");
+    expect(prompt).not.toContain("## ./voice.md");
+    expect(prompt).not.toContain("Voice library");
+    expect(prompt).not.toContain("## Speech Preparation Contract");
   });
 
   it("omits project context when no context files are injected", () => {
