@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   getDefaultRedactPatterns,
   redactSensitiveLines,
@@ -7,6 +10,28 @@ import {
 } from "./redact.js";
 
 const defaults = getDefaultRedactPatterns();
+const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+let tempDirs: string[] = [];
+
+function writeConfig(source: string): void {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-redact-config-"));
+  tempDirs.push(dir);
+  const configPath = path.join(dir, "openclaw.json");
+  fs.writeFileSync(configPath, source);
+  process.env.OPENCLAW_CONFIG_PATH = configPath;
+}
+
+afterEach(() => {
+  if (originalConfigPath === undefined) {
+    delete process.env.OPENCLAW_CONFIG_PATH;
+  } else {
+    process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
+  }
+  for (const dir of tempDirs) {
+    fs.rmSync(dir, { force: true, recursive: true });
+  }
+  tempDirs = [];
+});
 
 describe("redactSensitiveText", () => {
   it("masks env assignments while keeping the key", () => {
@@ -107,6 +132,16 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("token=abcdef…ghij");
   });
 
+  it("honors escaped character classes in custom patterns", () => {
+    const input = "contact peter@dc.io";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: [String.raw`([\w]|[-.])+@([\w]|[-.])+\.\w+`],
+    });
+    expect(output).toBe("contact peter@d***.io");
+    expect(output).not.toContain("peter@dc.io");
+  });
+
   it("ignores unsafe nested-repetition custom patterns", () => {
     const input = `${"a".repeat(28)}!`;
     const output = redactSensitiveText(input, {
@@ -132,6 +167,18 @@ describe("redactSensitiveText", () => {
       patterns: defaults,
     });
     expect(output).toBe(input);
+  });
+
+  it("honors logging redaction settings from the active config path", () => {
+    writeConfig(`{
+      logging: {
+        redactSensitive: "off",
+      },
+    }`);
+
+    expect(redactSensitiveText("OPENAI_API_KEY=sk-1234567890abcdef")).toBe(
+      "OPENAI_API_KEY=sk-1234567890abcdef",
+    );
   });
 
   it("does not resolve patterns when mode is off", () => {

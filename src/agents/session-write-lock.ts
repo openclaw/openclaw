@@ -25,6 +25,10 @@ type HeldLock = {
   releasePromise?: Promise<void>;
 };
 
+type SyncClosableFileHandle = fs.FileHandle & {
+  [key: symbol]: unknown;
+};
+
 export type SessionLockInspection = {
   lockPath: string;
   pid: number | null;
@@ -180,7 +184,7 @@ async function releaseHeldLock(
  */
 function releaseAllLocksSync(): void {
   for (const [sessionFile, held] of HELD_LOCKS) {
-    void held.handle.close().catch(() => undefined);
+    closeFileHandleSyncBestEffort(held.handle);
     try {
       fsSync.rmSync(held.lockPath, { force: true });
     } catch {
@@ -191,6 +195,24 @@ function releaseAllLocksSync(): void {
   if (HELD_LOCKS.size === 0) {
     stopWatchdogTimer();
   }
+}
+
+function closeFileHandleSyncBestEffort(handle: fs.FileHandle): void {
+  const syncCloseSymbol = Object.getOwnPropertySymbols(Object.getPrototypeOf(handle)).find(
+    (symbol) => symbol.description === "kCloseSync",
+  );
+  if (syncCloseSymbol) {
+    const closeSync = (handle as SyncClosableFileHandle)[syncCloseSymbol];
+    if (typeof closeSync === "function") {
+      try {
+        closeSync.call(handle);
+        return;
+      } catch {
+        // Fall back to async close below.
+      }
+    }
+  }
+  void handle.close().catch(() => undefined);
 }
 
 async function runLockWatchdogCheck(nowMs = Date.now()): Promise<number> {

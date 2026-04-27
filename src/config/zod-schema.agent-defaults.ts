@@ -6,6 +6,7 @@ import {
   AgentSandboxSchema,
   AgentContextLimitsSchema,
   AgentEmbeddedHarnessSchema,
+  AgentRuntimePolicySchema,
   AgentModelSchema,
   MemorySearchSchema,
 } from "./zod-schema.agent-runtime.js";
@@ -18,6 +19,11 @@ import {
 } from "./zod-schema.core.js";
 
 export const SilentReplyPolicySchema = z.union([z.literal("allow"), z.literal("disallow")]);
+
+const NonNegativeByteSizeSchema = z.union([
+  z.number().int().nonnegative(),
+  z.string().refine(isValidNonNegativeByteSizeString, "Expected byte size string like 2mb"),
+]);
 
 export const SilentReplyPolicyConfigSchema = z
   .object({
@@ -39,6 +45,7 @@ export const AgentDefaultsSchema = z
   .object({
     /** Global default provider params applied to all models before per-model and per-agent overrides. */
     params: z.record(z.string(), z.unknown()).optional(),
+    agentRuntime: AgentRuntimePolicySchema,
     embeddedHarness: AgentEmbeddedHarnessSchema,
     model: AgentModelSchema.optional(),
     imageModel: AgentModelSchema.optional(),
@@ -197,20 +204,14 @@ export const AgentDefaultsSchema = z
           .object({
             enabled: z.boolean().optional(),
             softThresholdTokens: z.number().int().nonnegative().optional(),
-            forceFlushTranscriptBytes: z
-              .union([
-                z.number().int().nonnegative(),
-                z
-                  .string()
-                  .refine(isValidNonNegativeByteSizeString, "Expected byte size string like 2mb"),
-              ])
-              .optional(),
+            forceFlushTranscriptBytes: NonNegativeByteSizeSchema.optional(),
             prompt: z.string().optional(),
             systemPrompt: z.string().optional(),
           })
           .strict()
           .optional(),
         truncateAfterCompaction: z.boolean().optional(),
+        maxActiveTranscriptBytes: NonNegativeByteSizeSchema.optional(),
         notifyUser: z.boolean().optional(),
       })
       .strict()

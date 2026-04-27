@@ -301,6 +301,12 @@ function canPromptForMessageTool(params: {
   return !params.toolsAllow?.length || params.toolsAllow.includes("message");
 }
 
+function hasExplicitCronDeliveryTarget(plan: CronDeliveryPlan): boolean {
+  return Boolean(
+    (plan.channel && plan.channel !== "last") || plan.to || plan.threadId || plan.accountId,
+  );
+}
+
 async function resolveCronDeliveryContext(params: {
   cfg: OpenClawConfig;
   job: CronJob;
@@ -321,6 +327,24 @@ async function resolveCronDeliveryContext(params: {
       deliveryPlan,
       deliveryRequested: deliveryPlan.requested,
       resolvedDelivery,
+      toolPolicy: resolveCronToolPolicy({
+        deliveryMode: deliveryPlan.mode,
+      }),
+    };
+  }
+  if (deliveryPlan.mode === "none" && !hasExplicitCronDeliveryTarget(deliveryPlan)) {
+    return {
+      deliveryPlan,
+      deliveryRequested: false,
+      resolvedDelivery: {
+        ok: false as const,
+        channel: undefined,
+        to: undefined,
+        accountId: undefined,
+        threadId: undefined,
+        mode: "implicit" as const,
+        error: new Error("delivery is disabled"),
+      },
       toolPolicy: resolveCronToolPolicy({
         deliveryMode: deliveryPlan.mode,
       }),
@@ -497,7 +521,6 @@ async function prepareCronRunContext(params: {
     isFastTestEnv: params.isFastTestEnv,
     cronSession,
     agentSessionKey,
-    runSessionKey,
     updateSessionStore: async (storePath, update) => {
       const { updateSessionStore } = await loadSessionStoreRuntime();
       await updateSessionStore(storePath, update);
@@ -816,6 +839,7 @@ async function finalizeCronRun(params: {
   } = resolveCronPayloadOutcome({
     payloads,
     runLevelError: finalRunResult.meta?.error,
+    failureSignal: finalRunResult.meta?.failureSignal,
     finalAssistantVisibleText: finalRunResult.meta?.finalAssistantVisibleText,
     preferFinalAssistantVisibleText: (
       await resolveCronChannelOutputPolicy(prepared.resolvedDelivery.channel)
@@ -841,7 +865,8 @@ async function finalizeCronRun(params: {
 
   const skipHeartbeatDelivery =
     prepared.deliveryRequested &&
-    isHeartbeatOnlyResponse(payloads, resolveHeartbeatAckMaxChars(prepared.agentCfg));
+    !hasFatalErrorPayload &&
+    isHeartbeatOnlyResponse(deliveryPayloads, resolveHeartbeatAckMaxChars(prepared.agentCfg));
   const {
     dispatchCronDelivery,
     matchesMessagingToolDeliveryTarget,
@@ -870,6 +895,7 @@ async function finalizeCronRun(params: {
     job: prepared.input.job,
     agentId: prepared.agentId,
     agentSessionKey: prepared.agentSessionKey,
+    runSessionKey: prepared.runSessionKey,
     sessionId: prepared.runSessionId,
     runStartedAt: execution.runStartedAt,
     runEndedAt: execution.runEndedAt,
@@ -958,6 +984,7 @@ export async function runCronIsolatedAgentTurn(params: {
       agentId: prepared.context.agentId,
       agentDir: prepared.context.agentDir,
       agentSessionKey: prepared.context.agentSessionKey,
+      runSessionKey: prepared.context.runSessionKey,
       workspaceDir: prepared.context.workspaceDir,
       lane: params.lane,
       resolvedDelivery: {

@@ -33,6 +33,11 @@ export type GatewayProbeAuthSummary = {
   capability: GatewayProbeCapability;
 };
 
+export type GatewayProbeServerSummary = {
+  version: string | null;
+  connId: string | null;
+};
+
 export type GatewayProbeResult = {
   ok: boolean;
   url: string;
@@ -41,6 +46,7 @@ export type GatewayProbeResult = {
   connectErrorDetails?: unknown;
   close: GatewayProbeClose | null;
   auth: GatewayProbeAuthSummary;
+  server?: GatewayProbeServerSummary;
   health: unknown;
   status: unknown;
   presence: SystemPresence[] | null;
@@ -67,6 +73,13 @@ function emptyProbeAuth(): GatewayProbeAuthSummary {
     role: null,
     scopes: [],
     capability: "unknown",
+  };
+}
+
+function emptyProbeServer(): GatewayProbeServerSummary {
+  return {
+    version: null,
+    connId: null,
   };
 }
 
@@ -143,6 +156,7 @@ export async function probeGateway(opts: {
   let connectErrorDetails: unknown = null;
   let close: GatewayProbeClose | null = null;
   let auth = emptyProbeAuth();
+  let server = emptyProbeServer();
   let authMetadataPresent = false;
 
   const detailLevel = opts.includeDetails === false ? "none" : (opts.detailLevel ?? "full");
@@ -235,6 +249,7 @@ export async function probeGateway(opts: {
           verifiedRead: params.verifiedRead,
           connectLatencyMs,
         }),
+        server,
         health: params.health,
         status: params.status,
         presence: params.presence,
@@ -273,6 +288,10 @@ export async function probeGateway(opts: {
       onHelloOk: async (hello) => {
         connectLatencyMs = Date.now() - startedAt;
         authMetadataPresent = typeof hello?.auth === "object" && hello.auth !== null;
+        server = {
+          version: typeof hello?.server?.version === "string" ? hello.server.version : null,
+          connId: typeof hello?.server?.connId === "string" ? hello.server.connId : null,
+        };
         auth = resolveProbeAuthSummary({
           role: typeof hello?.auth?.role === "string" ? hello.auth.role : null,
           scopes: Array.isArray(hello?.auth?.scopes)

@@ -1,5 +1,11 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  onInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  type DiagnosticEventMetadata,
+  type DiagnosticEventPayload,
+} from "../../infra/diagnostic-events.js";
 import type { EmbeddedRunAttemptResult } from "../pi-embedded-runner/run/types.js";
 import type { AgentHarness, AgentHarnessAttemptParams } from "./types.js";
 import type { AgentHarnessV2 } from "./v2.js";
@@ -9,6 +15,7 @@ function createAttemptParams(): AgentHarnessAttemptParams {
   return {
     prompt: "hello",
     sessionId: "session-1",
+    sessionKey: "session-key",
     runId: "run-1",
     sessionFile: "/tmp/session.jsonl",
     workspaceDir: "/tmp/workspace",
@@ -19,7 +26,17 @@ function createAttemptParams(): AgentHarnessAttemptParams {
     authStorage: {} as never,
     modelRegistry: {} as never,
     thinkLevel: "low",
+    messageChannel: "qa",
+    trigger: "manual",
   } as AgentHarnessAttemptParams;
+}
+
+function createDiagnosticTrace() {
+  return {
+    traceId: "11111111111111111111111111111111",
+    spanId: "2222222222222222",
+    traceFlags: "01",
+  };
 }
 
 function createAttemptResult(): EmbeddedRunAttemptResult {
@@ -32,6 +49,7 @@ function createAttemptResult(): EmbeddedRunAttemptResult {
     promptError: null,
     promptErrorSource: null,
     sessionIdUsed: "session-1",
+    diagnosticTrace: createDiagnosticTrace(),
     messagesSnapshot: [],
     assistantTexts: ["ok"],
     toolMetas: [],
@@ -46,7 +64,28 @@ function createAttemptResult(): EmbeddedRunAttemptResult {
   };
 }
 
+async function flushDiagnosticEvents(): Promise<void> {
+  await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+function captureDiagnosticEvents(): {
+  events: Array<{ event: DiagnosticEventPayload; metadata: DiagnosticEventMetadata }>;
+  unsubscribe: () => void;
+} {
+  const events: Array<{ event: DiagnosticEventPayload; metadata: DiagnosticEventMetadata }> = [];
+  const unsubscribe = onInternalDiagnosticEvent((event, metadata) => {
+    if (event.type.startsWith("harness.run.")) {
+      events.push({ event, metadata });
+    }
+  });
+  return { events, unsubscribe };
+}
+
 describe("AgentHarness V2 compatibility adapter", () => {
+  afterEach(() => {
+    resetDiagnosticEventsForTest();
+  });
+
   it("executes prepare/start/send/outcome/cleanup as one bounded lifecycle", async () => {
     const params = createAttemptParams();
     const result = createAttemptResult();
@@ -100,6 +139,112 @@ describe("AgentHarness V2 compatibility adapter", () => {
       "outcome:started",
       "cleanup:started",
     ]);
+  });
+
+  it("emits trusted harness lifecycle diagnostics for successful attempts", async () => {
+    resetDiagnosticEventsForTest();
+    const params = createAttemptParams();
+    const result = {
+      ...createAttemptResult(),
+      agentHarnessResultClassification: "reasoning-only",
+      yieldDetected: true,
+      itemLifecycle: { startedCount: 3, completedCount: 2, activeCount: 1 },
+    } as EmbeddedRunAttemptResult;
+    const harness: AgentHarnessV2 = {
+      id: "codex",
+      label: "Codex",
+      pluginId: "codex-plugin",
+      supports: () => ({ supported: true }),
+      prepare: async () => ({
+        harnessId: "codex",
+        label: "Codex",
+        pluginId: "codex-plugin",
+        params,
+        lifecycleState: "prepared",
+      }),
+      start: async (prepared) => ({ ...prepared, lifecycleState: "started" }),
+      send: async () => result,
+      resolveOutcome: async (_session, rawResult) => rawResult,
+      cleanup: async () => {},
+    };
+    const diagnostics = captureDiagnosticEvents();
+    try {
+      await runAgentHarnessV2LifecycleAttempt(harness, params);
+      await flushDiagnosticEvents();
+    } finally {
+      diagnostics.unsubscribe();
+    }
+
+    expect(diagnostics.events.map(({ event }) => event.type)).toEqual([
+      "harness.run.started",
+      "harness.run.completed",
+    ]);
+    expect(diagnostics.events.every(({ metadata }) => metadata.trusted)).toBe(true);
+    expect(diagnostics.events[1]?.event).toMatchObject({
+      type: "harness.run.completed",
+      runId: "run-1",
+      sessionKey: "session-key",
+      sessionId: "session-1",
+      provider: "codex",
+      model: "gpt-5.4",
+      channel: "qa",
+      trigger: "manual",
+      harnessId: "codex",
+      pluginId: "codex-plugin",
+      outcome: "completed",
+      resultClassification: "reasoning-only",
+      yieldDetected: true,
+      itemLifecycle: { startedCount: 3, completedCount: 2, activeCount: 1 },
+      durationMs: expect.any(Number),
+    });
+  });
+
+  it("emits trusted harness error diagnostics with the failing lifecycle phase", async () => {
+    resetDiagnosticEventsForTest();
+    const params = createAttemptParams();
+    const sendError = new Error("codex app-server send failed");
+    const harness: AgentHarnessV2 = {
+      id: "codex",
+      label: "Codex",
+      supports: () => ({ supported: true }),
+      prepare: async () => ({
+        harnessId: "codex",
+        label: "Codex",
+        params,
+        lifecycleState: "prepared",
+      }),
+      start: async (prepared) => ({ ...prepared, lifecycleState: "started" }),
+      send: async () => {
+        throw sendError;
+      },
+      resolveOutcome: async (_session, rawResult) => rawResult,
+      cleanup: async () => {
+        throw new Error("cleanup failed");
+      },
+    };
+    const diagnostics = captureDiagnosticEvents();
+    try {
+      await expect(runAgentHarnessV2LifecycleAttempt(harness, params)).rejects.toThrow(
+        "codex app-server send failed",
+      );
+      await flushDiagnosticEvents();
+    } finally {
+      diagnostics.unsubscribe();
+    }
+
+    expect(diagnostics.events.map(({ event }) => event.type)).toEqual([
+      "harness.run.started",
+      "harness.run.error",
+    ]);
+    expect(diagnostics.events.every(({ metadata }) => metadata.trusted)).toBe(true);
+    expect(diagnostics.events[1]?.event).toMatchObject({
+      type: "harness.run.error",
+      phase: "send",
+      errorCategory: "Error",
+      cleanupFailed: true,
+      harnessId: "codex",
+      durationMs: expect.any(Number),
+    });
   });
 
   it("runs cleanup with the original failure and preserves that failure", async () => {

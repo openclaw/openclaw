@@ -29,6 +29,7 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - Extension prod code: no core `src/**`, `src/plugin-sdk-internal/**`, other extension `src/**`, or relative outside package.
 - Core/tests: no deep plugin internals (`extensions/*/src/**`, `onboard.js`). Use `api.ts`, SDK facade, generic contracts.
 - Extension-owned behavior stays extension-owned: repair, detection, onboarding, auth/provider defaults, provider tools/settings.
+- Owner boundary: fix owner-specific behavior in the owner module. Shared/core gets generic seams only; no owner ids, dependency strings, defaults, migrations, or recovery policy. If a bug names an extension or its dependency, start in that extension and add a generic core seam only when multiple owners need it.
 - Legacy config repair: doctor/fix paths, not startup/load-time core migrations.
 - Core test asserting extension-specific behavior: move to owner extension or generic contract test.
 - New seams: backwards-compatible, documented, versioned. Third-party plugins exist.
@@ -50,7 +51,8 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - Extension tests: `pnpm test:extensions`, `pnpm test extensions`, `pnpm test extensions/<id>`.
 - Targeted tests: `pnpm test <path-or-filter> [vitest args...]`; never raw `vitest`.
 - Typecheck: `tsgo` lanes only (`pnpm tsgo*`, `pnpm check:test-types`); do not add `tsc --noEmit`, `typecheck`, `check:types`.
-- Format/lint: `pnpm format:check`/`pnpm format`; `pnpm lint*` lanes.
+- Formatting: use `oxfmt`, not Prettier. Prefer `pnpm format:check` / `pnpm format`; for targeted files use `pnpm exec oxfmt --check --threads=1 <files...>` or `pnpm exec oxfmt --write --threads=1 <files...>`.
+- Linting: use repo wrappers (`pnpm lint:*`, `scripts/run-oxlint.mjs`); do not invoke generic JS formatters/lints unless a repo script uses them.
 - Heavy checks: `OPENCLAW_LOCAL_CHECK=1`, mode `OPENCLAW_LOCAL_CHECK_MODE=throttled|full`; CI/shared use `OPENCLAW_LOCAL_CHECK=0`.
 - Local first. Use repo `pnpm` lanes before Blacksmith/Testbox. Remote only for parity-only failures, secrets/services, or explicit ask.
 
@@ -58,7 +60,9 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 
 - Triage: list first, hydrate few. Use bounded `gh --json --jq`; avoid repeated full comment scans.
 - Automatic PR/issue discovery: skip maintainer-owned items unless directly relevant. Do not comment, close, label, retitle, rebase, fix up, or land them without Peter asking.
+- PR scan/triage: no unsolicited PR comments/reviews. Report in chat only unless explicitly asked, or a close/duplicate action needs a reason comment.
 - Search/dedupe: prefer `gh search issues 'repo:openclaw/openclaw is:open <terms>' --json number,title,state,updatedAt --limit 20`.
+- GitHub search boolean text is fussy. If `OR` queries return empty, split exact terms and search title/body/comments separately before concluding no hits.
 - PR shortlist: `gh pr list ...`; then `gh pr view <n> --json number,title,body,closingIssuesReferences,files,statusCheckRollup,reviewDecision`.
 - After landing PR: search duplicate open issues/PRs. Before closing: comment why + canonical link.
 - GH comments with markdown backticks, `$`, or shell snippets: avoid inline double-quoted `--body`; use single quotes or `--body-file`.
@@ -84,7 +88,15 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
   - extension tests: extension test typecheck/tests
   - public SDK/plugin contract: extension prod/test too
   - unknown root/config: all lanes
-- Before handoff/push: `pnpm check:changed`. Tests-only: `pnpm test:changed`. Full prod sweep: `pnpm check`.
+- Before handoff/push for code/test/runtime/config changes: `pnpm check:changed`. Tests-only: `pnpm test:changed`. Full prod sweep: `pnpm check`.
+- Docs/changelog-only and CI/workflow metadata-only changes are not changed-gate work by default. Use `git diff --check` plus the relevant formatter/docs/workflow sanity check; escalate to `pnpm check:changed` only when scripts, test config, generated docs/API, package metadata, or runtime/build behavior changed.
+- Rebase sanity: after a green `pnpm check:changed`, a clean rebase onto current
+  `origin/main` does not require rerunning the full changed gate when the rebase
+  has no conflicts and the branch diff is materially unchanged. Do a quick
+  `git status`, `git diff --check`, and diff/stat sanity check; rerun targeted or
+  full checks only if conflict resolution, upstream overlap, generated drift,
+  dependency/config changes, or touched-file content changes make the prior
+  result stale.
 - Landing on `main`: verify touched surface near landing. Default feasible bar: `pnpm check` + `pnpm test`.
 - Hard build gate: `pnpm build` before push if build output, packaging, lazy/module boundaries, or published surfaces can change.
 - Do not land related failing format/lint/type/build/tests. If unrelated on latest `origin/main`, say so with scoped proof.
@@ -108,6 +120,7 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 ## Tests
 
 - Vitest. Colocated `*.test.ts`; e2e `*.e2e.test.ts`; example models `sonnet-4.6`, `gpt-5.4`.
+- Avoid brittle tests that grep workflow/docs strings for operator policy. Prefer executable behavior, parsed config/schema checks, or live run proof; put release/CI policy reminders in AGENTS/docs instead.
 - Clean timers/env/globals/mocks/sockets/temp dirs/module state; `--isolate=false` safe.
 - Hot tests: avoid per-test `vi.resetModules()` + heavy imports. Measure with `pnpm test:perf:imports <file>` / `pnpm test:perf:hotspots --limit N`.
 - Seam depth: pure helper/contract unit tests; one integration smoke per boundary.
@@ -115,6 +128,7 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - Prefer injection; if module mocking, mock narrow local `*.runtime.ts`, not broad barrels or `openclaw/plugin-sdk/*`.
 - Share fixtures/builders; delete duplicate assertions; assert behavior that can regress here.
 - Do not edit baseline/inventory/ignore/snapshot/expected-failure files to silence checks without explicit approval.
+- Do not run multiple independent `pnpm test`/Vitest commands concurrently in the same worktree. They can race on `node_modules/.experimental-vitest-cache` and fail with `ENOTEMPTY`. Use one grouped `pnpm test ...` invocation, run targeted lanes sequentially, or set distinct `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH` values when true parallel Vitest processes are needed.
 - Test workers max 16. Memory pressure: `OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test`.
 - Live: `OPENCLAW_LIVE_TEST=1 pnpm test:live`; verbose `OPENCLAW_LIVE_TEST_QUIET=0`.
 - Guide: `docs/help/testing.md`.
@@ -123,14 +137,17 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 
 - Docs change with behavior/API. Use docs list/read_when hints; docs links per `docs/AGENTS.md`.
 - Changelog user-facing only; pure test/internal usually no entry.
-- Changelog placement: active version `### Changes`/`### Fixes`; every added entry must include at least one `Thanks @author` attribution, using credited GitHub username(s). Never add `Thanks @steipete`.
+- Changelog placement: active version `### Changes`/`### Fixes`; every added entry must include at least one `Thanks @author` attribution, using credited GitHub username(s). Never add `Thanks @steipete` or `Thanks @codex`.
+- Changelog bullets are always single-line. No wrapping/continuation across multiple lines. Long entries stay on one long line so dedupe, PR-ref, and credit-audit tooling work and so the visual style stays uniform.
 
 ## Git
 
 - Commit via `scripts/committer "<msg>" <file...>`; stage intended files only. It formats staged files; still run gates.
 - Commits: conventional-ish, concise, grouped.
 - No manual stash/autostash unless explicit. No branch/worktree changes unless requested.
-- `main`: no merge commits; rebase on latest `origin/main` before push.
+- `main`: no merge commits; rebase on latest `origin/main` before push. Do not
+  keep chasing `main` with repeated full gates after one green run plus a clean
+  rebase sanity pass.
 - User says `commit`: your changes only. `commit all`: all changes in grouped chunks. `push`: may `git pull --rebase` first.
 - Do not delete/rename unexpected files; ask if blocking, else ignore.
 - Bulk PR close/reopen >5: ask with count/scope.

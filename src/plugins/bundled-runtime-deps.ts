@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createLowDiskSpaceWarning } from "../infra/disk-space.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
 import { createNpmProjectInstallEnv } from "../infra/npm-install-env.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
@@ -30,6 +31,7 @@ export type BundledRuntimeDepsInstallParams = {
   linkNodeModulesFromExecutionRoot?: boolean;
   missingSpecs: string[];
   installSpecs?: string[];
+  warn?: (message: string) => void;
 };
 
 export type BundledRuntimeDepsEnsureResult = {
@@ -339,9 +341,13 @@ function removeRuntimeDepsLockIfStale(lockDir: string, nowMs: number): boolean {
   }
 }
 
-function withBundledRuntimeDepsInstallRootLock<T>(installRoot: string, run: () => T): T {
+export function withBundledRuntimeDepsFilesystemLock<T>(
+  installRoot: string,
+  lockName: string,
+  run: () => T,
+): T {
   fs.mkdirSync(installRoot, { recursive: true });
-  const lockDir = path.join(installRoot, BUNDLED_RUNTIME_DEPS_LOCK_DIR);
+  const lockDir = path.join(installRoot, lockName);
   const startedAt = Date.now();
   let locked = false;
   while (!locked) {
@@ -386,6 +392,10 @@ function withBundledRuntimeDepsInstallRootLock<T>(installRoot: string, run: () =
   } finally {
     fs.rmSync(lockDir, { recursive: true, force: true });
   }
+}
+
+function withBundledRuntimeDepsInstallRootLock<T>(installRoot: string, run: () => T): T {
+  return withBundledRuntimeDepsFilesystemLock(installRoot, BUNDLED_RUNTIME_DEPS_LOCK_DIR, run);
 }
 
 function collectRuntimeDeps(packageJson: JsonObject): Record<string, unknown> {
@@ -684,6 +694,19 @@ function hasDependencySentinel(
   });
 }
 
+function assertBundledRuntimeDepsInstalled(rootDir: string, specs: readonly string[]): void {
+  const missingSpecs = specs.filter((spec) => {
+    const dep = parseInstallableRuntimeDepSpec(spec);
+    return !hasDependencySentinel([rootDir], dep);
+  });
+  if (missingSpecs.length === 0) {
+    return;
+  }
+  throw new Error(
+    `npm install did not place bundled runtime deps in ${rootDir}: ${missingSpecs.join(", ")}`,
+  );
+}
+
 function replaceNodeModulesDir(targetDir: string, sourceDir: string): void {
   const parentDir = path.dirname(targetDir);
   const tempDir = fs.mkdtempSync(path.join(parentDir, ".openclaw-runtime-deps-copy-"));
@@ -862,17 +885,31 @@ export function resolveBundledRuntimeDepsNpmRunner(params: {
     },
   };
 }
-function readBundledPluginChannels(pluginDir: string): string[] {
+type BundledPluginRuntimeDepsManifest = {
+  channels: string[];
+  enabledByDefault: boolean;
+};
+
+type BundledPluginRuntimeDepsManifestCache = Map<string, BundledPluginRuntimeDepsManifest>;
+
+function readBundledPluginRuntimeDepsManifest(
+  pluginDir: string,
+  cache?: BundledPluginRuntimeDepsManifestCache,
+): BundledPluginRuntimeDepsManifest {
+  const cached = cache?.get(pluginDir);
+  if (cached) {
+    return cached;
+  }
   const manifest = readJsonObject(path.join(pluginDir, "openclaw.plugin.json"));
   const channels = manifest?.channels;
-  if (!Array.isArray(channels)) {
-    return [];
-  }
-  return channels.filter((entry): entry is string => typeof entry === "string" && entry !== "");
-}
-
-function readBundledPluginEnabledByDefault(pluginDir: string): boolean {
-  return readJsonObject(path.join(pluginDir, "openclaw.plugin.json"))?.enabledByDefault === true;
+  const runtimeDepsManifest = {
+    channels: Array.isArray(channels)
+      ? channels.filter((entry): entry is string => typeof entry === "string" && entry !== "")
+      : [],
+    enabledByDefault: manifest?.enabledByDefault === true,
+  };
+  cache?.set(pluginDir, runtimeDepsManifest);
+  return runtimeDepsManifest;
 }
 
 function isBundledPluginConfiguredForRuntimeDeps(params: {
@@ -880,6 +917,7 @@ function isBundledPluginConfiguredForRuntimeDeps(params: {
   pluginId: string;
   pluginDir: string;
   includeConfiguredChannels?: boolean;
+  manifestCache?: BundledPluginRuntimeDepsManifestCache;
 }): boolean {
   const plugins = normalizePluginsConfig(params.config.plugins);
   if (!plugins.enabled) {
@@ -892,11 +930,10 @@ function isBundledPluginConfiguredForRuntimeDeps(params: {
   if (entry?.enabled === false) {
     return false;
   }
-  if (entry?.enabled === true) {
-    return true;
-  }
+  const manifest = readBundledPluginRuntimeDepsManifest(params.pluginDir, params.manifestCache);
   let hasExplicitChannelDisable = false;
-  for (const channelId of readBundledPluginChannels(params.pluginDir)) {
+  let hasConfiguredChannel = false;
+  for (const channelId of manifest.channels) {
     const normalizedChannelId = normalizeOptionalLowercaseString(channelId);
     if (!normalizedChannelId) {
       continue;
@@ -917,16 +954,32 @@ function isBundledPluginConfiguredForRuntimeDeps(params: {
       channelConfig &&
       typeof channelConfig === "object" &&
       !Array.isArray(channelConfig) &&
-      (params.includeConfiguredChannels ||
-        (channelConfig as { enabled?: unknown }).enabled === true)
+      (channelConfig as { enabled?: unknown }).enabled === true
     ) {
       return true;
+    }
+    if (
+      channelConfig &&
+      typeof channelConfig === "object" &&
+      !Array.isArray(channelConfig) &&
+      params.includeConfiguredChannels
+    ) {
+      hasConfiguredChannel = true;
     }
   }
   if (hasExplicitChannelDisable) {
     return false;
   }
-  return readBundledPluginEnabledByDefault(params.pluginDir);
+  if (plugins.allow.length > 0 && !plugins.allow.includes(params.pluginId)) {
+    return false;
+  }
+  if (entry?.enabled === true) {
+    return true;
+  }
+  if (hasConfiguredChannel) {
+    return true;
+  }
+  return manifest.enabledByDefault;
 }
 
 function shouldIncludeBundledPluginRuntimeDeps(params: {
@@ -935,18 +988,34 @@ function shouldIncludeBundledPluginRuntimeDeps(params: {
   pluginId: string;
   pluginDir: string;
   includeConfiguredChannels?: boolean;
+  manifestCache?: BundledPluginRuntimeDepsManifestCache;
 }): boolean {
-  if (params.pluginIds && !params.pluginIds.has(params.pluginId)) {
-    return false;
+  const scopedToPluginIds = Boolean(params.pluginIds);
+  if (params.pluginIds) {
+    if (!params.pluginIds.has(params.pluginId)) {
+      return false;
+    }
+    if (!params.config) {
+      return true;
+    }
   }
   if (!params.config) {
     return true;
+  }
+  if (scopedToPluginIds) {
+    const plugins = normalizePluginsConfig(params.config.plugins);
+    if (!plugins.enabled || plugins.deny.includes(params.pluginId)) {
+      return false;
+    }
+    const entry = plugins.entries[params.pluginId];
+    return entry?.enabled !== false;
   }
   return isBundledPluginConfiguredForRuntimeDeps({
     config: params.config,
     pluginId: params.pluginId,
     pluginDir: params.pluginDir,
     includeConfiguredChannels: params.includeConfiguredChannels,
+    manifestCache: params.manifestCache,
   });
 }
 
@@ -960,6 +1029,7 @@ function collectBundledPluginRuntimeDeps(params: {
   conflicts: RuntimeDepConflict[];
 } {
   const versionMap = new Map<string, Map<string, Set<string>>>();
+  const manifestCache: BundledPluginRuntimeDepsManifestCache = new Map();
 
   for (const entry of fs.readdirSync(params.extensionsDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) {
@@ -974,6 +1044,7 @@ function collectBundledPluginRuntimeDeps(params: {
         pluginId,
         pluginDir,
         includeConfiguredChannels: params.includeConfiguredChannels,
+        manifestCache,
       })
     ) {
       continue;
@@ -1185,6 +1256,7 @@ export function installBundledRuntimeDeps(params: {
   linkNodeModulesFromExecutionRoot?: boolean;
   missingSpecs: string[];
   env: NodeJS.ProcessEnv;
+  warn?: (message: string) => void;
 }): void {
   const installExecutionRoot = params.installExecutionRoot ?? params.installRoot;
   const isolatedExecutionRoot =
@@ -1198,6 +1270,13 @@ export function installBundledRuntimeDeps(params: {
   try {
     fs.mkdirSync(params.installRoot, { recursive: true });
     fs.mkdirSync(installExecutionRoot, { recursive: true });
+    const diskWarning = createLowDiskSpaceWarning({
+      targetPath: installExecutionRoot,
+      purpose: "bundled plugin runtime dependency staging",
+    });
+    if (diskWarning) {
+      params.warn?.(diskWarning);
+    }
     // Always make npm see an OpenClaw-owned package root. The package-level
     // doctor repair path installs directly in the external stage dir; without a
     // manifest, npm can honor a user's global prefix config and write under
@@ -1223,6 +1302,7 @@ export function installBundledRuntimeDeps(params: {
         .trim();
       throw new Error(output || "npm install failed");
     }
+    assertBundledRuntimeDepsInstalled(installExecutionRoot, params.missingSpecs);
     if (isolatedExecutionRoot) {
       const stagedNodeModulesDir = path.join(installExecutionRoot, "node_modules");
       if (!fs.existsSync(stagedNodeModulesDir)) {
@@ -1234,6 +1314,7 @@ export function installBundledRuntimeDeps(params: {
       } else {
         replaceNodeModulesDir(targetNodeModulesDir, stagedNodeModulesDir);
       }
+      assertBundledRuntimeDepsInstalled(params.installRoot, params.missingSpecs);
     }
   } finally {
     if (cleanInstallExecutionRoot) {
@@ -1248,6 +1329,7 @@ export function repairBundledRuntimeDepsInstallRoot(params: {
   installSpecs: string[];
   env: NodeJS.ProcessEnv;
   installDeps?: (params: BundledRuntimeDepsInstallParams) => void;
+  warn?: (message: string) => void;
 }): { installSpecs: string[] } {
   return withBundledRuntimeDepsInstallRootLock(params.installRoot, () => {
     const retainedManifestSpecs = readRetainedRuntimeDepsManifest(params.installRoot);
@@ -1261,6 +1343,7 @@ export function repairBundledRuntimeDepsInstallRoot(params: {
           installRoot: installParams.installRoot,
           missingSpecs: installParams.installSpecs ?? installParams.missingSpecs,
           env: params.env,
+          warn: params.warn,
         }));
     install({
       installRoot: params.installRoot,
