@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { OnboardOptions } from "../commands/onboard-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -12,6 +14,80 @@ export type SetupMigrationDetection = {
   source?: string;
   message?: string;
 };
+
+const MEANINGFUL_CONFIG_IGNORED_KEYS = new Set(["$schema", "meta"]);
+const MEANINGFUL_WORKSPACE_ENTRIES = [
+  "AGENTS.md",
+  "SOUL.md",
+  "USER.md",
+  "IDENTITY.md",
+  "MEMORY.md",
+  "skills",
+] as const;
+const MEANINGFUL_STATE_ENTRIES = ["credentials", "sessions", "agents"] as const;
+
+async function exists(candidate: string): Promise<boolean> {
+  try {
+    await fs.access(candidate);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function hasDirectoryEntries(candidate: string): Promise<boolean> {
+  try {
+    return (await fs.readdir(candidate)).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+function hasMeaningfulConfig(config: OpenClawConfig): boolean {
+  return Object.keys(config as Record<string, unknown>).some(
+    (key) => !MEANINGFUL_CONFIG_IGNORED_KEYS.has(key),
+  );
+}
+
+export async function inspectSetupMigrationFreshness(params: {
+  baseConfig: OpenClawConfig;
+  stateDir: string;
+  workspaceDir: string;
+}): Promise<{ fresh: boolean; reasons: string[] }> {
+  const reasons: string[] = [];
+  if (hasMeaningfulConfig(params.baseConfig)) {
+    reasons.push("existing config values are loaded");
+  }
+  for (const entry of MEANINGFUL_WORKSPACE_ENTRIES) {
+    if (await exists(path.join(params.workspaceDir, entry))) {
+      reasons.push(`workspace ${entry} exists`);
+    }
+  }
+  for (const entry of MEANINGFUL_STATE_ENTRIES) {
+    if (await hasDirectoryEntries(path.join(params.stateDir, entry))) {
+      reasons.push(`state ${entry}/ exists`);
+    }
+  }
+  return { fresh: reasons.length === 0, reasons };
+}
+
+function assertFreshSetupMigrationTarget(freshness: {
+  fresh: boolean;
+  reasons: readonly string[];
+}): void {
+  if (freshness.fresh || process.env.OPENCLAW_MIGRATION_EXISTING_IMPORT === "1") {
+    return;
+  }
+  throw new Error(
+    [
+      "Migration import during onboarding requires a fresh OpenClaw setup.",
+      "Create a fresh setup or reset config, credentials, sessions, and workspace before importing.",
+      "Backup plus overwrite/merge imports are feature-gated for now.",
+      "Existing setup:",
+      ...freshness.reasons.map((reason) => `- ${reason}`),
+    ].join("\n"),
+  );
+}
 
 export async function detectSetupMigrationSources(params: {
   config: OpenClawConfig;
@@ -173,6 +249,13 @@ export async function runSetupMigrationImport(params: {
   }
 
   const stateDir = resolveStateDir();
+  assertFreshSetupMigrationTarget(
+    await inspectSetupMigrationFreshness({
+      baseConfig: params.baseConfig,
+      stateDir,
+      workspaceDir,
+    }),
+  );
   const ctx = {
     config: targetConfig,
     stateDir,
