@@ -19,7 +19,7 @@ export function resolveTargets(ctx: MigrationProviderContext): PlannedTargets {
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   const configuredAgentDir = resolveAgentConfig(cfg, agentId)?.agentDir?.trim();
   const agentDir =
-    ctx.runtime?.agent.resolveAgentDir(cfg, agentId) ??
+    ctx.runtime?.agent?.resolveAgentDir(cfg, agentId) ??
     (configuredAgentDir ? resolveHomePath(configuredAgentDir) : undefined) ??
     path.join(ctx.stateDir, "agents", agentId, "agent");
   return {

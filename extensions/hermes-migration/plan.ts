@@ -9,6 +9,7 @@ import type {
   MigrationPlan,
   MigrationProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { buildConfigItems } from "./config.js";
 import { exists, parseHermesConfig, readText } from "./helpers.js";
 import { createHermesModelItem } from "./items.js";
 import { resolveCurrentModelRef, resolveHermesModelRef } from "./model.js";
@@ -65,6 +66,14 @@ export async function buildHermesPlan(ctx: MigrationProviderContext): Promise<Mi
       }),
     );
   }
+  items.push(
+    ...buildConfigItems({
+      ctx,
+      config,
+      modelRef,
+      hasMemoryFiles: Boolean(source.memoryPath || source.userPath),
+    }),
+  );
 
   await addFileItem({
     items,
@@ -135,6 +144,9 @@ export async function buildHermesPlan(ctx: MigrationProviderContext): Promise<Mi
       ? [
           "Some Hermes files are archive-only. They will be copied into the migration report for manual review, not loaded into OpenClaw.",
         ]
+      : []),
+    ...(items.some((item) => item.kind === "manual")
+      ? ["Some Hermes settings require manual review before they can be activated safely."]
       : []),
   ];
   return {

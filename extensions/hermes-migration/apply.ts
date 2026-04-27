@@ -11,6 +11,7 @@ import type {
   MigrationPlan,
   MigrationProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { applyConfigItem, applyManualItem } from "./config.js";
 import { appendItem } from "./helpers.js";
 import { applyModelItem } from "./model.js";
 import { buildHermesPlan } from "./plan.js";
@@ -38,6 +39,10 @@ export async function applyHermesPlan(params: {
           item,
         ),
       );
+    } else if (item.kind === "config") {
+      items.push(await applyConfigItem(params.ctx, item));
+    } else if (item.kind === "manual") {
+      items.push(applyManualItem(item));
     } else if (item.action === "archive") {
       items.push(await archiveMigrationItem(item, reportDir));
     } else if (item.kind === "secret") {

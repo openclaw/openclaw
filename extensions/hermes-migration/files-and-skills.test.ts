@@ -10,6 +10,21 @@ describe("Hermes migration file and skill items", () => {
     await cleanupTempRoots();
   });
 
+  function configRuntime(config: Record<string, unknown>) {
+    return {
+      config: {
+        loadConfig: () => config,
+        writeConfigFile: async (next: Record<string, unknown>) => {
+          Object.keys(config).forEach((key) => {
+            delete config[key];
+          });
+          Object.assign(config, next);
+          return next;
+        },
+      },
+    } as never;
+  }
+
   it("reports normalized skill-name collisions instead of overwriting during apply", async () => {
     const root = await makeTempRoot();
     const source = path.join(root, "hermes");
@@ -91,6 +106,7 @@ describe("Hermes migration file and skill items", () => {
     await writeFile(path.join(workspaceDir, "AGENTS.md"), "# Existing agents\n");
 
     const provider = buildHermesMigrationProvider();
+    const config: Record<string, unknown> = {};
     const result = await provider.apply(
       makeContext({
         source,
@@ -99,6 +115,7 @@ describe("Hermes migration file and skill items", () => {
         includeSecrets: true,
         overwrite: true,
         reportDir,
+        runtime: configRuntime(config),
       }),
     );
 

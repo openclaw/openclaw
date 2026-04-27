@@ -95,8 +95,27 @@ export function parseHermesConfig(content: string | undefined): Record<string, u
   }
 }
 
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+export function childRecord(
+  root: Record<string, unknown> | undefined,
+  key: string,
+): Record<string, unknown> {
+  const value = root?.[key];
+  return isRecord(value) ? value : {};
+}
+
 export function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+export function readStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "");
 }
 
 export async function appendItem(item: MigrationItem): Promise<MigrationItem> {

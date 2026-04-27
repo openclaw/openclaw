@@ -84,10 +84,13 @@ describe("Hermes migration provider", () => {
       }),
     );
 
-    expect(plan.summary).toMatchObject({ total: 5, conflicts: 2, sensitive: 1 });
+    expect(plan.summary).toMatchObject({ total: 8, conflicts: 2, sensitive: 1 });
     expect(plan.items).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: "config:default-model", status: "conflict" }),
+        expect.objectContaining({ id: "config:memory", status: "planned" }),
+        expect.objectContaining({ id: "config:memory-plugin-slot", status: "planned" }),
+        expect.objectContaining({ id: "config:model-providers", status: "planned" }),
         expect.objectContaining({ id: "workspace:SOUL.md", status: "conflict" }),
         expect.objectContaining({ id: "memory:MEMORY.md", action: "append", status: "planned" }),
         expect.objectContaining({ id: "skill:ship-it", status: "planned" }),
