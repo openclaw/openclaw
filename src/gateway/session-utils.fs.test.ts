@@ -2,6 +2,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import { clearSessionStoreCaches } from "../config/sessions/store-cache.js";
+import { withTempHomeConfig } from "../config/test-helpers.js";
+import { createRepro68765CompactionChainFromProduction } from "./fixtures/repro-68765-compaction-chain-from-production.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import {
   archiveSessionTranscripts,
@@ -46,6 +49,21 @@ function buildBasicSessionTranscript(
     { message: { role: "user", content: userText } },
     { message: { role: "assistant", content: assistantText } },
   ];
+}
+
+function extractMessageText(message: { content?: unknown }): string {
+  if (typeof message.content === "string") {
+    return message.content;
+  }
+  if (
+    Array.isArray(message.content) &&
+    message.content[0] &&
+    typeof message.content[0] === "object"
+  ) {
+    const first = message.content[0] as { text?: unknown };
+    return typeof first.text === "string" ? first.text : "";
+  }
+  return "";
 }
 
 describe("readFirstUserMessageFromTranscript", () => {
@@ -535,6 +553,344 @@ describe("readSessionMessages", () => {
       expect((out[0] as { __openclaw?: { seq?: number } }).__openclaw?.seq).toBe(1);
     },
   );
+
+  test("skips stale duplicate rows without matching sessionFile", () => {
+    const sessionId = "stale-row-session";
+    const snapshotPath = path.join(tmpDir, `${sessionId}.checkpoint.pre.jsonl`);
+    const currentPath = path.join(tmpDir, `${sessionId}.jsonl`);
+
+    fs.writeFileSync(
+      snapshotPath,
+      JSON.stringify({ message: { role: "user", content: "checkpoint content" } }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      currentPath,
+      JSON.stringify({ message: { role: "assistant", content: "current content" } }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        stale: {
+          sessionId,
+          compactionCheckpoints: [{ preCompaction: { sessionFile: snapshotPath } }],
+        },
+        "agent:main:main": {
+          sessionId,
+          sessionFile: currentPath,
+          compactionCheckpoints: [{ preCompaction: { sessionFile: snapshotPath } }],
+        },
+      }),
+      "utf-8",
+    );
+
+    const out = readSessionMessages(sessionId, storePath, currentPath) as Array<{
+      content?: string;
+    }>;
+    expect(out.map((entry) => entry.content)).toEqual(["checkpoint content", "current content"]);
+  });
+
+  test("chains checkpoints for configured main session even when the store key uses a legacy alias", async () => {
+    const sessionId = "canonical-main-alias-session";
+    const snapshotPath = path.join(tmpDir, `${sessionId}.checkpoint.pre.jsonl`);
+    const currentPath = path.join(tmpDir, `${sessionId}.jsonl`);
+
+    fs.writeFileSync(
+      snapshotPath,
+      JSON.stringify({ message: { role: "user", content: "pre-compaction content" } }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      currentPath,
+      JSON.stringify({ message: { role: "assistant", content: "live content" } }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "agent:main:main": {
+          sessionId,
+          sessionFile: currentPath,
+          compactionCheckpoints: [{ preCompaction: { sessionFile: snapshotPath } }],
+        },
+      }),
+      "utf-8",
+    );
+
+    await withTempHomeConfig(
+      {
+        agents: {
+          list: [{ id: "ops", default: true }, { id: "main" }],
+        },
+        session: {
+          mainKey: "work",
+        },
+      },
+      async () => {
+        const out = readSessionMessages(sessionId, storePath, currentPath) as Array<{
+          content?: string;
+        }>;
+        expect(out.map((entry) => entry.content)).toEqual([
+          "pre-compaction content",
+          "live content",
+        ]);
+      },
+    );
+  });
+
+  test("keeps non-main sessions on the legacy single-file fallback even when checkpoints exist", () => {
+    const sessionId = "non-main-fallback-session";
+    const snapshotPath = path.join(tmpDir, `${sessionId}.checkpoint.pre.jsonl`);
+    const currentPath = path.join(tmpDir, `${sessionId}.jsonl`);
+
+    fs.writeFileSync(
+      snapshotPath,
+      JSON.stringify({ message: { role: "user", content: "checkpoint content" } }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      currentPath,
+      JSON.stringify({ message: { role: "assistant", content: "live content" } }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "agent:ops:topic": {
+          sessionId,
+          sessionFile: currentPath,
+          compactionCheckpoints: [{ preCompaction: { sessionFile: snapshotPath } }],
+        },
+      }),
+      "utf-8",
+    );
+
+    const out = readSessionMessages(sessionId, storePath, currentPath) as Array<{
+      content?: string;
+    }>;
+    expect(out.map((entry) => entry.content)).toEqual(["live content"]);
+  });
+
+  test("reuses the cached session store on repeated chained reads", () => {
+    const sessionId = "cached-store-read-session";
+    const snapshotPath = path.join(tmpDir, `${sessionId}.checkpoint.pre.jsonl`);
+    const currentPath = path.join(tmpDir, `${sessionId}.jsonl`);
+
+    clearSessionStoreCaches();
+    vi.stubEnv("OPENCLAW_SESSION_CACHE_TTL_MS", "45000");
+    fs.writeFileSync(
+      snapshotPath,
+      JSON.stringify({ message: { role: "user", content: "checkpoint content" } }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      currentPath,
+      JSON.stringify({ message: { role: "assistant", content: "live content" } }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "agent:main:main": {
+          sessionId,
+          sessionFile: currentPath,
+          compactionCheckpoints: [{ preCompaction: { sessionFile: snapshotPath } }],
+        },
+      }),
+      "utf-8",
+    );
+
+    const readSpy = vi.spyOn(fs, "readFileSync");
+    const countStoreReads = () =>
+      readSpy.mock.calls.filter(([filePath]) => path.resolve(String(filePath)) === storePath)
+        .length;
+
+    readSessionMessages(sessionId, storePath, currentPath);
+    expect(countStoreReads()).toBe(1);
+    readSessionMessages(sessionId, storePath, currentPath);
+    expect(countStoreReads()).toBe(1);
+
+    readSpy.mockRestore();
+    vi.unstubAllEnvs();
+    clearSessionStoreCaches();
+  });
+
+  test("reads a production-derived main-session checkpoint chain across predecessor transcripts", () => {
+    const fixture = createRepro68765CompactionChainFromProduction(tmpDir);
+    for (const transcript of fixture.transcripts) {
+      fs.mkdirSync(path.dirname(transcript.filePath), { recursive: true });
+      fs.writeFileSync(
+        transcript.filePath,
+        transcript.entries.map((entry) => JSON.stringify(entry)).join("\n"),
+        "utf-8",
+      );
+    }
+    fs.writeFileSync(storePath, JSON.stringify(fixture.store), "utf-8");
+
+    const truncated = readSessionMessages(
+      fixture.sessionId,
+      path.join(tmpDir, "wrong-sessions.json"),
+      fixture.liveSessionFile,
+    ) as Array<{ content?: unknown; __openclaw?: { id?: string; seq?: number } }>;
+    expect(truncated.map((message) => extractMessageText(message))).toEqual(
+      fixture.expectedLiveSegmentTexts,
+    );
+    expect(truncated.map((message) => message.__openclaw?.id)).toEqual(
+      fixture.expectedLiveSegmentMessageIds,
+    );
+    expect(truncated.map((message) => message.__openclaw?.seq)).toEqual([1, 2]);
+
+    const out = readSessionMessages(
+      fixture.sessionId,
+      storePath,
+      fixture.liveSessionFile,
+    ) as Array<{ content?: unknown; __openclaw?: { id?: string; seq?: number } }>;
+
+    expect(out.map((message) => extractMessageText(message))).toEqual(fixture.expectedTexts);
+    expect(out.map((message) => message.__openclaw?.id)).toEqual(fixture.expectedMessageIds);
+    expect(out.map((message) => message.__openclaw?.seq)).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+});
+
+// Red-bar fixtures for the compaction-chain epoch design decision that is still open
+// on PR #68765. These tests encode the reset/restore semantics we expect the chain
+// replay to respect; they currently fail against the replay-everything behavior in
+// resolveMainSessionTranscriptFiles and exist to force a semantic choice rather than
+// to keep accreting bot-driven fixes. The store key is set to "agent:main:main" so
+// resolveMainSessionKey's default (FALLBACK_DEFAULT_AGENT_ID + default mainKey) aligns
+// with canonicalizeMainSessionAlias() without needing a config fixture.
+describe("readSessionMessages — compaction chain epoch semantics", () => {
+  let tmpDir: string;
+  let storePath: string;
+
+  registerTempSessionStore("openclaw-session-fs-epoch-test-", (nextTmpDir, nextStorePath) => {
+    tmpDir = nextTmpDir;
+    storePath = nextStorePath;
+  });
+
+  test("Compact -> Reset -> Read does not resurface pre-reset checkpoint content", () => {
+    const sessionId = "epoch-reset-session";
+    const preResetSnapshot = path.join(tmpDir, `${sessionId}.checkpoint.pre-reset.jsonl`);
+    const postResetTranscript = path.join(tmpDir, `${sessionId}.jsonl`);
+
+    fs.writeFileSync(
+      preResetSnapshot,
+      [
+        JSON.stringify({ message: { role: "user", content: "BEFORE RESET user" } }),
+        JSON.stringify({ message: { role: "assistant", content: "BEFORE RESET assistant" } }),
+      ].join("\n"),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      postResetTranscript,
+      JSON.stringify({ message: { role: "user", content: "AFTER RESET user" } }),
+      "utf-8",
+    );
+
+    // performGatewaySessionReset copies compactionCheckpoints[] from the previous
+    // entry to the new entry verbatim, so a post-reset store still points at the
+    // old pre-compaction snapshots via preCompaction.sessionFile.
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "agent:main:main": {
+          sessionId,
+          sessionFile: postResetTranscript,
+          compactionCheckpoints: [{ preCompaction: { sessionFile: preResetSnapshot } }],
+        },
+      }),
+      "utf-8",
+    );
+
+    const out = readSessionMessages(sessionId, storePath) as Array<{
+      content?: unknown;
+    }>;
+
+    const texts = out.map((m) => {
+      if (typeof m.content === "string") {
+        return m.content;
+      }
+      if (Array.isArray(m.content) && m.content[0] && typeof m.content[0] === "object") {
+        const first = m.content[0] as { text?: unknown };
+        return typeof first.text === "string" ? first.text : "";
+      }
+      return "";
+    });
+
+    // After /reset the replay must not resurface content that the user
+    // explicitly archived; the post-reset transcript is the only valid source.
+    expect(texts).not.toContain("BEFORE RESET user");
+    expect(texts).not.toContain("BEFORE RESET assistant");
+    expect(texts).toContain("AFTER RESET user");
+  });
+
+  test("Compact -> Restore -> Read does not double-read or resurface post-restore checkpoints", () => {
+    const sessionId = "epoch-restore-session";
+    const c1Snapshot = path.join(tmpDir, `${sessionId}.checkpoint.c1.jsonl`);
+    const c2Snapshot = path.join(tmpDir, `${sessionId}.checkpoint.c2.jsonl`);
+    const restoredFork = path.join(tmpDir, `${sessionId}.restored-fork.jsonl`);
+
+    // C1 is the checkpoint the user restored to; C2 is a later checkpoint
+    // created AFTER C1 and BEFORE the restore (content the user discarded).
+    fs.writeFileSync(
+      c1Snapshot,
+      JSON.stringify({ message: { role: "user", content: "C1 content" } }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      c2Snapshot,
+      JSON.stringify({ message: { role: "user", content: "C2 post-C1 pre-restore content" } }),
+      "utf-8",
+    );
+    // sessions.compaction.restore forks the restored transcript as a copy of
+    // the target checkpoint's preCompaction.sessionFile and writes it as the
+    // new entry.sessionFile, while preserveCompactionCheckpoints: true keeps
+    // both C1 and C2 attached to the entry.
+    fs.writeFileSync(
+      restoredFork,
+      JSON.stringify({ message: { role: "user", content: "C1 content" } }),
+      "utf-8",
+    );
+
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "agent:main:main": {
+          sessionId,
+          sessionFile: restoredFork,
+          compactionCheckpoints: [
+            { preCompaction: { sessionFile: c1Snapshot } },
+            { preCompaction: { sessionFile: c2Snapshot } },
+          ],
+        },
+      }),
+      "utf-8",
+    );
+
+    const out = readSessionMessages(sessionId, storePath) as Array<{
+      content?: unknown;
+    }>;
+
+    const texts = out.map((m) => {
+      if (typeof m.content === "string") {
+        return m.content;
+      }
+      if (Array.isArray(m.content) && m.content[0] && typeof m.content[0] === "object") {
+        const first = m.content[0] as { text?: unknown };
+        return typeof first.text === "string" ? first.text : "";
+      }
+      return "";
+    });
+
+    const c1Occurrences = texts.filter((t) => t === "C1 content").length;
+
+    // After a restore, the replay must not double-read the restored content
+    // (both C1 snapshot and the forked transcript carry it) and must not
+    // resurface checkpoints taken after the restore target.
+    expect(c1Occurrences).toBe(1);
+    expect(texts).not.toContain("C2 post-C1 pre-restore content");
+  });
 });
 
 describe("readSessionPreviewItemsFromTranscript", () => {

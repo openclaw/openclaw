@@ -1,5 +1,13 @@
 import fs from "node:fs";
+import path from "node:path";
+import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage, normalizeUsage } from "../agents/usage.js";
+import { loadConfig } from "../config/config.js";
+import {
+  canonicalizeMainSessionAlias,
+  resolveMainSessionKey,
+} from "../config/sessions/main-session.js";
+import { loadSessionStore } from "../config/sessions/store.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
@@ -90,57 +98,232 @@ export function attachOpenClawTranscriptMeta(
   };
 }
 
+type SessionMessagesStoreContext = {
+  sessionsDir: string;
+  key?: string;
+  entry?: unknown;
+};
+
+function resolveSessionMessagesStoreContext(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+): SessionMessagesStoreContext | null {
+  if (!storePath) {
+    return null;
+  }
+  const sessionsDir = path.dirname(storePath);
+  try {
+    const store = loadSessionStore(storePath);
+    if (!store || typeof store !== "object" || Array.isArray(store)) {
+      return { sessionsDir };
+    }
+    const targetSessionFile =
+      typeof sessionFile === "string" && sessionFile.trim()
+        ? path.resolve(sessionFile.trim())
+        : null;
+    for (const [key, value] of Object.entries(store)) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        continue;
+      }
+      const record = value as Record<string, unknown>;
+      if (record.sessionId !== sessionId) {
+        continue;
+      }
+      const entrySessionFile =
+        typeof record.sessionFile === "string" && record.sessionFile.trim()
+          ? path.resolve(record.sessionFile.trim())
+          : null;
+      if (targetSessionFile && entrySessionFile !== targetSessionFile) {
+        continue;
+      }
+      return {
+        key,
+        entry: value,
+        sessionsDir,
+      };
+    }
+  } catch {
+    // ignore malformed or unreadable sessions store
+  }
+  return { sessionsDir };
+}
+
+function resolveMainSessionTranscriptFiles(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+): string[] | null {
+  const context = resolveSessionMessagesStoreContext(sessionId, storePath, sessionFile);
+  if (!context?.sessionsDir || !context.key) {
+    return null;
+  }
+  // Hot-path guard: skip config + alias resolution when the entry has no checkpoint
+  // chain to walk. `readSessionMessages` runs on every transcript read, and the vast
+  // majority of sessions (isolated, subagent, heartbeat, explicit agent) never carry
+  // `compactionCheckpoints[]`. Gating the loadConfig + canonicalize work on a cheap
+  // field check avoids O(sessions.json) parsing + config I/O for those reads.
+  const entry = context.entry as Record<string, unknown> | undefined;
+  const rawCheckpoints = entry?.compactionCheckpoints;
+  if (!Array.isArray(rawCheckpoints) || rawCheckpoints.length === 0) {
+    return null;
+  }
+  // Activate the chained read only for the configured main session key, not a hardcoded
+  // literal. `resolveMainSessionKey` returns "global", "agent:<default>:<mainKey>", etc.,
+  // depending on `session.scope` / `session.mainKey` / `agents.default`. Stores can also
+  // carry legacy main-key aliases (e.g. `agent:main:main` when the configured default
+  // agent is "ops"), so we canonicalize `context.key` via `canonicalizeMainSessionAlias`
+  // before comparing. For any non-main session (isolated, subagent, heartbeat, explicit
+  // agent session) the canonicalizer returns the raw key unchanged and the comparison
+  // fails, so the legacy single-file path is correct.
+  let cfg;
+  try {
+    cfg = loadConfig();
+  } catch {
+    return null;
+  }
+  const canonicalMainKey = resolveMainSessionKey(cfg);
+  const canonicalContextKey = canonicalizeMainSessionAlias({
+    cfg,
+    agentId: resolveDefaultAgentId(cfg),
+    sessionKey: context.key,
+  });
+  if (canonicalContextKey !== canonicalMainKey) {
+    return null;
+  }
+  const files: string[] = [];
+  const seen = new Set<string>();
+  const pushFile = (filePath: string): void => {
+    const normalized = path.resolve(filePath);
+    if (seen.has(normalized) || !fs.existsSync(normalized)) {
+      return;
+    }
+    seen.add(normalized);
+    files.push(normalized);
+  };
+  // Walk the checkpoint chain in recorded order (oldest first). Each entry is a
+  // SessionCompactionCheckpoint whose `preCompaction.sessionFile` points at the actual
+  // pre-compaction snapshot written by session-compaction-checkpoints.ts (named like
+  // `<session>.checkpoint.<uuid>.jsonl`). Never reconstruct `<sessionId>.jsonl` — that
+  // does not match the on-disk convention. No `.reset.*` / `.bak` / `.deleted.*` variant
+  // scanning: `.bak` is a pre-compaction snapshot the chain already represents through
+  // predecessor entries, and replaying `.reset.*` archives would resurface content that
+  // the user explicitly cleared via /reset, breaking reset semantics.
+  for (const checkpoint of rawCheckpoints) {
+    if (!checkpoint || typeof checkpoint !== "object" || Array.isArray(checkpoint)) {
+      continue;
+    }
+    const checkpointRecord = checkpoint as Record<string, unknown>;
+    const preCompaction = checkpointRecord.preCompaction;
+    if (!preCompaction || typeof preCompaction !== "object" || Array.isArray(preCompaction)) {
+      continue;
+    }
+    const reference = (preCompaction as Record<string, unknown>).sessionFile;
+    if (typeof reference === "string" && reference.trim()) {
+      pushFile(reference.trim());
+    }
+  }
+  // Append the current session's primary transcript as the newest segment, so the chain
+  // ends with live content.
+  const currentSessionFile = entry?.sessionFile;
+  if (typeof currentSessionFile === "string" && currentSessionFile.trim()) {
+    pushFile(currentSessionFile.trim());
+  }
+  if (files.length === 0) {
+    return null;
+  }
+  // Deterministic ordering: primary key is mtime (ascending), tie-break is filename
+  // localeCompare. fs.statSync is cached per path so it runs once per file, not
+  // O(N log N) times inside the comparator.
+  const mtimeCache = new Map<string, number | null>();
+  const getMtime = (filePath: string): number | null => {
+    if (mtimeCache.has(filePath)) {
+      return mtimeCache.get(filePath) ?? null;
+    }
+    let value: number | null = null;
+    try {
+      value = fs.statSync(filePath).mtimeMs;
+    } catch {
+      value = null;
+    }
+    mtimeCache.set(filePath, value);
+    return value;
+  };
+  return files.toSorted((a, b) => {
+    const da = getMtime(a);
+    const db = getMtime(b);
+    if (da !== null && db !== null && da !== db) {
+      return da - db;
+    }
+    return a.localeCompare(b);
+  });
+}
+
+function resolveTranscriptReadFiles(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+): string[] {
+  const chained = resolveMainSessionTranscriptFiles(sessionId, storePath, sessionFile);
+  if (chained && chained.length > 0) {
+    return chained;
+  }
+  const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile);
+  const filePath = candidates.find((p) => fs.existsSync(p));
+  return filePath ? [filePath] : [];
+}
+
 export function readSessionMessages(
   sessionId: string,
   storePath: string | undefined,
   sessionFile?: string,
 ): unknown[] {
-  const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile);
-
-  const filePath = candidates.find((p) => fs.existsSync(p));
-  if (!filePath) {
+  const filePaths = resolveTranscriptReadFiles(sessionId, storePath, sessionFile);
+  if (filePaths.length === 0) {
     return [];
   }
-
-  const lines = fs.readFileSync(filePath, "utf-8").split(/\r?\n/);
   const messages: unknown[] = [];
   let messageSeq = 0;
-  for (const line of lines) {
-    if (!line.trim()) {
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(line);
-      if (parsed?.message) {
-        messageSeq += 1;
-        messages.push(
-          attachOpenClawTranscriptMeta(parsed.message, {
-            ...(typeof parsed.id === "string" ? { id: parsed.id } : {}),
-            seq: messageSeq,
-          }),
-        );
+  for (const filePath of filePaths) {
+    const lines = fs.readFileSync(filePath, "utf-8").split(/\r?\n/);
+    for (const line of lines) {
+      if (!line.trim()) {
         continue;
       }
+      try {
+        const parsed = JSON.parse(line);
+        if (parsed?.message) {
+          messageSeq += 1;
+          messages.push(
+            attachOpenClawTranscriptMeta(parsed.message, {
+              ...(typeof parsed.id === "string" ? { id: parsed.id } : {}),
+              seq: messageSeq,
+            }),
+          );
+          continue;
+        }
 
-      // Compaction entries are not "message" records, but they're useful context for debugging.
-      // Emit a lightweight synthetic message that the Web UI can render as a divider.
-      if (parsed?.type === "compaction") {
-        const ts = typeof parsed.timestamp === "string" ? Date.parse(parsed.timestamp) : Number.NaN;
-        const timestamp = Number.isFinite(ts) ? ts : Date.now();
-        messageSeq += 1;
-        messages.push({
-          role: "system",
-          content: [{ type: "text", text: "Compaction" }],
-          timestamp,
-          __openclaw: {
-            kind: "compaction",
-            id: typeof parsed.id === "string" ? parsed.id : undefined,
-            seq: messageSeq,
-          },
-        });
+        // Compaction entries are not "message" records, but they're useful context for debugging.
+        // Emit a lightweight synthetic message that the Web UI can render as a divider.
+        if (parsed?.type === "compaction") {
+          const ts =
+            typeof parsed.timestamp === "string" ? Date.parse(parsed.timestamp) : Number.NaN;
+          const timestamp = Number.isFinite(ts) ? ts : Date.now();
+          messageSeq += 1;
+          messages.push({
+            role: "system",
+            content: [{ type: "text", text: "Compaction" }],
+            timestamp,
+            __openclaw: {
+              kind: "compaction",
+              id: typeof parsed.id === "string" ? parsed.id : undefined,
+              seq: messageSeq,
+            },
+          });
+        }
+      } catch {
+        // ignore bad lines
       }
-    } catch {
-      // ignore bad lines
     }
   }
   return messages;
