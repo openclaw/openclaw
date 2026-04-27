@@ -93,6 +93,7 @@ export const forcedUnitFastTestFiles = [
   "src/security/windows-acl.test.ts",
   "src/realtime-transcription/websocket-session.test.ts",
   "src/trajectory/export.test.ts",
+  "src/tts/provider-registry.test.ts",
   "src/tts/status-config.test.ts",
   "src/version.test.ts",
 ];
