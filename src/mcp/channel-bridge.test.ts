@@ -6,21 +6,31 @@ const ONE_HOUR_MS = 60 * ONE_MINUTE_MS;
 const SWEEP_INTERVAL_MS = 5 * ONE_MINUTE_MS;
 const APPROVAL_DEFAULT_TTL_MS = 30 * ONE_MINUTE_MS;
 
+// Test view that exposes the private map/timer fields and the methods we
+// exercise. Defined as a standalone shape (not an intersection with the class)
+// because mixing public/private constituents collapses to `never` under tsgo.
 type BridgeInternals = {
   pendingClaudePermissions: Map<string, unknown>;
   pendingApprovals: Map<string, unknown>;
   pendingSweepInterval: NodeJS.Timeout | null;
+  handleClaudePermissionRequest: (params: {
+    requestId: string;
+    toolName: string;
+    description: string;
+    inputPreview: string;
+  }) => Promise<void>;
   handleGatewayEvent: (event: {
     event: string;
     payload?: Record<string, unknown>;
   }) => Promise<void>;
+  close: () => Promise<void>;
 };
 
-function makeBridge(): OpenClawChannelBridge & BridgeInternals {
+function makeBridge(): BridgeInternals {
   return new OpenClawChannelBridge({} as never, {
     claudeChannelMode: "off",
     verbose: false,
-  }) as OpenClawChannelBridge & BridgeInternals;
+  }) as unknown as BridgeInternals;
 }
 
 describe("OpenClawChannelBridge — pendingClaudePermissions / pendingApprovals memory bounds", () => {
