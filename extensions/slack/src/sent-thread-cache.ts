@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveGlobalDedupeCache } from "openclaw/plugin-sdk/infra-runtime";
@@ -52,6 +53,16 @@ interface PersistState {
   entries: Map<string, number>;
   hydrated: boolean;
   persistTimer: ReturnType<typeof setTimeout> | null;
+  /**
+   * Test-only override for the persist file path. Lives on the global
+   * singleton (not module-local) so it survives across module instances
+   * created by dynamic re-import or bundler code splitting — otherwise
+   * tests that exercise re-imported copies of this module would have the
+   * override silently lost on the second instance, while in-memory dedupe
+   * still works via the shared `entries` map. Disk side effects would
+   * then leak into STATE_DIR instead of the per-test temp dir.
+   */
+  persistPathOverride: string | undefined;
 }
 
 const PERSIST_STATE_KEY = Symbol.for("openclaw.slackThreadParticipationPersistState");
@@ -61,13 +72,11 @@ const persistState: PersistState =
     entries: new Map(),
     hydrated: false,
     persistTimer: null,
+    persistPathOverride: undefined,
   });
 
-/** @internal Overridable persist path for tests. */
-let _persistPathOverride: string | undefined;
-
 function getPersistPath(): string {
-  return _persistPathOverride ?? path.join(STATE_DIR, PERSIST_FILENAME);
+  return persistState.persistPathOverride ?? path.join(STATE_DIR, PERSIST_FILENAME);
 }
 
 /** Load persisted entries into both the dedupe cache and the shadow map. */
@@ -97,12 +106,26 @@ function hydrateFromDisk(): void {
       return;
     }
     const now = Date.now();
+    // Collect valid (key, ts) tuples first, then enforce MAX_ENTRIES by
+    // most-recent timestamp before inserting. The 4 MB file cap above
+    // permits up to ~250K entries through, which would otherwise blow
+    // past the 5K in-memory cap on first load (Aisle medium #1 / opus
+    // P2 review). Sorting DESC by ts and slicing keeps hydration bounded
+    // by MAX_ENTRIES regardless of file size up to MAX_PERSIST_FILE_BYTES.
+    const candidates: Array<[string, number]> = [];
     for (const [key, ts] of Object.entries(data)) {
       if (typeof ts === "number" && Number.isFinite(ts) && now - ts < TTL_MS) {
-        // Use check() to insert into the dedupe cache (it returns false for new entries)
-        threadParticipation.check(key, ts);
-        persistState.entries.set(key, ts);
+        candidates.push([key, ts]);
       }
+    }
+    if (candidates.length > MAX_ENTRIES) {
+      candidates.sort((a, b) => b[1] - a[1]);
+      candidates.length = MAX_ENTRIES;
+    }
+    for (const [key, ts] of candidates) {
+      // Use check() to insert into the dedupe cache (it returns false for new entries)
+      threadParticipation.check(key, ts);
+      persistState.entries.set(key, ts);
     }
   } catch {
     // File missing or corrupt — start fresh.
@@ -136,8 +159,20 @@ function schedulePersist(): void {
       fs.mkdirSync(path.dirname(filePath), { recursive: true });
       // Write atomically via temp file + rename so a mid-write crash
       // can't leave a truncated/corrupt JSON on disk.
-      const tmpPath = `${filePath}.${process.pid}.tmp`;
-      fs.writeFileSync(tmpPath, JSON.stringify(data), { mode: PERSIST_FILE_MODE });
+      //
+      // Security: tmpPath uses randomUUID() (not pid) and flag "wx"
+      // (O_CREAT | O_EXCL) to close the symlink-follow window described
+      // in CWE-59. A predictable name like ${pid}.tmp combined with the
+      // default "w" flag would let an attacker pre-create a symlink at
+      // the tmp path pointing to e.g. /etc/passwd, and our truncating
+      // write would follow it. "wx" refuses to overwrite existing
+      // entries (file or symlink), and randomUUID() removes
+      // predictability. Aisle medium #2 / opus P1.
+      const tmpPath = `${filePath}.${randomUUID()}.tmp`;
+      fs.writeFileSync(tmpPath, JSON.stringify(data), {
+        mode: PERSIST_FILE_MODE,
+        flag: "wx",
+      });
       fs.renameSync(tmpPath, filePath);
     } catch {
       // Best-effort persistence — don't crash on write failures.
@@ -258,8 +293,12 @@ export function _flushPersist(): void {
     const data = Object.fromEntries(entries);
     const filePath = getPersistPath();
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    const tmpPath = `${filePath}.${process.pid}.tmp`;
-    fs.writeFileSync(tmpPath, JSON.stringify(data), { mode: PERSIST_FILE_MODE });
+    // Same CWE-59 hardening as schedulePersist: randomUUID() + "wx".
+    const tmpPath = `${filePath}.${randomUUID()}.tmp`;
+    fs.writeFileSync(tmpPath, JSON.stringify(data), {
+      mode: PERSIST_FILE_MODE,
+      flag: "wx",
+    });
     fs.renameSync(tmpPath, filePath);
   } catch {
     // Best-effort.
@@ -278,7 +317,9 @@ export function _resetForTests(persistPath?: string): void {
   }
   // Set override BEFORE clearing so clearSlackThreadParticipationCache
   // doesn't delete the file at the new path we're about to hydrate from.
-  _persistPathOverride = persistPath;
+  // Stored on persistState (the global singleton) so that re-imports of
+  // this module observe the override consistently.
+  persistState.persistPathOverride = persistPath;
   threadParticipation.clear();
   persistState.entries.clear();
   if (persistState.persistTimer) {

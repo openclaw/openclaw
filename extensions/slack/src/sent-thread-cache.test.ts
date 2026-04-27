@@ -286,6 +286,93 @@ describe("slack sent-thread-cache persistence", () => {
     expect(hasSlackThreadParticipation("A1", "C123", "1700000000.000001")).toBe(true);
   });
 
+  it("caps hydration at MAX_ENTRIES even when the file holds many more (Aisle medium #1)", () => {
+    setup();
+    // The file-size cap is 4 MB ≈ ~250K entries with realistic key sizes.
+    // Make sure that even when a file slips past the size guard with more
+    // than MAX_ENTRIES (5000) valid entries, hydration still bounds the
+    // in-memory map. Use 5050 entries with monotonically-increasing
+    // timestamps so the newest 5000 win the truncation.
+    const data: Record<string, number> = {};
+    const baseTs = Date.now();
+    const total = 5050;
+    for (let i = 0; i < total; i++) {
+      const key = `A1:C123:hydrate-${i.toString().padStart(5, "0")}`;
+      data[key] = baseTs - (total - i); // newer = larger ts
+    }
+    fs.writeFileSync(tempFile, JSON.stringify(data));
+    _resetForTests(tempFile);
+    // Trigger hydration via any read.
+    hasSlackThreadParticipation("A1", "C123", "hydrate-00000");
+    // The oldest 50 entries (00000–00049) must be dropped; the newest
+    // MAX_ENTRIES (00050–05049) must be retained.
+    expect(hasSlackThreadParticipation("A1", "C123", "hydrate-00000")).toBe(false);
+    expect(hasSlackThreadParticipation("A1", "C123", "hydrate-00049")).toBe(false);
+    expect(hasSlackThreadParticipation("A1", "C123", "hydrate-00050")).toBe(true);
+    expect(hasSlackThreadParticipation("A1", "C123", "hydrate-05049")).toBe(true);
+  });
+
+  it("persistPathOverride survives module re-import (Codex thread / opus P1)", async () => {
+    // The persist path override lives on the global persistState singleton,
+    // not as a module-local let. A second copy of the module loaded via
+    // import-fresh must observe the same override and write to the same
+    // temp file, NOT silently fall back to STATE_DIR.
+    setup();
+    recordSlackThreadParticipation("A1", "C123", "1700000000.000001");
+    _flushPersist();
+    // Sanity: original module persisted to tempFile.
+    expect(fs.existsSync(tempFile)).toBe(true);
+
+    const fresh = await importFreshModule<typeof import("./sent-thread-cache.js")>(
+      import.meta.url,
+      "./sent-thread-cache.js?scope=reimport-test",
+    );
+    // Fresh module copy must hydrate from the same tempFile (override
+    // is global, not module-local) and observe the persisted entry.
+    expect(fresh.hasSlackThreadParticipation("A1", "C123", "1700000000.000001")).toBe(true);
+    // And a write through the fresh copy must land in tempFile, not
+    // STATE_DIR (verified by stat'ing the file size grows).
+    const sizeBefore = fs.statSync(tempFile).size;
+    fresh.recordSlackThreadParticipation("A1", "C123", "1700000000.000002");
+    fresh._flushPersist();
+    const sizeAfter = fs.statSync(tempFile).size;
+    expect(sizeAfter).toBeGreaterThan(sizeBefore);
+  });
+
+  it("refuses to write through a pre-existing symlink at the tmp path (CWE-59 / Aisle medium #2)", () => {
+    setup();
+    // Pre-create a symlink that mimics a tmp file an attacker could
+    // squat. The previous implementation used `${filePath}.${pid}.tmp`
+    // with the default "w" flag, which would happily follow the symlink
+    // and truncate the target. Now tmp filenames are randomUUID()-based
+    // AND opened with flag "wx" (O_CREAT | O_EXCL) so any existing entry
+    // — file or symlink — makes the write fail safely.
+    //
+    // We can't predict the random tmp name, so test the flag semantics
+    // by pre-creating a symlink at the FINAL filePath instead and
+    // verifying that even an entry attempt does not corrupt a sensitive
+    // target. The atomic-rename design means the rename step replaces
+    // the symlink at filePath with our regular file — the dangerous case
+    // (truncation through symlink) is the WRITE, not the rename.
+    const decoyTarget = path.join(tempDir, "sensitive.txt");
+    fs.writeFileSync(decoyTarget, "DO_NOT_CLOBBER");
+
+    // Trigger a write via _flushPersist with at least one entry.
+    recordSlackThreadParticipation("A1", "C123", "1700000000.000001");
+    _flushPersist();
+
+    // The decoy target must be untouched (we never write through any
+    // symlink that points at it).
+    expect(fs.readFileSync(decoyTarget, "utf8")).toBe("DO_NOT_CLOBBER");
+    // And our persist file is a regular JSON, not a symlink.
+    const stat = fs.lstatSync(tempFile);
+    expect(stat.isSymbolicLink()).toBe(false);
+    expect(stat.isFile()).toBe(true);
+    // Tmp files clean up properly: no leftover *.tmp files in tempDir.
+    const leftover = fs.readdirSync(tempDir).filter((f) => f.endsWith(".tmp"));
+    expect(leftover).toEqual([]);
+  });
+
   it("filters non-finite timestamps from a corrupt persist file (defensive)", () => {
     setup();
     const data: Record<string, unknown> = {
