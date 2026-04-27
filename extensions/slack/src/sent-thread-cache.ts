@@ -177,7 +177,9 @@ export function recordSlackThreadParticipation(
   // recency thanks to delete-then-set above) once we exceed the cap.
   while (persistState.entries.size > MAX_ENTRIES) {
     const oldest = persistState.entries.keys().next().value;
-    if (oldest === undefined) break;
+    if (oldest === undefined) {
+      break;
+    }
     persistState.entries.delete(oldest);
   }
   schedulePersist();

@@ -217,10 +217,7 @@ describe("slack sent-thread-cache persistence", () => {
     const keys = Object.keys(data);
     // After re-record, thread-A's position should be after thread-B in
     // insertion order (Object.keys preserves Map insertion order in V8).
-    expect(keys).toEqual([
-      "A1:C123:thread-B",
-      "A1:C123:thread-A",
-    ]);
+    expect(keys).toEqual(["A1:C123:thread-B", "A1:C123:thread-A"]);
   });
 
   it("caps in-memory map size on insert (not just on serialise)", () => {
@@ -323,9 +320,15 @@ describe("slack sent-thread-cache test-helper guards", () => {
       delete process.env.OPENCLAW_TEST;
       expect(() => _resetForTests("/tmp/should-throw.json")).toThrow(/test-only helper/i);
     } finally {
-      if (saved.NODE_ENV !== undefined) process.env.NODE_ENV = saved.NODE_ENV;
-      if (saved.VITEST !== undefined) process.env.VITEST = saved.VITEST;
-      if (saved.OPENCLAW_TEST !== undefined) process.env.OPENCLAW_TEST = saved.OPENCLAW_TEST;
+      if (saved.NODE_ENV !== undefined) {
+        process.env.NODE_ENV = saved.NODE_ENV;
+      }
+      if (saved.VITEST !== undefined) {
+        process.env.VITEST = saved.VITEST;
+      }
+      if (saved.OPENCLAW_TEST !== undefined) {
+        process.env.OPENCLAW_TEST = saved.OPENCLAW_TEST;
+      }
     }
   });
 
@@ -341,9 +344,15 @@ describe("slack sent-thread-cache test-helper guards", () => {
       delete process.env.OPENCLAW_TEST;
       expect(() => _flushPersist()).toThrow(/test-only helper/i);
     } finally {
-      if (saved.NODE_ENV !== undefined) process.env.NODE_ENV = saved.NODE_ENV;
-      if (saved.VITEST !== undefined) process.env.VITEST = saved.VITEST;
-      if (saved.OPENCLAW_TEST !== undefined) process.env.OPENCLAW_TEST = saved.OPENCLAW_TEST;
+      if (saved.NODE_ENV !== undefined) {
+        process.env.NODE_ENV = saved.NODE_ENV;
+      }
+      if (saved.VITEST !== undefined) {
+        process.env.VITEST = saved.VITEST;
+      }
+      if (saved.OPENCLAW_TEST !== undefined) {
+        process.env.OPENCLAW_TEST = saved.OPENCLAW_TEST;
+      }
     }
   });
 });
