@@ -700,18 +700,18 @@ export function renderApp(state: AppViewState) {
     if (!state.client || !state.connected) {
       return null;
     }
-    const payload = (await state.client.request("wiki.get", {
-      lookup,
-      fromLine: 1,
-      lineCount: 5000,
-    })) as {
+    const payload: {
       title?: unknown;
       path?: unknown;
       content?: unknown;
       updatedAt?: unknown;
       totalLines?: unknown;
       truncated?: unknown;
-    } | null;
+    } | null = await state.client.request("wiki.get", {
+      lookup,
+      fromLine: 1,
+      lineCount: 5000,
+    });
     const title =
       typeof payload?.title === "string" && payload.title.trim() ? payload.title.trim() : lookup;
     const path =
@@ -1313,7 +1313,7 @@ export function renderApp(state: AppViewState) {
       },
       onSlashCommand: (cmd) => {
         state.setTab("chat" as import("./navigation.ts").Tab);
-        state.chatMessage = cmd.endsWith(" ") ? cmd : `${cmd} `;
+        state.handleChatDraftChange(cmd.endsWith(" ") ? cmd : `${cmd} `);
       },
     })}
     <div
@@ -1587,6 +1587,7 @@ export function renderApp(state: AppViewState) {
               onSessionKeyChange: (next) => {
                 state.sessionKey = next;
                 state.chatMessage = "";
+                state.resetChatInputHistoryNavigation();
                 state.chatMessages = [];
                 state.chatToolMessages = [];
                 state.chatStream = null;
@@ -2361,8 +2362,9 @@ export function renderApp(state: AppViewState) {
               },
               onChatScroll: (event) => state.handleChatScroll(event),
               getDraft: () => state.chatMessage,
-              onDraftChange: (next) => (state.chatMessage = next),
+              onDraftChange: (next) => state.handleChatDraftChange(next),
               onRequestUpdate: requestHostUpdate,
+              onHistoryKeydown: (input) => state.handleChatInputHistoryKey(input),
               attachments: state.chatAttachments,
               onAttachmentsChange: (next) => (state.chatAttachments = next),
               onSend: () => state.handleSendChat(),
