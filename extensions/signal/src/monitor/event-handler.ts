@@ -321,17 +321,13 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       },
     });
 
-    // Send early typing indicator before dispatch to reduce perceived latency.
-    // The default typing indicator only fires on the first AI token (onReplyStart),
-    // but group messages have significant pre-dispatch overhead (history building,
-    // blocking hooks, larger context assembly). This fire-and-forget call ensures
-    // users see "typing..." immediately rather than waiting through pre-processing.
-    if (ctxPayload.To) {
-      sendTypingSignal(ctxPayload.To, {
-        baseUrl: deps.baseUrl,
-        account: deps.account,
-        accountId: deps.accountId,
-      }).catch(() => {});
+    // Early typing for GROUP messages only — group dispatch carries heavy
+    // pre-AI overhead (history build, hook chain, context assembly) that
+    // DMs don't have. Routes through typingCallbacks.onReplyStart so we
+    // reuse keepalive (3s tick), 60s TTL safety, and onIdle/onCleanup
+    // teardown wired into createReplyDispatcherWithTyping.
+    if (entry.isGroup) {
+      typingCallbacks?.onReplyStart().catch(() => {});
     }
 
     const { queuedFinal } = await dispatchInboundMessage({
