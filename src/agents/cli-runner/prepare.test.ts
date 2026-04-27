@@ -5,6 +5,8 @@ import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { __testing as cliBackendsTesting } from "../cli-backends.js";
+import { hashCliSessionText } from "../cli-session.js";
 import { buildActiveMusicGenerationTaskPromptContextForSession } from "../music-generation-task-status.js";
 import { buildActiveVideoGenerationTaskPromptContextForSession } from "../video-generation-task-status.js";
 import {
@@ -13,35 +15,31 @@ import {
   shouldSkipLocalCliCredentialEpoch,
 } from "./prepare.js";
 
-vi.mock("../../plugins/hook-runner-global.js", async () => {
-  const actual = await vi.importActual<typeof import("../../plugins/hook-runner-global.js")>(
-    "../../plugins/hook-runner-global.js",
-  );
-  return {
-    ...actual,
-    getGlobalHookRunner: vi.fn(() => null),
-  };
-});
+vi.mock("../../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: vi.fn(() => null),
+}));
 
-vi.mock("../video-generation-task-status.js", async () => {
-  const actual = await vi.importActual<typeof import("../video-generation-task-status.js")>(
-    "../video-generation-task-status.js",
-  );
-  return {
-    ...actual,
-    buildActiveVideoGenerationTaskPromptContextForSession: vi.fn(() => undefined),
-  };
-});
+vi.mock("../../tts/tts.js", () => ({
+  buildTtsSystemPromptHint: vi.fn(() => undefined),
+}));
 
-vi.mock("../music-generation-task-status.js", async () => {
-  const actual = await vi.importActual<typeof import("../music-generation-task-status.js")>(
-    "../music-generation-task-status.js",
-  );
-  return {
-    ...actual,
-    buildActiveMusicGenerationTaskPromptContextForSession: vi.fn(() => undefined),
-  };
-});
+vi.mock("../video-generation-task-status.js", () => ({
+  VIDEO_GENERATION_TASK_KIND: "video_generation",
+  buildActiveVideoGenerationTaskPromptContextForSession: vi.fn(() => undefined),
+  buildVideoGenerationTaskStatusDetails: vi.fn(() => ({})),
+  buildVideoGenerationTaskStatusText: vi.fn(() => ""),
+  findActiveVideoGenerationTaskForSession: vi.fn(() => undefined),
+  getVideoGenerationTaskProviderId: vi.fn(() => undefined),
+  isActiveVideoGenerationTask: vi.fn(() => false),
+}));
+
+vi.mock("../music-generation-task-status.js", () => ({
+  MUSIC_GENERATION_TASK_KIND: "music_generation",
+  buildActiveMusicGenerationTaskPromptContextForSession: vi.fn(() => undefined),
+  buildMusicGenerationTaskStatusDetails: vi.fn(() => ({})),
+  buildMusicGenerationTaskStatusText: vi.fn(() => ""),
+  findActiveMusicGenerationTaskForSession: vi.fn(() => undefined),
+}));
 
 const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
 const mockBuildActiveVideoGenerationTaskPromptContextForSession = vi.mocked(
@@ -51,10 +49,15 @@ const mockBuildActiveMusicGenerationTaskPromptContextForSession = vi.mocked(
   buildActiveMusicGenerationTaskPromptContextForSession,
 );
 
-function createCliBackendConfig(): OpenClawConfig {
+function createCliBackendConfig(
+  params: { systemPromptOverride?: string | null } = {},
+): OpenClawConfig {
   return {
     agents: {
       defaults: {
+        ...(params.systemPromptOverride !== null
+          ? { systemPromptOverride: params.systemPromptOverride ?? "test system prompt" }
+          : {}),
         cliBackends: {
           "test-cli": {
             command: "test-cli",
@@ -114,13 +117,17 @@ function appendTranscriptEntry(
 
 describe("shouldSkipLocalCliCredentialEpoch", () => {
   beforeEach(() => {
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [],
+    });
     setCliRunnerPrepareTestDeps({
       makeBootstrapWarn: vi.fn(() => () => undefined),
       resolveBootstrapContextForRun: vi.fn(async () => ({
         bootstrapFiles: [],
         contextFiles: [],
       })),
-      resolveOpenClawDocsPath: vi.fn(async () => null),
+      resolveOpenClawReferencePaths: vi.fn(async () => ({ docsPath: null, sourcePath: null })),
     });
     mockGetGlobalHookRunner.mockReturnValue(null);
     mockBuildActiveVideoGenerationTaskPromptContextForSession.mockReturnValue(undefined);
@@ -128,6 +135,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
   });
 
   afterEach(() => {
+    cliBackendsTesting.resetDepsForTest();
     mockGetGlobalHookRunner.mockReset();
     mockBuildActiveVideoGenerationTaskPromptContextForSession.mockReset();
     mockBuildActiveMusicGenerationTaskPromptContextForSession.mockReset();
@@ -301,7 +309,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         model: "test-model",
         timeoutMs: 1_000,
         runId: "run-test-legacy-merge",
-        config: createCliBackendConfig(),
+        config: createCliBackendConfig({ systemPromptOverride: null }),
       });
 
       expect(context.params.prompt).toBe("prompt prepend\n\nlegacy prepend\n\nlatest ask");
@@ -336,14 +344,70 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         model: "test-model",
         timeoutMs: 1_000,
         runId: "run-test-hook-failure",
-        extraSystemPrompt: "base extra system",
-        config: createCliBackendConfig(),
+        config: createCliBackendConfig({ systemPromptOverride: "base extra system" }),
       });
 
       expect(context.params.prompt).toBe("latest ask");
-      expect(context.systemPrompt).toContain("base extra system");
+      expect(context.systemPrompt).toBe("base extra system");
       expect(context.systemPrompt).not.toContain("hook exploded");
       expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledOnce();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses explicit static prompt text for CLI session reuse hashing", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-static-prompt",
+        extraSystemPrompt: "## Inbound Context\nchannel=telegram",
+        extraSystemPromptStatic: "",
+        cliSessionBinding: {
+          sessionId: "cli-session",
+        },
+        config: createCliBackendConfig({ systemPromptOverride: null }),
+      });
+
+      expect(context.systemPrompt).toContain("## Inbound Context\nchannel=telegram");
+      expect(context.extraSystemPromptHash).toBeUndefined();
+      expect(context.reusableCliSession).toEqual({ sessionId: "cli-session" });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores volatile prompt text when static prompt text matches", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      const staticPrompt = "## Direct Context\nYou are in a Telegram direct conversation.";
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-volatile-prompt",
+        extraSystemPrompt: `## Inbound Context\nchannel=heartbeat\n\n${staticPrompt}`,
+        extraSystemPromptStatic: staticPrompt,
+        cliSessionBinding: {
+          sessionId: "cli-session",
+          extraSystemPromptHash: hashCliSessionText(staticPrompt),
+        },
+        config: createCliBackendConfig(),
+      });
+
+      expect(context.extraSystemPromptHash).toBe(hashCliSessionText(staticPrompt));
+      expect(context.reusableCliSession).toEqual({ sessionId: "cli-session" });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

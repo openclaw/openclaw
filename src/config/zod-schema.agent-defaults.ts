@@ -1,11 +1,11 @@
 import { z } from "zod";
-import { DEFAULT_LLM_IDLE_TIMEOUT_SECONDS } from "./agent-timeout-defaults.js";
 import { isValidNonNegativeByteSizeString } from "./byte-size.js";
 import {
   HeartbeatSchema,
   AgentSandboxSchema,
   AgentContextLimitsSchema,
   AgentEmbeddedHarnessSchema,
+  AgentRuntimePolicySchema,
   AgentModelSchema,
   MemorySearchSchema,
 } from "./zod-schema.agent-runtime.js";
@@ -18,6 +18,11 @@ import {
 } from "./zod-schema.core.js";
 
 export const SilentReplyPolicySchema = z.union([z.literal("allow"), z.literal("disallow")]);
+
+const NonNegativeByteSizeSchema = z.union([
+  z.number().int().nonnegative(),
+  z.string().refine(isValidNonNegativeByteSizeString, "Expected byte size string like 2mb"),
+]);
 
 export const SilentReplyPolicyConfigSchema = z
   .object({
@@ -39,6 +44,7 @@ export const AgentDefaultsSchema = z
   .object({
     /** Global default provider params applied to all models before per-model and per-agent overrides. */
     params: z.record(z.string(), z.unknown()).optional(),
+    agentRuntime: AgentRuntimePolicySchema,
     embeddedHarness: AgentEmbeddedHarnessSchema,
     model: AgentModelSchema.optional(),
     imageModel: AgentModelSchema.optional(),
@@ -83,7 +89,9 @@ export const AgentDefaultsSchema = z
       .strict()
       .optional(),
     skipBootstrap: z.boolean().optional(),
-    contextInjection: z.union([z.literal("always"), z.literal("continuation-skip")]).optional(),
+    contextInjection: z
+      .union([z.literal("always"), z.literal("continuation-skip"), z.literal("never")])
+      .optional(),
     bootstrapMaxChars: z.number().int().positive().optional(),
     bootstrapTotalMaxChars: z.number().int().positive().optional(),
     experimental: z
@@ -153,19 +161,6 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
-    llm: z
-      .object({
-        idleTimeoutSeconds: z
-          .number()
-          .int()
-          .nonnegative()
-          .optional()
-          .describe(
-            `Idle timeout for LLM streaming responses in seconds. If no token is received within this time, the request is aborted. Set to 0 to disable. Default: ${DEFAULT_LLM_IDLE_TIMEOUT_SECONDS} seconds.`,
-          ),
-      })
-      .strict()
-      .optional(),
     compaction: z
       .object({
         mode: z.union([z.literal("default"), z.literal("safeguard")]).optional(),
@@ -195,20 +190,14 @@ export const AgentDefaultsSchema = z
           .object({
             enabled: z.boolean().optional(),
             softThresholdTokens: z.number().int().nonnegative().optional(),
-            forceFlushTranscriptBytes: z
-              .union([
-                z.number().int().nonnegative(),
-                z
-                  .string()
-                  .refine(isValidNonNegativeByteSizeString, "Expected byte size string like 2mb"),
-              ])
-              .optional(),
+            forceFlushTranscriptBytes: NonNegativeByteSizeSchema.optional(),
             prompt: z.string().optional(),
             systemPrompt: z.string().optional(),
           })
           .strict()
           .optional(),
         truncateAfterCompaction: z.boolean().optional(),
+        maxActiveTranscriptBytes: NonNegativeByteSizeSchema.optional(),
         notifyUser: z.boolean().optional(),
       })
       .strict()

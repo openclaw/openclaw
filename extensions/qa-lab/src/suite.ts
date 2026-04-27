@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { disposeRegisteredAgentHarnesses } from "openclaw/plugin-sdk/agent-harness";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { startQaGatewayChild, type QaCliBackendAuthMode } from "./gateway-child.js";
 import type {
@@ -38,6 +38,7 @@ import {
   collectQaSuitePluginIds,
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,
+  resolveQaSuiteWorkerStartStaggerMs,
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,
   selectQaSuiteScenarios,
@@ -285,7 +286,7 @@ export type QaSuiteSummaryJsonParams = {
 };
 
 /**
- * Strongly-typed shape of `qa-suite-summary.json`. The GPT-5.4 parity gate
+ * Strongly-typed shape of `qa-suite-summary.json`. The GPT-5.5 parity gate
  * (agentic-parity-report.ts, #64441) and any future parity wrapper can
  * import this type instead of re-declaring the shape, so changes to the
  * summary schema propagate through to every consumer at type-check time.
@@ -293,7 +294,7 @@ export type QaSuiteSummaryJsonParams = {
 export type { QaSuiteSummaryJson } from "./suite-summary.js";
 
 /**
- * Pure-ish JSON builder for qa-suite-summary.json. Exported so the GPT-5.4
+ * Pure-ish JSON builder for qa-suite-summary.json. Exported so the GPT-5.5
  * parity gate (agentic-parity-report.ts, #64441) and any future parity
  * runner can assert-and-trust the provider/model that produced a given
  * summary instead of blindly accepting the caller's candidateLabel /
@@ -440,9 +441,54 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
         startedAt: startedAt.toISOString(),
         scenarios: [...liveScenarioOutcomes],
       });
+    const completedScenarioResults: Array<QaSuiteScenarioResult | undefined> = Array.from({
+      length: selectedCatalogScenarios.length,
+    });
+    let artifactWriteQueue = Promise.resolve();
+    const writePartialArtifacts = () => {
+      const partialScenarios = completedScenarioResults.filter(
+        (scenario): scenario is QaSuiteScenarioResult => scenario !== undefined,
+      );
+      if (partialScenarios.length === 0) {
+        return;
+      }
+      artifactWriteQueue = artifactWriteQueue
+        .then(async () => {
+          const partialFinishedAt = new Date();
+          const { report, reportPath } = await writeQaSuiteArtifacts({
+            outputDir,
+            startedAt,
+            finishedAt: partialFinishedAt,
+            scenarios: partialScenarios,
+            transport,
+            providerMode,
+            primaryModel,
+            alternateModel,
+            fastMode,
+            concurrency,
+            scenarioIds:
+              params?.scenarioIds && params.scenarioIds.length > 0
+                ? selectedCatalogScenarios.map((scenario) => scenario.id)
+                : undefined,
+          });
+          lab.setLatestReport({
+            outputPath: reportPath,
+            markdown: report,
+            generatedAt: partialFinishedAt.toISOString(),
+          } satisfies QaLabLatestReport);
+        })
+        .catch((error) => {
+          writeQaSuiteProgress(
+            progressEnabled,
+            `partial artifact write failed: ${sanitizeQaSuiteProgressValue(formatErrorMessage(error))}`,
+          );
+        });
+    };
 
     try {
       updateScenarioRun();
+      const workerStartStaggerMs = resolveQaSuiteWorkerStartStaggerMs(concurrency);
+      writeQaSuiteProgress(progressEnabled, `scenario start stagger=${workerStartStaggerMs}ms`);
       const scenarios: QaSuiteScenarioResult[] = await mapQaSuiteWithConcurrency(
         selectedCatalogScenarios,
         concurrency,
@@ -507,6 +553,8 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
               progressEnabled,
               `scenario ${scenarioResult.status} (${index + 1}/${selectedCatalogScenarios.length}): ${scenarioIdForLog}`,
             );
+            completedScenarioResults[index] = scenarioResult;
+            writePartialArtifacts();
             return scenarioResult;
           } catch (error) {
             const details = formatErrorMessage(error);
@@ -536,10 +584,14 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
               progressEnabled,
               `scenario fail (${index + 1}/${selectedCatalogScenarios.length}): ${scenarioIdForLog}`,
             );
+            completedScenarioResults[index] = scenarioResult;
+            writePartialArtifacts();
             return scenarioResult;
           }
         },
+        { startStaggerMs: workerStartStaggerMs },
       );
+      await artifactWriteQueue;
       const finishedAt = new Date();
       const failedCount = scenarios.filter((scenario) => scenario.status === "fail").length;
       lab.setScenarioRun({

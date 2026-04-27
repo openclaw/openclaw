@@ -10,6 +10,8 @@ export type CliRoutedCommandId =
   | "config-unset"
   | "models-list"
   | "models-status"
+  | "tasks-list"
+  | "tasks-audit"
   | "channels-list"
   | "channels-status";
 
@@ -32,12 +34,42 @@ export type CliCommandCatalogEntry = {
 };
 
 export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
+  {
+    commandPath: ["crestodian"],
+    policy: { bypassConfigGuard: true, loadPlugins: "never", ensureCliPath: false },
+  },
   { commandPath: ["agent"], policy: { loadPlugins: "always" } },
-  { commandPath: ["message"], policy: { loadPlugins: "always" } },
+  { commandPath: ["message"], policy: { loadPlugins: "never" } },
   { commandPath: ["channels"], policy: { loadPlugins: "always" } },
   { commandPath: ["directory"], policy: { loadPlugins: "always" } },
   { commandPath: ["agents"], policy: { loadPlugins: "always" } },
+  {
+    commandPath: ["agents", "bind"],
+    exact: true,
+    policy: { loadPlugins: "never" },
+  },
+  {
+    commandPath: ["agents", "bindings"],
+    exact: true,
+    policy: { loadPlugins: "never" },
+  },
+  {
+    commandPath: ["agents", "unbind"],
+    exact: true,
+    policy: { loadPlugins: "never" },
+  },
+  {
+    commandPath: ["agents", "set-identity"],
+    exact: true,
+    policy: { loadPlugins: "never" },
+  },
+  {
+    commandPath: ["agents", "delete"],
+    exact: true,
+    policy: { loadPlugins: "never" },
+  },
   { commandPath: ["configure"], policy: { bypassConfigGuard: true, loadPlugins: "never" } },
+  { commandPath: ["migrate"], policy: { bypassConfigGuard: true, loadPlugins: "never" } },
   {
     commandPath: ["status"],
     policy: {
@@ -55,7 +87,10 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["gateway", "status"],
     exact: true,
-    policy: { routeConfigGuard: "always" },
+    policy: {
+      routeConfigGuard: "always",
+      loadPlugins: "never",
+    },
     route: { id: "gateway-status" },
   },
   {
@@ -66,6 +101,12 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   },
   {
     commandPath: ["agents", "list"],
+    // JSON callers (dashboards, monitoring scripts, IDE plugins) poll this
+    // command and don't need the plugin-derived `providers` enrichment that
+    // is only used in human text output. text-only skips the bundled-plugin
+    // import waterfall in `--json` mode, mirroring what `channels list`
+    // already does. Human (non-JSON) invocations still load plugins. (#71739)
+    policy: { loadPlugins: "text-only" },
     route: { id: "agents-list" },
   },
   {
@@ -91,6 +132,23 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     exact: true,
     policy: { ensureCliPath: false, routeConfigGuard: "always" },
     route: { id: "models-status" },
+  },
+  {
+    commandPath: ["tasks", "list"],
+    exact: true,
+    policy: { ensureCliPath: false, routeConfigGuard: "when-suppressed", loadPlugins: "never" },
+    route: { id: "tasks-list" },
+  },
+  {
+    commandPath: ["tasks", "audit"],
+    exact: true,
+    policy: { ensureCliPath: false, routeConfigGuard: "when-suppressed", loadPlugins: "never" },
+    route: { id: "tasks-audit" },
+  },
+  {
+    commandPath: ["tasks"],
+    policy: { ensureCliPath: false, routeConfigGuard: "when-suppressed", loadPlugins: "never" },
+    route: { id: "tasks-list" },
   },
   { commandPath: ["backup"], policy: { bypassConfigGuard: true } },
   { commandPath: ["doctor"], policy: { bypassConfigGuard: true } },
@@ -139,5 +197,10 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     exact: true,
     policy: { loadPlugins: "never" },
     route: { id: "channels-list" },
+  },
+  {
+    commandPath: ["channels", "logs"],
+    exact: true,
+    policy: { loadPlugins: "never" },
   },
 ];

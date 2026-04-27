@@ -7,8 +7,6 @@ read_when:
 title: "Gateway-owned pairing"
 ---
 
-# Gateway-owned pairing (Option B)
-
 In Gateway-owned pairing, the **Gateway** is the source of truth for which nodes
 are allowed to join. UIs (macOS app, future clients) are just frontends that
 approve or reject pending requests.
@@ -41,6 +39,7 @@ openclaw nodes pending
 openclaw nodes approve <requestId>
 openclaw nodes reject <requestId>
 openclaw nodes status
+openclaw nodes remove --node <id|name|ip>
 openclaw nodes rename --node <id|name|ip> --name "Living Room iPad"
 ```
 
@@ -59,6 +58,7 @@ Methods:
 - `node.pair.list` — list pending + paired nodes (`operator.pairing`).
 - `node.pair.approve` — approve a pending request (issues token).
 - `node.pair.reject` — reject a pending request.
+- `node.pair.remove` — remove a stale paired node entry.
 - `node.pair.verify` — verify `{ nodeId, token }`.
 
 Notes:
@@ -77,15 +77,12 @@ Notes:
   - `system.run` / `system.run.prepare` / `system.which` request:
     `operator.pairing` + `operator.admin`
 
-Important:
+<Warning>
+Node pairing is a trust and identity flow plus token issuance. It does **not** pin the live node command surface per node.
 
-- Node pairing is a trust/identity flow plus token issuance.
-- It does **not** pin the live node command surface per node.
-- Live node commands come from what the node declares on connect after the
-  gateway's global node command policy (`gateway.nodes.allowCommands` /
-  `denyCommands`) is applied.
-- Per-node `system.run` allow/ask policy lives on the node in
-  `exec.approvals.node.*`, not in the pairing record.
+- Live node commands come from what the node declares on connect after the gateway's global node command policy (`gateway.nodes.allowCommands` and `denyCommands`) is applied.
+- Per-node `system.run` allow and ask policy lives on the node in `exec.approvals.node.*`, not in the pairing record.
+  </Warning>
 
 ## Node command gating (2026.3.31+)
 
@@ -117,16 +114,45 @@ The macOS app can optionally attempt a **silent approval** when:
 
 If silent approval fails, it falls back to the normal “Approve/Reject” prompt.
 
+## Trusted-CIDR device auto-approval
+
+WS device pairing for `role: node` remains manual by default. For private
+node networks where the Gateway already trusts the network path, operators can
+opt in with explicit CIDRs or exact IPs:
+
+```json5
+{
+  gateway: {
+    nodes: {
+      pairing: {
+        autoApproveCidrs: ["192.168.1.0/24"],
+      },
+    },
+  },
+}
+```
+
+Security boundary:
+
+- Disabled when `gateway.nodes.pairing.autoApproveCidrs` is unset.
+- No blanket LAN or private-network auto-approve mode exists.
+- Only fresh `role: node` device pairing with no requested scopes is eligible.
+- Operator, browser, Control UI, and WebChat clients stay manual.
+- Role, scope, metadata, and public-key upgrades stay manual.
+- Same-host loopback trusted-proxy header paths are not eligible because that
+  path can be spoofed by local callers.
+
 ## Metadata-upgrade auto-approval
 
 When an already paired device reconnects with only non-sensitive metadata
 changes (for example, display name or client platform hints), OpenClaw treats
 that as a `metadata-upgrade`. Silent auto-approval is narrow: it applies only
-to trusted local CLI/helper reconnects that already proved possession of the
-shared token or password over loopback. Browser/Control UI clients and remote
-clients still use the explicit re-approval flow. Scope upgrades (read to
-write/admin) and public key changes are **not** eligible for metadata-upgrade
-auto-approval — they stay as explicit re-approval requests.
+to trusted non-browser local reconnects that already proved possession of local
+or shared credentials, including same-host native app reconnects after OS
+version metadata changes. Browser/Control UI clients and remote clients still
+use the explicit re-approval flow. Scope upgrades (read to write/admin) and
+public key changes are **not** eligible for metadata-upgrade auto-approval —
+they stay as explicit re-approval requests.
 
 ## QR pairing helpers
 
@@ -166,3 +192,9 @@ Security notes:
 - The transport is **stateless**; it does not store membership.
 - If the Gateway is offline or pairing is disabled, nodes cannot pair.
 - If the Gateway is in remote mode, pairing still happens against the remote Gateway’s store.
+
+## Related
+
+- [Channel pairing](/channels/pairing)
+- [Nodes](/nodes)
+- [Devices CLI](/cli/devices)

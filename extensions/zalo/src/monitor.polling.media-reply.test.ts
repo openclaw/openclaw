@@ -1,11 +1,14 @@
+import {
+  createEmptyPluginRegistry,
+  createRuntimeEnv,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/testing";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createEmptyPluginRegistry } from "../../../src/plugins/registry-empty.js";
-import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
-import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import type { PluginRuntime } from "../runtime-api.js";
 import {
   createLifecycleMonitorSetup,
   createTextUpdate,
+  settleAsyncWork,
 } from "../test-support/lifecycle-test-support.js";
 import {
   getUpdatesMock,
@@ -114,7 +117,8 @@ describe("Zalo polling media replies", () => {
     });
 
     try {
-      await vi.waitFor(() => expect(sendPhotoMock).toHaveBeenCalledTimes(1));
+      await settleAsyncWork();
+      expect(sendPhotoMock).toHaveBeenCalledTimes(1);
 
       expect(registry.httpRoutes).toHaveLength(1);
       expect(prepareHostedZaloMediaUrlMock).toHaveBeenCalledWith({
@@ -176,7 +180,8 @@ describe("Zalo polling media replies", () => {
     });
 
     try {
-      await vi.waitFor(() => expect(sendPhotoMock).toHaveBeenCalledTimes(1));
+      await settleAsyncWork();
+      expect(sendPhotoMock).toHaveBeenCalledTimes(1);
 
       expect(prepareHostedZaloMediaUrlMock).not.toHaveBeenCalled();
       expect(sendPhotoMock).toHaveBeenCalledWith(
@@ -223,7 +228,8 @@ describe("Zalo polling media replies", () => {
     let secondRun: Promise<void> | undefined;
 
     try {
-      await vi.waitFor(() => expect(firstRegistry.httpRoutes).toHaveLength(1));
+      await settleAsyncWork();
+      expect(firstRegistry.httpRoutes).toHaveLength(1);
 
       setActivePluginRegistry(secondRegistry);
       secondRun = monitorZaloProvider({
@@ -234,7 +240,8 @@ describe("Zalo polling media replies", () => {
         abortSignal: secondAbort.signal,
       });
 
-      await vi.waitFor(() => expect(secondRegistry.httpRoutes).toHaveLength(1));
+      await settleAsyncWork();
+      expect(secondRegistry.httpRoutes).toHaveLength(1);
     } finally {
       firstAbort.abort();
       secondAbort.abort();

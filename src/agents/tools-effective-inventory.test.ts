@@ -23,7 +23,6 @@ const effectiveInventoryState = vi.hoisted(() => ({
   pluginMeta: {} as Record<string, { pluginId: string } | undefined>,
   channelMeta: {} as Record<string, { channelId: string } | undefined>,
   effectivePolicy: {} as { profile?: string; providerProfile?: string },
-  resolvedModelCompat: undefined as Record<string, unknown> | undefined,
   createToolsMock: vi.fn<typeof createOpenClawCodingTools>(
     (_options) =>
       [
@@ -48,16 +47,6 @@ vi.mock("./pi-tools.js", () => ({
     effectiveInventoryState.createToolsMock(options),
 }));
 
-vi.mock("./pi-embedded-runner/model.js", () => ({
-  resolveModel: vi.fn(() => ({
-    model: effectiveInventoryState.resolvedModelCompat
-      ? { compat: effectiveInventoryState.resolvedModelCompat }
-      : undefined,
-    authStorage: {} as never,
-    modelRegistry: {} as never,
-  })),
-}));
-
 vi.mock("../plugins/tools.js", () => ({
   getPluginToolMeta: (tool: { name: string }) => effectiveInventoryState.pluginMeta[tool.name],
 }));
@@ -79,7 +68,6 @@ async function loadHarness(options?: {
   pluginMeta?: Record<string, { pluginId: string } | undefined>;
   channelMeta?: Record<string, { channelId: string } | undefined>;
   effectivePolicy?: { profile?: string; providerProfile?: string };
-  resolvedModelCompat?: Record<string, unknown>;
 }) {
   effectiveInventoryState.tools = options?.tools ?? [
     mockTool({ name: "exec", label: "Exec", description: "Run shell commands" }),
@@ -88,7 +76,6 @@ async function loadHarness(options?: {
   effectiveInventoryState.pluginMeta = options?.pluginMeta ?? {};
   effectiveInventoryState.channelMeta = options?.channelMeta ?? {};
   effectiveInventoryState.effectivePolicy = options?.effectivePolicy ?? {};
-  effectiveInventoryState.resolvedModelCompat = options?.resolvedModelCompat;
   effectiveInventoryState.createToolsMock =
     options?.createToolsMock ??
     vi.fn<typeof createOpenClawCodingTools>((_options) => effectiveInventoryState.tools);
@@ -111,7 +98,6 @@ describe("resolveEffectiveToolInventory", () => {
     effectiveInventoryState.pluginMeta = {};
     effectiveInventoryState.channelMeta = {};
     effectiveInventoryState.effectivePolicy = {};
-    effectiveInventoryState.resolvedModelCompat = undefined;
     effectiveInventoryState.createToolsMock = vi.fn<typeof createOpenClawCodingTools>(
       (_options) => effectiveInventoryState.tools,
     );
@@ -262,17 +248,81 @@ describe("resolveEffectiveToolInventory", () => {
     expect(result.profile).toBe("coding");
   });
 
+  it("adds an actionable notice when configured browser is filtered by the tool profile", async () => {
+    const { resolveEffectiveToolInventory } = await loadHarness({
+      tools: [
+        mockTool({ name: "web_fetch", label: "Web Fetch", description: "Fetch web content" }),
+      ],
+      effectivePolicy: { profile: "coding" },
+    });
+
+    const result = resolveEffectiveToolInventory({
+      cfg: {
+        browser: { enabled: true },
+        plugins: { entries: { browser: { enabled: true } } },
+      } as never,
+    });
+
+    expect(result.notices).toEqual([
+      {
+        id: "browser-filtered-by-profile",
+        severity: "info",
+        message:
+          'Browser is configured, but the current tool profile does not include the browser tool. Add tools.alsoAllow: ["browser"] or agents.list[].tools.alsoAllow: ["browser"]; tools.subagents.tools.allow alone cannot add it back after profile filtering.',
+      },
+    ]);
+  });
+
+  it("does not add a browser profile notice when browser is already available", async () => {
+    const { resolveEffectiveToolInventory } = await loadHarness({
+      tools: [
+        mockTool({ name: "browser", label: "Browser", description: "Control browser" }),
+        mockTool({ name: "web_fetch", label: "Web Fetch", description: "Fetch web content" }),
+      ],
+      effectivePolicy: { profile: "coding" },
+    });
+
+    const result = resolveEffectiveToolInventory({
+      cfg: {
+        browser: { enabled: true },
+        plugins: { entries: { browser: { enabled: true } } },
+      } as never,
+    });
+
+    expect(result.notices).toBeUndefined();
+  });
+
   it("passes resolved model compat into effective tool creation", async () => {
     const createToolsMock = vi.fn<typeof createOpenClawCodingTools>(() => [
       mockTool({ name: "exec", label: "Exec", description: "Run shell commands" }),
     ]);
     const { resolveEffectiveToolInventory } = await loadHarness({
       createToolsMock,
-      resolvedModelCompat: { supportsTools: true, supportsNativeWebSearch: true },
     });
 
     resolveEffectiveToolInventory({
-      cfg: {},
+      cfg: {
+        models: {
+          providers: {
+            xai: {
+              baseUrl: "https://api.x.ai/v1",
+              models: [
+                {
+                  id: "grok-test",
+                  name: "Grok Test",
+                  api: "openai-completions",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128_000,
+                  maxTokens: 8_192,
+                  compat: { supportsTools: true, nativeWebSearchTool: true },
+                },
+              ],
+            },
+          },
+        },
+      },
       agentDir: "/tmp/agents/main/agent",
       modelProvider: "xai",
       modelId: "grok-test",
@@ -281,7 +331,7 @@ describe("resolveEffectiveToolInventory", () => {
     expect(createToolsMock).toHaveBeenCalledWith(
       expect.objectContaining({
         allowGatewaySubagentBinding: true,
-        modelCompat: { supportsTools: true, supportsNativeWebSearch: true },
+        modelCompat: { supportsTools: true, nativeWebSearchTool: true },
       }),
     );
   });

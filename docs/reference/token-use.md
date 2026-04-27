@@ -101,6 +101,13 @@ Assistant transcript entries persist the same normalized usage shape, including
 returns usage metadata. This gives `/usage cost` and transcript-backed session
 status a stable source even after the live runtime state is gone.
 
+OpenClaw keeps provider usage accounting separate from the current context
+snapshot. Provider `usage.total` can include cached input, output, and multiple
+tool-loop model calls, so it is useful for cost and telemetry but can overstate
+the live context window. Context displays and diagnostics use the latest prompt
+snapshot (`promptTokens`, or the last model call when no prompt snapshot is
+available) for `context.used`.
+
 ## Cost estimation (when shown)
 
 Costs are estimated from your model pricing config:
@@ -212,3 +219,9 @@ rejects that combination with HTTP 401.
 - Prefer smaller models for verbose, exploratory work.
 
 See [Skills](/tools/skills) for the exact skill list overhead formula.
+
+## Related
+
+- [API usage and costs](/reference/api-usage-costs)
+- [Prompt caching](/reference/prompt-caching)
+- [Usage tracking](/concepts/usage-tracking)

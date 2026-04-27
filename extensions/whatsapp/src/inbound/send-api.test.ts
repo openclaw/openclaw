@@ -3,10 +3,10 @@ import { createWebSendApi } from "./send-api.js";
 
 const recordChannelActivity = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/infra-runtime")>(
-    "openclaw/plugin-sdk/infra-runtime",
-  );
+vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/channel-activity-runtime")
+  >("openclaw/plugin-sdk/channel-activity-runtime");
   return {
     ...actual,
     recordChannelActivity: (...args: unknown[]) => recordChannelActivity(...args),
@@ -97,6 +97,23 @@ describe("createWebSendApi", () => {
       channel: "whatsapp",
       accountId: "alt",
       direction: "outbound",
+    });
+  });
+
+  it("sends visible text separately from push-to-talk voice notes", async () => {
+    const payload = Buffer.from("aud");
+    await api.sendMessage("+1555", "voice text", payload, "audio/ogg");
+    expect(sendMessage).toHaveBeenNthCalledWith(
+      1,
+      "1555@s.whatsapp.net",
+      expect.objectContaining({
+        audio: payload,
+        ptt: true,
+        mimetype: "audio/ogg",
+      }),
+    );
+    expect(sendMessage).toHaveBeenNthCalledWith(2, "1555@s.whatsapp.net", {
+      text: "voice text",
     });
   });
 

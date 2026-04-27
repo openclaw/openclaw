@@ -61,3 +61,8 @@ If you need longer retention, re‑capture from the client.
   in **debug** mode only.
 - If no hosts are found, open one of the host apps (Peekaboo.app or OpenClaw.app)
   and confirm permissions are granted.
+
+## Related
+
+- [macOS app](/platforms/macos)
+- [macOS permissions](/platforms/mac/permissions)

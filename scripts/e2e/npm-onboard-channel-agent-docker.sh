@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
+# Installs a prepared OpenClaw npm tarball in Docker, runs non-interactive
+# onboarding for a channel, and verifies one mocked model turn through Gateway.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-npm-onboard-channel-agent-e2e" OPENCLAW_NPM_ONBOARD_E2E_IMAGE)"
-DOCKER_TARGET="${OPENCLAW_NPM_ONBOARD_DOCKER_TARGET:-e2e-runner}"
+DOCKER_TARGET="${OPENCLAW_NPM_ONBOARD_DOCKER_TARGET:-bare}"
 HOST_BUILD="${OPENCLAW_NPM_ONBOARD_HOST_BUILD:-1}"
-PACKAGE_TGZ="${OPENCLAW_NPM_ONBOARD_PACKAGE_TGZ:-}"
+PACKAGE_TGZ="${OPENCLAW_CURRENT_PACKAGE_TGZ:-}"
 CHANNEL="${OPENCLAW_NPM_ONBOARD_CHANNEL:-telegram}"
 
 case "$CHANNEL" in
@@ -22,45 +25,28 @@ docker_e2e_build_or_reuse "$IMAGE_NAME" npm-onboard-channel-agent "$ROOT_DIR/scr
 
 prepare_package_tgz() {
   if [ -n "$PACKAGE_TGZ" ]; then
-    if [ ! -f "$PACKAGE_TGZ" ]; then
-      echo "OPENCLAW_NPM_ONBOARD_PACKAGE_TGZ does not exist: $PACKAGE_TGZ" >&2
-      exit 1
-    fi
-    PACKAGE_TGZ="$(cd "$(dirname "$PACKAGE_TGZ")" && pwd)/$(basename "$PACKAGE_TGZ")"
+    PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz npm-onboard-channel-agent "$PACKAGE_TGZ")"
     return 0
   fi
-
-  if [ "$HOST_BUILD" != "0" ]; then
-    echo "Building host package artifacts..."
-    run_logged npm-onboard-channel-agent-host-build pnpm build
-  else
-    echo "Skipping host build (OPENCLAW_NPM_ONBOARD_HOST_BUILD=0)"
-  fi
-
-  echo "Writing package inventory and packing once..."
-  run_logged npm-onboard-channel-agent-inventory node --import tsx --input-type=module -e 'const { writePackageDistInventory } = await import("./src/infra/package-dist-inventory.ts"); await writePackageDistInventory(process.cwd());'
-  local pack_dir
-  pack_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-npm-onboard-pack.XXXXXX")"
-  run_logged npm-onboard-channel-agent-pack npm pack --ignore-scripts --pack-destination "$pack_dir"
-  PACKAGE_TGZ="$(find "$pack_dir" -maxdepth 1 -name 'openclaw-*.tgz' -print -quit)"
-  if [ -z "$PACKAGE_TGZ" ]; then
-    echo "missing packed OpenClaw tarball" >&2
+  if [ "$HOST_BUILD" = "0" ] && [ -z "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}" ]; then
+    echo "OPENCLAW_NPM_ONBOARD_HOST_BUILD=0 requires OPENCLAW_CURRENT_PACKAGE_TGZ" >&2
     exit 1
   fi
-  PACKAGE_TGZ="$(cd "$(dirname "$PACKAGE_TGZ")" && pwd)/$(basename "$PACKAGE_TGZ")"
+  PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz npm-onboard-channel-agent)"
 }
 
 prepare_package_tgz
 
-DOCKER_PACKAGE_TGZ="/tmp/openclaw-current.tgz"
-run_log="$(mktemp "${TMPDIR:-/tmp}/openclaw-npm-onboard-channel-agent.XXXXXX")"
+docker_e2e_package_mount_args "$PACKAGE_TGZ"
+docker_e2e_harness_mount_args
+run_log="$(docker_e2e_run_log npm-onboard-channel-agent)"
 
 echo "Running npm tarball onboard/channel/agent Docker E2E ($CHANNEL)..."
 if ! docker run --rm \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e OPENCLAW_NPM_ONBOARD_CHANNEL="$CHANNEL" \
-  -e OPENCLAW_CURRENT_PACKAGE_TGZ="$DOCKER_PACKAGE_TGZ" \
-  -v "$PACKAGE_TGZ:$DOCKER_PACKAGE_TGZ:ro" \
+  "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
+  "${DOCKER_E2E_HARNESS_ARGS[@]}" \
   -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'
 set -euo pipefail
 
@@ -148,165 +134,7 @@ assert_dep_present() {
   fi
 }
 
-cat >/tmp/openclaw-mock-openai.mjs <<'NODE'
-import http from "node:http";
-import fs from "node:fs";
-
-const port = Number(process.env.MOCK_PORT);
-const successMarker = process.env.SUCCESS_MARKER;
-const requestLog = process.env.MOCK_REQUEST_LOG;
-
-function readBody(req) {
-  return new Promise((resolve, reject) => {
-    let body = "";
-    req.setEncoding("utf8");
-    req.on("data", (chunk) => {
-      body += chunk;
-    });
-    req.on("end", () => resolve(body));
-    req.on("error", reject);
-  });
-}
-
-function writeJson(res, status, body) {
-  res.writeHead(status, { "content-type": "application/json" });
-  res.end(JSON.stringify(body));
-}
-
-function responseEvents(text) {
-  return [
-    {
-      type: "response.output_item.added",
-      item: {
-        type: "message",
-        id: "msg_e2e_1",
-        role: "assistant",
-        content: [],
-        status: "in_progress",
-      },
-    },
-    {
-      type: "response.output_item.done",
-      item: {
-        type: "message",
-        id: "msg_e2e_1",
-        role: "assistant",
-        status: "completed",
-        content: [{ type: "output_text", text, annotations: [] }],
-      },
-    },
-    {
-      type: "response.completed",
-      response: {
-        status: "completed",
-        usage: {
-          input_tokens: 11,
-          output_tokens: 7,
-          total_tokens: 18,
-          input_tokens_details: { cached_tokens: 0 },
-        },
-      },
-    },
-  ];
-}
-
-function writeSse(res, events) {
-  res.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-  });
-  for (const event of events) {
-    res.write(`data: ${JSON.stringify(event)}\n\n`);
-  }
-  res.write("data: [DONE]\n\n");
-  res.end();
-}
-
-function writeChatCompletion(res, stream) {
-  if (stream) {
-    writeSse(res, [
-      {
-        id: "chatcmpl_e2e",
-        object: "chat.completion.chunk",
-        choices: [{ index: 0, delta: { role: "assistant", content: successMarker } }],
-      },
-      {
-        id: "chatcmpl_e2e",
-        object: "chat.completion.chunk",
-        choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-      },
-    ]);
-    return;
-  }
-  writeJson(res, 200, {
-    id: "chatcmpl_e2e",
-    object: "chat.completion",
-    choices: [{ index: 0, message: { role: "assistant", content: successMarker }, finish_reason: "stop" }],
-    usage: { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 },
-  });
-}
-
-const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url ?? "/", "http://127.0.0.1");
-  if (req.method === "GET" && url.pathname === "/health") {
-    writeJson(res, 200, { ok: true });
-    return;
-  }
-  if (req.method === "GET" && url.pathname === "/v1/models") {
-    writeJson(res, 200, {
-      object: "list",
-      data: [{ id: "gpt-5.4", object: "model", owned_by: "openclaw-e2e" }],
-    });
-    return;
-  }
-
-  const bodyText = await readBody(req);
-  fs.appendFileSync(requestLog, JSON.stringify({ method: req.method, path: url.pathname, body: bodyText }) + "\n");
-  let body = {};
-  try {
-    body = bodyText ? JSON.parse(bodyText) : {};
-  } catch {
-    body = {};
-  }
-
-  if (req.method === "POST" && url.pathname === "/v1/responses") {
-    if (body.stream === false) {
-      writeJson(res, 200, {
-        id: "resp_e2e",
-        object: "response",
-        status: "completed",
-        output: [
-          {
-            type: "message",
-            id: "msg_e2e_1",
-            role: "assistant",
-            status: "completed",
-            content: [{ type: "output_text", text: successMarker, annotations: [] }],
-          },
-        ],
-        usage: { input_tokens: 11, output_tokens: 7, total_tokens: 18 },
-      });
-      return;
-    }
-    writeSse(res, responseEvents(successMarker));
-    return;
-  }
-
-  if (req.method === "POST" && url.pathname === "/v1/chat/completions") {
-    writeChatCompletion(res, body.stream !== false);
-    return;
-  }
-
-  writeJson(res, 404, { error: { message: `unhandled mock route: ${req.method} ${url.pathname}` } });
-});
-
-server.listen(port, "127.0.0.1", () => {
-  console.log(`mock-openai listening on ${port}`);
-});
-NODE
-
-MOCK_PORT="$MOCK_PORT" SUCCESS_MARKER="$SUCCESS_MARKER" MOCK_REQUEST_LOG="$MOCK_REQUEST_LOG" node /tmp/openclaw-mock-openai.mjs >/tmp/openclaw-mock-openai.log 2>&1 &
+MOCK_PORT="$MOCK_PORT" SUCCESS_MARKER="$SUCCESS_MARKER" MOCK_REQUEST_LOG="$MOCK_REQUEST_LOG" node scripts/e2e/mock-openai-server.mjs >/tmp/openclaw-mock-openai.log 2>&1 &
 mock_pid="$!"
 for _ in $(seq 1 80); do
   if node -e "fetch('http://127.0.0.1:${MOCK_PORT}/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"; then
@@ -364,7 +192,7 @@ const path = require("node:path");
 const mockPort = Number(process.argv[2]);
 const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
 const cfg = JSON.parse(fs.readFileSync(configPath, "utf8"));
-const modelRef = "openai/gpt-5.4";
+const modelRef = "openai/gpt-5.5";
 const cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
 cfg.models = {
@@ -380,8 +208,8 @@ cfg.models = {
       request: { ...(cfg.models?.providers?.openai?.request || {}), allowPrivateNetwork: true },
       models: [
         {
-          id: "gpt-5.4",
-          name: "gpt-5.4",
+          id: "gpt-5.5",
+          name: "gpt-5.5",
           api: "openai-responses",
           reasoning: false,
           input: ["text", "image"],
@@ -432,10 +260,8 @@ if (!serialized.includes(token)) {
 }
 NODE
 
-assert_dep_present "$DEP_SENTINEL"
-
-echo "Running doctor after activated plugin dep install..."
-openclaw doctor --non-interactive >/tmp/openclaw-doctor.log 2>&1
+echo "Running doctor after channel activation..."
+openclaw doctor --repair --non-interactive >/tmp/openclaw-doctor.log 2>&1
 assert_dep_present "$DEP_SENTINEL"
 
 echo "Running local agent turn against mocked OpenAI..."
@@ -463,7 +289,7 @@ NODE
 echo "npm tarball onboard/channel/agent Docker E2E passed for $CHANNEL"
 EOF
 then
-  cat "$run_log"
+  docker_e2e_print_log "$run_log"
   rm -f "$run_log"
   exit 1
 fi

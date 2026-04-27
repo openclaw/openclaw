@@ -92,6 +92,11 @@ Treat Gateway and node as one operator trust domain, with different roles:
 - **Gateway** is the control plane and policy surface (`gateway.auth`, tool policy, routing).
 - **Node** is remote execution surface paired to that Gateway (commands, device actions, host-local capabilities).
 - A caller authenticated to the Gateway is trusted at Gateway scope. After pairing, node actions are trusted operator actions on that node.
+- Direct loopback backend clients authenticated with the shared gateway
+  token/password can make internal control-plane RPCs without presenting a user
+  device identity. This is not a remote or browser pairing bypass: network
+  clients, node clients, device-token clients, and explicit device identities
+  still go through pairing and scope-upgrade enforcement.
 - `sessionKey` is routing/context selection, not per-user auth.
 - Exec approvals (allowlist + ask) are guardrails for operator intent, not hostile multi-tenant isolation.
 - OpenClaw's product default for trusted single-operator setups is that host exec on `gateway`/`node` is allowed without approval prompts (`security="full"`, `ask="off"` unless you tighten it). That default is intentional UX, not a vulnerability by itself.
@@ -111,12 +116,14 @@ Use this as the quick model when triaging risk:
 | `canvas.eval` / browser evaluate                          | Intentional operator capability when enabled      | "Any JS eval primitive is automatically a vuln in this trust model"           |
 | Local TUI `!` shell                                       | Explicit operator-triggered local execution       | "Local shell convenience command is remote injection"                         |
 | Node pairing and node commands                            | Operator-level remote execution on paired devices | "Remote device control should be treated as untrusted user access by default" |
+| `gateway.nodes.pairing.autoApproveCidrs`                  | Opt-in trusted-network node enrollment policy     | "A disabled-by-default allowlist is an automatic pairing vulnerability"       |
 
 ## Not vulnerabilities by design
 
 <Accordion title="Common findings that are out of scope">
-  These patterns get reported often and are usually closed as no-action unless
-  a real boundary bypass is demonstrated:
+
+These patterns get reported often and are usually closed as no-action unless
+a real boundary bypass is demonstrated:
 
 - Prompt-injection-only chains without a policy, auth, or sandbox bypass.
 - Claims that assume hostile multi-tenant operation on one shared host or
@@ -132,9 +139,16 @@ Use this as the quick model when triaging risk:
   approval layer for `system.run`, when the real execution boundary is still
   the gateway's global node command policy plus the node's own exec
   approvals.
+- Reports that treat configured `gateway.nodes.pairing.autoApproveCidrs` as a
+  vulnerability by itself. This setting is disabled by default, requires
+  explicit CIDR/IP entries, only applies to first-time `role: node` pairing with
+  no requested scopes, and does not auto-approve operator/browser/Control UI,
+  WebChat, role upgrades, scope upgrades, metadata changes, public-key changes,
+  or same-host loopback trusted-proxy header paths.
 - "Missing per-user authorization" findings that treat `sessionKey` as an
   auth token.
-  </Accordion>
+
+</Accordion>
 
 ## Hardened baseline in 60 seconds
 
@@ -351,6 +365,12 @@ gateway:
 
 When `trustedProxies` is configured, the Gateway uses `X-Forwarded-For` to determine the client IP. `X-Real-IP` is ignored by default unless `gateway.allowRealIpFallback: true` is explicitly set.
 
+Trusted proxy headers do not make node device pairing automatically trusted.
+`gateway.nodes.pairing.autoApproveCidrs` is a separate, disabled-by-default
+operator policy. Even when enabled, loopback-source trusted-proxy header paths
+are excluded from node auto-approval because local callers can forge those
+headers.
+
 Good reverse proxy behavior (overwrite incoming forwarding headers):
 
 ```nginx
@@ -461,6 +481,10 @@ Two built-in tools can make persistent control-plane changes:
 The owner-only `gateway` runtime tool still refuses to rewrite
 `tools.exec.ask` or `tools.exec.security`; legacy `tools.bash.*` aliases are
 normalized to the same protected exec paths before the write.
+Agent-driven `gateway config.apply` and `gateway config.patch` edits are
+fail-closed by default: only a narrow set of prompt, model, and mention-gating
+paths are agent-tunable. New sensitive config trees are therefore protected
+unless they are deliberately added to the allowlist.
 
 For any agent/surface that handles untrusted content, deny these by default:
 
@@ -485,7 +509,7 @@ Plugins run **in-process** with the Gateway. Treat them as trusted code:
 - If you install or update plugins (`openclaw plugins install <package>`, `openclaw plugins update <id>`), treat it like running untrusted code:
   - The install path is the per-plugin directory under the active plugin install root.
   - OpenClaw runs a built-in dangerous-code scan before install/update. `critical` findings block by default.
-  - OpenClaw uses `npm pack` and then runs `npm install --omit=dev` in that directory (npm lifecycle scripts can execute code during install).
+  - OpenClaw uses `npm pack`, then runs a project-local `npm install --omit=dev --ignore-scripts` in that directory. Inherited global npm install settings are ignored so dependencies stay under the plugin install path.
   - Prefer pinned, exact versions (`@scope/pkg@1.2.3`), and inspect the unpacked code on disk before enabling.
   - `--dangerously-force-unsafe-install` is break-glass only for built-in scan false positives on plugin install/update flows. It does not bypass plugin `before_install` hook policy blocks and does not bypass scan failures.
   - Gateway-backed skill dependency installs follow the same dangerous/suspicious split: built-in `critical` findings block unless the caller explicitly sets `dangerouslyForceUnsafeInstall`, while suspicious findings still warn only. `openclaw skills install` remains the separate ClawHub skill download/install flow.
@@ -832,15 +856,18 @@ Set a token so **all** WS clients must authenticate:
 
 Doctor can generate one for you: `openclaw doctor --generate-gateway-token`.
 
-Note: `gateway.remote.token` / `.password` are client credential sources. They
-do **not** protect local WS access by themselves.
-Local call paths can use `gateway.remote.*` as fallback only when `gateway.auth.*`
-is unset.
-If `gateway.auth.token` / `gateway.auth.password` is explicitly configured via
-SecretRef and unresolved, resolution fails closed (no remote fallback masking).
+<Note>
+`gateway.remote.token` and `gateway.remote.password` are client credential sources. They do **not** protect local WS access by themselves. Local call paths can use `gateway.remote.*` as fallback only when `gateway.auth.*` is unset. If `gateway.auth.token` or `gateway.auth.password` is explicitly configured via SecretRef and unresolved, resolution fails closed (no remote fallback masking).
+</Note>
 Optional: pin remote TLS with `gateway.remote.tlsFingerprint` when using `wss://`.
 Plaintext `ws://` is loopback-only by default. For trusted private-network
-paths, set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` on the client process as break-glass.
+paths, set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` on the client process as
+break-glass. This is intentionally process environment only, not an
+`openclaw.json` config key.
+Mobile pairing and Android manual or scanned gateway routes are stricter:
+cleartext is accepted for loopback, but private-LAN, link-local, `.local`, and
+dotless hostnames must use TLS unless you explicitly opt into the trusted
+private-network cleartext path.
 
 Local device pairing:
 
@@ -969,7 +996,7 @@ Logs and transcripts can leak sensitive info even when access controls are corre
 
 Recommendations:
 
-- Keep tool summary redaction on (`logging.redactSensitive: "tools"`; default).
+- Keep log and transcript redaction on (`logging.redactSensitive: "tools"`; default).
 - Add custom patterns for your environment via `logging.redactPatterns` (tokens, hostnames, internal URLs).
 - When sharing diagnostics, prefer `openclaw status --all` (pasteable, secrets redacted) over raw logs.
 - Prune old session transcripts and log files if you don’t need long retention.
@@ -1062,9 +1089,9 @@ Two complementary approaches:
 - **Run the full Gateway in Docker** (container boundary): [Docker](/install/docker)
 - **Tool sandbox** (`agents.defaults.sandbox`, host gateway + sandbox-isolated tools; Docker is the default backend): [Sandboxing](/gateway/sandboxing)
 
-Note: to prevent cross-agent access, keep `agents.defaults.sandbox.scope` at `"agent"` (default)
-or `"session"` for stricter per-session isolation. `scope: "shared"` uses a
-single container/workspace.
+<Note>
+To prevent cross-agent access, keep `agents.defaults.sandbox.scope` at `"agent"` (default) or `"session"` for stricter per-session isolation. `scope: "shared"` uses a single container or workspace.
+</Note>
 
 Also consider agent workspace access inside the sandbox:
 
@@ -1073,7 +1100,9 @@ Also consider agent workspace access inside the sandbox:
 - `agents.defaults.sandbox.workspaceAccess: "rw"` mounts the agent workspace read/write at `/workspace`
 - Extra `sandbox.docker.binds` are validated against normalized and canonicalized source paths. Parent-symlink tricks and canonical home aliases still fail closed if they resolve into blocked roots such as `/etc`, `/var/run`, or credential directories under the OS home.
 
-Important: `tools.elevated` is the global baseline escape hatch that runs exec outside the sandbox. The effective host is `gateway` by default, or `node` when the exec target is configured to `node`. Keep `tools.elevated.allowFrom` tight and don’t enable it for strangers. You can further restrict elevated per agent via `agents.list[].tools.elevated`. See [Elevated Mode](/tools/elevated).
+<Warning>
+`tools.elevated` is the global baseline escape hatch that runs exec outside the sandbox. The effective host is `gateway` by default, or `node` when the exec target is configured to `node`. Keep `tools.elevated.allowFrom` tight and do not enable it for strangers. You can further restrict elevated per agent via `agents.list[].tools.elevated`. See [Elevated mode](/tools/elevated).
+</Warning>
 
 ### Sub-agent delegation guardrail
 

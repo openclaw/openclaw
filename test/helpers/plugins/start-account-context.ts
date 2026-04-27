@@ -1,3 +1,4 @@
+import { createRuntimeEnv } from "openclaw/plugin-sdk/testing";
 import { vi } from "vitest";
 import type {
   ChannelAccountSnapshot,
@@ -5,7 +6,6 @@ import type {
 } from "../../../src/channels/plugins/types.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { RuntimeEnv } from "../../../src/runtime.js";
-import { createRuntimeEnv } from "./runtime-env.js";
 
 export function createStartAccountContext<TAccount extends { accountId: string }>(params: {
   account: TAccount;

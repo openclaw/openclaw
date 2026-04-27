@@ -1,6 +1,6 @@
 import { Type } from "typebox";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
-import { loadConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { textToSpeech } from "../../tts/tts.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
@@ -57,6 +57,8 @@ function sanitizeTranscriptForToolContent(text: string): string {
 export function createTtsTool(opts?: {
   config?: OpenClawConfig;
   agentChannel?: GatewayMessageChannel;
+  agentId?: string;
+  agentAccountId?: string;
 }): AnyAgentTool {
   return {
     label: "TTS",
@@ -69,12 +71,14 @@ export function createTtsTool(opts?: {
       const text = readStringParam(params, "text", { required: true });
       const channel = readStringParam(params, "channel");
       const timeoutMs = readTtsTimeoutMs(params);
-      const cfg = opts?.config ?? loadConfig();
+      const cfg = opts?.config ?? getRuntimeConfig();
       const result = await textToSpeech({
         text,
         cfg,
         channel: channel ?? opts?.agentChannel,
         timeoutMs,
+        agentId: opts?.agentId,
+        accountId: opts?.agentAccountId,
       });
 
       if (result.success && result.audioPath) {
@@ -92,7 +96,7 @@ export function createTtsTool(opts?: {
             media: {
               mediaUrl: result.audioPath,
               trustedLocalMedia: true,
-              ...(result.voiceCompatible ? { audioAsVoice: true } : {}),
+              ...(result.audioAsVoice || result.voiceCompatible ? { audioAsVoice: true } : {}),
             },
           },
         };

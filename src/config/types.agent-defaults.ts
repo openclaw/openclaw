@@ -5,6 +5,7 @@ import type {
 import type {
   AgentEmbeddedHarnessConfig,
   AgentModelConfig,
+  AgentRuntimePolicyConfig,
   AgentSandboxConfig,
 } from "./types.agents-shared.js";
 import type {
@@ -15,7 +16,7 @@ import type {
 } from "./types.base.js";
 import type { MemorySearchConfig } from "./types.tools.js";
 
-export type AgentContextInjection = "always" | "continuation-skip";
+export type AgentContextInjection = "always" | "continuation-skip" | "never";
 export type EmbeddedPiExecutionContract = "default" | "strict-agentic";
 
 export type Gpt5PromptOverlayConfig = {
@@ -127,6 +128,8 @@ export type CliBackendConfig = {
   sessionIdFields?: string[];
   /** Flag used to pass system prompt. */
   systemPromptArg?: string;
+  /** Flag used to pass a system prompt file. */
+  systemPromptFileArg?: string;
   /** Config override flag used to pass a system prompt file (e.g. -c). */
   systemPromptFileConfigArg?: string;
   /** Config override key used to pass a system prompt file. */
@@ -176,7 +179,9 @@ export type CliBackendConfig = {
 export type AgentDefaultsConfig = {
   /** Global default provider params applied to all models before per-model and per-agent overrides. */
   params?: Record<string, unknown>;
-  /** Default embedded agent harness policy. */
+  /** Default agent runtime policy. */
+  agentRuntime?: AgentRuntimePolicyConfig;
+  /** @deprecated Use agentRuntime. */
   embeddedHarness?: AgentEmbeddedHarnessConfig;
   /** Primary model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   model?: AgentModelConfig;
@@ -272,8 +277,6 @@ export type AgentDefaultsConfig = {
   cliBackends?: Record<string, CliBackendConfig>;
   /** Opt-in: prune old tool results from the LLM context to reduce token usage. */
   contextPruning?: AgentContextPruningConfig;
-  /** LLM timeout configuration. */
-  llm?: AgentLlmConfig;
   /** Compaction tuning and pre-compaction memory flush behavior. */
   compaction?: AgentCompactionConfig;
   /** Embedded Pi runner hardening and compatibility controls. */
@@ -466,11 +469,20 @@ export type AgentCompactionConfig = {
    */
   provider?: string;
   /**
-   * Truncate the session JSONL file after compaction to remove entries that
-   * were summarized. Prevents unbounded file growth in long-running sessions.
+   * Rotate the active session JSONL file after compaction so the next turn
+   * starts from the compaction summary and unsummarized tail while the old
+   * transcript stays archived.
    * Default: false (existing behavior preserved).
    */
   truncateAfterCompaction?: boolean;
+  /**
+   * Trigger a normal local compaction when the active session JSONL reaches
+   * this size (bytes, or byte-size string like "20mb"). Set to 0/unset to
+   * disable. Requires truncateAfterCompaction so successful compaction can
+   * rotate to a smaller successor transcript. This does not split raw
+   * transcript bytes.
+   */
+  maxActiveTranscriptBytes?: number | string;
   /**
    * Send brief compaction notices to the user when compaction starts and completes.
    * Default: false (silent by default).
@@ -492,17 +504,4 @@ export type AgentCompactionMemoryFlushConfig = {
   prompt?: string;
   /** System prompt appended for the memory flush turn. */
   systemPrompt?: string;
-};
-
-/**
- * LLM timeout configuration.
- */
-export type AgentLlmConfig = {
-  /**
-   * Idle timeout for LLM streaming responses in seconds.
-   * If no token is received within this time, the request is aborted.
-   * Set to 0 to disable (never timeout).
-   * If unset, OpenClaw uses the default LLM idle timeout.
-   */
-  idleTimeoutSeconds?: number;
 };

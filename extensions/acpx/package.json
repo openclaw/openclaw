@@ -1,12 +1,13 @@
 {
   "name": "@openclaw/acpx",
-  "version": "2026.4.20",
+  "version": "2026.4.25",
   "description": "OpenClaw ACP runtime backend",
   "type": "module",
   "dependencies": {
-    "acpx": "0.5.3"
+    "acpx": "0.6.1"
   },
   "devDependencies": {
+    "@agentclientprotocol/claude-agent-acp": "0.31.0",
     "@openclaw/plugin-sdk": "workspace:*"
   },
   "openclaw": {

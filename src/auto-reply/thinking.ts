@@ -42,14 +42,17 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 
-type ThinkingLevelOption = {
+export type ThinkingLevelOption = {
   id: ThinkLevel;
   label: string;
+};
+
+type RankedThinkingLevelOption = ThinkingLevelOption & {
   rank: number;
 };
 
 type ResolvedThinkingProfile = {
-  levels: ThinkingLevelOption[];
+  levels: RankedThinkingLevelOption[];
   defaultLevel?: ThinkLevel | null;
 };
 
@@ -70,7 +73,7 @@ function resolveThinkingPolicyContext(params: {
 
 function normalizeProfileLevel(
   level: ProviderThinkingProfile["levels"][number],
-): ThinkingLevelOption | undefined {
+): RankedThinkingLevelOption | undefined {
   const normalized = normalizeThinkLevel(level.id);
   if (!normalized) {
     return undefined;
@@ -83,7 +86,7 @@ function normalizeProfileLevel(
 }
 
 function normalizeThinkingProfile(profile: ProviderThinkingProfile): ResolvedThinkingProfile {
-  const byId = new Map<ThinkLevel, ThinkingLevelOption>();
+  const byId = new Map<ThinkLevel, RankedThinkingLevelOption>();
   for (const raw of profile.levels) {
     const level = normalizeProfileLevel(raw);
     if (level) {
@@ -191,8 +194,11 @@ function supportsThinkingLevel(
   provider: string | null | undefined,
   model: string | null | undefined,
   level: ThinkLevel,
+  catalog?: ThinkingCatalogEntry[],
 ): boolean {
-  return resolveThinkingProfile({ provider, model }).levels.some((entry) => entry.id === level);
+  return resolveThinkingProfile({ provider, model, catalog }).levels.some(
+    (entry) => entry.id === level,
+  );
 }
 
 export function supportsXHighThinking(provider?: string | null, model?: string | null): boolean {
@@ -204,17 +210,26 @@ export function listThinkingLevels(provider?: string | null, model?: string | nu
   return profile.levels.map((level) => level.id);
 }
 
-export function listThinkingLevelLabels(provider?: string | null, model?: string | null): string[] {
+export function listThinkingLevelOptions(
+  provider?: string | null,
+  model?: string | null,
+): ThinkingLevelOption[] {
   const profile = resolveThinkingProfile({ provider, model });
-  return profile.levels.map((level) => level.label);
+  return profile.levels.map(({ id, label }) => ({ id, label }));
+}
+
+export function listThinkingLevelLabels(provider?: string | null, model?: string | null): string[] {
+  return listThinkingLevelOptions(provider, model).map((level) => level.label);
 }
 
 export function formatThinkingLevels(
   provider?: string | null,
   model?: string | null,
   separator = ", ",
+  catalog?: ThinkingCatalogEntry[],
 ): string {
-  return listThinkingLevelLabels(provider, model).join(separator);
+  const profile = resolveThinkingProfile({ provider, model, catalog });
+  return profile.levels.map(({ label }) => label).join(separator);
 }
 
 export function resolveThinkingDefaultForModel(params: {
@@ -252,8 +267,9 @@ export function isThinkingLevelSupported(params: {
   provider?: string | null;
   model?: string | null;
   level: ThinkLevel;
+  catalog?: ThinkingCatalogEntry[];
 }): boolean {
-  return supportsThinkingLevel(params.provider, params.model, params.level);
+  return supportsThinkingLevel(params.provider, params.model, params.level, params.catalog);
 }
 
 function resolveSupportedThinkingLevelFromProfile(
@@ -276,7 +292,12 @@ export function resolveSupportedThinkingLevel(params: {
   provider?: string | null;
   model?: string | null;
   level: ThinkLevel;
+  catalog?: ThinkingCatalogEntry[];
 }): ThinkLevel {
-  const profile = resolveThinkingProfile({ provider: params.provider, model: params.model });
+  const profile = resolveThinkingProfile({
+    provider: params.provider,
+    model: params.model,
+    catalog: params.catalog,
+  });
   return resolveSupportedThinkingLevelFromProfile(profile, params.level);
 }

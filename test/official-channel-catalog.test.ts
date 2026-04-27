@@ -6,6 +6,7 @@ import {
   OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH,
   writeOfficialChannelCatalog,
 } from "../scripts/write-official-channel-catalog.mjs";
+import { describePluginInstallSource } from "../src/plugins/install-source-info.js";
 import { bundledPluginRoot } from "./helpers/bundled-plugin-paths.js";
 import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "./helpers/temp-repo.js";
 
@@ -78,8 +79,25 @@ describe("buildOfficialChannelCatalog", () => {
               label: "WeCom",
             }),
             install: {
-              npmSpec: "@wecom/wecom-openclaw-plugin",
+              npmSpec: "@wecom/wecom-openclaw-plugin@2026.4.23",
               defaultChoice: "npm",
+              expectedIntegrity:
+                "sha512-bnzfdIEEu1/LFvcdyjaTkyxt27w6c7dqhkPezU62OWaqmcdFsUGR3T55USK/O9pIKsNcnL1Tnu1pqKYCWHFgWQ==",
+            },
+          }),
+        }),
+        expect.objectContaining({
+          name: "openclaw-plugin-yuanbao",
+          openclaw: expect.objectContaining({
+            channel: expect.objectContaining({
+              id: "openclaw-plugin-yuanbao",
+              label: "Yuanbao",
+            }),
+            install: {
+              npmSpec: "openclaw-plugin-yuanbao@2.11.0",
+              defaultChoice: "npm",
+              expectedIntegrity:
+                "sha512-lYmBrU71ox3v7dzRqaltvzTXPcMjjgYrNqpBj5HIBkXgEFkXRRG8wplXg9Fub41/FjsSPn3WAbYpdTc+k+jsHg==",
             },
           }),
         }),
@@ -104,6 +122,20 @@ describe("buildOfficialChannelCatalog", () => {
         },
       ]),
     );
+  });
+
+  it("keeps official external catalog npm sources exactly pinned", () => {
+    const repoRoot = makeRepoRoot("openclaw-official-channel-catalog-policy-");
+    const entries = buildOfficialChannelCatalog({ repoRoot }).entries.filter(
+      (entry) => entry.source === "external",
+    );
+
+    expect(entries.length).toBeGreaterThan(0);
+    for (const entry of entries) {
+      const installSource = describePluginInstallSource(entry.openclaw?.install ?? {});
+      expect(installSource.warnings).toEqual([]);
+      expect(installSource.npm?.pinState).toBe("exact-with-integrity");
+    }
   });
 
   it("writes the official catalog under dist", () => {
@@ -135,6 +167,9 @@ describe("buildOfficialChannelCatalog", () => {
       expect.arrayContaining([
         expect.objectContaining({
           name: "@wecom/wecom-openclaw-plugin",
+        }),
+        expect.objectContaining({
+          name: "openclaw-plugin-yuanbao",
         }),
         {
           name: "@openclaw/whatsapp",

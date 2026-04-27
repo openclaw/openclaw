@@ -195,6 +195,8 @@ export const ModelCompatSchema = z
     supportsStrictMode: z.boolean().optional(),
     requiresStringContent: z.boolean().optional(),
     visibleReasoningDetailTypes: z.array(z.string().min(1)).optional(),
+    supportedReasoningEfforts: z.array(z.string().min(1)).optional(),
+    reasoningEffortMap: z.record(z.string().min(1), z.string().min(1)).optional(),
     maxTokensField: z
       .union([z.literal("max_completion_tokens"), z.literal("max_tokens")])
       .optional(),
@@ -202,9 +204,8 @@ export const ModelCompatSchema = z
       .union([
         z.literal("openai"),
         z.literal("openrouter"),
+        z.literal("deepseek"),
         z.literal("zai"),
-        z.literal("qwen"),
-        z.literal("qwen-chat-template"),
       ])
       .optional(),
     requiresToolResultName: z.boolean().optional(),
@@ -311,7 +312,11 @@ export const ModelDefinitionSchema = z
     api: ModelApiSchema.optional(),
     baseUrl: z.string().min(1).optional(),
     reasoning: z.boolean().optional(),
-    input: z.array(z.union([z.literal("text"), z.literal("image")])).optional(),
+    input: z
+      .array(
+        z.union([z.literal("text"), z.literal("image"), z.literal("video"), z.literal("audio")]),
+      )
+      .optional(),
     cost: z
       .object({
         input: z.number().optional(),
@@ -337,6 +342,7 @@ export const ModelDefinitionSchema = z
     contextWindow: z.number().positive().optional(),
     contextTokens: z.number().int().positive().optional(),
     maxTokens: z.number().positive().optional(),
+    params: z.record(z.string(), z.unknown()).optional(),
     headers: z.record(z.string(), z.string()).optional(),
     compat: ModelCompatSchema,
     metadataSource: z.literal("models-add").optional(),
@@ -351,6 +357,10 @@ export const ModelProviderSchema = z
       .union([z.literal("api-key"), z.literal("aws-sdk"), z.literal("oauth"), z.literal("token")])
       .optional(),
     api: ModelApiSchema.optional(),
+    contextWindow: z.number().positive().optional(),
+    contextTokens: z.number().int().positive().optional(),
+    maxTokens: z.number().positive().optional(),
+    timeoutSeconds: z.number().int().positive().optional(),
     injectNumCtxForOpenAICompat: z.boolean().optional(),
     headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
     authHeader: z.boolean().optional(),
@@ -496,12 +506,37 @@ const TtsProviderConfigSchema = z
       z.record(z.string(), z.unknown()),
     ]),
   );
+const TtsPersonaPromptSchema = z
+  .object({
+    profile: z.string().optional(),
+    scene: z.string().optional(),
+    sampleContext: z.string().optional(),
+    style: z.string().optional(),
+    accent: z.string().optional(),
+    pacing: z.string().optional(),
+    constraints: z.array(z.string()).optional(),
+  })
+  .strict();
+const TtsPersonaSchema = z
+  .object({
+    label: z.string().optional(),
+    description: z.string().optional(),
+    provider: TtsProviderSchema.optional(),
+    fallbackPolicy: z
+      .union([z.literal("preserve-persona"), z.literal("provider-defaults"), z.literal("fail")])
+      .optional(),
+    prompt: TtsPersonaPromptSchema.optional(),
+    providers: z.record(z.string(), TtsProviderConfigSchema).optional(),
+  })
+  .strict();
 export const TtsConfigSchema = z
   .object({
     auto: TtsAutoSchema.optional(),
     enabled: z.boolean().optional(),
     mode: TtsModeSchema.optional(),
     provider: TtsProviderSchema.optional(),
+    persona: z.string().optional(),
+    personas: z.record(z.string(), TtsPersonaSchema).optional(),
     summaryModel: z.string().optional(),
     modelOverrides: z
       .object({
@@ -564,6 +599,7 @@ export const CliBackendSchema = z
       .optional(),
     sessionIdFields: z.array(z.string()).optional(),
     systemPromptArg: z.string().optional(),
+    systemPromptFileArg: z.string().optional(),
     systemPromptFileConfigArg: z.string().optional(),
     systemPromptFileConfigKey: z.string().optional(),
     systemPromptMode: z.union([z.literal("append"), z.literal("replace")]).optional(),

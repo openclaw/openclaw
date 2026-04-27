@@ -535,8 +535,20 @@ const waitForSpawnedProcess = async (childProcess, deps) => {
 
   try {
     return await new Promise((resolve) => {
+      let settled = false;
+      const settle = (res) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        resolve(res);
+      };
+      childProcess.on("error", (error) => {
+        logRunner(`Spawn failed: ${error?.message ?? String(error)}`, deps);
+        settle({ exitCode: 1, exitSignal: null, forwardedSignal });
+      });
       childProcess.on("exit", (exitCode, exitSignal) => {
-        resolve({ exitCode, exitSignal, forwardedSignal });
+        settle({ exitCode, exitSignal, forwardedSignal });
       });
     });
   } finally {
@@ -598,8 +610,33 @@ const closeRunNodeOutputTee = async (deps, exitCode) => {
   return exitCode;
 };
 
+const readBuildLockOwnerPid = (deps, lockDir) => {
+  try {
+    const raw = deps.fs.readFileSync(path.join(lockDir, "owner.json"), "utf8");
+    const parsed = JSON.parse(raw);
+    const pid = Number(parsed?.pid);
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+};
+
+const isBuildLockOwnerDead = (deps, pid) => {
+  try {
+    deps.process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    return error?.code === "ESRCH";
+  }
+};
+
 const removeStaleBuildLock = (deps, lockDir, staleMs) => {
   try {
+    const ownerPid = readBuildLockOwnerPid(deps, lockDir);
+    if (ownerPid !== null && isBuildLockOwnerDead(deps, ownerPid)) {
+      deps.fs.rmSync(lockDir, { recursive: true, force: true });
+      return true;
+    }
     const stats = deps.fs.statSync(lockDir);
     if (Date.now() - stats.mtimeMs < staleMs) {
       return false;
@@ -764,6 +801,15 @@ const writeBuildStamp = (deps) => {
 
 const shouldSkipCleanWatchRuntimeSync = (deps) => deps.env.OPENCLAW_WATCH_MODE === "1";
 
+const isGatewayClientCommand = (args) =>
+  args[0] === "gateway" && (args[1] === "call" || args[1] === "status");
+
+const shouldUseExistingDistForGatewayClient = (deps, buildRequirement) =>
+  buildRequirement.reason === "dirty_watched_tree" &&
+  isGatewayClientCommand(deps.args) &&
+  deps.env.OPENCLAW_FORCE_BUILD !== "1" &&
+  statMtime(deps.distEntry, deps.fs) != null;
+
 export async function runNodeMain(params = {}) {
   const deps = {
     spawn: params.spawn ?? spawn,
@@ -797,9 +843,16 @@ export async function runNodeMain(params = {}) {
 
   try {
     let exitCode = 1;
-    const buildRequirement = resolveBuildRequirement(deps);
+    let buildRequirement = resolveBuildRequirement(deps);
+    const useExistingGatewayClientDist = shouldUseExistingDistForGatewayClient(
+      deps,
+      buildRequirement,
+    );
+    if (useExistingGatewayClientDist) {
+      buildRequirement = { shouldBuild: false, reason: "gateway_client_existing_dist" };
+    }
     if (!buildRequirement.shouldBuild) {
-      if (!shouldSkipCleanWatchRuntimeSync(deps)) {
+      if (!useExistingGatewayClientDist && !shouldSkipCleanWatchRuntimeSync(deps)) {
         const runtimePostBuildRequirement = resolveRuntimePostBuildRequirement(deps);
         if (runtimePostBuildRequirement.shouldSync) {
           const synced = await withRunNodeBuildLock(deps, async () => {

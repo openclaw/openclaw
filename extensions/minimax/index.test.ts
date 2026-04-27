@@ -1,10 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model } from "@mariozechner/pi-ai";
+import { registerProviderPlugin, requireRegisteredProvider } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it, vi } from "vitest";
-import {
-  registerProviderPlugin,
-  requireRegisteredProvider,
-} from "../../test/helpers/plugins/provider-registration.js";
 import { registerMinimaxProviders } from "./provider-registration.js";
 import { createMiniMaxWebSearchProvider } from "./src/minimax-web-search-provider.js";
 

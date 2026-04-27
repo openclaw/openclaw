@@ -7,6 +7,7 @@ import type {
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TtsAutoMode } from "../config/types.tts.js";
+import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import {
   PLUGIN_PROMPT_MUTATION_RESULT_FIELDS,
   stripPromptMutationFieldsFromLegacyHookResult,
@@ -58,8 +59,11 @@ export type PluginHookName =
   | "before_prompt_build"
   | "before_agent_start"
   | "before_agent_reply"
+  | "model_call_started"
+  | "model_call_ended"
   | "llm_input"
   | "llm_output"
+  | "before_agent_finalize"
   | "agent_end"
   | "before_compaction"
   | "after_compaction"
@@ -89,8 +93,11 @@ export const PLUGIN_HOOK_NAMES = [
   "before_prompt_build",
   "before_agent_start",
   "before_agent_reply",
+  "model_call_started",
+  "model_call_ended",
   "llm_input",
   "llm_output",
+  "before_agent_finalize",
   "agent_end",
   "before_compaction",
   "after_compaction",
@@ -141,6 +148,7 @@ export const isPromptInjectionHookName = (hookName: PluginHookName): boolean =>
 export const CONVERSATION_HOOK_NAMES = [
   "llm_input",
   "llm_output",
+  "before_agent_finalize",
   "agent_end",
 ] as const satisfies readonly PluginHookName[];
 
@@ -153,6 +161,8 @@ export const isConversationHookName = (hookName: PluginHookName): boolean =>
 
 export type PluginHookAgentContext = {
   runId?: string;
+  jobId?: string;
+  trace?: DiagnosticTraceContext;
   agentId?: string;
   sessionKey?: string;
   sessionId?: string;
@@ -185,11 +195,48 @@ export type PluginHookLlmInputEvent = {
   imagesCount: number;
 };
 
+export type PluginHookModelCallBaseEvent = {
+  runId: string;
+  callId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  provider: string;
+  model: string;
+  api?: string;
+  transport?: string;
+};
+
+export type PluginHookModelCallStartedEvent = PluginHookModelCallBaseEvent;
+
+export type PluginHookModelCallEndedEvent = PluginHookModelCallBaseEvent & {
+  durationMs: number;
+  outcome: "completed" | "error";
+  errorCategory?: string;
+  failureKind?: "aborted" | "connection_closed" | "connection_reset" | "terminated" | "timeout";
+  requestPayloadBytes?: number;
+  responseStreamBytes?: number;
+  timeToFirstByteMs?: number;
+  upstreamRequestIdHash?: string;
+};
+
 export type PluginHookLlmOutputEvent = {
   runId: string;
   sessionId: string;
   provider: string;
   model: string;
+  /**
+   * Fully resolved provider/model ref used for the call.
+   *
+   * This intentionally keeps the provider prefix so operator tooling can
+   * distinguish e.g. openai-codex/gpt-5.4 from codex/gpt-5.4 even when display
+   * names collapse to just the model id.
+   */
+  resolvedRef?: string;
+  /**
+   * Harness/backend responsible for the model loop. Kept separate from
+   * `resolvedRef` so provider/model consumers keep a stable parse contract.
+   */
+  harnessId?: string;
   assistantTexts: string[];
   lastAssistant?: unknown;
   usage?: {
@@ -202,10 +249,35 @@ export type PluginHookLlmOutputEvent = {
 };
 
 export type PluginHookAgentEndEvent = {
+  runId?: string;
   messages: unknown[];
   success: boolean;
   error?: string;
   durationMs?: number;
+};
+
+export type PluginHookBeforeAgentFinalizeEvent = {
+  runId?: string;
+  sessionId: string;
+  sessionKey?: string;
+  turnId?: string;
+  provider?: string;
+  model?: string;
+  cwd?: string;
+  transcriptPath?: string;
+  stopHookActive: boolean;
+  lastAssistantMessage?: string;
+  messages?: unknown[];
+};
+
+export type PluginHookBeforeAgentFinalizeResult = {
+  /**
+   * continue: accept normal finalization.
+   * revise: block finalization and ask the harness for another model pass.
+   * finalize: force finalization even if another hook requested revision.
+   */
+  action?: "continue" | "revise" | "finalize";
+  reason?: string;
 };
 
 export type PluginHookBeforeCompactionEvent = {
@@ -231,6 +303,7 @@ export type PluginHookAfterCompactionEvent = {
 
 export type PluginHookInboundClaimResult = {
   handled: boolean;
+  reply?: ReplyPayload;
 };
 
 export type PluginHookBeforeDispatchEvent = {
@@ -299,6 +372,7 @@ export type PluginHookToolContext = {
   sessionKey?: string;
   sessionId?: string;
   runId?: string;
+  trace?: DiagnosticTraceContext;
   toolName: string;
   toolCallId?: string;
 };
@@ -658,11 +732,26 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforeAgentReplyEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforeAgentReplyResult | void> | PluginHookBeforeAgentReplyResult | void;
+  model_call_started: (
+    event: PluginHookModelCallStartedEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<void> | void;
+  model_call_ended: (
+    event: PluginHookModelCallEndedEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<void> | void;
   llm_input: (event: PluginHookLlmInputEvent, ctx: PluginHookAgentContext) => Promise<void> | void;
   llm_output: (
     event: PluginHookLlmOutputEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<void> | void;
+  before_agent_finalize: (
+    event: PluginHookBeforeAgentFinalizeEvent,
+    ctx: PluginHookAgentContext,
+  ) =>
+    | Promise<PluginHookBeforeAgentFinalizeResult | void>
+    | PluginHookBeforeAgentFinalizeResult
+    | void;
   agent_end: (event: PluginHookAgentEndEvent, ctx: PluginHookAgentContext) => Promise<void> | void;
   before_compaction: (
     event: PluginHookBeforeCompactionEvent,

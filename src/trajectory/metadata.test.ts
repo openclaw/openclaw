@@ -18,8 +18,8 @@ vi.mock("../infra/os-summary.js", () => ({
   }),
 }));
 
-vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry,
+vi.mock("../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: loadPluginManifestRegistry,
 }));
 
 import { buildTrajectoryArtifacts, buildTrajectoryRunMetadata } from "./metadata.js";
@@ -96,11 +96,13 @@ describe("trajectory metadata", () => {
       musicGenerationProviderIds: [],
       webFetchProviderIds: [],
       webSearchProviderIds: [],
+      migrationProviderIds: [],
       memoryEmbeddingProviderIds: [],
       agentHarnessIds: ["pi"],
       gatewayMethods: [],
       cliCommands: [],
       services: [],
+      gatewayDiscoveryServiceIds: [],
       commands: [],
       httpRoutes: 0,
       hookCount: 0,

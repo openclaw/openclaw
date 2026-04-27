@@ -9,6 +9,7 @@ export {
   browserCreateProfile,
   browserConsoleMessages,
   browserDeleteProfile,
+  browserDoctor,
   browserFocusTab,
   browserNavigate,
   browserOpenTab,
@@ -52,6 +53,8 @@ export {
 export type {
   BrowserCreateProfileResult,
   BrowserDeleteProfileResult,
+  BrowserDoctorCheck,
+  BrowserDoctorReport,
   BrowserFormField,
   BrowserResetProfileResult,
   BrowserRouteRegistrar,
@@ -82,7 +85,7 @@ export {
   theme,
 } from "openclaw/plugin-sdk/browser-setup-tools";
 export {
-  loadConfig,
+  getRuntimeConfig,
   normalizePluginsConfig,
   parseBooleanValue,
   resolveEffectiveEnableState,

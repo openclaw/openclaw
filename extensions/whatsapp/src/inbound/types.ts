@@ -1,6 +1,6 @@
 import type { AnyMessageContent, MiscMessageGenerationOptions } from "@whiskeysockets/baileys";
 import type { NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
-import type { PollInput } from "openclaw/plugin-sdk/media-runtime";
+import type { PollInput } from "openclaw/plugin-sdk/poll-runtime";
 import type { WhatsAppIdentity, WhatsAppReplyContext, WhatsAppSelfIdentity } from "../identity.js";
 
 export type WebListenerCloseReason = {
@@ -57,6 +57,8 @@ export type WebInboundMessage = {
   conversationId: string; // alias for clarity (same as from)
   to: string;
   accountId: string;
+  /** Set by the real inbound monitor after access-control / pairing checks pass. */
+  accessControlPassed?: boolean;
   body: string;
   pushName?: string;
   timestamp?: number;

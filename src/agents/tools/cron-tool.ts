@@ -1,15 +1,23 @@
 import { Type, type TSchema } from "typebox";
-import { loadConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import type { CronDelivery, CronMessageChannel } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
-import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import {
+  parseAgentSessionKey,
+  parseThreadSessionSuffix,
+} from "../../sessions/session-key-utils.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
+  normalizeOptionalString,
 } from "../../shared/string-coerce.js";
 import { isRecord, truncateUtf16Safe } from "../../utils.js";
+import {
+  normalizeDeliveryContext,
+  type DeliveryContext,
+} from "../../utils/delivery-context.shared.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { CRON_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
@@ -39,6 +47,20 @@ const CRON_FLAT_PAYLOAD_KEYS = [
   "lightContext",
   "allowUnsafeExternalContent",
 ] as const;
+const CRON_FLAT_SCHEDULE_KEYS = [
+  "kind",
+  "at",
+  "atMs",
+  "every",
+  "everyMs",
+  "anchorMs",
+  "cron",
+  "expr",
+  "tz",
+  "stagger",
+  "staggerMs",
+  "exact",
+] as const;
 const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
   "name",
   "schedule",
@@ -53,6 +75,7 @@ const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
   "sessionKey",
   "failureAlert",
   ...CRON_FLAT_PAYLOAD_KEYS,
+  ...CRON_FLAT_SCHEDULE_KEYS,
 ]);
 
 const REMINDER_CONTEXT_MESSAGES_MAX = 10;
@@ -76,12 +99,29 @@ function recoverCronObjectFromFlatParams(params: Record<string, unknown>): {
       found = true;
     }
   }
+  if (value.everyMs === undefined && value.every !== undefined) {
+    value.everyMs = value.every;
+  }
+  if (value.staggerMs === undefined && value.stagger !== undefined) {
+    value.staggerMs = value.stagger;
+  }
+  if (value.exact === true && value.staggerMs === undefined) {
+    value.staggerMs = 0;
+  }
+  delete value.every;
+  delete value.stagger;
+  delete value.exact;
   return { found, value };
 }
 
 function hasCronCreateSignal(value: Record<string, unknown>): boolean {
   return (
     value.schedule !== undefined ||
+    value.at !== undefined ||
+    value.atMs !== undefined ||
+    value.everyMs !== undefined ||
+    value.cron !== undefined ||
+    value.expr !== undefined ||
     value.payload !== undefined ||
     value.message !== undefined ||
     value.text !== undefined
@@ -143,6 +183,11 @@ const CronDeliverySchema = Type.Optional(
       mode: optionalStringEnum(CRON_DELIVERY_MODES, { description: "Delivery mode" }),
       channel: Type.Optional(Type.String({ description: "Delivery channel" })),
       to: Type.Optional(Type.String({ description: "Delivery target" })),
+      threadId: Type.Optional(
+        Type.Union([Type.String(), Type.Number()], {
+          description: "Thread/topic id for channels that support threaded delivery",
+        }),
+      ),
       bestEffort: Type.Optional(Type.Boolean()),
       accountId: Type.Optional(Type.String({ description: "Account target for delivery" })),
       failureDestination: Type.Optional(
@@ -174,6 +219,9 @@ const CronFailureAlertSchema = Type.Optional(
       channel: Type.Optional(Type.String({ description: "Alert channel" })),
       to: Type.Optional(Type.String({ description: "Alert target" })),
       cooldownMs: Type.Optional(Type.Number({ description: "Cooldown between alerts in ms" })),
+      includeSkipped: Type.Optional(
+        Type.Boolean({ description: "Count consecutive skipped runs toward alerting" }),
+      ),
       mode: optionalStringEnum(["announce", "webhook"] as const),
       accountId: Type.Optional(Type.String()),
     },
@@ -255,6 +303,7 @@ export const CronToolSchema = Type.Object(
 
 type CronToolOptions = {
   agentSessionKey?: string;
+  currentDeliveryContext?: DeliveryContext;
 };
 
 type GatewayToolCaller = typeof callGatewayTool;
@@ -310,7 +359,7 @@ async function buildReminderContextLines(params: {
   if (!sessionKey) {
     return [];
   }
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const { mainKey, alias } = resolveMainSessionAlias(cfg);
   const resolvedKey = resolveInternalSessionKey({ key: sessionKey, alias, mainKey });
   try {
@@ -358,12 +407,37 @@ function stripThreadSuffixFromSessionKey(sessionKey: string): string {
   return parent ? parent : sessionKey;
 }
 
+function resolveTelegramDirectThreadId(params: {
+  peerId: string;
+  threadId?: string;
+}): string | undefined {
+  const threadId = normalizeOptionalString(params.threadId);
+  if (!threadId) {
+    return undefined;
+  }
+  const peerId = normalizeOptionalString(params.peerId);
+  if (!peerId) {
+    return undefined;
+  }
+  const [threadChatId, ...threadIdParts] = threadId.split(":");
+  if (threadIdParts.length === 0) {
+    return threadId;
+  }
+  if (normalizeOptionalLowercaseString(threadChatId) !== peerId) {
+    return undefined;
+  }
+  return normalizeOptionalString(threadIdParts.join(":"));
+}
+
 function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | null {
   const rawSessionKey = agentSessionKey?.trim();
   if (!rawSessionKey) {
     return null;
   }
-  const parsed = parseAgentSessionKey(stripThreadSuffixFromSessionKey(rawSessionKey));
+  const threadSuffix = parseThreadSessionSuffix(rawSessionKey);
+  const parsed = parseAgentSessionKey(
+    threadSuffix.baseSessionKey ?? stripThreadSuffixFromSessionKey(rawSessionKey),
+  );
   if (!parsed || !parsed.rest) {
     return null;
   }
@@ -404,9 +478,46 @@ function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | n
     channel = normalizeOptionalLowercaseString(parts[0]) as CronMessageChannel | undefined;
   }
 
+  const marker = parts[markerIndex];
   const delivery: CronDelivery = { mode: "announce", to: peerId };
   if (channel) {
     delivery.channel = channel;
+  }
+  if (channel === "telegram" && markerIndex === 2) {
+    const accountId = normalizeOptionalString(parts[1]);
+    if (accountId) {
+      delivery.accountId = accountId;
+    }
+  }
+  if (channel === "telegram" && (marker === "direct" || marker === "dm")) {
+    const threadId = resolveTelegramDirectThreadId({
+      peerId,
+      threadId: threadSuffix.threadId,
+    });
+    if (threadId) {
+      delivery.threadId = threadId;
+    }
+  }
+  return delivery;
+}
+
+function inferDeliveryFromContext(context?: DeliveryContext): CronDelivery | null {
+  const normalized = normalizeDeliveryContext(context);
+  if (!normalized?.to) {
+    return null;
+  }
+  const delivery: CronDelivery = {
+    mode: "announce",
+    to: normalized.to,
+  };
+  if (normalized.channel) {
+    delivery.channel = normalized.channel as CronMessageChannel;
+  }
+  if (normalized.accountId) {
+    delivery.accountId = normalized.accountId;
+  }
+  if (normalized.threadId != null) {
+    delivery.threadId = normalized.threadId;
   }
   return delivery;
 }
@@ -470,9 +581,10 @@ PAYLOAD TYPES (payload.kind):
   { "kind": "agentTurn", "message": "<prompt>", "model": "<optional>", "thinking": "<optional>", "timeoutSeconds": <optional, 0 means no timeout> }
 
 DELIVERY (top-level):
-  { "mode": "none|announce|webhook", "channel": "<optional>", "to": "<optional>", "bestEffort": <optional-bool> }
+  { "mode": "none|announce|webhook", "channel": "<optional>", "to": "<optional>", "threadId": "<optional>", "bestEffort": <optional-bool> }
   - Default for isolated agentTurn jobs (when delivery omitted): "announce"
   - announce: send to chat channel (optional channel/to target)
+  - threadId: chat thread/topic id for channels that support threaded delivery
   - webhook: send finished-run event as HTTP POST to delivery.to (URL required)
   - If the task needs to send to a specific chat/recipient, set announce delivery.channel/to; do not call messaging tools inside the run.
 
@@ -532,7 +644,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               sessionContext: { sessionKey: opts?.agentSessionKey },
             }) ?? params.job;
           if (job && typeof job === "object") {
-            const cfg = loadConfig();
+            const cfg = getRuntimeConfig();
             const { mainKey, alias } = resolveMainSessionAlias(cfg);
             const resolvedSessionKey = opts?.agentSessionKey
               ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias, mainKey })
@@ -551,7 +663,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           }
 
           if (
-            opts?.agentSessionKey &&
+            (opts?.agentSessionKey || opts?.currentDeliveryContext) &&
             job &&
             typeof job === "object" &&
             "payload" in job &&
@@ -581,11 +693,13 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               (mode === "" || mode === "announce") &&
               !hasTarget;
             if (shouldInfer) {
-              const inferred = inferDeliveryFromSessionKey(opts.agentSessionKey);
+              const inferred =
+                inferDeliveryFromContext(opts.currentDeliveryContext) ??
+                inferDeliveryFromSessionKey(opts.agentSessionKey);
               if (inferred) {
                 (job as { delivery?: unknown }).delivery = {
-                  ...delivery,
                   ...inferred,
+                  ...delivery,
                 } satisfies CronDelivery;
               }
             }

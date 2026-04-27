@@ -6,6 +6,7 @@ import {
   isSessionIdentityPending,
   resolveSessionIdentityFromMeta,
 } from "../../acp/runtime/session-identity.js";
+import { resolveAgentDir } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
@@ -43,6 +44,9 @@ let dispatchAcpSessionRuntimePromise: Promise<
 > | null = null;
 let dispatchAcpTtsRuntimePromise: Promise<typeof import("./dispatch-acp-tts.runtime.js")> | null =
   null;
+let dispatchAcpTranscriptRuntimePromise: Promise<
+  typeof import("./dispatch-acp-transcript.runtime.js")
+> | null = null;
 
 function loadDispatchAcpManagerRuntime() {
   dispatchAcpManagerRuntimePromise ??= import("./dispatch-acp-manager.runtime.js");
@@ -57,6 +61,11 @@ function loadDispatchAcpSessionRuntime() {
 function loadDispatchAcpTtsRuntime() {
   dispatchAcpTtsRuntimePromise ??= import("./dispatch-acp-tts.runtime.js");
   return dispatchAcpTtsRuntimePromise;
+}
+
+function loadDispatchAcpTranscriptRuntime() {
+  dispatchAcpTranscriptRuntimePromise ??= import("./dispatch-acp-transcript.runtime.js");
+  return dispatchAcpTranscriptRuntimePromise;
 }
 
 type DispatchProcessedRecorder = (
@@ -178,21 +187,31 @@ async function maybeUnbindStaleBoundConversations(params: {
 async function finalizeAcpTurnOutput(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
+  agentId: string;
   delivery: AcpDispatchDeliveryCoordinator;
   inboundAudio: boolean;
   sessionTtsAuto?: TtsAutoMode;
   ttsChannel?: string;
+  ttsAccountId?: string;
   shouldEmitResolvedIdentityNotice: boolean;
 }): Promise<boolean> {
   await params.delivery.settleVisibleText();
   let queuedFinal =
     params.delivery.hasDeliveredVisibleText() && !params.delivery.hasFailedVisibleTextDelivery();
-  const ttsMode = resolveConfiguredTtsMode(params.cfg);
-  const accumulatedBlockText = params.delivery.getAccumulatedBlockText();
-  const hasAccumulatedBlockText = accumulatedBlockText.trim().length > 0;
+  const ttsMode = resolveConfiguredTtsMode(params.cfg, {
+    agentId: params.agentId,
+    channelId: params.ttsChannel,
+    accountId: params.ttsAccountId,
+  });
+  const accumulatedVisibleBlockText = params.delivery.getAccumulatedVisibleBlockText();
+  const accumulatedBlockTtsText = params.delivery.getAccumulatedBlockTtsText();
+  const hasAccumulatedBlockText = accumulatedBlockTtsText.trim().length > 0;
   const ttsStatus = resolveStatusTtsSnapshot({
     cfg: params.cfg,
     sessionAuto: params.sessionTtsAuto,
+    agentId: params.agentId,
+    channelId: params.ttsChannel,
+    accountId: params.ttsAccountId,
   });
   const canAttemptFinalTts =
     ttsStatus != null && !(ttsStatus.autoMode === "inbound" && !params.inboundAudio);
@@ -202,17 +221,20 @@ async function finalizeAcpTurnOutput(params: {
     try {
       const { maybeApplyTtsToPayload } = await loadDispatchAcpTtsRuntime();
       const ttsSyntheticReply = await maybeApplyTtsToPayload({
-        payload: { text: accumulatedBlockText },
+        payload: { text: accumulatedBlockTtsText },
         cfg: params.cfg,
         channel: params.ttsChannel,
         kind: "final",
         inboundAudio: params.inboundAudio,
         ttsAuto: params.sessionTtsAuto,
+        agentId: params.agentId,
+        accountId: params.ttsAccountId,
       });
       if (ttsSyntheticReply.mediaUrl) {
         const delivered = await params.delivery.deliver("final", {
           mediaUrl: ttsSyntheticReply.mediaUrl,
           audioAsVoice: ttsSyntheticReply.audioAsVoice,
+          spokenText: accumulatedBlockTtsText,
         });
         queuedFinal = queuedFinal || delivered;
         finalMediaDelivered = delivered;
@@ -226,14 +248,14 @@ async function finalizeAcpTurnOutput(params: {
   // to prove the final result was visible to the user.
   const shouldDeliverTextFallback =
     ttsMode !== "all" &&
-    hasAccumulatedBlockText &&
+    accumulatedVisibleBlockText.trim().length > 0 &&
     !finalMediaDelivered &&
     !params.delivery.hasDeliveredFinalReply() &&
     (!params.delivery.hasDeliveredVisibleText() || params.delivery.hasFailedVisibleTextDelivery());
   if (shouldDeliverTextFallback) {
     const delivered = await params.delivery.deliver(
       "final",
-      { text: accumulatedBlockText },
+      { text: accumulatedVisibleBlockText },
       { skipTts: true },
     );
     queuedFinal = queuedFinal || delivered;
@@ -299,10 +321,12 @@ export async function tryDispatchAcpReply(params: {
     return null;
   }
   const canonicalSessionKey = acpResolution.sessionKey;
+  const acpAgentId = resolveAgentIdFromSessionKey(canonicalSessionKey);
 
   let queuedFinal = false;
   const delivery = createAcpDispatchDeliveryCoordinator({
     cfg: params.cfg,
+    agentId: acpAgentId,
     ctx: params.ctx,
     dispatcher: params.dispatcher,
     inboundAudio: params.inboundAudio,
@@ -397,6 +421,7 @@ export async function tryDispatchAcpReply(params: {
         await applyMediaUnderstanding({
           ctx: params.ctx,
           cfg: params.cfg,
+          agentDir: resolveAgentDir(params.cfg, acpAgentId),
         });
       } catch (err) {
         logVerbose(
@@ -439,14 +464,40 @@ export async function tryDispatchAcpReply(params: {
     });
 
     await projector.flush(true);
+    if (params.abortSignal?.aborted) {
+      const counts = params.dispatcher.getQueuedCounts();
+      delivery.applyRoutedCounts(counts);
+      params.recordProcessed("completed", { reason: "acp_aborted" });
+      params.markIdle("message_aborted");
+      return { queuedFinal, counts };
+    }
+    try {
+      const { persistAcpDispatchTranscript } = await loadDispatchAcpTranscriptRuntime();
+      await persistAcpDispatchTranscript({
+        cfg: params.cfg,
+        sessionKey: canonicalSessionKey,
+        promptText,
+        finalText: delivery.getAccumulatedBlockText(),
+        meta: acpResolution.meta,
+        threadId: params.ctx.MessageThreadId,
+      });
+    } catch (error) {
+      logVerbose(
+        `dispatch-acp: transcript persistence failed for ${canonicalSessionKey}: ${formatErrorMessage(
+          error,
+        )}`,
+      );
+    }
     queuedFinal =
       (await finalizeAcpTurnOutput({
         cfg: params.cfg,
         sessionKey: canonicalSessionKey,
+        agentId: acpAgentId,
         delivery,
         inboundAudio: params.inboundAudio,
         sessionTtsAuto: params.sessionTtsAuto,
         ttsChannel: params.ttsChannel,
+        ttsAccountId: effectiveDispatchAccountId,
         shouldEmitResolvedIdentityNotice,
       })) || queuedFinal;
 

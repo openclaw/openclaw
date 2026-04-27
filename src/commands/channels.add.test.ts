@@ -1,6 +1,8 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -30,6 +32,14 @@ const pluginInstallMocks = vi.hoisted(() => ({
   loadChannelSetupPluginRegistrySnapshotForChannel: vi.fn(),
 }));
 
+const registryRefreshMocks = vi.hoisted(() => ({
+  refreshPluginRegistryAfterConfigMutation: vi.fn(async () => undefined),
+}));
+
+const pluginInstallRecordCommitMocks = vi.hoisted(() => ({
+  commitConfigWithPendingPluginInstalls: vi.fn(),
+}));
+
 vi.mock("../channels/plugins/catalog.js", () => ({
   listChannelPluginCatalogEntries: catalogMocks.listChannelPluginCatalogEntries,
 }));
@@ -49,6 +59,10 @@ vi.mock("../channels/plugins/bundled.js", async () => {
 });
 
 vi.mock("./channel-setup/plugin-install.js", () => pluginInstallMocks);
+
+vi.mock("../cli/plugins-registry-refresh.js", () => registryRefreshMocks);
+
+vi.mock("../cli/plugins-install-record-commit.js", () => pluginInstallRecordCommitMocks);
 
 const runtime = createTestRuntime();
 
@@ -193,6 +207,9 @@ function registerExternalChatSetupPlugin(pluginId = "@vendor/external-chat-plugi
 type SignalAfterAccountConfigWritten = NonNullable<
   NonNullable<ChannelPlugin["setup"]>["afterAccountConfigWritten"]
 >;
+type ApplyAccountConfigParams = Parameters<
+  NonNullable<NonNullable<ChannelPlugin["setup"]>["applyAccountConfig"]>
+>[0];
 
 function createSignalPlugin(
   afterAccountConfigWritten: SignalAfterAccountConfigWritten,
@@ -247,6 +264,17 @@ describe("channelsAddCommand", () => {
       .mockImplementation(async (params: { nextConfig: unknown }) => {
         await configMocks.writeConfigFile(params.nextConfig);
       });
+    pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls.mockReset();
+    pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls.mockImplementation(
+      async (params: { nextConfig: unknown }) => {
+        await configMocks.writeConfigFile(params.nextConfig);
+        return {
+          config: params.nextConfig,
+          installRecords: {},
+          movedInstallRecords: false,
+        };
+      },
+    );
     lifecycleMocks.onAccountConfigChanged.mockClear();
     runtime.log.mockClear();
     runtime.error.mockClear();
@@ -265,6 +293,7 @@ describe("channelsAddCommand", () => {
     vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
       createTestRegistry(),
     );
+    registryRefreshMocks.refreshPluginRegistryAfterConfigMutation.mockClear();
     setMinimalChannelsAddRegistryForTests();
   });
 
@@ -306,6 +335,154 @@ describe("channelsAddCommand", () => {
     expect(lifecycleMocks.onAccountConfigChanged).not.toHaveBeenCalled();
   });
 
+  it("maps legacy Nextcloud Talk add flags to setup input fields", async () => {
+    const applyAccountConfig = vi.fn(({ cfg, input }) => ({
+      ...cfg,
+      channels: {
+        ...cfg.channels,
+        "nextcloud-talk": {
+          enabled: true,
+          baseUrl: input.baseUrl,
+          botSecret: input.secret,
+          botSecretFile: input.secretFile,
+        },
+      },
+    }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "nextcloud-talk",
+          plugin: {
+            ...createChannelTestPluginBase({
+              id: "nextcloud-talk",
+              label: "Nextcloud Talk",
+            }),
+            setup: { applyAccountConfig },
+          },
+          source: "test",
+        },
+      ]),
+    );
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+
+    await channelsAddCommand(
+      {
+        channel: "nextcloud-talk",
+        account: "default",
+        url: "https://cloud.example.com/",
+        token: "shared-secret",
+      },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(applyAccountConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: expect.objectContaining({
+          url: "https://cloud.example.com/",
+          token: "shared-secret",
+          baseUrl: "https://cloud.example.com/",
+          secret: "shared-secret",
+        }),
+      }),
+    );
+    expect(configMocks.writeConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channels: {
+          "nextcloud-talk": {
+            enabled: true,
+            baseUrl: "https://cloud.example.com/",
+            botSecret: "shared-secret",
+            botSecretFile: undefined,
+          },
+        },
+      }),
+    );
+
+    configMocks.writeConfigFile.mockClear();
+    applyAccountConfig.mockClear();
+    await channelsAddCommand(
+      {
+        channel: "nextcloud-talk",
+        account: "default",
+        url: "https://cloud.example.com",
+        tokenFile: "/tmp/nextcloud-secret",
+      },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(applyAccountConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: expect.objectContaining({
+          baseUrl: "https://cloud.example.com",
+          secretFile: "/tmp/nextcloud-secret",
+        }),
+      }),
+    );
+  });
+
+  it("passes channel auth directory overrides through add setup input", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "whatsapp",
+          plugin: {
+            ...createChannelTestPluginBase({
+              id: "whatsapp",
+              label: "WhatsApp",
+            }),
+            setup: {
+              applyAccountConfig: (params: ApplyAccountConfigParams) => ({
+                ...params.cfg,
+                channels: {
+                  ...params.cfg.channels,
+                  whatsapp: {
+                    enabled: true,
+                    accounts: {
+                      [params.accountId]: {
+                        enabled: true,
+                        authDir: params.input.authDir,
+                      },
+                    },
+                  },
+                },
+              }),
+            },
+          },
+          source: "test",
+        },
+      ]),
+    );
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+
+    await channelsAddCommand(
+      {
+        channel: "whatsapp",
+        account: "work",
+        authDir: "/tmp/openclaw-wa-auth",
+      },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(configMocks.writeConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channels: {
+          whatsapp: {
+            enabled: true,
+            accounts: {
+              work: {
+                enabled: true,
+                authDir: "/tmp/openclaw-wa-auth",
+              },
+            },
+          },
+        },
+      }),
+    );
+  });
+
   it("loads external channel setup snapshots for newly installed and existing plugins", async () => {
     configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
     setActivePluginRegistry(createTestRegistry());
@@ -324,9 +501,22 @@ describe("channelsAddCommand", () => {
     );
 
     expect(ensureChannelSetupPluginInstalled).toHaveBeenCalledWith(
-      expect.objectContaining({ entry: catalogEntry }),
+      expect.objectContaining({ entry: catalogEntry, promptInstall: false }),
     );
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(1);
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
+      expect.objectContaining({ installRuntimeDeps: false }),
+    );
+    expect(registryRefreshMocks.refreshPluginRegistryAfterConfigMutation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          channels: expect.objectContaining({
+            "external-chat": expect.objectContaining({ enabled: true }),
+          }),
+        }),
+        reason: "source-changed",
+      }),
+    );
     expectExternalChatEnabledConfigWrite();
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
@@ -348,7 +538,75 @@ describe("channelsAddCommand", () => {
 
     expect(ensureChannelSetupPluginInstalled).not.toHaveBeenCalled();
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(1);
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
+      expect.objectContaining({ installRuntimeDeps: false }),
+    );
     expectExternalChatEnabledConfigWrite();
+  });
+
+  it("commits channel setup plugin install records with the guarded config write", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      hash: "config-1",
+    });
+    setActivePluginRegistry(createTestRegistry());
+    const catalogEntry = createExternalChatCatalogEntry();
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([catalogEntry]);
+    registerExternalChatSetupPlugin("external-chat");
+    const installRecords: Record<string, PluginInstallRecord> = {
+      "@vendor/external-chat-plugin": {
+        source: "npm",
+        spec: "@vendor/external-chat@1.2.3",
+      },
+    };
+    pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls.mockImplementationOnce(
+      async (params: { nextConfig: OpenClawConfig }) => {
+        const { installs: _installs, ...plugins } = params.nextConfig.plugins ?? {};
+        const writtenConfig = { ...params.nextConfig, plugins };
+        await configMocks.writeConfigFile(writtenConfig);
+        return {
+          config: writtenConfig,
+          installRecords,
+          movedInstallRecords: true,
+        };
+      },
+    );
+    vi.mocked(ensureChannelSetupPluginInstalled).mockImplementation(async ({ cfg }) => ({
+      cfg: {
+        ...cfg,
+        plugins: {
+          ...cfg.plugins,
+          installs: installRecords,
+        },
+      },
+      installed: true,
+      pluginId: "@vendor/external-chat-plugin",
+      status: "installed",
+    }));
+
+    await channelsAddCommand(
+      {
+        channel: "external-chat",
+        account: "default",
+        token: "tenant-scoped",
+      },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(
+      pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls,
+    ).toHaveBeenCalledWith({
+      nextConfig: expect.objectContaining({
+        plugins: expect.objectContaining({ installs: installRecords }),
+      }),
+      baseHash: "config-1",
+    });
+    expect(registryRefreshMocks.refreshPluginRegistryAfterConfigMutation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        installRecords,
+      }),
+    );
   });
 
   it("uses the installed plugin id when channel and plugin ids differ", async () => {

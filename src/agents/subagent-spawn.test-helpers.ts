@@ -81,10 +81,10 @@ export function installSessionStoreCaptureMock(
     onStore?: (store: SessionStore) => void;
   },
 ) {
+  const store: SessionStore = {};
   updateSessionStoreMock.mockImplementation(
     async (_storePath: string, mutator: SessionStoreMutator) => {
       params?.operations?.push("store:update");
-      const store: SessionStore = {};
       await mutator(store);
       params?.onStore?.(store);
       return store;
@@ -112,7 +112,7 @@ export function expectPersistedRuntimeModel(params: {
 
 export async function loadSubagentSpawnModuleForTest(params: {
   callGatewayMock: MockFn;
-  loadConfig?: () => Record<string, unknown>;
+  getRuntimeConfig?: () => Record<string, unknown>;
   updateSessionStoreMock?: MockFn;
   forkSessionFromParentMock?: MockFn;
   resolveContextEngineMock?: MockFn;
@@ -171,8 +171,9 @@ export async function loadSubagentSpawnModuleForTest(params: {
     DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH: 3,
     ADMIN_SCOPE: "operator.admin",
     AGENT_LANE_SUBAGENT: "subagent",
-    loadConfig: () =>
-      params.loadConfig?.() ?? createSubagentSpawnTestConfig(params.workspaceDir ?? os.tmpdir()),
+    getRuntimeConfig: () =>
+      params.getRuntimeConfig?.() ??
+      createSubagentSpawnTestConfig(params.workspaceDir ?? os.tmpdir()),
     resolveContextEngine: params.resolveContextEngineMock ?? (async () => ({})),
     resolveParentForkMaxTokens: params.resolveParentForkMaxTokensMock ?? (() => 100_000),
     mergeSessionEntry: (

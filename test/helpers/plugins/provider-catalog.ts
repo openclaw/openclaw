@@ -11,7 +11,7 @@ export {
 } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 
 type ProviderRuntimeCatalogModule = Pick<
-  typeof import("../../../src/plugins/provider-runtime.js"),
+  typeof import("openclaw/plugin-sdk/provider-catalog-runtime"),
   | "augmentModelCatalogWithProviderPlugins"
   | "resetProviderRuntimeHookCacheForTest"
   | "resolveProviderBuiltInModelSuppression"
@@ -22,7 +22,7 @@ export async function importProviderRuntimeCatalogModule(): Promise<ProviderRunt
     augmentModelCatalogWithProviderPlugins,
     resetProviderRuntimeHookCacheForTest,
     resolveProviderBuiltInModelSuppression,
-  } = await import("../../../src/plugins/provider-runtime.js");
+  } = await import("openclaw/plugin-sdk/provider-catalog-runtime");
   return {
     augmentModelCatalogWithProviderPlugins,
     resetProviderRuntimeHookCacheForTest,

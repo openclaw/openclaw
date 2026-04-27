@@ -2,12 +2,6 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { hasAvailableAuthForProvider } from "../agents/model-auth.js";
-import {
-  findModelInCatalog,
-  loadModelCatalog,
-  modelSupportsVision,
-} from "../agents/model-catalog.js";
 import { findNormalizedProviderValue } from "../agents/provider-id.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import {
@@ -58,11 +52,44 @@ export { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.
 export type { ActiveMediaModel } from "./active-model.types.js";
 
 type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
+type HasAvailableAuthForProvider =
+  typeof import("../agents/model-auth.js").hasAvailableAuthForProvider;
+type ModelCatalogApi = typeof import("../agents/model-catalog.js");
+type ModelCatalog = Awaited<ReturnType<ModelCatalogApi["loadModelCatalog"]>>;
 
 export type RunCapabilityResult = {
   outputs: MediaUnderstandingOutput[];
   decision: MediaUnderstandingDecision;
 };
+
+let cachedHasAvailableAuthForProvider: HasAvailableAuthForProvider | null = null;
+let cachedModelCatalogApi: ModelCatalogApi | null = null;
+
+async function loadModelCatalogApi(): Promise<ModelCatalogApi> {
+  cachedModelCatalogApi ??= await import("../agents/model-catalog.js");
+  return cachedModelCatalogApi;
+}
+
+function resolveLiteralProviderApiKey(
+  cfg: OpenClawConfig | undefined,
+  providerId: string,
+): string | null {
+  const value = cfg?.models?.providers?.[providerId]?.apiKey;
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+async function hasProviderAuthAvailable(params: {
+  provider: string;
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+}): Promise<boolean> {
+  if (resolveLiteralProviderApiKey(params.cfg, params.provider)) {
+    return true;
+  }
+  cachedHasAvailableAuthForProvider ??= (await import("../agents/model-auth.js"))
+    .hasAvailableAuthForProvider;
+  return await cachedHasAvailableAuthForProvider(params);
+}
 
 function resolveConfiguredKeyProviderOrder(params: {
   cfg: OpenClawConfig;
@@ -85,6 +112,15 @@ function resolveConfiguredImageModelId(params: {
   cfg: OpenClawConfig;
   providerId: string;
 }): string | undefined {
+  const configured = resolveConfiguredImageModel(params);
+  const id = configured?.id?.trim();
+  return id || undefined;
+}
+
+function resolveConfiguredImageModel(params: {
+  cfg: OpenClawConfig;
+  providerId: string;
+}): { id?: string; input?: string[] } | undefined {
   const providerCfg = findNormalizedProviderValue(
     params.cfg.models?.providers,
     params.providerId,
@@ -96,27 +132,45 @@ function resolveConfiguredImageModelId(params: {
         }>;
       }
     | undefined;
-  const configured = providerCfg?.models?.find((entry) => {
+  return providerCfg?.models?.find((entry) => {
     const id = entry?.id?.trim();
     return Boolean(id) && entry?.input?.includes("image");
   });
-  const id = configured?.id?.trim();
-  return id || undefined;
 }
 
 function resolveCatalogImageModelId(params: {
   providerId: string;
-  catalog: Awaited<ReturnType<typeof loadModelCatalog>>;
+  catalog: ModelCatalog;
+  modelSupportsVision: ModelCatalogApi["modelSupportsVision"];
 }): string | undefined {
   const matches = params.catalog.filter(
     (entry) =>
-      normalizeMediaProviderId(entry.provider) === params.providerId && modelSupportsVision(entry),
+      normalizeMediaProviderId(entry.provider) === params.providerId &&
+      params.modelSupportsVision(entry),
   );
   if (matches.length === 0) {
     return undefined;
   }
   const autoEntry = matches.find((entry) => normalizeLowercaseStringOrEmpty(entry.id) === "auto");
   return normalizeOptionalString((autoEntry ?? matches[0])?.id);
+}
+
+async function explicitImageModelVisionStatus(params: {
+  cfg: OpenClawConfig;
+  providerId: string;
+  model: string;
+}): Promise<"supported" | "unsupported" | "unknown"> {
+  const configured = resolveConfiguredImageModel(params);
+  if (configured?.id?.trim() === params.model && configured.input?.includes("image")) {
+    return "supported";
+  }
+  const { findModelInCatalog, loadModelCatalog, modelSupportsVision } = await loadModelCatalogApi();
+  const catalog = await loadModelCatalog({ config: params.cfg });
+  const entry = findModelInCatalog(catalog, params.providerId, params.model);
+  if (!entry) {
+    return "unknown";
+  }
+  return modelSupportsVision(entry) ? "supported" : "unsupported";
 }
 
 async function resolveAutoImageModelId(params: {
@@ -126,7 +180,14 @@ async function resolveAutoImageModelId(params: {
 }): Promise<string | undefined> {
   const explicit = normalizeOptionalString(params.explicitModel);
   if (explicit) {
-    return explicit;
+    const explicitStatus = await explicitImageModelVisionStatus({
+      cfg: params.cfg,
+      providerId: params.providerId,
+      model: explicit,
+    });
+    if (explicitStatus !== "unsupported") {
+      return explicit;
+    }
   }
   const configuredModel = resolveConfiguredImageModelId(params);
   if (configuredModel) {
@@ -140,10 +201,12 @@ async function resolveAutoImageModelId(params: {
   if (defaultModel) {
     return defaultModel;
   }
+  const { loadModelCatalog, modelSupportsVision } = await loadModelCatalogApi();
   const catalog = await loadModelCatalog({ config: params.cfg });
   return resolveCatalogImageModelId({
     providerId: params.providerId,
     catalog,
+    modelSupportsVision,
   });
 }
 
@@ -426,7 +489,7 @@ async function resolveKeyEntry(params: {
       return null;
     }
     if (
-      !(await hasAvailableAuthForProvider({
+      !(await hasProviderAuthAvailable({
         provider: providerId,
         cfg,
         agentDir,
@@ -498,6 +561,16 @@ function resolveImageModelFromAgentDefaults(cfg: OpenClawConfig): MediaUnderstan
   return entries;
 }
 
+function hasExplicitImageUnderstandingConfig(params: {
+  cfg: OpenClawConfig;
+  config?: MediaUnderstandingConfig;
+}): boolean {
+  return (
+    (params.config?.models?.length ?? 0) > 0 ||
+    resolveImageModelFromAgentDefaults(params.cfg).length > 0
+  );
+}
+
 async function resolveAutoEntries(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
@@ -505,6 +578,12 @@ async function resolveAutoEntries(params: {
   capability: MediaUnderstandingCapability;
   activeModel?: ActiveMediaModel;
 }): Promise<MediaUnderstandingModelConfig[]> {
+  if (params.capability === "image") {
+    const imageModelEntries = resolveImageModelFromAgentDefaults(params.cfg);
+    if (imageModelEntries.length > 0) {
+      return imageModelEntries;
+    }
+  }
   const activeEntry = await resolveActiveModelEntry(params);
   if (activeEntry) {
     return [activeEntry];
@@ -517,12 +596,6 @@ async function resolveAutoEntries(params: {
     const localAudio = await resolveLocalAudioEntry();
     if (localAudio) {
       return [localAudio];
-    }
-  }
-  if (params.capability === "image") {
-    const imageModelEntries = resolveImageModelFromAgentDefaults(params.cfg);
-    if (imageModelEntries.length > 0) {
-      return imageModelEntries;
     }
   }
   const gemini = await resolveGeminiCliEntry(params.capability);
@@ -553,6 +626,12 @@ export async function resolveAutoImageModel(params: {
     }
     return { provider, model };
   };
+  const configuredImageModel = resolveImageModelFromAgentDefaults(params.cfg)
+    .map((entry) => toActive(entry))
+    .find((entry): entry is ActiveMediaModel => entry !== null);
+  if (configuredImageModel) {
+    return configuredImageModel;
+  }
   const activeEntry = await resolveActiveModelEntry({
     cfg: params.cfg,
     agentDir: params.agentDir,
@@ -602,7 +681,7 @@ async function resolveActiveModelEntry(params: {
   if (params.capability === "video" && !provider.describeVideo) {
     return null;
   }
-  const hasAuth = await hasAvailableAuthForProvider({
+  const hasAuth = await hasProviderAuthAvailable({
     provider: providerId,
     cfg: params.cfg,
     agentDir: params.agentDir,
@@ -772,7 +851,13 @@ export async function runCapability(params: {
   // Skip image understanding when the primary model supports vision natively.
   // The image will be injected directly into the model context instead.
   const activeProvider = params.activeModel?.provider?.trim();
-  if (capability === "image" && activeProvider) {
+  if (
+    capability === "image" &&
+    activeProvider &&
+    !hasExplicitImageUnderstandingConfig({ cfg, config })
+  ) {
+    const { findModelInCatalog, loadModelCatalog, modelSupportsVision } =
+      await loadModelCatalogApi();
     const catalog = await loadModelCatalog({ config: cfg });
     const entry = findModelInCatalog(catalog, activeProvider, params.activeModel?.model ?? "");
     if (modelSupportsVision(entry)) {

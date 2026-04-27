@@ -1,5 +1,5 @@
 import { ChannelType, Routes } from "discord-api-types/v10";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { createDiscordRestClient } from "../client.js";
@@ -173,19 +173,17 @@ export async function maybeSendBindingMessage(params: {
 }
 
 export async function createWebhookForChannel(params: {
-  cfg?: OpenClawConfig;
+  cfg: OpenClawConfig;
   accountId: string;
   token?: string;
   channelId: string;
 }): Promise<{ webhookId?: string; webhookToken?: string }> {
   try {
-    const rest = createDiscordRestClient(
-      {
-        accountId: params.accountId,
-        token: params.token,
-      },
-      params.cfg,
-    ).rest;
+    const rest = createDiscordRestClient({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      token: params.token,
+    }).rest;
     const created = (await rest.post(Routes.channelWebhooks(params.channelId), {
       body: {
         name: "OpenClaw Agents",
@@ -240,7 +238,7 @@ export function findReusableWebhook(params: { accountId: string; channelId: stri
 }
 
 export async function resolveChannelIdForBinding(params: {
-  cfg?: OpenClawConfig;
+  cfg: OpenClawConfig;
   accountId: string;
   token?: string;
   threadId: string;
@@ -255,13 +253,11 @@ export async function resolveChannelIdForBinding(params: {
     return null;
   }
   try {
-    const rest = createDiscordRestClient(
-      {
-        accountId: params.accountId,
-        token: params.token,
-      },
-      params.cfg,
-    ).rest;
+    const rest = createDiscordRestClient({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      token: params.token,
+    }).rest;
     const channel = (await rest.get(Routes.channel(lookupThreadId))) as {
       id?: string;
       type?: number;
@@ -291,7 +287,7 @@ export async function resolveChannelIdForBinding(params: {
 }
 
 export async function createThreadForBinding(params: {
-  cfg?: OpenClawConfig;
+  cfg: OpenClawConfig;
   accountId: string;
   token?: string;
   channelId: string;

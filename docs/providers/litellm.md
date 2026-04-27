@@ -30,6 +30,12 @@ read_when:
         ```bash
         openclaw onboard --auth-choice litellm-api-key
         ```
+
+        For non-interactive setup against a remote proxy, pass the proxy URL explicitly:
+
+        ```bash
+        openclaw onboard --non-interactive --auth-choice litellm-api-key --litellm-api-key "$LITELLM_API_KEY" --custom-base-url "https://litellm.example/v1"
+        ```
       </Step>
     </Steps>
 
@@ -107,6 +113,38 @@ export LITELLM_API_KEY="sk-litellm-key"
 ```
 
 ## Advanced configuration
+
+### Image generation
+
+LiteLLM can also back the `image_generate` tool through OpenAI-compatible
+`/images/generations` and `/images/edits` routes. Configure a LiteLLM image
+model under `agents.defaults.imageGenerationModel`:
+
+```json5
+{
+  models: {
+    providers: {
+      litellm: {
+        baseUrl: "http://localhost:4000",
+        apiKey: "${LITELLM_API_KEY}",
+      },
+    },
+  },
+  agents: {
+    defaults: {
+      imageGenerationModel: {
+        primary: "litellm/gpt-image-2",
+        timeoutMs: 180_000,
+      },
+    },
+  },
+}
+```
+
+Loopback LiteLLM URLs such as `http://localhost:4000` work without a global
+private-network override. For a LAN-hosted proxy, set
+`models.providers.litellm.request.allowPrivateNetwork: true` because the API key
+will be sent to the configured proxy host.
 
 <AccordionGroup>
   <Accordion title="Virtual keys">

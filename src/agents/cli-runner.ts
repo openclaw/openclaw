@@ -1,3 +1,5 @@
+import type { ReplyPayload } from "../auto-reply/reply-payload.js";
+import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { loadCliSessionHistoryMessages } from "./cli-runner/session-history.js";
@@ -11,6 +13,21 @@ import {
 } from "./harness/lifecycle-hook-helpers.js";
 import { classifyFailoverReason, isFailoverErrorMessage } from "./pi-embedded-helpers.js";
 import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
+
+function buildHandledReplyPayloads(reply?: ReplyPayload) {
+  const normalized = reply ?? { text: SILENT_REPLY_TOKEN };
+  return [
+    {
+      text: normalized.text,
+      mediaUrl: normalized.mediaUrl,
+      mediaUrls: normalized.mediaUrls,
+      replyToId: normalized.replyToId,
+      audioAsVoice: normalized.audioAsVoice,
+      isError: normalized.isError,
+      isReasoning: normalized.isReasoning,
+    },
+  ];
+}
 
 function buildCliHookUserMessage(prompt: string): unknown {
   return {
@@ -45,9 +62,56 @@ function buildCliHookAssistantMessage(params: {
 }
 
 export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedPiRunResult> {
+  // Cron gate must fire before prepareCliRunContext — that call allocates
+  // backend resources released only by runPreparedCliAgent's try…finally.
+  params.onExecutionStarted?.();
+  if (params.trigger === "cron") {
+    const startedAt = Date.now();
+    const hookRunner = getGlobalHookRunner();
+    if (hookRunner?.hasHooks("before_agent_reply")) {
+      const hookContext = {
+        runId: params.runId,
+        jobId: params.jobId,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        messageProvider: params.messageProvider,
+        trigger: params.trigger,
+        channelId: params.messageChannel ?? params.messageProvider,
+      } as const;
+      const hookResult = await hookRunner.runBeforeAgentReply(
+        { cleanedBody: params.prompt },
+        hookContext,
+      );
+      if (hookResult?.handled) {
+        return {
+          payloads: buildHandledReplyPayloads(hookResult.reply),
+          meta: {
+            durationMs: Date.now() - startedAt,
+            agentMeta: {
+              sessionId: params.sessionId,
+              provider: params.provider,
+              model: params.model ?? "",
+            },
+            finalAssistantVisibleText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
+            finalAssistantRawText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
+          },
+        };
+      }
+    }
+  }
   const { prepareCliRunContext } = await import("./cli-runner/prepare.runtime.js");
   const context = await prepareCliRunContext(params);
-  return runPreparedCliAgent(context);
+  try {
+    return await runPreparedCliAgent(context);
+  } finally {
+    if (params.cleanupCliLiveSessionOnRunEnd === true) {
+      const { closeClaudeLiveSessionForContext } =
+        await import("./cli-runner/claude-live-session.js");
+      closeClaudeLiveSessionForContext(context);
+    }
+  }
 }
 
 export async function runPreparedCliAgent(
@@ -81,6 +145,7 @@ export async function runPreparedCliAgent(
   } as const;
   const hookContext = {
     runId: params.runId,
+    jobId: params.jobId,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
@@ -145,11 +210,13 @@ export async function runPreparedCliAgent(
           sessionId: params.sessionId,
           provider: params.provider,
           model: context.modelId,
+          resolvedRef: `${params.provider}/${context.modelId}`,
           assistantTexts,
           ...(lastAssistant ? { lastAssistant } : {}),
           ...(output.usage ? { usage: output.usage } : {}),
         },
         ctx: hookContext,
+        hookRunner,
       });
     }
     return { output, assistantText, lastAssistant };
@@ -235,6 +302,7 @@ export async function runPreparedCliAgent(
     runAgentHarnessLlmInputHook({
       event: llmInputEvent,
       ctx: hookContext,
+      hookRunner,
     });
     try {
       const { output, lastAssistant } = await executeCliAttempt(
@@ -248,6 +316,7 @@ export async function runPreparedCliAgent(
           durationMs: Date.now() - context.started,
         },
         ctx: hookContext,
+        hookRunner,
       });
       return buildCliRunResult({ output, effectiveCliSessionId });
     } catch (err) {
@@ -270,6 +339,7 @@ export async function runPreparedCliAgent(
                 durationMs: Date.now() - context.started,
               },
               ctx: hookContext,
+              hookRunner,
             });
             return buildCliRunResult({ output, effectiveCliSessionId });
           } catch (retryErr) {
@@ -277,6 +347,7 @@ export async function runPreparedCliAgent(
             runAgentHarnessAgentEndHook({
               event: buildFailedAgentEndEvent(retryMessage),
               ctx: hookContext,
+              hookRunner,
             });
             return toCliRunFailure(retryErr);
           }
@@ -284,6 +355,7 @@ export async function runPreparedCliAgent(
         runAgentHarnessAgentEndHook({
           event: buildFailedAgentEndEvent(formatErrorMessage(err)),
           ctx: hookContext,
+          hookRunner,
         });
         throw err;
       }
@@ -291,6 +363,7 @@ export async function runPreparedCliAgent(
       runAgentHarnessAgentEndHook({
         event: buildFailedAgentEndEvent(message),
         ctx: hookContext,
+        hookRunner,
       });
       return toCliRunFailure(err);
     }
@@ -319,7 +392,9 @@ export function buildRunClaudeCliAgentParams(params: RunClaudeCliAgentParams): R
     thinkLevel: params.thinkLevel,
     timeoutMs: params.timeoutMs,
     runId: params.runId,
+    jobId: params.jobId,
     extraSystemPrompt: params.extraSystemPrompt,
+    silentReplyPromptMode: params.silentReplyPromptMode,
     extraSystemPromptStatic: params.extraSystemPromptStatic,
     ownerNumbers: params.ownerNumbers,
     // Legacy `claudeSessionId` callers predate the shared CLI session contract.

@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  hasEnvHttpProxyAgentConfigured,
   hasEnvHttpProxyConfigured,
   hasProxyEnvConfigured,
   matchesNoProxy,
+  resolveEnvHttpProxyAgentOptions,
   resolveEnvHttpProxyUrl,
+  shouldUseEnvHttpProxyForUrl,
 } from "./proxy-env.js";
 
 describe("hasProxyEnvConfigured", () => {
@@ -92,6 +95,55 @@ describe("resolveEnvHttpProxyUrl", () => {
   ])("$name", ({ protocol, env, expectedUrl, expectedConfigured }) => {
     expect(resolveEnvHttpProxyUrl(protocol, env)).toBe(expectedUrl);
     expect(hasEnvHttpProxyConfigured(protocol, env)).toBe(expectedConfigured);
+  });
+});
+
+describe("resolveEnvHttpProxyAgentOptions", () => {
+  it.each([
+    {
+      name: "maps HTTPS_PROXY to httpsProxy only",
+      env: { HTTPS_PROXY: "http://https-proxy.test:8443" } as NodeJS.ProcessEnv,
+      expected: { httpsProxy: "http://https-proxy.test:8443" },
+    },
+    {
+      name: "uses HTTP_PROXY as HTTPS fallback",
+      env: { HTTP_PROXY: "http://http-proxy.test:8080" } as NodeJS.ProcessEnv,
+      expected: {
+        httpProxy: "http://http-proxy.test:8080",
+        httpsProxy: "http://http-proxy.test:8080",
+      },
+    },
+    {
+      name: "uses ALL_PROXY for both protocols",
+      env: { ALL_PROXY: "socks5://all-proxy.test:1080" } as NodeJS.ProcessEnv,
+      expected: {
+        httpProxy: "socks5://all-proxy.test:1080",
+        httpsProxy: "socks5://all-proxy.test:1080",
+      },
+    },
+    {
+      name: "lets protocol-specific proxy override ALL_PROXY",
+      env: {
+        ALL_PROXY: "socks5://all-proxy.test:1080",
+        HTTP_PROXY: "http://http-proxy.test:8080",
+        HTTPS_PROXY: "http://https-proxy.test:8443",
+      } as NodeJS.ProcessEnv,
+      expected: {
+        httpProxy: "http://http-proxy.test:8080",
+        httpsProxy: "http://https-proxy.test:8443",
+      },
+    },
+    {
+      name: "treats empty lower-case all_proxy as authoritative over upper-case ALL_PROXY",
+      env: {
+        all_proxy: "",
+        ALL_PROXY: "socks5://upper-all-proxy.test:1080",
+      } as NodeJS.ProcessEnv,
+      expected: undefined,
+    },
+  ])("$name", ({ env, expected }) => {
+    expect(resolveEnvHttpProxyAgentOptions(env)).toEqual(expected);
+    expect(hasEnvHttpProxyAgentConfigured(env)).toBe(expected !== undefined);
   });
 });
 
@@ -231,5 +283,57 @@ describe("matchesNoProxy", () => {
     },
   ])("$name", ({ url, env, expected }) => {
     expect(matchesNoProxy(url, env)).toBe(expected);
+  });
+});
+
+describe("shouldUseEnvHttpProxyForUrl", () => {
+  it.each([
+    {
+      name: "uses HTTPS_PROXY for https URLs",
+      url: "https://api.example.com/v1",
+      env: { HTTPS_PROXY: "http://proxy.test:8080" } as NodeJS.ProcessEnv,
+      expected: true,
+    },
+    {
+      name: "falls back to HTTP_PROXY for https URLs",
+      url: "https://api.example.com/v1",
+      env: { HTTP_PROXY: "http://proxy.test:8080" } as NodeJS.ProcessEnv,
+      expected: true,
+    },
+    {
+      name: "uses HTTP_PROXY for http URLs",
+      url: "http://api.example.com/v1",
+      env: { HTTP_PROXY: "http://proxy.test:8080" } as NodeJS.ProcessEnv,
+      expected: true,
+    },
+    {
+      name: "ignores ALL_PROXY-only environments",
+      url: "https://api.example.com/v1",
+      env: { ALL_PROXY: "http://proxy.test:8080" } as NodeJS.ProcessEnv,
+      expected: false,
+    },
+    {
+      name: "keeps strict mode for NO_PROXY matches",
+      url: "https://internal.corp.example/v1",
+      env: {
+        HTTPS_PROXY: "http://proxy.test:8080",
+        NO_PROXY: "corp.example",
+      } as NodeJS.ProcessEnv,
+      expected: false,
+    },
+    {
+      name: "keeps strict mode for non-http URLs",
+      url: "file:///tmp/input.txt",
+      env: { HTTPS_PROXY: "http://proxy.test:8080" } as NodeJS.ProcessEnv,
+      expected: false,
+    },
+    {
+      name: "keeps strict mode for malformed URLs",
+      url: "not-a-url",
+      env: { HTTPS_PROXY: "http://proxy.test:8080" } as NodeJS.ProcessEnv,
+      expected: false,
+    },
+  ])("$name", ({ url, env, expected }) => {
+    expect(shouldUseEnvHttpProxyForUrl(url, env)).toBe(expected);
   });
 });

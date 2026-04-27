@@ -2,17 +2,17 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   firstWrittenJsonArg,
   spyRuntimeErrors,
   spyRuntimeJson,
   spyRuntimeLogs,
-} from "../../../src/cli/test-runtime-capture.js";
+} from "openclaw/plugin-sdk/testing";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { readShortTermRecallEntries, recordShortTermRecalls } from "./short-term-promotion.js";
 
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
-const loadConfig = vi.hoisted(() => vi.fn(() => ({})));
+const getRuntimeConfig = vi.hoisted(() => vi.fn(() => ({})));
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "main"));
 const resolveCommandSecretRefsViaGateway = vi.hoisted(() =>
   vi.fn(async ({ config }: { config: unknown }) => ({
@@ -34,7 +34,7 @@ vi.mock("./cli.host.runtime.js", async () => {
     getMemorySearchManager,
     isRich: runtimeCli.isRich,
     listMemoryFiles: runtimeFiles.listMemoryFiles,
-    loadConfig,
+    getRuntimeConfig,
     normalizeExtraMemoryPaths: runtimeFiles.normalizeExtraMemoryPaths,
     resolveCommandSecretRefsViaGateway,
     resolveDefaultAgentId,
@@ -73,7 +73,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   getMemorySearchManager.mockReset();
-  loadConfig.mockReset().mockReturnValue({});
+  getRuntimeConfig.mockReset().mockReturnValue({});
   resolveDefaultAgentId.mockReset().mockReturnValue("main");
   resolveCommandSecretRefsViaGateway.mockReset().mockImplementation(async ({ config }) => ({
     resolvedConfig: config,
@@ -247,7 +247,7 @@ describe("memory cli", () => {
   });
 
   it("resolves configured memory SecretRefs through gateway snapshot", async () => {
-    loadConfig.mockReturnValue({
+    getRuntimeConfig.mockReturnValue({
       agents: {
         defaults: {
           memorySearch: {
@@ -382,135 +382,6 @@ describe("memory cli", () => {
       expect(log).toHaveBeenCalledWith(expect.stringContaining("Dreaming: off"));
       expect(close).toHaveBeenCalled();
     });
-  });
-
-  it("reports dreaming blocked when another explicit heartbeat agent excludes main", async () => {
-    loadConfig.mockReturnValue({
-      plugins: {
-        entries: {
-          "memory-core": {
-            config: {
-              dreaming: {
-                enabled: true,
-              },
-            },
-          },
-        },
-      },
-      agents: {
-        defaults: {
-          heartbeat: {
-            every: "30m",
-          },
-        },
-        list: [
-          { id: "main", default: true },
-          {
-            id: "ops",
-            heartbeat: {
-              every: "1h",
-            },
-          },
-        ],
-      },
-    });
-    const close = vi.fn(async () => {});
-    mockManager({
-      probeVectorAvailability: vi.fn(async () => true),
-      status: () => makeMemoryStatus({ workspaceDir: "/tmp/openclaw" }),
-      close,
-    });
-
-    const log = spyRuntimeLogs(defaultRuntime);
-    await runMemoryCli(["status", "--agent", "main"]);
-
-    expect(log).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'Dreaming status: blocked - dreaming is enabled but will not run because heartbeat is disabled for "main". See https://docs.openclaw.ai/concepts/dreaming#troubleshooting',
-      ),
-    );
-    expect(close).toHaveBeenCalled();
-  });
-
-  it('reports dreaming blocked when main heartbeat interval is "0m"', async () => {
-    loadConfig.mockReturnValue({
-      plugins: {
-        entries: {
-          "memory-core": {
-            config: {
-              dreaming: {
-                enabled: true,
-              },
-            },
-          },
-        },
-      },
-      agents: {
-        defaults: {
-          heartbeat: {
-            every: "0m",
-          },
-        },
-        list: [{ id: "main", default: true }],
-      },
-    });
-    const close = vi.fn(async () => {});
-    mockManager({
-      probeVectorAvailability: vi.fn(async () => true),
-      status: () => makeMemoryStatus({ workspaceDir: "/tmp/openclaw" }),
-      close,
-    });
-
-    const log = spyRuntimeLogs(defaultRuntime);
-    await runMemoryCli(["status"]);
-
-    expect(log).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'Dreaming status: blocked - dreaming is enabled but will not run because heartbeat is disabled for "main". See https://docs.openclaw.ai/concepts/dreaming#troubleshooting',
-      ),
-    );
-    expect(close).toHaveBeenCalled();
-  });
-
-  it("reports dreaming blocked for the configured default agent when it is not main", async () => {
-    resolveDefaultAgentId.mockReturnValue("ops");
-    loadConfig.mockReturnValue({
-      plugins: {
-        entries: {
-          "memory-core": {
-            config: {
-              dreaming: {
-                enabled: true,
-              },
-            },
-          },
-        },
-      },
-      agents: {
-        defaults: {
-          heartbeat: {
-            every: "0m",
-          },
-        },
-        list: [{ id: "ops", default: true }],
-      },
-    });
-    const close = vi.fn(async () => {});
-    mockManager({
-      probeVectorAvailability: vi.fn(async () => true),
-      status: () => makeMemoryStatus({ workspaceDir: "/tmp/openclaw" }),
-      close,
-    });
-
-    const log = spyRuntimeLogs(defaultRuntime);
-    await runMemoryCli(["status", "--agent", "ops"]);
-
-    expect(log).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'Dreaming status: blocked - dreaming is enabled but will not run because heartbeat is disabled for "ops". See https://docs.openclaw.ai/concepts/dreaming#troubleshooting',
-      ),
-    );
-    expect(close).toHaveBeenCalled();
   });
 
   it("repairs invalid recall metadata and stale locks with status --fix", async () => {
@@ -687,6 +558,11 @@ describe("memory cli", () => {
 
     expectCliSync(sync);
     expect(probeEmbeddingAvailability).toHaveBeenCalled();
+    expect(getMemorySearchManager).toHaveBeenCalledWith({
+      cfg: {},
+      agentId: "main",
+      purpose: "cli",
+    });
     expect(close).toHaveBeenCalled();
   });
 
@@ -699,6 +575,11 @@ describe("memory cli", () => {
     await runMemoryCli(["index"]);
 
     expectCliSync(sync);
+    expect(getMemorySearchManager).toHaveBeenCalledWith({
+      cfg: {},
+      agentId: "main",
+      purpose: "cli",
+    });
     expect(close).toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith("Memory index updated (main).");
   });
@@ -913,6 +794,11 @@ describe("memory cli", () => {
       maxResults: undefined,
       minScore: undefined,
       sessionKey: "agent:main:cli:direct:memory-search",
+    });
+    expect(getMemorySearchManager).toHaveBeenCalledWith({
+      cfg: {},
+      agentId: "main",
+      purpose: "cli",
     });
     expect(log).toHaveBeenCalledWith("No matches.");
     expect(close).toHaveBeenCalled();

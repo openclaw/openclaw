@@ -80,6 +80,28 @@ function redactSessionsSpawnAttachmentsArgs(value: unknown): unknown {
   return { ...rec, attachments: next };
 }
 
+function redactSessionsSpawnAcpArgs(value: unknown): unknown {
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const rec = value as Record<string, unknown>;
+  const next = { ...rec };
+  let changed = false;
+
+  for (const key of ["resumeSessionId", "streamTo"] as const) {
+    if (Object.hasOwn(rec, key)) {
+      next[key] = REDACTED_SESSIONS_SPAWN_ATTACHMENT_CONTENT;
+      changed = true;
+    }
+  }
+
+  return changed ? next : value;
+}
+
+function redactSessionsSpawnArgs(value: unknown): unknown {
+  return redactSessionsSpawnAcpArgs(redactSessionsSpawnAttachmentsArgs(value));
+}
+
 function redactSessionsSpawnAttachment(item: unknown): Record<string, unknown> {
   const next: Record<string, unknown> = {
     content: REDACTED_SESSIONS_SPAWN_ATTACHMENT_CONTENT,
@@ -113,10 +135,10 @@ function sanitizeToolCallBlock(block: RawToolCallBlock): RawToolCallBlock {
     return { ...(block as Record<string, unknown>), name: normalizedName } as RawToolCallBlock;
   }
 
-  // Redact large/sensitive inline attachment content from persisted transcripts.
-  // Apply redaction to both `.arguments` and `.input` properties since block structures can vary
-  const nextArgs = redactSessionsSpawnAttachmentsArgs(block.arguments);
-  const nextInput = redactSessionsSpawnAttachmentsArgs(block.input);
+  // Redact sensitive sessions_spawn payload fields from persisted transcripts.
+  // Apply redaction to both `.arguments` and `.input` properties since block structures can vary.
+  const nextArgs = redactSessionsSpawnArgs(block.arguments);
+  const nextInput = redactSessionsSpawnArgs(block.input);
   if (nextArgs === block.arguments && nextInput === block.input && !nameChanged) {
     return block;
   }
@@ -175,6 +197,12 @@ function isReplaySafeThinkingAssistantTurn(
 function makeMissingToolResult(params: {
   toolCallId: string;
   toolName?: string;
+  // OpenAI Responses/Codex replay should match upstream Codex's "aborted"
+  // function_call_output normalization; live coverage in
+  // openai-reasoning-compat.live.test.ts and tool-replay-repair.live.test.ts
+  // sends this repaired history to real models. Other providers keep the older,
+  // explicit OpenClaw diagnostic text unless the caller opts in.
+  text?: string;
 }): Extract<AgentMessage, { role: "toolResult" }> {
   return {
     role: "toolResult",
@@ -183,7 +211,9 @@ function makeMissingToolResult(params: {
     content: [
       {
         type: "text",
-        text: "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.",
+        text:
+          params.text ??
+          "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.",
       },
     ],
     isError: true,
@@ -232,6 +262,7 @@ export type ErroredAssistantResultPolicy = "preserve" | "drop";
 
 export type ToolUseResultPairingOptions = {
   erroredAssistantResultPolicy?: ErroredAssistantResultPolicy;
+  missingToolResultText?: string;
 };
 
 export function stripToolResultDetails(messages: AgentMessage[]): AgentMessage[] {
@@ -529,8 +560,8 @@ export function repairToolUseResultPairing(
     // tool calls in the same turn after malformed siblings are dropped.
     const stopReason = (assistant as { stopReason?: string }).stopReason;
     if (stopReason === "error" || stopReason === "aborted") {
-      out.push(msg);
       if (!shouldDropErroredAssistantResults(options)) {
+        out.push(msg);
         for (const toolCall of toolCalls) {
           const result = spanResultsById.get(toolCall.id);
           if (!result) {
@@ -539,6 +570,8 @@ export function repairToolUseResultPairing(
           pushToolResult(result);
         }
       } else if (spanResultsById.size > 0) {
+        changed = true;
+      } else {
         changed = true;
       }
       for (const rem of remainder) {
@@ -551,6 +584,8 @@ export function repairToolUseResultPairing(
     out.push(msg);
 
     if (spanResultsById.size > 0 && remainder.length > 0) {
+      // Preserve real late-arriving results before synthesizing missing siblings;
+      // otherwise parallel tool replay can replace useful output with repair noise.
       moved = true;
       changed = true;
     }
@@ -563,6 +598,7 @@ export function repairToolUseResultPairing(
         const missing = makeMissingToolResult({
           toolCallId: call.id,
           toolName: call.name,
+          text: options?.missingToolResultText,
         });
         added.push(missing);
         changed = true;

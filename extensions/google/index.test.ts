@@ -3,11 +3,8 @@ import type {
   ProviderReplaySessionEntry,
   ProviderSanitizeReplayHistoryContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { registerProviderPlugin, requireRegisteredProvider } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it } from "vitest";
-import {
-  registerProviderPlugin,
-  requireRegisteredProvider,
-} from "../../test/helpers/plugins/provider-registration.js";
 import { createCapturedThinkingConfigStream } from "../../test/helpers/plugins/stream-hooks.js";
 import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
 import { registerGoogleProvider } from "./provider-registration.js";
@@ -178,6 +175,40 @@ describe("google provider plugin hooks", () => {
 
     runCase(googleProvider, "google");
     runCase(cliProvider, "google-gemini-cli");
+  });
+
+  it("advertises adaptive thinking for Gemini dynamic thinking", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const provider = requireRegisteredProvider(providers, "google");
+    expect(provider.resolveThinkingProfile).toBeDefined();
+    const resolveThinkingProfile = provider.resolveThinkingProfile!;
+    const gemini3Profile = resolveThinkingProfile({
+      provider: "google",
+      modelId: "gemini-3.1-pro-preview",
+    } as never);
+    const gemini25Profile = resolveThinkingProfile({
+      provider: "google",
+      modelId: "gemini-2.5-flash",
+    } as never);
+
+    expect(gemini3Profile?.levels).toEqual([
+      { id: "off" },
+      { id: "low" },
+      { id: "adaptive" },
+      { id: "high" },
+    ]);
+    expect(gemini25Profile?.levels).toEqual([
+      { id: "off" },
+      { id: "minimal" },
+      { id: "low" },
+      { id: "medium" },
+      { id: "adaptive" },
+      { id: "high" },
+    ]);
   });
 
   it("shares Gemini replay and stream hooks across Google provider variants", async () => {

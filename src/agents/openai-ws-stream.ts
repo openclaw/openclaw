@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type {
   AssistantMessage,
@@ -51,10 +51,15 @@ import {
 import {
   buildAssistantMessageFromResponse,
   convertMessagesToInputItems,
+  convertResponseToInputItems,
   convertTools,
   planTurnInput,
 } from "./openai-ws-message-conversion.js";
-import { buildOpenAIWebSocketResponseCreatePayload } from "./openai-ws-request.js";
+import {
+  buildOpenAIWebSocketResponseCreatePayload,
+  planOpenAIWebSocketRequestPayload,
+} from "./openai-ws-request.js";
+import type { ResponseCreateEvent } from "./openai-ws-types.js";
 import { log } from "./pi-embedded-runner/logger.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { normalizeProviderId } from "./provider-id.js";
@@ -73,14 +78,22 @@ import { mergeTransportMetadata } from "./transport-stream-shared.js";
 interface WsSession {
   manager: OpenAIWebSocketManager;
   managerConfigSignature: string;
+  authSignature: string;
   /** Number of messages that were in context.messages at the END of the last streamFn call. */
   lastContextLength: number;
+  /** Last full canonical request, before any incremental previous_response_id delta rewrite. */
+  lastRequestPayload?: ResponseCreateEvent;
+  /** Last response output converted to the same replay form used by future full-context sends. */
+  lastResponseInputItems: ReturnType<typeof convertResponseToInputItems>;
   /** True if the connection has been established at least once. */
   everConnected: boolean;
   /** True once a best-effort warm-up attempt has run for this session. */
   warmUpAttempted: boolean;
   /** True if the session is permanently broken (no more reconnect). */
   broken: boolean;
+  /** Pending idle release timer when disabled-by-default pooling retains a session. */
+  idleTimer?: ReturnType<typeof setTimeout>;
+  pooledUntil?: number;
   /** Session-scoped cool-down after repeated websocket failures. */
   degradedUntil: number | null;
   degradeCooldownMs: number;
@@ -201,20 +214,72 @@ function createEventStream(): AssistantMessageEventStream {
 // Public registry helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
+type ReleaseWsSessionOptions = {
+  allowPool?: boolean;
+  env?: NodeJS.ProcessEnv;
+};
+
+function resolveWsSessionPoolConfig(env: NodeJS.ProcessEnv = process.env): {
+  enabled: boolean;
+  idleMs: number;
+} {
+  const enabled =
+    env.OPENCLAW_OPENAI_WS_POOL === "1" || env.OPENCLAW_OPENAI_WS_SESSION_POOL === "1";
+  const rawIdleMs = Number(env.OPENCLAW_OPENAI_WS_SESSION_POOL_IDLE_MS);
+  const idleMs = Number.isFinite(rawIdleMs)
+    ? Math.min(300_000, Math.max(1_000, Math.trunc(rawIdleMs)))
+    : 30_000;
+  return { enabled, idleMs };
+}
+
+function clearWsSessionIdleTimer(session: WsSession): void {
+  if (!session.idleTimer) {
+    return;
+  }
+  clearTimeout(session.idleTimer);
+  session.idleTimer = undefined;
+  session.pooledUntil = undefined;
+}
+
+function closeWsSession(sessionId: string, session: WsSession): void {
+  clearWsSessionIdleTimer(session);
+  try {
+    session.manager.close();
+  } catch {
+    // Ignore close errors — connection may already be gone.
+  }
+  wsRegistry.delete(sessionId);
+}
+
 /**
  * Release and close the WebSocket session for the given sessionId.
  * Call this after the agent run completes to free the connection.
  */
-export function releaseWsSession(sessionId: string): void {
+export function releaseWsSession(sessionId: string, options: ReleaseWsSessionOptions = {}): void {
   const session = wsRegistry.get(sessionId);
-  if (session) {
-    try {
-      session.manager.close();
-    } catch {
-      // Ignore close errors — connection may already be gone.
-    }
-    wsRegistry.delete(sessionId);
+  if (!session) {
+    return;
   }
+  const pool = resolveWsSessionPoolConfig(options.env);
+  if (
+    options.allowPool === true &&
+    pool.enabled &&
+    !session.broken &&
+    session.manager.isConnected()
+  ) {
+    clearWsSessionIdleTimer(session);
+    session.pooledUntil = Date.now() + pool.idleMs;
+    session.idleTimer = setTimeout(() => {
+      const current = wsRegistry.get(sessionId);
+      if (current === session) {
+        closeWsSession(sessionId, session);
+      }
+    }, pool.idleMs);
+    session.idleTimer.unref?.();
+    log.debug(`[ws-stream] pooled websocket session=${sessionId} idleMs=${pool.idleMs}`);
+    return;
+  }
+  closeWsSession(sessionId, session);
 }
 
 /**
@@ -292,6 +357,7 @@ function resetWsSession(params: {
   createManager: () => OpenAIWebSocketManager;
   preserveDegradeUntil?: boolean;
 }): void {
+  clearWsSessionIdleTimer(params.session);
   try {
     params.session.manager.close();
   } catch {
@@ -301,6 +367,9 @@ function resetWsSession(params: {
   params.session.everConnected = false;
   params.session.warmUpAttempted = false;
   params.session.broken = false;
+  params.session.lastContextLength = 0;
+  params.session.lastRequestPayload = undefined;
+  params.session.lastResponseInputItems = [];
   if (!params.preserveDegradeUntil) {
     params.session.degradedUntil = null;
   }
@@ -360,6 +429,10 @@ function resolveWsManagerConfigSignature(
     request: managerOptions?.request,
     url: managerOptions?.url,
   });
+}
+
+function resolveWsAuthSignature(apiKey: string): string {
+  return createHash("sha256").update(apiKey).digest("hex");
 }
 
 const AZURE_OPENAI_PROVIDER_IDS = new Set(["azure-openai", "azure-openai-responses"]);
@@ -655,6 +728,7 @@ export function createOpenAIWebSocketStreamFn(
 
       while (true) {
         let session = wsRegistry.get(sessionId);
+        const authSignature = resolveWsAuthSignature(apiKey);
         const managerConfigSignature = resolveWsManagerConfigSignature(
           opts.managerOptions,
           sessionHeaders,
@@ -664,7 +738,9 @@ export function createOpenAIWebSocketStreamFn(
           session = {
             manager,
             managerConfigSignature,
+            authSignature,
             lastContextLength: 0,
+            lastResponseInputItems: [],
             everConnected: false,
             warmUpAttempted: false,
             broken: false,
@@ -672,13 +748,20 @@ export function createOpenAIWebSocketStreamFn(
             degradeCooldownMs: wsSessionPolicy.degradeCooldownMs,
           };
           wsRegistry.set(sessionId, session);
-        } else if (session.managerConfigSignature !== managerConfigSignature) {
+        } else if (
+          session.managerConfigSignature !== managerConfigSignature ||
+          session.authSignature !== authSignature
+        ) {
+          clearWsSessionIdleTimer(session);
           resetWsSession({
             session,
             createManager: () => createWsManager(opts.managerOptions, sessionHeaders),
           });
           session.managerConfigSignature = managerConfigSignature;
+          session.authSignature = authSignature;
           session.degradeCooldownMs = wsSessionPolicy.degradeCooldownMs;
+        } else {
+          clearWsSessionIdleTimer(session);
         }
 
         if (transport !== "websocket" && isWsSessionDegraded(session)) {
@@ -820,27 +903,6 @@ export function createOpenAIWebSocketStreamFn(
           }
         }
 
-        const turnInput = planTurnInput({
-          context,
-          model,
-          previousResponseId: session.manager.previousResponseId,
-          lastContextLength: session.lastContextLength,
-        });
-
-        if (turnInput.mode === "incremental_tool_results") {
-          log.debug(
-            `[ws-stream] session=${sessionId}: incremental send (${turnInput.inputItems.length} tool results) previous_response_id=${turnInput.previousResponseId}`,
-          );
-        } else if (turnInput.mode === "full_context_restart") {
-          log.debug(
-            `[ws-stream] session=${sessionId}: no new tool results found; sending full context without previous_response_id`,
-          );
-        } else {
-          log.debug(
-            `[ws-stream] session=${sessionId}: full context send (${turnInput.inputItems.length} items)`,
-          );
-        }
-
         turnAttempt++;
         const turnState = resolveProviderTransportTurnState(model, {
           sessionId,
@@ -848,22 +910,45 @@ export function createOpenAIWebSocketStreamFn(
           attempt: turnAttempt,
           transport: "websocket",
         });
-        let payload = buildOpenAIWebSocketResponseCreatePayload({
+        const fullTurnInput = {
+          inputItems: convertMessagesToInputItems(context.messages, model),
+        };
+        let fullPayload = buildOpenAIWebSocketResponseCreatePayload({
           model,
           context,
           options: options as WsOptions | undefined,
-          turnInput,
+          turnInput: fullTurnInput,
           tools: convertTools(context.tools, {
             strict: resolveOpenAIWebSocketStrictToolSetting(model),
           }),
           metadata: turnState?.metadata,
         }) as Record<string, unknown>;
-        const nextPayload = await options?.onPayload?.(payload, model);
-        payload = mergeTransportMetadata(
-          (nextPayload ?? payload) as Record<string, unknown>,
+        const nextPayload = await options?.onPayload?.(fullPayload, model);
+        fullPayload = mergeTransportMetadata(
+          (nextPayload ?? fullPayload) as Record<string, unknown>,
           turnState?.metadata,
         );
-        const requestPayload = payload as Parameters<OpenAIWebSocketManager["send"]>[0];
+        const plannedPayload = planOpenAIWebSocketRequestPayload({
+          fullPayload: fullPayload as ResponseCreateEvent,
+          previousRequestPayload: session.lastRequestPayload,
+          previousResponseId: session.manager.previousResponseId,
+          previousResponseInputItems: session.lastResponseInputItems,
+        });
+        const plannedInputItems = Array.isArray(plannedPayload.payload.input)
+          ? plannedPayload.payload.input
+          : [];
+        if (plannedPayload.mode === "incremental") {
+          log.debug(
+            `[ws-stream] session=${sessionId}: incremental send (${plannedInputItems.length} items) previous_response_id=${plannedPayload.payload.previous_response_id}`,
+          );
+        } else {
+          log.debug(
+            `[ws-stream] session=${sessionId}: full context send (${plannedInputItems.length} items)`,
+          );
+        }
+        const requestPayload = plannedPayload.payload as Parameters<
+          OpenAIWebSocketManager["send"]
+        >[0];
 
         try {
           session.manager.send(requestPayload);
@@ -1097,6 +1182,13 @@ export function createOpenAIWebSocketStreamFn(
                 emittedTextByPart.clear();
                 cleanup();
                 session.lastContextLength = capturedContextLength;
+                session.lastRequestPayload = fullPayload as ResponseCreateEvent;
+                session.lastResponseInputItems = convertResponseToInputItems(event.response, {
+                  api: model.api,
+                  provider: model.provider,
+                  id: model.id,
+                  input: model.input,
+                });
                 const assistantMsg = buildAssistantMessageFromResponse(event.response, {
                   api: model.api,
                   provider: model.provider,

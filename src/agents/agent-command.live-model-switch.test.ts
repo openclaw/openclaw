@@ -1,7 +1,16 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { INTERNAL_RUNTIME_CONTEXT_BEGIN, INTERNAL_RUNTIME_CONTEXT_END } from "./internal-events.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 
 const state = vi.hoisted(() => ({
+  acpResolveSessionMock: vi.fn((..._args: unknown[]): unknown => null),
+  acpRunTurnMock: vi.fn((..._args: unknown[]): unknown => undefined),
+  buildAcpResultMock: vi.fn(),
+  createAcpVisibleTextAccumulatorMock: vi.fn(),
+  persistAcpTurnTranscriptMock: vi.fn(),
+  resolveAcpAgentPolicyErrorMock: vi.fn(),
+  resolveAcpDispatchPolicyErrorMock: vi.fn(),
+  resolveAcpExplicitTurnPolicyErrorMock: vi.fn(),
   runWithModelFallbackMock: vi.fn(),
   runAgentAttemptMock: vi.fn(),
   resolveEffectiveModelFallbacksMock: vi.fn().mockReturnValue(undefined),
@@ -10,6 +19,10 @@ const state = vi.hoisted(() => ({
   clearAgentRunContextMock: vi.fn(),
   updateSessionStoreAfterAgentRunMock: vi.fn(),
   deliverAgentCommandResultMock: vi.fn(),
+  clearSessionAuthProfileOverrideMock: vi.fn(),
+  authProfileStoreMock: { profiles: {} } as { profiles: Record<string, unknown> },
+  sessionEntryMock: undefined as unknown,
+  sessionStoreMock: undefined as unknown,
 }));
 
 vi.mock("./model-fallback.js", () => ({
@@ -17,13 +30,13 @@ vi.mock("./model-fallback.js", () => ({
 }));
 
 vi.mock("./command/attempt-execution.runtime.js", () => ({
-  buildAcpResult: vi.fn(),
-  createAcpVisibleTextAccumulator: vi.fn(),
+  buildAcpResult: (...args: unknown[]) => state.buildAcpResultMock(...args),
+  createAcpVisibleTextAccumulator: () => state.createAcpVisibleTextAccumulatorMock(),
   emitAcpAssistantDelta: vi.fn(),
   emitAcpLifecycleEnd: vi.fn(),
   emitAcpLifecycleError: vi.fn(),
   emitAcpLifecycleStart: vi.fn(),
-  persistAcpTurnTranscript: vi.fn(),
+  persistAcpTurnTranscript: (...args: unknown[]) => state.persistAcpTurnTranscriptMock(...args),
   persistSessionEntry: vi.fn(),
   prependInternalEventContext: (_body: string) => _body,
   runAgentAttempt: (...args: unknown[]) => state.runAgentAttemptMock(...args),
@@ -57,12 +70,12 @@ vi.mock("./command/session.js", () => ({
   resolveSession: () => ({
     sessionId: "session-1",
     sessionKey: "agent:main",
-    sessionEntry: {
+    sessionEntry: state.sessionEntryMock ?? {
       sessionId: "session-1",
       updatedAt: Date.now(),
       skillsSnapshot: { prompt: "", skills: [], version: 0 },
     },
-    sessionStore: undefined,
+    sessionStore: state.sessionStoreMock,
     storePath: undefined,
     isNewSession: false,
     persistedThinking: undefined,
@@ -73,12 +86,16 @@ vi.mock("./command/session.js", () => ({
 vi.mock("./command/types.js", () => ({}));
 
 vi.mock("../acp/policy.js", () => ({
-  resolveAcpAgentPolicyError: () => null,
-  resolveAcpDispatchPolicyError: () => null,
+  resolveAcpAgentPolicyError: (...args: unknown[]) => state.resolveAcpAgentPolicyErrorMock(...args),
+  resolveAcpDispatchPolicyError: (...args: unknown[]) =>
+    state.resolveAcpDispatchPolicyErrorMock(...args),
+  resolveAcpExplicitTurnPolicyError: (...args: unknown[]) =>
+    state.resolveAcpExplicitTurnPolicyErrorMock(...args),
 }));
 
 vi.mock("../acp/runtime/errors.js", () => ({
-  toAcpRuntimeError: vi.fn(),
+  toAcpRuntimeError: ({ error }: { error: unknown }) =>
+    error instanceof Error ? error : new Error(String(error)),
 }));
 
 vi.mock("../acp/runtime/session-identifiers.js", () => ({
@@ -115,7 +132,7 @@ vi.mock("../cli/deps.js", () => ({
 }));
 
 vi.mock("../config/io.js", () => ({
-  loadConfig: () => ({
+  getRuntimeConfig: () => ({
     agents: {
       defaults: {
         models: {
@@ -250,8 +267,13 @@ vi.mock("./auth-profiles.js", () => ({
   ensureAuthProfileStore: () => ({ profiles: {} }),
 }));
 
+vi.mock("./auth-profiles/store.js", () => ({
+  ensureAuthProfileStore: () => state.authProfileStoreMock,
+}));
+
 vi.mock("./auth-profiles/session-override.js", () => ({
-  clearSessionAuthProfileOverride: vi.fn(),
+  clearSessionAuthProfileOverride: (...args: unknown[]) =>
+    state.clearSessionAuthProfileOverrideMock(...args),
 }));
 
 vi.mock("./defaults.js", () => ({
@@ -269,7 +291,12 @@ vi.mock("./model-catalog.js", () => ({
 
 vi.mock("./model-selection.js", () => ({
   buildAllowedModelSet: () => ({
-    allowedKeys: new Set<string>(["anthropic/claude", "openai/claude", "openai/gpt-5.4"]),
+    allowedKeys: new Set<string>([
+      "anthropic/claude",
+      "codex-cli/gpt-5.4",
+      "openai/claude",
+      "openai/gpt-5.4",
+    ]),
     allowedCatalog: [],
     allowAny: false,
   }),
@@ -279,6 +306,12 @@ vi.mock("./model-selection.js", () => ({
   resolveConfiguredModelRef: () => ({ provider: "anthropic", model: "claude" }),
   resolveDefaultModelForAgent: () => ({ provider: "anthropic", model: "claude" }),
   resolveThinkingDefault: () => "low",
+}));
+
+vi.mock("./provider-auth-aliases.js", () => ({
+  resolveProviderAuthAliasMap: () => ({}),
+  resolveProviderIdForAuth: (provider: string) =>
+    provider.trim().toLowerCase() === "codex-cli" ? "openai-codex" : provider.trim().toLowerCase(),
 }));
 
 vi.mock("./skills.js", () => ({
@@ -308,7 +341,8 @@ vi.mock("./workspace.js", () => ({
 
 vi.mock("../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: () => ({
-    resolveSession: () => null,
+    resolveSession: (...args: unknown[]) => state.acpResolveSessionMock(...args),
+    runTurn: (...args: unknown[]) => state.acpRunTurnMock(...args),
   }),
 }));
 
@@ -376,6 +410,36 @@ function expectFallbackOverrideCalls(first: boolean, second: boolean) {
 describe("agentCommand – LiveSessionModelSwitchError retry", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    state.acpResolveSessionMock.mockReturnValue(null);
+    state.resolveAcpAgentPolicyErrorMock.mockReturnValue(null);
+    state.resolveAcpDispatchPolicyErrorMock.mockReturnValue(null);
+    state.resolveAcpExplicitTurnPolicyErrorMock.mockReturnValue(null);
+    state.acpRunTurnMock.mockImplementation(async (params: unknown) => {
+      const onEvent = (params as { onEvent?: (event: unknown) => void }).onEvent;
+      onEvent?.({ type: "text_delta", stream: "output", text: "done" });
+      onEvent?.({ type: "done", stopReason: "end_turn" });
+    });
+    state.createAcpVisibleTextAccumulatorMock.mockImplementation(() => {
+      let text = "";
+      return {
+        consume(chunk: string) {
+          text += chunk;
+          return { text, delta: chunk };
+        },
+        finalizeRaw: () => text,
+        finalize: () => text,
+      };
+    });
+    state.buildAcpResultMock.mockImplementation((params: { payloadText?: string }) => ({
+      payloads: params.payloadText ? [{ text: params.payloadText }] : [],
+      meta: { durationMs: 0, stopReason: "end_turn" },
+    }));
+    state.persistAcpTurnTranscriptMock.mockImplementation(
+      async (params: { sessionEntry?: unknown }) => params.sessionEntry,
+    );
+    state.authProfileStoreMock = { profiles: {} };
+    state.sessionEntryMock = undefined;
+    state.sessionStoreMock = undefined;
     state.deliverAgentCommandResultMock.mockResolvedValue(undefined);
     state.updateSessionStoreAfterAgentRunMock.mockResolvedValue(undefined);
   });
@@ -450,6 +514,48 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps aliased session auth profiles for codex-cli runs", async () => {
+    let capturedAuthProfileProvider: string | undefined;
+    const sessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      providerOverride: "codex-cli",
+      modelOverride: "gpt-5.4",
+      authProfileOverride: "openai-codex:work",
+      authProfileOverrideSource: "user",
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    state.sessionEntryMock = sessionEntry;
+    state.authProfileStoreMock = {
+      profiles: {
+        "openai-codex:work": {
+          type: "api_key",
+          provider: "openai-codex",
+          key: "sk-test",
+        },
+      },
+    };
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      const result = await params.run(params.provider, params.model);
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockImplementation(async (...args: unknown[]) => {
+      const attemptParams = args[0] as { authProfileProvider?: string } | undefined;
+      capturedAuthProfileProvider = attemptParams?.authProfileProvider;
+      return makeSuccessResult("codex-cli", "gpt-5.4");
+    });
+
+    await runBasicAgentCommand();
+
+    expect(capturedAuthProfileProvider).toBe("codex-cli");
+    expect(state.clearSessionAuthProfileOverrideMock).not.toHaveBeenCalled();
+  });
+
   it("updates hasSessionModelOverride for fallback resolution after switch", async () => {
     setupModelSwitchRetry({
       provider: "openai",
@@ -478,6 +584,108 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     await runBasicAgentCommand();
 
     expectFallbackOverrideCalls(false, false);
+  });
+
+  it("sends internal completion wakes to ACP sessions as plain prompt text", async () => {
+    state.acpResolveSessionMock.mockReturnValue({
+      kind: "ready",
+      meta: {
+        agent: "claude",
+        cwd: "/tmp/workspace",
+      },
+    });
+
+    await agentCommand({
+      message: [
+        INTERNAL_RUNTIME_CONTEXT_BEGIN,
+        "OpenClaw runtime context (internal):",
+        "hidden task completion event",
+        INTERNAL_RUNTIME_CONTEXT_END,
+      ].join("\n"),
+      sessionKey: "agent:main",
+      senderIsOwner: true,
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:main:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "inspect ACP delivery",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "child output",
+          replyInstruction: "Summarize the result for the user.",
+        },
+      ],
+    });
+
+    expect(state.acpRunTurnMock).toHaveBeenCalledTimes(1);
+    const runTurnParams = state.acpRunTurnMock.mock.calls[0]?.[0] as { text?: string };
+    expect(runTurnParams.text).toContain("A background task completed.");
+    expect(runTurnParams.text).toContain("inspect ACP delivery");
+    expect(runTurnParams.text).toContain("child output");
+    expect(runTurnParams.text).not.toContain(INTERNAL_RUNTIME_CONTEXT_BEGIN);
+    expect(runTurnParams.text).not.toContain(INTERNAL_RUNTIME_CONTEXT_END);
+
+    expect(state.persistAcpTurnTranscriptMock).toHaveBeenCalledTimes(1);
+    const transcriptParams = state.persistAcpTurnTranscriptMock.mock.calls[0]?.[0] as {
+      body?: string;
+      transcriptBody?: string;
+    };
+    expect(transcriptParams.body).toBe(runTurnParams.text);
+    expect(transcriptParams.transcriptBody).toContain("A background task completed.");
+    expect(transcriptParams.transcriptBody).not.toContain(INTERNAL_RUNTIME_CONTEXT_BEGIN);
+    expect(transcriptParams.transcriptBody).not.toContain(INTERNAL_RUNTIME_CONTEXT_END);
+  });
+
+  it("allows manual ACP spawn turns when ACP dispatch is disabled", async () => {
+    state.acpResolveSessionMock.mockReturnValue({
+      kind: "ready",
+      meta: {
+        agent: "claude",
+        cwd: "/tmp/workspace",
+      },
+    });
+    state.resolveAcpDispatchPolicyErrorMock.mockReturnValue(
+      new Error("ACP dispatch is disabled by policy (`acp.dispatch.enabled=false`)."),
+    );
+
+    await agentCommand({
+      message: "bootstrap ACP child",
+      sessionKey: "agent:main",
+      senderIsOwner: true,
+      acpTurnSource: "manual_spawn",
+    });
+
+    expect(state.resolveAcpExplicitTurnPolicyErrorMock).toHaveBeenCalledTimes(1);
+    expect(state.resolveAcpDispatchPolicyErrorMock).not.toHaveBeenCalled();
+    expect(state.acpRunTurnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps ordinary ACP turns blocked when ACP dispatch is disabled", async () => {
+    state.acpResolveSessionMock.mockReturnValue({
+      kind: "ready",
+      meta: {
+        agent: "claude",
+        cwd: "/tmp/workspace",
+      },
+    });
+    state.resolveAcpDispatchPolicyErrorMock.mockReturnValue(
+      new Error("ACP dispatch is disabled by policy (`acp.dispatch.enabled=false`)."),
+    );
+
+    await expect(
+      agentCommand({
+        message: "automatic ACP turn",
+        sessionKey: "agent:main",
+        senderIsOwner: true,
+      }),
+    ).rejects.toThrow("ACP dispatch is disabled");
+
+    expect(state.resolveAcpExplicitTurnPolicyErrorMock).not.toHaveBeenCalled();
+    expect(state.resolveAcpDispatchPolicyErrorMock).toHaveBeenCalledTimes(1);
+    expect(state.acpRunTurnMock).not.toHaveBeenCalled();
   });
 
   it("flips hasSessionModelOverride on provider-only switch with same model", async () => {

@@ -33,9 +33,11 @@ describe("runCliAgent bundle MCP e2e", () => {
     { timeout: E2E_TIMEOUT_MS },
     async () => {
       const { runCliAgent } = await import("./cli-runner.js");
+      const { resetGlobalHookRunner } = await import("../plugins/hook-runner-global.js");
       const envSnapshot = captureEnv(["HOME"]);
       const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-bundle-mcp-"));
       process.env.HOME = tempHome;
+      resetGlobalHookRunner();
 
       const workspaceDir = path.join(tempHome, "workspace");
       const sessionFile = path.join(tempHome, "session.jsonl");
@@ -84,6 +86,7 @@ describe("runCliAgent bundle MCP e2e", () => {
         expect(result.payloads?.[0]?.text).toContain("BUNDLE MCP OK FROM-BUNDLE");
         expect(result.meta.agentMeta?.sessionId.length ?? 0).toBeGreaterThan(0);
       } finally {
+        resetGlobalHookRunner();
         await fs.rm(tempHome, { recursive: true, force: true });
         envSnapshot.restore();
       }

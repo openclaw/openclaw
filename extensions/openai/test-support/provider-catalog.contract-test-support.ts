@@ -1,3 +1,4 @@
+import { registerProviderPlugin, requireRegisteredProvider } from "openclaw/plugin-sdk/testing";
 import { beforeEach, describe, it, vi } from "vitest";
 import {
   expectAugmentedCodexCatalog,
@@ -8,10 +9,6 @@ import {
   loadBundledPluginPublicSurface,
 } from "../../../test/helpers/plugins/provider-catalog.js";
 import type { ProviderPlugin } from "../../../test/helpers/plugins/provider-catalog.js";
-import {
-  registerProviderPlugin,
-  requireRegisteredProvider,
-} from "../../../test/helpers/plugins/provider-registration.js";
 
 const PROVIDER_CATALOG_CONTRACT_TIMEOUT_MS = 300_000;
 
@@ -27,17 +24,47 @@ const resolveCatalogHookProviderPluginIdsMock = vi.hoisted(() =>
   vi.fn<ResolveCatalogHookProviderPluginIds>((_) => [] as string[]),
 );
 
-vi.mock("../../../src/plugins/providers.js", () => ({
-  resolveOwningPluginIdsForProvider: (params: unknown) =>
-    resolveOwningPluginIdsForProviderMock(params as never),
-  resolveCatalogHookProviderPluginIds: (params: unknown) =>
-    resolveCatalogHookProviderPluginIdsMock(params as never),
-}));
-
-vi.mock("../../../src/plugins/providers.runtime.js", () => ({
-  isPluginProvidersLoadInFlight: () => false,
-  resolvePluginProviders: (params: unknown) => resolvePluginProvidersMock(params as never),
-}));
+vi.mock("openclaw/plugin-sdk/provider-catalog-runtime", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/provider-catalog-runtime")
+  >("openclaw/plugin-sdk/provider-catalog-runtime");
+  const resolveCatalogHookProviders = (params: unknown) =>
+    resolvePluginProvidersMock({
+      onlyPluginIds: resolveCatalogHookProviderPluginIdsMock(params),
+    });
+  return {
+    ...actual,
+    augmentModelCatalogWithProviderPlugins: async (params: {
+      context: Parameters<NonNullable<ProviderPlugin["augmentModelCatalog"]>>[0];
+    }) => {
+      const supplemental = [];
+      for (const provider of resolveCatalogHookProviders(params)) {
+        const entries = await provider.augmentModelCatalog?.(params.context);
+        if (entries?.length) {
+          supplemental.push(...entries);
+        }
+      }
+      return supplemental;
+    },
+    resolveProviderBuiltInModelSuppression: (params: {
+      context: Parameters<NonNullable<ProviderPlugin["suppressBuiltInModel"]>>[0];
+    }) => {
+      for (const provider of resolveCatalogHookProviders(params)) {
+        const result = provider.suppressBuiltInModel?.(params.context);
+        if (result?.suppress) {
+          return result;
+        }
+      }
+      return undefined;
+    },
+    resolveOwningPluginIdsForProvider: (params: unknown) =>
+      resolveOwningPluginIdsForProviderMock(params as never),
+    resolveCatalogHookProviderPluginIds: (params: unknown) =>
+      resolveCatalogHookProviderPluginIdsMock(params as never),
+    isPluginProvidersLoadInFlight: () => false,
+    resolvePluginProviders: (params: unknown) => resolvePluginProvidersMock(params as never),
+  };
+});
 
 export function describeOpenAIProviderCatalogContract() {
   const contractDepsPromise = (async () => {
@@ -107,6 +134,7 @@ export function describeOpenAIProviderCatalogContract() {
         const { openaiProvider } = await contractDepsPromise;
         expectCodexMissingAuthHint(
           (params) => openaiProvider.buildMissingAuthMessage?.(params.context) ?? undefined,
+          "openai-codex/gpt-5.5",
         );
       });
 

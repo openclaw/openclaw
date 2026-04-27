@@ -158,4 +158,51 @@ describe("createOpenAIThinkingLevelWrapper", () => {
       expect(payloads[0]?.reasoning).toEqual({ effort: level });
     }
   });
+
+  it("raises minimal reasoning for web_search on loopback Responses routes", () => {
+    const payloads: Array<Record<string, unknown>> = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        reasoning: { effort: "minimal", summary: "auto" },
+        tools: [{ type: "function", name: "web_search" }],
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(structuredClone(payload));
+      return createAssistantMessageEventStream();
+    };
+    const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "minimal");
+    void wrapped(
+      {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5",
+        baseUrl: "http://127.0.0.1:19191/v1",
+      } as Model<"openai-responses">,
+      { messages: [] },
+      {},
+    );
+
+    expect(payloads[0]?.reasoning).toEqual({ effort: "low", summary: "auto" });
+  });
+
+  it.each([
+    {
+      api: "openai-responses",
+      provider: "openai",
+      id: "gpt-5.5",
+    },
+    {
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      id: "gpt-5.5",
+    },
+  ] as const)("preserves xhigh for $provider/$id", (model) => {
+    const { baseStreamFn, payloads } = createPayloadCapture({
+      initialReasoning: { effort: "high" },
+    });
+    const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "xhigh");
+    void wrapped(model as Model<typeof model.api>, { messages: [] }, {});
+
+    expect(payloads[0]?.reasoning).toEqual({ effort: "xhigh" });
+  });
 });

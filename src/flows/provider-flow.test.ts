@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type ResolveProviderInstallCatalogEntries =
   typeof import("../plugins/provider-install-catalog.js").resolveProviderInstallCatalogEntries;
+type ResolveManifestProviderAuthChoices =
+  typeof import("../plugins/provider-auth-choices.js").resolveManifestProviderAuthChoices;
 type ResolveProviderWizardOptions =
   typeof import("../plugins/provider-wizard.js").resolveProviderWizardOptions;
 type ResolveProviderModelPickerEntries =
@@ -14,6 +16,13 @@ const resolveProviderInstallCatalogEntries = vi.hoisted(() =>
 );
 vi.mock("../plugins/provider-install-catalog.js", () => ({
   resolveProviderInstallCatalogEntries,
+}));
+
+const resolveManifestProviderAuthChoices = vi.hoisted(() =>
+  vi.fn<ResolveManifestProviderAuthChoices>(() => []),
+);
+vi.mock("../plugins/provider-auth-choices.js", () => ({
+  resolveManifestProviderAuthChoices,
 }));
 
 const resolveProviderWizardOptions = vi.hoisted(() =>
@@ -32,14 +41,117 @@ vi.mock("../plugins/providers.runtime.js", () => ({
   resolvePluginProviders,
 }));
 
-import {
-  resolveProviderModelPickerFlowContributions,
-  resolveProviderSetupFlowContributions,
-} from "./provider-flow.js";
+import { resolveProviderSetupFlowContributions } from "./provider-flow.js";
+import { resolveProviderModelPickerFlowContributions } from "./provider-flow.runtime.js";
 
 describe("provider flow install catalog contributions", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    resolveManifestProviderAuthChoices.mockReset();
+    resolveManifestProviderAuthChoices.mockReturnValue([]);
+    resolveProviderInstallCatalogEntries.mockReset();
+    resolveProviderInstallCatalogEntries.mockReturnValue([]);
+    resolveProviderWizardOptions.mockReset();
+    resolveProviderWizardOptions.mockReturnValue([]);
+    resolveProviderModelPickerEntries.mockReset();
+    resolveProviderModelPickerEntries.mockReturnValue([]);
+    resolvePluginProviders.mockReset();
+    resolvePluginProviders.mockReturnValue([]);
+  });
+
+  it("surfaces manifest provider auth choices before setup runtime loads", () => {
+    resolveManifestProviderAuthChoices.mockReturnValue([
+      {
+        pluginId: "openai-compatible",
+        providerId: "openai-compatible",
+        methodId: "api-key",
+        choiceId: "openai-compatible-api-key",
+        choiceLabel: "OpenAI-compatible API key",
+        choiceHint: "Use a compatible endpoint",
+        assistantPriority: -5,
+        assistantVisibility: "visible",
+        groupId: "openai-compatible",
+        groupLabel: "OpenAI-compatible",
+        groupHint: "Self-hosted and compatible providers",
+        onboardingScopes: ["text-inference"],
+      },
+    ]);
+
+    expect(resolveProviderSetupFlowContributions()).toEqual([
+      {
+        id: "provider:setup:openai-compatible-api-key",
+        kind: "provider",
+        surface: "setup",
+        providerId: "openai-compatible",
+        pluginId: "openai-compatible",
+        option: {
+          value: "openai-compatible-api-key",
+          label: "OpenAI-compatible API key",
+          hint: "Use a compatible endpoint",
+          assistantPriority: -5,
+          assistantVisibility: "visible",
+          group: {
+            id: "openai-compatible",
+            label: "OpenAI-compatible",
+            hint: "Self-hosted and compatible providers",
+          },
+        },
+        onboardingScopes: ["text-inference"],
+        source: "manifest",
+      },
+    ]);
+    expect(resolveManifestProviderAuthChoices).toHaveBeenCalledWith(
+      expect.objectContaining({
+        includeUntrustedWorkspacePlugins: false,
+      }),
+    );
+    expect(resolveProviderWizardOptions).not.toHaveBeenCalled();
+    expect(resolvePluginProviders).not.toHaveBeenCalled();
+  });
+
+  it("prefers manifest setup contributions over duplicate install-catalog entries", () => {
+    resolveManifestProviderAuthChoices.mockReturnValue([
+      {
+        pluginId: "openai",
+        providerId: "openai",
+        methodId: "api-key",
+        choiceId: "openai-api-key",
+        choiceLabel: "OpenAI API key",
+      },
+    ]);
+    resolveProviderInstallCatalogEntries.mockReturnValue([
+      {
+        pluginId: "openai",
+        providerId: "openai",
+        methodId: "api-key",
+        choiceId: "openai-api-key",
+        choiceLabel: "Catalog OpenAI API key",
+        label: "OpenAI",
+        origin: "bundled",
+        install: {
+          npmSpec: "@openclaw/openai",
+        },
+      },
+    ]);
+
+    expect(resolveProviderSetupFlowContributions()).toEqual([
+      {
+        id: "provider:setup:openai-api-key",
+        kind: "provider",
+        surface: "setup",
+        providerId: "openai",
+        pluginId: "openai",
+        option: {
+          value: "openai-api-key",
+          label: "OpenAI API key",
+          group: {
+            id: "openai",
+            label: "OpenAI API key",
+          },
+        },
+        source: "manifest",
+      },
+    ]);
+    expect(resolveProviderWizardOptions).not.toHaveBeenCalled();
   });
 
   it("surfaces install-catalog provider choices when runtime setup options are absent", () => {
@@ -180,7 +292,7 @@ describe("provider flow install catalog contributions", () => {
     ).toEqual([]);
   });
 
-  it("prefers runtime setup contributions over duplicate install-catalog entries", () => {
+  it("keeps setup contributions on cold metadata instead of runtime wizard options", () => {
     resolveProviderWizardOptions.mockReturnValue([
       {
         value: "openai-api-key",
@@ -212,6 +324,7 @@ describe("provider flow install catalog contributions", () => {
         kind: "provider",
         surface: "setup",
         providerId: "openai",
+        pluginId: "openai",
         option: {
           value: "openai-api-key",
           label: "OpenAI API key",
@@ -220,9 +333,11 @@ describe("provider flow install catalog contributions", () => {
             label: "OpenAI",
           },
         },
-        source: "runtime",
+        source: "install-catalog",
       },
     ]);
+    expect(resolveProviderWizardOptions).not.toHaveBeenCalled();
+    expect(resolvePluginProviders).not.toHaveBeenCalled();
   });
 
   it("keeps docs attached to runtime model-picker contributions", () => {

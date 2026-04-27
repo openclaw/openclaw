@@ -5,6 +5,8 @@ export type MemorySearchResult = {
   startLine: number;
   endLine: number;
   score: number;
+  vectorScore?: number;
+  textScore?: number;
   snippet: string;
   source: MemorySource;
   citation?: string;
@@ -13,6 +15,10 @@ export type MemorySearchResult = {
 export type MemoryEmbeddingProbeResult = {
   ok: boolean;
   error?: string;
+  checked?: boolean;
+  cached?: boolean;
+  checkedAtMs?: number;
+  cacheExpiresAtMs?: number;
 };
 
 export type MemorySyncProgressUpdate = {
@@ -83,6 +89,7 @@ export interface MemorySearchManager {
       sessionKey?: string;
       qmdSearchModeOverride?: "query" | "search" | "vsearch";
       onDebug?: (debug: MemorySearchRuntimeDebug) => void;
+      sources?: MemorySource[];
     },
   ): Promise<MemorySearchResult[]>;
   readFile(params: { relPath: string; from?: number; lines?: number }): Promise<MemoryReadResult>;
@@ -93,6 +100,7 @@ export interface MemorySearchManager {
     sessionFiles?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void>;
+  getCachedEmbeddingAvailability?(): MemoryEmbeddingProbeResult | null;
   probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult>;
   probeVectorAvailability(): Promise<boolean>;
   close?(): Promise<void>;

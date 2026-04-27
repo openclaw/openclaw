@@ -5,6 +5,8 @@ const SCRIPT_PATH = "scripts/test-install-sh-docker.sh";
 const SMOKE_RUNNER_PATH = "scripts/docker/install-sh-smoke/run.sh";
 const BUN_GLOBAL_SMOKE_PATH = "scripts/e2e/bun-global-install-smoke.sh";
 const INSTALL_SMOKE_WORKFLOW_PATH = ".github/workflows/install-smoke.yml";
+const RELEASE_CHECKS_WORKFLOW_PATH = ".github/workflows/openclaw-release-checks.yml";
+const LIVE_E2E_WORKFLOW_PATH = ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
 
 describe("test-install-sh-docker", () => {
   it("defaults local Apple Silicon smoke runs to native arm64 while keeping CI on amd64", () => {
@@ -44,7 +46,9 @@ describe("test-install-sh-docker", () => {
     );
     expect(runner).toContain("resolve_update_baseline_version");
     expect(runner).toContain('quiet_npm view "${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}" version');
-    expect(workflow).toContain("OPENCLAW_INSTALL_SMOKE_UPDATE_BASELINE: latest");
+    expect(workflow).toContain(
+      "OPENCLAW_INSTALL_SMOKE_UPDATE_BASELINE: ${{ inputs.update_baseline_version || 'latest' }}",
+    );
   });
 
   it("can reuse dist from the already-built root Docker smoke image", () => {
@@ -54,6 +58,16 @@ describe("test-install-sh-docker", () => {
     expect(script).toContain("restore_local_dist_from_image");
     expect(script).toContain('docker cp "${container_id}:/app/dist" "$ROOT_DIR/dist"');
     expect(script).toContain('echo "==> Reuse local dist/ from Docker image: $image"');
+  });
+
+  it("allows repository branch history and release tags for secret-backed Docker release checks", () => {
+    const workflow = readFileSync(LIVE_E2E_WORKFLOW_PATH, "utf8");
+
+    expect(workflow).toContain("git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'");
+    expect(workflow).toContain('git rev-parse --verify "${INPUT_REF}^{commit}"');
+    expect(workflow).toContain("repository-branch-history");
+    expect(workflow).toContain("git tag --points-at \"$selected_sha\" | grep -Eq '^v'");
+    expect(workflow).toContain("reachable from an OpenClaw branch or release tag");
   });
 
   it("prints package size audits for release smoke tarballs", () => {
@@ -138,18 +152,44 @@ describe("bun global install smoke", () => {
     expect(script).toContain("OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE");
   });
 
-  it("runs from the install-smoke workflow with Bun enabled", () => {
+  it("gates workflow Bun install smoke to scheduled and release-check runs", () => {
     const workflow = readFileSync(INSTALL_SMOKE_WORKFLOW_PATH, "utf8");
+    const releaseChecks = readFileSync(RELEASE_CHECKS_WORKFLOW_PATH, "utf8");
 
-    expect(workflow).toContain('install-bun: "true"');
+    expect(workflow).not.toContain("pull_request:");
+    expect(workflow).not.toContain("branches: [main]");
+    expect(workflow).toContain("workflow_call:");
+    expect(workflow).toContain('cron: "17 3 * * *"');
+    expect(workflow).toContain("run_bun_global_install_smoke:");
+    expect(workflow).toContain(
+      "install-bun: ${{ needs.preflight.outputs.run_bun_global_install_smoke }}",
+    );
+    expect(workflow).toContain(
+      "if: needs.preflight.outputs.run_bun_global_install_smoke == 'true'",
+    );
     expect(workflow).toContain("Run Bun global install image-provider smoke");
     expect(workflow).toContain("bash scripts/e2e/bun-global-install-smoke.sh");
     expect(workflow).toContain(
       "OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE: openclaw-dockerfile-smoke:local",
     );
     expect(workflow).toContain("format('{0}-manual-{1}', github.workflow, github.run_id)");
-    expect(workflow).toContain("OPENCLAW_CI_FORCE_INSTALL_SMOKE");
-    expect(workflow).toContain('if [ "$force_install_smoke" = "true" ]; then');
+    expect(workflow).not.toContain(
+      "github.event_name == 'workflow_call' || github.event_name == 'push'",
+    );
+    expect(workflow).not.toContain("github.event_name == 'pull_request'");
+    expect(workflow).not.toContain("node scripts/ci-changed-scope.mjs");
+    expect(workflow).toContain("OPENCLAW_CI_WORKFLOW_BUN_GLOBAL_INSTALL_SMOKE");
+    expect(workflow).toContain('if [ "$event_name" = "schedule" ]; then');
+    expect(workflow).toContain('echo "run_bun_global_install_smoke=$run_bun_global_install_smoke"');
+    expect(workflow).toContain("run_fast_install_smoke=true");
+    expect(workflow).toContain("run_full_install_smoke=true");
+    expect(workflow).toContain("run_install_smoke=true");
+    expect(workflow).toContain("install-smoke-fast:");
+    expect(workflow).toContain("run_fast_install_smoke");
+    expect(workflow).toContain("run_full_install_smoke");
     expect(workflow).toContain('OPENCLAW_INSTALL_SMOKE_SKIP_NPM_GLOBAL: "1"');
+    expect(releaseChecks).toContain("install_smoke_release_checks:");
+    expect(releaseChecks).toContain("uses: ./.github/workflows/install-smoke.yml");
+    expect(releaseChecks).toContain("run_bun_global_install_smoke: true");
   });
 });

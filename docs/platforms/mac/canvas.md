@@ -121,3 +121,8 @@ The app prompts for confirmation unless a valid key is provided.
 - Canvas scheme blocks directory traversal; files must live under the session root.
 - Local Canvas content uses a custom scheme (no loopback server required).
 - External `http(s)` URLs are allowed only when explicitly navigated.
+
+## Related
+
+- [macOS app](/platforms/macos)
+- [WebChat](/web/webchat)

@@ -7,8 +7,6 @@ read_when:
 title: "Bridge protocol"
 ---
 
-# Bridge protocol (legacy node transport)
-
 <Warning>
 The TCP bridge has been **removed**. Current OpenClaw builds do not ship the bridge listener and `bridge.*` config keys are no longer in the schema. This page is kept for historical reference only. Use the [Gateway Protocol](/gateway/protocol) for all node/operator clients.
 </Warning>
@@ -87,3 +85,8 @@ Payload fields (all optional unless noted):
 The bridge was **implicit v1** (no min/max negotiation). This section is
 historical reference only; current node/operator clients use the WebSocket
 [Gateway Protocol](/gateway/protocol).
+
+## Related
+
+- [Gateway protocol](/gateway/protocol)
+- [Nodes](/nodes)

@@ -1,13 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
+import { resolveManifestProviderAuthChoices } from "../plugins/provider-auth-choices.js";
 import { resolveProviderInstallCatalogEntries } from "../plugins/provider-install-catalog.js";
-import {
-  resolveProviderModelPickerEntries,
-  resolveProviderWizardOptions,
-} from "../plugins/provider-wizard.js";
-import { resolvePluginProviders } from "../plugins/providers.runtime.js";
-import type { ProviderPlugin } from "../plugins/types.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { FlowContribution, FlowOption } from "./types.js";
 import { sortFlowContributionsByLabel } from "./types.js";
 
@@ -28,15 +22,7 @@ export type ProviderSetupFlowContribution = FlowContribution & {
   pluginId?: string;
   option: ProviderSetupFlowOption;
   onboardingScopes?: ProviderFlowScope[];
-  source: "runtime" | "install-catalog";
-};
-
-export type ProviderModelPickerFlowContribution = FlowContribution & {
-  kind: "provider";
-  surface: "model-picker";
-  providerId: string;
-  option: ProviderModelPickerFlowEntry;
-  source: "runtime";
+  source: "manifest" | "install-catalog";
 };
 
 function includesProviderFlowScope(
@@ -44,25 +30,6 @@ function includesProviderFlowScope(
   scope: ProviderFlowScope,
 ): boolean {
   return scopes ? scopes.includes(scope) : scope === DEFAULT_PROVIDER_FLOW_SCOPE;
-}
-
-function resolveProviderDocsById(params?: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): Map<string, string> {
-  return new Map(
-    resolvePluginProviders({
-      config: params?.config,
-      workspaceDir: params?.workspaceDir,
-      env: params?.env,
-      mode: "setup",
-    })
-      .filter((provider): provider is ProviderPlugin & { docsPath: string } =>
-        Boolean(normalizeOptionalString(provider.docsPath)),
-      )
-      .map((provider) => [provider.id, normalizeOptionalString(provider.docsPath)!]),
-  );
 }
 
 function resolveInstallCatalogProviderSetupFlowContributions(params?: {
@@ -121,6 +88,51 @@ function resolveInstallCatalogProviderSetupFlowContributions(params?: {
     });
 }
 
+function resolveManifestProviderSetupFlowContributions(params?: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  scope?: ProviderFlowScope;
+}): ProviderSetupFlowContribution[] {
+  const scope = params?.scope ?? DEFAULT_PROVIDER_FLOW_SCOPE;
+  return resolveManifestProviderAuthChoices({
+    ...params,
+    includeUntrustedWorkspacePlugins: false,
+  })
+    .filter((choice) => includesProviderFlowScope(choice.onboardingScopes, scope))
+    .map((choice) => {
+      const groupId = choice.groupId ?? choice.providerId;
+      const groupLabel = choice.groupLabel ?? choice.choiceLabel;
+      return Object.assign(
+        {
+          id: `provider:setup:${choice.choiceId}`,
+          kind: `provider` as const,
+          surface: `setup` as const,
+          providerId: choice.providerId,
+          pluginId: choice.pluginId,
+          option: {
+            value: choice.choiceId,
+            label: choice.choiceLabel,
+            ...(choice.choiceHint ? { hint: choice.choiceHint } : {}),
+            ...(choice.assistantPriority !== undefined
+              ? { assistantPriority: choice.assistantPriority }
+              : {}),
+            ...(choice.assistantVisibility
+              ? { assistantVisibility: choice.assistantVisibility }
+              : {}),
+            group: {
+              id: groupId,
+              label: groupLabel,
+              ...(choice.groupHint ? { hint: choice.groupHint } : {}),
+            },
+          },
+        },
+        choice.onboardingScopes ? { onboardingScopes: [...choice.onboardingScopes] } : {},
+        { source: `manifest` as const },
+      );
+    });
+}
+
 export function resolveProviderSetupFlowContributions(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -128,88 +140,18 @@ export function resolveProviderSetupFlowContributions(params?: {
   scope?: ProviderFlowScope;
 }): ProviderSetupFlowContribution[] {
   const scope = params?.scope ?? DEFAULT_PROVIDER_FLOW_SCOPE;
-  const docsByProvider = resolveProviderDocsById(params ?? {});
-  const runtimeContributions = resolveProviderWizardOptions(params ?? {})
-    .filter((option) => includesProviderFlowScope(option.onboardingScopes, scope))
-    .map((option) =>
-      Object.assign(
-        {
-          id: `provider:setup:${option.value}`,
-          kind: `provider` as const,
-          surface: `setup` as const,
-          providerId: option.groupId,
-          option: {
-            value: option.value,
-            label: option.label,
-            ...(option.hint ? { hint: option.hint } : {}),
-            ...(option.assistantPriority !== undefined
-              ? { assistantPriority: option.assistantPriority }
-              : {}),
-            ...(option.assistantVisibility
-              ? { assistantVisibility: option.assistantVisibility }
-              : {}),
-            group: {
-              id: option.groupId,
-              label: option.groupLabel,
-              ...(option.groupHint ? { hint: option.groupHint } : {}),
-            },
-            ...(docsByProvider.get(option.groupId)
-              ? { docs: { path: docsByProvider.get(option.groupId)! } }
-              : {}),
-          },
-        },
-        option.onboardingScopes ? { onboardingScopes: [...option.onboardingScopes] } : {},
-        { source: `runtime` as const },
-      ),
-    );
+  const manifestContributions = resolveManifestProviderSetupFlowContributions({
+    ...params,
+    scope,
+  });
   const seenOptionValues = new Set(
-    runtimeContributions.map((contribution) => contribution.option.value),
+    manifestContributions.map((contribution) => contribution.option.value),
   );
   const installCatalogContributions = resolveInstallCatalogProviderSetupFlowContributions({
     ...params,
     scope,
   }).filter((contribution) => !seenOptionValues.has(contribution.option.value));
-  return sortFlowContributionsByLabel([...runtimeContributions, ...installCatalogContributions]);
-}
-
-export function resolveProviderModelPickerFlowEntries(params?: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): ProviderModelPickerFlowEntry[] {
-  return resolveProviderModelPickerFlowContributions(params).map(
-    (contribution) => contribution.option,
-  );
-}
-
-export function resolveProviderModelPickerFlowContributions(params?: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): ProviderModelPickerFlowContribution[] {
-  const docsByProvider = resolveProviderDocsById(params ?? {});
-  return sortFlowContributionsByLabel(
-    resolveProviderModelPickerEntries(params ?? {}).map((entry) => {
-      const providerId = entry.value.startsWith("provider-plugin:")
-        ? entry.value.slice("provider-plugin:".length).split(":")[0]
-        : entry.value;
-      return {
-        id: `provider:model-picker:${entry.value}`,
-        kind: "provider" as const,
-        surface: "model-picker" as const,
-        providerId,
-        option: {
-          value: entry.value,
-          label: entry.label,
-          ...(entry.hint ? { hint: entry.hint } : {}),
-          ...(docsByProvider.get(providerId)
-            ? { docs: { path: docsByProvider.get(providerId)! } }
-            : {}),
-        },
-        source: "runtime" as const,
-      };
-    }),
-  );
+  return sortFlowContributionsByLabel([...manifestContributions, ...installCatalogContributions]);
 }
 
 export { includesProviderFlowScope };

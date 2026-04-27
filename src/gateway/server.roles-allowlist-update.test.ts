@@ -12,6 +12,12 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 import type { GatewayClient } from "./client.js";
 
 vi.mock("../infra/update-runner.js", () => ({
+  resolveUpdateInstallSurface: vi.fn(async () => ({
+    kind: "git",
+    mode: "git",
+    root: "/repo",
+    packageRoot: "/repo",
+  })),
   runGatewayUpdate: vi.fn(async () => ({
     status: "ok",
     mode: "git",
@@ -263,7 +269,9 @@ describe("gateway update.run", () => {
       );
       const res = await onceMessage(ws, (o) => o.type === "res" && o.id === id);
       expect(res.ok).toBe(true);
-      expect(updateMock).toHaveBeenCalledOnce();
+      await vi.waitFor(() => {
+        expect(updateMock).toHaveBeenCalledOnce();
+      }, FAST_WAIT_OPTS);
     } finally {
       process.off("SIGUSR1", sigusr1);
     }

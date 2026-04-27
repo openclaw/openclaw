@@ -38,6 +38,24 @@ import {
 | `installCommonResolveTargetErrorCases` | Shared test cases for target resolution error handling |
 | `shouldAckReaction`                    | Check whether a channel should add an ack reaction     |
 | `removeAckReactionAfterReply`          | Remove ack reaction after reply delivery               |
+| `createTestRegistry`                   | Build a channel plugin registry fixture                |
+| `createEmptyPluginRegistry`            | Build an empty plugin registry fixture                 |
+| `setActivePluginRegistry`              | Install a registry fixture for plugin runtime tests    |
+| `createRequestCaptureJsonFetch`        | Capture JSON fetch requests in media helper tests      |
+| `withFetchPreconnect`                  | Run fetch tests with preconnect hooks installed        |
+| `withEnv` / `withEnvAsync`             | Temporarily patch environment variables                |
+| `createTempHomeEnv` / `withTempDir`    | Create isolated filesystem test fixtures               |
+| `createMockServerResponse`             | Create a minimal HTTP server response mock             |
+| `registerSingleProviderPlugin`         | Register one provider plugin in loader smoke tests     |
+| `registerProviderPlugin`               | Capture all provider kinds from one plugin             |
+| `requireRegisteredProvider`            | Assert that a provider collection contains an id       |
+| `createProviderUsageFetch`             | Build provider usage fetch fixtures                    |
+| `useFrozenTime` / `useRealTime`        | Freeze and restore timers for time-sensitive tests     |
+| `createRuntimeEnv`                     | Build a mocked CLI/plugin runtime environment          |
+| `createTestWizardPrompter`             | Build a mocked setup wizard prompter                   |
+| `createPluginSetupWizardStatus`        | Build setup status helpers for channel plugins         |
+| `createRuntimeTaskFlow`                | Create isolated runtime task-flow state                |
+| `typedCases`                           | Preserve literal types for table-driven tests          |
 
 ### Types
 
@@ -80,6 +98,27 @@ describe("my-channel target resolution", () => {
 ```
 
 ## Testing patterns
+
+### Testing registration contracts
+
+Unit tests that pass a hand-written `api` mock to `register(api)` do not exercise
+OpenClaw's loader acceptance gates. Add at least one loader-backed smoke test
+for each registration surface your plugin depends on, especially hooks and
+exclusive capabilities such as memory.
+
+The real loader fails plugin registration when required metadata is missing or a
+plugin calls a capability API it does not own. For example,
+`api.registerHook(...)` requires a hook name, and
+`api.registerMemoryCapability(...)` requires the plugin manifest or exported
+entry to declare `kind: "memory"`.
+
+### Testing runtime config access
+
+Prefer the shared plugin runtime mock from the repo test helpers when testing
+bundled plugins. Its deprecated `runtime.config.loadConfig()` and
+`runtime.config.writeConfigFile(...)` mocks throw by default so tests catch new
+usage of compatibility APIs. Override those mocks only when the test is
+explicitly covering legacy compatibility behavior.
 
 ### Unit testing a channel plugin
 
@@ -165,8 +204,9 @@ const mockRuntime = {
     // ... other mocks
   },
   config: {
-    loadConfig: vi.fn(),
-    writeConfigFile: vi.fn(),
+    current: vi.fn(() => ({}) as const),
+    mutateConfigFile: vi.fn(),
+    replaceConfigFile: vi.fn(),
   },
   // ... other namespaces
 } as unknown as PluginRuntime;

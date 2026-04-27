@@ -8,6 +8,7 @@ import {
   installLaunchAgent,
   isLaunchAgentListed,
   parseLaunchctlPrint,
+  readLaunchAgentRuntime,
   repairLaunchAgentBootstrap,
   restartLaunchAgent,
   resolveLaunchAgentPlistPath,
@@ -25,6 +26,7 @@ const state = vi.hoisted(() => ({
   bootstrapError: "",
   bootstrapCode: 1,
   kickstartError: "",
+  kickstartCode: 1,
   kickstartFailuresRemaining: 0,
   disableError: "",
   disableCode: 1,
@@ -39,6 +41,7 @@ const state = vi.hoisted(() => ({
   dirModes: new Map<string, number>(),
   files: new Map<string, string>(),
   fileModes: new Map<string, number>(),
+  fileWrites: [] as Array<{ path: string; data: string }>,
 }));
 const launchdRestartHandoffState = vi.hoisted(() => ({
   isCurrentProcessLaunchdServiceLabel: vi.fn<(label: string) => boolean>(() => false),
@@ -177,7 +180,7 @@ vi.mock("./exec-file.js", () => ({
     if (call[0] === "kickstart") {
       if (state.kickstartError && state.kickstartFailuresRemaining > 0) {
         state.kickstartFailuresRemaining -= 1;
-        return { stdout: "", stderr: state.kickstartError, code: 1 };
+        return { stdout: "", stderr: state.kickstartError, code: state.kickstartCode };
       }
       state.serviceLoaded = true;
       state.serviceRunning = true;
@@ -236,12 +239,21 @@ vi.mock("node:fs/promises", async () => {
       }
       throw new Error(`ENOENT: no such file or directory, chmod '${key}'`);
     }),
+    readFile: vi.fn(async (p: string) => {
+      const key = p;
+      const data = state.files.get(key);
+      if (data !== undefined) {
+        return data;
+      }
+      throw new Error(`ENOENT: no such file or directory, open '${key}'`);
+    }),
     unlink: vi.fn(async (p: string) => {
       state.files.delete(p);
     }),
     writeFile: vi.fn(async (p: string, data: string, opts?: { mode?: number }) => {
       const key = p;
       state.files.set(key, data);
+      state.fileWrites.push({ path: key, data });
       state.dirs.add(key.split("/").slice(0, -1).join("/"));
       state.fileModes.set(key, opts?.mode ?? 0o666);
     }),
@@ -260,6 +272,7 @@ beforeEach(() => {
   state.bootstrapError = "";
   state.bootstrapCode = 1;
   state.kickstartError = "";
+  state.kickstartCode = 1;
   state.kickstartFailuresRemaining = 0;
   state.disableError = "";
   state.disableCode = 1;
@@ -274,6 +287,7 @@ beforeEach(() => {
   state.dirModes.clear();
   state.files.clear();
   state.fileModes.clear();
+  state.fileWrites.length = 0;
   cleanStaleGatewayProcessesSync.mockReset();
   cleanStaleGatewayProcessesSync.mockReturnValue([]);
   launchdRestartHandoffState.isCurrentProcessLaunchdServiceLabel.mockReset();
@@ -332,6 +346,30 @@ describe("launchd runtime parsing", () => {
     expect(parseLaunchctlPrint(output)).toEqual({
       state: "waiting",
       lastExitReason: "exited",
+    });
+  });
+});
+
+describe("launchd runtime state", () => {
+  it("marks installed plist split-brain when launchd no longer has the job", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.files.set(resolveLaunchAgentPlistPath(env), "<plist/>");
+    state.serviceLoaded = false;
+
+    await expect(readLaunchAgentRuntime(env)).resolves.toMatchObject({
+      status: "unknown",
+      missingSupervision: true,
+      detail: "Could not find service",
+    });
+  });
+
+  it("marks a missing unit when launchd has no job and no plist exists", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.serviceLoaded = false;
+
+    await expect(readLaunchAgentRuntime(env)).resolves.toMatchObject({
+      status: "unknown",
+      missingUnit: true,
     });
   });
 });
@@ -438,7 +476,7 @@ describe("launchd install", () => {
 
   it("writes TMPDIR to LaunchAgent environment when provided", async () => {
     const env = createDefaultLaunchdEnv();
-    const tmpDir = "/var/folders/xy/abc123/T/";
+    const tmpDir = "/Users/test/.openclaw/tmp";
     await installLaunchAgent({
       env,
       stdout: new PassThrough(),
@@ -451,6 +489,20 @@ describe("launchd install", () => {
     expect(plist).toContain("<key>EnvironmentVariables</key>");
     expect(plist).toContain("<key>TMPDIR</key>");
     expect(plist).toContain(`<string>${tmpDir}</string>`);
+  });
+
+  it("creates the LaunchAgent TMPDIR before bootstrap", async () => {
+    const env = createDefaultLaunchdEnv();
+    const tmpDir = "/Users/test/.openclaw/tmp";
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+      environment: { TMPDIR: tmpDir },
+    });
+
+    expect(state.dirs.has(tmpDir)).toBe(true);
+    expect(state.dirModes.get(tmpDir)).toBe(0o700);
   });
 
   it("writes KeepAlive=true policy with restrictive umask", async () => {
@@ -470,6 +522,47 @@ describe("launchd install", () => {
     expect(plist).toContain(`<integer>${LAUNCH_AGENT_UMASK_DECIMAL}</integer>`);
     expect(plist).toContain("<key>ThrottleInterval</key>");
     expect(plist).toContain(`<integer>${LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS}</integer>`);
+  });
+
+  it("rewrites the plist before bootstrap during restart fallback", async () => {
+    const env = createDefaultLaunchdEnv();
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    state.serviceLoaded = false;
+    state.kickstartError = "Could not find service";
+    state.kickstartFailuresRemaining = 1;
+    state.files.set(
+      plistPath,
+      [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<plist version="1.0">',
+        "  <dict>",
+        "    <key>Label</key>",
+        "    <string>ai.openclaw.gateway</string>",
+        "    <key>ProgramArguments</key>",
+        "    <array>",
+        "      <string>node</string>",
+        "      <string>gateway.js</string>",
+        "    </array>",
+        "  </dict>",
+        "</plist>",
+      ].join("\n"),
+    );
+
+    await restartLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+    });
+
+    const plist = state.files.get(plistPath) ?? "";
+    expect(plist).toContain("<key>StandardOutPath</key>");
+    expect(plist).toContain("<key>StandardErrorPath</key>");
+    expect(plist).toContain("<key>KeepAlive</key>");
+    expect(plist).toContain("<string>node</string>");
+    const rewriteIndex = state.fileWrites.findIndex((write) => write.path === plistPath);
+    const bootstrapIndex = state.launchctlCalls.findIndex((call) => call[0] === "bootstrap");
+    expect(rewriteIndex).toBeGreaterThanOrEqual(0);
+    expect(bootstrapIndex).toBeGreaterThanOrEqual(0);
+    expect(rewriteIndex).toBeLessThan(bootstrapIndex);
   });
 
   it("tightens writable bits on launch agent dirs and plist", async () => {

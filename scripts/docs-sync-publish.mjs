@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { repairMintlifyAccordionIndentation } from "./lib/mintlify-accordion.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
@@ -13,6 +14,10 @@ const SYNC_SUPPORT_FILES = [
   {
     source: path.join(ROOT, "scripts", "check-docs-mdx.mjs"),
     target: path.join(".openclaw-sync", "check-docs-mdx.mjs"),
+  },
+  {
+    source: path.join(ROOT, "scripts", "lib", "mintlify-accordion.mjs"),
+    target: path.join(".openclaw-sync", "lib", "mintlify-accordion.mjs"),
   },
   {
     source: path.join(ROOT, ".github", "codex", "prompts", "docs-mdx-repair.md"),
@@ -284,53 +289,30 @@ function composeDocsConfig() {
   };
 }
 
-function repairMintlifyAccordionIndentation(raw) {
-  const lines = raw.split(/\r?\n/u);
-  const accordionStack = [];
-  let inCodeFence = false;
-  let changed = false;
-
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    if (/^\s*(```|~~~)/u.test(line)) {
-      inCodeFence = !inCodeFence;
+function pruneOrphanLocaleDocs(targetDocsDir) {
+  let pruned = 0;
+  for (const locale of GENERATED_LOCALES) {
+    const localeDir = path.join(targetDocsDir, locale.dir);
+    if (!fs.existsSync(localeDir)) {
       continue;
     }
-    if (inCodeFence) {
-      continue;
-    }
-
-    const openAccordion = line.match(/^(\s*)<Accordion\b/u);
-    if (openAccordion) {
-      accordionStack.push({
-        indent: openAccordion[1].length,
-        hasOutdentedListItem: false,
-      });
-      continue;
-    }
-
-    const listItem = line.match(/^(\s*)[-*+]\s+/u);
-    if (listItem) {
-      for (const accordion of accordionStack) {
-        if (listItem[1].length < accordion.indent) {
-          accordion.hasOutdentedListItem = true;
-        }
+    for (const filePath of walkMarkdownFiles(localeDir)) {
+      const relativeToLocale = path.relative(localeDir, filePath);
+      // The English source file lives at docs/<relativeToLocale> with either .md or .mdx.
+      const englishBase = path.join(SOURCE_DOCS_DIR, relativeToLocale);
+      const englishMd = englishBase.replace(/\.mdx?$/i, ".md");
+      const englishMdx = englishBase.replace(/\.mdx?$/i, ".mdx");
+      if (fs.existsSync(englishMd) || fs.existsSync(englishMdx)) {
+        continue;
       }
-    }
-
-    const closeAccordion = line.match(/^(\s*)<\/Accordion>/u);
-    if (!closeAccordion) {
-      continue;
-    }
-
-    const opening = accordionStack.pop();
-    if (opening && opening.hasOutdentedListItem && closeAccordion[1].length > opening.indent) {
-      lines[index] = `${" ".repeat(opening.indent)}${line.slice(closeAccordion[1].length)}`;
-      changed = true;
+      fs.rmSync(filePath, { force: true });
+      pruned += 1;
     }
   }
 
-  return changed ? lines.join("\n") : raw;
+  if (pruned > 0) {
+    console.log(`Pruned ${pruned} orphan localized doc(s) with no matching English source file.`);
+  }
 }
 
 function repairGeneratedLocaleDocs(targetDocsDir) {
@@ -389,6 +371,7 @@ function syncDocsTree(targetRoot) {
     }
   }
 
+  pruneOrphanLocaleDocs(targetDocsDir);
   repairGeneratedLocaleDocs(targetDocsDir);
   writeJson(path.join(targetDocsDir, "docs.json"), composeDocsConfig());
 }

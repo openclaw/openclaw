@@ -1,15 +1,19 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { enableCompileCache } from "node:module";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { isRootHelpInvocation } from "./cli/argv.js";
 import { parseCliContainerArgs, resolveCliContainerTarget } from "./cli/container-target.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
+import {
+  enableOpenClawCompileCache,
+  resolveEntryInstallRoot,
+  respawnWithoutOpenClawCompileCacheIfNeeded,
+} from "./entry.compile-cache.js";
 import { buildCliRespawnPlan } from "./entry.respawn.js";
 import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
-import { isTruthyEnvValue, normalizeEnv } from "./infra/env.js";
+import { normalizeEnv } from "./infra/env.js";
 import { isMainModule } from "./infra/is-main.js";
 import { ensureOpenClawExecMarkerOnProcess } from "./infra/openclaw-exec-env.js";
 import { installProcessWarningFilter } from "./infra/warning-filter.js";
@@ -43,17 +47,19 @@ if (
 ) {
   // Imported as a dependency — skip all entry-point side effects.
 } else {
+  const entryFile = fileURLToPath(import.meta.url);
+  const installRoot = resolveEntryInstallRoot(entryFile);
+  respawnWithoutOpenClawCompileCacheIfNeeded({
+    currentFile: entryFile,
+    installRoot,
+  });
   process.title = "openclaw";
   ensureOpenClawExecMarkerOnProcess();
   installProcessWarningFilter();
   normalizeEnv();
-  if (!isTruthyEnvValue(process.env.NODE_DISABLE_COMPILE_CACHE)) {
-    try {
-      enableCompileCache();
-    } catch {
-      // Best-effort only; never block startup.
-    }
-  }
+  enableOpenClawCompileCache({
+    installRoot,
+  });
 
   if (shouldForceReadOnlyAuthStore(process.argv)) {
     process.env.OPENCLAW_AUTH_STORE_READONLY = "1";
@@ -70,7 +76,7 @@ if (
       return false;
     }
 
-    const child = spawn(process.execPath, plan.argv, {
+    const child = spawn(plan.command, plan.argv, {
       stdio: "inherit",
       env: plan.env,
     });
@@ -126,19 +132,20 @@ if (
     }
 
     if (!tryHandleRootVersionFastPath(process.argv)) {
-      runMainOrRootHelp(process.argv);
+      await runMainOrRootHelp(process.argv);
     }
   }
 }
 
-export function tryHandleRootHelpFastPath(
+export async function tryHandleRootHelpFastPath(
   argv: string[],
   deps: {
+    outputPrecomputedRootHelpText?: () => boolean;
     outputRootHelp?: () => void | Promise<void>;
     onError?: (error: unknown) => void;
     env?: NodeJS.ProcessEnv;
   } = {},
-): boolean {
+): Promise<boolean> {
   if (resolveCliContainerTarget(argv, deps.env)) {
     return false;
   }
@@ -154,35 +161,37 @@ export function tryHandleRootHelpFastPath(
       );
       process.exitCode = 1;
     });
-  if (deps.outputRootHelp) {
-    Promise.resolve()
-      .then(() => deps.outputRootHelp?.())
-      .catch(handleError);
-    return true;
-  }
-  import("./cli/root-help-metadata.js")
-    .then(async ({ outputPrecomputedRootHelpText }) => {
-      if (outputPrecomputedRootHelpText()) {
-        return;
-      }
+  try {
+    if (deps.outputRootHelp) {
+      await deps.outputRootHelp();
+      return true;
+    }
+    const outputPrecomputedRootHelpText =
+      deps.outputPrecomputedRootHelpText ??
+      (await import("./cli/root-help-metadata.js")).outputPrecomputedRootHelpText;
+    if (!outputPrecomputedRootHelpText()) {
       const { outputRootHelp } = await import("./cli/program/root-help.js");
       await outputRootHelp();
-    })
-    .catch(handleError);
-  return true;
+    }
+    return true;
+  } catch (error) {
+    handleError(error);
+    return true;
+  }
 }
 
-function runMainOrRootHelp(argv: string[]): void {
-  if (tryHandleRootHelpFastPath(argv)) {
+async function runMainOrRootHelp(argv: string[]): Promise<void> {
+  if (await tryHandleRootHelpFastPath(argv)) {
     return;
   }
-  import("./cli/run-main.js")
-    .then(({ runCli }) => runCli(argv))
-    .catch((error) => {
-      console.error(
-        "[openclaw] Failed to start CLI:",
-        error instanceof Error ? (error.stack ?? error.message) : error,
-      );
-      process.exitCode = 1;
-    });
+  try {
+    const { runCli } = await import("./cli/run-main.js");
+    await runCli(argv);
+  } catch (error) {
+    console.error(
+      "[openclaw] Failed to start CLI:",
+      error instanceof Error ? (error.stack ?? error.message) : error,
+    );
+    process.exitCode = 1;
+  }
 }

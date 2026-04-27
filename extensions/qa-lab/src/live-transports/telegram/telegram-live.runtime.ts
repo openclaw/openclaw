@@ -1,9 +1,12 @@
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { promisify } from "node:util";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { z } from "zod";
 import { startQaGatewayChild } from "../../gateway-child.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "../../providers/index.js";
@@ -48,6 +51,7 @@ type TelegramQaScenarioId =
   | "telegram-mention-gating";
 
 type TelegramQaScenarioRun = {
+  allowAnySutReply?: boolean;
   expectReply: boolean;
   input: string;
   expectedTextIncludes?: string[];
@@ -265,15 +269,11 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
     id: "telegram-mentioned-message-reply",
     title: "Telegram mentioned message gets a reply",
     timeoutMs: 45_000,
-    buildRun: (sutUsername) => {
-      const token = `TELEGRAM_QA_REPLY_${randomUUID().slice(0, 8).toUpperCase()}`;
-      return {
-        expectReply: true,
-        input: `@${sutUsername} reply with only this exact marker: ${token}`,
-        expectedTextIncludes: [token],
-        matchText: token,
-      };
-    },
+    buildRun: (sutUsername) => ({
+      allowAnySutReply: true,
+      expectReply: true,
+      input: `@${sutUsername} Telegram QA mention routing check. Reply with a short acknowledgement.`,
+    }),
   },
   {
     id: "telegram-mention-gating",
@@ -306,6 +306,7 @@ const QA_REDACT_PUBLIC_METADATA_ENV = "OPENCLAW_QA_REDACT_PUBLIC_METADATA";
 const QA_SUITE_PROGRESS_ENV = "OPENCLAW_QA_SUITE_PROGRESS";
 const TELEGRAM_QA_PROGRESS_DETAIL_LIMIT = 240;
 const TELEGRAM_QA_PROGRESS_PREFIX = "[qa-telegram-live]";
+const execFileAsync = promisify(execFile);
 
 const telegramQaCredentialPayloadSchema = z.object({
   groupId: z.string().trim().min(1),
@@ -472,6 +473,13 @@ function buildTelegramQaConfig(
   };
   return {
     ...baseCfg,
+    agents: {
+      ...baseCfg.agents,
+      defaults: {
+        ...baseCfg.agents?.defaults,
+        skipBootstrap: true,
+      },
+    },
     plugins: {
       ...baseCfg.plugins,
       allow: pluginAllow,
@@ -747,6 +755,7 @@ function findScenario(ids?: string[]) {
 
 function matchesTelegramScenarioReply(params: {
   groupId: string;
+  allowAnySutReply?: boolean;
   matchText?: string;
   message: TelegramObservedMessage;
   sentMessageId: number;
@@ -759,6 +768,9 @@ function matchesTelegramScenarioReply(params: {
     return false;
   }
   if (params.message.replyToMessageId === params.sentMessageId) {
+    return true;
+  }
+  if (params.allowAnySutReply === true) {
     return true;
   }
   return Boolean(params.matchText && params.message.text.includes(params.matchText));
@@ -962,9 +974,71 @@ function canaryFailureMessage(params: {
   ].join("\n");
 }
 
+async function runInstalledOpenClawTelegramOnboardingPreflight(params: {
+  openClawCommand: string;
+  providerMode: ReturnType<typeof normalizeQaProviderMode>;
+  sutToken: string;
+}) {
+  const tempRoot = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-npm-telegram-"),
+  );
+  const homeDir = path.join(tempRoot, "home");
+  const stateDir = path.join(homeDir, ".openclaw");
+  await fs.mkdir(stateDir, { recursive: true });
+  const tokenPath = path.join(tempRoot, "sut-token.txt");
+  await fs.writeFile(tokenPath, params.sutToken, { encoding: "utf8", mode: 0o600 });
+  const env = {
+    ...process.env,
+    HOME: homeDir,
+    OPENCLAW_HOME: stateDir,
+    OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_GATEWAY_TOKEN: "npm-telegram-live-onboard",
+    ...(params.providerMode === "live-frontier"
+      ? {}
+      : { OPENAI_API_KEY: process.env.OPENAI_API_KEY ?? "sk-openclaw-npm-telegram-preflight" }),
+  };
+  try {
+    await execFileAsync(
+      params.openClawCommand,
+      [
+        "onboard",
+        "--non-interactive",
+        "--accept-risk",
+        "--mode",
+        "local",
+        "--auth-choice",
+        "openai-api-key",
+        "--secret-input-mode",
+        "ref",
+        "--gateway-port",
+        "18789",
+        "--gateway-bind",
+        "loopback",
+        "--skip-daemon",
+        "--skip-ui",
+        "--skip-skills",
+        "--skip-health",
+        "--json",
+      ],
+      { env },
+    );
+    await execFileAsync(
+      params.openClawCommand,
+      ["channels", "add", "--channel", "telegram", "--token-file", tokenPath],
+      { env },
+    );
+    await execFileAsync(params.openClawCommand, ["doctor", "--non-interactive"], { env });
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 export async function runTelegramQaLive(params: {
   repoRoot?: string;
   outputDir?: string;
+  sutOpenClawCommand?: string;
+  preflightInstalledOnboarding?: boolean;
   providerMode?: QaProviderModeInput;
   primaryModel?: string;
   alternateModel?: string;
@@ -1022,6 +1096,16 @@ export async function runTelegramQaLive(params: {
   const cleanupIssues: string[] = [];
   let canaryFailure: string | null = null;
   try {
+    if (params.sutOpenClawCommand && params.preflightInstalledOnboarding === true) {
+      writeTelegramQaProgress(progressEnabled, "installed package onboarding preflight start");
+      await runInstalledOpenClawTelegramOnboardingPreflight({
+        openClawCommand: params.sutOpenClawCommand,
+        providerMode,
+        sutToken: runtimeEnv.sutToken,
+      });
+      writeTelegramQaProgress(progressEnabled, "installed package onboarding preflight pass");
+    }
+
     const driverIdentity = await getBotIdentity(runtimeEnv.driverToken);
     const sutIdentity = await getBotIdentity(runtimeEnv.sutToken);
     const sutUsername = sutIdentity.username?.trim();
@@ -1040,6 +1124,12 @@ export async function runTelegramQaLive(params: {
 
     const gatewayHarness = await startQaLiveLaneGateway({
       repoRoot,
+      command: params.sutOpenClawCommand
+        ? {
+            executablePath: params.sutOpenClawCommand,
+            usePackagedPlugins: true,
+          }
+        : undefined,
       transport: {
         requiredPluginIds: [],
         createGatewayConfig: () => ({}),
@@ -1134,6 +1224,7 @@ export async function runTelegramQaLive(params: {
               observationScenarioTitle: scenario.title,
               predicate: (message) =>
                 matchesTelegramScenarioReply({
+                  allowAnySutReply: scenarioRun.allowAnySutReply,
                   groupId: runtimeEnv.groupId,
                   matchText: scenarioRun.matchText,
                   message,

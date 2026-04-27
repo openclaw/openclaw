@@ -41,6 +41,7 @@ export async function ensureChannelSetupPluginInstalled(params: {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
   workspaceDir?: string;
+  promptInstall?: boolean;
 }): Promise<InstallResult> {
   const result = await ensureOnboardingPluginInstalled({
     cfg: params.cfg,
@@ -48,6 +49,7 @@ export async function ensureChannelSetupPluginInstalled(params: {
     prompter: params.prompter,
     runtime: params.runtime,
     workspaceDir: params.workspaceDir,
+    ...(params.promptInstall !== undefined ? { promptInstall: params.promptInstall } : {}),
   });
   return {
     cfg: result.cfg,
@@ -71,6 +73,8 @@ function loadChannelSetupPluginRegistry(params: {
   workspaceDir?: string;
   onlyPluginIds?: string[];
   activate?: boolean;
+  installRuntimeDeps?: boolean;
+  forceSetupOnlyChannelPlugins?: boolean;
 }): PluginRegistry {
   clearPluginDiscoveryCache();
   const autoEnabled = applyPluginAutoEnable({ config: params.cfg, env: process.env });
@@ -88,7 +92,10 @@ function loadChannelSetupPluginRegistry(params: {
     logger: createPluginLoaderLogger(log),
     onlyPluginIds: params.onlyPluginIds,
     includeSetupOnlyChannelPlugins: true,
+    forceSetupOnlyChannelPlugins:
+      params.forceSetupOnlyChannelPlugins ?? params.installRuntimeDeps === false,
     activate: params.activate,
+    installBundledRuntimeDeps: params.installRuntimeDeps !== false,
   });
 }
 
@@ -156,6 +163,8 @@ export function loadChannelSetupPluginRegistrySnapshotForChannel(params: {
   channel: string;
   pluginId?: string;
   workspaceDir?: string;
+  installRuntimeDeps?: boolean;
+  forceSetupOnlyChannelPlugins?: boolean;
 }): PluginRegistry {
   const scopedPluginId = resolveScopedChannelPluginId({
     cfg: params.cfg,

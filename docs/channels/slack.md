@@ -301,8 +301,8 @@ Surface different features that extend the above defaults.
       },
       {
         "command": "/models",
-        "description": "List providers/models or add a model",
-        "usage_hint": "[provider] [page] [limit=<n>|size=<n>|all] | add <provider> <modelId>"
+        "description": "List providers/models",
+        "usage_hint": "[provider] [page] [limit=<n>|size=<n>|all]"
       },
       {
         "command": "/help",
@@ -436,7 +436,7 @@ Available action groups in current Slack tooling:
 | memberInfo | enabled |
 | emojiList  | enabled |
 
-Current Slack message actions include `send`, `upload-file`, `download-file`, `read`, `edit`, `delete`, `pin`, `unpin`, `list-pins`, `member-info`, and `emoji-list`.
+Current Slack message actions include `send`, `upload-file`, `download-file`, `read`, `edit`, `delete`, `pin`, `unpin`, `list-pins`, `member-info`, and `emoji-list`. `download-file` accepts Slack file IDs shown in inbound file placeholders and returns image previews for images or local file metadata for other file types.
 
 ## Access control and routing
 
@@ -530,7 +530,9 @@ Manual reply tags are supported:
 - `[[reply_to_current]]`
 - `[[reply_to:<id>]]`
 
-Note: `replyToMode="off"` disables **all** reply threading in Slack, including explicit `[[reply_to_*]]` tags. This differs from Telegram, where explicit tags are still honored in `"off"` mode — Slack threads hide messages from the channel while Telegram replies stay visible inline.
+<Note>
+`replyToMode="off"` disables **all** reply threading in Slack, including explicit `[[reply_to_*]]` tags. This differs from Telegram, where explicit tags are still honored in `"off"` mode. Slack threads hide messages from the channel while Telegram replies stay visible inline.
+</Note>
 
 ## Ack reactions
 
@@ -606,7 +608,7 @@ Notes:
 
 <AccordionGroup>
   <Accordion title="Inbound attachments">
-    Slack file attachments are downloaded from Slack-hosted private URLs (token-authenticated request flow) and written to the media store when fetch succeeds and size limits permit.
+    Slack file attachments are downloaded from Slack-hosted private URLs (token-authenticated request flow) and written to the media store when fetch succeeds and size limits permit. File placeholders include the Slack `fileId` so agents can fetch the original file with `download-file`.
 
     Runtime inbound size cap defaults to `20MB` unless overridden by `channels.slack.mediaMaxMb`.
 
@@ -773,7 +775,8 @@ Same-chat `/approve` also works in Slack channels and DMs that already support c
 
 ## Events and operational behavior
 
-- Message edits/deletes/thread broadcasts are mapped into system events.
+- Message edits/deletes are mapped into system events.
+- Thread broadcasts ("Also send to channel" thread replies) are processed as normal user messages.
 - Reaction add/remove events are mapped into system events.
 - Member join/leave, channel created/renamed, and pin add/remove events are mapped into system events.
 - `channel_id_changed` can migrate channel config keys when `configWrites` is enabled.
@@ -785,7 +788,7 @@ Same-chat `/approve` also works in Slack channels and DMs that already support c
 
 ## Configuration reference
 
-Primary reference: [Configuration reference - Slack](/gateway/configuration-reference#slack).
+Primary reference: [Configuration reference - Slack](/gateway/config-channels#slack).
 
 <Accordion title="High-signal Slack fields">
 
@@ -826,6 +829,9 @@ openclaw doctor
     - `channels.slack.dm.enabled`
     - `channels.slack.dmPolicy` (or legacy `channels.slack.dm.policy`)
     - pairing approvals / allowlist entries
+    - Slack Assistant DM events: verbose logs mentioning `drop message_changed`
+      usually mean Slack sent an edited Assistant-thread event without a
+      recoverable human sender in message metadata
 
 ```bash
 openclaw pairing list slack

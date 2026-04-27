@@ -93,6 +93,9 @@ const TARGET_KEYS = [
   "agents.defaults.memorySearch.remote.batch.timeoutMinutes",
   "agents.defaults.memorySearch.local.modelPath",
   "agents.defaults.memorySearch.store.path",
+  "agents.defaults.memorySearch.inputType",
+  "agents.defaults.memorySearch.queryInputType",
+  "agents.defaults.memorySearch.documentInputType",
   "agents.defaults.memorySearch.outputDimensionality",
   "agents.defaults.memorySearch.store.vector.enabled",
   "agents.defaults.memorySearch.store.vector.extensionPath",
@@ -108,6 +111,7 @@ const TARGET_KEYS = [
   "agents.defaults.memorySearch.cache.maxEntries",
   "agents.defaults.memorySearch.sync.onSearch",
   "agents.defaults.memorySearch.sync.watch",
+  "agents.defaults.memorySearch.sync.embeddingBatchTimeoutSeconds",
   "agents.defaults.memorySearch.sync.sessions.deltaBytes",
   "agents.defaults.memorySearch.sync.sessions.deltaMessages",
   "models.mode",
@@ -352,13 +356,13 @@ const TARGET_KEYS = [
   "plugins.entries.*.enabled",
   "plugins.entries.*.hooks",
   "plugins.entries.*.hooks.allowPromptInjection",
+  "plugins.entries.*.hooks.allowConversationAccess",
   "plugins.entries.*.subagent",
   "plugins.entries.*.subagent.allowModelOverride",
   "plugins.entries.*.subagent.allowedModels",
   "plugins.entries.*.apiKey",
   "plugins.entries.*.env",
   "plugins.entries.*.config",
-  "plugins.installs",
   "auth",
   "auth.cooldowns",
   "models",
@@ -366,6 +370,9 @@ const TARGET_KEYS = [
   "models.providers.*.baseUrl",
   "models.providers.*.apiKey",
   "models.providers.*.api",
+  "models.providers.*.contextWindow",
+  "models.providers.*.contextTokens",
+  "models.providers.*.maxTokens",
   "models.providers.*.headers",
   "models.providers.*.models",
   "agents",
@@ -388,6 +395,7 @@ const TARGET_KEYS = [
   "agents.defaults.compaction.timeoutSeconds",
   "agents.defaults.compaction.model",
   "agents.defaults.compaction.truncateAfterCompaction",
+  "agents.defaults.compaction.maxActiveTranscriptBytes",
   "agents.defaults.compaction.memoryFlush",
   "agents.defaults.compaction.memoryFlush.enabled",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens",
@@ -533,10 +541,13 @@ const FINAL_BACKLOG_TARGET_KEYS = [
   "diagnostics.otel.endpoint",
   "diagnostics.otel.flushIntervalMs",
   "diagnostics.otel.headers",
+  "diagnostics.otel.logsEndpoint",
   "diagnostics.otel.logs",
+  "diagnostics.otel.metricsEndpoint",
   "diagnostics.otel.metrics",
   "diagnostics.otel.sampleRate",
   "diagnostics.otel.serviceName",
+  "diagnostics.otel.tracesEndpoint",
   "diagnostics.otel.traces",
   "gateway.remote.password",
   "gateway.remote.token",
@@ -763,6 +774,12 @@ describe("config help copy quality", () => {
     expect(pluginPromptPolicy.includes("before_prompt_build")).toBe(true);
     expect(pluginPromptPolicy.includes("before_agent_start")).toBe(true);
     expect(pluginPromptPolicy.includes("modelOverride")).toBe(true);
+
+    const pluginConversationPolicy = FIELD_HELP["plugins.entries.*.hooks.allowConversationAccess"];
+    expect(pluginConversationPolicy.includes("llm_input")).toBe(true);
+    expect(pluginConversationPolicy.includes("llm_output")).toBe(true);
+    expect(pluginConversationPolicy.includes("before_agent_finalize")).toBe(true);
+    expect(pluginConversationPolicy.includes("agent_end")).toBe(true);
   });
 
   it("documents auth/model root semantics and provider secret handling", () => {
@@ -800,6 +817,10 @@ describe("config help copy quality", () => {
 
     const compactionModel = FIELD_HELP["agents.defaults.compaction.model"];
     expect(/provider\/model|different model|primary agent model/i.test(compactionModel)).toBe(true);
+
+    const transcriptBytes = FIELD_HELP["agents.defaults.compaction.maxActiveTranscriptBytes"];
+    expect(/transcript|bytes|compaction/i.test(transcriptBytes)).toBe(true);
+    expect(/never splits raw transcript bytes/i.test(transcriptBytes)).toBe(true);
 
     const flush = FIELD_HELP["agents.defaults.compaction.memoryFlush.enabled"];
     expect(/pre-compaction|memory flush|token/i.test(flush)).toBe(true);

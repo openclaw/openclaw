@@ -575,8 +575,21 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
     expect(classifyFailoverReasonFromHttpStatus(401, "invalid_api_key")).toBe("auth");
   });
 
-  it("treats HTTP 422 as format error", () => {
-    expect(classifyFailoverReasonFromHttpStatus(422)).toBe("format");
+  it("treats body-less HTTP 422 as unknown instead of format", () => {
+    expect(classifyFailoverReasonFromHttpStatus(422)).toBeNull();
+  });
+
+  it("treats no-body HTTP 400/422 wrappers as unknown instead of format", () => {
+    expect(classifyFailoverReasonFromHttpStatus(400, "No body response")).toBeNull();
+    expect(classifyFailoverReasonFromHttpStatus(400, "400 status code (no body)")).toBeNull();
+    expect(classifyFailoverReasonFromHttpStatus(422, "HTTP 422: No body")).toBeNull();
+    expect(classifyFailoverReasonFromHttpStatus(422, "HTTP 422: No response body")).toBeNull();
+    expect(
+      classifyFailoverReasonFromHttpStatus(422, "Error: HTTP 422: No response body"),
+    ).toBeNull();
+  });
+
+  it("treats HTTP 422 with an unclassifiable body as format error", () => {
     expect(classifyFailoverReasonFromHttpStatus(422, "check open ai req parameter error")).toBe(
       "format",
     );
@@ -686,6 +699,15 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("HTTP 404: No body")).toBe("model_not_found");
   });
 
+  it("keeps HTTP 400/422 no-body wrappers out of the format bucket", () => {
+    expect(classifyFailoverReason("400 status code (no body)")).toBeNull();
+    expect(classifyFailoverReason("HTTP 400: No body")).toBeNull();
+    expect(classifyFailoverReason("422 status code (no body)")).toBeNull();
+    expect(classifyFailoverReason("HTTP 422: No body")).toBeNull();
+    expect(classifyFailoverReason("HTTP 422: No response body")).toBeNull();
+    expect(classifyFailoverReason("Error: HTTP 422: No response body")).toBeNull();
+  });
+
   it("preserves session and auth billing signals on HTTP 404 text", () => {
     expect(classifyFailoverReason("HTTP 404: session not found")).toBe("session_expired");
     expect(classifyFailoverReason("HTTP 404: invalid_api_key")).toBe("auth");
@@ -711,16 +733,45 @@ describe("classifyFailoverReason", () => {
     ).toBeNull();
   });
 
-  it("classifies OpenAI Responses unknown-no-details message as unknown", () => {
+  it("classifies OpenAI Responses unknown-no-details message distinctly", () => {
     const message = "Unknown error (no error details in response)";
-    expect(classifyFailoverReason(message)).toBe("unknown");
+    expect(classifyFailoverReason(message)).toBe("no_error_details");
     expect(isFailoverErrorMessage(message)).toBe(true);
   });
 
-  it("classifies provider-scoped generic upstream messages", () => {
+  it("classifies bare pi-ai stream wrapper as timeout regardless of provider (#71620)", () => {
+    // pi-ai providers throw `Error("An unknown error occurred")` provider-agnostically
+    // when streams end with stopReason "aborted" | "error" with no specific info.
+    for (const sample of [
+      "An unknown error occurred",
+      "an unknown error occurred",
+      "AN UNKNOWN ERROR OCCURRED",
+      "An unknown error occurred.",
+      "  An unknown error occurred  ",
+    ]) {
+      expect(classifyFailoverReason(sample)).toBe("timeout");
+      expect(isFailoverErrorMessage(sample)).toBe(true);
+    }
     expect(classifyFailoverReason("An unknown error occurred", { provider: "anthropic" })).toBe(
       "timeout",
     );
+    expect(classifyFailoverReason("An unknown error occurred", { provider: "google" })).toBe(
+      "timeout",
+    );
+    expect(classifyFailoverReason("An unknown error occurred", { provider: "openrouter" })).toBe(
+      "timeout",
+    );
+  });
+
+  it("does not match wrapped or unrelated unknown-error phrases as bare wrapper", () => {
+    // Wrapped messages must not slip into failover-as-timeout via the bare match.
+    expect(classifyFailoverReason("LLM request failed with an unknown error.")).toBeNull();
+    expect(
+      classifyFailoverReason("user reported that an unknown error occurred during sync"),
+    ).toBeNull();
+  });
+
+  it("classifies openrouter-scoped upstream messages", () => {
     expect(classifyFailoverReason("Provider returned error", { provider: "openrouter" })).toBe(
       "timeout",
     );
@@ -729,11 +780,7 @@ describe("classifyFailoverReason", () => {
     );
   });
 
-  it("does not classify provider-scoped generic upstream messages without provider context", () => {
-    expect(classifyFailoverReason("An unknown error occurred")).toBeNull();
-    expect(
-      classifyFailoverReason("An unknown error occurred", { provider: "openrouter" }),
-    ).toBeNull();
+  it("does not classify openrouter-scoped upstream messages without provider context", () => {
     expect(classifyFailoverReason("Provider returned error")).toBeNull();
     expect(classifyFailoverReason("Provider returned error", { provider: "anthropic" })).toBeNull();
     expect(classifyFailoverReason("Key limit exceeded")).toBeNull();
@@ -1327,6 +1374,16 @@ describe("classifyProviderRuntimeFailureKind", () => {
     expect(
       classifyProviderRuntimeFailureKind("401 input item ID does not belong to this connection"),
     ).toBe("replay_invalid");
+  });
+
+  it("splits ambiguous provider runtime failures instead of collapsing to unknown", () => {
+    expect(classifyProviderRuntimeFailureKind({})).toBe("empty_response");
+    expect(classifyProviderRuntimeFailureKind("Unknown error (no error details in response)")).toBe(
+      "no_error_details",
+    );
+    expect(classifyProviderRuntimeFailureKind("provider sent a strange opaque failure")).toBe(
+      "unclassified",
+    );
   });
 
   it("does not classify generic config errors that mention proxy settings as proxy failures", () => {
