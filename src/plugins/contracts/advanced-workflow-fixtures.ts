@@ -62,10 +62,13 @@ export function registerApprovalWorkflowFixture(api: OpenClawPluginApi) {
       required: ["decision"],
     },
     async handler(ctx) {
-      const decision =
-        ctx.payload && typeof ctx.payload === "object" && !Array.isArray(ctx.payload)
-          ? String((ctx.payload as { decision?: unknown }).decision ?? "approved")
-          : "approved";
+      let decision = "approved";
+      if (ctx.payload && typeof ctx.payload === "object" && !Array.isArray(ctx.payload)) {
+        const payloadDecision = (ctx.payload as { decision?: unknown }).decision;
+        if (payloadDecision === "approved" || payloadDecision === "denied") {
+          decision = payloadDecision;
+        }
+      }
       api.emitAgentEvent({
         runId: "approval-workflow-run",
         stream: "approval",
