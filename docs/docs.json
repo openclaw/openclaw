@@ -1012,6 +1012,7 @@
                 "pages": [
                   "install/updating",
                   "install/migrating",
+                  "install/migrating-claude",
                   "install/migrating-hermes",
                   "install/migrating-matrix",
                   "install/uninstall",

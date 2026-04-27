@@ -452,6 +452,10 @@
     "target": "从 Hermes 迁移"
   },
   {
+    "source": "Migrating from Claude",
+    "target": "从 Claude 迁移"
+  },
+  {
     "source": "Migration",
     "target": "迁移"
   },
