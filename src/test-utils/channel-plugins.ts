@@ -15,7 +15,6 @@ export type TestChannelRegistration = {
 
 export const createTestRegistry = (channels: TestChannelRegistration[] = []): PluginRegistry => ({
   plugins: [],
-  statusProviders: [],
   tools: [],
   hooks: [],
   typedHooks: [],

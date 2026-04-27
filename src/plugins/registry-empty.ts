@@ -3,7 +3,6 @@ import type { PluginRegistry } from "./registry-types.js";
 export function createEmptyPluginRegistry(): PluginRegistry {
   return {
     plugins: [],
-    statusProviders: [],
     tools: [],
     hooks: [],
     typedHooks: [],

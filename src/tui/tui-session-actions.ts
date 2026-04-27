@@ -196,9 +196,6 @@ export function createSessionActions(context: SessionActionContext) {
     if (entry?.totalTokens !== undefined) {
       next.totalTokens = entry.totalTokens;
     }
-    if (entry?.estimatedCostUsd !== undefined) {
-      next.estimatedCostUsd = entry.estimatedCostUsd;
-    }
     if (entry?.contextTokens !== undefined || defaults?.contextTokens !== undefined) {
       next.contextTokens =
         entry?.contextTokens ?? defaults?.contextTokens ?? state.sessionInfo.contextTokens;

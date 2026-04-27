@@ -18,7 +18,6 @@ export type BuildPluginApiParams = {
   handlers?: Partial<
     Pick<
       OpenClawPluginApi,
-      | "registerStatusProvider"
       | "registerTool"
       | "registerHook"
       | "registerHttpRoute"
@@ -166,7 +165,6 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     pluginConfig: params.pluginConfig,
     runtime: params.runtime,
     logger: params.logger,
-    registerStatusProvider: handlers.registerStatusProvider ?? (() => {}),
     registerTool: handlers.registerTool ?? noopRegisterTool,
     registerHook: handlers.registerHook ?? noopRegisterHook,
     registerHttpRoute: handlers.registerHttpRoute ?? noopRegisterHttpRoute,

@@ -58,7 +58,6 @@ export type SessionInfo = {
   inputTokens?: number | null;
   outputTokens?: number | null;
   totalTokens?: number | null;
-  estimatedCostUsd?: number | null;
   responseUsage?: ResponseUsageMode;
   updatedAt?: number | null;
   displayName?: string;

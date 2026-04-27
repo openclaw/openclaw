@@ -837,10 +837,6 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
         : sessionInfo.model
       : "unknown";
     const tokens = formatTokens(sessionInfo.totalTokens ?? null, sessionInfo.contextTokens ?? null);
-    const cost =
-      typeof sessionInfo.estimatedCostUsd === "number" && sessionInfo.estimatedCostUsd > 0
-        ? `$${sessionInfo.estimatedCostUsd < 0.01 ? sessionInfo.estimatedCostUsd.toFixed(4) : sessionInfo.estimatedCostUsd.toFixed(2)}`
-        : null;
     const think = sessionInfo.thinkingLevel ?? "off";
     const fast = sessionInfo.fastMode === true;
     const verbose = sessionInfo.verboseLevel ?? "off";
@@ -856,7 +852,6 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       verbose !== "off" ? `verbose ${verbose}` : null,
       reasoningLabel,
       tokens,
-      cost,
     ].filter(Boolean);
     footer.setText(theme.dim(footerParts.join(" | ")));
   };
