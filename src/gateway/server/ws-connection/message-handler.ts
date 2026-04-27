@@ -977,11 +977,9 @@ export function attachGatewayWsMessageHandler(params: {
               ...clientPairingMetadata,
               ...(bootstrapPairingRoles ? { roles: bootstrapPairingRoles } : {}),
               silent:
-                reason === "scope-upgrade"
-                  ? false
-                  : allowSilentLocalPairing ||
-                    allowSilentBootstrapPairing ||
-                    allowSilentTrustedCidrsNodePairing,
+                allowSilentLocalPairing ||
+                allowSilentBootstrapPairing ||
+                allowSilentTrustedCidrsNodePairing,
             });
             const context = buildRequestContext();
             let approved: Awaited<ReturnType<typeof approveDevicePairing>> | undefined;
