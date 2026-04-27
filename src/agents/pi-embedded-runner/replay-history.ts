@@ -70,7 +70,14 @@ type ProviderReplayHookParams = {
 
 function stripAssistantEmotionTags(messages: AgentMessage[]): AgentMessage[] {
   return messages.map((message) => {
-    if (!message || message.role !== "assistant" || !Array.isArray(message.content)) {
+    if (!message || message.role !== "assistant") {
+      return message;
+    }
+    if (typeof message.content === "string") {
+      const stripped = stripEmotionTags(message.content);
+      return stripped.changed ? { ...message, content: stripped.text } : message;
+    }
+    if (!Array.isArray(message.content)) {
       return message;
     }
     let changed = false;
@@ -578,8 +585,9 @@ export async function sanitizeSessionHistory(params: {
       model: params.model,
     });
   const withInterSessionMarkers = annotateInterSessionUserMessages(params.messages);
+  const replayEmotionMode = normalizeEmotionMode(params.emotionMode) ?? "off";
   const replayMessages =
-    normalizeEmotionMode(params.emotionMode) === "off"
+    replayEmotionMode === "off"
       ? stripAssistantEmotionTags(withInterSessionMarkers)
       : withInterSessionMarkers;
   const allowProviderOwnedThinkingReplay = shouldAllowProviderOwnedThinkingReplay({
