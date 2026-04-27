@@ -218,6 +218,7 @@ function resolveRequestedFallbackModelRef(params: {
 
 function createSyntheticOperatorClient(params?: {
   allowModelOverride?: boolean;
+  allowExtraSystemPrompt?: boolean;
   pluginRuntimeOwnerId?: string;
   scopes?: string[];
 }): GatewayRequestOptions["client"] {
@@ -240,6 +241,7 @@ function createSyntheticOperatorClient(params?: {
     },
     internal: {
       allowModelOverride: params?.allowModelOverride === true,
+      allowExtraSystemPrompt: params?.allowExtraSystemPrompt === true,
       ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
     },
   };
@@ -275,6 +277,7 @@ async function dispatchGatewayMethod<T>(
   params: Record<string, unknown>,
   options?: {
     allowSyntheticModelOverride?: boolean;
+    allowExtraSystemPrompt?: boolean;
     forceSyntheticClient?: boolean;
     pluginRuntimeOwnerId?: string;
     syntheticScopes?: string[];
@@ -297,12 +300,18 @@ async function dispatchGatewayMethod<T>(
       : undefined;
   const syntheticClient = createSyntheticOperatorClient({
     allowModelOverride: options?.allowSyntheticModelOverride === true,
+    allowExtraSystemPrompt: options?.allowExtraSystemPrompt === true,
     ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
     scopes: options?.syntheticScopes,
   });
   const scopedClient = mergeGatewayClientInternal(
     scope?.client,
-    pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : undefined,
+    pluginRuntimeOwnerId || options?.allowExtraSystemPrompt === true
+      ? {
+          ...(options?.allowExtraSystemPrompt === true ? { allowExtraSystemPrompt: true } : {}),
+          ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
+        }
+      : undefined,
   );
   await handleGatewayRequest({
     req: {
@@ -348,6 +357,7 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
           ? scope.pluginId.trim()
           : undefined;
       const overrideRequested = Boolean(params.provider || params.model);
+      const extraSystemPromptRequested = Boolean(params.extraSystemPrompt);
       const hasRequestScopeClient = Boolean(scope?.client);
       let allowOverride = hasRequestScopeClient && canClientUseModelOverride(scope?.client ?? null);
       let allowSyntheticModelOverride = false;
@@ -385,6 +395,7 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
         },
         {
           allowSyntheticModelOverride,
+          allowExtraSystemPrompt: extraSystemPromptRequested,
           ...(pluginId ? { pluginRuntimeOwnerId: pluginId } : {}),
         },
       );

@@ -126,6 +126,16 @@ function resolveAllowModelOverrideFromClient(
   return resolveSenderIsOwnerFromClient(client) || client?.internal?.allowModelOverride === true;
 }
 
+function resolveAllowExtraSystemPromptFromClient(
+  client: GatewayRequestHandlerOptions["client"],
+): boolean {
+  return (
+    resolveSenderIsOwnerFromClient(client) ||
+    client?.internal?.allowExtraSystemPrompt === true ||
+    client?.internal?.allowModelOverride === true
+  );
+}
+
 function resolveCanResetSessionFromClient(client: GatewayRequestHandlerOptions["client"]): boolean {
   return resolveSenderIsOwnerFromClient(client);
 }
@@ -441,6 +451,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     };
     const senderIsOwner = resolveSenderIsOwnerFromClient(client);
     const allowModelOverride = resolveAllowModelOverrideFromClient(client);
+    const allowExtraSystemPrompt = resolveAllowExtraSystemPromptFromClient(client);
     const canResetSession = resolveCanResetSessionFromClient(client);
     const requestedModelOverride = Boolean(request.provider || request.model);
     if (requestedModelOverride && !allowModelOverride) {
@@ -454,8 +465,22 @@ export const agentHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const requestedExtraSystemPrompt =
+      typeof request.extraSystemPrompt === "string" && request.extraSystemPrompt.trim().length > 0;
+    if (requestedExtraSystemPrompt && !allowExtraSystemPrompt) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "extraSystemPrompt is not authorized for this caller.",
+        ),
+      );
+      return;
+    }
     const providerOverride = allowModelOverride ? request.provider : undefined;
     const modelOverride = allowModelOverride ? request.model : undefined;
+    const extraSystemPrompt = allowExtraSystemPrompt ? request.extraSystemPrompt : undefined;
     const cfg = context.getRuntimeConfig();
     const idem = request.idempotencyKey;
     const normalizedSpawned = normalizeSpawnedRunMetadata({
@@ -1179,7 +1204,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           cleanupBundleMcpOnRunEnd: request.cleanupBundleMcpOnRunEnd === true,
           modelRun: request.modelRun === true,
           promptMode: request.promptMode,
-          extraSystemPrompt: request.extraSystemPrompt,
+          extraSystemPrompt,
           bootstrapContextMode: request.bootstrapContextMode,
           bootstrapContextRunKind: request.bootstrapContextRunKind,
           acpTurnSource: request.acpTurnSource,

@@ -830,6 +830,29 @@ describe("loadGatewayPlugins", () => {
     });
   });
 
+  test("marks runtime extra system prompts as internal gateway input", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createSubagentRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("extra-system-prompt-forward"));
+
+    await runtime.run({
+      sessionKey: "s-extra-system-prompt",
+      message: "hello",
+      extraSystemPrompt: "Use the plugin subagent contract.",
+      deliver: false,
+    });
+
+    expect(getLastDispatchedParams()).toMatchObject({
+      sessionKey: "s-extra-system-prompt",
+      message: "hello",
+      extraSystemPrompt: "Use the plugin subagent contract.",
+      deliver: false,
+    });
+    expect(getLastDispatchedClientInternal()).toMatchObject({
+      allowExtraSystemPrompt: true,
+    });
+  });
+
   test("generates a non-empty idempotencyKey when the caller omits it", async () => {
     const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins);

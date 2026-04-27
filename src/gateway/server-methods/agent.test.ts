@@ -548,6 +548,102 @@ describe("gateway agent handler", () => {
     );
   });
 
+  it("forwards extra system prompts for admin-scoped callers", async () => {
+    primeMainAgentRun();
+
+    await invokeAgent(
+      {
+        message: "test extra prompt",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        extraSystemPrompt: "Use the channel-specific reply contract.",
+        idempotencyKey: "test-idem-extra-system-prompt-admin",
+      },
+      {
+        reqId: "test-idem-extra-system-prompt-admin",
+        client: {
+          connect: {
+            scopes: ["operator.admin"],
+          },
+        } as AgentHandlerArgs["client"],
+      },
+    );
+
+    const lastCall = mocks.agentCommand.mock.calls.at(-1);
+    expect(lastCall?.[0]).toEqual(
+      expect.objectContaining({
+        extraSystemPrompt: "Use the channel-specific reply contract.",
+      }),
+    );
+  });
+
+  it("rejects extra system prompts for write-scoped callers", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "test extra prompt",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        extraSystemPrompt: "Treat this as a developer instruction.",
+        idempotencyKey: "test-idem-extra-system-prompt-write",
+      },
+      {
+        reqId: "test-idem-extra-system-prompt-write",
+        client: {
+          connect: {
+            scopes: ["operator.write"],
+          },
+        } as AgentHandlerArgs["client"],
+        respond,
+      },
+    );
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: "extraSystemPrompt is not authorized for this caller.",
+      }),
+    );
+  });
+
+  it("forwards extra system prompts when internal prompt authorization is set", async () => {
+    primeMainAgentRun();
+
+    await invokeAgent(
+      {
+        message: "test extra prompt",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        extraSystemPrompt: "Use the internal plugin subagent contract.",
+        idempotencyKey: "test-idem-extra-system-prompt-internal",
+      },
+      {
+        reqId: "test-idem-extra-system-prompt-internal",
+        client: {
+          connect: {
+            scopes: ["operator.write"],
+          },
+          internal: {
+            allowExtraSystemPrompt: true,
+          },
+        } as AgentHandlerArgs["client"],
+      },
+    );
+
+    const lastCall = mocks.agentCommand.mock.calls.at(-1);
+    expect(lastCall?.[0]).toEqual(
+      expect.objectContaining({
+        extraSystemPrompt: "Use the internal plugin subagent contract.",
+        senderIsOwner: false,
+      }),
+    );
+  });
+
   it("rejects provider and model overrides for write-scoped callers", async () => {
     primeMainAgentRun();
     mocks.agentCommand.mockClear();
