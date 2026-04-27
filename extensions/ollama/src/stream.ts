@@ -152,7 +152,7 @@ export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: num
     });
 }
 
-type OllamaThinkValue = boolean | "low" | "medium" | "high";
+type OllamaThinkValue = boolean | "low" | "medium" | "high" | "max";
 
 function createOllamaThinkingWrapper(
   baseFn: StreamFn | undefined,
@@ -165,7 +165,15 @@ function createOllamaThinkingWrapper(
     });
 }
 
-function resolveOllamaThinkValue(thinkingLevel: unknown): OllamaThinkValue | undefined {
+function isOllamaCloudModelRef(modelId: string): boolean {
+  return normalizeLowercaseStringOrEmpty(modelId).endsWith(":cloud");
+}
+
+function resolveOllamaThinkValue(params: {
+  thinkingLevel: unknown;
+  modelId: string;
+}): OllamaThinkValue | undefined {
+  const { thinkingLevel, modelId } = params;
   if (thinkingLevel === "off") {
     return false;
   }
@@ -175,7 +183,10 @@ function resolveOllamaThinkValue(thinkingLevel: unknown): OllamaThinkValue | und
   if (thinkingLevel === "minimal") {
     return "low";
   }
-  if (thinkingLevel === "xhigh" || thinkingLevel === "adaptive" || thinkingLevel === "max") {
+  if (thinkingLevel === "max") {
+    return isOllamaCloudModelRef(modelId) ? "max" : "high";
+  }
+  if (thinkingLevel === "xhigh" || thinkingLevel === "adaptive") {
     return "high";
   }
   return undefined;
@@ -219,7 +230,10 @@ export function createConfiguredOllamaCompatStreamWrapper(
   }
 
   const ollamaThinkValue = isNativeOllamaTransport
-    ? resolveOllamaThinkValue(ctx.thinkingLevel)
+    ? resolveOllamaThinkValue({
+        thinkingLevel: ctx.thinkingLevel,
+        modelId: ctx.modelId,
+      })
     : undefined;
   if (ollamaThinkValue !== undefined) {
     streamFn = createOllamaThinkingWrapper(streamFn, ollamaThinkValue);
