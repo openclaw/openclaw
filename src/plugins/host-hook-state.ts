@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { loadConfig } from "../config/config.js";
 import { loadSessionStore, updateSessionStore, type SessionEntry } from "../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
@@ -163,14 +164,17 @@ function buildSessionStoreScanTargets(params: {
   return [...targets];
 }
 
-function loadPluginHostHookSessionEntry(params: { cfg: OpenClawConfig; sessionKey: string }): {
+function loadPluginHostHookSessionEntry(
+  params: { cfg?: OpenClawConfig; sessionKey: string } | string,
+): {
   storePath: string;
   entry?: SessionEntry;
   canonicalKey: string;
   storeKey: string;
 } {
-  const key = normalizeOptionalString(params.sessionKey) ?? "";
-  const cfg = params.cfg;
+  const key =
+    normalizeOptionalString(typeof params === "string" ? params : params.sessionKey) ?? "";
+  const cfg = typeof params === "string" ? loadConfig() : (params.cfg ?? loadConfig());
   const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey: key });
   const agentId = resolveSessionStoreAgentId(cfg, canonicalKey);
   const scanTargets = buildSessionStoreScanTargets({ cfg, key, canonicalKey, agentId });
@@ -232,7 +236,7 @@ function toPluginNextTurnInjectionRecord(params: {
 }
 
 export async function enqueuePluginNextTurnInjection(params: {
-  cfg: OpenClawConfig;
+  cfg?: OpenClawConfig;
   pluginId: string;
   pluginName?: string;
   injection: PluginNextTurnInjection;
@@ -279,7 +283,7 @@ export async function enqueuePluginNextTurnInjection(params: {
   ) {
     return { enqueued: false, id: "", sessionKey };
   }
-  const loaded = loadPluginHostHookSessionEntry({ cfg: params.cfg, sessionKey });
+  const loaded = loadPluginHostHookSessionEntry({ cfg: params.cfg ?? loadConfig(), sessionKey });
   if (!loaded.entry) {
     return { enqueued: false, id: "", sessionKey };
   }
@@ -328,7 +332,7 @@ export async function enqueuePluginNextTurnInjection(params: {
 }
 
 export async function drainPluginNextTurnInjections(params: {
-  cfg: OpenClawConfig;
+  cfg?: OpenClawConfig;
   sessionKey?: string;
   now?: number;
 }): Promise<PluginNextTurnInjectionRecord[]> {
@@ -336,7 +340,8 @@ export async function drainPluginNextTurnInjections(params: {
   if (!sessionKey) {
     return [];
   }
-  const loaded = loadPluginHostHookSessionEntry({ cfg: params.cfg, sessionKey });
+  const cfg = params.cfg ?? loadConfig();
+  const loaded = loadPluginHostHookSessionEntry({ cfg, sessionKey });
   if (!loaded.entry) {
     return [];
   }
@@ -363,7 +368,7 @@ export async function drainPluginNextTurnInjections(params: {
     );
     const drained: PluginNextTurnInjectionRecord[] = [];
     for (const [pluginId, entries] of Object.entries(entry.pluginNextTurnInjections)) {
-      if (!activePluginIds.has(pluginId) || !isPluginPromptInjectionEnabled(params.cfg, pluginId)) {
+      if (!activePluginIds.has(pluginId) || !isPluginPromptInjectionEnabled(cfg, pluginId)) {
         continue;
       }
       // Guard against malformed/hand-edited persisted state — a non-array value
@@ -410,7 +415,7 @@ export function getPluginSessionExtensionSync<T extends PluginJsonValue = Plugin
 }
 
 export async function drainPluginNextTurnInjectionContext(params: {
-  cfg: OpenClawConfig;
+  cfg?: OpenClawConfig;
   sessionKey?: string;
   now?: number;
 }): Promise<PluginAgentTurnPrepareResult & { queuedInjections: PluginNextTurnInjectionRecord[] }> {

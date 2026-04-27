@@ -2347,7 +2347,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   });
                 }
                 return enqueuePluginNextTurnInjection({
-                  cfg: registryParams.runtime.config.current() as OpenClawConfig,
                   pluginId: record.id,
                   pluginName: record.name,
                   injection,
