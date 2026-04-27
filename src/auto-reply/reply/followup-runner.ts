@@ -389,6 +389,7 @@ export function createFollowupRunner(params: {
                     throw err;
                   }
                   if (activeSessionEntry) {
+                    const fallbackEntry = activeSessionEntry;
                     clearCliSession(activeSessionEntry, cliExecutionProvider);
                     activeSessionEntry.updatedAt = Date.now();
                     if (sessionKey && sessionStore) {
@@ -397,7 +398,7 @@ export function createFollowupRunner(params: {
                     if (storePath && sessionKey) {
                       await updateSessionStore(storePath, (store) => {
                         const resolvedEntry = resolveSessionStoreEntry({ store, sessionKey });
-                        const entry = resolvedEntry.existing ?? activeSessionEntry;
+                        const entry = resolvedEntry.existing ?? fallbackEntry;
                         clearCliSession(entry, cliExecutionProvider);
                         entry.updatedAt = Date.now();
                         store[resolvedEntry.normalizedKey] = entry;
