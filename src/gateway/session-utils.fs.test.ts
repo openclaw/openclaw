@@ -542,6 +542,78 @@ describe("readSessionMessages", () => {
     );
   });
 
+  test("hides runtime context rows when they do not contain sender labels", () => {
+    const sessionId = "test-session-runtime-context-without-sender";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      JSON.stringify({ message: { role: "user", content: "Hello from Discord" } }),
+      JSON.stringify({
+        type: "custom_message",
+        customType: "openclaw.runtime-context",
+        display: false,
+        content: "OpenClaw runtime context with no parseable sender metadata.",
+      }),
+      JSON.stringify({ message: { role: "assistant", content: "Hello" } }),
+    ];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+
+    const out = readSessionMessages(sessionId, storePath);
+    expect(out).toHaveLength(2);
+    expect(out[0]).toMatchObject({ role: "user", content: "Hello from Discord" });
+    expect(out[0]).not.toHaveProperty("senderLabel");
+    expect(out).not.toContainEqual(
+      expect.objectContaining({
+        type: "custom_message",
+        customType: "openclaw.runtime-context",
+      }),
+    );
+  });
+
+  test("attaches runtime-context sender labels across compaction markers", () => {
+    const sessionId = "test-session-runtime-context-after-compaction";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      JSON.stringify({ message: { role: "user", content: "Hello from Discord" } }),
+      JSON.stringify({
+        type: "compaction",
+        id: "comp-1",
+        timestamp: "2026-02-07T00:00:00.000Z",
+      }),
+      JSON.stringify({
+        type: "custom_message",
+        customType: "openclaw.runtime-context",
+        display: false,
+        content: [
+          "OpenClaw runtime context for the immediately preceding user message.",
+          "",
+          "Sender (untrusted metadata):",
+          "```json",
+          JSON.stringify({ label: "Yuka" }),
+          "```",
+        ].join("\n"),
+      }),
+      JSON.stringify({ message: { role: "assistant", content: "Hello" } }),
+    ];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+
+    const out = readSessionMessages(sessionId, storePath);
+    expect(out).toHaveLength(3);
+    expect(out[0]).toMatchObject({
+      role: "user",
+      content: "Hello from Discord",
+      senderLabel: "Yuka",
+      __openclaw: { seq: 1 },
+    });
+    expect(out[1]).toMatchObject({
+      role: "system",
+      content: [{ type: "text", text: "Compaction" }],
+      __openclaw: { kind: "compaction", seq: 2 },
+    });
+    expect(out[2]).toMatchObject({ role: "assistant", __openclaw: { seq: 3 } });
+  });
+
   test("does not attach runtime-context sender labels across assistant messages", () => {
     const sessionId = "test-session-runtime-context-stale-sender";
     const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);

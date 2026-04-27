@@ -92,19 +92,19 @@ export function attachOpenClawTranscriptMeta(
   };
 }
 
-function extractRuntimeContextSenderLabel(entry: unknown): string | null {
+function isRuntimeContextEntry(entry: unknown): entry is Record<string, unknown> {
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-    return null;
+    return false;
   }
   const record = entry as Record<string, unknown>;
-  if (
-    record.type !== "custom_message" ||
-    record.customType !== RUNTIME_CONTEXT_CUSTOM_TYPE ||
-    typeof record.content !== "string"
-  ) {
+  return record.type === "custom_message" && record.customType === RUNTIME_CONTEXT_CUSTOM_TYPE;
+}
+
+function extractRuntimeContextSenderLabel(entry: Record<string, unknown>): string | null {
+  if (typeof entry.content !== "string") {
     return null;
   }
-  return extractInboundSenderLabel(record.content);
+  return extractInboundSenderLabel(entry.content);
 }
 
 function attachSenderLabelToPreviousUser(messages: unknown[], senderLabel: string | null): boolean {
@@ -120,6 +120,9 @@ function attachSenderLabelToPreviousUser(messages: unknown[], senderLabel: strin
     const role =
       typeof record.role === "string" ? normalizeLowercaseStringOrEmpty(record.role) : "";
     if (!role) {
+      continue;
+    }
+    if (role === "system") {
       continue;
     }
     if (role !== "user") {
@@ -158,8 +161,8 @@ export function readSessionMessages(
     }
     try {
       const parsed = JSON.parse(line);
-      const runtimeSenderLabel = extractRuntimeContextSenderLabel(parsed);
-      if (runtimeSenderLabel) {
+      if (isRuntimeContextEntry(parsed)) {
+        const runtimeSenderLabel = extractRuntimeContextSenderLabel(parsed);
         attachSenderLabelToPreviousUser(messages, runtimeSenderLabel);
         continue;
       }
