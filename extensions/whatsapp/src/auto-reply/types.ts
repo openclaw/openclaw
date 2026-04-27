@@ -27,6 +27,7 @@ export type WebChannelStatus = {
   lastInboundAt?: number | null;
   lastMessageAt?: number | null;
   lastEventAt?: number | null;
+  lastTransportActivityAt?: number | null;
   lastError?: string | null;
   healthState?: WebChannelHealthState;
 };
