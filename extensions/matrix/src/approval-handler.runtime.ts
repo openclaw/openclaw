@@ -34,6 +34,7 @@ import {
 import { resolveMatrixTargetIdentity } from "./matrix/target-ids.js";
 import type { CoreConfig } from "./types.js";
 
+// OpenClaw Matrix custom event content for capable clients; body and reactions remain fallback.
 const MATRIX_APPROVAL_METADATA_KEY = "com.openclaw.approval" as const;
 
 type PendingMessage = {
@@ -114,7 +115,9 @@ function normalizeThreadId(value?: string | number | null): string | undefined {
 }
 
 function isSingleMatrixMessageLimitError(error: unknown): boolean {
-  return error instanceof Error && error.message.includes("Matrix single-message text exceeds limit");
+  return (
+    error instanceof Error && error.message.includes("Matrix single-message text exceeds limit")
+  );
 }
 
 async function prepareTarget(
@@ -166,7 +169,9 @@ function buildMatrixApprovalMetadata(params: {
 }): Record<string, unknown> {
   const base = removeUndefinedValues({
     version: 1,
+    type: "approval.request",
     id: params.view.approvalId,
+    state: "pending",
     kind: params.view.approvalKind,
     phase: params.view.phase,
     title: params.view.title,
