@@ -3,6 +3,7 @@ import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
+import { recordSessionRecoveryCheckpoint } from "../session-recovery-state.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { optionalStringEnum } from "../schema/typebox.js";
@@ -100,6 +101,57 @@ async function cleanupUntrackedAcpSession(sessionKey: string): Promise<void> {
   }
 }
 
+type SessionsSpawnRecoveryOptions = {
+  enabled?: boolean;
+  taskId?: string;
+  actorId?: string;
+  sessionId?: string;
+  workspaceId?: string;
+  repoId?: string;
+};
+
+function recordSessionsSpawnHandoff(params: {
+  recovery?: SessionsSpawnRecoveryOptions;
+  requesterSessionKey?: string;
+  runtime: "subagent" | "acp";
+  label: string;
+  requestedAgentId?: string;
+  result: unknown;
+}): "recorded" | "skipped" | "error" | undefined {
+  if (!params.recovery?.enabled) {
+    return undefined;
+  }
+  const result = params.result as { status?: unknown; childSessionKey?: unknown; runId?: unknown };
+  if (result.status !== "accepted" || typeof result.childSessionKey !== "string") {
+    return "skipped";
+  }
+  try {
+    const checkpoint = recordSessionRecoveryCheckpoint({
+      taskId:
+        params.recovery.taskId ??
+        (params.recovery.sessionId ? `session:${params.recovery.sessionId}` : "session:unknown"),
+      actorId: params.recovery.actorId ?? "agent",
+      eventType: "handoff_written",
+      summary: `Spawned ${params.runtime} handoff${params.label ? `: ${params.label}` : ""}`,
+      sessionId: params.recovery.sessionId ?? params.requesterSessionKey,
+      workspaceId: params.recovery.workspaceId,
+      repoId: params.recovery.repoId,
+      confirmedItems: [
+        `runtime: ${params.runtime}`,
+        `childSessionKey: ${result.childSessionKey}`,
+        ...(typeof result.runId === "string" ? [`runId: ${result.runId}`] : []),
+        ...(params.requestedAgentId ? [`agentId: ${params.requestedAgentId}`] : []),
+      ],
+      uncertainItems: ["Child session output is not yet available at handoff time."],
+      nextResumeAction:
+        "Wait for the child result, then ask whether to continue, correct context, or start fresh.",
+    });
+    return checkpoint.status;
+  } catch {
+    return "error";
+  }
+}
+
 function createSessionsSpawnToolSchema(params: { acpAvailable: boolean }) {
   const schema = {
     task: Type.String(),
@@ -188,6 +240,7 @@ export function createSessionsSpawnTool(
     config?: OpenClawConfig;
     /** Explicit agent ID override for cron/hook sessions where session key parsing may not work. */
     requesterAgentIdOverride?: string;
+    recovery?: SessionsSpawnRecoveryOptions;
   } & SpawnedToolContext,
 ): AnyAgentTool {
   const acpAvailable = isAcpRuntimeSpawnAvailable({
@@ -361,7 +414,20 @@ export function createSessionsSpawnTool(
             });
           }
         }
-        return jsonResult(addRoleToFailureResult(result, requestedAgentId));
+        const recoveryStatus = recordSessionsSpawnHandoff({
+          recovery: opts?.recovery,
+          requesterSessionKey: opts?.agentSessionKey,
+          runtime,
+          label,
+          requestedAgentId,
+          result,
+        });
+        const resultWithRole = addRoleToFailureResult(result, requestedAgentId);
+        return jsonResult(
+          recoveryStatus && result.status === "accepted"
+            ? { ...resultWithRole, recovery: recoveryStatus }
+            : resultWithRole,
+        );
       }
 
       const result = await spawnSubagentDirect(
@@ -400,7 +466,20 @@ export function createSessionsSpawnTool(
         },
       );
 
-      return jsonResult(addRoleToFailureResult(result, requestedAgentId));
+      const recoveryStatus = recordSessionsSpawnHandoff({
+        recovery: opts?.recovery,
+        requesterSessionKey: opts?.agentSessionKey,
+        runtime,
+        label,
+        requestedAgentId,
+        result,
+      });
+      const resultWithRole = addRoleToFailureResult(result, requestedAgentId);
+      return jsonResult(
+        recoveryStatus && result.status === "accepted"
+          ? { ...resultWithRole, recovery: recoveryStatus }
+          : resultWithRole,
+      );
     },
   };
 }

@@ -1,4 +1,8 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadRecoveryBundle, readTaskLedgerEvents } from "../session-recovery-state.js";
 
 const hoisted = vi.hoisted(() => {
   const spawnSubagentDirectMock = vi.fn();
@@ -32,12 +36,18 @@ let createSessionsSpawnTool: typeof import("./sessions-spawn-tool.js").createSes
 let acpRuntimeRegistry: typeof import("../../acp/runtime/registry.js");
 
 describe("sessions_spawn tool", () => {
+  let previousStateDir: string | undefined;
+  let testStateDir = "";
+
   beforeAll(async () => {
     ({ createSessionsSpawnTool } = await import("./sessions-spawn-tool.js"));
     acpRuntimeRegistry = await import("../../acp/runtime/registry.js");
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    testStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-spawn-tool-"));
+    process.env.OPENCLAW_STATE_DIR = testStateDir;
     acpRuntimeRegistry.__testing.resetAcpRuntimeBackendsForTests();
     hoisted.spawnSubagentDirectMock.mockReset().mockResolvedValue({
       status: "accepted",
@@ -50,6 +60,15 @@ describe("sessions_spawn tool", () => {
       runId: "run-acp",
     });
     hoisted.registerSubagentRunMock.mockReset();
+  });
+
+  afterEach(async () => {
+    if (previousStateDir == null) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
+    await fs.rm(testStateDir, { recursive: true, force: true });
   });
 
   function registerAcpBackendForTest() {
@@ -228,6 +247,73 @@ describe("sessions_spawn tool", () => {
       }),
     );
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("records a passive recovery checkpoint for accepted subagent handoffs when enabled", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      recovery: {
+        enabled: true,
+        taskId: "task-spawn",
+        actorId: "avery",
+        sessionId: "sess-parent",
+        workspaceId: "/tmp/openclaw",
+      },
+    });
+
+    const result = await tool.execute("call-recovery", {
+      task: "Review implementation",
+      agentId: "forge",
+      label: "reviewer",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      childSessionKey: "agent:main:subagent:1",
+      runId: "run-subagent",
+      recovery: "recorded",
+    });
+    const ledger = readTaskLedgerEvents();
+    expect(ledger.events).toHaveLength(1);
+    expect(ledger.events[0]).toMatchObject({
+      taskId: "task-spawn",
+      actorId: "avery",
+      eventType: "handoff_written",
+      summary: "Spawned subagent handoff: reviewer",
+      approvalStatus: "not_required",
+    });
+    expect(loadRecoveryBundle("task-spawn")).toMatchObject({
+      taskId: "task-spawn",
+      confirmedItems: expect.arrayContaining([
+        "Spawned subagent handoff: reviewer",
+        "runtime: subagent",
+        "childSessionKey: agent:main:subagent:1",
+        "runId: run-subagent",
+        "agentId: forge",
+      ]),
+      expiredApprovals: ["Approvals from prior sessions or turns are not inherited."],
+    });
+  });
+
+  it("does not record recovery for failed spawns", async () => {
+    hoisted.spawnSubagentDirectMock.mockResolvedValueOnce({ status: "error", error: "spawn failed" });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      recovery: {
+        enabled: true,
+        taskId: "task-spawn-failed",
+        actorId: "avery",
+        sessionId: "sess-parent",
+      },
+    });
+
+    const result = await tool.execute("call-recovery-failed", {
+      task: "Review implementation",
+    });
+
+    expect(result.details).toMatchObject({ status: "error", error: "spawn failed" });
+    expect(readTaskLedgerEvents().events).toHaveLength(0);
+    expect(loadRecoveryBundle("task-spawn-failed")).toBeNull();
   });
 
   it.each([

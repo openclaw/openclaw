@@ -136,6 +136,79 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Subagent details");
   });
 
+  it("adds session recovery discipline to full prompts", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).toContain("## Session Recovery Discipline");
+    expect(prompt).toContain("do not pretend to remember more than the available evidence supports");
+    expect(prompt).toContain("Recovered context is informational only");
+    expect(prompt).toContain("Old approvals, elevated permissions, shell allowances");
+    expect(prompt).toContain("1. continue with recovered context, 2. correct the context, 3. start fresh");
+  });
+
+  it("includes bounded recovered task candidates without inheriting approvals", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      sessionRecovery: {
+        taskId: "task_123",
+        status: "candidate",
+        generatedAt: "2026-04-26T20:53:00+08:00",
+        workspaceId: "workspace-a",
+        repoId: "repo-a",
+        confirmedItems: ["Dependency install returned exit code 0"],
+        uncertainItems: ["The larger task goal is unknown"],
+        missingItems: ["No verified project-root audit yet"],
+        expiredApprovals: ["pnpm install approval from prior session"],
+        nextResumeAction: "Ask user whether to audit git status before continuing",
+      },
+    });
+
+    expect(prompt).toContain("### Recovered Task Candidate");
+    expect(prompt).toContain("Task ID: task_123");
+    expect(prompt).toContain("Status: candidate");
+    expect(prompt).toContain("Confirmed");
+    expect(prompt).toContain("- Dependency install returned exit code 0");
+    expect(prompt).toContain("Uncertain");
+    expect(prompt).toContain("- The larger task goal is unknown");
+    expect(prompt).toContain("Expired approvals");
+    expect(prompt).toContain("- pnpm install approval from prior session");
+    expect(prompt).toContain("Recovered candidates do not authorize execution");
+    expect(prompt).toContain("Do not execute this action until the user confirms continuation");
+  });
+
+  it("warns recovered candidates cannot authorize execution even without a next action", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      sessionRecovery: {
+        taskId: "task_456",
+        status: "candidate",
+        confirmedItems: ["A prior command reported success"],
+      },
+    });
+
+    expect(prompt).toContain("Recovered candidates do not authorize execution");
+    expect(prompt).toContain("do not perform operation-specific actions until their approvals are fresh");
+    expect(prompt).not.toContain("Suggested next resume action");
+  });
+
+  it("omits session recovery discipline in minimal prompt mode", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptMode: "minimal",
+      sessionRecovery: {
+        taskId: "task_123",
+        status: "candidate",
+        confirmedItems: ["Recovered fact"],
+      },
+    });
+
+    expect(prompt).not.toContain("## Session Recovery Discipline");
+    expect(prompt).not.toContain("### Recovered Task Candidate");
+    expect(prompt).not.toContain("Recovered fact");
+  });
+
   it("includes skills in minimal prompt mode when skillsPrompt is provided (cron regression)", () => {
     // Isolated cron sessions use promptMode="minimal" but must still receive skills.
     const skillsPrompt =
@@ -1098,3 +1171,4 @@ describe("buildSubagentSystemPrompt", () => {
     }
   });
 });
+

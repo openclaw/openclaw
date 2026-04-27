@@ -1,4 +1,5 @@
 import { Type } from "typebox";
+import { recordSessionRecoveryCheckpoint } from "../session-recovery-state.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
 
@@ -9,6 +10,13 @@ const SessionsYieldToolSchema = Type.Object({
 export function createSessionsYieldTool(opts?: {
   sessionId?: string;
   onYield?: (message: string) => Promise<void> | void;
+  recovery?: {
+    enabled?: boolean;
+    taskId?: string;
+    actorId?: string;
+    workspaceId?: string;
+    repoId?: string;
+  };
 }): AnyAgentTool {
   return {
     label: "Yield",
@@ -26,7 +34,29 @@ export function createSessionsYieldTool(opts?: {
         return jsonResult({ status: "error", error: "Yield not supported in this context" });
       }
       await opts.onYield(message);
-      return jsonResult({ status: "yielded", message });
+      let recoveryStatus: "recorded" | "skipped" | "error" | undefined;
+      if (opts.recovery?.enabled) {
+        try {
+          const checkpoint = recordSessionRecoveryCheckpoint({
+            taskId: opts.recovery.taskId ?? `session:${opts.sessionId}`,
+            actorId: opts.recovery.actorId ?? "agent",
+            eventType: "handoff_written",
+            summary: message,
+            sessionId: opts.sessionId,
+            workspaceId: opts.recovery.workspaceId,
+            repoId: opts.recovery.repoId,
+            nextResumeAction: "Ask the user whether to continue, correct context, or start fresh.",
+          });
+          recoveryStatus = checkpoint.status;
+        } catch {
+          recoveryStatus = "error";
+        }
+      }
+      return jsonResult({
+        status: "yielded",
+        message,
+        ...(recoveryStatus ? { recovery: recoveryStatus } : {}),
+      });
     },
   };
 }

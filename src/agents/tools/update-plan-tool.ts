@@ -1,4 +1,5 @@
 import { Type } from "typebox";
+import { recordSessionRecoveryCheckpoint } from "../session-recovery-state.js";
 import { stringEnum } from "../schema/typebox.js";
 import {
   describeUpdatePlanTool,
@@ -73,7 +74,16 @@ function readPlanSteps(params: Record<string, unknown>): UpdatePlanStep[] {
   return steps;
 }
 
-export function createUpdatePlanTool(): AnyAgentTool {
+export function createUpdatePlanTool(opts?: {
+  recovery?: {
+    enabled?: boolean;
+    taskId?: string;
+    actorId?: string;
+    sessionId?: string;
+    workspaceId?: string;
+    repoId?: string;
+  };
+}): AnyAgentTool {
   return {
     label: "Update Plan",
     name: "update_plan",
@@ -84,12 +94,41 @@ export function createUpdatePlanTool(): AnyAgentTool {
       const params = args as Record<string, unknown>;
       const explanation = readStringParam(params, "explanation");
       const plan = readPlanSteps(params);
+      let recoveryStatus: "recorded" | "skipped" | "error" | undefined;
+      if (opts?.recovery?.enabled) {
+        const activeStep = plan.find((entry) => entry.status === "in_progress");
+        const completedCount = plan.filter((entry) => entry.status === "completed").length;
+        const summary =
+          explanation ||
+          (activeStep
+            ? `Plan updated; current step: ${activeStep.step}`
+            : `Plan updated; ${completedCount}/${plan.length} steps completed`);
+        try {
+          const checkpoint = recordSessionRecoveryCheckpoint({
+            taskId: opts.recovery.taskId ?? `session:${opts.recovery.sessionId ?? "unknown"}`,
+            actorId: opts.recovery.actorId ?? "agent",
+            eventType: "plan_updated",
+            summary,
+            sessionId: opts.recovery.sessionId,
+            workspaceId: opts.recovery.workspaceId,
+            repoId: opts.recovery.repoId,
+            confirmedItems: plan.map((entry) => `${entry.status}: ${entry.step}`),
+            nextResumeAction: activeStep
+              ? `Continue with plan step: ${activeStep.step}`
+              : "Confirm whether there is a next step before continuing.",
+          });
+          recoveryStatus = checkpoint.status;
+        } catch {
+          recoveryStatus = "error";
+        }
+      }
       return {
         content: [],
         details: {
           status: "updated" as const,
           ...(explanation ? { explanation } : {}),
           plan,
+          ...(recoveryStatus ? { recovery: recoveryStatus } : {}),
         },
       };
     },

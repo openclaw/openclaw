@@ -276,7 +276,17 @@ export function createOpenClawTools(
       modelProvider: options?.modelProvider,
       modelId: options?.modelId,
     })
-      ? [createUpdatePlanTool()]
+      ? [
+          createUpdatePlanTool({
+            recovery: {
+              enabled: Boolean(options?.sessionId),
+              taskId: options?.sessionId ? `session:${options.sessionId}` : undefined,
+              actorId: sessionAgentId,
+              sessionId: options?.sessionId,
+              workspaceId: workspaceDir,
+            },
+          }),
+        ]
       : []),
     createSessionsListTool({
       agentSessionKey: options?.agentSessionKey,
@@ -314,11 +324,24 @@ export function createOpenClawTools(
             config: resolvedConfig,
             requesterAgentIdOverride: options?.requesterAgentIdOverride,
             workspaceDir: spawnWorkspaceDir,
+            recovery: {
+              enabled: Boolean(options?.sessionId),
+              taskId: options?.sessionId ? `session:${options.sessionId}` : undefined,
+              actorId: sessionAgentId,
+              sessionId: options?.sessionId,
+              workspaceId: workspaceDir,
+            },
           }),
         ]),
     createSessionsYieldTool({
       sessionId: options?.sessionId,
       onYield: options?.onYield,
+      recovery: {
+        enabled: Boolean(options?.sessionId),
+        taskId: options?.sessionId ? `session:${options.sessionId}` : undefined,
+        actorId: sessionAgentId,
+        workspaceId: workspaceDir,
+      },
     }),
     createSubagentsTool({
       agentSessionKey: options?.agentSessionKey,
