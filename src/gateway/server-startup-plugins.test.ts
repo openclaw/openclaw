@@ -235,6 +235,34 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
     );
   });
 
+  it("pre-stages only missing runtime deps while retaining the full startup dependency set", async () => {
+    scanBundledPluginRuntimeDeps.mockReturnValueOnce({
+      deps: [
+        { name: "alpha-runtime", version: "1.0.0", pluginIds: ["telegram"] },
+        { name: "grammy", version: "1.37.0", pluginIds: ["telegram"] },
+      ],
+      missing: [{ name: "grammy", version: "1.37.0", pluginIds: ["telegram"] }],
+      conflicts: [],
+    });
+    const log = createLog();
+    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
+
+    await prepareGatewayPluginBootstrap({
+      cfgAtStart: {},
+      startupRuntimeConfig: {},
+      minimalTestGateway: false,
+      log,
+    });
+
+    expect(repairBundledRuntimeDepsInstallRootAsync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        installRoot: "/runtime",
+        missingSpecs: ["grammy@1.37.0"],
+        installSpecs: ["alpha-runtime@1.0.0", "grammy@1.37.0"],
+      }),
+    );
+  });
+
   it("derives startup activation from source config instead of runtime plugin defaults", async () => {
     const sourceConfig = {
       channels: {

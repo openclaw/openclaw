@@ -1757,16 +1757,33 @@ function shouldCleanBundledRuntimeDepsInstallExecutionRoot(params: {
   return installExecutionRoot.startsWith(`${installRoot}${path.sep}`);
 }
 
-function ensureNpmInstallExecutionManifest(installExecutionRoot: string): void {
+function createNpmInstallExecutionManifest(installSpecs: readonly string[]): JsonObject {
+  const dependencies: Record<string, string> = {};
+  for (const spec of installSpecs) {
+    const dep = parseInstallableRuntimeDepSpec(spec);
+    dependencies[dep.name] = dep.version;
+  }
+  const sortedDependencies = Object.fromEntries(
+    Object.entries(dependencies).toSorted(([left], [right]) => left.localeCompare(right)),
+  );
+  return {
+    name: "openclaw-runtime-deps-install",
+    private: true,
+    ...(Object.keys(sortedDependencies).length > 0 ? { dependencies: sortedDependencies } : {}),
+  };
+}
+
+function ensureNpmInstallExecutionManifest(
+  installExecutionRoot: string,
+  installSpecs: readonly string[] = [],
+): void {
   const manifestPath = path.join(installExecutionRoot, "package.json");
-  if (fs.existsSync(manifestPath)) {
+  const manifest = createNpmInstallExecutionManifest(installSpecs);
+  const nextContents = `${JSON.stringify(manifest, null, 2)}\n`;
+  if (fs.existsSync(manifestPath) && fs.readFileSync(manifestPath, "utf8") === nextContents) {
     return;
   }
-  fs.writeFileSync(
-    manifestPath,
-    `${JSON.stringify({ name: "openclaw-runtime-deps-install", private: true }, null, 2)}\n`,
-    "utf8",
-  );
+  fs.writeFileSync(manifestPath, nextContents, "utf8");
 }
 
 function formatBundledRuntimeDepsInstallError(result: {
@@ -1885,6 +1902,7 @@ export function installBundledRuntimeDeps(params: {
   installExecutionRoot?: string;
   linkNodeModulesFromExecutionRoot?: boolean;
   missingSpecs: string[];
+  installSpecs?: string[];
   env: NodeJS.ProcessEnv;
   warn?: (message: string) => void;
 }): void {
@@ -1911,7 +1929,15 @@ export function installBundledRuntimeDeps(params: {
     // doctor repair path installs directly in the external stage dir; without a
     // manifest, npm can honor a user's global prefix config and write under
     // $HOME/node_modules instead of our managed stage.
-    ensureNpmInstallExecutionManifest(installExecutionRoot);
+    //
+    // The manifest also declares retained staged deps. npm may prune packages
+    // that are present in node_modules but absent from package dependencies
+    // while installing a new explicit spec, so keep retained deps in the
+    // manifest and pass only actually missing specs as install args.
+    ensureNpmInstallExecutionManifest(
+      installExecutionRoot,
+      params.installSpecs ?? params.missingSpecs,
+    );
     const installEnv = createBundledRuntimeDepsInstallEnv(params.env, {
       cacheDir: path.join(installExecutionRoot, ".openclaw-npm-cache"),
     });
@@ -1955,6 +1981,7 @@ export async function installBundledRuntimeDepsAsync(params: {
   installExecutionRoot?: string;
   linkNodeModulesFromExecutionRoot?: boolean;
   missingSpecs: string[];
+  installSpecs?: string[];
   env: NodeJS.ProcessEnv;
   warn?: (message: string) => void;
   onProgress?: (message: string) => void;
@@ -1978,7 +2005,10 @@ export async function installBundledRuntimeDepsAsync(params: {
     if (diskWarning) {
       params.warn?.(diskWarning);
     }
-    ensureNpmInstallExecutionManifest(installExecutionRoot);
+    ensureNpmInstallExecutionManifest(
+      installExecutionRoot,
+      params.installSpecs ?? params.missingSpecs,
+    );
     const installEnv = createBundledRuntimeDepsInstallEnv(params.env, {
       cacheDir: path.join(installExecutionRoot, ".openclaw-npm-cache"),
     });
@@ -2035,7 +2065,8 @@ export function repairBundledRuntimeDepsInstallRoot(params: {
       ((installParams) =>
         installBundledRuntimeDeps({
           installRoot: installParams.installRoot,
-          missingSpecs: installParams.installSpecs ?? installParams.missingSpecs,
+          missingSpecs: installParams.missingSpecs,
+          installSpecs: installParams.installSpecs,
           env: params.env,
           warn: params.warn,
         }));
@@ -2129,7 +2160,8 @@ export async function repairBundledRuntimeDepsInstallRootAsync(params: {
       ((installParams) =>
         installBundledRuntimeDepsAsync({
           installRoot: installParams.installRoot,
-          missingSpecs: installParams.installSpecs ?? installParams.missingSpecs,
+          missingSpecs: installParams.missingSpecs,
+          installSpecs: installParams.installSpecs,
           env: params.env,
           warn: params.warn,
           onProgress: params.onProgress,
@@ -2268,14 +2300,22 @@ export function ensureBundledPluginRuntimeDeps(params: {
 
     const install =
       params.installDeps ??
-      ((installParams) =>
-        installBundledRuntimeDeps({
+      ((installParams) => {
+        const isolatedExecutionRoot =
+          installParams.installExecutionRoot &&
+          path.resolve(installParams.installExecutionRoot) !==
+            path.resolve(installParams.installRoot);
+        return installBundledRuntimeDeps({
           installRoot: installParams.installRoot,
           installExecutionRoot: installParams.installExecutionRoot,
           linkNodeModulesFromExecutionRoot: installParams.linkNodeModulesFromExecutionRoot,
-          missingSpecs: installParams.installSpecs ?? installParams.missingSpecs,
+          missingSpecs: isolatedExecutionRoot
+            ? (installParams.installSpecs ?? installParams.missingSpecs)
+            : installParams.missingSpecs,
+          installSpecs: installParams.installSpecs,
           env: params.env,
-        }));
+        });
+      });
     const finishActivity = beginBundledRuntimeDepsInstall({
       installRoot,
       missingSpecs,
