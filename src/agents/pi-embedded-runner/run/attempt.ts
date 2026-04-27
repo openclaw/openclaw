@@ -773,6 +773,7 @@ export async function runEmbeddedAttempt(
       hasCompletedBootstrapTurn,
       resolveBootstrapContextForRun: async () =>
         await resolveBootstrapContextForRun({
+          agentDir,
           workspaceDir: resolvedWorkspace,
           config: params.config,
           sessionKey: params.sessionKey,
