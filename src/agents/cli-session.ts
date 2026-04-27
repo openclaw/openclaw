@@ -32,6 +32,7 @@ export function getCliSessionBinding(
       extraSystemPromptHash: normalizeOptionalString(fromBindings?.extraSystemPromptHash),
       mcpConfigHash: normalizeOptionalString(fromBindings?.mcpConfigHash),
       mcpResumeHash: normalizeOptionalString(fromBindings?.mcpResumeHash),
+      mcpRoutingHash: normalizeOptionalString(fromBindings?.mcpRoutingHash),
     };
   }
   const fromMap = entry.cliSessionIds?.[normalized];
@@ -91,6 +92,9 @@ export function setCliSessionBinding(
       ...(normalizeOptionalString(binding.mcpResumeHash)
         ? { mcpResumeHash: normalizeOptionalString(binding.mcpResumeHash) }
         : {}),
+      ...(normalizeOptionalString(binding.mcpRoutingHash)
+        ? { mcpRoutingHash: normalizeOptionalString(binding.mcpRoutingHash) }
+        : {}),
     },
   };
   entry.cliSessionIds = { ...entry.cliSessionIds, [normalized]: trimmed };
@@ -130,6 +134,7 @@ export function resolveCliSessionReuse(params: {
   extraSystemPromptHash?: string;
   mcpConfigHash?: string;
   mcpResumeHash?: string;
+  mcpRoutingHash?: string;
 }): {
   sessionId?: string;
   invalidatedReason?: "auth-profile" | "auth-epoch" | "system-prompt" | "mcp";
@@ -144,6 +149,7 @@ export function resolveCliSessionReuse(params: {
   const currentExtraSystemPromptHash = normalizeOptionalString(params.extraSystemPromptHash);
   const currentMcpConfigHash = normalizeOptionalString(params.mcpConfigHash);
   const currentMcpResumeHash = normalizeOptionalString(params.mcpResumeHash);
+  const currentMcpRoutingHash = normalizeOptionalString(params.mcpRoutingHash);
   const storedAuthProfileId = normalizeOptionalString(binding?.authProfileId);
   if (storedAuthProfileId !== currentAuthProfileId) {
     return { invalidatedReason: "auth-profile" };
@@ -160,6 +166,10 @@ export function resolveCliSessionReuse(params: {
     return { invalidatedReason: "system-prompt" };
   }
   const storedMcpResumeHash = normalizeOptionalString(binding?.mcpResumeHash);
+  const storedMcpRoutingHash = normalizeOptionalString(binding?.mcpRoutingHash);
+  if (storedMcpRoutingHash !== currentMcpRoutingHash) {
+    return { invalidatedReason: "mcp" };
+  }
   if (storedMcpResumeHash && currentMcpResumeHash) {
     if (storedMcpResumeHash !== currentMcpResumeHash) {
       return { invalidatedReason: "mcp" };

@@ -239,11 +239,14 @@ export async function runPreparedCliAgent(
 
     return {
       payloads,
-      ...(messagingToolSends.targets.length > 0 || messagingToolSends.texts.length > 0
+      ...(messagingToolSends.targets.length > 0 ||
+      messagingToolSends.texts.length > 0 ||
+      messagingToolSends.mediaUrls.length > 0
         ? {
             didSendViaMessagingTool: true,
             messagingToolSentTargets: messagingToolSends.targets,
             messagingToolSentTexts: messagingToolSends.texts,
+            messagingToolSentMediaUrls: messagingToolSends.mediaUrls,
           }
         : {}),
       meta: {
@@ -303,6 +306,7 @@ export async function runPreparedCliAgent(
                   ...(context.preparedBackend.mcpResumeHash
                     ? { mcpResumeHash: context.preparedBackend.mcpResumeHash }
                     : {}),
+                  ...(context.mcpRoutingHash ? { mcpRoutingHash: context.mcpRoutingHash } : {}),
                 },
               }
             : {}),

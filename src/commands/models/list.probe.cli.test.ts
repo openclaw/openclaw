@@ -132,13 +132,68 @@ describe("runAuthProbes CLI backend dispatch", () => {
     ]);
   });
 
-  it("uses the configured CLI runtime for canonical provider probes", async () => {
+  it("keeps canonical provider credential probes on the canonical provider", async () => {
     mockStore = {
       version: 1,
       profiles: {
         "anthropic:default": {
           type: "token",
           provider: "anthropic",
+          token: "test-token",
+        },
+      },
+      order: {},
+    };
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "OK" }],
+      meta: {
+        agentMeta: {
+          sessionId: "embedded-session",
+          provider: "anthropic",
+          model: "opus",
+        },
+      },
+    });
+
+    await runAuthProbes({
+      cfg: {
+        agents: {
+          defaults: {
+            agentRuntime: { id: "claude-cli" },
+            cliBackends: {
+              "claude-cli": { command: "claude" },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      providers: ["anthropic"],
+      modelCandidates: ["anthropic/opus"],
+      options: {
+        timeoutMs: 5_000,
+        concurrency: 1,
+        maxTokens: 16,
+      },
+    });
+
+    expect(runCliAgentMock).not.toHaveBeenCalled();
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: expect.stringMatching(/^probe-anthropic-/),
+        provider: "anthropic",
+        model: "opus",
+        authProfileId: "anthropic:default",
+        cleanupBundleMcpOnRunEnd: true,
+      }),
+    );
+  });
+
+  it("uses CLI runtime profiles for canonical provider probes", async () => {
+    mockStore = {
+      version: 1,
+      profiles: {
+        "claude-cli:default": {
+          type: "token",
+          provider: "claude-cli",
           token: "test-token",
         },
       },
@@ -167,7 +222,7 @@ describe("runAuthProbes CLI backend dispatch", () => {
         },
       } as OpenClawConfig,
       providers: ["anthropic"],
-      modelCandidates: ["anthropic/opus"],
+      modelCandidates: ["claude-cli/opus"],
       options: {
         timeoutMs: 5_000,
         concurrency: 1,
@@ -180,7 +235,7 @@ describe("runAuthProbes CLI backend dispatch", () => {
         sessionKey: expect.stringMatching(/^agent:main:probe-anthropic-/),
         provider: "claude-cli",
         model: "opus",
-        authProfileId: "anthropic:default",
+        authProfileId: "claude-cli:default",
         cleanupCliLiveSessionOnRunEnd: true,
       }),
     );

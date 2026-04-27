@@ -408,9 +408,17 @@ export async function buildProbeTargets(params: {
           });
           continue;
         }
+        const profileModel =
+          profileProviderKey !== providerKey
+            ? (selectProbeModel({
+                provider: profileProviderKey,
+                candidates,
+                catalog,
+              }) ?? model)
+            : model;
         targets.push({
           provider: providerKey,
-          model,
+          model: profileModel,
           profileId,
           label,
           source: "profile",
@@ -424,7 +432,11 @@ export async function buildProbeTargets(params: {
       continue;
     }
 
-    if (model && isCliProvider(cliExecutionProvider, cfg)) {
+    if (
+      model &&
+      normalizeProviderId(model.provider) !== providerKey &&
+      isCliProvider(model.provider, cfg)
+    ) {
       targets.push({
         provider: providerKey,
         model,
@@ -518,12 +530,7 @@ async function probeTarget(params: {
     latencyMs: Date.now() - start,
   });
   try {
-    const cliExecutionProvider =
-      resolveCliRuntimeExecutionProvider({
-        provider: target.model.provider,
-        cfg,
-        agentId,
-      }) ?? target.model.provider;
+    const cliExecutionProvider = target.model.provider;
     if (isCliProvider(cliExecutionProvider, cfg)) {
       await runCliAgent({
         sessionId,

@@ -166,6 +166,17 @@ export async function prepareCliRunContext(
     agentId: params.agentId,
   });
   const bundleMcpEnabled = backendResolved.bundleMcp && params.disableTools !== true;
+  const mcpRoutingHash = bundleMcpEnabled
+    ? hashCliSessionText(
+        JSON.stringify({
+          accountId: params.agentAccountId ?? "",
+          messageChannel: params.messageChannel ?? params.messageProvider ?? "",
+          messageTo: params.messageTo ?? "",
+          threadId: params.messageThreadId == null ? "" : String(params.messageThreadId),
+          currentChannelId: params.currentChannelId ?? params.messageTo ?? "",
+        }),
+      )
+    : undefined;
   let mcpLoopbackRuntime = bundleMcpEnabled ? prepareDeps.getActiveMcpLoopbackRuntime() : undefined;
   if (bundleMcpEnabled && !mcpLoopbackRuntime) {
     try {
@@ -259,6 +270,7 @@ export async function prepareCliRunContext(
         extraSystemPromptHash,
         mcpConfigHash: preparedBackendFinal.mcpConfigHash,
         mcpResumeHash: preparedBackendFinal.mcpResumeHash,
+        mcpRoutingHash,
       })
     : params.cliSessionId
       ? { sessionId: params.cliSessionId }
@@ -428,5 +440,6 @@ export async function prepareCliRunContext(
     authEpoch,
     authEpochVersion: CLI_AUTH_EPOCH_VERSION,
     extraSystemPromptHash,
+    mcpRoutingHash,
   };
 }

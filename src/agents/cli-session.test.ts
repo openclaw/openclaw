@@ -24,6 +24,7 @@ describe("cli-session helpers", () => {
       extraSystemPromptHash: "prompt-hash",
       mcpConfigHash: "mcp-hash",
       mcpResumeHash: "mcp-resume-hash",
+      mcpRoutingHash: "mcp-routing-hash",
     });
 
     expect(entry.cliSessionIds?.["claude-cli"]).toBe("cli-session-1");
@@ -36,6 +37,7 @@ describe("cli-session helpers", () => {
       extraSystemPromptHash: "prompt-hash",
       mcpConfigHash: "mcp-hash",
       mcpResumeHash: "mcp-resume-hash",
+      mcpRoutingHash: "mcp-routing-hash",
     });
   });
 
@@ -262,6 +264,44 @@ describe("cli-session helpers", () => {
         extraSystemPromptHash: "prompt-a",
         mcpConfigHash: "mcp-config-a",
         mcpResumeHash: "mcp-resume-b",
+      }),
+    ).toEqual({ invalidatedReason: "mcp" });
+  });
+
+  it("invalidates reuse when MCP routing context changes", () => {
+    const binding = {
+      sessionId: "cli-session-1",
+      authProfileId: "anthropic:work",
+      authEpoch: "auth-epoch-a",
+      authEpochVersion: 2,
+      extraSystemPromptHash: "prompt-a",
+      mcpConfigHash: "mcp-config-a",
+      mcpResumeHash: "mcp-resume-a",
+      mcpRoutingHash: "routing-a",
+    };
+
+    expect(
+      resolveCliSessionReuse({
+        binding,
+        authProfileId: "anthropic:work",
+        authEpoch: "auth-epoch-a",
+        authEpochVersion: 2,
+        extraSystemPromptHash: "prompt-a",
+        mcpConfigHash: "mcp-config-b",
+        mcpResumeHash: "mcp-resume-a",
+        mcpRoutingHash: "routing-a",
+      }),
+    ).toEqual({ sessionId: "cli-session-1" });
+    expect(
+      resolveCliSessionReuse({
+        binding,
+        authProfileId: "anthropic:work",
+        authEpoch: "auth-epoch-a",
+        authEpochVersion: 2,
+        extraSystemPromptHash: "prompt-a",
+        mcpConfigHash: "mcp-config-b",
+        mcpResumeHash: "mcp-resume-a",
+        mcpRoutingHash: "routing-b",
       }),
     ).toEqual({ invalidatedReason: "mcp" });
   });

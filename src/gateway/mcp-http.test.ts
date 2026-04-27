@@ -499,7 +499,14 @@ describe("mcp loopback server", () => {
         jsonrpc: "2.0",
         id: 1,
         method: "tools/call",
-        params: { name: "message", arguments: { action: "send", message: "hello" } },
+        params: {
+          name: "message",
+          arguments: {
+            action: "send",
+            message: "hello",
+            media: "file:///tmp/out.png",
+          },
+        },
       }),
     });
 
@@ -508,6 +515,7 @@ describe("mcp loopback server", () => {
     expect(drainCliMessagingToolSends("agent:main:telegram:chat123")).toEqual({
       targets: [{ tool: "message", provider: "telegram", to: "chat123" }],
       texts: ["hello"],
+      mediaUrls: ["file:///tmp/out.png"],
     });
   });
 

@@ -613,6 +613,7 @@ describe("runCliAgent spawn path", () => {
         sessionKey: "agent:main:telegram:chat123",
         target: { tool: "message", provider: "telegram", to: "chat123" },
         text: "sent from tool",
+        mediaUrls: ["file:///tmp/out.png"],
       });
       return createManagedRun({
         reason: "exit",
@@ -637,6 +638,7 @@ describe("runCliAgent spawn path", () => {
 
     expect(result.didSendViaMessagingTool).toBe(true);
     expect(result.messagingToolSentTexts).toEqual(["sent from tool"]);
+    expect(result.messagingToolSentMediaUrls).toEqual(["file:///tmp/out.png"]);
     expect(result.messagingToolSentTargets).toEqual([
       { tool: "message", provider: "telegram", to: "chat123" },
     ]);

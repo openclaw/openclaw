@@ -60,6 +60,33 @@ function resolveMessageToolSentText(args: Record<string, unknown>): string | und
   );
 }
 
+function pushMediaUrl(urls: string[], seen: Set<string>, value: unknown): void {
+  if (typeof value !== "string") {
+    return;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || seen.has(trimmed)) {
+    return;
+  }
+  seen.add(trimmed);
+  urls.push(trimmed);
+}
+
+function resolveMessageToolSentMediaUrls(args: Record<string, unknown>): string[] {
+  const urls: string[] = [];
+  const seen = new Set<string>();
+  pushMediaUrl(urls, seen, args.media);
+  pushMediaUrl(urls, seen, args.mediaUrl);
+  pushMediaUrl(urls, seen, args.path);
+  pushMediaUrl(urls, seen, args.filePath);
+  if (Array.isArray(args.mediaUrls)) {
+    for (const mediaUrl of args.mediaUrls) {
+      pushMediaUrl(urls, seen, mediaUrl);
+    }
+  }
+  return urls;
+}
+
 function recordMcpMessagingToolSend(params: {
   requestContext: McpRequestContext;
   toolName?: string;
@@ -95,6 +122,7 @@ function recordMcpMessagingToolSend(params: {
       ...(threadId ? { threadId } : {}),
     },
     text: resolveMessageToolSentText(params.args),
+    mediaUrls: resolveMessageToolSentMediaUrls(params.args),
   });
 }
 
