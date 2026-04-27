@@ -192,6 +192,16 @@ listed PRs when `apply=true`. Before mutating GitHub, it verifies that the
 landed PR is merged and that each duplicate has either a shared referenced issue
 or overlapping changed hunks.
 
+The `CodeQL` workflow is intentionally a narrow first-pass scanner, not the
+full repository sweep. Daily and manual runs scan Actions workflow code plus the
+highest-risk JavaScript/TypeScript auth, secrets, sandbox, cron, and gateway
+surfaces. The critical security lane uses high-precision security queries, and
+the separate critical quality lane runs only error-severity non-security
+queries over the same narrow JavaScript/TypeScript surface. Swift, Android,
+Python, UI, and bundled-plugin CodeQL expansion should be added back as scoped
+or sharded follow-up work only after the narrow profile has stable runtime and
+signal.
+
 The `Docs Agent` workflow is an event-driven Codex maintenance lane for keeping
 existing docs aligned with recently landed changes. It has no pure schedule: a
 successful non-bot push CI run on `main` can trigger it, and manual dispatch can

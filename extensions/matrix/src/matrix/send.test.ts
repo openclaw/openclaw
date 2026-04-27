@@ -630,6 +630,28 @@ describe("sendMessageMatrix threads", () => {
       messageIds: ["$m1", "$m2", "$m3"],
     });
   });
+
+  it("merges extra content into only the first chunked text event", async () => {
+    const { client, sendMessage } = makeClient();
+    convertMarkdownTablesMock.mockImplementation(() => "first|second|third");
+    chunkMarkdownTextWithModeMock.mockImplementation((text: string) => text.split("|"));
+
+    await sendMessageMatrix("room:!room:example", "ignored", {
+      client,
+      cfg: {} as never,
+      extraContent: { "com.openclaw.approval": { id: "req-1" } },
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(3);
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      body: "first",
+      "com.openclaw.approval": { id: "req-1" },
+    });
+    expect(sendMessage.mock.calls[1]?.[1]).toMatchObject({ body: "second" });
+    expect(sendMessage.mock.calls[1]?.[1]).not.toHaveProperty("com.openclaw.approval");
+    expect(sendMessage.mock.calls[2]?.[1]).toMatchObject({ body: "third" });
+    expect(sendMessage.mock.calls[2]?.[1]).not.toHaveProperty("com.openclaw.approval");
+  });
 });
 
 describe("sendSingleTextMessageMatrix", () => {
