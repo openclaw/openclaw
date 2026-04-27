@@ -651,7 +651,7 @@ be registered, but catalog and UI display metadata are still partly host-owned.
 
 ```ts
 type ToolPolicyDecision =
-  | { allow?: true }
+  | { allow: true }
   | { block: true; reason: string; code?: string }
   | { requireApproval: true; reason: string; approvalKind?: string };
 

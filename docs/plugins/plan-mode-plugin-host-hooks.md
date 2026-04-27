@@ -143,7 +143,7 @@ oracle, not code to cherry-pick.
 | Plan snapshots and subagent state                 | `src/infra/agent-events.ts`, `src/gateway/plan-snapshot-persister.ts`, `src/gateway/server-runtime-subscriptions.ts`                                   | Agent event subscriptions plus run context extensions                 |
 | Auto nudges and heartbeats                        | `src/infra/heartbeat-runner.ts`, `src/cron/*`                                                                                                          | Session-scoped scheduler lifecycle plus heartbeat prompt contribution |
 
-## RFC 1: Plugin Session Extensions
+## RFC A: Plugin Session Extensions
 
 ### Session Contract
 
@@ -187,7 +187,7 @@ subagent ids, and nudge job ids under its own extension key.
 - Public projection appears in session rows without leaking private fields.
 - Reset/delete lifecycle clears extension state and related scheduled work.
 
-## RFC 2: Agent Turn Preparation And Injection
+## RFC B: Agent Turn Preparation And Injection
 
 ### Turn Contract
 
@@ -234,7 +234,7 @@ prompts without patching `agent-runner-execution.ts` or runner internals.
 - Retry/fallback does not duplicate the injection.
 - Existing `before_prompt_build` output still applies in deterministic order.
 
-## RFC 3: Tool Policy And Tool Metadata
+## RFC C: Tool Policy And Tool Metadata
 
 ### Tool Contract
 
@@ -243,6 +243,7 @@ Add a trusted tool policy surface separate from normal `before_tool_call`:
 ```ts
 api.registerToolPolicy({
   id: "example.policy",
+  trust: "bundled",
   stage: "pre_plugin_hooks",
   handler,
 });
@@ -253,10 +254,10 @@ Also let plugin-owned tools publish catalog and display metadata:
 ```ts
 api.registerToolMetadata({
   name,
-  displayName,
+  title,
   category,
   safety,
-  ui,
+  display,
 });
 ```
 
@@ -284,7 +285,7 @@ Mode in the core tool catalog.
 - A fixture plugin tool appears with registered display metadata.
 - Existing `before_tool_call` tests keep passing.
 
-## RFC 4: Commands, Scopes, And Agent Continuation
+## RFC D: Commands, Scopes, And Agent Continuation
 
 ### Command Contract
 
@@ -330,7 +331,7 @@ scope and then continue the agent when appropriate.
 - A fixture command returning `continueAgent: true` resumes the agent.
 - Existing plugin commands still default to no continuation.
 
-## RFC 5: Control UI Plugin Contribution Slots
+## RFC E: Control UI Plugin Contribution Slots
 
 ### UI Contract
 
@@ -377,7 +378,7 @@ input when waiting on an approval response if the product wants that behavior.
 - A fixture plugin approval payload renders through the registered card slot.
 - Removing or disabling the plugin removes its UI contributions.
 
-## RFC 6: Agent Events, Run Context, And Scheduler Lifecycle
+## RFC F: Agent Events, Run Context, And Scheduler Lifecycle
 
 ### Event And Scheduler Contract
 
@@ -385,8 +386,8 @@ Expose safe agent event subscriptions and run-context storage:
 
 ```ts
 api.onAgentEvent("tool_result", handler);
-api.setRunContextData(runId, "example", value);
-api.getRunContextData(runId, "example");
+ctx.runContext.set(runId, "example", value);
+ctx.runContext.get(runId, "example");
 ```
 
 Add scheduler lifecycle helpers tied to session extension state:
