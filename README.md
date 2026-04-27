@@ -481,3 +481,11 @@ yuweuii
 yxjsxy
 zijiess
 clawtributors:hidden:end -->
+
+## 💰 Bounty Contribution
+
+- **Task:** Design input needed: token-cost scaling in conversational multi-agent coordinati
+- **Reward:** $150
+- **Source:** GitHub-Paid
+- **Date:** 2026-04-27
+
