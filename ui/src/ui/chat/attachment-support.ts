@@ -42,6 +42,9 @@ export function resolveSupportedChatAttachmentMimeType(file: {
   if (typeof file.type === "string") {
     const mimeType = file.type.trim();
     if (mimeType.length > 0) {
+      if (!isSupportedChatAttachmentFile({ name: fileName, type: mimeType })) {
+        return null;
+      }
       if (!mimeType.startsWith("image/") && resolveImageExtensionMimeType(fileName)) {
         return null;
       }

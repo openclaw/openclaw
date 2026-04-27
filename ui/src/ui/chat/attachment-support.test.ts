@@ -50,6 +50,15 @@ describe("attachment support", () => {
     expect(isSupportedChatAttachmentMimeType(" video/mp4 ")).toBe(false);
     expect(resolveSupportedChatAttachmentMimeType({ name: "clip.mp4", type: "" })).toBeNull();
     expect(
+      resolveSupportedChatAttachmentMimeType({
+        name: "clip.mp4",
+        type: "application/octet-stream",
+      }),
+    ).toBeNull();
+    expect(
+      resolveSupportedChatAttachmentMimeType({ name: "clip.mp4", type: "text/plain" }),
+    ).toBeNull();
+    expect(
       resolveSupportedChatAttachmentMimeType({ name: "photo.png", type: " video/mp4 " }),
     ).toBeNull();
   });
