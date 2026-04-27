@@ -26,6 +26,7 @@ const WINDOWS_STOPPED_FREE_EARLY_EXIT_GRACE_MS = 90_000;
 export type GatewayRestartWaitOutcome =
   | "healthy"
   | "plugin-errors"
+  | "channel-errors"
   | "version-mismatch"
   | "stale-pids"
   | "stopped-free"
@@ -38,6 +39,7 @@ export type GatewayRestartSnapshot = {
   staleGatewayPids: number[];
   gatewayVersion?: string | null;
   activatedPluginErrors?: PluginHealthErrorSummary[];
+  channelProbeErrors?: Array<{ id: string; error: string }>;
   expectedVersion?: string;
   versionMismatch?: {
     expected: string;
@@ -56,6 +58,7 @@ type GatewayReachability = {
   reachable: boolean;
   gatewayVersion: string | null;
   activatedPluginErrors: PluginHealthErrorSummary[];
+  channelProbeErrors: Array<{ id: string; error: string }>;
 };
 
 function hasListenerAttributionGap(portUsage: PortUsage): boolean {
@@ -80,12 +83,33 @@ function looksLikeAuthClose(code: number | undefined, reason: string | undefined
     return false;
   }
   const normalized = normalizeLowercaseStringOrEmpty(reason);
+  if (!normalized) {
+    return false;
+  }
+  // The restart probe runs against loopback only and only decides restart
+  // liveness, not authorization. Keep this allowlist exact so a local listener
+  // cannot satisfy the health check with broad device/auth-looking text.
   return (
-    normalized.includes("auth") ||
-    normalized.includes("token") ||
-    normalized.includes("password") ||
-    normalized.includes("scope") ||
-    normalized.includes("role")
+    normalized === "auth required" ||
+    normalized === "owner auth required" ||
+    normalized === "connect failed" ||
+    normalized === "device required" ||
+    normalized === "pairing required" ||
+    normalized.startsWith("pairing required:") ||
+    normalized.startsWith("unauthorized: gateway token missing") ||
+    normalized.startsWith("unauthorized: gateway token mismatch") ||
+    normalized.startsWith("unauthorized: gateway token not configured") ||
+    normalized.startsWith("unauthorized: gateway password missing") ||
+    normalized.startsWith("unauthorized: gateway password mismatch") ||
+    normalized.startsWith("unauthorized: gateway password not configured") ||
+    normalized.startsWith("unauthorized: bootstrap token invalid or expired") ||
+    normalized.startsWith("unauthorized: tailscale identity missing") ||
+    normalized.startsWith("unauthorized: tailscale proxy headers missing") ||
+    normalized.startsWith("unauthorized: tailscale identity check failed") ||
+    normalized.startsWith("unauthorized: tailscale identity mismatch") ||
+    normalized.startsWith("unauthorized: too many failed authentication attempts") ||
+    normalized.startsWith("unauthorized: device token mismatch") ||
+    normalized.startsWith("unauthorized: device token rejected")
   );
 }
 
@@ -154,8 +178,45 @@ function readActivatedPluginErrors(health: unknown): PluginHealthErrorSummary[] 
     });
 }
 
+function readChannelProbeErrors(health: unknown): Array<{ id: string; error: string }> {
+  if (!health || typeof health !== "object") {
+    return [];
+  }
+  const channels = (health as { channels?: unknown }).channels;
+  if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
+    return [];
+  }
+  const errors: Array<{ id: string; error: string }> = [];
+  for (const [id, summary] of Object.entries(channels)) {
+    if (!summary || typeof summary !== "object") {
+      continue;
+    }
+    const probe = (summary as { probe?: unknown }).probe;
+    if (!probe || typeof probe !== "object") {
+      continue;
+    }
+    const ok = (probe as { ok?: unknown }).ok;
+    if (ok !== false) {
+      continue;
+    }
+    const error = (probe as { error?: unknown }).error;
+    errors.push({
+      id,
+      error: typeof error === "string" && error.trim() ? error : "probe failed",
+    });
+  }
+  return errors;
+}
+
 function applyActivatedPluginErrors(snapshot: GatewayRestartSnapshot): GatewayRestartSnapshot {
   if (!snapshot.activatedPluginErrors?.length) {
+    return snapshot;
+  }
+  return { ...snapshot, healthy: false };
+}
+
+function applyChannelProbeErrors(snapshot: GatewayRestartSnapshot): GatewayRestartSnapshot {
+  if (!snapshot.channelProbeErrors?.length) {
     return snapshot;
   }
   return { ...snapshot, healthy: false };
@@ -177,6 +238,7 @@ async function confirmGatewayReachable(params: {
     reachable: probe.ok || looksLikeAuthClose(probe.close?.code, probe.close?.reason),
     gatewayVersion: probe.server?.version ?? null,
     activatedPluginErrors: readActivatedPluginErrors(probe.health),
+    channelProbeErrors: readChannelProbeErrors(probe.health),
   };
 }
 
@@ -217,6 +279,7 @@ export async function inspectGatewayRestart(params: {
   const expectedVersion = normalizeOptionalString(params.expectedVersion);
   let reachability: GatewayReachability | null = null;
   let activatedPluginErrors: PluginHealthErrorSummary[] = [];
+  let channelProbeErrors: Array<{ id: string; error: string }> = [];
   const loadReachability = async () => {
     if (!reachability) {
       reachability = await confirmGatewayReachable({
@@ -224,6 +287,7 @@ export async function inspectGatewayRestart(params: {
         includeHealthDetails: Boolean(expectedVersion),
       });
       activatedPluginErrors = reachability.activatedPluginErrors;
+      channelProbeErrors = reachability.channelProbeErrors;
     }
     return reachability;
   };
@@ -251,19 +315,24 @@ export async function inspectGatewayRestart(params: {
     try {
       const reachable = await loadReachability();
       if (reachable.reachable) {
-        return applyActivatedPluginErrors(
-          applyExpectedVersion(
-            {
-              runtime,
-              portUsage,
-              healthy: true,
-              staleGatewayPids: [],
-              gatewayVersion: reachable.gatewayVersion,
-              ...(reachable.activatedPluginErrors.length > 0
-                ? { activatedPluginErrors: reachable.activatedPluginErrors }
-                : {}),
-            },
-            expectedVersion,
+        return applyChannelProbeErrors(
+          applyActivatedPluginErrors(
+            applyExpectedVersion(
+              {
+                runtime,
+                portUsage,
+                healthy: true,
+                staleGatewayPids: [],
+                gatewayVersion: reachable.gatewayVersion,
+                ...(reachable.activatedPluginErrors.length > 0
+                  ? { activatedPluginErrors: reachable.activatedPluginErrors }
+                  : {}),
+                ...(reachable.channelProbeErrors.length > 0
+                  ? { channelProbeErrors: reachable.channelProbeErrors }
+                  : {}),
+              },
+              expectedVersion,
+            ),
           ),
         );
       }
@@ -307,6 +376,9 @@ export async function inspectGatewayRestart(params: {
       if (reachable.activatedPluginErrors.length > 0) {
         healthy = false;
       }
+      if (reachable.channelProbeErrors.length > 0) {
+        healthy = false;
+      }
     } catch {
       healthy = false;
     }
@@ -340,17 +412,20 @@ export async function inspectGatewayRestart(params: {
     ]),
   );
 
-  return applyActivatedPluginErrors(
-    applyExpectedVersion(
-      {
-        runtime,
-        portUsage,
-        healthy,
-        staleGatewayPids,
-        ...(gatewayVersion !== undefined ? { gatewayVersion } : {}),
-        ...(activatedPluginErrors.length ? { activatedPluginErrors } : {}),
-      },
-      expectedVersion,
+  return applyChannelProbeErrors(
+    applyActivatedPluginErrors(
+      applyExpectedVersion(
+        {
+          runtime,
+          portUsage,
+          healthy,
+          staleGatewayPids,
+          ...(gatewayVersion !== undefined ? { gatewayVersion } : {}),
+          ...(activatedPluginErrors.length ? { activatedPluginErrors } : {}),
+          ...(channelProbeErrors.length ? { channelProbeErrors } : {}),
+        },
+        expectedVersion,
+      ),
     ),
   );
 }
@@ -414,6 +489,9 @@ export async function waitForGatewayHealthyRestart(params: {
     }
     if (snapshot.activatedPluginErrors?.length) {
       return withWaitContext(snapshot, "plugin-errors", attempt * delayMs);
+    }
+    if (snapshot.channelProbeErrors?.length) {
+      return withWaitContext(snapshot, "channel-errors", attempt * delayMs);
     }
     if (snapshot.versionMismatch) {
       return withWaitContext(snapshot, "version-mismatch", attempt * delayMs);
@@ -491,6 +569,12 @@ export function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): stri
     lines.push("Activated plugin load errors:");
     for (const plugin of snapshot.activatedPluginErrors) {
       lines.push(`- ${plugin.id}: ${plugin.error}`);
+    }
+  }
+  if (snapshot.channelProbeErrors?.length) {
+    lines.push("Channel health probe errors:");
+    for (const channel of snapshot.channelProbeErrors) {
+      lines.push(`- ${channel.id}: ${channel.error}`);
     }
   }
   const runtimeSummary = [

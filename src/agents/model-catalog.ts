@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runtime.runtime.js";
@@ -111,7 +111,7 @@ export async function loadModelCatalog(params?: {
         return a.name.localeCompare(b.name);
       });
     try {
-      const cfg = params?.config ?? loadConfig();
+      const cfg = params?.config ?? getRuntimeConfig();
       if (!readOnly) {
         await ensureOpenClawModelsJson(cfg);
         logStage("models-json-ready");

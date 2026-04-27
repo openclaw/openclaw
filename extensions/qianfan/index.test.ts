@@ -1,6 +1,6 @@
 import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
+import { resolveProviderPluginChoice } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it } from "vitest";
-import { resolveProviderPluginChoice } from "../../src/plugins/provider-auth-choice.runtime.js";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import qianfanPlugin from "./index.js";

@@ -398,18 +398,41 @@ describe("buildServiceEnvironment", () => {
     }
   });
 
-  it("forwards TMPDIR from the host environment", () => {
+  it("passes through OPENCLAW_WRAPPER for gateway services", () => {
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        OPENCLAW_WRAPPER: " /usr/local/bin/openclaw-doppler ",
+      },
+      port: 18789,
+    });
+
+    expect(env.OPENCLAW_WRAPPER).toBe("/usr/local/bin/openclaw-doppler");
+  });
+
+  it("forwards TMPDIR from the host environment on Linux", () => {
     const env = buildServiceEnvironment({
       env: { HOME: "/home/user", TMPDIR: "/var/folders/xw/abc123/T/" },
       port: 18789,
+      platform: "linux",
     });
     expect(env.TMPDIR).toBe("/var/folders/xw/abc123/T/");
   });
 
-  it("falls back to os.tmpdir when TMPDIR is not set", () => {
+  it("uses a durable state temp directory for macOS LaunchAgents", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/Users/user", TMPDIR: "/var/folders/xw/abc123/T/" },
+      port: 18789,
+      platform: "darwin",
+    });
+    expect(env.TMPDIR).toBe(path.join("/Users/user", ".openclaw", "tmp"));
+  });
+
+  it("falls back to os.tmpdir when TMPDIR is not set on Linux", () => {
     const env = buildServiceEnvironment({
       env: { HOME: "/home/user" },
       port: 18789,
+      platform: "linux",
     });
     expect(env.TMPDIR).toBe(os.tmpdir());
   });
@@ -426,7 +449,7 @@ describe("buildServiceEnvironment", () => {
     }
   });
 
-  it("forwards proxy environment variables for launchd/systemd runtime", () => {
+  it("does not persist ambient proxy environment variables for launchd/systemd runtime", () => {
     const env = buildServiceEnvironment({
       env: {
         HOME: "/home/user",
@@ -439,11 +462,11 @@ describe("buildServiceEnvironment", () => {
       port: 18789,
     });
 
-    expect(env.HTTP_PROXY).toBe("http://proxy.local:7890");
-    expect(env.HTTPS_PROXY).toBe("https://proxy.local:7890");
-    expect(env.NO_PROXY).toBe("localhost,127.0.0.1");
-    expect(env.http_proxy).toBe("http://proxy.local:7890");
-    expect(env.all_proxy).toBe("socks5://proxy.local:1080");
+    expect(env.HTTP_PROXY).toBeUndefined();
+    expect(env.HTTPS_PROXY).toBeUndefined();
+    expect(env.NO_PROXY).toBeUndefined();
+    expect(env.http_proxy).toBeUndefined();
+    expect(env.all_proxy).toBeUndefined();
   });
 
   it("omits PATH on Windows so Scheduled Tasks can inherit the current shell path", () => {
@@ -506,7 +529,7 @@ describe("buildNodeServiceEnvironment", () => {
     expect(env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
   });
 
-  it("forwards proxy environment variables for node services", () => {
+  it("does not persist ambient proxy environment variables for node services", () => {
     const env = buildNodeServiceEnvironment({
       env: {
         HOME: "/home/user",
@@ -515,20 +538,30 @@ describe("buildNodeServiceEnvironment", () => {
       },
     });
 
-    expect(env.HTTPS_PROXY).toBe("https://proxy.local:7890");
-    expect(env.no_proxy).toBe("localhost,127.0.0.1");
+    expect(env.HTTPS_PROXY).toBeUndefined();
+    expect(env.no_proxy).toBeUndefined();
   });
 
-  it("forwards TMPDIR for node services", () => {
+  it("forwards TMPDIR for node services on Linux", () => {
     const env = buildNodeServiceEnvironment({
       env: { HOME: "/home/user", TMPDIR: "/tmp/custom" },
+      platform: "linux",
     });
     expect(env.TMPDIR).toBe("/tmp/custom");
   });
 
-  it("falls back to os.tmpdir for node services when TMPDIR is not set", () => {
+  it("uses a durable state temp directory for macOS node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/Users/user", TMPDIR: "/var/folders/xw/abc123/T/" },
+      platform: "darwin",
+    });
+    expect(env.TMPDIR).toBe(path.join("/Users/user", ".openclaw", "tmp"));
+  });
+
+  it("falls back to os.tmpdir for node services when TMPDIR is not set on Linux", () => {
     const env = buildNodeServiceEnvironment({
       env: { HOME: "/home/user" },
+      platform: "linux",
     });
     expect(env.TMPDIR).toBe(os.tmpdir());
   });

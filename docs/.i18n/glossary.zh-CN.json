@@ -380,6 +380,10 @@
     "target": "插件 SDK"
   },
   {
+    "source": "Plugins",
+    "target": "插件"
+  },
+  {
     "source": "Building plugins",
     "target": "构建插件"
   },
@@ -436,6 +440,38 @@
     "target": "设置"
   },
   {
+    "source": "Migrate",
+    "target": "迁移"
+  },
+  {
+    "source": "Migrating",
+    "target": "迁移"
+  },
+  {
+    "source": "Migrating from Hermes",
+    "target": "从 Hermes 迁移"
+  },
+  {
+    "source": "Migrating from Claude",
+    "target": "从 Claude 迁移"
+  },
+  {
+    "source": "Agent workspace",
+    "target": "Agent 工作区"
+  },
+  {
+    "source": "Migration",
+    "target": "迁移"
+  },
+  {
+    "source": "Hermes",
+    "target": "Hermes"
+  },
+  {
+    "source": "Archive-only",
+    "target": "仅归档"
+  },
+  {
     "source": "Channel Plugin SDK",
     "target": "渠道插件 SDK"
   },
@@ -466,6 +502,18 @@
   {
     "source": "QA Refactor",
     "target": "QA 重构"
+  },
+  {
+    "source": "Matrix QA",
+    "target": "Matrix QA"
+  },
+  {
+    "source": "QA overview",
+    "target": "QA overview"
+  },
+  {
+    "source": "QA channel",
+    "target": "QA channel"
   },
   {
     "source": "Rich Output Protocol",

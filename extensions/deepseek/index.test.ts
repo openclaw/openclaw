@@ -1,8 +1,8 @@
 import type { Context, Model } from "@mariozechner/pi-ai";
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
+import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
+import { resolveProviderPluginChoice } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it } from "vitest";
-import { buildOpenAICompletionsParams } from "../../src/agents/openai-transport-stream.js";
-import { resolveProviderPluginChoice } from "../../src/plugins/provider-auth-choice.runtime.js";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import deepseekPlugin from "./index.js";

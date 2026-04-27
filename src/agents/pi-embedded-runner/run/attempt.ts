@@ -12,8 +12,8 @@ import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import {
-  createDiagnosticTraceContext,
   createChildDiagnosticTraceContext,
+  createDiagnosticTraceContextFromActiveScope,
   freezeDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
 import { isEmbeddedMode } from "../../../infra/embedded-mode.js";
@@ -21,7 +21,7 @@ import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summary.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
-import { listRegisteredPluginCommands } from "../../../plugins/command-registry-state.js";
+import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import {
   extractModelCompat,
@@ -78,6 +78,7 @@ import { resolveOpenClawReferencePaths } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
+import { stripRuntimeContextCustomMessages } from "../../internal-runtime-context.js";
 import { buildModelAliasLines } from "../../model-alias-lines.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
@@ -207,7 +208,7 @@ import {
   buildEmbeddedSystemPrompt,
   createSystemPromptOverride,
 } from "../system-prompt.js";
-import { dropThinkingBlocks } from "../thinking.js";
+import { dropReasoningFromHistory, dropThinkingBlocks } from "../thinking.js";
 import {
   collectAllowedToolNames,
   collectRegisteredToolNames,
@@ -232,6 +233,10 @@ import {
   shouldStripBootstrapFromEmbeddedContext,
 } from "./attempt-bootstrap-routing.js";
 export { shouldStripBootstrapFromEmbeddedContext } from "./attempt-bootstrap-routing.js";
+import {
+  rotateTranscriptAfterCompaction,
+  shouldRotateCompactionTranscript,
+} from "../compaction-successor-transcript.js";
 import { configureEmbeddedAttemptHttpRuntime } from "./attempt-http-runtime.js";
 import {
   assembleAttemptContextEngine,
@@ -310,6 +315,7 @@ import {
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
 import {
+  buildRuntimeContextSystemContext,
   queueRuntimeContextForNextTurn,
   resolveRuntimeContextPromptParts,
 } from "./runtime-context-prompt.js";
@@ -476,7 +482,8 @@ export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
 }
 
 export function normalizeMessagesForLlmBoundary(messages: AgentMessage[]): AgentMessage[] {
-  return stripToolResultDetails(normalizeAssistantReplayContent(messages));
+  const normalized = stripToolResultDetails(normalizeAssistantReplayContent(messages));
+  return stripRuntimeContextCustomMessages(normalized);
 }
 
 export function shouldCreateBundleMcpRuntimeForAttempt(params: {
@@ -635,20 +642,12 @@ export async function runEmbeddedAttempt(
       agentId: sessionAgentId,
     });
 
-    const sessionLock = await acquireSessionWriteLock({
-      sessionFile: params.sessionFile,
-      maxHoldMs: resolveSessionLockMaxHoldFromTimeout({
-        timeoutMs: resolveRunTimeoutWithCompactionGraceMs({
-          runTimeoutMs: params.timeoutMs,
-          compactionTimeoutMs: resolveCompactionTimeoutMs(params.config),
-        }),
-      }),
-    });
-
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const contextInjectionMode = resolveContextInjectionMode(params.config);
     const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
-    const diagnosticTrace = freezeDiagnosticTraceContext(createDiagnosticTraceContext());
+    const diagnosticTrace = freezeDiagnosticTraceContext(
+      createDiagnosticTraceContextFromActiveScope(),
+    );
     const runTrace = freezeDiagnosticTraceContext(
       createChildDiagnosticTraceContext(diagnosticTrace),
     );
@@ -1136,7 +1135,7 @@ export async function runEmbeddedAttempt(
           config: params.config,
           sandboxed: sandboxInfo?.enabled === true,
         }),
-        nativeCommandNames: listRegisteredPluginCommands().map((command) => command.name),
+        nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance(),
         runtimeInfo,
         messageToolHints,
         sandboxInfo,
@@ -1198,6 +1197,19 @@ export async function runEmbeddedAttempt(
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
     let systemPromptText = systemPromptOverride();
     const userPromptPrefixText = bootstrapRouting.userPromptPrefixText;
+
+    // Keep the session lock scoped to transcript/session mutations. Cold plugin
+    // and tool setup can be slow, and holding the lock there blocks CLI fallback
+    // from taking over the same session when a gateway run stalls before model I/O.
+    const sessionLock = await acquireSessionWriteLock({
+      sessionFile: params.sessionFile,
+      maxHoldMs: resolveSessionLockMaxHoldFromTimeout({
+        timeoutMs: resolveRunTimeoutWithCompactionGraceMs({
+          runTimeoutMs: params.timeoutMs,
+          compactionTimeoutMs: resolveCompactionTimeoutMs(params.config),
+        }),
+      }),
+    });
 
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
@@ -1667,7 +1679,7 @@ export async function runEmbeddedAttempt(
       // (e.g. thinkingSignature:"reasoning_text") on any follow-up provider
       // call, including tool continuations. Wrap the stream function so every
       // outbound request sees sanitized messages.
-      if (transcriptPolicy.dropThinkingBlocks) {
+      if (transcriptPolicy.dropThinkingBlocks || transcriptPolicy.dropReasoningFromHistory) {
         const inner = activeSession.agent.streamFn;
         activeSession.agent.streamFn = (model, context, options) => {
           const ctx = context as unknown as { messages?: unknown };
@@ -1675,7 +1687,12 @@ export async function runEmbeddedAttempt(
           if (!Array.isArray(messages)) {
             return inner(model, context, options);
           }
-          const sanitized = dropThinkingBlocks(messages as unknown as AgentMessage[]) as unknown;
+          const reasoningSanitized = transcriptPolicy.dropReasoningFromHistory
+            ? dropReasoningFromHistory(messages as unknown as AgentMessage[])
+            : (messages as unknown as AgentMessage[]);
+          const sanitized = transcriptPolicy.dropThinkingBlocks
+            ? (dropThinkingBlocks(reasoningSanitized) as unknown)
+            : (reasoningSanitized as unknown);
           if (sanitized === messages) {
             return inner(model, context, options);
           }
@@ -1821,6 +1838,7 @@ export async function runEmbeddedAttempt(
         cfg: params.config,
         trigger: params.trigger,
         runTimeoutMs: params.timeoutMs !== configuredRunTimeoutMs ? params.timeoutMs : undefined,
+        modelRequestTimeoutMs: (params.model as { requestTimeoutMs?: number }).requestTimeoutMs,
       });
       if (idleTimeoutMs > 0) {
         activeSession.agent.streamFn = streamWithIdleTimeout(
@@ -2078,6 +2096,7 @@ export async function runEmbeddedAttempt(
         setTerminalLifecycleMeta,
         getUsageTotals,
         getCompactionCount,
+        getLastCompactionTokensAfter,
       } = subscription;
 
       const queueHandle: EmbeddedPiQueueHandle & {
@@ -2168,6 +2187,7 @@ export async function runEmbeddedAttempt(
 
       let messagesSnapshot: AgentMessage[] = [];
       let sessionIdUsed = activeSession.sessionId;
+      let sessionFileUsed: string | undefined = params.sessionFile;
       const onAbort = () => {
         externalAbort = true;
         const reason = params.abortSignal ? getAbortReason(params.abortSignal) : undefined;
@@ -2640,19 +2660,35 @@ export async function runEmbeddedAttempt(
             if (promptSubmission.runtimeOnly) {
               await abortable(activeSession.prompt(promptSubmission.prompt));
             } else {
-              await queueRuntimeContextForNextTurn({
-                session: activeSession,
-                runtimeContext: promptSubmission.runtimeContext,
-              });
+              const runtimeContext = promptSubmission.runtimeContext?.trim();
+              const runtimeSystemPrompt = runtimeContext
+                ? composeSystemPromptWithHookContext({
+                    baseSystemPrompt: systemPromptText,
+                    appendSystemContext: buildRuntimeContextSystemContext(runtimeContext),
+                  })
+                : undefined;
+              if (runtimeSystemPrompt) {
+                applySystemPromptOverrideToSession(activeSession, runtimeSystemPrompt);
+              }
+              try {
+                await queueRuntimeContextForNextTurn({
+                  session: activeSession,
+                  runtimeContext,
+                });
 
-              // Only pass images option if there are actually images to pass
-              // This avoids potential issues with models that don't expect the images parameter
-              if (imageResult.images.length > 0) {
-                await abortable(
-                  activeSession.prompt(promptSubmission.prompt, { images: imageResult.images }),
-                );
-              } else {
-                await abortable(activeSession.prompt(promptSubmission.prompt));
+                // Only pass images option if there are actually images to pass
+                // This avoids potential issues with models that don't expect the images parameter
+                if (imageResult.images.length > 0) {
+                  await abortable(
+                    activeSession.prompt(promptSubmission.prompt, { images: imageResult.images }),
+                  );
+                } else {
+                  await abortable(activeSession.prompt(promptSubmission.prompt));
+                }
+              } finally {
+                if (runtimeSystemPrompt) {
+                  applySystemPromptOverrideToSession(activeSession, systemPromptText);
+                }
               }
             }
           }
@@ -2902,6 +2938,35 @@ export async function runEmbeddedAttempt(
           }
         }
 
+        if (
+          compactionOccurredThisAttempt &&
+          !promptError &&
+          !aborted &&
+          !timedOut &&
+          !idleTimedOut &&
+          !timedOutDuringCompaction &&
+          shouldRotateCompactionTranscript(params.config)
+        ) {
+          try {
+            const rotation = await rotateTranscriptAfterCompaction({
+              sessionManager,
+              sessionFile: params.sessionFile,
+            });
+            if (rotation.rotated) {
+              sessionIdUsed = rotation.sessionId ?? sessionIdUsed;
+              sessionFileUsed = rotation.sessionFile ?? sessionFileUsed;
+              log.info(
+                `[compaction] rotated active transcript after automatic compaction ` +
+                  `(sessionKey=${params.sessionKey ?? params.sessionId})`,
+              );
+            }
+          } catch (err) {
+            log.warn("[compaction] automatic transcript rotation failed", {
+              errorMessage: formatErrorMessage(err),
+            });
+          }
+        }
+
         cacheTrace?.recordStage("session:after", {
           messages: messagesSnapshot,
           note: timedOutDuringCompaction
@@ -3125,6 +3190,7 @@ export async function runEmbeddedAttempt(
         promptErrorSource,
         preflightRecovery,
         sessionIdUsed,
+        sessionFileUsed,
         diagnosticTrace,
         bootstrapPromptWarningSignaturesSeen: bootstrapPromptWarning.warningSignaturesSeen,
         bootstrapPromptWarningSignature: bootstrapPromptWarning.signature,
@@ -3149,6 +3215,7 @@ export async function runEmbeddedAttempt(
         attemptUsage,
         promptCache,
         compactionCount: getCompactionCount(),
+        compactionTokensAfter: getLastCompactionTokensAfter(),
         // Client tool call detected (OpenResponses hosted tools)
         clientToolCall: clientToolCallDetected ?? undefined,
         yieldDetected: yieldDetected || undefined,

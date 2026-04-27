@@ -17,6 +17,7 @@ const AWS_SDK_ENV_MARKERS = new Set([
 ]);
 const CORE_NON_SECRET_API_KEY_MARKERS = [
   CUSTOM_LOCAL_AUTH_MARKER,
+  OLLAMA_LOCAL_AUTH_MARKER,
   NON_ENV_SECRETREF_MARKER,
 ] as const;
 let knownEnvApiKeyMarkersCache: Set<string> | undefined;

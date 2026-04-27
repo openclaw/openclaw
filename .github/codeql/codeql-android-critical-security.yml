@@ -1,0 +1,21 @@
+name: openclaw-codeql-android-critical-security
+
+disable-default-queries: true
+
+queries:
+  - uses: security-extended
+
+paths:
+  - apps/android/app/src/main
+
+paths-ignore:
+  - "**/.gradle"
+  - "**/build"
+  - "**/node_modules"
+  - "**/coverage"
+  - "**/*.generated.*"
+  - "**/*Test.kt"
+  - "**/*Test.java"
+  - "**/*Benchmark.kt"
+  - apps/android/app/src/test
+  - apps/android/benchmark

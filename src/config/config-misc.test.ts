@@ -642,7 +642,7 @@ describe("model compat config schema", () => {
                   supportsUsageInStreaming: true,
                   supportsStrictMode: false,
                   requiresStringContent: true,
-                  thinkingFormat: "qwen",
+                  thinkingFormat: "zai",
                   requiresToolResultName: true,
                   requiresAssistantAfterToolResult: false,
                   requiresThinkingAsText: false,

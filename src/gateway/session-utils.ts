@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   listAgentIds,
+  resolveAgentConfig,
   resolveAgentEffectiveModelPrimary,
   resolveAgentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
@@ -17,6 +18,7 @@ import {
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
   resolvePersistedSelectedModelRef,
+  resolveThinkingDefault,
 } from "../agents/model-selection.js";
 import {
   countActiveDescendantRuns,
@@ -31,11 +33,8 @@ import {
   RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
   shouldKeepSubagentRunChildLink,
 } from "../agents/subagent-run-liveness.js";
-import {
-  listThinkingLevelOptions,
-  resolveThinkingDefaultForModel,
-} from "../auto-reply/thinking.js";
-import { loadConfig } from "../config/config.js";
+import { listThinkingLevelOptions } from "../auto-reply/thinking.js";
+import { getRuntimeConfig } from "../config/io.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -473,7 +472,7 @@ export function resolveDeletedAgentIdFromSessionKey(
 }
 
 export function loadSessionEntry(sessionKey: string) {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const key = normalizeOptionalString(sessionKey) ?? "";
   const target = resolveGatewaySessionStoreTarget({
     cfg,
@@ -1038,6 +1037,25 @@ export function resolveGatewaySessionStoreTarget(params: {
 
 export { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
 
+function resolveGatewaySessionThinkingDefault(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  model: string;
+  agentId?: string;
+}) {
+  const agentThinkingDefault = params.agentId
+    ? resolveAgentConfig(params.cfg, params.agentId)?.thinkingDefault
+    : undefined;
+  return (
+    agentThinkingDefault ??
+    resolveThinkingDefault({
+      cfg: params.cfg,
+      provider: params.provider,
+      model: params.model,
+    })
+  );
+}
+
 export function getSessionDefaults(cfg: OpenClawConfig): GatewaySessionsDefaults {
   const resolved = resolveConfiguredModelRef({
     cfg,
@@ -1055,7 +1073,8 @@ export function getSessionDefaults(cfg: OpenClawConfig): GatewaySessionsDefaults
     contextTokens: contextTokens ?? null,
     thinkingLevels,
     thinkingOptions: thinkingLevels.map((level) => level.label),
-    thinkingDefault: resolveThinkingDefaultForModel({
+    thinkingDefault: resolveGatewaySessionThinkingDefault({
+      cfg,
       provider: resolved.provider,
       model: resolved.model,
     }),
@@ -1429,9 +1448,11 @@ export function buildGatewaySessionRow(params: {
     thinkingLevel: entry?.thinkingLevel,
     thinkingLevels,
     thinkingOptions: thinkingLevels.map((level) => level.label),
-    thinkingDefault: resolveThinkingDefaultForModel({
+    thinkingDefault: resolveGatewaySessionThinkingDefault({
+      cfg,
       provider: thinkingProvider,
       model: thinkingModel,
+      agentId: sessionAgentId,
     }),
     fastMode: entry?.fastMode,
     verboseLevel: entry?.verboseLevel,
@@ -1464,6 +1485,28 @@ export function buildGatewaySessionRow(params: {
     compactionCheckpointCount: entry?.compactionCheckpoints?.length,
     latestCompactionCheckpoint,
   };
+}
+
+function resolveSessionListSearchDisplayName(
+  key: string,
+  entry?: SessionEntry,
+): string | undefined {
+  if (entry?.displayName) {
+    return entry.displayName;
+  }
+  const parsed = parseGroupKey(key);
+  const channel = entry?.channel ?? parsed?.channel;
+  if (!channel) {
+    return undefined;
+  }
+  return buildGroupDisplayName({
+    provider: channel,
+    subject: entry?.subject,
+    groupChannel: entry?.groupChannel,
+    space: entry?.space,
+    id: parsed?.id,
+    key,
+  });
 }
 
 export function loadGatewaySessionRow(
@@ -1508,7 +1551,7 @@ export function listSessionsFromStore(params: {
       ? Math.max(1, Math.floor(opts.activeMinutes))
       : undefined;
 
-  let sessions = Object.entries(store)
+  let entries = Object.entries(store)
     .filter(([key]) => {
       if (isCronRunSessionKey(key)) {
         return false;
@@ -1562,23 +1605,17 @@ export function listSessionsFromStore(params: {
       }
       return entry?.label === label;
     })
-    .map(([key, entry]) =>
-      buildGatewaySessionRow({
-        cfg,
-        storePath,
-        store,
-        key,
-        entry,
-        now,
-        includeDerivedTitles,
-        includeLastMessage,
-      }),
-    )
-    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+    .toSorted((a, b) => (b[1]?.updatedAt ?? 0) - (a[1]?.updatedAt ?? 0));
 
   if (search) {
-    sessions = sessions.filter((s) => {
-      const fields = [s.displayName, s.label, s.subject, s.sessionId, s.key];
+    entries = entries.filter(([key, entry]) => {
+      const fields = [
+        resolveSessionListSearchDisplayName(key, entry),
+        entry?.label,
+        entry?.subject,
+        entry?.sessionId,
+        key,
+      ];
       return fields.some(
         (f) => typeof f === "string" && normalizeLowercaseStringOrEmpty(f).includes(search),
       );
@@ -1587,13 +1624,26 @@ export function listSessionsFromStore(params: {
 
   if (activeMinutes !== undefined) {
     const cutoff = now - activeMinutes * 60_000;
-    sessions = sessions.filter((s) => (s.updatedAt ?? 0) >= cutoff);
+    entries = entries.filter(([, entry]) => (entry?.updatedAt ?? 0) >= cutoff);
   }
 
   if (typeof opts.limit === "number" && Number.isFinite(opts.limit)) {
     const limit = Math.max(1, Math.floor(opts.limit));
-    sessions = sessions.slice(0, limit);
+    entries = entries.slice(0, limit);
   }
+
+  const sessions = entries.map(([key, entry]) =>
+    buildGatewaySessionRow({
+      cfg,
+      storePath,
+      store,
+      key,
+      entry,
+      now,
+      includeDerivedTitles,
+      includeLastMessage,
+    }),
+  );
 
   return {
     ts: now,

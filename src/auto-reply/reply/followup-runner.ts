@@ -452,9 +452,11 @@ export function createFollowupRunner(params: {
           sessionKey,
           storePath,
           amount: autoCompactionCount,
+          compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
           lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           contextTokensUsed,
           newSessionId: runResult.meta?.agentMeta?.sessionId,
+          newSessionFile: runResult.meta?.agentMeta?.sessionFile,
         });
         const refreshedSessionEntry =
           sessionKey && sessionStore ? sessionStore[sessionKey] : undefined;

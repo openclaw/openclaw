@@ -13,7 +13,11 @@ export {
 } from "../agents/tools/common.js";
 export { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 export { parseNonNegativeByteSize } from "../config/byte-size.js";
-export { loadConfig } from "../config/config.js";
+export {
+  getRuntimeConfig,
+  /** @deprecated Use getRuntimeConfig(), or pass the already loaded config through the call path. */
+  loadConfig,
+} from "../config/config.js";
 export { resolveStateDir } from "../config/paths.js";
 export { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
