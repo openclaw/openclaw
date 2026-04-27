@@ -51,6 +51,7 @@ export const SERVICE_AUDIT_CODES = {
   gatewayTokenEmbedded: "gateway-token-embedded",
   gatewayManagedEnvEmbedded: "gateway-managed-env-embedded",
   gatewayProxyEnvEmbedded: "gateway-proxy-env-embedded",
+  gatewayPortMismatch: "gateway-port-mismatch",
   gatewayTokenMismatch: "gateway-token-mismatch",
   gatewayRuntimeBun: "gateway-runtime-bun",
   gatewayRuntimeNodeVersionManager: "gateway-runtime-node-version-manager",
@@ -217,6 +218,49 @@ function auditGatewayCommand(programArguments: string[] | undefined, issues: Ser
       level: "aggressive",
     });
   }
+}
+
+export function readGatewayServiceCommandPort(programArguments?: string[]): number | undefined {
+  if (!programArguments || programArguments.length === 0) {
+    return undefined;
+  }
+  for (let index = 0; index < programArguments.length; index += 1) {
+    const arg = programArguments[index];
+    if (arg === "--port") {
+      const parsed = Number.parseInt(programArguments[index + 1] ?? "", 10);
+      return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+    }
+    if (arg.startsWith("--port=")) {
+      const parsed = Number.parseInt(arg.slice("--port=".length), 10);
+      return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+    }
+  }
+  return undefined;
+}
+
+function auditGatewayServicePort(
+  programArguments: string[] | undefined,
+  issues: ServiceConfigIssue[],
+  expectedPort: number | undefined,
+) {
+  if (
+    typeof expectedPort !== "number" ||
+    !Number.isSafeInteger(expectedPort) ||
+    expectedPort <= 0
+  ) {
+    return;
+  }
+  const expected = expectedPort;
+  const servicePort = readGatewayServiceCommandPort(programArguments);
+  if (servicePort === undefined || servicePort === expected) {
+    return;
+  }
+  issues.push({
+    code: SERVICE_AUDIT_CODES.gatewayPortMismatch,
+    message: "Gateway service port does not match current gateway config.",
+    detail: `${servicePort} -> ${expected}`,
+    level: "recommended",
+  });
 }
 
 function auditGatewayToken(
@@ -521,11 +565,13 @@ export async function auditGatewayServiceConfig(params: {
   platform?: NodeJS.Platform;
   expectedGatewayToken?: string;
   expectedManagedServiceEnvKeys?: Iterable<string>;
+  expectedPort?: number;
 }): Promise<ServiceConfigAudit> {
   const issues: ServiceConfigIssue[] = [];
   const platform = params.platform ?? process.platform;
 
   auditGatewayCommand(params.command?.programArguments, issues);
+  auditGatewayServicePort(params.command?.programArguments, issues, params.expectedPort);
   auditManagedServiceEnvironment(params.command, issues, params.expectedManagedServiceEnvKeys);
   auditProxyServiceEnvironment(params.command, issues);
   auditGatewayToken(params.command, issues, params.expectedGatewayToken);
