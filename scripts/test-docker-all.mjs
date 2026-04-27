@@ -194,7 +194,7 @@ function shellQuote(value) {
 }
 
 function githubWorkflowRerunCommand(laneNames, ref) {
-  return [
+  const fields = [
     "gh workflow run",
     shellQuote(process.env.OPENCLAW_DOCKER_E2E_WORKFLOW || DEFAULT_GITHUB_WORKFLOW),
     "-f",
@@ -211,7 +211,29 @@ function githubWorkflowRerunCommand(laneNames, ref) {
     "include_live_suites=false",
     "-f",
     "live_models_only=false",
-  ].join(" ");
+  ];
+  if (process.env.GITHUB_RUN_ID) {
+    fields.push("-f", `package_artifact_run_id=${shellQuote(process.env.GITHUB_RUN_ID)}`);
+    fields.push(
+      "-f",
+      `package_artifact_name=${shellQuote(
+        process.env.OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME || "docker-e2e-package",
+      )}`,
+    );
+  }
+  if (process.env.OPENCLAW_DOCKER_E2E_BARE_IMAGE) {
+    fields.push(
+      "-f",
+      `docker_e2e_bare_image=${shellQuote(process.env.OPENCLAW_DOCKER_E2E_BARE_IMAGE)}`,
+    );
+  }
+  if (process.env.OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE) {
+    fields.push(
+      "-f",
+      `docker_e2e_functional_image=${shellQuote(process.env.OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE)}`,
+    );
+  }
+  return fields.join(" ");
 }
 
 function buildLaneRerunCommand(name, baseEnv) {
@@ -301,6 +323,7 @@ async function writeRunSummary(logDir, summary) {
   const file = path.join(logDir, "summary.json");
   const payload = {
     ...summary,
+    packageArtifactName: process.env.OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME || undefined,
     finishedAt: new Date().toISOString(),
     github: {
       ref: process.env.GITHUB_REF_NAME || undefined,
@@ -346,7 +369,9 @@ async function writeFailureIndex(logDir, summary) {
         : undefined,
     generatedAt: new Date().toISOString(),
     lanes,
-    note: "Targeted GitHub reruns prepare a fresh OpenClaw npm tarball for the selected ref before lane execution.",
+    note: "Targeted GitHub reruns reuse this run's package artifact and shared Docker images when the generated command includes package_artifact_run_id and docker_e2e_*_image inputs.",
+    images: summary.images,
+    packageArtifactName: process.env.OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME || undefined,
     ref,
     runUrl: summary.github?.runUrl,
     status: summary.status,

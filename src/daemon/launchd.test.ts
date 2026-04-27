@@ -8,6 +8,7 @@ import {
   installLaunchAgent,
   isLaunchAgentListed,
   parseLaunchctlPrint,
+  readLaunchAgentRuntime,
   repairLaunchAgentBootstrap,
   restartLaunchAgent,
   resolveLaunchAgentPlistPath,
@@ -345,6 +346,30 @@ describe("launchd runtime parsing", () => {
     expect(parseLaunchctlPrint(output)).toEqual({
       state: "waiting",
       lastExitReason: "exited",
+    });
+  });
+});
+
+describe("launchd runtime state", () => {
+  it("marks installed plist split-brain when launchd no longer has the job", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.files.set(resolveLaunchAgentPlistPath(env), "<plist/>");
+    state.serviceLoaded = false;
+
+    await expect(readLaunchAgentRuntime(env)).resolves.toMatchObject({
+      status: "unknown",
+      missingSupervision: true,
+      detail: "Could not find service",
+    });
+  });
+
+  it("marks a missing unit when launchd has no job and no plist exists", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.serviceLoaded = false;
+
+    await expect(readLaunchAgentRuntime(env)).resolves.toMatchObject({
+      status: "unknown",
+      missingUnit: true,
     });
   });
 });

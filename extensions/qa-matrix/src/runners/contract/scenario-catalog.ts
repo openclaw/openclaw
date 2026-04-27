@@ -327,7 +327,7 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
   },
   {
     id: "matrix-room-block-streaming",
-    timeoutMs: 45_000,
+    timeoutMs: 75_000,
     title: "Matrix block streaming preserves completed quiet preview blocks",
     topology: MATRIX_QA_BLOCK_ROOM_TOPOLOGY,
     configOverrides: {

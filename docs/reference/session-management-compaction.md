@@ -7,15 +7,15 @@ read_when:
 title: "Session management deep dive"
 ---
 
-This page explains how OpenClaw manages sessions end-to-end:
+OpenClaw manages sessions end-to-end across these areas:
 
 - **Session routing** (how inbound messages map to a `sessionKey`)
 - **Session store** (`sessions.json`) and what it tracks
 - **Transcript persistence** (`*.jsonl`) and its structure
 - **Transcript hygiene** (provider-specific fixups before runs)
 - **Context limits** (context window vs tracked tokens)
-- **Compaction** (manual + auto-compaction) and where to hook pre-compaction work
-- **Silent housekeeping** (e.g. memory writes that shouldn’t produce user-visible output)
+- **Compaction** (manual and auto-compaction) and where to hook pre-compaction work
+- **Silent housekeeping** (memory writes that should not produce user-visible output)
 
 If you want a higher-level overview first, start with:
 

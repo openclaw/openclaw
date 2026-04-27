@@ -31,14 +31,6 @@ on:
           - e2ee-smoke
           - e2ee-deep
           - e2ee-cli
-      matrix_shards:
-        description: Shard matrix_profile=all into parallel Matrix profile jobs
-        required: false
-        default: "false"
-        type: choice
-        options:
-          - "false"
-          - "true"
 
 permissions:
   contents: read
@@ -220,7 +212,7 @@ jobs:
   run_live_matrix:
     name: Run Matrix live QA lane
     needs: [authorize_actor, validate_selected_ref]
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.matrix_profile == 'all' && inputs.matrix_shards == 'true') }}
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.matrix_profile == 'all') }}
     runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 60
     environment: qa-live-shared
@@ -289,7 +281,7 @@ jobs:
   run_live_matrix_sharded:
     name: Run Matrix live QA lane (${{ matrix.profile }})
     needs: [authorize_actor, validate_selected_ref]
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.matrix_profile == 'all' && inputs.matrix_shards == 'true' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.matrix_profile == 'all' }}
     runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 60
     environment: qa-live-shared

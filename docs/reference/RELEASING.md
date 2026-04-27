@@ -118,7 +118,7 @@ the maintainer-only release runbook.
   Example: `gh workflow run package-acceptance.yml --ref main -f workflow_ref=main -f source=npm -f package_spec=openclaw@beta -f suite_profile=product -f telegram_mode=mock-openai`
   Common profiles:
   - `smoke`: install/channel/agent, gateway network, and config reload lanes
-  - `package`: package/update/plugin lanes without OpenWebUI or live ClawHub
+  - `package`: artifact-native package/update/plugin lanes without OpenWebUI or live ClawHub
   - `product`: package profile plus MCP channels, cron/subagent cleanup,
     OpenAI web search, and OpenWebUI
   - `full`: Docker release-path chunks with OpenWebUI
@@ -143,11 +143,10 @@ the maintainer-only release runbook.
   credential leases. Run the manual `QA-Lab - All Lanes` workflow with
   `matrix_profile=all` and `matrix_shards=true` when you want full Matrix
   transport, media, and E2EE inventory in parallel.
-- Cross-OS install and upgrade runtime validation is dispatched from the
-  private caller workflow
-  `openclaw/releases-private/.github/workflows/openclaw-cross-os-release-checks.yml`,
-  which invokes the reusable public workflow
-  `.github/workflows/openclaw-cross-os-release-checks-reusable.yml`
+- Cross-OS install and upgrade runtime validation is part of public
+  `OpenClaw Release Checks` and `Full Release Validation`, which call the
+  reusable workflow
+  `.github/workflows/openclaw-cross-os-release-checks-reusable.yml` directly
 - This split is intentional: keep the real npm release path short,
   deterministic, and artifact-focused, while slower live checks stay in their
   own lane so they do not stall or block publish
@@ -321,7 +320,7 @@ Release Docker coverage includes:
 - repository E2E lanes
 - release-path Docker chunks: `core`, `package-update`, and
   `plugins-integrations`
-- OpenWebUI coverage inside the plugins/integrations chunk
+- OpenWebUI coverage inside the `plugins-integrations` chunk when requested
 - live/E2E provider suites and Docker live model coverage when release checks
   include live suites
 
@@ -329,7 +328,9 @@ Use Docker artifacts before rerunning. The release-path scheduler uploads
 `.artifacts/docker-tests/` with lane logs, `summary.json`, `failures.json`,
 phase timings, scheduler plan JSON, and rerun commands. For focused recovery,
 use `docker_lanes=<lane[,lane]>` on the reusable live/E2E workflow instead of
-rerunning all release chunks.
+rerunning all release chunks. Generated rerun commands include prior
+`package_artifact_run_id` and prepared Docker image inputs when available, so a
+failed lane can reuse the same tarball and GHCR images.
 
 ### QA Lab
 
@@ -377,6 +378,15 @@ of the package/update coverage that previously required Parallels. Cross-OS
 release checks still matter for OS-specific onboarding, installer, and platform
 behavior, but package/update product validation should prefer Package
 Acceptance.
+
+Legacy package-acceptance leniency is intentionally time boxed. Packages through
+`2026.4.25` may use the compatibility path for metadata gaps already published
+to npm: private QA inventory entries missing from the tarball, missing
+`gateway install --wrapper`, missing patch files in the tarball-derived git
+fixture, missing persisted `update.channel`, legacy plugin install-record
+locations, missing marketplace install-record persistence, and config metadata
+migration during `plugins update`. Packages after `2026.4.25` must satisfy the
+modern package contracts; those same gaps fail release validation.
 
 Use broader Package Acceptance profiles when the release question is about an
 actual installable package:

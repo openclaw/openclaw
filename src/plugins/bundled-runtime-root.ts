@@ -2,9 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   ensureBundledPluginRuntimeDeps,
+  materializeBundledRuntimeMirrorDistFile,
   resolveBundledRuntimeDependencyInstallRoot,
   resolveBundledRuntimeDependencyPackageRoot,
   registerBundledRuntimeDependencyNodePath,
+  shouldMaterializeBundledRuntimeMirrorDistFile,
   withBundledRuntimeDepsFilesystemLock,
 } from "./bundled-runtime-deps.js";
 
@@ -137,6 +139,10 @@ function prepareBundledPluginRuntimeDistMirror(params: {
     }
     const sourcePath = path.join(sourceDistRoot, entry.name);
     const targetPath = path.join(mirrorDistRoot, entry.name);
+    if (entry.isFile() && shouldMaterializeBundledRuntimeMirrorDistFile(sourcePath)) {
+      materializeBundledRuntimeMirrorDistFile(sourcePath, targetPath);
+      continue;
+    }
     if (fs.existsSync(targetPath)) {
       continue;
     }

@@ -120,6 +120,22 @@ LOGINCTL
 	  fi
 	  git_cli="$git_root/openclaw.mjs"
 
+  package_version="$(node -p "require(\"$npm_root/package.json\").version")"
+  is_legacy_package_acceptance_compat() {
+    node - "$1" <<"NODE"
+const version = process.argv[2] || "";
+const match = /^(\d{4})\.(\d{1,2})\.(\d{1,2})(?:[-+].*)?$/.exec(version);
+if (!match) process.exit(1);
+const value = [Number(match[1]), Number(match[2]), Number(match[3])];
+const max = [2026, 4, 25];
+for (let i = 0; i < value.length; i += 1) {
+  if (value[i] < max[i]) process.exit(0);
+  if (value[i] > max[i]) process.exit(1);
+}
+process.exit(0);
+NODE
+  }
+
   assert_entrypoint() {
     local unit_path="$1"
     local expected="$2"
@@ -314,7 +330,11 @@ WRAPPER
 
   if "$npm_bin" gateway install --help 2>&1 | grep -q -- "--wrapper"; then
     run_wrapper_flow
-  else
+  elif is_legacy_package_acceptance_compat "$package_version"; then
+    # Legacy compatibility: 2026.4.25 and older did not ship gateway install --wrapper.
     echo "Skipping wrapper persistence; package gateway install does not support --wrapper."
+  else
+    echo "Package $package_version must support gateway install --wrapper." >&2
+    exit 1
   fi
 '

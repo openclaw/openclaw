@@ -77,8 +77,8 @@ pnpm openclaw qa matrix --profile fast --fail-fast
 - `transport`, `media`, `e2ee-smoke`, `e2ee-deep`, `e2ee-cli`: sharded full
   Matrix coverage.
 - `QA-Lab - All Lanes` uses explicit `fast` Matrix on scheduled runs. Manual
-  dispatch keeps `matrix_profile=all` as the default and can shard full Matrix
-  with `matrix_profile=all` and `matrix_shards=true`.
+  dispatch keeps `matrix_profile=all` as the default and always shards that full
+  Matrix selection.
 
 ## QA credentials and 1Password
 

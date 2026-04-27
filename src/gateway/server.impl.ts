@@ -30,6 +30,7 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import type { VoiceWakeRoutingConfig } from "../infra/voicewake-routing.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
+import { getActiveBundledRuntimeDepsInstallCount } from "../plugins/bundled-runtime-deps-activity.js";
 import { runGlobalGatewayStopSafely } from "../plugins/hook-runner-global.js";
 import { createRuntimeChannel } from "../plugins/runtime/runtime-channel.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
@@ -43,7 +44,6 @@ import {
   getInspectableTaskRegistrySummary,
   stopTaskRegistryMaintenance,
 } from "../tasks/task-registry.maintenance.js";
-import { runSetupWizard } from "../wizard/setup.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { closeMcpLoopbackServer } from "./mcp-http.js";
@@ -242,6 +242,13 @@ export type GatewayServerOptions = {
   startupStartedAt?: number;
 };
 
+type SetupWizardRunner = NonNullable<GatewayServerOptions["wizardRunner"]>;
+
+const runDefaultSetupWizard: SetupWizardRunner = async (...args) => {
+  const { runSetupWizard } = await import("../wizard/setup.js");
+  return runSetupWizard(...args);
+};
+
 export async function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
@@ -322,6 +329,7 @@ export async function startGatewayServer(
       getTotalQueueSize() +
       getTotalPendingReplies() +
       getActiveEmbeddedRunCount() +
+      getActiveBundledRuntimeDepsInstallCount() +
       getInspectableTaskRegistrySummary().active,
   );
   // Unconditional startup migration: seed gateway.controlUi.allowedOrigins for existing
@@ -458,7 +466,7 @@ export async function startGatewayServer(
     }),
   );
 
-  const wizardRunner = opts.wizardRunner ?? runSetupWizard;
+  const wizardRunner = opts.wizardRunner ?? runDefaultSetupWizard;
   const { wizardSessions, findRunningWizard, purgeWizardSession } = createWizardSessionTracker();
 
   const deps = createDefaultDeps();
