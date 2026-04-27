@@ -1,5 +1,4 @@
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { createNonExitingTypedRuntimeEnv } from "openclaw/plugin-sdk/testing";
+import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as resolveChannelsModule from "../resolve-channels.js";
 import * as resolveUsersModule from "../resolve-users.js";
@@ -29,7 +28,7 @@ describe("resolveDiscordAllowlistConfig", () => {
   });
 
   it("canonicalizes resolved user names to ids in runtime config", async () => {
-    const runtime = createNonExitingTypedRuntimeEnv<RuntimeEnv>();
+    const runtime = createNonExitingRuntimeEnv();
     const result = await resolveDiscordAllowlistConfig({
       token: "token",
       allowFrom: ["Alice", "111", "*"],
@@ -63,7 +62,7 @@ describe("resolveDiscordAllowlistConfig", () => {
         channelName: "missing-room",
       },
     ]);
-    const runtime = createNonExitingTypedRuntimeEnv<RuntimeEnv>();
+    const runtime = createNonExitingRuntimeEnv();
 
     await resolveDiscordAllowlistConfig({
       token: "token",
@@ -116,7 +115,7 @@ describe("resolveDiscordAllowlistConfig", () => {
       },
     ]);
 
-    const runtime = createNonExitingTypedRuntimeEnv<RuntimeEnv>();
+    const runtime = createNonExitingRuntimeEnv();
 
     await resolveDiscordAllowlistConfig({
       token: "token",

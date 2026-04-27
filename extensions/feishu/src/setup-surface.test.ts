@@ -1,5 +1,5 @@
 import {
-  createNonExitingTypedRuntimeEnv,
+  createNonExitingRuntimeEnv,
   createPluginSetupWizardConfigure,
   createPluginSetupWizardStatus,
   createTestWizardPrompter,
@@ -67,8 +67,6 @@ async function getStatusWithEnvRefs(params: { appIdKey: string; appSecretKey: st
 
 const feishuConfigure = createPluginSetupWizardConfigure(feishuPlugin);
 const feishuGetStatus = createPluginSetupWizardStatus(feishuPlugin);
-type FeishuConfigureRuntime = Parameters<typeof feishuConfigure>[0]["runtime"];
-
 describe("feishu setup wizard", () => {
   it("does not throw when config appId/appSecret are SecretRef objects", async () => {
     const text = vi
@@ -95,7 +93,7 @@ describe("feishu setup wizard", () => {
           },
         } as never,
         prompter,
-        runtime: createNonExitingTypedRuntimeEnv<FeishuConfigureRuntime>(),
+        runtime: createNonExitingRuntimeEnv(),
       }),
     ).resolves.toBeTruthy();
   });
