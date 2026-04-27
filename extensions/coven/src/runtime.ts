@@ -424,15 +424,14 @@ export class CovenAcpRuntime implements AcpRuntime {
     if (!sessionId) {
       return { summary: "coven runtime ready" };
     }
-    const session = await this.client.getSession(sessionId, input.signal);
     const status = sanitizeStatusField(session.status, "completed");
     const harness = sanitizeStatusField(session.harness);
     const title = sanitizeStatusField(session.title, "untitled");
+    const sessionId = sanitizeStatusField(session.id);
     return {
       summary: `${status} ${harness} ${title}`,
-      backendSessionId: session.id,
-      agentSessionId: session.id,
-      details: {
+      backendSessionId: sessionId,
+      agentSessionId: sessionId,
         projectRoot: sanitizeStatusField(session.projectRoot),
         harness,
         status,
