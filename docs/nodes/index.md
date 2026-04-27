@@ -7,14 +7,16 @@ read_when:
 title: "Nodes"
 ---
 
-# Nodes
-
 A **node** is a companion device (macOS/iOS/Android/headless) that connects to the Gateway **WebSocket** (same port as operators) with `role: "node"` and exposes a command surface (e.g. `canvas.*`, `camera.*`, `device.*`, `notifications.*`, `system.*`) via `node.invoke`. Protocol details: [Gateway protocol](/gateway/protocol).
 
 Legacy transport: [Bridge protocol](/gateway/bridge-protocol) (TCP JSONL;
 historical only for current nodes).
 
-macOS can also run in **node mode**: the menubar app connects to the Gateway’s WS server and exposes its local canvas/camera commands as a node (so `openclaw nodes …` works against this Mac).
+macOS can also run in **node mode**: the menubar app connects to the Gateway’s
+WS server and exposes its local canvas/camera commands as a node (so
+`openclaw nodes …` works against this Mac). In remote gateway mode, browser
+automation is handled by the CLI node host (`openclaw node run` or the
+installed node service), not by the native app node.
 
 Notes:
 
@@ -114,6 +116,7 @@ Notes:
 
 ```bash
 openclaw node install --host <gateway-host> --port 18789 --display-name "Build Node"
+openclaw node start
 openclaw node restart
 ```
 

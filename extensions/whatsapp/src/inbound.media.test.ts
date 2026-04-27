@@ -60,9 +60,9 @@ vi.mock("../../../src/pairing/pairing-store.js", () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
-    "openclaw/plugin-sdk/media-runtime",
+vi.mock("openclaw/plugin-sdk/media-store", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-store")>(
+    "openclaw/plugin-sdk/media-store",
   );
   return {
     ...actual,
@@ -167,6 +167,10 @@ describe("web inbound media saves with extension", () => {
   it("stores image extension and keeps document filename", async () => {
     const onMessage = vi.fn();
     const listener = await monitorWebInbox({
+      cfg: {
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        messages: { messagePrefix: undefined, responsePrefix: undefined },
+      } as never,
       verbose: false,
       onMessage,
       accountId: "default",
@@ -217,6 +221,10 @@ describe("web inbound media saves with extension", () => {
   it("passes mediaMaxMb to saveMediaBuffer", async () => {
     const onMessage = vi.fn();
     const listener = await monitorWebInbox({
+      cfg: {
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        messages: { messagePrefix: undefined, responsePrefix: undefined },
+      } as never,
       verbose: false,
       onMessage,
       mediaMaxMb: 1,

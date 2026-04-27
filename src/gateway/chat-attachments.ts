@@ -59,8 +59,8 @@ export type ParsedMessageWithImages = {
    * do not receive these as inline image blocks.
    *
    * ⚠️  Call sites (chat.ts, agent.ts, server-node-events.ts) MUST also pass
-   * `supportsImages: modelSupportsImages(model)` so that text-only model runs
-   * do not inject unresolvable media:// markers into prompt text.
+   * `supportsImages: modelSupportsImages(model)` so text-only model runs
+   * offload images as media refs instead of passing inline image blocks.
    */
   offloadedRefs: OffloadedRef[];
 };
@@ -82,6 +82,7 @@ type SavedMedia = {
 };
 
 const OFFLOAD_THRESHOLD_BYTES = 2_000_000;
+const TEXT_ONLY_OFFLOAD_LIMIT = 10;
 
 const MIME_TO_EXT: Record<string, string> = {
   "image/jpeg": ".jpg",
@@ -141,6 +142,19 @@ function isImageMime(mime?: string): boolean {
   return typeof mime === "string" && mime.startsWith("image/");
 }
 
+function isVideoMime(mime?: string): boolean {
+  return typeof mime === "string" && mime.startsWith("video/");
+}
+
+function isGenericMime(mime?: string): boolean {
+  return (
+    !mime ||
+    mime === "application/octet-stream" ||
+    mime === "binary/octet-stream" ||
+    mime === "application/unknown"
+  );
+}
+
 function isValidBase64(value: string): boolean {
   if (value.length === 0 || value.length % 4 !== 0) {
     return false;
@@ -158,7 +172,7 @@ function isValidBase64(value: string): boolean {
  * Node's Buffer.from silently drops invalid base64 characters rather than
  * throwing. A material size discrepancy means the source string contained
  * embedded garbage that was silently stripped, which would produce a corrupted
- * file on disk. ±3 bytes of slack accounts for base64 padding rounding.
+ * file on disk. ±3 bytes of leeway accounts for base64 padding rounding.
  *
  * IMPORTANT: this is an input-validation check (4xx client error).
  * It MUST be called OUTSIDE the MediaOffloadError try/catch so that
@@ -271,12 +285,9 @@ function validateAttachmentBase64OrThrow(
  * because they are not passed inline to the model.
  *
  * ## Text-only model runs
- * Pass `supportsImages: false` for text-only model runs so that no media://
- * markers are injected into prompt text.
- *
- * ⚠️  Call sites in chat.ts, agent.ts, and server-node-events.ts MUST be
- * updated to pass `supportsImages: modelSupportsImages(model)`. Until they do,
- * text-only model runs receive unresolvable media:// markers in their prompt.
+ * Pass `supportsImages: false` for text-only model runs so images are offloaded
+ * as `media://inbound/<id>` refs instead of being sent as inline image blocks.
+ * The agent runner can then resolve the refs through the normal media path.
  *
  * ## Cleanup on failure
  * On any parse failure after files have already been offloaded, best-effort
@@ -304,22 +315,12 @@ export async function parseMessageWithAttachments(
     return { message, images: [], imageOrder: [], offloadedRefs: [] };
   }
 
-  // For text-only models drop all attachments cleanly. Do not save files or
-  // inject media:// markers that would never be resolved and would leak
-  // internal path references into the model's prompt.
-  if (opts?.supportsImages === false) {
-    if (attachments.length > 0) {
-      log?.warn(
-        `parseMessageWithAttachments: ${attachments.length} attachment(s) dropped — model does not support images`,
-      );
-    }
-    return { message, images: [], imageOrder: [], offloadedRefs: [] };
-  }
-
   const images: ChatImageContent[] = [];
   const imageOrder: PromptImageOrderEntry[] = [];
   const offloadedRefs: OffloadedRef[] = [];
   let updatedMessage = message;
+  const shouldForceOffload = opts?.supportsImages === false;
+  let textOnlyImageOffloadCount = 0;
 
   // Track IDs of files saved during this request for cleanup if a later
   // attachment fails validation and the entire parse is aborted.
@@ -357,15 +358,54 @@ export async function parseMessageWithAttachments(
       const providedMime = normalizeMime(mime);
       const sniffedMime = normalizeMime(await sniffMimeFromBase64(b64));
 
-      if (sniffedMime && !isImageMime(sniffedMime)) {
+      if (sniffedMime && !isImageMime(sniffedMime) && isImageMime(providedMime)) {
         log?.warn(`attachment ${label}: detected non-image (${sniffedMime}), dropping`);
         continue;
       }
-      if (!sniffedMime && !isImageMime(providedMime)) {
-        log?.warn(`attachment ${label}: unable to detect image mime type, dropping`);
+
+      const shouldHandleAsImage =
+        isImageMime(sniffedMime) || (isImageMime(providedMime) && !sniffedMime);
+      if (!shouldHandleAsImage) {
+        const finalMime = sniffedMime ?? providedMime ?? "application/octet-stream";
+        if (isVideoMime(finalMime)) {
+          log?.warn(`attachment ${label}: video attachments are not supported, dropping`);
+          continue;
+        }
+
+        const buffer = Buffer.from(b64, "base64");
+        verifyDecodedSize(buffer, sizeBytes, label);
+
+        try {
+          const rawResult = await saveMediaBuffer(buffer, finalMime, "inbound", maxBytes, label);
+          const savedMedia = assertSavedMedia(rawResult, label);
+          savedMediaIds.push(savedMedia.id);
+
+          const mediaRef = `media://inbound/${savedMedia.id}`;
+          updatedMessage += `\n[media attached: ${mediaRef}]`;
+          log?.info?.(`[Gateway] Saved file attachment. Saved: ${mediaRef}`);
+          offloadedRefs.push({
+            mediaRef,
+            id: savedMedia.id,
+            path: savedMedia.path ?? "",
+            mimeType: finalMime,
+            label,
+          });
+          imageOrder.push("offloaded");
+        } catch (err) {
+          const errorMessage = formatErrorMessage(err);
+          throw new MediaOffloadError(
+            `[Gateway Error] Failed to save intercepted media to disk: ${errorMessage}`,
+            { cause: err },
+          );
+        }
         continue;
       }
-      if (sniffedMime && providedMime && sniffedMime !== providedMime) {
+      if (
+        sniffedMime &&
+        providedMime &&
+        !isGenericMime(providedMime) &&
+        sniffedMime !== providedMime
+      ) {
         log?.warn(
           `attachment ${label}: mime mismatch (${providedMime} -> ${sniffedMime}), using sniffed`,
         );
@@ -377,10 +417,26 @@ export async function parseMessageWithAttachments(
 
       let isOffloaded = false;
 
-      if (sizeBytes > OFFLOAD_THRESHOLD_BYTES) {
+      if (shouldForceOffload && textOnlyImageOffloadCount >= TEXT_ONLY_OFFLOAD_LIMIT) {
+        log?.warn(
+          `attachment ${label}: dropping image because text-only offload limit ` +
+            `${TEXT_ONLY_OFFLOAD_LIMIT} was reached`,
+        );
+        updatedMessage += "\n[image attachment omitted: text-only attachment limit reached]";
+        continue;
+      }
+
+      if (shouldForceOffload || sizeBytes > OFFLOAD_THRESHOLD_BYTES) {
         const isSupportedForOffload = SUPPORTED_OFFLOAD_MIMES.has(finalMime);
 
         if (!isSupportedForOffload) {
+          if (shouldForceOffload) {
+            log?.warn(
+              `attachment ${label}: format ${finalMime} cannot be offloaded for ` +
+                "text-only model, dropping",
+            );
+            continue;
+          }
           // Passing this inline would reintroduce the OOM risk this PR prevents.
           throw new Error(
             `attachment ${label}: format ${finalMime} is too large to pass inline ` +
@@ -418,7 +474,11 @@ export async function parseMessageWithAttachments(
           const mediaRef = `media://inbound/${savedMedia.id}`;
 
           updatedMessage += `\n[media attached: ${mediaRef}]`;
-          log?.info?.(`[Gateway] Intercepted large image payload. Saved: ${mediaRef}`);
+          log?.info?.(
+            shouldForceOffload
+              ? `[Gateway] Offloaded image for text-only model. Saved: ${mediaRef}`
+              : `[Gateway] Intercepted large image payload. Saved: ${mediaRef}`,
+          );
 
           // Record for transcript metadata — separate from `images` because
           // these are not passed inline to the model.
@@ -430,6 +490,9 @@ export async function parseMessageWithAttachments(
             label,
           });
           imageOrder.push("offloaded");
+          if (shouldForceOffload) {
+            textOnlyImageOffloadCount++;
+          }
 
           isOffloaded = true;
         } catch (err) {

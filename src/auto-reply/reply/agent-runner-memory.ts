@@ -361,6 +361,7 @@ export async function runPreflightCompactionIfNeeded(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
+  runtimePolicySessionKey?: string;
   storePath?: string;
   isHeartbeat: boolean;
   replyOperation: ReplyOperation;
@@ -463,6 +464,7 @@ export async function runPreflightCompactionIfNeeded(params: {
   const result = await memoryDeps.compactEmbeddedPiSession({
     sessionId: entry.sessionId,
     sessionKey: params.sessionKey,
+    sandboxSessionKey: params.runtimePolicySessionKey,
     allowGatewaySubagentBinding: true,
     messageChannel: params.followupRun.run.messageProvider,
     groupId: entry.groupId ?? params.followupRun.run.groupId,
@@ -479,6 +481,8 @@ export async function runPreflightCompactionIfNeeded(params: {
     skillsSnapshot: entry.skillsSnapshot ?? params.followupRun.run.skillsSnapshot,
     provider: params.followupRun.run.provider,
     model: params.followupRun.run.model,
+    agentHarnessId:
+      entry.sessionId === params.followupRun.run.sessionId ? entry.agentHarnessId : undefined,
     thinkLevel: params.followupRun.run.thinkLevel,
     bashElevated: params.followupRun.run.bashElevated,
     trigger: "budget",
@@ -523,6 +527,7 @@ export async function runMemoryFlushIfNeeded(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
+  runtimePolicySessionKey?: string;
   storePath?: string;
   isHeartbeat: boolean;
   replyOperation: ReplyOperation;
@@ -538,7 +543,7 @@ export async function runMemoryFlushIfNeeded(params: {
     }
     const runtime = resolveSandboxRuntimeStatus({
       cfg: params.cfg,
-      sessionKey: params.sessionKey,
+      sessionKey: params.runtimePolicySessionKey ?? params.sessionKey,
     });
     if (!runtime.sandboxed) {
       return true;
@@ -762,6 +767,7 @@ export async function runMemoryFlushIfNeeded(params: {
           ...embeddedContext,
           ...senderContext,
           ...runBaseParams,
+          sandboxSessionKey: params.runtimePolicySessionKey,
           allowGatewaySubagentBinding: true,
           silentExpected: true,
           trigger: "memory",

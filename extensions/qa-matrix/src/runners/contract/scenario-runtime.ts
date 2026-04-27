@@ -9,15 +9,30 @@ import {
   runDmThreadReplyOverrideScenario,
 } from "./scenario-runtime-dm.js";
 import {
+  runMatrixQaE2eeCorruptCryptoIdbSnapshotScenario,
+  runMatrixQaE2eeHistoryExistsBackupEmptyScenario,
+  runMatrixQaE2eeServerBackupDeletedLocalStateIntactScenario,
+  runMatrixQaE2eeServerBackupDeletedLocalReuploadRestoresScenario,
+  runMatrixQaE2eeServerDeviceDeletedLocalStateIntactScenario,
+  runMatrixQaE2eeStaleRecoveryKeyAfterBackupResetScenario,
+  runMatrixQaE2eeStateLossExternalRecoveryKeyScenario,
+  runMatrixQaE2eeStateLossNoRecoveryKeyScenario,
+  runMatrixQaE2eeStateLossStoredRecoveryKeyScenario,
+  runMatrixQaE2eeSyncStateLossCryptoIntactScenario,
+  runMatrixQaE2eeWrongAccountRecoveryKeyScenario,
+} from "./scenario-runtime-e2ee-destructive.js";
+import {
   runMatrixQaE2eeArtifactRedactionScenario,
   runMatrixQaE2eeBasicReplyScenario,
   runMatrixQaE2eeBootstrapSuccessScenario,
+  runMatrixQaE2eeCliSelfVerificationScenario,
   runMatrixQaE2eeDeviceSasVerificationScenario,
   runMatrixQaE2eeDmSasVerificationScenario,
   runMatrixQaE2eeKeyBootstrapFailureScenario,
   runMatrixQaE2eeMediaImageScenario,
   runMatrixQaE2eeQrVerificationScenario,
   runMatrixQaE2eeRecoveryKeyLifecycleScenario,
+  runMatrixQaE2eeRecoveryOwnerVerificationRequiredScenario,
   runMatrixQaE2eeRestartResumeScenario,
   runMatrixQaE2eeStaleDeviceHygieneScenario,
   runMatrixQaE2eeThreadFollowUpScenario,
@@ -308,6 +323,32 @@ export async function runMatrixQaScenario(
       return await runMatrixQaE2eeBootstrapSuccessScenario(context);
     case "matrix-e2ee-recovery-key-lifecycle":
       return await runMatrixQaE2eeRecoveryKeyLifecycleScenario(context);
+    case "matrix-e2ee-recovery-owner-verification-required":
+      return await runMatrixQaE2eeRecoveryOwnerVerificationRequiredScenario(context);
+    case "matrix-e2ee-cli-self-verification":
+      return await runMatrixQaE2eeCliSelfVerificationScenario(context);
+    case "matrix-e2ee-state-loss-external-recovery-key":
+      return await runMatrixQaE2eeStateLossExternalRecoveryKeyScenario(context);
+    case "matrix-e2ee-state-loss-stored-recovery-key":
+      return await runMatrixQaE2eeStateLossStoredRecoveryKeyScenario(context);
+    case "matrix-e2ee-state-loss-no-recovery-key":
+      return await runMatrixQaE2eeStateLossNoRecoveryKeyScenario(context);
+    case "matrix-e2ee-stale-recovery-key-after-backup-reset":
+      return await runMatrixQaE2eeStaleRecoveryKeyAfterBackupResetScenario(context);
+    case "matrix-e2ee-server-backup-deleted-local-state-intact":
+      return await runMatrixQaE2eeServerBackupDeletedLocalStateIntactScenario(context);
+    case "matrix-e2ee-server-backup-deleted-local-reupload-restores":
+      return await runMatrixQaE2eeServerBackupDeletedLocalReuploadRestoresScenario(context);
+    case "matrix-e2ee-corrupt-crypto-idb-snapshot":
+      return await runMatrixQaE2eeCorruptCryptoIdbSnapshotScenario(context);
+    case "matrix-e2ee-server-device-deleted-local-state-intact":
+      return await runMatrixQaE2eeServerDeviceDeletedLocalStateIntactScenario(context);
+    case "matrix-e2ee-sync-state-loss-crypto-intact":
+      return await runMatrixQaE2eeSyncStateLossCryptoIntactScenario(context);
+    case "matrix-e2ee-wrong-account-recovery-key":
+      return await runMatrixQaE2eeWrongAccountRecoveryKeyScenario(context);
+    case "matrix-e2ee-history-exists-backup-empty":
+      return await runMatrixQaE2eeHistoryExistsBackupEmptyScenario(context);
     case "matrix-e2ee-device-sas-verification":
       return await runMatrixQaE2eeDeviceSasVerificationScenario(context);
     case "matrix-e2ee-qr-verification":

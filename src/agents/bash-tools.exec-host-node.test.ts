@@ -148,6 +148,7 @@ let executeNodeHostCommand: typeof import("./bash-tools.exec-host-node.js").exec
 
 type MockNodeInvokeParams = {
   command?: string;
+  params?: Record<string, unknown>;
 };
 
 describe("executeNodeHostCommand", () => {
@@ -237,6 +238,13 @@ describe("executeNodeHostCommand", () => {
   });
 
   it("forwards prepared systemRunPlan on async node invoke after approval", async () => {
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "full",
+      hostAsk: "always",
+      askFallback: "deny",
+    });
+
     const result = await executeNodeHostCommand({
       command: "bun ./script.ts",
       workdir: "/tmp/work",
@@ -258,11 +266,11 @@ describe("executeNodeHostCommand", () => {
     );
 
     await vi.waitFor(() => {
-      expect(callGatewayToolMock).toHaveBeenCalledTimes(2);
+      expect(callGatewayToolMock).toHaveBeenCalledTimes(3);
     });
 
     expect(callGatewayToolMock).toHaveBeenNthCalledWith(
-      2,
+      3,
       "node.invoke",
       expect.anything(),
       expect.objectContaining({
@@ -271,6 +279,45 @@ describe("executeNodeHostCommand", () => {
           approved: true,
           approvalDecision: "allow-once",
           systemRunPlan: preparedPlan,
+        }),
+      }),
+    );
+  });
+
+  it("skips approval prepare in full/off mode", async () => {
+    await executeNodeHostCommand({
+      command: "bun ./script.ts",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "off",
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+      notifyOnExit: false,
+    });
+
+    expect(callGatewayToolMock).toHaveBeenCalledTimes(1);
+    expect(callGatewayToolMock).toHaveBeenCalledWith(
+      "node.invoke",
+      expect.anything(),
+      expect.objectContaining({
+        command: "system.run",
+        params: expect.objectContaining({
+          command: ["bash", "-lc", "bun ./script.ts"],
+          rawCommand: "bun ./script.ts",
+          suppressNotifyOnExit: true,
+        }),
+      }),
+    );
+    expect(callGatewayToolMock).toHaveBeenCalledWith(
+      "node.invoke",
+      expect.anything(),
+      expect.objectContaining({
+        params: expect.not.objectContaining({
+          systemRunPlan: expect.anything(),
         }),
       }),
     );

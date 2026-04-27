@@ -145,6 +145,19 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts agents.defaults.compaction.truncateAfterCompaction", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          compaction: {
+            truncateAfterCompaction: true,
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
   it("accepts string values for agents defaults model inputs", () => {
     const res = validateConfigObject({
       agents: {
@@ -200,6 +213,28 @@ describe("config schema regressions", () => {
     });
 
     expect(res.ok).toBe(true);
+  });
+
+  it("accepts browser local startup timeout settings", () => {
+    const res = validateConfigObject({
+      browser: {
+        localLaunchTimeoutMs: 45_000,
+        localCdpReadyTimeoutMs: 30_000,
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects out-of-range browser local startup timeout settings", () => {
+    const res = validateConfigObject({
+      browser: {
+        localLaunchTimeoutMs: 120_001,
+        localCdpReadyTimeoutMs: 0,
+      },
+    });
+
+    expect(res.ok).toBe(false);
   });
 
   it("rejects browser.extraArgs with non-array value", () => {

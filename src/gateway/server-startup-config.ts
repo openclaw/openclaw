@@ -8,6 +8,8 @@ import {
   isNixMode,
   readConfigFileSnapshot,
   recoverConfigFromLastKnownGood,
+  recoverConfigFromJsonRootSuffix,
+  shouldAttemptLastKnownGoodRecovery,
   writeConfigFile,
 } from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
@@ -69,10 +71,18 @@ export async function loadGatewayStartupConfigSnapshot(params: {
   }
   if (configSnapshot.exists) {
     if (!configSnapshot.valid) {
-      const recovered = await recoverConfigFromLastKnownGood({
-        snapshot: configSnapshot,
-        reason: "startup-invalid-config",
-      });
+      const canRecoverFromLastKnownGood = shouldAttemptLastKnownGoodRecovery(configSnapshot);
+      const recovered = canRecoverFromLastKnownGood
+        ? await recoverConfigFromLastKnownGood({
+            snapshot: configSnapshot,
+            reason: "startup-invalid-config",
+          })
+        : false;
+      if (!canRecoverFromLastKnownGood) {
+        params.log.warn(
+          `gateway: last-known-good recovery skipped for plugin-local config invalidity: ${configSnapshot.path}`,
+        );
+      }
       if (recovered) {
         wroteConfig = true;
         params.log.warn(
@@ -87,6 +97,13 @@ export async function loadGatewayStartupConfigSnapshot(params: {
             configPath: configSnapshot.path,
           });
         }
+      }
+      if (!recovered && (await recoverConfigFromJsonRootSuffix(configSnapshot))) {
+        wroteConfig = true;
+        params.log.warn(
+          `gateway: invalid config was repaired by stripping a non-JSON prefix: ${configSnapshot.path}`,
+        );
+        configSnapshot = await readConfigFileSnapshot();
       }
     }
     assertValidGatewayStartupConfigSnapshot(configSnapshot, { includeDoctorHint: true });

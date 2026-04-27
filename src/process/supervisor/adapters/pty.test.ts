@@ -20,24 +20,36 @@ vi.mock("../../kill-tree.js", () => ({
 
 function createStubPty(pid = 1234) {
   let exitListener: ((event: { exitCode: number; signal?: number }) => void) | null = null;
+  const disposeData = vi.fn();
+  const disposeExit = vi.fn();
   return {
     pid,
     write: vi.fn(),
-    onData: vi.fn(() => ({ dispose: vi.fn() })),
+    onData: vi.fn(() => ({ dispose: disposeData })),
     onExit: vi.fn((listener: (event: { exitCode: number; signal?: number }) => void) => {
       exitListener = listener;
-      return { dispose: vi.fn() };
+      return { dispose: disposeExit };
     }),
     kill: (signal?: string) => ptyKillMock(signal),
     emitExit: (event: { exitCode: number; signal?: number }) => {
       exitListener?.(event);
     },
+    disposeData,
+    disposeExit,
   };
 }
 
 function expectSpawnEnv() {
   const spawnOptions = spawnMock.mock.calls[0]?.[2] as { env?: Record<string, string> };
   return spawnOptions?.env;
+}
+
+function expectSpawnCommand() {
+  return spawnMock.mock.calls[0]?.[0] as string | undefined;
+}
+
+function expectSpawnArgs() {
+  return spawnMock.mock.calls[0]?.[1] as string[] | undefined;
 }
 
 describe("createPtyAdapter", () => {
@@ -143,16 +155,71 @@ describe("createPtyAdapter", () => {
     await expect(adapter.wait()).resolves.toEqual({ code: 3, signal: null });
   });
 
-  it("keeps inherited env when no override env is provided", async () => {
+  it("disposes PTY listeners", async () => {
     const stub = createStubPty();
     spawnMock.mockReturnValue(stub);
 
-    await createPtyAdapter({
+    const adapter = await createPtyAdapter({
       shell: "bash",
-      args: ["-lc", "env"],
+      args: ["-lc", "echo ok"],
     });
+    adapter.onStdout(() => undefined);
 
-    expect(expectSpawnEnv()).toBeUndefined();
+    adapter.dispose();
+
+    expect(stub.disposeData).toHaveBeenCalledTimes(1);
+    expect(stub.disposeExit).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps inherited env when no override env is provided on non-Linux", async () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+    try {
+      const stub = createStubPty();
+      spawnMock.mockReturnValue(stub);
+
+      await createPtyAdapter({
+        shell: "bash",
+        args: ["-lc", "env"],
+      });
+
+      expect(expectSpawnCommand()).toBe("bash");
+      expect(expectSpawnArgs()).toEqual(["-lc", "env"]);
+      expect(expectSpawnEnv()).toBeUndefined();
+    } finally {
+      if (originalPlatform) {
+        Object.defineProperty(process, "platform", originalPlatform);
+      }
+    }
+  });
+
+  it("wraps Linux PTY spawns so shell children inherit higher OOM score", async () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    try {
+      const stub = createStubPty();
+      spawnMock.mockReturnValue(stub);
+
+      await createPtyAdapter({
+        shell: "bash",
+        args: ["-lc", "env"],
+        env: { PATH: "/usr/bin", BASH_ENV: "/tmp/bashenv" },
+      });
+    } finally {
+      if (originalPlatform) {
+        Object.defineProperty(process, "platform", originalPlatform);
+      }
+    }
+
+    expect(expectSpawnCommand()).toBe("/bin/sh");
+    expect(expectSpawnArgs()).toEqual([
+      "-c",
+      'echo 1000 > /proc/self/oom_score_adj 2>/dev/null; exec "$0" "$@"',
+      "bash",
+      "-lc",
+      "env",
+    ]);
+    expect(expectSpawnEnv()).toEqual({ PATH: "/usr/bin" });
   });
 
   it("passes explicit env overrides as strings", async () => {

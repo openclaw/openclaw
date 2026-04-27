@@ -19,7 +19,8 @@ import {
   isBundledManifestOwner,
   passesManifestOwnerBasePolicy,
 } from "./manifest-owner-policy.js";
-import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 
 const IGNORED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
 
@@ -322,6 +323,39 @@ function addPolicySignal(
   sources.add(source);
 }
 
+function listDisabledChannelIdsForConfig(config: OpenClawConfig): string[] {
+  const channels = config.channels;
+  if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
+    return [];
+  }
+  return Object.entries(channels)
+    .filter(([, value]) => {
+      return (
+        value &&
+        typeof value === "object" &&
+        !Array.isArray(value) &&
+        (value as { enabled?: unknown }).enabled === false
+      );
+    })
+    .map(([channelId]) => normalizeOptionalLowercaseString(channelId))
+    .filter((channelId): channelId is string => Boolean(channelId));
+}
+
+function loadInstalledChannelManifestRecords(params: {
+  config: OpenClawConfig;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+  cache?: boolean;
+}): readonly PluginManifestRecord[] {
+  return loadPluginManifestRegistryForPluginRegistry({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    cache: params.cache,
+    includeDisabled: true,
+  }).plugins;
+}
+
 export function resolveConfiguredChannelPresencePolicy(params: {
   config: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
@@ -337,13 +371,14 @@ export function resolveConfiguredChannelPresencePolicy(params: {
     resolveAgentWorkspaceDir(params.config, resolveDefaultAgentId(params.config));
   const records =
     params.manifestRecords ??
-    loadPluginManifestRegistry({
+    loadInstalledChannelManifestRecords({
       config: params.config,
       workspaceDir,
       env,
       cache: params.cache,
-    }).plugins;
+    });
 
+  const disabledChannelIds = new Set(listDisabledChannelIdsForConfig(params.config));
   const entrySources = new Map<string, Set<ConfiguredChannelPresenceSource>>();
   for (const channelId of listExplicitConfiguredChannelIdsForConfig(params.config)) {
     addPolicySignal(entrySources, channelId, "explicit-config");
@@ -363,6 +398,9 @@ export function resolveConfiguredChannelPresencePolicy(params: {
     env,
   })) {
     addPolicySignal(entrySources, signal.channelId, signal.source);
+  }
+  for (const channelId of disabledChannelIds) {
+    entrySources.delete(channelId);
   }
 
   const activationSource = createPluginActivationSource({
@@ -428,22 +466,7 @@ export function listConfiguredAnnounceChannelIdsForConfig(params: {
   env?: NodeJS.ProcessEnv;
   cache?: boolean;
 }): string[] {
-  const channels = params.config.channels;
-  const disabledChannelIds = new Set(
-    channels && typeof channels === "object" && !Array.isArray(channels)
-      ? Object.entries(channels)
-          .filter(([, value]) => {
-            return (
-              value &&
-              typeof value === "object" &&
-              !Array.isArray(value) &&
-              (value as { enabled?: unknown }).enabled === false
-            );
-          })
-          .map(([channelId]) => normalizeOptionalLowercaseString(channelId))
-          .filter((channelId): channelId is string => Boolean(channelId))
-      : [],
-  );
+  const disabledChannelIds = new Set(listDisabledChannelIdsForConfig(params.config));
   return normalizeChannelIds([
     ...listExplicitConfiguredChannelIdsForConfig(params.config),
     ...listConfiguredChannelIdsForReadOnlyScope({
@@ -464,17 +487,20 @@ function resolveScopedChannelOwnerPluginIds(params: {
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
   cache?: boolean;
+  manifestRecords?: readonly PluginManifestRecord[];
 }): string[] {
   const channelIds = normalizeChannelIds(params.channelIds);
   if (channelIds.length === 0) {
     return [];
   }
-  const registry = loadPluginManifestRegistry({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    cache: params.cache,
-  });
+  const records =
+    params.manifestRecords ??
+    loadInstalledChannelManifestRecords({
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      cache: params.cache,
+    });
   const trustConfig = params.activationSourceConfig ?? params.config;
   const normalizedConfig = normalizePluginsConfig(trustConfig.plugins);
   const candidateIds = dedupeSortedPluginIds(
@@ -488,6 +514,7 @@ function resolveScopedChannelOwnerPluginIds(params: {
         workspaceDir: params.workspaceDir,
         env: params.env,
         cache: params.cache,
+        manifestRecords: records,
       });
     }),
   );
@@ -495,7 +522,7 @@ function resolveScopedChannelOwnerPluginIds(params: {
     return [];
   }
   const candidateIdSet = new Set(candidateIds);
-  return registry.plugins
+  return records
     .filter((plugin) => {
       if (!candidateIdSet.has(plugin.id)) {
         return false;
@@ -518,6 +545,7 @@ export function resolveDiscoverableScopedChannelPluginIds(params: {
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
   cache?: boolean;
+  manifestRecords?: readonly PluginManifestRecord[];
 }): string[] {
   return resolveScopedChannelOwnerPluginIds(params);
 }

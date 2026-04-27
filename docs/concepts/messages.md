@@ -7,8 +7,6 @@ read_when:
 title: "Messages"
 ---
 
-# Messages
-
 This page ties together how OpenClaw handles inbound messages, sessions, queueing,
 streaming, and reasoning visibility.
 
@@ -78,6 +76,19 @@ conversations to avoid divergent context. The Control UI and TUI always show the
 gateway-backed session transcript, so they are the source of truth.
 
 Details: [Session management](/concepts/session).
+
+## Tool result metadata
+
+Tool result `content` is the model-visible result. Tool result `details` is
+runtime metadata for UI rendering, diagnostics, media delivery, and plugins.
+
+OpenClaw keeps that boundary explicit:
+
+- `toolResult.details` is stripped before provider replay and compaction input.
+- Persisted session transcripts keep only bounded `details`; oversized metadata
+  is replaced with a compact summary marked `persistedDetailsTruncated: true`.
+- Plugins and tools should put text the model must read in `content`, not only
+  in `details`.
 
 ## Inbound bodies and history context
 
@@ -151,11 +162,13 @@ Outbound message formatting is centralized in `messages`:
 - `messages.responsePrefix`, `channels.<channel>.responsePrefix`, and `channels.<channel>.accounts.<id>.responsePrefix` (outbound prefix cascade), plus `channels.whatsapp.messagePrefix` (WhatsApp inbound prefix)
 - Reply threading via `replyToMode` and per-channel defaults
 
-Details: [Configuration](/gateway/configuration-reference#messages) and channel docs.
+Details: [Configuration](/gateway/config-agents#messages) and channel docs.
 
 ## Silent replies
 
 The exact silent token `NO_REPLY` / `no_reply` means “do not deliver a user-visible reply”.
+When a turn also has pending tool media, such as generated TTS audio, OpenClaw
+strips the silent text but still delivers the media attachment.
 OpenClaw resolves that behavior by conversation type:
 
 - Direct conversations disallow silence by default and rewrite a bare silent
@@ -163,9 +176,18 @@ OpenClaw resolves that behavior by conversation type:
 - Groups/channels allow silence by default.
 - Internal orchestration allows silence by default.
 
+OpenClaw also uses silent replies for internal runner failures that happen
+before any assistant reply in non-direct chats, so groups/channels do not see
+gateway error boilerplate. Direct chats show compact failure copy by default;
+raw runner details are shown only when `/verbose` is `on` or `full`.
+
 Defaults live under `agents.defaults.silentReply` and
 `agents.defaults.silentReplyRewrite`; `surfaces.<id>.silentReply` and
 `surfaces.<id>.silentReplyRewrite` can override them per surface.
+
+When the parent session has one or more pending spawned subagent runs, bare
+silent replies are dropped on all surfaces instead of being rewritten, so the
+parent stays quiet until the child completion event delivers the real reply.
 
 ## Related
 
