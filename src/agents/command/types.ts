@@ -4,7 +4,6 @@ import type { PromptMode } from "../../agents/system-prompt.types.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
-import type { EmbeddedPiRunMeta } from "../pi-embedded-runner/types.js";
 import type { AgentStreamParams, ClientToolDefinition } from "./shared-types.js";
 
 /** Image content block for Claude API multimodal messages. */
@@ -15,9 +14,10 @@ export type ImageContent = {
 };
 export type { AgentStreamParams } from "./shared-types.js";
 
-export type AgentCommandResultMetaOverrides = Partial<
-  Pick<EmbeddedPiRunMeta, "transport" | "fallbackFrom">
->;
+export type AgentCommandResultMetaOverrides = {
+  transport?: "embedded";
+  fallbackFrom?: "gateway";
+};
 
 export type AgentRunContext = {
   messageChannel?: string;

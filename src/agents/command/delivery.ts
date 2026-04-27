@@ -26,7 +26,8 @@ import type { OutboundSessionContext } from "../../infra/outbound/session-contex
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { isNestedAgentLane } from "../lanes.js";
-import type { AgentCommandOpts } from "./types.js";
+import type { EmbeddedPiRunMeta } from "../pi-embedded-runner/types.js";
+import type { AgentCommandOpts, AgentCommandResultMetaOverrides } from "./types.js";
 
 type RunResult = Awaited<ReturnType<(typeof import("../pi-embedded.js"))["runEmbeddedPiAgent"]>>;
 
@@ -70,9 +71,9 @@ function logNestedOutput(
 }
 
 function mergeResultMetaOverrides(
-  meta: RunResult["meta"],
-  overrides: AgentCommandOpts["resultMetaOverrides"],
-): RunResult["meta"] {
+  meta: EmbeddedPiRunMeta,
+  overrides: AgentCommandResultMetaOverrides | undefined,
+): EmbeddedPiRunMeta & AgentCommandResultMetaOverrides {
   if (!overrides) {
     return meta;
   }
