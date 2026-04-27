@@ -10,21 +10,26 @@ export {
   projectConfigOntoRuntimeSourceSnapshot,
   loadConfig,
   readBestEffortConfig,
+  readSourceConfigBestEffort,
   parseConfigJson5,
+  promoteConfigSnapshotToLastKnownGood,
   readConfigFileSnapshot,
   readConfigFileSnapshotForWrite,
   readSourceConfigSnapshot,
   readSourceConfigSnapshotForWrite,
+  recoverConfigFromLastKnownGood,
+  recoverConfigFromJsonRootSuffix,
   resetConfigRuntimeState,
   resolveConfigSnapshotHash,
+  selectApplicableRuntimeConfig,
   setRuntimeConfigSnapshotRefreshHandler,
   setRuntimeConfigSnapshot,
   writeConfigFile,
 } from "./io.js";
 export type { ConfigWriteNotification } from "./io.js";
-export { migrateLegacyConfig } from "./legacy-migrate.js";
 export { ConfigMutationConflictError, mutateConfigFile, replaceConfigFile } from "./mutate.js";
 export * from "./paths.js";
+export * from "./recovery-policy.js";
 export * from "./runtime-overrides.js";
 export * from "./types.js";
 export {

@@ -3,6 +3,12 @@
       - any-glob-to-any-file:
           - "extensions/bluebubbles/**"
           - "docs/channels/bluebubbles.md"
+"plugin: azure-speech":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/azure-speech/**"
+          - "docs/providers/azure-speech.md"
+          - "docs/tools/tts.md"
 "channel: discord":
   - changed-files:
       - any-glob-to-any-file:
@@ -24,6 +30,16 @@
       - any-glob-to-any-file:
           - "extensions/googlechat/**"
           - "docs/channels/googlechat.md"
+"plugin: google-meet":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/google-meet/**"
+          - "docs/plugins/google-meet.md"
+"plugin: bonjour":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/bonjour/**"
+          - "docs/gateway/bonjour.md"
 "channel: imessage":
   - changed-files:
       - any-glob-to-any-file:
@@ -64,6 +80,17 @@
       - any-glob-to-any-file:
           - "extensions/qqbot/**"
           - "docs/channels/qqbot.md"
+"channel: qa-channel":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/qa-channel/**"
+          - "docs/channels/qa-channel.md"
+"extensions: qa-lab":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/qa-lab/**"
+          - "docs/concepts/qa-e2e-automation.md"
+          - "docs/channels/qa-channel.md"
 "channel: signal":
   - changed-files:
       - any-glob-to-any-file:
@@ -206,6 +233,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/diagnostics-otel/**"
+"extensions: diagnostics-prometheus":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/diagnostics-prometheus/**"
 "extensions: llm-task":
   - changed-files:
       - any-glob-to-any-file:
@@ -222,10 +253,22 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/memory-lancedb/**"
+"extensions: memory-wiki":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/memory-wiki/**"
 "extensions: open-prose":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/open-prose/**"
+"extensions: tokenjuice":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/tokenjuice/**"
+"extensions: webhooks":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/webhooks/**"
 "extensions: device-pair":
   - changed-files:
       - any-glob-to-any-file:
@@ -238,6 +281,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/acpx/**"
+"extensions: arcee":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/arcee/**"
 "extensions: byteplus":
   - changed-files:
       - any-glob-to-any-file:
@@ -246,6 +293,14 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/deepseek/**"
+"extensions: tencent":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/tencent/**"
+"extensions: stepfun":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/stepfun/**"
 "extensions: anthropic":
   - changed-files:
       - any-glob-to-any-file:
@@ -262,14 +317,32 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/huggingface/**"
+"extensions: inworld":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/inworld/**"
+          - "docs/providers/inworld.md"
 "extensions: kilocode":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/kilocode/**"
+"extensions: lmstudio":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/lmstudio/**"
+"extensions: litellm":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/litellm/**"
+          - "docs/providers/litellm.md"
 "extensions: openai":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/openai/**"
+"extensions: codex":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/codex/**"
 "extensions: kimi-coding":
   - changed-files:
       - any-glob-to-any-file:
@@ -298,6 +371,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/qianfan/**"
+"extensions: senseaudio":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/senseaudio/**"
+          - "docs/providers/senseaudio.md"
 "extensions: synthetic":
   - changed-files:
       - any-glob-to-any-file:
@@ -314,6 +392,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/together/**"
+"extensions: tts-local-cli":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/tts-local-cli/**"
+          - "docs/tools/tts.md"
 "extensions: venice":
   - changed-files:
       - any-glob-to-any-file:
@@ -334,3 +417,7 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/fal/**"
+"extensions: gradium":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/gradium/**"

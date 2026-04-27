@@ -208,7 +208,7 @@ function parseSettingsEvent(event: unknown): { key: string; value: unknown } | n
       return null;
     }
     return {
-      key: String(put["entry-key"] ?? ""),
+      key: typeof put["entry-key"] === "string" ? put["entry-key"] : "",
       value: put.value,
     };
   }
@@ -220,7 +220,7 @@ function parseSettingsEvent(event: unknown): { key: string; value: unknown } | n
       return null;
     }
     return {
-      key: String(del["entry-key"] ?? ""),
+      key: typeof del["entry-key"] === "string" ? del["entry-key"] : "",
       value: undefined,
     };
   }

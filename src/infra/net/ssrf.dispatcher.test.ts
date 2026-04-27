@@ -32,6 +32,7 @@ beforeEach(() => {
     Agent: agentCtor,
     EnvHttpProxyAgent: envHttpProxyAgentCtor,
     ProxyAgent: proxyAgentCtor,
+    fetch: vi.fn(),
   };
 });
 
@@ -76,6 +77,7 @@ describe("createPinnedDispatcher", () => {
       connect: {
         lookup,
       },
+      allowH2: false,
     });
     const firstCallArg = agentCtor.mock.calls[0]?.[0] as
       | { connect?: Record<string, unknown> }
@@ -107,6 +109,27 @@ describe("createPinnedDispatcher", () => {
         autoSelectFamilyAttemptTimeout: 300,
         lookup,
       },
+      allowH2: false,
+    });
+  });
+
+  it("applies stream timeouts to pinned direct dispatchers", () => {
+    const lookup = vi.fn() as unknown as PinnedHostname["lookup"];
+    const pinned: PinnedHostname = {
+      hostname: "api.telegram.org",
+      addresses: ["149.154.167.220"],
+      lookup,
+    };
+
+    createPinnedDispatcher(pinned, undefined, undefined, 123_456);
+
+    expect(agentCtor).toHaveBeenCalledWith({
+      connect: {
+        lookup,
+      },
+      allowH2: false,
+      bodyTimeout: 123_456,
+      headersTimeout: 123_456,
     });
   });
 
@@ -182,6 +205,7 @@ describe("createPinnedDispatcher", () => {
         autoSelectFamily: true,
         lookup,
       },
+      allowH2: false,
       proxyTls: {
         autoSelectFamily: true,
       },
@@ -206,10 +230,44 @@ describe("createPinnedDispatcher", () => {
 
     expect(proxyAgentCtor).toHaveBeenCalledWith({
       uri: "http://127.0.0.1:7890",
+      allowH2: false,
       requestTls: {
         autoSelectFamily: false,
         lookup,
       },
+    });
+  });
+
+  it("applies stream timeouts to explicit proxy dispatchers", () => {
+    const lookup = vi.fn() as unknown as PinnedHostname["lookup"];
+    const pinned: PinnedHostname = {
+      hostname: "api.telegram.org",
+      addresses: ["149.154.167.220"],
+      lookup,
+    };
+
+    createPinnedDispatcher(
+      pinned,
+      {
+        mode: "explicit-proxy",
+        proxyUrl: "http://127.0.0.1:7890",
+        proxyTls: {
+          autoSelectFamily: false,
+        },
+      },
+      undefined,
+      654_321,
+    );
+
+    expect(proxyAgentCtor).toHaveBeenCalledWith({
+      uri: "http://127.0.0.1:7890",
+      requestTls: {
+        autoSelectFamily: false,
+        lookup,
+      },
+      allowH2: false,
+      bodyTimeout: 654_321,
+      headersTimeout: 654_321,
     });
   });
 });

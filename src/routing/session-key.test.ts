@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import {
-  deriveSessionChatType,
   getSubagentDepth,
   isCronSessionKey,
   parseThreadSessionSuffix,
@@ -70,19 +70,26 @@ describe("isCronSessionKey", () => {
   });
 });
 
-describe("deriveSessionChatType", () => {
+describe("deriveSessionChatTypeFromKey", () => {
   it.each([
     { key: "agent:main:discord:direct:user1", expected: "direct" },
     { key: "agent:main:telegram:group:g1", expected: "group" },
     { key: "agent:main:discord:channel:c1", expected: "channel" },
     { key: "agent:main:telegram:dm:123456", expected: "direct" },
     { key: "telegram:dm:123456", expected: "direct" },
-    { key: "discord:acc-1:guild-123:channel-456", expected: "channel" },
     { key: "agent:main:main", expected: "unknown" },
     { key: "agent:main", expected: "unknown" },
     { key: "", expected: "unknown" },
   ] as const)("derives chat type for %j => $expected", ({ key, expected }) => {
-    expect(deriveSessionChatType(key)).toBe(expected);
+    expect(deriveSessionChatTypeFromKey(key)).toBe(expected);
+  });
+
+  it("uses plugin-owned legacy chat-type hooks after generic token parsing", () => {
+    expect(
+      deriveSessionChatTypeFromKey("legacy-room:abc", [
+        (sessionKey) => (sessionKey.startsWith("legacy-room:") ? "channel" : undefined),
+      ]),
+    ).toBe("channel");
   });
 });
 
@@ -104,26 +111,20 @@ describe("thread session suffix parsing", () => {
     ).toBeNull();
   });
 
-  it("still parses telegram topic session suffixes", () => {
+  it("does not treat telegram :topic: as a generic thread suffix", () => {
     expect(parseThreadSessionSuffix("agent:main:telegram:group:-100123:topic:77")).toEqual({
-      baseSessionKey: "agent:main:telegram:group:-100123",
-      threadId: "77",
+      baseSessionKey: "agent:main:telegram:group:-100123:topic:77",
+      threadId: undefined,
     });
-    expect(resolveThreadParentSessionKey("agent:main:telegram:group:-100123:topic:77")).toBe(
-      "agent:main:telegram:group:-100123",
-    );
+    expect(resolveThreadParentSessionKey("agent:main:telegram:group:-100123:topic:77")).toBeNull();
   });
 
-  it("parses mixed-case suffix markers without lowercasing the stored key", () => {
+  it("parses mixed-case :thread: markers without lowercasing the stored key", () => {
     expect(
       parseThreadSessionSuffix("agent:main:slack:channel:General:Thread:1699999999.0001"),
     ).toEqual({
       baseSessionKey: "agent:main:slack:channel:General",
       threadId: "1699999999.0001",
-    });
-    expect(parseThreadSessionSuffix("agent:main:telegram:group:-100123:Topic:77")).toEqual({
-      baseSessionKey: "agent:main:telegram:group:-100123",
-      threadId: "77",
     });
   });
 });

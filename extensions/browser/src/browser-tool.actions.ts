@@ -9,10 +9,13 @@ import {
   imageResultFromFile,
   jsonResult,
   loadConfig,
+  normalizeOptionalString,
+  readStringValue,
   resolveBrowserConfig,
   resolveProfile,
   wrapExternalContent,
-} from "./core-api.js";
+} from "./browser-tool.runtime.js";
+import { DEFAULT_BROWSER_ACTION_TIMEOUT_MS } from "./browser/constants.js";
 
 const browserToolActionDeps = {
   browserAct,
@@ -22,6 +25,94 @@ const browserToolActionDeps = {
   imageResultFromFile,
   loadConfig,
 };
+
+const BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS = 5_000;
+
+type BrowserActRequest = Parameters<typeof browserAct>[1];
+type BrowserActRequestWithTimeout = BrowserActRequest & { timeoutMs?: number };
+
+function normalizePositiveTimeoutMs(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
+}
+
+function supportsBrowserActTimeout(request: BrowserActRequest): boolean {
+  switch (request.kind) {
+    case "click":
+    case "type":
+    case "hover":
+    case "scrollIntoView":
+    case "drag":
+    case "select":
+    case "fill":
+    case "evaluate":
+    case "wait":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function existingSessionRejectsActTimeout(request: BrowserActRequest): boolean {
+  switch (request.kind) {
+    case "type":
+    case "hover":
+    case "scrollIntoView":
+    case "drag":
+    case "select":
+    case "fill":
+    case "evaluate":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function usesExistingSessionProfile(profileName: string | undefined): boolean {
+  const cfg = browserToolActionDeps.loadConfig();
+  const resolved = resolveBrowserConfig(cfg.browser, cfg);
+  const profile = resolveProfile(resolved, profileName ?? resolved.defaultProfile);
+  return profile ? getBrowserProfileCapabilities(profile).usesChromeMcp : false;
+}
+
+function withConfiguredActTimeout(
+  request: BrowserActRequest,
+  profileName: string | undefined,
+): BrowserActRequest {
+  const typedRequest = request as BrowserActRequestWithTimeout;
+  if (normalizePositiveTimeoutMs(typedRequest.timeoutMs) !== undefined) {
+    return request;
+  }
+  if (!supportsBrowserActTimeout(request)) {
+    return request;
+  }
+  if (existingSessionRejectsActTimeout(request) && usesExistingSessionProfile(profileName)) {
+    return request;
+  }
+
+  const cfg = browserToolActionDeps.loadConfig();
+  const configuredTimeout =
+    normalizePositiveTimeoutMs(cfg.browser?.actionTimeoutMs) ?? DEFAULT_BROWSER_ACTION_TIMEOUT_MS;
+  return { ...typedRequest, timeoutMs: configuredTimeout } as BrowserActRequest;
+}
+
+function resolveActProxyTimeoutMs(request: BrowserActRequest): number | undefined {
+  const candidateTimeouts: number[] = [];
+  const explicitTimeout = normalizePositiveTimeoutMs(
+    (request as BrowserActRequestWithTimeout).timeoutMs,
+  );
+  if (explicitTimeout !== undefined) {
+    candidateTimeouts.push(explicitTimeout + BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS);
+  }
+  if (request.kind === "wait") {
+    const waitDuration = normalizePositiveTimeoutMs(request.timeMs);
+    if (waitDuration !== undefined) {
+      candidateTimeouts.push(waitDuration + BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS);
+    }
+  }
+  return candidateTimeouts.length ? Math.max(...candidateTimeouts) : undefined;
+}
 
 export const __testing = {
   setDepsForTest(
@@ -54,6 +145,38 @@ type BrowserProxyRequest = (opts: {
   profile?: string;
 }) => Promise<unknown>;
 
+type BrowserTabLike = {
+  suggestedTargetId?: unknown;
+  tabId?: unknown;
+  label?: unknown;
+  title?: unknown;
+  url?: unknown;
+  type?: unknown;
+  targetId?: unknown;
+  wsUrl?: unknown;
+};
+
+function formatAgentTab(tab: unknown): Record<string, unknown> {
+  if (!tab || typeof tab !== "object") {
+    return { value: tab };
+  }
+  const source = tab as BrowserTabLike;
+  const targetId = readStringValue(source.targetId);
+  const tabId = readStringValue(source.tabId);
+  const label = readStringValue(source.label);
+  const suggestedTargetId = readStringValue(source.suggestedTargetId) ?? label ?? tabId ?? targetId;
+  return {
+    ...(suggestedTargetId ? { suggestedTargetId } : {}),
+    ...(tabId ? { tabId } : {}),
+    ...(label ? { label } : {}),
+    title: source.title,
+    url: source.url,
+    type: source.type,
+    ...(targetId ? { targetId } : {}),
+    ...(source.wsUrl ? { wsUrl: source.wsUrl } : {}),
+  };
+}
+
 function wrapBrowserExternalJson(params: {
   kind: "snapshot" | "console" | "tabs";
   payload: unknown;
@@ -79,9 +202,10 @@ function wrapBrowserExternalJson(params: {
 }
 
 function formatTabsToolResult(tabs: unknown[]): AgentToolResult<unknown> {
+  const formattedTabs = tabs.map((tab) => formatAgentTab(tab));
   const wrapped = wrapBrowserExternalJson({
     kind: "tabs",
-    payload: { tabs },
+    payload: { tabs: formattedTabs },
     includeWarning: false,
   });
   const content: AgentToolResult<unknown>["content"] = [
@@ -89,12 +213,17 @@ function formatTabsToolResult(tabs: unknown[]): AgentToolResult<unknown> {
   ];
   return {
     content,
-    details: { ...wrapped.safeDetails, tabCount: tabs.length },
+    details: {
+      ...wrapped.safeDetails,
+      tabCount: tabs.length,
+      tabs: formattedTabs,
+    },
   };
 }
 
 function formatConsoleToolResult(result: {
   targetId?: string;
+  url?: string;
   messages?: unknown[];
 }): AgentToolResult<unknown> {
   const wrapped = wrapBrowserExternalJson({
@@ -106,7 +235,8 @@ function formatConsoleToolResult(result: {
     content: [{ type: "text" as const, text: wrapped.wrappedText }],
     details: {
       ...wrapped.safeDetails,
-      targetId: typeof result.targetId === "string" ? result.targetId : undefined,
+      targetId: readStringValue(result.targetId),
+      url: readStringValue(result.url),
       messageCount: Array.isArray(result.messages) ? result.messages.length : undefined,
     },
   };
@@ -133,7 +263,7 @@ function isChromeStaleTargetError(profile: string | undefined, err: unknown): bo
 function stripTargetIdFromActRequest(
   request: Parameters<typeof browserAct>[1],
 ): Parameters<typeof browserAct>[1] | null {
-  const targetId = typeof request.targetId === "string" ? request.targetId.trim() : undefined;
+  const targetId = normalizeOptionalString(request.targetId);
   if (!targetId) {
     return null;
   }
@@ -153,22 +283,38 @@ function canRetryChromeActWithoutTargetId(request: Parameters<typeof browserAct>
   return kind === "hover" || kind === "scrollIntoView" || kind === "wait";
 }
 
+function isAriaRefsUnsupportedError(err: unknown): boolean {
+  const msg = String(err).toLowerCase();
+  return msg.includes("refs=aria") && msg.includes("not support");
+}
+
+function withRoleRefsFallback<T extends { refs?: "aria" | "role" }>(
+  snapshotQuery: T,
+): T & { refs: "role" } {
+  return {
+    ...snapshotQuery,
+    refs: "role",
+  };
+}
+
 export async function executeTabsAction(params: {
   baseUrl?: string;
   profile?: string;
+  timeoutMs?: number;
   proxyRequest: BrowserProxyRequest | null;
 }): Promise<AgentToolResult<unknown>> {
-  const { baseUrl, profile, proxyRequest } = params;
+  const { baseUrl, profile, timeoutMs, proxyRequest } = params;
   if (proxyRequest) {
     const result = await proxyRequest({
       method: "GET",
       path: "/tabs",
       profile,
+      timeoutMs,
     });
     const tabs = (result as { tabs?: unknown[] }).tabs ?? [];
     return formatTabsToolResult(tabs);
   }
-  const tabs = await browserToolActionDeps.browserTabs(baseUrl, { profile });
+  const tabs = await browserToolActionDeps.browserTabs(baseUrl, { profile, timeoutMs });
   return formatTabsToolResult(tabs);
 }
 
@@ -177,24 +323,25 @@ export async function executeSnapshotAction(params: {
   baseUrl?: string;
   profile?: string;
   proxyRequest: BrowserProxyRequest | null;
+  onTabActivity?: (targetId: string | undefined) => void;
 }): Promise<AgentToolResult<unknown>> {
   const { input, baseUrl, profile, proxyRequest } = params;
   const snapshotDefaults = browserToolActionDeps.loadConfig().browser?.snapshotDefaults;
   const format: "ai" | "aria" | undefined =
-    input.snapshotFormat === "ai" || input.snapshotFormat === "aria"
-      ? input.snapshotFormat
-      : undefined;
+    input.snapshotFormat === "ai" ? "ai" : input.snapshotFormat === "aria" ? "aria" : undefined;
+  const formatExplicit = format !== undefined;
   const mode: "efficient" | undefined =
     input.mode === "efficient"
       ? "efficient"
-      : format !== "aria" && snapshotDefaults?.mode === "efficient"
+      : !formatExplicit && format !== "aria" && snapshotDefaults?.mode === "efficient"
         ? "efficient"
         : undefined;
   const labels = typeof input.labels === "boolean" ? input.labels : undefined;
+  const urls = typeof input.urls === "boolean" ? input.urls : undefined;
   const refs: "aria" | "role" | undefined =
     input.refs === "aria" || input.refs === "role" ? input.refs : undefined;
   const hasMaxChars = Object.hasOwn(input, "maxChars");
-  const targetId = typeof input.targetId === "string" ? input.targetId.trim() : undefined;
+  const targetId = normalizeOptionalString(input.targetId);
   const limit =
     typeof input.limit === "number" && Number.isFinite(input.limit) ? input.limit : undefined;
   const maxChars =
@@ -205,8 +352,8 @@ export async function executeSnapshotAction(params: {
   const compact = typeof input.compact === "boolean" ? input.compact : undefined;
   const depth =
     typeof input.depth === "number" && Number.isFinite(input.depth) ? input.depth : undefined;
-  const selector = typeof input.selector === "string" ? input.selector.trim() : undefined;
-  const frame = typeof input.frame === "string" ? input.frame.trim() : undefined;
+  const selector = normalizeOptionalString(input.selector);
+  const frame = normalizeOptionalString(input.frame);
   const resolvedMaxChars =
     format === "ai"
       ? hasMaxChars
@@ -229,19 +376,33 @@ export async function executeSnapshotAction(params: {
     selector,
     frame,
     labels,
+    urls,
     mode,
   };
-  const snapshot = proxyRequest
-    ? ((await proxyRequest({
-        method: "GET",
-        path: "/snapshot",
-        profile,
-        query: snapshotQuery,
-      })) as Awaited<ReturnType<typeof browserSnapshot>>)
-    : await browserToolActionDeps.browserSnapshot(baseUrl, {
-        ...snapshotQuery,
-        profile,
-      });
+  let refsFallback: "role" | undefined;
+  const readSnapshot = async (query: typeof snapshotQuery) =>
+    proxyRequest
+      ? ((await proxyRequest({
+          method: "GET",
+          path: "/snapshot",
+          profile,
+          query,
+        })) as Awaited<ReturnType<typeof browserSnapshot>>)
+      : await browserToolActionDeps.browserSnapshot(baseUrl, {
+          ...query,
+          profile,
+        });
+  let snapshot: Awaited<ReturnType<typeof browserSnapshot>>;
+  try {
+    snapshot = await readSnapshot(snapshotQuery);
+  } catch (err) {
+    if (refs !== "aria" || !isAriaRefsUnsupportedError(err)) {
+      throw err;
+    }
+    refsFallback = "role";
+    snapshot = await readSnapshot(withRoleRefsFallback(snapshotQuery));
+  }
+  params.onTabActivity?.(readStringValue(snapshot.targetId) ?? targetId);
   if (snapshot.format === "ai") {
     const extractedText = snapshot.snapshot ?? "";
     const wrappedSnapshot = wrapExternalContent(extractedText, {
@@ -261,6 +422,7 @@ export async function executeSnapshotAction(params: {
       labelsSkipped: snapshot.labelsSkipped,
       imagePath: snapshot.imagePath,
       imageType: snapshot.imageType,
+      refsFallback,
       externalContent: {
         untrusted: true,
         source: "browser",
@@ -314,8 +476,8 @@ export async function executeConsoleAction(params: {
   proxyRequest: BrowserProxyRequest | null;
 }): Promise<AgentToolResult<unknown>> {
   const { input, baseUrl, profile, proxyRequest } = params;
-  const level = typeof input.level === "string" ? input.level.trim() : undefined;
-  const targetId = typeof input.targetId === "string" ? input.targetId.trim() : undefined;
+  const level = normalizeOptionalString(input.level);
+  const targetId = normalizeOptionalString(input.targetId);
   if (proxyRequest) {
     const result = (await proxyRequest({
       method: "GET",
@@ -337,27 +499,34 @@ export async function executeConsoleAction(params: {
 }
 
 export async function executeActAction(params: {
-  request: Parameters<typeof browserAct>[1];
+  request: BrowserActRequest;
   baseUrl?: string;
   profile?: string;
   proxyRequest: BrowserProxyRequest | null;
+  onTabActivity?: (targetId: string | undefined) => void;
 }): Promise<AgentToolResult<unknown>> {
   const { request, baseUrl, profile, proxyRequest } = params;
+  const effectiveRequest = withConfiguredActTimeout(request, profile);
   try {
     const result = proxyRequest
       ? await proxyRequest({
           method: "POST",
           path: "/act",
           profile,
-          body: request,
+          body: effectiveRequest,
+          timeoutMs: resolveActProxyTimeoutMs(effectiveRequest),
         })
-      : await browserToolActionDeps.browserAct(baseUrl, request, {
+      : await browserToolActionDeps.browserAct(baseUrl, effectiveRequest, {
           profile,
         });
+    params.onTabActivity?.(
+      readStringValue((result as { targetId?: unknown }).targetId) ??
+        readStringValue(effectiveRequest.targetId),
+    );
     return jsonResult(result);
   } catch (err) {
     if (isChromeStaleTargetError(profile, err)) {
-      const retryRequest = stripTargetIdFromActRequest(request);
+      const retryRequest = stripTargetIdFromActRequest(effectiveRequest);
       const tabs = proxyRequest
         ? ((
             (await proxyRequest({
@@ -369,7 +538,7 @@ export async function executeActAction(params: {
         : await browserToolActionDeps.browserTabs(baseUrl, { profile }).catch(() => []);
       // Some user-browser targetIds can go stale between snapshots and actions.
       // Only retry safe read-only actions, and only when exactly one tab remains attached.
-      if (retryRequest && canRetryChromeActWithoutTargetId(request) && tabs.length === 1) {
+      if (retryRequest && canRetryChromeActWithoutTargetId(effectiveRequest) && tabs.length === 1) {
         try {
           const retryResult = proxyRequest
             ? await proxyRequest({
@@ -377,10 +546,15 @@ export async function executeActAction(params: {
                 path: "/act",
                 profile,
                 body: retryRequest,
+                timeoutMs: resolveActProxyTimeoutMs(retryRequest),
               })
             : await browserToolActionDeps.browserAct(baseUrl, retryRequest, {
                 profile,
               });
+          params.onTabActivity?.(
+            readStringValue((retryResult as { targetId?: unknown }).targetId) ??
+              readStringValue(retryRequest.targetId),
+          );
           return jsonResult(retryResult);
         } catch {
           // Fall through to explicit stale-target guidance.

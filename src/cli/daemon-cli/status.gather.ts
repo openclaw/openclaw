@@ -6,18 +6,16 @@ import {
 } from "../../config/config.js";
 import type {
   OpenClawConfig,
+  ConfigFileSnapshot,
   GatewayBindMode,
   GatewayControlUiConfig,
 } from "../../config/types.js";
 import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
 import type { FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
-import { findExtraGatewayServices } from "../../daemon/inspect.js";
 import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
-import { auditGatewayServiceConfig } from "../../daemon/service-audit.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { resolveGatewayService } from "../../daemon/service.js";
-import { isGatewaySecretRefUnavailableError, trimToUndefined } from "../../gateway/credentials.js";
-import { resolveGatewayProbeAuthWithSecretInputs } from "../../gateway/probe-auth.js";
+import { trimToUndefined } from "../../gateway/credentials.js";
 import {
   inspectBestEffortPrimaryTailnetIPv4,
   resolveBestEffortGatewayBindHostForDisplay,
@@ -29,9 +27,7 @@ import {
   type PortListener,
   type PortUsageStatus,
 } from "../../infra/ports.js";
-import { loadGatewayTlsRuntime } from "../../infra/tls/gateway.js";
-import { probeGatewayStatus } from "./probe.js";
-import { inspectGatewayRestart } from "./restart-health.js";
+import { resolveConfiguredLogFilePath } from "../../logging/log-file-path.js";
 import { normalizeListenerAddress, parsePortFromArgs, pickProbeHostForBind } from "./shared.js";
 import type { GatewayRpcOpts } from "./types.js";
 
@@ -47,6 +43,7 @@ type GatewayStatusSummary = {
   bindMode: GatewayBindMode;
   bindHost: string;
   customBindHost?: string;
+  tlsEnabled?: boolean;
   port: number;
   portSource: "service args" | "env/config";
   probeUrl: string;
@@ -76,6 +73,52 @@ type ResolvedGatewayStatus = {
   probeUrlOverride: string | null;
 };
 
+let gatewayProbeAuthModulePromise:
+  | Promise<typeof import("../../gateway/probe-auth.js")>
+  | undefined;
+let daemonInspectModulePromise: Promise<typeof import("../../daemon/inspect.js")> | undefined;
+let serviceAuditModulePromise: Promise<typeof import("../../daemon/service-audit.js")> | undefined;
+let gatewayTlsModulePromise: Promise<typeof import("../../infra/tls/gateway.js")> | undefined;
+let daemonProbeModulePromise: Promise<typeof import("./probe.js")> | undefined;
+let restartHealthModulePromise: Promise<typeof import("./restart-health.js")> | undefined;
+
+function loadGatewayProbeAuthModule() {
+  gatewayProbeAuthModulePromise ??= import("../../gateway/probe-auth.js");
+  return gatewayProbeAuthModulePromise;
+}
+
+function loadDaemonInspectModule() {
+  daemonInspectModulePromise ??= import("../../daemon/inspect.js");
+  return daemonInspectModulePromise;
+}
+
+function loadServiceAuditModule() {
+  serviceAuditModulePromise ??= import("../../daemon/service-audit.js");
+  return serviceAuditModulePromise;
+}
+
+function loadGatewayTlsModule() {
+  gatewayTlsModulePromise ??= import("../../infra/tls/gateway.js");
+  return gatewayTlsModulePromise;
+}
+
+function loadDaemonProbeModule() {
+  daemonProbeModulePromise ??= import("./probe.js");
+  return daemonProbeModulePromise;
+}
+
+function loadRestartHealthModule() {
+  restartHealthModulePromise ??= import("./restart-health.js");
+  return restartHealthModulePromise;
+}
+
+function resolveSnapshotRuntimeConfig(snapshot: ConfigFileSnapshot | null): OpenClawConfig | null {
+  if (!snapshot?.valid || !snapshot.runtimeConfig) {
+    return null;
+  }
+  return snapshot.runtimeConfig;
+}
+
 function appendProbeNote(
   existing: string | undefined,
   extra: string | undefined,
@@ -87,6 +130,7 @@ function appendProbeNote(
   return [...new Set(values)].join(" ");
 }
 export type DaemonStatus = {
+  logFile?: string;
   service: {
     label: string;
     loaded: boolean;
@@ -122,6 +166,13 @@ export type DaemonStatus = {
   lastError?: string;
   rpc?: {
     ok: boolean;
+    kind?: "connect" | "read";
+    capability?: string;
+    auth?: {
+      role?: string | null;
+      scopes?: string[];
+      capability?: string;
+    };
     error?: string;
     url?: string;
     authWarning?: string;
@@ -143,10 +194,6 @@ function shouldReportPortUsage(status: PortUsageStatus | undefined, rpcOk?: bool
   return true;
 }
 
-function parseGatewaySecretRefPathFromError(error: unknown): string | null {
-  return isGatewaySecretRefUnavailableError(error) ? error.path : null;
-}
-
 async function loadDaemonConfigContext(
   serviceEnv?: Record<string, string>,
 ): Promise<DaemonConfigContext> {
@@ -161,18 +208,33 @@ async function loadDaemonConfigContext(
     resolveStateDir(mergedDaemonEnv as NodeJS.ProcessEnv),
   );
 
-  const cliIO = createConfigIO({ env: process.env, configPath: cliConfigPath });
-  const daemonIO = createConfigIO({
-    env: mergedDaemonEnv,
-    configPath: daemonConfigPath,
+  const cliIO = createConfigIO({
+    env: process.env,
+    configPath: cliConfigPath,
+    pluginValidation: "skip",
   });
+  const sharesDaemonConfigContext = !serviceEnv && cliConfigPath === daemonConfigPath;
+  const daemonIO = sharesDaemonConfigContext
+    ? cliIO
+    : createConfigIO({
+        env: mergedDaemonEnv,
+        configPath: daemonConfigPath,
+        pluginValidation: "skip",
+      });
 
+  const cliSnapshotPromise = cliIO.readConfigFileSnapshot().catch(() => null);
+  const daemonSnapshotPromise = sharesDaemonConfigContext
+    ? cliSnapshotPromise
+    : daemonIO.readConfigFileSnapshot().catch(() => null);
   const [cliSnapshot, daemonSnapshot] = await Promise.all([
-    cliIO.readConfigFileSnapshot().catch(() => null),
-    daemonIO.readConfigFileSnapshot().catch(() => null),
+    cliSnapshotPromise,
+    daemonSnapshotPromise,
   ]);
-  const cliCfg = cliIO.loadConfig();
-  const daemonCfg = daemonIO.loadConfig();
+  const cliCfg = resolveSnapshotRuntimeConfig(cliSnapshot) ?? cliIO.loadConfig();
+  const daemonCfg =
+    sharesDaemonConfigContext && cliSnapshot === daemonSnapshot
+      ? cliCfg
+      : (resolveSnapshotRuntimeConfig(daemonSnapshot) ?? daemonIO.loadConfig());
 
   const cliConfigSummary: ConfigSummary = {
     path: cliSnapshot?.path ?? cliConfigPath,
@@ -223,7 +285,8 @@ async function resolveGatewayStatusSummary(params: {
   });
   const probeHost = pickProbeHostForBind(bindMode, tailnetIPv4, customBindHost);
   const probeUrlOverride = trimToUndefined(params.rpcUrlOverride) ?? null;
-  const scheme = params.daemonCfg.gateway?.tls?.enabled === true ? "wss" : "ws";
+  const tlsEnabled = params.daemonCfg.gateway?.tls?.enabled === true;
+  const scheme = tlsEnabled ? "wss" : "ws";
   const probeUrl = probeUrlOverride ?? `${scheme}://${probeHost}:${daemonPort}`;
   let probeNote =
     !probeUrlOverride && bindMode === "lan"
@@ -239,6 +302,7 @@ async function resolveGatewayStatusSummary(params: {
       bindMode,
       bindHost,
       customBindHost,
+      ...(tlsEnabled ? { tlsEnabled } : {}),
       port: daemonPort,
       portSource,
       probeUrl,
@@ -300,10 +364,14 @@ export async function gatherDaemonStatus(
     service.isLoaded({ env: serviceEnv }).catch(() => false),
     service.readRuntime(serviceEnv).catch((err) => ({ status: "unknown", detail: String(err) })),
   ]);
-  const configAudit = await auditGatewayServiceConfig({
-    env: process.env,
-    command,
-  });
+  const configAudit = command
+    ? await loadServiceAuditModule().then(({ auditGatewayServiceConfig }) =>
+        auditGatewayServiceConfig({
+          env: process.env,
+          command,
+        }),
+      )
+    : { ok: true, issues: [] satisfies ServiceConfigAudit["issues"] };
   const {
     mergedDaemonEnv,
     cliCfg,
@@ -324,66 +392,76 @@ export async function gatherDaemonStatus(
     cliPort,
   });
 
-  const extraServices = await findExtraGatewayServices(
-    process.env as Record<string, string | undefined>,
-    { deep: Boolean(opts.deep) },
-  ).catch(() => []);
+  const extraServices = opts.deep
+    ? await loadDaemonInspectModule()
+        .then(({ findExtraGatewayServices }) =>
+          findExtraGatewayServices(process.env as Record<string, string | undefined>, {
+            deep: true,
+          }),
+        )
+        .catch(() => [])
+    : [];
 
   const timeoutMs = parseStrictPositiveInteger(opts.rpc.timeout ?? "10000") ?? 10_000;
 
   const tlsEnabled = daemonCfg.gateway?.tls?.enabled === true;
   const shouldUseLocalTlsRuntime = opts.probe && !probeUrlOverride && tlsEnabled;
   const tlsRuntime = shouldUseLocalTlsRuntime
-    ? await loadGatewayTlsRuntime(daemonCfg.gateway?.tls)
+    ? await loadGatewayTlsModule().then(({ loadGatewayTlsRuntime }) =>
+        loadGatewayTlsRuntime(daemonCfg.gateway?.tls),
+      )
     : undefined;
   let daemonProbeAuth: { token?: string; password?: string } | undefined;
   let rpcAuthWarning: string | undefined;
   if (opts.probe) {
-    try {
-      daemonProbeAuth = await resolveGatewayProbeAuthWithSecretInputs({
-        cfg: daemonCfg,
-        mode: daemonCfg.gateway?.mode === "remote" ? "remote" : "local",
-        env: mergedDaemonEnv as NodeJS.ProcessEnv,
-        explicitAuth: {
-          token: opts.rpc.token,
-          password: opts.rpc.password,
-        },
-      });
-    } catch (error) {
-      const refPath = parseGatewaySecretRefPathFromError(error);
-      if (!refPath) {
-        throw error;
-      }
-      daemonProbeAuth = undefined;
-      rpcAuthWarning = `${refPath} SecretRef is unavailable in this command path; probing without configured auth credentials.`;
-    }
+    const probeMode = daemonCfg.gateway?.mode === "remote" ? "remote" : "local";
+    const probeAuthResolution = await loadGatewayProbeAuthModule().then(
+      ({ resolveGatewayProbeAuthSafeWithSecretInputs }) =>
+        resolveGatewayProbeAuthSafeWithSecretInputs({
+          cfg: daemonCfg,
+          mode: probeMode,
+          env: mergedDaemonEnv as NodeJS.ProcessEnv,
+          explicitAuth: {
+            token: opts.rpc.token,
+            password: opts.rpc.password,
+          },
+        }),
+    );
+    daemonProbeAuth = probeAuthResolution.auth;
+    rpcAuthWarning = probeAuthResolution.warning;
   }
 
   const rpc = opts.probe
-    ? await probeGatewayStatus({
-        url: gateway.probeUrl,
-        token: daemonProbeAuth?.token,
-        password: daemonProbeAuth?.password,
-        tlsFingerprint:
-          shouldUseLocalTlsRuntime && tlsRuntime?.enabled
-            ? tlsRuntime.fingerprintSha256
-            : undefined,
-        timeoutMs,
-        json: opts.rpc.json,
-        requireRpc: opts.requireRpc,
-        configPath: daemonConfigSummary.path,
-      })
+    ? await loadDaemonProbeModule().then(({ probeGatewayStatus }) =>
+        probeGatewayStatus({
+          url: gateway.probeUrl,
+          token: daemonProbeAuth?.token,
+          password: daemonProbeAuth?.password,
+          tlsFingerprint:
+            shouldUseLocalTlsRuntime && tlsRuntime?.enabled
+              ? tlsRuntime.fingerprintSha256
+              : undefined,
+          timeoutMs,
+          json: opts.rpc.json,
+          requireRpc: opts.requireRpc,
+          configPath: daemonConfigSummary.path,
+        }),
+      )
     : undefined;
   if (rpc?.ok) {
     rpcAuthWarning = undefined;
   }
   const health =
-    opts.probe && loaded
-      ? await inspectGatewayRestart({
-          service,
-          port: daemonPort,
-          env: serviceEnv,
-        }).catch(() => undefined)
+    opts.probe && loaded && rpc?.ok !== true
+      ? await loadRestartHealthModule()
+          .then(({ inspectGatewayRestart }) =>
+            inspectGatewayRestart({
+              service,
+              port: daemonPort,
+              env: serviceEnv,
+            }),
+          )
+          .catch(() => undefined)
       : undefined;
 
   let lastError: string | undefined;
@@ -392,6 +470,7 @@ export async function gatherDaemonStatus(
   }
 
   return {
+    logFile: resolveConfiguredLogFilePath(cliCfg),
     service: {
       label: service.label,
       loaded,

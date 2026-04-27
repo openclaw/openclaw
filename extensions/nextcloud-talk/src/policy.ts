@@ -1,24 +1,23 @@
+import {
+  buildChannelKeyCandidates,
+  normalizeChannelSlug,
+  resolveChannelEntryMatchWithFallback,
+  resolveNestedAllowlistDecision,
+} from "openclaw/plugin-sdk/channel-targets";
+import { evaluateMatchedGroupAccessForPolicy } from "openclaw/plugin-sdk/group-access";
 import type {
   AllowlistMatch,
   ChannelGroupContext,
   GroupPolicy,
   GroupToolPolicyConfig,
 } from "../runtime-api.js";
-import {
-  buildChannelKeyCandidates,
-  evaluateMatchedGroupAccessForPolicy,
-  normalizeChannelSlug,
-  resolveChannelEntryMatchWithFallback,
-  resolveMentionGatingWithBypass,
-  resolveNestedAllowlistDecision,
-} from "../runtime-api.js";
 import type { NextcloudTalkRoomConfig } from "./types.js";
 
 function normalizeAllowEntry(raw: string): string {
   return raw
     .trim()
-    .toLowerCase()
-    .replace(/^(nextcloud-talk|nc-talk|nc):/i, "");
+    .replace(/^(nextcloud-talk|nc-talk|nc):/i, "")
+    .toLowerCase();
 }
 
 export function normalizeNextcloudTalkAllowlist(
@@ -167,14 +166,15 @@ export function resolveNextcloudTalkMentionGate(params: {
   hasControlCommand: boolean;
   commandAuthorized: boolean;
 }): { shouldSkip: boolean; shouldBypassMention: boolean } {
-  const result = resolveMentionGatingWithBypass({
-    isGroup: params.isGroup,
-    requireMention: params.requireMention,
-    canDetectMention: true,
-    wasMentioned: params.wasMentioned,
-    allowTextCommands: params.allowTextCommands,
-    hasControlCommand: params.hasControlCommand,
-    commandAuthorized: params.commandAuthorized,
-  });
-  return { shouldSkip: result.shouldSkip, shouldBypassMention: result.shouldBypassMention };
+  const shouldBypassMention =
+    params.isGroup &&
+    params.requireMention &&
+    !params.wasMentioned &&
+    params.allowTextCommands &&
+    params.commandAuthorized &&
+    params.hasControlCommand;
+  return {
+    shouldBypassMention,
+    shouldSkip: params.requireMention && !params.wasMentioned && !shouldBypassMention,
+  };
 }

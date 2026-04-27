@@ -4,10 +4,8 @@ read_when:
   - Setting up autonomous agent workflows that run without per-task prompting
   - Defining what the agent can do independently vs. what needs human approval
   - Structuring multi-program agents with clear boundaries and escalation rules
-title: "Standing Orders"
+title: "Standing orders"
 ---
-
-# Standing Orders
 
 Standing orders grant your agent **permanent operating authority** for defined programs. Instead of giving individual task instructions each time, you define programs with clear scope, triggers, and escalation rules — and the agent executes autonomously within those boundaries.
 
@@ -29,7 +27,7 @@ This is the difference between telling your assistant "send the weekly report" e
 - You only get involved for exceptions and approvals
 - The agent fills idle time productively
 
-## How They Work
+## How they work
 
 Standing orders are defined in your [agent workspace](/concepts/agent-workspace) files. The recommended approach is to include them directly in `AGENTS.md` (which is auto-injected every session) so the agent always has them in context. For larger configurations, you can also place them in a dedicated file like `standing-orders.md` and reference it from `AGENTS.md`.
 
@@ -200,8 +198,6 @@ This pattern prevents the most common agent failure mode: acknowledging a task w
 For agents managing multiple concerns, organize standing orders as separate programs with clear boundaries:
 
 ```markdown
-# Standing Orders
-
 ## Program 1: [Domain A] (Weekly)
 
 ...
@@ -247,8 +243,8 @@ Each program should have:
 
 ## Related
 
-- [Automation Overview](/automation) — all automation mechanisms at a glance
+- [Automation & Tasks](/automation) — all automation mechanisms at a glance
 - [Cron Jobs](/automation/cron-jobs) — schedule enforcement for standing orders
 - [Hooks](/automation/hooks) — event-driven scripts for agent lifecycle events
-- [Webhooks](/automation/webhook) — inbound HTTP event triggers
+- [Webhooks](/automation/cron-jobs#webhooks) — inbound HTTP event triggers
 - [Agent Workspace](/concepts/agent-workspace) — where standing orders live, including the full list of auto-injected bootstrap files (AGENTS.md, SOUL.md, etc.)

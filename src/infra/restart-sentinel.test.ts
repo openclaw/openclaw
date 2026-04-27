@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
+import { withTempDir } from "../test-helpers/temp-dir.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
+  DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
+  buildRestartSuccessContinuation,
   consumeRestartSentinel,
   formatDoctorNonInteractiveHint,
   formatRestartSentinelMessage,
@@ -14,60 +16,70 @@ import {
   writeRestartSentinel,
 } from "./restart-sentinel.js";
 
-describe("restart sentinel", () => {
-  let envSnapshot: ReturnType<typeof captureEnv>;
-  let tempDir: string;
-
-  beforeEach(async () => {
-    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sentinel-"));
-    process.env.OPENCLAW_STATE_DIR = tempDir;
-  });
-
-  afterEach(async () => {
+async function withRestartSentinelStateDir(run: () => Promise<void>): Promise<void> {
+  const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+  try {
+    await withTempDir({ prefix: "openclaw-sentinel-" }, async (tempDir) => {
+      process.env.OPENCLAW_STATE_DIR = tempDir;
+      await run();
+    });
+  } finally {
     envSnapshot.restore();
-    await fs.rm(tempDir, { recursive: true, force: true });
-  });
+  }
+}
 
+describe("restart sentinel", () => {
   it("writes and consumes a sentinel", async () => {
-    const payload = {
-      kind: "update" as const,
-      status: "ok" as const,
-      ts: Date.now(),
-      sessionKey: "agent:main:whatsapp:dm:+15555550123",
-      stats: { mode: "git" },
-    };
-    const filePath = await writeRestartSentinel(payload);
-    expect(filePath).toBe(resolveRestartSentinelPath());
+    await withRestartSentinelStateDir(async () => {
+      const payload = {
+        kind: "update" as const,
+        status: "ok" as const,
+        ts: Date.now(),
+        sessionKey: "agent:main:mobilechat:dm:+15555550123",
+        continuation: {
+          kind: "agentTurn" as const,
+          message: "Reply with exactly: Yay! I did it!",
+        },
+        stats: { mode: "git" },
+      };
+      const filePath = await writeRestartSentinel(payload);
+      expect(filePath).toBe(resolveRestartSentinelPath());
 
-    const read = await readRestartSentinel();
-    expect(read?.payload.kind).toBe("update");
+      const read = await readRestartSentinel();
+      expect(read?.payload.kind).toBe("update");
+      expect(read?.payload.continuation).toEqual(payload.continuation);
 
-    const consumed = await consumeRestartSentinel();
-    expect(consumed?.payload.sessionKey).toBe(payload.sessionKey);
+      const consumed = await consumeRestartSentinel();
+      expect(consumed?.payload.sessionKey).toBe(payload.sessionKey);
+      expect(consumed?.payload.continuation).toEqual(payload.continuation);
 
-    const empty = await readRestartSentinel();
-    expect(empty).toBeNull();
+      const empty = await readRestartSentinel();
+      expect(empty).toBeNull();
+    });
   });
 
   it("drops invalid sentinel payloads", async () => {
-    const filePath = resolveRestartSentinelPath();
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, "not-json", "utf-8");
+    await withRestartSentinelStateDir(async () => {
+      const filePath = resolveRestartSentinelPath();
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(filePath, "not-json", "utf-8");
 
-    const read = await readRestartSentinel();
-    expect(read).toBeNull();
+      const read = await readRestartSentinel();
+      expect(read).toBeNull();
 
-    await expect(fs.stat(filePath)).rejects.toThrow();
+      await expect(fs.stat(filePath)).rejects.toThrow();
+    });
   });
 
   it("drops structurally invalid sentinel payloads", async () => {
-    const filePath = resolveRestartSentinelPath();
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, JSON.stringify({ version: 2, payload: null }), "utf-8");
+    await withRestartSentinelStateDir(async () => {
+      const filePath = resolveRestartSentinelPath();
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(filePath, JSON.stringify({ version: 2, payload: null }), "utf-8");
 
-    await expect(readRestartSentinel()).resolves.toBeNull();
-    await expect(fs.stat(filePath)).rejects.toThrow();
+      await expect(readRestartSentinel()).resolves.toBeNull();
+      await expect(fs.stat(filePath)).rejects.toThrow();
+    });
   });
 
   it("formatRestartSentinelMessage uses custom message when present", () => {
@@ -78,6 +90,20 @@ describe("restart sentinel", () => {
       message: "Config updated successfully",
     };
     expect(formatRestartSentinelMessage(payload)).toBe("Config updated successfully");
+  });
+
+  it("uses the exact auto-recovery message for config recovery notices", () => {
+    const payload = {
+      kind: "config-auto-recovery" as const,
+      status: "ok" as const,
+      ts: Date.now(),
+      message:
+        "Gateway recovered automatically after a failed config change and restored the last known good configuration.",
+      stats: { mode: "config-auto-recovery", reason: "gateway-run-invalid-config" },
+    };
+
+    expect(formatRestartSentinelMessage(payload)).toBe(payload.message);
+    expect(summarizeRestartSentinel(payload)).toBe("Gateway auto-recovery");
   });
 
   it("formatRestartSentinelMessage falls back to summary when no message", () => {
@@ -157,6 +183,31 @@ describe("restart sentinel", () => {
     ).toBe("Gateway restart update skipped");
     expect(trimLogTail("hello\n")).toBe("hello");
     expect(trimLogTail(undefined)).toBeNull();
+  });
+});
+
+describe("restart success continuation", () => {
+  it("builds the default agent turn for session-scoped restarts", () => {
+    expect(buildRestartSuccessContinuation({ sessionKey: "agent:main:main" })).toEqual({
+      kind: "agentTurn",
+      message: DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
+    });
+  });
+
+  it("keeps explicit continuation messages", () => {
+    expect(
+      buildRestartSuccessContinuation({
+        sessionKey: "agent:main:main",
+        continuationMessage: "wake after restart",
+      }),
+    ).toEqual({
+      kind: "agentTurn",
+      message: "wake after restart",
+    });
+  });
+
+  it("stays silent without session context", () => {
+    expect(buildRestartSuccessContinuation({})).toBeNull();
   });
 });
 

@@ -1,14 +1,12 @@
 ---
-title: "Plugin Testing"
-sidebarTitle: "Testing"
 summary: "Testing utilities and patterns for OpenClaw plugins"
+title: "Plugin testing"
+sidebarTitle: "Testing"
 read_when:
   - You are writing tests for a plugin
   - You need test utilities from the plugin SDK
   - You want to understand contract tests for bundled plugins
 ---
-
-# Plugin Testing
 
 Reference for test utilities, patterns, and lint enforcement for OpenClaw
 plugins.
@@ -155,7 +153,10 @@ For code that uses `createPluginRuntimeStore`, mock the runtime in tests:
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 
-const store = createPluginRuntimeStore<PluginRuntime>("test runtime not set");
+const store = createPluginRuntimeStore<PluginRuntime>({
+  pluginId: "test-plugin",
+  errorMessage: "test runtime not set",
+});
 
 // In test setup
 const mockRuntime = {
@@ -252,7 +253,7 @@ pnpm test:coverage
 If local runs cause memory pressure:
 
 ```bash
-OPENCLAW_TEST_PROFILE=low OPENCLAW_TEST_SERIAL_GATEWAY=1 pnpm test
+OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test
 ```
 
 ## Related

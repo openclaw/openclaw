@@ -7,7 +7,7 @@ import type { PluginHookBeforeToolCallResult, PluginHookMessageSendingResult } f
 const toolEvent = { toolName: "bash", params: { command: "echo hello" } };
 const toolCtx = { toolName: "bash" };
 const messageEvent = { to: "user-1", content: "hello" };
-const messageCtx = { channelId: "telegram" };
+const messageCtx = { channelId: "forum" };
 
 async function runBeforeToolCallWithHooks(
   registry: PluginRegistry,
@@ -162,6 +162,61 @@ describe("before_tool_call terminal block semantics", () => {
 
     expect(result?.block).toBe(true);
     expect(low).not.toHaveBeenCalled();
+  });
+
+  it("throws for before_tool_call when configured as fail-closed", async () => {
+    addStaticTestHooks(registry, {
+      hookName: "before_tool_call",
+      hooks: [
+        {
+          pluginId: "failing",
+          result: {},
+          priority: 100,
+          handler: () => {
+            throw new Error("boom");
+          },
+        },
+      ],
+    });
+    const runner = createHookRunner(registry, {
+      catchErrors: true,
+      failurePolicyByHook: {
+        before_tool_call: "fail-closed",
+      },
+    });
+
+    await expect(runner.runBeforeToolCall(toolEvent, toolCtx)).rejects.toThrow(
+      "before_tool_call handler from failing failed: boom",
+    );
+  });
+
+  it("sanitizes caught hook error logs", async () => {
+    const logger = {
+      error: vi.fn(),
+      warn: vi.fn(),
+    };
+    addStaticTestHooks(registry, {
+      hookName: "message_received",
+      hooks: [
+        {
+          pluginId: "failing",
+          result: undefined,
+          handler: () => {
+            throw new Error("boom\nforged\tsecret sk-test1234567890");
+          },
+        },
+      ],
+    });
+    const runner = createHookRunner(registry, { catchErrors: true, logger });
+
+    await runner.runMessageReceived({ from: "user-1", content: "hi" }, { channelId: "whatsapp" });
+
+    const message = String(logger.error.mock.calls[0]?.[0] ?? "");
+    expect(message).toMatch(
+      /^\[hooks\] message_received handler from failing failed: boom forged secret/,
+    );
+    expect(message).not.toContain("\n");
+    expect(message).not.toContain("sk-test1234567890");
   });
 });
 

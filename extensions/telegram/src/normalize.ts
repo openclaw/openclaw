@@ -2,6 +2,10 @@ import { normalizeTelegramLookupTarget, parseTelegramTarget } from "./targets.js
 
 const TELEGRAM_PREFIX_RE = /^(telegram|tg):/i;
 
+function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
 function normalizeTelegramTargetBody(raw: string): string | undefined {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -36,7 +40,7 @@ export function normalizeTelegramMessagingTarget(raw: string): string | undefine
   if (!normalizedBody) {
     return undefined;
   }
-  return `telegram:${normalizedBody}`.toLowerCase();
+  return normalizeLowercaseStringOrEmpty(`telegram:${normalizedBody}`);
 }
 
 export function looksLikeTelegramTargetId(raw: string): boolean {

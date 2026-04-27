@@ -1,4 +1,5 @@
-import { buildPluginConfigSchema } from "openclaw/plugin-sdk/core";
+import { mapPluginConfigIssues } from "openclaw/plugin-sdk/extension-shared";
+import { buildPluginConfigSchema } from "openclaw/plugin-sdk/plugin-entry";
 import { z } from "openclaw/plugin-sdk/zod";
 import type { OpenClawPluginConfigSchema } from "../api.js";
 import {
@@ -18,8 +19,10 @@ import {
   type DiffTheme,
   type DiffToolDefaults,
 } from "./types.js";
+import { normalizeViewerBaseUrl } from "./url.js";
 
 type DiffsPluginConfig = {
+  viewerBaseUrl?: string;
   defaults?: {
     fontFamily?: string;
     fontSize?: number;
@@ -93,7 +96,29 @@ export const DEFAULT_DIFFS_PLUGIN_SECURITY: DiffsPluginSecurityConfig = {
   allowRemoteViewer: false,
 };
 
+const VIEWER_BASE_URL_JSON_SCHEMA = {
+  type: "string",
+  format: "uri",
+  pattern: "^[Hh][Tt][Tt][Pp][Ss]?://",
+  not: {
+    pattern: "[?#]",
+  },
+} as const satisfies Record<string, unknown>;
+
 const DiffsPluginJsonSchemaSource = z.strictObject({
+  viewerBaseUrl: z
+    .string()
+    .superRefine((value, ctx) => {
+      try {
+        normalizeViewerBaseUrl(value, "viewerBaseUrl");
+      } catch (error) {
+        ctx.addIssue({
+          code: "custom",
+          message: error instanceof Error ? error.message : "Invalid viewerBaseUrl",
+        });
+      }
+    })
+    .optional(),
   defaults: z
     .strictObject({
       fontFamily: z.string().default(DEFAULT_DIFFS_TOOL_DEFAULTS.fontFamily).optional(),
@@ -141,35 +166,38 @@ const DiffsPluginJsonSchemaSource = z.strictObject({
     .optional(),
 });
 
-export const diffsPluginConfigSchema: OpenClawPluginConfigSchema = buildPluginConfigSchema(
-  DiffsPluginJsonSchemaSource,
-  {
-    safeParse(value: unknown) {
-      if (value === undefined) {
-        return { success: true, data: undefined };
-      }
-      const result = DiffsPluginJsonSchemaSource.safeParse(value);
-      if (result.success) {
-        return {
-          success: true,
-          data: buildDiffsPluginConfigShape(result.data as DiffsPluginConfig),
-        };
-      }
+const diffsPluginConfigSchemaBase = buildPluginConfigSchema(DiffsPluginJsonSchemaSource, {
+  safeParse(value: unknown) {
+    if (value === undefined) {
+      return { success: true, data: undefined };
+    }
+    const result = DiffsPluginJsonSchemaSource.safeParse(value);
+    if (result.success) {
       return {
-        success: false,
-        error: {
-          issues: result.error.issues.map((issue) => ({
-            path: issue.path.filter((segment): segment is string | number => {
-              const kind = typeof segment;
-              return kind === "string" || kind === "number";
-            }),
-            message: issue.message,
-          })),
-        },
+        success: true,
+        data: buildDiffsPluginConfigShape(result.data as DiffsPluginConfig),
       };
+    }
+    return {
+      success: false,
+      error: {
+        issues: mapPluginConfigIssues(result.error.issues),
+      },
+    };
+  },
+});
+
+export const diffsPluginConfigSchema: OpenClawPluginConfigSchema = {
+  ...diffsPluginConfigSchemaBase,
+  jsonSchema: {
+    ...diffsPluginConfigSchemaBase.jsonSchema,
+    properties: {
+      ...(diffsPluginConfigSchemaBase.jsonSchema as { properties?: Record<string, unknown> })
+        .properties,
+      viewerBaseUrl: VIEWER_BASE_URL_JSON_SCHEMA,
     },
   },
-);
+};
 
 function resolveConfiguredValue<T>(options: {
   primary: T | undefined;
@@ -184,7 +212,9 @@ function resolveConfiguredValue<T>(options: {
 }
 
 function buildDiffsPluginConfigShape(config: DiffsPluginConfig): DiffsPluginConfig {
+  const viewerBaseUrl = resolveDiffsPluginViewerBaseUrl(config);
   return {
+    ...(viewerBaseUrl !== undefined ? { viewerBaseUrl } : {}),
     ...(config.defaults !== undefined ? { defaults: resolveDiffsPluginDefaults(config) } : {}),
     ...(config.security !== undefined ? { security: resolveDiffsPluginSecurity(config) } : {}),
   };
@@ -253,6 +283,20 @@ export function resolveDiffsPluginSecurity(config: unknown): DiffsPluginSecurity
   return {
     allowRemoteViewer: security.allowRemoteViewer === true,
   };
+}
+
+export function resolveDiffsPluginViewerBaseUrl(config: unknown): string | undefined {
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    return undefined;
+  }
+
+  const viewerBaseUrl = (config as DiffsPluginConfig).viewerBaseUrl;
+  if (typeof viewerBaseUrl !== "string") {
+    return undefined;
+  }
+
+  const normalized = viewerBaseUrl.trim();
+  return normalized ? normalizeViewerBaseUrl(normalized) : undefined;
 }
 
 export function toPresentationDefaults(defaults: DiffToolDefaults): DiffPresentationDefaults {

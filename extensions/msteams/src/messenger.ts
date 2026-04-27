@@ -1,14 +1,15 @@
 import {
-  type ChunkMode,
   isSilentReplyText,
-  loadWebMedia,
-  type MarkdownTableMode,
-  type MSTeamsReplyStyle,
-  type ReplyPayload,
-  resolveSendableOutboundReplyParts,
   SILENT_REPLY_TOKEN,
-  sleep,
-} from "../runtime-api.js";
+  type ChunkMode,
+} from "openclaw/plugin-sdk/reply-chunking";
+import {
+  resolveSendableOutboundReplyParts,
+  type ReplyPayload,
+} from "openclaw/plugin-sdk/reply-payload";
+import { normalizeOptionalLowercaseString, sleep } from "openclaw/plugin-sdk/text-runtime";
+import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
+import type { MarkdownTableMode, MSTeamsReplyStyle } from "../runtime-api.js";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 import { classifyMSTeamsSendError } from "./errors.js";
@@ -21,6 +22,7 @@ import {
 } from "./graph-upload.js";
 import { extractFilename, extractMessageId, getMimeType, isLocalPath } from "./media-helpers.js";
 import { parseMentions } from "./mentions.js";
+import { setPendingUploadActivityId } from "./pending-uploads.js";
 import { withRevokedProxyFallback } from "./revoked-context.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 
@@ -50,6 +52,18 @@ export type MSTeamsConversationReference = {
   channelId: string;
   serviceUrl?: string;
   locale?: string;
+  /**
+   * Top-level tenant ID echoed onto the Bot Framework connector request. Included
+   * alongside `conversation.tenantId` so the connector can route proactive sends
+   * to the correct Azure AD tenant. Missing it causes HTTP 403 on proactive
+   * (bot-initiated) messages.
+   */
+  tenantId?: string;
+  /**
+   * Azure AD object ID of the target user, forwarded on proactive sends so
+   * Bot Framework can resolve the personal DM recipient on the connector side.
+   */
+  aadObjectId?: string;
 };
 
 export type MSTeamsAdapter = {
@@ -118,18 +132,26 @@ export function buildConversationReference(
   if (!user?.id) {
     throw new Error("Invalid stored reference: missing user.id");
   }
+  // Bot Framework proactive sends require `tenantId` on the outbound activity
+  // so the connector routes to the correct Azure AD tenant; otherwise it rejects
+  // with HTTP 403. Prefer the explicit top-level `ref.tenantId` (captured from
+  // `channelData.tenant.id` inbound) and fall back to `conversation.tenantId`.
+  const tenantId = ref.tenantId ?? ref.conversation?.tenantId;
+  const aadObjectId = ref.aadObjectId ?? user.aadObjectId;
   return {
     activityId: ref.activityId,
-    user,
+    user: aadObjectId ? { ...user, aadObjectId } : user,
     agent,
     conversation: {
       id: normalizeConversationId(conversationId),
       conversationType: ref.conversation?.conversationType,
-      tenantId: ref.conversation?.tenantId,
+      tenantId,
     },
     channelId: ref.channelId ?? "msteams",
     serviceUrl: ref.serviceUrl,
     locale: ref.locale,
+    ...(tenantId ? { tenantId } : {}),
+    ...(aadObjectId ? { aadObjectId } : {}),
   };
 }
 
@@ -305,7 +327,9 @@ export async function buildActivity(
 
       // Determine conversation type and file type
       // Teams only accepts base64 data URLs for images
-      const conversationType = conversationRef.conversation?.conversationType?.toLowerCase();
+      const conversationType = normalizeOptionalLowercaseString(
+        conversationRef.conversation?.conversationType,
+      );
       const isPersonal = conversationType === "personal";
       const isImage = media.kind === "image";
 
@@ -319,11 +343,14 @@ export async function buildActivity(
       ) {
         // Large file or non-image in personal chat: use FileConsentCard flow
         const conversationId = conversationRef.conversation?.id ?? "unknown";
-        const { activity: consentActivity } = prepareFileConsentActivity({
+        const { activity: consentActivity, uploadId } = prepareFileConsentActivity({
           media: { buffer: media.buffer, filename: fileName, contentType },
           conversationId,
           description: msg.text || undefined,
         });
+
+        // Tag the activity so the caller can store the activity ID after sending
+        consentActivity._pendingUploadId = uploadId;
 
         // Return the consent activity (caller sends it)
         return consentActivity;
@@ -462,21 +489,40 @@ export async function sendMSTeamsMessages(params: {
     message: MSTeamsRenderedMessage,
     messageIndex: number,
   ): Promise<string> => {
+    let pendingUploadId: string | undefined;
     const response = await sendWithRetry(
-      async () =>
-        await ctx.sendActivity(
-          await buildActivity(
-            message,
-            params.conversationRef,
-            params.tokenProvider,
-            params.sharePointSiteId,
-            params.mediaMaxBytes,
-            { feedbackLoopEnabled: params.feedbackLoopEnabled },
-          ),
-        ),
-      { messageIndex, messageCount: messages.length },
+      async () => {
+        const activity = await buildActivity(
+          message,
+          params.conversationRef,
+          params.tokenProvider,
+          params.sharePointSiteId,
+          params.mediaMaxBytes,
+          { feedbackLoopEnabled: params.feedbackLoopEnabled },
+        );
+
+        // Extract and strip the internal-only pending upload tag before sending.
+        pendingUploadId =
+          typeof activity._pendingUploadId === "string" ? activity._pendingUploadId : undefined;
+        if (pendingUploadId) {
+          delete activity._pendingUploadId;
+        }
+
+        return await ctx.sendActivity(activity);
+      },
+      {
+        messageIndex,
+        messageCount: messages.length,
+      },
     );
-    return extractMessageId(response) ?? "unknown";
+    const messageId = extractMessageId(response) ?? "unknown";
+
+    // Store the activity ID so the accept handler can replace the consent card in-place
+    if (pendingUploadId && messageId !== "unknown") {
+      setPendingUploadActivityId(pendingUploadId, messageId);
+    }
+
+    return messageId;
   };
 
   const sendMessageBatchInContext = async (
@@ -494,11 +540,21 @@ export async function sendMSTeamsMessages(params: {
   const sendProactively = async (
     batch: MSTeamsRenderedMessage[],
     startIndex: number,
+    threadActivityId?: string,
   ): Promise<string[]> => {
     const baseRef = buildConversationReference(params.conversationRef);
+    const isChannel = params.conversationRef.conversation?.conversationType === "channel";
+    // For Teams channels, reconstruct the threaded conversation ID so the
+    // proactive message lands in the correct thread instead of creating a
+    // new top-level post in the channel.
+    const conversationId =
+      isChannel && threadActivityId
+        ? `${baseRef.conversation.id};messageid=${threadActivityId}`
+        : baseRef.conversation.id;
     const proactiveRef: MSTeamsConversationReference = {
       ...baseRef,
       activityId: undefined,
+      conversation: { ...baseRef.conversation, id: conversationId },
     };
 
     const messageIds: string[] = [];
@@ -507,6 +563,11 @@ export async function sendMSTeamsMessages(params: {
     });
     return messageIds;
   };
+
+  // Resolve the thread root message ID for channel thread routing.
+  // `threadId` is the canonical thread root (set on inbound for channel threads);
+  // fall back to `activityId` for backward compatibility with older stored refs.
+  const resolvedThreadId = params.conversationRef.threadId ?? params.conversationRef.activityId;
 
   if (params.replyStyle === "thread") {
     const ctx = params.context;
@@ -521,9 +582,13 @@ export async function sendMSTeamsMessages(params: {
           fellBack: false,
         }),
         onRevoked: async () => {
+          // When the live turn context is revoked (e.g. debounced messages),
+          // reconstruct the threaded conversation ID so the proactive
+          // fallback delivers the reply into the correct channel thread.
           const remaining = messages.slice(idx);
           return {
-            ids: remaining.length > 0 ? await sendProactively(remaining, idx) : [],
+            ids:
+              remaining.length > 0 ? await sendProactively(remaining, idx, resolvedThreadId) : [],
             fellBack: true,
           };
         },

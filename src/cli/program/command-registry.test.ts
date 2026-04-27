@@ -37,6 +37,12 @@ vi.mock("./register.status-health-sessions.js", () => ({
   },
 }));
 
+vi.mock("./register.crestodian.js", () => ({
+  registerCrestodianCommand: (program: Command) => {
+    program.command("crestodian");
+  },
+}));
+
 import {
   getCoreCliCommandNames,
   getCoreCliCommandsWithSubcommands,
@@ -67,6 +73,8 @@ describe("command-registry", () => {
 
   it("includes both agent and agents in core CLI command names", () => {
     const names = getCoreCliCommandNames();
+    expect(names).toContain("crestodian");
+    expect(names).toContain("mcp");
     expect(names).toContain("agent");
     expect(names).toContain("agents");
   });
@@ -76,9 +84,11 @@ describe("command-registry", () => {
     expect(names).toContain("config");
     expect(names).toContain("agents");
     expect(names).toContain("backup");
+    expect(names).toContain("mcp");
     expect(names).toContain("sessions");
     expect(names).toContain("tasks");
     expect(names).not.toContain("agent");
+    expect(names).not.toContain("crestodian");
     expect(names).not.toContain("status");
     expect(names).not.toContain("doctor");
   });
@@ -107,9 +117,16 @@ describe("command-registry", () => {
     expect(namesOf(program)).toEqual(["doctor"]);
   });
 
-  it("does not narrow to the primary command when help is requested", () => {
+  it("narrows to the primary command when command help is requested", () => {
     const program = createProgram();
     registerCoreCliCommands(program, testProgramContext, ["node", "openclaw", "doctor", "--help"]);
+
+    expect(namesOf(program)).toEqual(["doctor"]);
+  });
+
+  it("keeps all placeholders for root help", () => {
+    const program = createProgram();
+    registerCoreCliCommands(program, testProgramContext, ["node", "openclaw", "--help"]);
 
     const names = namesOf(program);
     expect(names).toContain("doctor");

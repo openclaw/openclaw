@@ -11,23 +11,14 @@ import {
 } from "./image-generation-provider.js";
 
 function expectFalJsonPost(params: { call: number; url: string; body: Record<string, unknown> }) {
-  expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
-    params.call,
-    expect.objectContaining({
-      url: params.url,
-      init: expect.objectContaining({
-        method: "POST",
-        headers: expect.objectContaining({
-          Authorization: "Key fal-test-key",
-          "Content-Type": "application/json",
-        }),
-      }),
-      auditContext: "fal-image-generate",
-    }),
-  );
-
   const request = fetchWithSsrFGuardMock.mock.calls[params.call - 1]?.[0];
   expect(request).toBeTruthy();
+  expect(request?.url).toBe(params.url);
+  expect(request?.auditContext).toBe("fal-image-generate");
+  expect(request?.init?.method).toBe("POST");
+  const headers = new Headers(request?.init?.headers);
+  expect(headers.get("authorization")).toBe("Key fal-test-key");
+  expect(headers.get("content-type")).toBe("application/json");
   expect(JSON.parse(String(request?.init?.body))).toEqual(params.body);
 }
 
@@ -85,6 +76,7 @@ describe("fal image-generation provider", () => {
       cfg: {},
       count: 2,
       size: "1536x1024",
+      outputFormat: "jpeg",
     });
 
     expectFalJsonPost({
@@ -94,7 +86,7 @@ describe("fal image-generation provider", () => {
         prompt: "draw a cat",
         image_size: { width: 1536, height: 1024 },
         num_images: 2,
-        output_format: "png",
+        output_format: "jpeg",
       },
     });
     expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
@@ -361,17 +353,13 @@ describe("fal image-generation provider", () => {
     );
   });
 
-  it("allows trusted private relay hosts derived from configured baseUrl", async () => {
+  it("does not auto-whitelist trusted private relay hosts from a configured baseUrl", async () => {
     vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "fal-test-key",
       source: "env",
       mode: "api-key",
     });
     _setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
-    const relayPolicy = {
-      allowPrivateNetwork: true,
-      hostnameAllowlist: ["relay.internal", "*.relay.internal"],
-    };
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(
@@ -415,7 +403,7 @@ describe("fal image-generation provider", () => {
       expect.objectContaining({
         url: "http://relay.internal:8080/fal-ai/flux/dev",
         auditContext: "fal-image-generate",
-        policy: relayPolicy,
+        policy: undefined,
       }),
     );
     expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
@@ -423,7 +411,7 @@ describe("fal image-generation provider", () => {
       expect.objectContaining({
         url: "http://media.relay.internal/files/generated.png",
         auditContext: "fal-image-download",
-        policy: relayPolicy,
+        policy: undefined,
       }),
     );
   });

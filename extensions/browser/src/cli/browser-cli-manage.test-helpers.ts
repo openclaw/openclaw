@@ -1,9 +1,13 @@
+import type { Command } from "commander";
 import { vi } from "vitest";
 import * as parentCoreApiModule from "../core-api.js";
 import * as browserCliSharedModule from "./browser-cli-shared.js";
 import * as cliCoreApiModule from "./core-api.js";
 
-type BrowserRequest = { path?: string };
+type BrowserRequest = {
+  path?: string;
+  query?: Record<string, string | number | boolean | undefined>;
+};
 type BrowserRuntimeOptions = { timeoutMs?: number };
 
 export type BrowserManageCall = [unknown, BrowserRequest, BrowserRuntimeOptions | undefined];
@@ -56,7 +60,7 @@ vi.spyOn(cliCoreApiModule.defaultRuntime, "exit").mockImplementation(browserCliR
 
 const { registerBrowserManageCommands } = await import("./browser-cli-manage.js");
 
-export function createBrowserManageProgram(params?: { withParentTimeout?: boolean }) {
+export function createBrowserManageProgram(params?: { withParentTimeout?: boolean }): Command {
   const { program, browser, parentOpts } = createBrowserProgram();
   if (params?.withParentTimeout) {
     browser.option("--timeout <ms>", "Timeout in ms", "30000");

@@ -2,7 +2,8 @@ import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import {
   createResolvedDirectoryEntriesLister,
   type DirectoryConfigParams,
-} from "openclaw/plugin-sdk/directory-runtime";
+} from "openclaw/plugin-sdk/directory-config-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { mergeSlackAccountConfig, resolveDefaultSlackAccountId } from "./accounts.js";
 import { parseSlackTarget } from "./targets.js";
 
@@ -39,7 +40,9 @@ export const listSlackDirectoryPeersFromConfig = createResolvedDirectoryEntriesL
     }
     const target = `user:${normalizedUserId}`;
     const normalized = parseSlackTarget(target, { defaultKind: "user" });
-    return normalized?.kind === "user" ? `user:${normalized.id.toLowerCase()}` : null;
+    return normalized?.kind === "user"
+      ? `user:${normalizeLowercaseStringOrEmpty(normalized.id)}`
+      : null;
   },
 });
 
@@ -51,6 +54,8 @@ export const listSlackDirectoryGroupsFromConfig = createResolvedDirectoryEntries
   resolveSources: (account) => [Object.keys(account.config.channels ?? {})],
   normalizeId: (raw) => {
     const normalized = parseSlackTarget(raw, { defaultKind: "channel" });
-    return normalized?.kind === "channel" ? `channel:${normalized.id.toLowerCase()}` : null;
+    return normalized?.kind === "channel"
+      ? `channel:${normalizeLowercaseStringOrEmpty(normalized.id)}`
+      : null;
   },
 });

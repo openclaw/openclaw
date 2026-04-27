@@ -15,13 +15,14 @@ import { resolveStateDir } from "../config/paths.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { detectMime } from "../media/mime.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { lowercasePreservingWhitespace, normalizeOptionalString } from "../shared/string-coerce.js";
 import { ensureDir, resolveUserPath } from "../utils.js";
 import {
   CANVAS_HOST_PATH,
   CANVAS_WS_PATH,
-  handleA2uiHttpRequest,
   injectCanvasLiveReload,
-} from "./a2ui.js";
+  isA2uiPath,
+} from "./a2ui-shared.js";
 import { normalizeUrlPath, resolveFileWithinRoot } from "./file-resolver.js";
 
 type ChokidarWatch = typeof import("chokidar").watch;
@@ -393,7 +394,7 @@ export async function createCanvasHostHandler(
         await handle.close().catch(() => {});
       }
 
-      const lower = realPath.toLowerCase();
+      const lower = lowercasePreservingWhitespace(realPath);
       const mime =
         lower.endsWith(".html") || lower.endsWith(".htm")
           ? "text/html"
@@ -462,14 +463,17 @@ export async function startCanvasHost(opts: CanvasHostServerOpts): Promise<Canva
     }));
   const ownsHandler = opts.ownsHandler ?? opts.handler === undefined;
 
-  const bindHost = opts.listenHost?.trim() || "127.0.0.1";
+  const bindHost = normalizeOptionalString(opts.listenHost) || "127.0.0.1";
   const server: Server = http.createServer((req, res) => {
-    if (String(req.headers.upgrade ?? "").toLowerCase() === "websocket") {
+    if (lowercasePreservingWhitespace(req.headers.upgrade ?? "") === "websocket") {
       return;
     }
     void (async () => {
-      if (await handleA2uiHttpRequest(req, res)) {
-        return;
+      if (req.url && isA2uiPath(new URL(req.url, "http://localhost").pathname)) {
+        const { handleA2uiHttpRequest } = await import("./a2ui.js");
+        if (await handleA2uiHttpRequest(req, res)) {
+          return;
+        }
       }
       if (await handler.handleHttpRequest(req, res)) {
         return;

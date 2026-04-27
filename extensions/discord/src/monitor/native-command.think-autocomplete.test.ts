@@ -2,61 +2,167 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ChannelType, type AutocompleteInteraction } from "@buape/carbon";
-import {
-  findCommandByNativeName,
-  resolveCommandArgChoices,
-} from "openclaw/plugin-sdk/command-auth";
-import type { OpenClawConfig, loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { clearSessionStoreCacheForTest } from "openclaw/plugin-sdk/config-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
+type ConversationRuntimeModule = typeof import("openclaw/plugin-sdk/conversation-binding-runtime");
+type ResolveConfiguredBindingRoute = ConversationRuntimeModule["resolveConfiguredBindingRoute"];
+type ConfiguredBindingRouteResult = ReturnType<ResolveConfiguredBindingRoute>;
+type EnsureConfiguredBindingRouteReady =
+  ConversationRuntimeModule["ensureConfiguredBindingRouteReady"];
+
+function createUnboundConfiguredRouteResult(): ConfiguredBindingRouteResult {
+  return {
+    bindingResolution: null,
+    route: {
+      agentId: "main",
+      channel: "discord",
+      accountId: "default",
+      sessionKey: SESSION_KEY,
+      mainSessionKey: SESSION_KEY,
+      lastRoutePolicy: "main",
+      matchedBy: "default",
+    },
+  };
+}
 const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() =>
-  vi.fn<() => Promise<{ ok: boolean; error?: string }>>(async () => ({ ok: true })),
+  vi.fn<EnsureConfiguredBindingRouteReady>(async () => ({ ok: true })),
 );
 const resolveConfiguredBindingRouteMock = vi.hoisted(() =>
-  vi.fn<
-    () => {
-      bindingResolution: {
-        record: {
-          conversation: {
-            channel: string;
-            accountId: string;
-            conversationId: string;
-          };
-        };
-      };
-      boundSessionKey: string;
-      route: {
-        agentId: string;
-        sessionKey: string;
-      };
-    } | null
-  >(() => null),
+  vi.fn<ResolveConfiguredBindingRoute>(() => createUnboundConfiguredRouteResult()),
 );
+const providerThinkingMocks = vi.hoisted(() => ({
+  resolveProviderBinaryThinking: vi.fn(),
+  resolveProviderDefaultThinkingLevel: vi.fn(),
+  resolveProviderThinkingProfile: vi.fn(),
+  resolveProviderXHighThinking: vi.fn(),
+}));
+const buildModelsProviderDataMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+type ConfiguredBindingRoute = ConfiguredBindingRouteResult;
+type ConfiguredBindingResolution = NonNullable<ConfiguredBindingRoute["bindingResolution"]>;
+
+function createConfiguredRouteResult(
+  params: Parameters<ResolveConfiguredBindingRoute>[0],
+): ConfiguredBindingRoute {
+  return {
+    bindingResolution: {
+      record: {
+        bindingId: "binding-1",
+        targetSessionKey: SESSION_KEY,
+        targetKind: "session",
+        status: "active",
+        boundAt: Date.now(),
+        conversation: {
+          channel: "discord",
+          accountId: "default",
+          conversationId: "C1",
+        },
+      },
+    } as ConfiguredBindingResolution,
+    boundSessionKey: SESSION_KEY,
+    route: {
+      ...params.route,
+      agentId: "main",
+      sessionKey: SESSION_KEY,
+      matchedBy: "binding.channel",
+      lastRoutePolicy: "session",
+    },
+  };
+}
+
+vi.mock("openclaw/plugin-sdk/conversation-binding-runtime", async () => {
   const { createConfiguredBindingConversationRuntimeModuleMock } =
     await import("../test-support/configured-binding-runtime.js");
-  return await createConfiguredBindingConversationRuntimeModuleMock(
+  return await createConfiguredBindingConversationRuntimeModuleMock<
+    typeof import("openclaw/plugin-sdk/conversation-binding-runtime")
+  >(
     {
       ensureConfiguredBindingRouteReadyMock,
       resolveConfiguredBindingRouteMock,
     },
-    importOriginal,
+    () =>
+      vi.importActual<typeof import("openclaw/plugin-sdk/conversation-binding-runtime")>(
+        "openclaw/plugin-sdk/conversation-binding-runtime",
+      ),
   );
 });
+
+vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
+  normalizeProviderId: (value: string) => value.trim().toLowerCase(),
+  resolveDefaultModelForAgent: (params: { cfg: ReturnType<typeof loadConfig> }) => {
+    const configuredModel = params.cfg.agents?.defaults?.model;
+    const primary =
+      typeof configuredModel === "string"
+        ? configuredModel.trim()
+        : (configuredModel?.primary?.trim() ?? "");
+    const slashIndex = primary.indexOf("/");
+    if (slashIndex > 0 && slashIndex < primary.length - 1) {
+      return {
+        provider: primary.slice(0, slashIndex).trim().toLowerCase(),
+        model: primary.slice(slashIndex + 1).trim(),
+      };
+    }
+    return {
+      provider: "anthropic",
+      model: "claude-sonnet-4.5",
+    };
+  },
+}));
+
+vi.mock("openclaw/plugin-sdk/models-provider-runtime", () => ({
+  buildModelsProviderData: buildModelsProviderDataMock,
+}));
 
 const STORE_PATH = path.join(
   os.tmpdir(),
   `openclaw-discord-think-autocomplete-${process.pid}.json`,
 );
 const SESSION_KEY = "agent:main:main";
+let findCommandByNativeName: typeof import("openclaw/plugin-sdk/command-auth").findCommandByNativeName;
+let resolveCommandArgChoices: typeof import("openclaw/plugin-sdk/command-auth").resolveCommandArgChoices;
 let resolveDiscordNativeChoiceContext: typeof import("./native-command-ui.js").resolveDiscordNativeChoiceContext;
+
+async function loadDiscordThinkAutocompleteModulesForTest() {
+  vi.resetModules();
+  vi.doMock("../../../../src/plugins/provider-thinking.js", () => ({
+    resolveProviderBinaryThinking: providerThinkingMocks.resolveProviderBinaryThinking,
+    resolveProviderDefaultThinkingLevel: providerThinkingMocks.resolveProviderDefaultThinkingLevel,
+    resolveProviderThinkingProfile: providerThinkingMocks.resolveProviderThinkingProfile,
+    resolveProviderXHighThinking: providerThinkingMocks.resolveProviderXHighThinking,
+  }));
+  const commandAuth = await import("openclaw/plugin-sdk/command-auth");
+  const nativeCommandUi = await import("./native-command-ui.js");
+  return {
+    findCommandByNativeName: commandAuth.findCommandByNativeName,
+    resolveCommandArgChoices: commandAuth.resolveCommandArgChoices,
+    resolveDiscordNativeChoiceContext: nativeCommandUi.resolveDiscordNativeChoiceContext,
+  };
+}
 
 describe("discord native /think autocomplete", () => {
   beforeAll(async () => {
-    ({ resolveDiscordNativeChoiceContext } = await import("./native-command-ui.js"));
+    providerThinkingMocks.resolveProviderBinaryThinking.mockReturnValue(undefined);
+    providerThinkingMocks.resolveProviderDefaultThinkingLevel.mockReturnValue(undefined);
+    providerThinkingMocks.resolveProviderThinkingProfile.mockReturnValue(undefined);
+    providerThinkingMocks.resolveProviderXHighThinking.mockImplementation(({ provider, context }) =>
+      provider === "openai-codex" && ["gpt-5.4", "gpt-5.4-pro"].includes(context.modelId)
+        ? true
+        : undefined,
+    );
+    buildModelsProviderDataMock.mockResolvedValue({
+      byProvider: new Map<string, Set<string>>(),
+      providers: [],
+      resolvedDefault: {
+        provider: "anthropic",
+        model: "claude-sonnet-4.5",
+      },
+      modelNames: new Map<string, string>(),
+    });
+    ({ findCommandByNativeName, resolveCommandArgChoices, resolveDiscordNativeChoiceContext } =
+      await loadDiscordThinkAutocompleteModulesForTest());
   });
 
   beforeEach(() => {
@@ -64,7 +170,19 @@ describe("discord native /think autocomplete", () => {
     ensureConfiguredBindingRouteReadyMock.mockReset();
     ensureConfiguredBindingRouteReadyMock.mockResolvedValue({ ok: true });
     resolveConfiguredBindingRouteMock.mockReset();
-    resolveConfiguredBindingRouteMock.mockReturnValue(null);
+    resolveConfiguredBindingRouteMock.mockReturnValue(createUnboundConfiguredRouteResult());
+    providerThinkingMocks.resolveProviderBinaryThinking.mockReset();
+    providerThinkingMocks.resolveProviderBinaryThinking.mockReturnValue(undefined);
+    providerThinkingMocks.resolveProviderDefaultThinkingLevel.mockReset();
+    providerThinkingMocks.resolveProviderDefaultThinkingLevel.mockReturnValue(undefined);
+    providerThinkingMocks.resolveProviderThinkingProfile.mockReset();
+    providerThinkingMocks.resolveProviderThinkingProfile.mockReturnValue(undefined);
+    providerThinkingMocks.resolveProviderXHighThinking.mockReset();
+    providerThinkingMocks.resolveProviderXHighThinking.mockImplementation(({ provider, context }) =>
+      provider === "openai-codex" && ["gpt-5.4", "gpt-5.4-pro"].includes(context.modelId)
+        ? true
+        : undefined,
+    );
     fs.mkdirSync(path.dirname(STORE_PATH), { recursive: true });
     fs.writeFileSync(
       STORE_PATH,
@@ -145,26 +263,74 @@ describe("discord native /think autocomplete", () => {
     });
     const values = choices.map((choice) => choice.value);
     expect(values).toContain("xhigh");
+    expect(values).not.toContain("max");
+    expect(values).not.toContain("adaptive");
+  });
+
+  it("includes max only for provider-advertised models", async () => {
+    providerThinkingMocks.resolveProviderThinkingProfile.mockImplementation(
+      ({ provider, context }) =>
+        provider === "anthropic" && context.modelId === "claude-opus-4-7"
+          ? { levels: [{ id: "off" }, { id: "max" }] }
+          : undefined,
+    );
+    fs.writeFileSync(
+      STORE_PATH,
+      JSON.stringify({
+        [SESSION_KEY]: {
+          updatedAt: Date.now(),
+          providerOverride: "anthropic",
+          modelOverride: "claude-opus-4-7",
+        },
+      }),
+      "utf8",
+    );
+    const cfg = createConfig();
+    resolveConfiguredBindingRouteMock.mockImplementation(createConfiguredRouteResult);
+    const interaction = {
+      options: {
+        getFocused: () => ({ value: "ma" }),
+      },
+      respond: async (_choices: Array<{ name: string; value: string }>) => {},
+      rawData: {
+        member: { roles: [] },
+      },
+      channel: { id: "C1", type: ChannelType.GuildText },
+      user: { id: "U1" },
+      guild: { id: "G1" },
+      client: {},
+    } as unknown as AutocompleteInteraction & {
+      respond: (choices: Array<{ name: string; value: string }>) => Promise<void>;
+    };
+
+    const context = await resolveDiscordNativeChoiceContext({
+      interaction,
+      cfg,
+      accountId: "default",
+      threadBindings: createNoopThreadBindingManager("default"),
+    });
+    const command = findCommandByNativeName("think", "discord");
+    const levelArg = command?.args?.find((entry) => entry.name === "level");
+    expect(command).toBeTruthy();
+    expect(levelArg).toBeTruthy();
+    if (!command || !levelArg) {
+      return;
+    }
+
+    const choices = resolveCommandArgChoices({
+      command,
+      arg: levelArg,
+      cfg,
+      provider: context?.provider,
+      model: context?.model,
+    });
+    const values = choices.map((choice) => choice.value);
+    expect(values).toContain("max");
   });
 
   it("falls back when a configured binding is unavailable", async () => {
     const cfg = createConfig();
-    resolveConfiguredBindingRouteMock.mockReturnValue({
-      bindingResolution: {
-        record: {
-          conversation: {
-            channel: "discord",
-            accountId: "default",
-            conversationId: "C1",
-          },
-        },
-      },
-      boundSessionKey: SESSION_KEY,
-      route: {
-        agentId: "main",
-        sessionKey: SESSION_KEY,
-      },
-    });
+    resolveConfiguredBindingRouteMock.mockImplementation(createConfiguredRouteResult);
     ensureConfiguredBindingRouteReadyMock.mockResolvedValue({
       ok: false,
       error: "acpx exited",

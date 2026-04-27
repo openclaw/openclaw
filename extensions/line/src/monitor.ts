@@ -1,4 +1,4 @@
-import type { WebhookRequestBody } from "@line/bot-sdk";
+import type { webhook } from "@line/bot-sdk";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
@@ -19,6 +19,7 @@ import {
   beginWebhookRequestPipelineOrReject,
   createWebhookInFlightLimiter,
 } from "openclaw/plugin-sdk/webhook-request-guards";
+import { resolveDefaultLineAccountId } from "./accounts.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { createLineBot } from "./bot.js";
 import { processLineMessage } from "./markdown-to-line.js";
@@ -53,7 +54,7 @@ export interface MonitorLineProviderOptions {
 
 export interface LineProviderMonitor {
   account: ResolvedLineAccount;
-  handleWebhook: (body: WebhookRequestBody) => Promise<void>;
+  handleWebhook: (body: webhook.CallbackRequest) => Promise<void>;
   stop: () => void;
 }
 
@@ -96,7 +97,12 @@ export function getLineRuntimeState(accountId: string) {
   return runtimeState.get(`line:${accountId}`);
 }
 
+export function clearLineRuntimeStateForTests() {
+  runtimeState.clear();
+}
+
 function startLineLoadingKeepalive(params: {
+  cfg: OpenClawConfig;
   userId: string;
   accountId?: string;
   intervalMs?: number;
@@ -111,6 +117,7 @@ function startLineLoadingKeepalive(params: {
       return;
     }
     void showLoadingAnimation(params.userId, {
+      cfg: params.cfg,
       accountId: params.accountId,
       loadingSeconds,
     }).catch(() => {});
@@ -140,7 +147,7 @@ export async function monitorLineProvider(
     abortSignal,
     webhookPath,
   } = opts;
-  const resolvedAccountId = accountId ?? "default";
+  const resolvedAccountId = accountId ?? resolveDefaultLineAccountId(config);
   const token = channelAccessToken.trim();
   const secret = channelSecret.trim();
 
@@ -184,11 +191,15 @@ export async function monitorLineProvider(
       const shouldShowLoading = Boolean(ctx.userId && !ctx.isGroup);
 
       const displayNamePromise = ctx.userId
-        ? getUserDisplayName(ctx.userId, { accountId: ctx.accountId })
+        ? getUserDisplayName(ctx.userId, { cfg: config, accountId: ctx.accountId })
         : Promise.resolve(ctxPayload.From);
 
       const stopLoading = shouldShowLoading
-        ? startLineLoadingKeepalive({ userId: ctx.userId!, accountId: ctx.accountId })
+        ? startLineLoadingKeepalive({
+            cfg: config,
+            userId: ctx.userId!,
+            accountId: ctx.accountId,
+          })
         : null;
 
       const displayName = await displayNamePromise;
@@ -213,7 +224,10 @@ export async function monitorLineProvider(
               const lineData = (payload.channelData?.line as LineChannelData | undefined) ?? {};
 
               if (ctx.userId && !ctx.isGroup) {
-                void showLoadingAnimation(ctx.userId, { accountId: ctx.accountId }).catch(() => {});
+                void showLoadingAnimation(ctx.userId, {
+                  cfg: config,
+                  accountId: ctx.accountId,
+                }).catch(() => {});
               }
 
               const { replyTokenUsed: nextReplyTokenUsed } = await deliverLineAutoReply({
@@ -223,6 +237,7 @@ export async function monitorLineProvider(
                 replyToken,
                 replyTokenUsed,
                 accountId: ctx.accountId,
+                cfg: config,
                 textLimit,
                 deps: {
                   buildTemplateMessageFromPayload,
@@ -275,7 +290,7 @@ export async function monitorLineProvider(
             await replyMessageLine(
               replyToken,
               [{ type: "text", text: "Sorry, I encountered an error processing your message." }],
-              { accountId: ctx.accountId },
+              { cfg: config, accountId: ctx.accountId },
             );
           } catch (replyErr) {
             runtime.error?.(danger(`line: error reply failed: ${String(replyErr)}`));

@@ -39,4 +39,34 @@ class CanvasActionTrustTest {
       ),
     )
   }
+
+  @Test
+  fun acceptsFragmentOnlyDifferenceForTrustedA2uiPage() {
+    assertTrue(
+      CanvasActionTrust.isTrustedCanvasActionUrl(
+        rawUrl = "https://canvas.example.com:9443/__openclaw__/cap/token/__openclaw__/a2ui/?platform=android#step2",
+        trustedA2uiUrls = listOf("https://canvas.example.com:9443/__openclaw__/cap/token/__openclaw__/a2ui/?platform=android"),
+      ),
+    )
+  }
+
+  @Test
+  fun rejectsQueryMismatchOnTrustedOriginAndPath() {
+    assertFalse(
+      CanvasActionTrust.isTrustedCanvasActionUrl(
+        rawUrl = "https://canvas.example.com:9443/__openclaw__/cap/token/__openclaw__/a2ui/?platform=ios",
+        trustedA2uiUrls = listOf("https://canvas.example.com:9443/__openclaw__/cap/token/__openclaw__/a2ui/?platform=android"),
+      ),
+    )
+  }
+
+  @Test
+  fun rejectsDescendantPathUnderTrustedA2uiRoot() {
+    assertFalse(
+      CanvasActionTrust.isTrustedCanvasActionUrl(
+        rawUrl = "https://canvas.example.com:9443/__openclaw__/cap/token/__openclaw__/a2ui/child/index.html?platform=android",
+        trustedA2uiUrls = listOf("https://canvas.example.com:9443/__openclaw__/cap/token/__openclaw__/a2ui/?platform=android"),
+      ),
+    )
+  }
 }

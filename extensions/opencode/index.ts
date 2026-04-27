@@ -1,13 +1,18 @@
+import { createOpencodeCatalogApiKeyAuthMethod } from "openclaw/plugin-sdk/opencode";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
-import { matchesExactOrPrefix } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  matchesExactOrPrefix,
+  PASSTHROUGH_GEMINI_REPLAY_HOOKS,
+} from "openclaw/plugin-sdk/provider-model-shared";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { applyOpencodeZenConfig, OPENCODE_ZEN_DEFAULT_MODEL } from "./api.js";
+import { opencodeMediaUnderstandingProvider } from "./media-understanding-provider.js";
 
 const PROVIDER_ID = "opencode";
 const MINIMAX_MODERN_MODEL_MATCHERS = ["minimax-m2.7"] as const;
 
 function isModernOpencodeModel(modelId: string): boolean {
-  const lower = modelId.trim().toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(modelId);
   if (lower.endsWith("-free") || lower === "alpha-glm-4.7") {
     return false;
   }
@@ -25,18 +30,12 @@ export default definePluginEntry({
       docsPath: "/providers/models",
       envVars: ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"],
       auth: [
-        createProviderApiKeyAuthMethod({
+        createOpencodeCatalogApiKeyAuthMethod({
           providerId: PROVIDER_ID,
-          methodId: "api-key",
           label: "OpenCode Zen catalog",
-          hint: "Shared API key for Zen + Go catalogs",
           optionKey: "opencodeZenApiKey",
           flagName: "--opencode-zen-api-key",
-          envVar: "OPENCODE_API_KEY",
-          promptMessage: "Enter OpenCode API key",
-          profileIds: ["opencode:default", "opencode-go:default"],
           defaultModel: OPENCODE_ZEN_DEFAULT_MODEL,
-          expectedProviders: ["opencode", "opencode-go"],
           applyConfig: (cfg) => applyOpencodeZenConfig(cfg),
           noteMessage: [
             "OpenCode uses one API key across the Zen and Go catalogs.",
@@ -44,22 +43,13 @@ export default definePluginEntry({
             "Get your API key at: https://opencode.ai/auth",
             "Choose the Zen catalog when you want the curated multi-model proxy.",
           ].join("\n"),
-          noteTitle: "OpenCode",
-          wizard: {
-            choiceId: "opencode-zen",
-            choiceLabel: "OpenCode Zen catalog",
-            groupId: "opencode",
-            groupLabel: "OpenCode",
-            groupHint: "Shared API key for Zen + Go catalogs",
-          },
+          choiceId: "opencode-zen",
+          choiceLabel: "OpenCode Zen catalog",
         }),
       ],
-      capabilities: {
-        openAiCompatTurnValidation: false,
-        geminiThoughtSignatureSanitization: true,
-        geminiThoughtSignatureModelHints: ["gemini"],
-      },
+      ...PASSTHROUGH_GEMINI_REPLAY_HOOKS,
       isModernModelRef: ({ modelId }) => isModernOpencodeModel(modelId),
     });
+    api.registerMediaUnderstandingProvider(opencodeMediaUnderstandingProvider);
   },
 });

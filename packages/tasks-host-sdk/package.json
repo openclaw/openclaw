@@ -1,9 +1,0 @@
-{
-  "name": "@openclaw/tasks-host-sdk",
-  "version": "0.0.0-private",
-  "private": true,
-  "type": "module",
-  "exports": {
-    "./runtime-core": "./src/runtime-core.ts"
-  }
-}

@@ -1,1 +1,1 @@
-export { captureEnv, withEnv, withEnvAsync } from "../../../src/test-utils/env.js";
+export { withEnv, withEnvAsync } from "../../../src/test-utils/env.js";

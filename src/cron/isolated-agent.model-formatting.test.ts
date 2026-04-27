@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 
 const {
   loadModelCatalogMock,
@@ -10,20 +11,30 @@ const {
 } = vi.hoisted(() => ({
   loadModelCatalogMock: vi.fn(),
   getModelRefStatusMock: vi.fn(),
-  normalizeModelSelectionMock: vi.fn((value: unknown) =>
-    typeof value === "string" && value.trim() ? value.trim() : undefined,
-  ),
+  normalizeModelSelectionMock: vi.fn((value: unknown) => {
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+    if (
+      value &&
+      typeof value === "object" &&
+      typeof (value as { primary?: unknown }).primary === "string" &&
+      (value as { primary: string }).primary.trim()
+    ) {
+      return (value as { primary: string }).primary.trim();
+    }
+    return undefined;
+  }),
   resolveAllowedModelRefMock: vi.fn(),
   resolveConfiguredModelRefMock: vi.fn(),
   resolveHooksGmailModelMock: vi.fn(),
 }));
 
-vi.mock("../agents/model-catalog.js", () => ({
-  loadModelCatalog: loadModelCatalogMock,
-}));
-
-vi.mock("../agents/model-selection.js", () => ({
+vi.mock("./isolated-agent/run-model-selection.runtime.js", () => ({
+  DEFAULT_MODEL: "claude-opus-4-6",
+  DEFAULT_PROVIDER: "anthropic",
   getModelRefStatus: getModelRefStatusMock,
+  loadModelCatalog: loadModelCatalogMock,
   normalizeModelSelection: normalizeModelSelectionMock,
   resolveAllowedModelRef: resolveAllowedModelRefMock,
   resolveConfiguredModelRef: resolveConfiguredModelRefMock,
@@ -33,19 +44,17 @@ vi.mock("../agents/model-selection.js", () => ({
 import { resolveCronModelSelection } from "./isolated-agent/model-selection.js";
 
 const DEFAULT_MESSAGE = "do it";
-const DEFAULT_PROVIDER = "anthropic";
-const DEFAULT_MODEL = "claude-opus-4-5";
 
 type AgentTurnPayload = {
   kind: "agentTurn";
   message: string;
-  deliver?: boolean;
   model?: string;
 };
 
 type SelectModelOptions = {
   cfg?: Record<string, unknown>;
   agentConfigOverride?: {
+    model?: unknown;
     subagents?: {
       model?: unknown;
     };
@@ -105,7 +114,6 @@ function defaultPayload(): AgentTurnPayload {
   return {
     kind: "agentTurn",
     message: DEFAULT_MESSAGE,
-    deliver: false,
   };
 }
 
@@ -232,10 +240,10 @@ describe("cron model formatting and precedence edge cases", () => {
           payload: {
             kind: "agentTurn",
             message: DEFAULT_MESSAGE,
-            model: "bedrock/claude-sonnet-4-5",
+            model: "bedrock/claude-sonnet-4-6",
           },
         },
-        { provider: "amazon-bedrock", model: "claude-sonnet-4-5" },
+        { provider: "amazon-bedrock", model: "claude-sonnet-4-6" },
       );
     });
   });
@@ -272,15 +280,14 @@ describe("cron model formatting and precedence edge cases", () => {
           payload: {
             kind: "agentTurn",
             message: DEFAULT_MESSAGE,
-            model: "anthropic/claude-sonnet-4-5",
-            deliver: false,
+            model: "anthropic/claude-sonnet-4-6",
           },
           sessionEntry: {
             providerOverride: "openai",
             modelOverride: "gpt-4.1-mini",
           },
         },
-        { provider: "anthropic", model: "claude-sonnet-4-5" },
+        { provider: "anthropic", model: "claude-sonnet-4-6" },
       );
     });
 
@@ -317,15 +324,14 @@ describe("cron model formatting and precedence edge cases", () => {
           payload: {
             kind: "agentTurn",
             message: DEFAULT_MESSAGE,
-            model: "anthropic/claude-opus-4-5",
-            deliver: false,
+            model: "anthropic/claude-opus-4-6",
           },
           sessionEntry: {
             providerOverride: "openai",
             modelOverride: "gpt-4.1-mini",
           },
         },
-        { provider: "anthropic", model: "claude-opus-4-5" },
+        { provider: "anthropic", model: "claude-opus-4-6" },
       );
     });
 
@@ -430,10 +436,82 @@ describe("cron model formatting and precedence edge cases", () => {
           payload: {
             kind: "agentTurn",
             message: DEFAULT_MESSAGE,
-            model: "anthropic/claude-sonnet-4-5",
+            model: "anthropic/claude-sonnet-4-6",
           },
         },
-        { provider: "anthropic", model: "claude-sonnet-4-5" },
+        { provider: "anthropic", model: "claude-sonnet-4-6" },
+      );
+    });
+
+    it("uses agents.defaults.subagents.model when set", async () => {
+      await expectSelectedModel(
+        {
+          cfg: {
+            agents: {
+              defaults: {
+                model: "anthropic/claude-sonnet-4-6",
+                subagents: { model: "ollama/llama3.2:3b" },
+              },
+            },
+          },
+        },
+        { provider: "ollama", model: "llama3.2:3b" },
+      );
+    });
+
+    it("supports subagents.model with {primary} object format", async () => {
+      await expectSelectedModel(
+        {
+          cfg: {
+            agents: {
+              defaults: {
+                model: "anthropic/claude-sonnet-4-6",
+                subagents: { model: { primary: "google/gemini-2.5-flash" } },
+              },
+            },
+          },
+        },
+        { provider: "google", model: "gemini-2.5-flash" },
+      );
+    });
+
+    it("job payload model override takes precedence over subagents.model", async () => {
+      await expectSelectedModel(
+        {
+          cfg: {
+            agents: {
+              defaults: {
+                model: "anthropic/claude-sonnet-4-6",
+                subagents: { model: "ollama/llama3.2:3b" },
+              },
+            },
+          },
+          payload: {
+            kind: "agentTurn",
+            message: DEFAULT_MESSAGE,
+            model: "openai/gpt-4o",
+          },
+        },
+        { provider: "openai", model: "gpt-4o" },
+      );
+    });
+
+    it("prefers the agent model over agents.defaults.subagents.model", async () => {
+      await expectSelectedModel(
+        {
+          cfg: {
+            agents: {
+              defaults: {
+                model: "anthropic/claude-sonnet-4-6",
+                subagents: { model: "ollama/llama3.2:3b" },
+              },
+            },
+          },
+          agentConfigOverride: {
+            model: { primary: "anthropic/claude-opus-4-6" },
+          },
+        },
+        { provider: "anthropic", model: "claude-opus-4-6" },
       );
     });
   });

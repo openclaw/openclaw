@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { assertFutureConfigActionAllowed } from "./future-config-guard.js";
 import {
   installLaunchAgent,
   isLaunchAgentLoaded,
@@ -154,7 +156,7 @@ export function describeGatewayServiceRestart(
     return {
       scheduled: true,
       daemonActionResult: "scheduled",
-      message: `restart scheduled, ${serviceNoun.toLowerCase()} will restart momentarily`,
+      message: `restart scheduled, ${normalizeLowercaseStringOrEmpty(serviceNoun)} will restart momentarily`,
       progressMessage: `${serviceNoun} service restart scheduled.`,
     };
   }
@@ -210,6 +212,32 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
   },
 };
 
+function withFutureConfigGuard(service: GatewayService): GatewayService {
+  return {
+    ...service,
+    stage: async (args) => {
+      await assertFutureConfigActionAllowed("rewrite the gateway service");
+      return await service.stage(args);
+    },
+    install: async (args) => {
+      await assertFutureConfigActionAllowed("install or rewrite the gateway service");
+      return await service.install(args);
+    },
+    uninstall: async (args) => {
+      await assertFutureConfigActionAllowed("uninstall the gateway service");
+      return await service.uninstall(args);
+    },
+    stop: async (args) => {
+      await assertFutureConfigActionAllowed("stop the gateway service");
+      return await service.stop(args);
+    },
+    restart: async (args) => {
+      await assertFutureConfigActionAllowed("restart the gateway service");
+      return await service.restart(args);
+    },
+  };
+}
+
 function isSupportedGatewayServicePlatform(
   platform: NodeJS.Platform,
 ): platform is SupportedGatewayServicePlatform {
@@ -218,7 +246,7 @@ function isSupportedGatewayServicePlatform(
 
 export function resolveGatewayService(): GatewayService {
   if (isSupportedGatewayServicePlatform(process.platform)) {
-    return GATEWAY_SERVICE_REGISTRY[process.platform];
+    return withFutureConfigGuard(GATEWAY_SERVICE_REGISTRY[process.platform]);
   }
   throw new Error(`Gateway service install not supported on ${process.platform}`);
 }

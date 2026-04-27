@@ -1,41 +1,48 @@
+export { getChatChannelMeta, type ChannelPlugin } from "openclaw/plugin-sdk/core";
+export { buildChannelConfigSchema, WhatsAppConfigSchema } from "../config-api.js";
+export { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 export {
-  buildChannelConfigSchema,
-  createActionGate,
-  DEFAULT_ACCOUNT_ID,
   formatWhatsAppConfigAllowFromEntries,
-  getChatChannelMeta,
+  resolveWhatsAppConfigAllowFrom,
+  resolveWhatsAppConfigDefaultTo,
+} from "./config-accessors.js";
+export {
+  createActionGate,
   jsonResult,
-  normalizeE164,
   readReactionParams,
   readStringParam,
-  resolveWhatsAppGroupIntroHint,
+  ToolAuthorizationError,
+} from "openclaw/plugin-sdk/channel-actions";
+export { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
+export type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig as RuntimeOpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+
+export { type ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contract";
+export { loadOutboundMediaFromUrl } from "./outbound-media.runtime.js";
+export {
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupToolPolicy,
-  ToolAuthorizationError,
-  WhatsAppConfigSchema,
-  type ChannelPlugin,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/whatsapp-core";
-
+} from "./group-policy.js";
 export {
-  createWhatsAppOutboundBase,
-  looksLikeWhatsAppTargetId,
-  normalizeWhatsAppAllowFromEntries,
-  normalizeWhatsAppMessagingTarget,
-  resolveWhatsAppHeartbeatRecipients,
+  resolveWhatsAppGroupIntroHint,
   resolveWhatsAppMentionStripRegexes,
-  type ChannelMessageActionName,
-  type DmPolicy,
-  type GroupPolicy,
-  type WhatsAppAccountConfig,
-} from "openclaw/plugin-sdk/whatsapp-shared";
-import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
+} from "./group-intro.js";
+export { resolveWhatsAppHeartbeatRecipients } from "./heartbeat-recipients.js";
+export { createWhatsAppOutboundBase } from "./outbound-base.js";
 export {
   isWhatsAppGroupJid,
   isWhatsAppUserTarget,
+  looksLikeWhatsAppTargetId,
+  normalizeWhatsAppAllowFromEntries,
+  normalizeWhatsAppMessagingTarget,
   normalizeWhatsAppTarget,
 } from "./normalize-target.js";
 export { resolveWhatsAppOutboundTarget } from "./resolve-outbound-target.js";
+export { resolveWhatsAppReactionLevel } from "./reaction-level.js";
+
+export type OpenClawConfig = RuntimeOpenClawConfig;
+export type { WhatsAppAccountConfig } from "./account-types.js";
+
 type MonitorWebChannel = typeof import("./channel.runtime.js").monitorWebChannel;
 
 let channelRuntimePromise: Promise<typeof import("./channel.runtime.js")> | null = null;
@@ -50,39 +57,4 @@ export async function monitorWebChannel(
 ): ReturnType<MonitorWebChannel> {
   const { monitorWebChannel } = await loadChannelRuntime();
   return await monitorWebChannel(...args);
-}
-
-export async function loadOutboundMediaFromUrl(
-  mediaUrl: string,
-  options: {
-    maxBytes?: number;
-    mediaAccess?: {
-      localRoots?: readonly string[];
-      readFile?: (filePath: string) => Promise<Buffer>;
-    };
-    mediaLocalRoots?: readonly string[];
-    mediaReadFile?: (filePath: string) => Promise<Buffer>;
-  } = {},
-) {
-  const readFile = options.mediaAccess?.readFile ?? options.mediaReadFile;
-  const localRoots =
-    options.mediaAccess?.localRoots?.length && options.mediaAccess.localRoots.length > 0
-      ? options.mediaAccess.localRoots
-      : options.mediaLocalRoots && options.mediaLocalRoots.length > 0
-        ? options.mediaLocalRoots
-        : undefined;
-  return await loadWebMedia(
-    mediaUrl,
-    readFile
-      ? {
-          ...(options.maxBytes !== undefined ? { maxBytes: options.maxBytes } : {}),
-          localRoots: "any",
-          readFile,
-          hostReadCapability: true,
-        }
-      : {
-          ...(options.maxBytes !== undefined ? { maxBytes: options.maxBytes } : {}),
-          ...(localRoots ? { localRoots } : {}),
-        },
-  );
 }

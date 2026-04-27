@@ -1,9 +1,10 @@
 import type {
-  BlockStreamingCoalesceConfig,
+  ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
   MarkdownConfig,
   ReplyToMode,
+  SlackChannelStreamingConfig,
 } from "./types.base.js";
 import type {
   ChannelHealthMonitorConfig,
@@ -28,10 +29,8 @@ export type SlackDmConfig = {
 };
 
 export type SlackChannelConfig = {
-  /** If false, disable the bot in this channel. (Alias for allow: false.) */
+  /** If false, disable the bot in this channel. */
   enabled?: boolean;
-  /** Legacy channel allow toggle; prefer enabled. */
-  allow?: boolean;
   /** Require mentioning the bot to trigger replies. */
   requireMention?: boolean;
   /** Optional tool policy overrides for this channel. */
@@ -49,12 +48,11 @@ export type SlackChannelConfig = {
 
 export type SlackReactionNotificationMode = "off" | "own" | "all" | "allowlist";
 export type SlackStreamingMode = "off" | "partial" | "block" | "progress";
-export type SlackLegacyStreamMode = "replace" | "status_final" | "append";
 export type SlackExecApprovalTarget = "dm" | "channel" | "both";
 export type SlackExecApprovalConfig = {
-  /** Enable Slack exec approvals for this account. Default: false. */
-  enabled?: boolean;
-  /** Slack user IDs allowed to approve exec requests. Optional: falls back to owner IDs inferred from allowFrom/defaultTo when possible. */
+  /** Enable mode for Slack exec approvals on this account. Default: auto when approvers can be resolved; false disables. */
+  enabled?: import("./types.approvals.js").NativeExecApprovalEnableMode;
+  /** Slack user IDs allowed to approve exec requests. Optional: falls back to commands.ownerAllowFrom when possible. */
   approvers?: Array<string | number>;
   /** Only forward approvals for these agent IDs. Omit = all agents. */
   agentFilter?: string[];
@@ -98,6 +96,14 @@ export type SlackThreadConfig = {
   inheritParent?: boolean;
   /** Maximum number of thread messages to fetch as context when starting a new thread session (default: 20). Set to 0 to disable thread history fetching. */
   initialHistoryLimit?: number;
+  /**
+   * If true, require explicit @mention even inside threads where the bot has
+   * previously participated. By default (false), replying in a thread where
+   * the bot is a participant counts as an implicit mention and bypasses
+   * requireMention gating. Set to true to suppress implicit thread mentions
+   * so only explicit @bot mentions trigger replies in threads.
+   */
+  requireExplicitMention?: boolean;
 };
 
 export type SlackAccountConfig = {
@@ -142,6 +148,8 @@ export type SlackAccountConfig = {
    * - "allowlist": only allow channels present in channels.slack.channels
    */
   groupPolicy?: GroupPolicy;
+  /** Supplemental context visibility policy (all|allowlist|allowlist_quote). */
+  contextVisibility?: ContextVisibilityMode;
   /** Max channel messages to keep as history context (0 disables). */
   historyLimit?: number;
   /** Max DM turns to keep as history context. */
@@ -149,34 +157,14 @@ export type SlackAccountConfig = {
   /** Per-DM config overrides keyed by user ID. */
   dms?: Record<string, DmConfig>;
   textChunkLimit?: number;
-  /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
-  chunkMode?: "length" | "newline";
-  blockStreaming?: boolean;
-  /** Merge streamed block replies before sending. */
-  blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
-  /**
-   * Stream preview mode:
-   * - "off": disable live preview streaming
-   * - "partial": replace preview text with the latest partial output (default)
-   * - "block": append chunked preview updates
-   * - "progress": show progress status, then send final text
-   *
-   * Legacy boolean values are still accepted and auto-migrated.
-   */
-  streaming?: SlackStreamingMode | boolean;
-  /**
-   * Slack native text streaming toggle (`chat.startStream` / `chat.appendStream` / `chat.stopStream`).
-   * Used when `streaming` is `partial`. Default: true.
-   */
-  nativeStreaming?: boolean;
-  /** @deprecated Legacy preview mode key; migrated automatically to `streaming`. */
-  streamMode?: SlackLegacyStreamMode;
+  /** Streaming + chunking settings. Prefer this nested shape over legacy flat keys. */
+  streaming?: SlackChannelStreamingConfig;
   mediaMaxMb?: number;
   /** Reaction notification mode (off|own|all|allowlist). Default: own. */
   reactionNotifications?: SlackReactionNotificationMode;
   /** Allowlist for reaction notifications when mode is allowlist. */
   reactionAllowlist?: Array<string | number>;
-  /** Control reply threading when reply tags are present (off|first|all). */
+  /** Control reply threading when reply tags are present (off|first|all|batched). */
   replyToMode?: ReplyToMode;
   /**
    * Optional per-chat-type reply threading overrides.

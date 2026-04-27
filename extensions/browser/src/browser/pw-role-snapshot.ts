@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { CONTENT_ROLES, INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
 
 export type RoleRef = {
@@ -56,7 +57,7 @@ function matchInteractiveSnapshotLine(
   if (roleRaw.startsWith("/")) {
     return null;
   }
-  const role = roleRaw.toLowerCase();
+  const role = normalizeLowercaseStringOrEmpty(roleRaw);
   return {
     roleRaw,
     role,
@@ -174,7 +175,7 @@ function processLine(
     return options.interactive ? null : line;
   }
 
-  const role = roleRaw.toLowerCase();
+  const role = normalizeLowercaseStringOrEmpty(roleRaw);
   const isInteractive = INTERACTIVE_ROLES.has(role);
   const isContent = CONTENT_ROLES.has(role);
   const isStructural = STRUCTURAL_ROLES.has(role);
@@ -264,7 +265,13 @@ export function parseRoleRef(raw: string): string | null {
     : trimmed.startsWith("ref=")
       ? trimmed.slice(4)
       : trimmed;
-  return /^e\d+$/.test(normalized) ? normalized : null;
+  if (/^e\d+$/i.test(normalized)) {
+    return normalized;
+  }
+  if (/^\d{1,9}$/.test(normalized)) {
+    return normalized;
+  }
+  return null;
 }
 
 export function buildRoleSnapshotFromAriaSnapshot(
@@ -327,8 +334,12 @@ export function buildRoleSnapshotFromAriaSnapshot(
 }
 
 function parseAiSnapshotRef(suffix: string): string | null {
-  const match = suffix.match(/\[ref=(e\d+)\]/i);
-  return match ? match[1] : null;
+  const eMatch = suffix.match(/\[ref=(e\d+)\]/i);
+  if (eMatch) {
+    return eMatch[1];
+  }
+  const numMatch = suffix.match(/\[ref=(\d{1,9})\]/);
+  return numMatch ? numMatch[1] : null;
 }
 
 /**
@@ -339,7 +350,7 @@ export function buildRoleSnapshotFromAiSnapshot(
   aiSnapshot: string,
   options: RoleSnapshotOptions = {},
 ): { snapshot: string; refs: RoleRefMap } {
-  const lines = String(aiSnapshot ?? "").split("\n");
+  const lines = aiSnapshot.split("\n");
   const refs: RoleRefMap = {};
 
   if (options.interactive) {
@@ -379,7 +390,7 @@ export function buildRoleSnapshotFromAiSnapshot(
       continue;
     }
 
-    const role = roleRaw.toLowerCase();
+    const role = normalizeLowercaseStringOrEmpty(roleRaw);
     const isStructural = STRUCTURAL_ROLES.has(role);
 
     if (options.compact && isStructural && !name) {

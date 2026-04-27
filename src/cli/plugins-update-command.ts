@@ -1,104 +1,36 @@
 import { loadConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
-import type { HookInstallRecord } from "../config/types.hooks.js";
-import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { updateNpmInstalledHookPacks } from "../hooks/update.js";
-import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import {
+  loadInstalledPluginIndexInstallRecords,
+  withoutPluginInstallRecords,
+  withPluginInstallRecords,
+} from "../plugins/installed-plugin-index-records.js";
 import { updateNpmInstalledPlugins } from "../plugins/update.js";
 import { defaultRuntime } from "../runtime.js";
 import { theme } from "../terminal/theme.js";
+import { commitPluginInstallRecordsWithConfig } from "./plugins-install-record-commit.js";
+import { refreshPluginRegistryAfterConfigMutation } from "./plugins-registry-refresh.js";
+import { logPluginUpdateOutcomes } from "./plugins-update-outcomes.js";
 import {
-  extractInstalledNpmHookPackageName,
-  extractInstalledNpmPackageName,
-} from "./plugins-command-helpers.js";
+  resolveHookPackUpdateSelection,
+  resolvePluginUpdateSelection,
+} from "./plugins-update-selection.js";
 import { promptYesNo } from "./prompt.js";
-
-function resolvePluginUpdateSelection(params: {
-  installs: Record<string, PluginInstallRecord>;
-  rawId?: string;
-  all?: boolean;
-}): { pluginIds: string[]; specOverrides?: Record<string, string> } {
-  if (params.all) {
-    return { pluginIds: Object.keys(params.installs) };
-  }
-  if (!params.rawId) {
-    return { pluginIds: [] };
-  }
-
-  const parsedSpec = parseRegistryNpmSpec(params.rawId);
-  if (!parsedSpec || parsedSpec.selectorKind === "none") {
-    return { pluginIds: [params.rawId] };
-  }
-
-  const matches = Object.entries(params.installs).filter(([, install]) => {
-    return extractInstalledNpmPackageName(install) === parsedSpec.name;
-  });
-  if (matches.length !== 1) {
-    return { pluginIds: [params.rawId] };
-  }
-
-  const [pluginId] = matches[0];
-  if (!pluginId) {
-    return { pluginIds: [params.rawId] };
-  }
-  return {
-    pluginIds: [pluginId],
-    specOverrides: {
-      [pluginId]: parsedSpec.raw,
-    },
-  };
-}
-
-function resolveHookPackUpdateSelection(params: {
-  installs: Record<string, HookInstallRecord>;
-  rawId?: string;
-  all?: boolean;
-}): { hookIds: string[]; specOverrides?: Record<string, string> } {
-  if (params.all) {
-    return { hookIds: Object.keys(params.installs) };
-  }
-  if (!params.rawId) {
-    return { hookIds: [] };
-  }
-  if (params.rawId in params.installs) {
-    return { hookIds: [params.rawId] };
-  }
-
-  const parsedSpec = parseRegistryNpmSpec(params.rawId);
-  if (!parsedSpec || parsedSpec.selectorKind === "none") {
-    return { hookIds: [] };
-  }
-
-  const matches = Object.entries(params.installs).filter(([, install]) => {
-    return extractInstalledNpmHookPackageName(install) === parsedSpec.name;
-  });
-  if (matches.length !== 1) {
-    return { hookIds: [] };
-  }
-
-  const [hookId] = matches[0];
-  if (!hookId) {
-    return { hookIds: [] };
-  }
-  return {
-    hookIds: [hookId],
-    specOverrides: {
-      [hookId]: parsedSpec.raw,
-    },
-  };
-}
 
 export async function runPluginUpdateCommand(params: {
   id?: string;
-  opts: { all?: boolean; dryRun?: boolean };
+  opts: { all?: boolean; dryRun?: boolean; dangerouslyForceUnsafeInstall?: boolean };
 }) {
   const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
   const cfg = loadConfig();
+  const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
+  const cfgWithPluginInstallRecords = withPluginInstallRecords(cfg, pluginInstallRecords);
   const logger = {
     info: (msg: string) => defaultRuntime.log(msg),
     warn: (msg: string) => defaultRuntime.log(theme.warn(msg)),
   };
   const pluginSelection = resolvePluginUpdateSelection({
-    installs: cfg.plugins?.installs ?? {},
+    installs: pluginInstallRecords,
     rawId: params.id,
     all: params.opts.all,
   });
@@ -118,10 +50,11 @@ export async function runPluginUpdateCommand(params: {
   }
 
   const pluginResult = await updateNpmInstalledPlugins({
-    config: cfg,
+    config: cfgWithPluginInstallRecords,
     pluginIds: pluginSelection.pluginIds,
     specOverrides: pluginSelection.specOverrides,
     dryRun: params.opts.dryRun,
+    dangerouslyForceUnsafeInstall: params.opts.dangerouslyForceUnsafeInstall,
     logger,
     onIntegrityDrift: async (drift) => {
       const specLabel = drift.resolvedSpec ?? drift.spec;
@@ -160,35 +93,43 @@ export async function runPluginUpdateCommand(params: {
     },
   });
 
-  for (const outcome of pluginResult.outcomes) {
-    if (outcome.status === "error") {
-      defaultRuntime.log(theme.error(outcome.message));
-      continue;
-    }
-    if (outcome.status === "skipped") {
-      defaultRuntime.log(theme.warn(outcome.message));
-      continue;
-    }
-    defaultRuntime.log(outcome.message);
-  }
-
-  for (const outcome of hookResult.outcomes) {
-    if (outcome.status === "error") {
-      defaultRuntime.log(theme.error(outcome.message));
-      continue;
-    }
-    if (outcome.status === "skipped") {
-      defaultRuntime.log(theme.warn(outcome.message));
-      continue;
-    }
-    defaultRuntime.log(outcome.message);
-  }
+  const outcomeSummary = logPluginUpdateOutcomes({
+    outcomes: [...pluginResult.outcomes, ...hookResult.outcomes],
+    log: (message) => defaultRuntime.log(message),
+  });
 
   if (!params.opts.dryRun && (pluginResult.changed || hookResult.changed)) {
-    await replaceConfigFile({
-      nextConfig: hookResult.config,
-      baseHash: (await sourceSnapshotPromise)?.hash,
-    });
+    const nextPluginInstallRecords = pluginResult.config.plugins?.installs ?? {};
+    const shouldPersistPluginInstallIndex =
+      pluginResult.changed || Object.keys(pluginInstallRecords).length > 0;
+    const nextConfig = shouldPersistPluginInstallIndex
+      ? withoutPluginInstallRecords(hookResult.config)
+      : hookResult.config;
+    if (shouldPersistPluginInstallIndex) {
+      await commitPluginInstallRecordsWithConfig({
+        previousInstallRecords: pluginInstallRecords,
+        nextInstallRecords: nextPluginInstallRecords,
+        nextConfig,
+        baseHash: (await sourceSnapshotPromise)?.hash,
+      });
+    } else {
+      await replaceConfigFile({
+        nextConfig,
+        baseHash: (await sourceSnapshotPromise)?.hash,
+      });
+    }
+    if (pluginResult.changed) {
+      await refreshPluginRegistryAfterConfigMutation({
+        config: nextConfig,
+        reason: "source-changed",
+        installRecords: nextPluginInstallRecords,
+        logger,
+      });
+    }
     defaultRuntime.log("Restart the gateway to load plugins and hooks.");
+  }
+
+  if (outcomeSummary.hasErrors) {
+    defaultRuntime.exit(1);
   }
 }

@@ -1,7 +1,7 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveAgentIdentity } from "../agents/identity.js";
 import { loadAgentIdentity } from "../commands/agents.config.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { coerceIdentityValue } from "../shared/assistant-identity-values.js";
 import {
@@ -11,7 +11,10 @@ import {
 } from "../shared/avatar-policy.js";
 
 const MAX_ASSISTANT_NAME = 50;
-const MAX_ASSISTANT_AVATAR = 200;
+// Image-bearing avatars (data: URLs, paths) need to round-trip through
+// coerceIdentityValue without truncation. Sized to match
+// MAX_LOCAL_USER_IMAGE_AVATAR / AVATAR_MAX_BYTES expansion.
+const MAX_ASSISTANT_AVATAR = 2_000_000;
 const MAX_ASSISTANT_EMOJI = 16;
 
 export const DEFAULT_ASSISTANT_IDENTITY: AssistantIdentity = {

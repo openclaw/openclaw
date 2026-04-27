@@ -27,6 +27,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   private val prefs = nodeApp.prefs
   private val runtimeRef = MutableStateFlow<NodeRuntime?>(null)
   private var foreground = true
+  private val _requestedHomeDestination = MutableStateFlow<HomeDestination?>(null)
+  val requestedHomeDestination: StateFlow<HomeDestination?> = _requestedHomeDestination
+  private val _chatDraft = MutableStateFlow<String?>(null)
+  val chatDraft: StateFlow<String?> = _chatDraft
+  private val _pendingAssistantAutoSend = MutableStateFlow<String?>(null)
+  val pendingAssistantAutoSend: StateFlow<String?> = _pendingAssistantAutoSend
 
   private fun ensureRuntime(): NodeRuntime {
     runtimeRef.value?.let { return it }
@@ -95,7 +101,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val onboardingCompleted: StateFlow<Boolean> = prefs.onboardingCompleted
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
   val speakerEnabled: StateFlow<Boolean> = prefs.speakerEnabled
-  val micEnabled: StateFlow<Boolean> = prefs.talkEnabled
+  val voiceCaptureMode: StateFlow<VoiceCaptureMode> = runtimeState(initial = VoiceCaptureMode.Off) { it.voiceCaptureMode }
+  val micEnabled: StateFlow<Boolean> = runtimeState(initial = false) { it.micEnabled }
 
   val micCooldown: StateFlow<Boolean> = runtimeState(initial = false) { it.micCooldown }
   val micStatusText: StateFlow<String> = runtimeState(initial = "Mic off") { it.micStatusText }
@@ -105,6 +112,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val micConversation: StateFlow<List<VoiceConversationEntry>> = runtimeState(initial = emptyList()) { it.micConversation }
   val micInputLevel: StateFlow<Float> = runtimeState(initial = 0f) { it.micInputLevel }
   val micIsSending: StateFlow<Boolean> = runtimeState(initial = false) { it.micIsSending }
+  val talkModeEnabled: StateFlow<Boolean> = runtimeState(initial = false) { it.talkModeEnabled }
+  val talkModeListening: StateFlow<Boolean> = runtimeState(initial = false) { it.talkModeListening }
+  val talkModeSpeaking: StateFlow<Boolean> = runtimeState(initial = false) { it.talkModeSpeaking }
+  val talkModeStatusText: StateFlow<String> = runtimeState(initial = "Off") { it.talkModeStatusText }
 
   val chatSessionKey: StateFlow<String> = runtimeState(initial = "main") { it.chatSessionKey }
   val chatSessionId: StateFlow<String?> = runtimeState(initial = null) { it.chatSessionId }
@@ -198,6 +209,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     prefs.setGatewayPassword(value)
   }
 
+  fun resetGatewaySetupAuth() {
+    ensureRuntime().resetGatewaySetupAuth()
+  }
+
   fun setOnboardingCompleted(value: Boolean) {
     if (value) {
       ensureRuntime()
@@ -246,8 +261,35 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     ensureRuntime().setVoiceScreenActive(active)
   }
 
+  fun handleAssistantLaunch(request: AssistantLaunchRequest) {
+    _requestedHomeDestination.value = HomeDestination.Chat
+    if (request.autoSend) {
+      _pendingAssistantAutoSend.value = request.prompt
+      _chatDraft.value = null
+      return
+    }
+    _pendingAssistantAutoSend.value = null
+    _chatDraft.value = request.prompt
+  }
+
+  fun clearRequestedHomeDestination() {
+    _requestedHomeDestination.value = null
+  }
+
+  fun clearChatDraft() {
+    _chatDraft.value = null
+  }
+
+  fun clearPendingAssistantAutoSend() {
+    _pendingAssistantAutoSend.value = null
+  }
+
   fun setMicEnabled(enabled: Boolean) {
     ensureRuntime().setMicEnabled(enabled)
+  }
+
+  fun setTalkModeEnabled(enabled: Boolean) {
+    ensureRuntime().setTalkModeEnabled(enabled)
   }
 
   fun setSpeakerEnabled(enabled: Boolean) {
@@ -336,5 +378,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun sendChat(message: String, thinking: String, attachments: List<OutgoingAttachment>) {
     ensureRuntime().sendChat(message = message, thinking = thinking, attachments = attachments)
+  }
+
+  suspend fun sendChatAwaitAcceptance(
+    message: String,
+    thinking: String,
+    attachments: List<OutgoingAttachment>,
+  ): Boolean {
+    return ensureRuntime().sendChatAwaitAcceptance(
+      message = message,
+      thinking = thinking,
+      attachments = attachments,
+    )
   }
 }

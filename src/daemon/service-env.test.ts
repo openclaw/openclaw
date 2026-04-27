@@ -24,6 +24,9 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     expect(result).toContain("/home/testuser/.npm-global/bin");
     expect(result).toContain("/home/testuser/bin");
     expect(result).toContain("/home/testuser/.nvm/current/bin");
+    expect(result).toContain("/home/testuser/.local/share/fnm/aliases/default/bin");
+    expect(result).toContain("/home/testuser/.local/share/fnm/current/bin");
+    expect(result).toContain("/home/testuser/.fnm/aliases/default/bin");
     expect(result).toContain("/home/testuser/.fnm/current/bin");
     expect(result).toContain("/home/testuser/.volta/bin");
     expect(result).toContain("/home/testuser/.asdf/shims");
@@ -96,6 +99,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     expect(result).toContain("/opt/volta/bin");
     expect(result).toContain("/opt/asdf/shims");
     expect(result).toContain("/opt/nvm/current/bin");
+    expect(result).toContain("/opt/fnm/aliases/default/bin");
     expect(result).toContain("/opt/fnm/current/bin");
   });
 
@@ -172,6 +176,102 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
   });
 });
 
+describe("getMinimalServicePathParts - Nix Home Manager", () => {
+  it("falls back to default Nix profile when NIX_PROFILES is absent on Linux", () => {
+    const result = getMinimalServicePathParts({
+      platform: "linux",
+      home: "/home/testuser",
+    });
+
+    expect(result).toContain("/home/testuser/.nix-profile/bin");
+  });
+
+  it("falls back to default Nix profile when NIX_PROFILES is absent on macOS", () => {
+    const result = getMinimalServicePathParts({
+      platform: "darwin",
+      home: "/Users/testuser",
+    });
+
+    expect(result).toContain("/Users/testuser/.nix-profile/bin");
+  });
+
+  it("places rightmost NIX_PROFILES entry before leftmost on Linux", () => {
+    const result = getMinimalServicePathPartsFromEnv({
+      platform: "linux",
+      env: {
+        HOME: "/home/testuser",
+        NIX_PROFILES: "/nix/var/nix/profiles/default /home/testuser/.nix-profile",
+      },
+    });
+
+    const userIdx = result.indexOf("/home/testuser/.nix-profile/bin");
+    const defaultIdx = result.indexOf("/nix/var/nix/profiles/default/bin");
+    expect(userIdx).toBeGreaterThan(-1);
+    expect(defaultIdx).toBeGreaterThan(-1);
+    expect(userIdx).toBeLessThan(defaultIdx);
+  });
+
+  it("places rightmost NIX_PROFILES entry before leftmost on macOS", () => {
+    const result = getMinimalServicePathPartsFromEnv({
+      platform: "darwin",
+      env: {
+        HOME: "/Users/testuser",
+        NIX_PROFILES: "/nix/var/nix/profiles/default /Users/testuser/.nix-profile",
+      },
+    });
+
+    const userIdx = result.indexOf("/Users/testuser/.nix-profile/bin");
+    const defaultIdx = result.indexOf("/nix/var/nix/profiles/default/bin");
+    expect(userIdx).toBeGreaterThan(-1);
+    expect(defaultIdx).toBeGreaterThan(-1);
+    expect(userIdx).toBeLessThan(defaultIdx);
+  });
+
+  it("includes single Nix profile from NIX_PROFILES on Linux", () => {
+    const result = getMinimalServicePathPartsFromEnv({
+      platform: "linux",
+      env: {
+        HOME: "/home/testuser",
+        NIX_PROFILES: "/nix/var/nix/profiles/per-user/testuser/profile",
+      },
+    });
+
+    expect(result).toContain("/nix/var/nix/profiles/per-user/testuser/profile/bin");
+  });
+
+  it("includes single Nix profile from NIX_PROFILES on macOS", () => {
+    const result = getMinimalServicePathPartsFromEnv({
+      platform: "darwin",
+      env: {
+        HOME: "/Users/testuser",
+        NIX_PROFILES: "/nix/var/nix/profiles/per-user/testuser/profile",
+      },
+    });
+
+    expect(result).toContain("/nix/var/nix/profiles/per-user/testuser/profile/bin");
+  });
+
+  it("preserves Nix precedence across three profiles", () => {
+    const result = getMinimalServicePathPartsFromEnv({
+      platform: "linux",
+      env: {
+        HOME: "/home/testuser",
+        NIX_PROFILES:
+          "/nix/var/nix/profiles/default /nix/var/nix/profiles/per-user/testuser/custom /home/testuser/.nix-profile",
+      },
+    });
+
+    const userIdx = result.indexOf("/home/testuser/.nix-profile/bin");
+    const customIdx = result.indexOf("/nix/var/nix/profiles/per-user/testuser/custom/bin");
+    const defaultIdx = result.indexOf("/nix/var/nix/profiles/default/bin");
+    expect(userIdx).toBeGreaterThan(-1);
+    expect(customIdx).toBeGreaterThan(-1);
+    expect(defaultIdx).toBeGreaterThan(-1);
+    expect(userIdx).toBeLessThan(customIdx);
+    expect(customIdx).toBeLessThan(defaultIdx);
+  });
+});
+
 describe("buildMinimalServicePath", () => {
   const splitPath = (value: string, platform: NodeJS.Platform) =>
     value.split(platform === "win32" ? path.win32.delimiter : path.posix.delimiter);
@@ -206,6 +306,7 @@ describe("buildMinimalServicePath", () => {
     expect(parts).toContain("/home/alice/.local/bin");
     expect(parts).toContain("/home/alice/.npm-global/bin");
     expect(parts).toContain("/home/alice/.nvm/current/bin");
+    expect(parts).toContain("/home/alice/.local/share/fnm/aliases/default/bin");
 
     // Verify system directories are also included
     expect(parts).toContain("/usr/local/bin");
@@ -297,18 +398,41 @@ describe("buildServiceEnvironment", () => {
     }
   });
 
-  it("forwards TMPDIR from the host environment", () => {
+  it("passes through OPENCLAW_WRAPPER for gateway services", () => {
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        OPENCLAW_WRAPPER: " /usr/local/bin/openclaw-doppler ",
+      },
+      port: 18789,
+    });
+
+    expect(env.OPENCLAW_WRAPPER).toBe("/usr/local/bin/openclaw-doppler");
+  });
+
+  it("forwards TMPDIR from the host environment on Linux", () => {
     const env = buildServiceEnvironment({
       env: { HOME: "/home/user", TMPDIR: "/var/folders/xw/abc123/T/" },
       port: 18789,
+      platform: "linux",
     });
     expect(env.TMPDIR).toBe("/var/folders/xw/abc123/T/");
   });
 
-  it("falls back to os.tmpdir when TMPDIR is not set", () => {
+  it("uses a durable state temp directory for macOS LaunchAgents", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/Users/user", TMPDIR: "/var/folders/xw/abc123/T/" },
+      port: 18789,
+      platform: "darwin",
+    });
+    expect(env.TMPDIR).toBe(path.join("/Users/user", ".openclaw", "tmp"));
+  });
+
+  it("falls back to os.tmpdir when TMPDIR is not set on Linux", () => {
     const env = buildServiceEnvironment({
       env: { HOME: "/home/user" },
       port: 18789,
+      platform: "linux",
     });
     expect(env.TMPDIR).toBe(os.tmpdir());
   });
@@ -388,6 +512,13 @@ describe("buildNodeServiceEnvironment", () => {
     expect(env.OPENCLAW_GATEWAY_TOKEN).toBe("node-token");
   });
 
+  it("passes through OPENCLAW_ALLOW_INSECURE_PRIVATE_WS for node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/home/user", OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: " 1 " },
+    });
+    expect(env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS).toBe("1");
+  });
+
   it("omits OPENCLAW_GATEWAY_TOKEN when the env var is empty", () => {
     const env = buildNodeServiceEnvironment({
       env: {
@@ -411,16 +542,26 @@ describe("buildNodeServiceEnvironment", () => {
     expect(env.no_proxy).toBe("localhost,127.0.0.1");
   });
 
-  it("forwards TMPDIR for node services", () => {
+  it("forwards TMPDIR for node services on Linux", () => {
     const env = buildNodeServiceEnvironment({
       env: { HOME: "/home/user", TMPDIR: "/tmp/custom" },
+      platform: "linux",
     });
     expect(env.TMPDIR).toBe("/tmp/custom");
   });
 
-  it("falls back to os.tmpdir for node services when TMPDIR is not set", () => {
+  it("uses a durable state temp directory for macOS node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/Users/user", TMPDIR: "/var/folders/xw/abc123/T/" },
+      platform: "darwin",
+    });
+    expect(env.TMPDIR).toBe(path.join("/Users/user", ".openclaw", "tmp"));
+  });
+
+  it("falls back to os.tmpdir for node services when TMPDIR is not set on Linux", () => {
     const env = buildNodeServiceEnvironment({
       env: { HOME: "/home/user" },
+      platform: "linux",
     });
     expect(env.TMPDIR).toBe(os.tmpdir());
   });
@@ -457,8 +598,8 @@ describe("shared Node TLS env defaults", () => {
     expect(env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/cert.pem");
   });
 
-  it.each(builders)("$name does not default NODE_EXTRA_CA_CERTS on non-macOS", ({ build }) => {
-    const env = build({ HOME: "/home/user" }, "linux");
+  it.each(builders)("$name does not default NODE_EXTRA_CA_CERTS on Windows", ({ build }) => {
+    const env = build({ HOME: "/home/user" }, "win32");
     expect(env.NODE_EXTRA_CA_CERTS).toBeUndefined();
   });
 

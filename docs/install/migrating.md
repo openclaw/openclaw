@@ -3,7 +3,7 @@ summary: "Move (migrate) an OpenClaw install from one machine to another"
 read_when:
   - You are moving OpenClaw to a new laptop/server
   - You want to preserve sessions, auth, and channel logins (WhatsApp, etc.)
-title: "Migration Guide"
+title: "Migration guide"
 ---
 
 # Migrating OpenClaw to a New Machine
@@ -15,7 +15,7 @@ This guide moves an OpenClaw gateway to a new machine without redoing onboarding
 When you copy the **state directory** (`~/.openclaw/` by default) and your **workspace**, you preserve:
 
 - **Config** -- `openclaw.json` and all gateway settings
-- **Auth** -- API keys, OAuth tokens, credential profiles
+- **Auth** -- per-agent `auth-profiles.json` (API keys + OAuth), plus any channel/provider state under `credentials/`
 - **Sessions** -- conversation history and agent state
 - **Channel state** -- WhatsApp login, Telegram session, etc.
 - **Workspace files** -- `MEMORY.md`, `USER.md`, skills, and prompts
@@ -80,8 +80,9 @@ Custom profiles use `~/.openclaw-<profile>/` or a path set via `OPENCLAW_STATE_D
   </Accordion>
 
   <Accordion title="Copying only openclaw.json">
-    The config file alone is not enough. Credentials live under `credentials/`, and agent
-    state lives under `agents/`. Always migrate the **entire** state directory.
+    The config file alone is not enough. Model auth profiles live under
+    `agents/<agentId>/agent/auth-profiles.json`, and channel/provider state still
+    lives under `credentials/`. Always migrate the **entire** state directory.
   </Accordion>
 
   <Accordion title="Permissions and ownership">
@@ -95,7 +96,8 @@ Custom profiles use `~/.openclaw-<profile>/` or a path set via `OPENCLAW_STATE_D
   </Accordion>
 
   <Accordion title="Secrets in backups">
-    The state directory contains API keys, OAuth tokens, and channel credentials.
+    The state directory contains auth profiles, channel credentials, and other
+    provider state.
     Store backups encrypted, avoid insecure transfer channels, and rotate keys if you suspect exposure.
   </Accordion>
 </AccordionGroup>
@@ -108,3 +110,9 @@ On the new machine, confirm:
 - [ ] Channels are still connected (no re-pairing needed)
 - [ ] The dashboard opens and shows existing sessions
 - [ ] Workspace files (memory, configs) are present
+
+## Related
+
+- [Install overview](/install)
+- [Matrix migration](/install/migrating-matrix)
+- [Uninstall](/install/uninstall)

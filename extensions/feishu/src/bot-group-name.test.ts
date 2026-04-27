@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { resolveGroupName, clearGroupNameCache } from "./bot.js";
+import type { ResolvedFeishuAccount } from "./types.js";
 
 const mockGetChatInfo = vi.hoisted(() => vi.fn());
 const mockCreateFeishuClient = vi.hoisted(() => vi.fn());
@@ -7,8 +8,26 @@ const mockCreateFeishuClient = vi.hoisted(() => vi.fn());
 vi.mock("./chat.js", () => ({ getChatInfo: mockGetChatInfo }));
 vi.mock("./client.js", () => ({ createFeishuClient: mockCreateFeishuClient }));
 
-function makeAccount(id = "test-account") {
-  return { accountId: id, appId: "cli_test", appSecret: "secret", configured: true } as any;
+function makeAccount(id = "test-account"): ResolvedFeishuAccount {
+  return {
+    accountId: id,
+    selectionSource: "explicit",
+    enabled: true,
+    configured: true,
+    appId: "cli_test",
+    appSecret: "secret",
+    domain: "feishu",
+    config: {
+      domain: "feishu",
+      connectionMode: "websocket",
+      webhookPath: "/feishu/events",
+      dmPolicy: "pairing",
+      reactionNotifications: "own",
+      groupPolicy: "allowlist",
+      typingIndicator: true,
+      resolveSenderNames: true,
+    },
+  };
 }
 
 /**

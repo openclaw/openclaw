@@ -3,10 +3,8 @@ summary: "Grok web search via xAI web-grounded responses"
 read_when:
   - You want to use Grok for web_search
   - You need an XAI_API_KEY for web search
-title: "Grok Search"
+title: "Grok search"
 ---
-
-# Grok Search
 
 OpenClaw supports Grok as a `web_search` provider, using xAI web-grounded
 responses to produce AI-synthesized answers backed by live search results
@@ -88,7 +86,11 @@ citations, similar to Gemini's Google Search grounding approach.
 
 ## Supported parameters
 
-Grok search supports the standard `query` and `count` parameters.
+Grok search supports `query`.
+
+`count` is accepted for shared `web_search` compatibility, but Grok still
+returns one synthesized answer with citations rather than an N-result list.
+
 Provider-specific filters are not currently supported.
 
 ## Related

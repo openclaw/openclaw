@@ -32,6 +32,10 @@ export function parseTelegramThreadId(threadId?: string | number | null): number
   if (!trimmed) {
     return undefined;
   }
+  const topicMatch = /^-?\d+:topic:(\d+)$/.exec(trimmed);
+  if (topicMatch) {
+    return parseIntegerId(topicMatch[1]);
+  }
   // DM topic session keys may scope thread ids as "<chatId>:<threadId>".
   const scopedMatch = /^-?\d+:(-?\d+)$/.exec(trimmed);
   const rawThreadId = scopedMatch ? scopedMatch[1] : trimmed;

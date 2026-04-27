@@ -1,5 +1,8 @@
-import { type BackoffPolicy } from "../../../infra/backoff.js";
+import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { generateSecureToken } from "../../../infra/secure-random.js";
+import { extractAssistantTextForPhase } from "../../../shared/chat-message-content.js";
+import { extractAssistantVisibleText } from "../../pi-embedded-utils.js";
 import { derivePromptTokens, normalizeUsage } from "../../usage.js";
 import type { EmbeddedPiAgentMeta } from "../types.js";
 import { toLastCallUsage, toNormalizedUsage, type UsageAccumulator } from "../usage-accumulator.js";
@@ -13,6 +16,7 @@ type UsageSnapshot = {
 };
 
 export type RuntimeAuthState = {
+  generation: number;
   sourceApiKey: string;
   authMode: string;
   profileId?: string;
@@ -25,22 +29,23 @@ export const RUNTIME_AUTH_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 export const RUNTIME_AUTH_REFRESH_RETRY_MS = 60 * 1000;
 export const RUNTIME_AUTH_REFRESH_MIN_DELAY_MS = 5 * 1000;
 
-// Keep overload pacing noticeable enough to avoid tight retry bursts, but short
-// enough that fallback still feels responsive within a single turn.
-export const OVERLOAD_FAILOVER_BACKOFF_POLICY: BackoffPolicy = {
-  initialMs: 250,
-  maxMs: 1_500,
-  factor: 2,
-  jitter: 0.2,
-};
+export const DEFAULT_OVERLOAD_FAILOVER_BACKOFF_MS = 0;
+export const DEFAULT_MAX_OVERLOAD_PROFILE_ROTATIONS = 1;
+export const DEFAULT_MAX_RATE_LIMIT_PROFILE_ROTATIONS = 1;
 
-// Maximum number of auth-profile rotations to attempt for overloaded errors
-// before escalating to cross-provider fallback. Overloaded is a provider-level
-// capacity issue — rotating auth profiles on the same provider is unlikely to
-// help and wastes time with backoff delays. A cap of 1 allows one probe attempt
-// (in case the overload was transient) before giving up on the provider.
-// See: https://github.com/openclaw/openclaw/issues/58348
-export const MAX_OVERLOAD_PROFILE_ROTATIONS = 1;
+export function resolveOverloadFailoverBackoffMs(cfg?: OpenClawConfig): number {
+  return cfg?.auth?.cooldowns?.overloadedBackoffMs ?? DEFAULT_OVERLOAD_FAILOVER_BACKOFF_MS;
+}
+
+export function resolveOverloadProfileRotationLimit(cfg?: OpenClawConfig): number {
+  return cfg?.auth?.cooldowns?.overloadedProfileRotations ?? DEFAULT_MAX_OVERLOAD_PROFILE_ROTATIONS;
+}
+
+export function resolveRateLimitProfileRotationLimit(cfg?: OpenClawConfig): number {
+  return (
+    cfg?.auth?.cooldowns?.rateLimitedProfileRotations ?? DEFAULT_MAX_RATE_LIMIT_PROFILE_ROTATIONS
+  );
+}
 
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
 const ANTHROPIC_MAGIC_STRING_REPLACEMENT = "ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)";
@@ -74,13 +79,18 @@ export function resolveMaxRunRetryIterations(profileCandidateCount: number): num
 }
 
 export function resolveActiveErrorContext(params: {
-  lastAssistant: { provider?: string; model?: string } | undefined;
   provider: string;
   model: string;
-}): { provider: string; model: string } {
+  assistant?: { provider?: string; model?: string };
+}): {
+  provider: string;
+  model: string;
+} {
+  const assistantProvider = params.assistant?.provider?.trim();
+  const assistantModel = params.assistant?.model?.trim();
   return {
-    provider: params.lastAssistant?.provider ?? params.provider,
-    model: params.lastAssistant?.model ?? params.model,
+    provider: assistantProvider || params.provider,
+    model: assistantModel || params.model,
   };
 }
 
@@ -114,6 +124,7 @@ export function buildErrorAgentMeta(params: {
   sessionId: string;
   provider: string;
   model: string;
+  contextTokens?: number;
   usageAccumulator: UsageAccumulator;
   lastRunPromptUsage: UsageSnapshot | undefined;
   lastAssistant?: { usage?: unknown } | null;
@@ -129,8 +140,30 @@ export function buildErrorAgentMeta(params: {
     sessionId: params.sessionId,
     provider: params.provider,
     model: params.model,
+    ...(params.contextTokens ? { contextTokens: params.contextTokens } : {}),
     ...(usageMeta.usage ? { usage: usageMeta.usage } : {}),
     ...(usageMeta.lastCallUsage ? { lastCallUsage: usageMeta.lastCallUsage } : {}),
     ...(usageMeta.promptTokens ? { promptTokens: usageMeta.promptTokens } : {}),
   };
+}
+
+export function resolveFinalAssistantVisibleText(
+  lastAssistant: AssistantMessage | undefined,
+): string | undefined {
+  if (!lastAssistant) {
+    return undefined;
+  }
+  const visibleText = extractAssistantVisibleText(lastAssistant).trim();
+  return visibleText || undefined;
+}
+
+export function resolveFinalAssistantRawText(
+  lastAssistant: AssistantMessage | undefined,
+): string | undefined {
+  if (!lastAssistant) {
+    return undefined;
+  }
+  const finalAnswerText = extractAssistantTextForPhase(lastAssistant, { phase: "final_answer" });
+  const rawText = (finalAnswerText ?? extractAssistantTextForPhase(lastAssistant) ?? "").trim();
+  return rawText || undefined;
 }

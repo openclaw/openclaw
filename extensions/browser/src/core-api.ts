@@ -9,6 +9,7 @@ export {
   browserCreateProfile,
   browserConsoleMessages,
   browserDeleteProfile,
+  browserDoctor,
   browserFocusTab,
   browserNavigate,
   browserOpenTab,
@@ -52,6 +53,8 @@ export {
 export type {
   BrowserCreateProfileResult,
   BrowserDeleteProfileResult,
+  BrowserDoctorCheck,
+  BrowserDoctorReport,
   BrowserFormField,
   BrowserResetProfileResult,
   BrowserRouteRegistrar,
@@ -64,47 +67,52 @@ export type {
 } from "./browser-runtime.js";
 export {
   callGatewayTool,
-  createSubsystemLogger,
   danger,
-  defaultRuntime,
   detectMime,
-  ErrorCodes,
-  errorShape,
   formatCliCommand,
   formatDocsLink,
   formatHelpExamples,
-  addGatewayClientOptions,
-  callGatewayFromCli,
   inheritOptionFromParent,
   info,
   imageResultFromFile,
-  isNodeCommandAllowed,
   jsonResult,
   listNodes,
-  loadConfig,
-  normalizePluginsConfig,
   optionalStringEnum,
-  parseBooleanValue,
   readStringParam,
-  respondUnavailableOnNodeInvokeError,
-  resolveEffectiveEnableState,
   resolveNodeIdFromList,
-  resolveNodeCommandAllowlist,
-  runCommandWithRuntime,
   selectDefaultNodeFromList,
-  safeParseJson,
-  shortenHomePath,
   stringEnum,
   theme,
+} from "openclaw/plugin-sdk/browser-setup-tools";
+export {
+  loadConfig,
+  normalizePluginsConfig,
+  parseBooleanValue,
+  resolveEffectiveEnableState,
+  shortenHomePath,
+} from "openclaw/plugin-sdk/browser-config-runtime";
+export {
+  addGatewayClientOptions,
+  callGatewayFromCli,
+  defaultRuntime,
+  ErrorCodes,
+  errorShape,
+  isNodeCommandAllowed,
+  respondUnavailableOnNodeInvokeError,
+  resolveNodeCommandAllowlist,
+  runCommandWithRuntime,
+  safeParseJson,
   withTimeout,
+} from "openclaw/plugin-sdk/browser-node-runtime";
+export {
+  createSubsystemLogger,
   wrapExternalContent,
-} from "openclaw/plugin-sdk/browser-support";
+} from "openclaw/plugin-sdk/browser-security-runtime";
+export type { AnyAgentTool, NodeListNode } from "openclaw/plugin-sdk/browser-setup-tools";
+export type { OpenClawConfig } from "openclaw/plugin-sdk/browser-config-runtime";
 export type {
-  AnyAgentTool,
   GatewayRequestHandlers,
   GatewayRpcOpts,
-  NodeListNode,
   NodeSession,
-  OpenClawConfig,
   OpenClawPluginService,
-} from "openclaw/plugin-sdk/browser-support";
+} from "openclaw/plugin-sdk/browser-node-runtime";

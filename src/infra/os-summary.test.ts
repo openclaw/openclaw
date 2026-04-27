@@ -3,9 +3,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 
-vi.mock("node:child_process", () => ({
-  spawnSync: (...args: unknown[]) => spawnSyncMock(...args),
-}));
+vi.mock("node:child_process", async () => {
+  const { mockNodeChildProcessSpawnSync } =
+    await import("../../test/helpers/node-builtin-mocks.js");
+  return mockNodeChildProcessSpawnSync(spawnSyncMock);
+});
 
 import { resolveOsSummary } from "./os-summary.js";
 

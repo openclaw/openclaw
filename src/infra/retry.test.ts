@@ -162,6 +162,19 @@ describe("retryAsync", () => {
     );
   });
 
+  it("retries immediately when the resolved delay is zero", async () => {
+    const fn = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce("ok");
+    await expect(
+      retryAsync(fn, {
+        attempts: 2,
+        minDelayMs: 0,
+        maxDelayMs: 0,
+        jitter: 0,
+      }),
+    ).resolves.toBe("ok");
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
   it("clamps attempts to at least 1", async () => {
     const fn = vi.fn().mockRejectedValue(new Error("boom"));
     await expect(retryAsync(fn, { attempts: 0, minDelayMs: 0, maxDelayMs: 0 })).rejects.toThrow(

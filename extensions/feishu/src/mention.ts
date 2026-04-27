@@ -1,4 +1,7 @@
-import type { FeishuMessageEvent } from "./bot.js";
+import type { FeishuMessageEvent } from "./event-types.js";
+export type { MentionTarget } from "./mention-target.types.js";
+import type { MentionTarget } from "./mention-target.types.js";
+import { isFeishuGroupChatType } from "./types.js";
 
 /**
  * Escape regex metacharacters so user-controlled mention fields are treated literally.
@@ -6,15 +9,6 @@ import type { FeishuMessageEvent } from "./bot.js";
 export function escapeRegExp(input: string): string {
   return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
-
-/**
- * Mention target user info
- */
-export type MentionTarget = {
-  openId: string;
-  name: string;
-  key: string; // Placeholder in original message, e.g. @_user_1
-};
 
 /**
  * Extract mention targets from message event (excluding the bot itself)
@@ -53,17 +47,16 @@ export function isMentionForwardRequest(event: FeishuMessageEvent, botOpenId?: s
     return false;
   }
 
-  const isDirectMessage = event.message.chat_type !== "group";
+  const isDirectMessage = !isFeishuGroupChatType(event.message.chat_type);
   const hasOtherMention = mentions.some((m) => m.id.open_id !== botOpenId);
 
   if (isDirectMessage) {
     // DM: trigger if any non-bot user is mentioned
     return hasOtherMention;
-  } else {
-    // Group: need to mention both bot and other users
-    const hasBotMention = mentions.some((m) => m.id.open_id === botOpenId);
-    return hasBotMention && hasOtherMention;
   }
+  // Group: need to mention both bot and other users
+  const hasBotMention = mentions.some((m) => m.id.open_id === botOpenId);
+  return hasBotMention && hasOtherMention;
 }
 
 /**

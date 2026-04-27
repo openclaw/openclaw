@@ -1,44 +1,31 @@
-import fs from "node:fs";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as stickerCache from "./sticker-cache-store.js";
 
-vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
-  resolveApiKeyForProvider: vi.fn(),
-  findModelInCatalog: vi.fn(),
-  loadModelCatalog: vi.fn(async () => []),
-  modelSupportsVision: vi.fn(() => false),
-  resolveDefaultModelForAgent: vi.fn(() => ({ provider: "openai", model: "gpt-5.2" })),
+const jsonStoreMocks = vi.hoisted(() => {
+  const store: { value: unknown } = { value: null };
+  return {
+    store,
+    loadJsonFile: vi.fn(() => store.value),
+    saveJsonFile: vi.fn((_file: string, value: unknown) => {
+      store.value = structuredClone(value);
+    }),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/json-store", () => ({
+  loadJsonFile: jsonStoreMocks.loadJsonFile,
+  saveJsonFile: jsonStoreMocks.saveJsonFile,
 }));
 
-vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
-  AUTO_IMAGE_KEY_PROVIDERS: ["openai"],
-  DEFAULT_IMAGE_MODELS: { openai: "gpt-4.1-mini" },
-  resolveAutoImageModel: vi.fn(async () => null),
+vi.mock("openclaw/plugin-sdk/state-paths", () => ({
+  resolveStateDir: () => "/tmp/openclaw-test-sticker-cache",
 }));
-
-vi.mock("openclaw/plugin-sdk/media-understanding-runtime", () => ({
-  describeImageFileWithModel: vi.fn(),
-}));
-
-const TEST_CACHE_DIR = "/tmp/openclaw-test-sticker-cache/telegram";
-const TEST_CACHE_FILE = path.join(TEST_CACHE_DIR, "sticker-cache.json");
-
-type StickerCacheModule = typeof import("./sticker-cache.js");
-
-let stickerCache: StickerCacheModule;
 
 describe("sticker-cache", () => {
-  beforeEach(async () => {
-    process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-test-sticker-cache";
-    fs.rmSync("/tmp/openclaw-test-sticker-cache", { recursive: true, force: true });
-    fs.mkdirSync(TEST_CACHE_DIR, { recursive: true });
-    vi.resetModules();
-    stickerCache = await import("./sticker-cache.js");
-  });
-
-  afterEach(() => {
-    fs.rmSync("/tmp/openclaw-test-sticker-cache", { recursive: true, force: true });
-    delete process.env.OPENCLAW_STATE_DIR;
+  beforeEach(() => {
+    jsonStoreMocks.store.value = null;
+    jsonStoreMocks.loadJsonFile.mockClear();
+    jsonStoreMocks.saveJsonFile.mockClear();
   });
 
   describe("getCachedSticker", () => {
@@ -63,7 +50,7 @@ describe("sticker-cache", () => {
       expect(result).toEqual(sticker);
     });
 
-    it("returns null after cache is cleared", () => {
+    it("returns null after backing store is cleared", () => {
       const sticker = {
         fileId: "file123",
         fileUniqueId: "unique123",
@@ -74,8 +61,7 @@ describe("sticker-cache", () => {
       stickerCache.cacheSticker(sticker);
       expect(stickerCache.getCachedSticker("unique123")).not.toBeNull();
 
-      // Manually clear the cache file
-      fs.rmSync(TEST_CACHE_FILE, { force: true });
+      jsonStoreMocks.store.value = null;
 
       expect(stickerCache.getCachedSticker("unique123")).toBeNull();
     });

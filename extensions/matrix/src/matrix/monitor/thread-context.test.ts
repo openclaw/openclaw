@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createPollStartEvent } from "./test-events.js";
 import {
   createMatrixThreadContextResolver,
   summarizeMatrixThreadStarterEvent,
@@ -63,6 +64,7 @@ describe("matrix thread context", () => {
       }),
     ).resolves.toEqual({
       threadStarterBody: "Matrix thread root $root from Alice:\nRoot topic",
+      senderId: "@alice:example.org",
       senderLabel: "Alice",
       summary: "Root topic",
     });
@@ -115,6 +117,7 @@ describe("matrix thread context", () => {
       }),
     ).resolves.toEqual({
       threadStarterBody: "Matrix thread root $root from Alice:\nRecovered topic",
+      senderId: "@alice:example.org",
       senderLabel: "Alice",
       summary: "Recovered topic",
     });
@@ -124,24 +127,8 @@ describe("matrix thread context", () => {
   });
 
   it("summarizes poll start thread roots from poll content", () => {
-    expect(
-      summarizeMatrixThreadStarterEvent({
-        event_id: "$root",
-        sender: "@alice:example.org",
-        type: "m.poll.start",
-        origin_server_ts: Date.now(),
-        content: {
-          "m.poll.start": {
-            question: { "m.text": "Lunch?" },
-            kind: "m.poll.disclosed",
-            max_selections: 1,
-            answers: [
-              { id: "a1", "m.text": "Pizza" },
-              { id: "a2", "m.text": "Sushi" },
-            ],
-          },
-        },
-      } as MatrixRawEvent),
-    ).toBe("[Poll]\nLunch?\n\n1. Pizza\n2. Sushi");
+    expect(summarizeMatrixThreadStarterEvent(createPollStartEvent("$root"))).toBe(
+      "[Poll]\nLunch?\n\n1. Pizza\n2. Sushi",
+    );
   });
 });

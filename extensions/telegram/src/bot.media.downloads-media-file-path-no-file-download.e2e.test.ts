@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { telegramBotDepsForTest } from "./bot.media.e2e-harness.js";
 import { setNextSavedMediaPath } from "./bot.media.e2e-harness.js";
 import {
   TELEGRAM_TEST_TIMINGS,
@@ -206,7 +207,7 @@ describe("telegram inbound media", () => {
           },
         },
         assert: (payload: Record<string, unknown>) => {
-          expect(payload.Body).toContain("Eiffel Tower");
+          expect(payload.Body).toContain("48.858844");
           expect(payload.LocationName).toBe("Eiffel Tower");
           expect(payload.LocationAddress).toBe("Champ de Mars, Paris");
           expect(payload.LocationSource).toBe("place");
@@ -236,6 +237,81 @@ describe("telegram media groups", () => {
 
   const MEDIA_GROUP_TEST_TIMEOUT_MS = process.platform === "win32" ? 45_000 : 20_000;
   const MEDIA_GROUP_FLUSH_MS = TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs + 40;
+
+  it(
+    "uses custom apiRoot for buffered media-group downloads",
+    async () => {
+      const originalLoadConfig = telegramBotDepsForTest.loadConfig;
+      telegramBotDepsForTest.loadConfig = (() => ({
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            apiRoot: "http://127.0.0.1:8081/custom-bot-api",
+          },
+        },
+      })) as typeof telegramBotDepsForTest.loadConfig;
+
+      const runtimeError = vi.fn();
+      const { handler, replySpy } = await createBotHandlerWithOptions({ runtimeError });
+      const fetchSpy = mockTelegramPngDownload();
+
+      try {
+        await Promise.all([
+          handler({
+            message: {
+              chat: { id: 42, type: "private" as const },
+              from: { id: 777, is_bot: false, first_name: "Ada" },
+              message_id: 1,
+              caption: "Album",
+              date: 1736380800,
+              media_group_id: "album-custom-api-root",
+              photo: [{ file_id: "photo1" }],
+            },
+            me: { username: "openclaw_bot" },
+            getFile: async () => ({ file_path: "photos/photo1.jpg" }),
+          }),
+          handler({
+            message: {
+              chat: { id: 42, type: "private" as const },
+              from: { id: 777, is_bot: false, first_name: "Ada" },
+              message_id: 2,
+              date: 1736380801,
+              media_group_id: "album-custom-api-root",
+              photo: [{ file_id: "photo2" }],
+            },
+            me: { username: "openclaw_bot" },
+            getFile: async () => ({ file_path: "photos/photo2.jpg" }),
+          }),
+        ]);
+
+        await vi.waitFor(
+          () => {
+            expect(replySpy).toHaveBeenCalledTimes(1);
+          },
+          { timeout: MEDIA_GROUP_FLUSH_MS * 4, interval: 2 },
+        );
+
+        expect(runtimeError).not.toHaveBeenCalled();
+        expect(fetchSpy).toHaveBeenNthCalledWith(
+          1,
+          expect.objectContaining({
+            url: "http://127.0.0.1:8081/custom-bot-api/file/bottok/photos/photo1.jpg",
+          }),
+        );
+        expect(fetchSpy).toHaveBeenNthCalledWith(
+          2,
+          expect.objectContaining({
+            url: "http://127.0.0.1:8081/custom-bot-api/file/bottok/photos/photo2.jpg",
+          }),
+        );
+      } finally {
+        telegramBotDepsForTest.loadConfig = originalLoadConfig;
+        fetchSpy.mockRestore();
+      }
+    },
+    MEDIA_GROUP_TEST_TIMEOUT_MS,
+  );
 
   it(
     "handles same-group buffering and separate-group independence",

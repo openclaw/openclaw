@@ -16,6 +16,8 @@ const loadConfig = vi.fn<() => OpenClawConfig>(() => ({
     },
   },
 }));
+const writeGatewayRestartIntentSync = vi.fn();
+const clearGatewayRestartIntentSync = vi.fn();
 
 vi.mock("../../config/config.js", () => ({
   loadConfig: () => loadConfig(),
@@ -26,10 +28,16 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime,
 }));
 
+vi.mock("../../infra/restart.js", () => ({
+  clearGatewayRestartIntentSync: () => clearGatewayRestartIntentSync(),
+  writeGatewayRestartIntentSync: (opts: unknown) => writeGatewayRestartIntentSync(opts),
+}));
+
 let runServiceRestart: typeof import("./lifecycle-core.js").runServiceRestart;
 let runServiceStart: typeof import("./lifecycle-core.js").runServiceStart;
 let runServiceStop: typeof import("./lifecycle-core.js").runServiceStop;
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe logged JSON shape.
 function readJsonLog<T extends object>() {
   const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
   return JSON.parse(jsonLine ?? "{}") as T;
@@ -43,6 +51,36 @@ function createServiceRunArgs(checkTokenDrift?: boolean) {
     opts: { json: true as const },
     ...(checkTokenDrift ? { checkTokenDrift } : {}),
   };
+}
+
+function stubConfigSecretRefGatewayToken() {
+  loadConfig.mockReturnValue({
+    secrets: {
+      providers: {
+        default: { source: "env" },
+      },
+    },
+    gateway: {
+      auth: {
+        mode: "token",
+        token: {
+          source: "env",
+          provider: "default",
+          id: "SERVICE_GATEWAY_TOKEN",
+        },
+      },
+    },
+  });
+}
+
+function stubServiceGatewayTokenEnv() {
+  service.readCommand.mockResolvedValue({
+    programArguments: [],
+    environment: {
+      OPENCLAW_GATEWAY_TOKEN: "service-token",
+      SERVICE_GATEWAY_TOKEN: "service-token",
+    },
+  });
 }
 
 describe("runServiceRestart token drift", () => {
@@ -61,6 +99,8 @@ describe("runServiceRestart token drift", () => {
       },
     });
     resetLifecycleServiceMocks();
+    writeGatewayRestartIntentSync.mockClear();
+    clearGatewayRestartIntentSync.mockClear();
     service.readCommand.mockResolvedValue({
       programArguments: [],
       environment: { OPENCLAW_GATEWAY_TOKEN: "service-token" },
@@ -121,30 +161,8 @@ describe("runServiceRestart token drift", () => {
   });
 
   it("resolves config token SecretRefs using service command env before drift checks", async () => {
-    loadConfig.mockReturnValue({
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
-      },
-      gateway: {
-        auth: {
-          mode: "token",
-          token: {
-            source: "env",
-            provider: "default",
-            id: "SERVICE_GATEWAY_TOKEN",
-          },
-        },
-      },
-    });
-    service.readCommand.mockResolvedValue({
-      programArguments: [],
-      environment: {
-        OPENCLAW_GATEWAY_TOKEN: "service-token",
-        SERVICE_GATEWAY_TOKEN: "service-token",
-      },
-    });
+    stubConfigSecretRefGatewayToken();
+    stubServiceGatewayTokenEnv();
 
     await runServiceRestart(createServiceRunArgs(true));
 
@@ -153,30 +171,8 @@ describe("runServiceRestart token drift", () => {
   });
 
   it("prefers service command env over process env for SecretRef token drift resolution", async () => {
-    loadConfig.mockReturnValue({
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
-      },
-      gateway: {
-        auth: {
-          mode: "token",
-          token: {
-            source: "env",
-            provider: "default",
-            id: "SERVICE_GATEWAY_TOKEN",
-          },
-        },
-      },
-    });
-    service.readCommand.mockResolvedValue({
-      programArguments: [],
-      environment: {
-        OPENCLAW_GATEWAY_TOKEN: "service-token",
-        SERVICE_GATEWAY_TOKEN: "service-token",
-      },
-    });
+    stubConfigSecretRefGatewayToken();
+    stubServiceGatewayTokenEnv();
     vi.stubEnv("SERVICE_GATEWAY_TOKEN", "process-token");
 
     await runServiceRestart(createServiceRunArgs(true));
@@ -195,6 +191,7 @@ describe("runServiceRestart token drift", () => {
 
     expect(loadConfig).not.toHaveBeenCalled();
     expect(service.readCommand).not.toHaveBeenCalled();
+    expect(writeGatewayRestartIntentSync).not.toHaveBeenCalled();
     const payload = readJsonLog<{ warnings?: string[] }>();
     expect(payload.warnings).toBeUndefined();
   });
@@ -216,6 +213,33 @@ describe("runServiceRestart token drift", () => {
     expect(payload.result).toBe("stopped");
     expect(payload.message).toContain("unmanaged process");
     expect(service.stop).not.toHaveBeenCalled();
+  });
+
+  it("emits started when a not-loaded start path repairs the service", async () => {
+    service.isLoaded.mockResolvedValue(false);
+
+    await runServiceStart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [],
+      opts: { json: true },
+      onNotLoaded: async () => ({
+        result: "started",
+        message:
+          "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.",
+        loaded: true,
+      }),
+    });
+
+    const payload = readJsonLog<{
+      result?: string;
+      message?: string;
+      service?: { loaded?: boolean };
+    }>();
+    expect(payload.result).toBe("started");
+    expect(payload.message).toContain("re-bootstrapped");
+    expect(payload.service?.loaded).toBe(true);
+    expect(service.restart).not.toHaveBeenCalled();
   });
 
   it("runs restart health checks after an unmanaged restart signal", async () => {
@@ -242,6 +266,36 @@ describe("runServiceRestart token drift", () => {
     expect(payload.message).toContain("unmanaged process");
   });
 
+  it("emits loaded restart state when launchd repair handles a not-loaded restart", async () => {
+    const postRestartCheck = vi.fn(async () => {});
+    service.isLoaded.mockResolvedValue(false);
+
+    await runServiceRestart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [],
+      opts: { json: true },
+      onNotLoaded: async () => ({
+        result: "restarted",
+        message:
+          "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.",
+        loaded: true,
+      }),
+      postRestartCheck,
+    });
+
+    expect(postRestartCheck).toHaveBeenCalledTimes(1);
+    expect(service.restart).not.toHaveBeenCalled();
+    const payload = readJsonLog<{
+      result?: string;
+      message?: string;
+      service?: { loaded?: boolean };
+    }>();
+    expect(payload.result).toBe("restarted");
+    expect(payload.message).toContain("re-bootstrapped");
+    expect(payload.service?.loaded).toBe(true);
+  });
+
   it("skips restart health checks when restart is only scheduled", async () => {
     const postRestartCheck = vi.fn(async () => {});
     service.restart.mockResolvedValue({ outcome: "scheduled" });
@@ -259,6 +313,27 @@ describe("runServiceRestart token drift", () => {
     const payload = readJsonLog<{ result?: string; message?: string }>();
     expect(payload.result).toBe("scheduled");
     expect(payload.message).toBe("restart scheduled, gateway will restart momentarily");
+  });
+
+  it("writes a restart intent before service-manager restart", async () => {
+    service.readRuntime.mockResolvedValue({ status: "running", pid: 1234 });
+
+    await runServiceRestart(createServiceRunArgs());
+
+    expect(writeGatewayRestartIntentSync).toHaveBeenCalledWith({ targetPid: 1234 });
+    expect(clearGatewayRestartIntentSync).not.toHaveBeenCalled();
+    expect(service.restart).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears restart intent when service-manager restart fails before signaling", async () => {
+    service.readRuntime.mockResolvedValue({ status: "running", pid: 1234 });
+    writeGatewayRestartIntentSync.mockReturnValueOnce(true);
+    service.restart.mockRejectedValueOnce(new Error("launchctl failed before signaling"));
+
+    await expect(runServiceRestart(createServiceRunArgs())).rejects.toThrow("__exit__:1");
+
+    expect(writeGatewayRestartIntentSync).toHaveBeenCalledWith({ targetPid: 1234 });
+    expect(clearGatewayRestartIntentSync).toHaveBeenCalledOnce();
   });
 
   it("emits scheduled when service start routes through a scheduled restart", async () => {

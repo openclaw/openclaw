@@ -163,6 +163,7 @@ class WizardSessionPrompter implements WizardPrompter {
 export class WizardSession {
   private currentStep: WizardStep | null = null;
   private stepDeferred: Deferred<WizardStep | null> | null = null;
+  private pendingTerminalResolution = false;
   private answerDeferred = new Map<string, Deferred<unknown>>();
   private status: WizardSessionStatus = "running";
   private error: string | undefined;
@@ -175,6 +176,10 @@ export class WizardSession {
   async next(): Promise<WizardNextResult> {
     if (this.currentStep) {
       return { done: false, step: this.currentStep, status: this.status };
+    }
+    if (this.pendingTerminalResolution) {
+      this.pendingTerminalResolution = false;
+      return { done: true, status: this.status, error: this.error };
     }
     if (this.status !== "running") {
       return { done: true, status: this.status, error: this.error };
@@ -247,6 +252,9 @@ export class WizardSession {
 
   private resolveStep(step: WizardStep | null) {
     if (!this.stepDeferred) {
+      if (step === null) {
+        this.pendingTerminalResolution = true;
+      }
       return;
     }
     const deferred = this.stepDeferred;

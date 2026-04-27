@@ -108,15 +108,18 @@ const TARGET_KEYS = [
   "agents.defaults.memorySearch.cache.maxEntries",
   "agents.defaults.memorySearch.sync.onSearch",
   "agents.defaults.memorySearch.sync.watch",
+  "agents.defaults.memorySearch.sync.embeddingBatchTimeoutSeconds",
   "agents.defaults.memorySearch.sync.sessions.deltaBytes",
   "agents.defaults.memorySearch.sync.sessions.deltaMessages",
   "models.mode",
   "models.providers.*.auth",
   "models.providers.*.authHeader",
+  "models.providers.*.request",
   "gateway.reload.mode",
   "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback",
   "gateway.controlUi.allowInsecureAuth",
   "gateway.controlUi.dangerouslyDisableDeviceAuth",
+  "gateway.controlUi.embedSandbox",
   "cron",
   "cron.enabled",
   "cron.store",
@@ -232,9 +235,6 @@ const TARGET_KEYS = [
   "hooks.gmail.tailscale.mode",
   "hooks.gmail.thinking",
   "hooks.internal",
-  "hooks.internal.handlers",
-  "hooks.internal.handlers[].event",
-  "hooks.internal.handlers[].module",
   "hooks.internal.load.extraDirs",
   "messages",
   "messages.messagePrefix",
@@ -256,6 +256,7 @@ const TARGET_KEYS = [
   "channels",
   "channels.defaults",
   "channels.defaults.groupPolicy",
+  "channels.defaults.contextVisibility",
   "channels.defaults.heartbeat",
   "channels.defaults.heartbeat.showOk",
   "channels.defaults.heartbeat.showAlerts",
@@ -307,16 +308,13 @@ const TARGET_KEYS = [
   "discovery.wideArea.enabled",
   "discovery.mdns",
   "discovery.mdns.mode",
+  "gateway.controlUi.embedSandbox",
   "canvasHost",
   "canvasHost.enabled",
   "canvasHost.root",
   "canvasHost.port",
   "canvasHost.liveReload",
   "talk",
-  "talk.voiceId",
-  "talk.voiceAliases",
-  "talk.modelId",
-  "talk.outputFormat",
   "talk.interruptOnSpeech",
   "talk.silenceTimeoutMs",
   "meta",
@@ -355,13 +353,13 @@ const TARGET_KEYS = [
   "plugins.entries.*.enabled",
   "plugins.entries.*.hooks",
   "plugins.entries.*.hooks.allowPromptInjection",
+  "plugins.entries.*.hooks.allowConversationAccess",
   "plugins.entries.*.subagent",
   "plugins.entries.*.subagent.allowModelOverride",
   "plugins.entries.*.subagent.allowedModels",
   "plugins.entries.*.apiKey",
   "plugins.entries.*.env",
   "plugins.entries.*.config",
-  "plugins.installs",
   "auth",
   "auth.cooldowns",
   "models",
@@ -371,18 +369,12 @@ const TARGET_KEYS = [
   "models.providers.*.api",
   "models.providers.*.headers",
   "models.providers.*.models",
-  "models.bedrockDiscovery",
-  "models.bedrockDiscovery.enabled",
-  "models.bedrockDiscovery.region",
-  "models.bedrockDiscovery.providerFilter",
-  "models.bedrockDiscovery.refreshInterval",
-  "models.bedrockDiscovery.defaultContextWindow",
-  "models.bedrockDiscovery.defaultMaxTokens",
   "agents",
   "agents.defaults",
   "agents.list",
   "agents.defaults.compaction",
   "agents.defaults.compaction.mode",
+  "agents.defaults.compaction.provider",
   "agents.defaults.compaction.reserveTokens",
   "agents.defaults.compaction.keepRecentTokens",
   "agents.defaults.compaction.reserveTokensFloor",
@@ -397,6 +389,7 @@ const TARGET_KEYS = [
   "agents.defaults.compaction.timeoutSeconds",
   "agents.defaults.compaction.model",
   "agents.defaults.compaction.truncateAfterCompaction",
+  "agents.defaults.compaction.maxActiveTranscriptBytes",
   "agents.defaults.compaction.memoryFlush",
   "agents.defaults.compaction.memoryFlush.enabled",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens",
@@ -429,6 +422,7 @@ const ENUM_EXPECTATIONS: Record<string, string[]> = {
   ],
   "messages.queue.drop": ['"old"', '"new"', '"summarize"'],
   "channels.defaults.groupPolicy": ['"open"', '"disabled"', '"allowlist"'],
+  "channels.defaults.contextVisibility": ['"all"', '"allowlist"', '"allowlist_quote"'],
   "gateway.mode": ['"local"', '"remote"'],
   "gateway.bind": ['"auto"', '"lan"', '"loopback"', '"custom"', '"tailnet"'],
   "gateway.auth.mode": ['"none"', '"token"', '"password"', '"trusted-proxy"'],
@@ -533,7 +527,6 @@ const FINAL_BACKLOG_TARGET_KEYS = [
   "browser.snapshotDefaults",
   "browser.snapshotDefaults.mode",
   "browser.ssrfPolicy",
-  "browser.ssrfPolicy.allowPrivateNetwork",
   "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork",
   "browser.ssrfPolicy.allowedHostnames",
   "browser.ssrfPolicy.hostnameAllowlist",
@@ -542,16 +535,18 @@ const FINAL_BACKLOG_TARGET_KEYS = [
   "diagnostics.otel.endpoint",
   "diagnostics.otel.flushIntervalMs",
   "diagnostics.otel.headers",
+  "diagnostics.otel.logsEndpoint",
   "diagnostics.otel.logs",
+  "diagnostics.otel.metricsEndpoint",
   "diagnostics.otel.metrics",
   "diagnostics.otel.sampleRate",
   "diagnostics.otel.serviceName",
+  "diagnostics.otel.tracesEndpoint",
   "diagnostics.otel.traces",
   "gateway.remote.password",
   "gateway.remote.token",
   "skills.load.watch",
   "skills.load.watchDebounceMs",
-  "talk.apiKey",
   "ui.assistant.avatar",
   "ui.assistant.name",
   "ui.seamColor",
@@ -773,6 +768,12 @@ describe("config help copy quality", () => {
     expect(pluginPromptPolicy.includes("before_prompt_build")).toBe(true);
     expect(pluginPromptPolicy.includes("before_agent_start")).toBe(true);
     expect(pluginPromptPolicy.includes("modelOverride")).toBe(true);
+
+    const pluginConversationPolicy = FIELD_HELP["plugins.entries.*.hooks.allowConversationAccess"];
+    expect(pluginConversationPolicy.includes("llm_input")).toBe(true);
+    expect(pluginConversationPolicy.includes("llm_output")).toBe(true);
+    expect(pluginConversationPolicy.includes("before_agent_finalize")).toBe(true);
+    expect(pluginConversationPolicy.includes("agent_end")).toBe(true);
   });
 
   it("documents auth/model root semantics and provider secret handling", () => {
@@ -781,10 +782,6 @@ describe("config help copy quality", () => {
     const modelsMode = FIELD_HELP["models.mode"];
     expect(modelsMode.includes("SecretRef-managed")).toBe(true);
     expect(modelsMode.includes("preserve")).toBe(true);
-
-    const bedrockRefresh = FIELD_HELP["models.bedrockDiscovery.refreshInterval"];
-    expect(/refresh|seconds|interval/i.test(bedrockRefresh)).toBe(true);
-    expect(/cost|noise|api/i.test(bedrockRefresh)).toBe(true);
 
     const authCooldowns = FIELD_HELP["auth.cooldowns"];
     expect(/cooldown|backoff|retry/i.test(authCooldowns)).toBe(true);
@@ -815,7 +812,23 @@ describe("config help copy quality", () => {
     const compactionModel = FIELD_HELP["agents.defaults.compaction.model"];
     expect(/provider\/model|different model|primary agent model/i.test(compactionModel)).toBe(true);
 
+    const transcriptBytes = FIELD_HELP["agents.defaults.compaction.maxActiveTranscriptBytes"];
+    expect(/transcript|bytes|compaction/i.test(transcriptBytes)).toBe(true);
+    expect(/never splits raw transcript bytes/i.test(transcriptBytes)).toBe(true);
+
     const flush = FIELD_HELP["agents.defaults.compaction.memoryFlush.enabled"];
     expect(/pre-compaction|memory flush|token/i.test(flush)).toBe(true);
+  });
+
+  it("documents agent startup-context preload controls", () => {
+    const startupContext = FIELD_HELP["agents.defaults.startupContext"];
+    expect(/first-turn|\/new|\/reset|daily memory/i.test(startupContext)).toBe(true);
+
+    const applyOn = FIELD_HELP["agents.defaults.startupContext.applyOn"];
+    expect(applyOn.includes('"new"')).toBe(true);
+    expect(applyOn.includes('"reset"')).toBe(true);
+
+    const dailyMemoryDays = FIELD_HELP["agents.defaults.startupContext.dailyMemoryDays"];
+    expect(/today \+ yesterday|default:\s*2/i.test(dailyMemoryDays)).toBe(true);
   });
 });

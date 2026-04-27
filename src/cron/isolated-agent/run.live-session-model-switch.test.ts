@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { LiveSessionModelSwitchError } from "../../agents/live-model-switch.js";
+import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import {
   clearFastTestEnv,
   loadRunCronIsolatedAgentTurn,
@@ -247,6 +247,26 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
     expect(String(result.error)).toContain("transient network error");
     // Switched once, then failed
     expect(callCount).toBe(2);
+  });
+
+  it("aborts after exceeding LiveSessionModelSwitchError retry limit (#58466)", async () => {
+    const switchError = new LiveSessionModelSwitchError({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+    });
+
+    let callCount = 0;
+    runWithModelFallbackMock.mockImplementation(async () => {
+      callCount++;
+      throw switchError;
+    });
+
+    const result = await runCronIsolatedAgentTurn(makeParams());
+
+    expect(result.status).toBe("error");
+    // Circuit breaker: max 2 retries → 3 total attempts (initial + 2 retries)
+    expect(callCount).toBe(3);
+    expect(logWarnMock).toHaveBeenCalledWith(expect.stringContaining("retry limit reached"));
   });
 
   it("does not retry when the thrown error is not a LiveSessionModelSwitchError", async () => {

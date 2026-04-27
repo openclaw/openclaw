@@ -1,13 +1,13 @@
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { formatCliCommand } from "../cli/command-format.js";
 import { loadConfig } from "../config/config.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { getBridgeAuthForPort } from "./bridge-auth-registry.js";
+import { resolveBrowserConfig, resolveProfile } from "./config.js";
 import { resolveBrowserControlAuth } from "./control-auth.js";
-import {
-  createBrowserControlContext,
-  startBrowserControlServiceFromConfig,
-} from "./control-service.js";
-import { createBrowserRouteDispatcher } from "./routes/dispatcher.js";
+import { resolveBrowserRateLimitMessage } from "./rate-limit-message.js";
 
 // Application-level error from the browser control service (service is reachable
 // but returned an error response). Must NOT be wrapped with "Can't reach ..." messaging.
@@ -102,37 +102,43 @@ const BROWSER_TOOL_MODEL_HINT =
   "Do NOT retry the browser tool — it will keep failing. " +
   "Use an alternative approach or inform the user that the browser is currently unavailable.";
 
-const BROWSER_SERVICE_RATE_LIMIT_MESSAGE =
-  "Browser service rate limit reached. " +
-  "Wait for the current session to complete, or retry later.";
-
-const BROWSERBASE_RATE_LIMIT_MESSAGE =
-  "Browserbase rate limit reached (max concurrent sessions). " +
-  "Wait for the current session to complete, or upgrade your plan.";
-
 function isRateLimitStatus(status: number): boolean {
   return status === 429;
 }
 
-function isBrowserbaseUrl(url: string): boolean {
-  if (!isAbsoluteHttp(url)) {
-    return false;
+type BrowserControlOwnership = "local-managed" | "external-browser" | "unknown";
+
+function resolveDispatcherBrowserControlOwnership(url: string): BrowserControlOwnership {
+  if (isAbsoluteHttp(url)) {
+    return "unknown";
   }
   try {
-    const host = new URL(url).hostname.toLowerCase();
-    return host === "browserbase.com" || host.endsWith(".browserbase.com");
+    const cfg = loadConfig();
+    const resolved = resolveBrowserConfig(cfg?.browser, cfg);
+    const parsed = new URL(url, "http://localhost");
+    const requestedProfile = parsed.searchParams.get("profile")?.trim();
+    const profile = resolveProfile(resolved, requestedProfile || resolved.defaultProfile);
+    if (!profile) {
+      return "unknown";
+    }
+    return profile.driver === "openclaw" && profile.cdpIsLoopback && !profile.attachOnly
+      ? "local-managed"
+      : "external-browser";
   } catch {
-    return false;
+    return "unknown";
   }
 }
 
-export function resolveBrowserRateLimitMessage(url: string): string {
-  return isBrowserbaseUrl(url)
-    ? BROWSERBASE_RATE_LIMIT_MESSAGE
-    : BROWSER_SERVICE_RATE_LIMIT_MESSAGE;
-}
-
-function resolveBrowserFetchOperatorHint(url: string): string {
+function resolveBrowserFetchOperatorHint(
+  url: string,
+  opts?: { ownership?: BrowserControlOwnership },
+): string {
+  if (opts?.ownership === "external-browser") {
+    return (
+      "The browser profile is external to OpenClaw; make sure its browser/CDP endpoint " +
+      "is running and reachable. Restarting the OpenClaw gateway will not launch it."
+    );
+  }
   const isLocal = !isAbsoluteHttp(url);
   return isLocal
     ? `Restart the OpenClaw gateway (OpenClaw.app menubar, or \`${formatCliCommand("openclaw gateway")}\`).`
@@ -140,8 +146,9 @@ function resolveBrowserFetchOperatorHint(url: string): string {
 }
 
 function normalizeErrorMessage(err: unknown): string {
-  if (err instanceof Error && err.message.trim().length > 0) {
-    return err.message.trim();
+  const message = err instanceof Error ? normalizeOptionalString(err.message) : undefined;
+  if (message) {
+    return message;
   }
   return String(err);
 }
@@ -151,6 +158,27 @@ function appendBrowserToolModelHint(message: string): string {
     return message;
   }
   return `${message} ${BROWSER_TOOL_MODEL_HINT}`;
+}
+
+type BrowserFetchFailureKind = "timeout" | "aborted" | "persistent";
+
+function classifyBrowserFetchFailure(err: unknown): BrowserFetchFailureKind {
+  const msg = normalizeErrorMessage(err);
+  const msgLower = normalizeLowercaseStringOrEmpty(msg);
+  const nameLower = err instanceof Error ? normalizeLowercaseStringOrEmpty(err.name) : "";
+  const looksLikeTimeout =
+    nameLower.includes("timeout") || msgLower.includes("timed out") || msgLower.includes("timeout");
+  if (looksLikeTimeout) {
+    return "timeout";
+  }
+  const looksLikeAbort =
+    nameLower === "aborterror" ||
+    msgLower.includes("aborterror") ||
+    msgLower.includes("aborted") ||
+    msgLower.includes("abort") ||
+    msgLower.includes("cancelled") ||
+    msgLower.includes("canceled");
+  return looksLikeAbort ? "aborted" : "persistent";
 }
 
 async function discardResponseBody(res: Response): Promise<void> {
@@ -163,32 +191,36 @@ async function discardResponseBody(res: Response): Promise<void> {
 
 function enhanceDispatcherPathError(url: string, err: unknown): Error {
   const msg = normalizeErrorMessage(err);
-  const suffix = `${resolveBrowserFetchOperatorHint(url)} ${BROWSER_TOOL_MODEL_HINT}`;
+  const kind = classifyBrowserFetchFailure(err);
+  const ownership = resolveDispatcherBrowserControlOwnership(url);
+  const operatorHint = resolveBrowserFetchOperatorHint(url, { ownership });
+  const suffix =
+    kind === "persistent" ? `${operatorHint} ${BROWSER_TOOL_MODEL_HINT}` : operatorHint;
   const normalized = msg.endsWith(".") ? msg : `${msg}.`;
   return new Error(`${normalized} ${suffix}`, err instanceof Error ? { cause: err } : undefined);
 }
 
 function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number): Error {
   const operatorHint = resolveBrowserFetchOperatorHint(url);
-  const msg = String(err);
-  const msgLower = msg.toLowerCase();
-  const looksLikeTimeout =
-    msgLower.includes("timed out") ||
-    msgLower.includes("timeout") ||
-    msgLower.includes("aborted") ||
-    msgLower.includes("abort") ||
-    msgLower.includes("aborterror");
-  if (looksLikeTimeout) {
+  const msg = normalizeErrorMessage(err);
+  const kind = classifyBrowserFetchFailure(err);
+  if (kind === "timeout") {
     return new Error(
-      appendBrowserToolModelHint(
-        `Can't reach the OpenClaw browser control service (timed out after ${timeoutMs}ms). ${operatorHint}`,
-      ),
+      `Can't reach the OpenClaw browser control service (timed out after ${timeoutMs}ms). ${operatorHint}`,
+      err instanceof Error ? { cause: err } : undefined,
+    );
+  }
+  if (kind === "aborted") {
+    return new Error(
+      `Browser control request was cancelled. ${operatorHint}`,
+      err instanceof Error ? { cause: err } : undefined,
     );
   }
   return new Error(
     appendBrowserToolModelHint(
       `Can't reach the OpenClaw browser control service. ${operatorHint} (${msg})`,
     ),
+    err instanceof Error ? { cause: err } : undefined,
   );
 }
 
@@ -210,8 +242,17 @@ async function fetchHttpJson<T>(
   }
 
   const t = setTimeout(() => ctrl.abort(new Error("timed out")), timeoutMs);
+  let release: (() => Promise<void>) | undefined;
   try {
-    const res = await fetch(url, { ...init, signal: ctrl.signal });
+    const guarded = await fetchWithSsrFGuard({
+      url,
+      init,
+      signal: ctrl.signal,
+      policy: { allowPrivateNetwork: true },
+      auditContext: "browser-control-client",
+    });
+    release = guarded.release;
+    const res = guarded.response;
     if (!res.ok) {
       if (isRateLimitStatus(res.status)) {
         // Do not reflect upstream response text into the error surface (log/agent injection risk)
@@ -226,6 +267,7 @@ async function fetchHttpJson<T>(
     return (await res.json()) as T;
   } finally {
     clearTimeout(t);
+    await release?.();
     if (upstreamSignal && upstreamAbortListener) {
       upstreamSignal.removeEventListener("abort", upstreamAbortListener);
     }
@@ -244,11 +286,7 @@ export async function fetchBrowserJson<T>(
       return await fetchHttpJson<T>(url, { ...httpInit, timeoutMs });
     }
     isDispatcherPath = true;
-    const started = await startBrowserControlServiceFromConfig();
-    if (!started) {
-      throw new Error("browser control disabled");
-    }
-    const dispatcher = createBrowserRouteDispatcher(createBrowserControlContext());
+    const { dispatchBrowserControlRequest } = await import("./local-dispatch.runtime.js");
     const parsed = new URL(url, "http://localhost");
     const query: Record<string, unknown> = {};
     for (const [key, value] of parsed.searchParams.entries()) {
@@ -288,7 +326,7 @@ export async function fetchBrowserJson<T>(
       timer = setTimeout(() => abortCtrl.abort(new Error("timed out")), timeoutMs);
     }
 
-    const dispatchPromise = dispatcher.dispatch({
+    const dispatchPromise = dispatchBrowserControlRequest({
       method:
         init?.method?.toUpperCase() === "DELETE"
           ? "DELETE"

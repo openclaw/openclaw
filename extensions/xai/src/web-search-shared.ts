@@ -1,34 +1,18 @@
 import { postTrustedWebToolsJson, wrapWebContent } from "openclaw/plugin-sdk/provider-web-search";
 import { normalizeXaiModelId } from "../model-id.js";
+import {
+  buildXaiResponsesToolBody,
+  extractXaiWebSearchContent,
+  resolveXaiResponseTextCitationsAndInline,
+  XAI_RESPONSES_ENDPOINT,
+} from "./responses-tool-shared.js";
+import { isRecord } from "./tool-config-shared.js";
+import type { XaiWebSearchResponse } from "./web-search-response.types.js";
+export { extractXaiWebSearchContent } from "./responses-tool-shared.js";
+export type { XaiWebSearchResponse } from "./web-search-response.types.js";
 
-export const XAI_WEB_SEARCH_ENDPOINT = "https://api.x.ai/v1/responses";
+export const XAI_WEB_SEARCH_ENDPOINT = XAI_RESPONSES_ENDPOINT;
 export const XAI_DEFAULT_WEB_SEARCH_MODEL = "grok-4-1-fast";
-
-export type XaiWebSearchResponse = {
-  output?: Array<{
-    type?: string;
-    text?: string;
-    content?: Array<{
-      type?: string;
-      text?: string;
-      annotations?: Array<{
-        type?: string;
-        url?: string;
-      }>;
-    }>;
-    annotations?: Array<{
-      type?: string;
-      url?: string;
-    }>;
-  }>;
-  output_text?: string;
-  citations?: string[];
-  inline_citations?: Array<{
-    start_index: number;
-    end_index: number;
-    url: string;
-  }>;
-};
 
 type XaiWebSearchConfig = Record<string, unknown> & {
   model?: unknown;
@@ -67,14 +51,10 @@ export function buildXaiWebSearchPayload(params: {
   };
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 export function resolveXaiSearchConfig(searchConfig?: Record<string, unknown>): XaiWebSearchConfig {
-  return (asRecord(searchConfig?.grok) as XaiWebSearchConfig | undefined) ?? {};
+  return (
+    (isRecord(searchConfig?.grok) ? (searchConfig.grok as XaiWebSearchConfig) : undefined) ?? {}
+  );
 }
 
 export function resolveXaiWebSearchModel(searchConfig?: Record<string, unknown>): string {
@@ -86,41 +66,6 @@ export function resolveXaiWebSearchModel(searchConfig?: Record<string, unknown>)
 
 export function resolveXaiInlineCitations(searchConfig?: Record<string, unknown>): boolean {
   return resolveXaiSearchConfig(searchConfig).inlineCitations === true;
-}
-
-export function extractXaiWebSearchContent(data: XaiWebSearchResponse): {
-  text: string | undefined;
-  annotationCitations: string[];
-} {
-  for (const output of data.output ?? []) {
-    if (output.type === "message") {
-      for (const block of output.content ?? []) {
-        if (block.type === "output_text" && typeof block.text === "string" && block.text) {
-          const urls = (block.annotations ?? [])
-            .filter(
-              (annotation) =>
-                annotation.type === "url_citation" && typeof annotation.url === "string",
-            )
-            .map((annotation) => annotation.url as string);
-          return { text: block.text, annotationCitations: [...new Set(urls)] };
-        }
-      }
-    }
-
-    if (output.type === "output_text" && typeof output.text === "string" && output.text) {
-      const urls = (output.annotations ?? [])
-        .filter(
-          (annotation) => annotation.type === "url_citation" && typeof annotation.url === "string",
-        )
-        .map((annotation) => annotation.url as string);
-      return { text: output.text, annotationCitations: [...new Set(urls)] };
-    }
-  }
-
-  return {
-    text: typeof data.output_text === "string" ? data.output_text : undefined,
-    annotationCitations: [],
-  };
 }
 
 export async function requestXaiWebSearch(params: {
@@ -135,28 +80,16 @@ export async function requestXaiWebSearch(params: {
       url: XAI_WEB_SEARCH_ENDPOINT,
       timeoutSeconds: params.timeoutSeconds,
       apiKey: params.apiKey,
-      body: {
+      body: buildXaiResponsesToolBody({
         model: params.model,
-        input: [{ role: "user", content: params.query }],
+        inputText: params.query,
         tools: [{ type: "web_search" }],
-      },
+      }),
       errorLabel: "xAI",
     },
     async (response) => {
       const data = (await response.json()) as XaiWebSearchResponse;
-      const { text, annotationCitations } = extractXaiWebSearchContent(data);
-      const citations =
-        Array.isArray(data.citations) && data.citations.length > 0
-          ? data.citations
-          : annotationCitations;
-      return {
-        content: text ?? "No response",
-        citations,
-        inlineCitations:
-          params.inlineCitations && Array.isArray(data.inline_citations)
-            ? data.inline_citations
-            : undefined,
-      };
+      return resolveXaiResponseTextCitationsAndInline(data, params.inlineCitations);
     },
   );
 }

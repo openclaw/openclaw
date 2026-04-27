@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { downloadGoogleChatMedia, sendGoogleChatMessage } from "./api.js";
 import { resolveGoogleChatGroupRequireMention } from "./group-policy.js";
-import { isSenderAllowed } from "./monitor.js";
+import { isSenderAllowed } from "./sender-allow.js";
 import {
   isGoogleChatSpaceTarget,
   isGoogleChatUserTarget,
@@ -10,26 +10,71 @@ import {
 } from "./targets.js";
 
 const mocks = vi.hoisted(() => ({
+  buildHostnameAllowlistPolicyFromSuffixAllowlist: vi.fn((hosts: string[]) => ({
+    hostnameAllowlist: hosts,
+  })),
+  fetchWithSsrFGuard: vi.fn(async (params: { url: string; init?: RequestInit }) => ({
+    response: await fetch(params.url, params.init),
+    release: async () => {},
+  })),
+  googleAuthCtor: vi.fn(),
+  gaxiosCtor: vi.fn(),
+  getAccessToken: vi.fn().mockResolvedValue({ token: "access-token" }),
+  oauthCtor: vi.fn(),
+  verifySignedJwtWithCertsAsync: vi.fn(),
   verifyIdToken: vi.fn(),
   getGoogleChatAccessToken: vi.fn().mockResolvedValue("token"),
 }));
 
-vi.mock("google-auth-library", () => ({
-  GoogleAuth: class {},
-  OAuth2Client: class {
-    verifyIdToken = mocks.verifyIdToken;
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => {
+  return {
+    buildHostnameAllowlistPolicyFromSuffixAllowlist:
+      mocks.buildHostnameAllowlistPolicyFromSuffixAllowlist,
+    fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
+  };
+});
+
+vi.mock("gaxios", () => ({
+  Gaxios: class {
+    defaults: unknown;
+
+    constructor(defaults?: unknown) {
+      this.defaults = defaults;
+      mocks.gaxiosCtor(defaults);
+    }
   },
 }));
 
-vi.mock("./auth.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./auth.js")>();
+vi.mock("google-auth-library", () => ({
+  GoogleAuth: class {
+    constructor(options?: unknown) {
+      mocks.googleAuthCtor(options);
+    }
+
+    getClient = vi.fn().mockResolvedValue({
+      getAccessToken: mocks.getAccessToken,
+    });
+  },
+  OAuth2Client: class {
+    constructor(options?: unknown) {
+      mocks.oauthCtor(options);
+    }
+
+    verifyIdToken = mocks.verifyIdToken;
+    verifySignedJwtWithCertsAsync = mocks.verifySignedJwtWithCertsAsync;
+  },
+}));
+
+vi.mock("./auth.js", async () => {
+  const actual = await vi.importActual<typeof import("./auth.js")>("./auth.js");
   return {
     ...actual,
     getGoogleChatAccessToken: mocks.getGoogleChatAccessToken,
   };
 });
 
-const { verifyGoogleChatRequest } = await import("./auth.js");
+const authActual = await vi.importActual<typeof import("./auth.js")>("./auth.js");
+const { __testing: authTesting, getGoogleChatAccessToken, verifyGoogleChatRequest } = authActual;
 
 const account = {
   accountId: "default",
@@ -94,7 +139,6 @@ describe("googlechat group policy", () => {
           },
         },
       },
-      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
 
     expect(resolveGoogleChatGroupRequireMention({ cfg, groupId: "spaces/AAA" })).toBe(false);
@@ -127,6 +171,8 @@ describe("isSenderAllowed", () => {
 
 describe("downloadGoogleChatMedia", () => {
   afterEach(() => {
+    authTesting.resetGoogleChatAuthForTests();
+    mocks.fetchWithSsrFGuard.mockClear();
     vi.unstubAllGlobals();
   });
 
@@ -166,6 +212,8 @@ describe("downloadGoogleChatMedia", () => {
 
 describe("sendGoogleChatMessage", () => {
   afterEach(() => {
+    authTesting.resetGoogleChatAuthForTests();
+    mocks.fetchWithSsrFGuard.mockClear();
     vi.unstubAllGlobals();
   });
 
@@ -208,6 +256,53 @@ function mockTicket(payload: Record<string, unknown>) {
 }
 
 describe("verifyGoogleChatRequest", () => {
+  afterEach(() => {
+    authTesting.resetGoogleChatAuthForTests();
+    mocks.getAccessToken.mockClear();
+    mocks.gaxiosCtor.mockClear();
+    mocks.googleAuthCtor.mockClear();
+    mocks.oauthCtor.mockClear();
+  });
+
+  it("injects a scoped transporter into GoogleAuth access-token clients", async () => {
+    await expect(
+      getGoogleChatAccessToken({
+        ...account,
+        credentials: {
+          auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
+          auth_uri: "https://accounts.google.com/o/oauth2/auth",
+          client_email: "bot@example.iam.gserviceaccount.com",
+          private_key: "key",
+          token_uri: "https://oauth2.googleapis.com/token",
+          type: "service_account",
+          universe_domain: "googleapis.com",
+        },
+      }),
+    ).resolves.toBe("access-token");
+
+    const googleAuthOptions = mocks.googleAuthCtor.mock.calls[0]?.[0] as {
+      clientOptions?: { transporter?: { defaults?: { fetchImplementation?: unknown } } };
+      credentials?: { client_email?: string; token_uri?: string };
+    };
+
+    expect(mocks.gaxiosCtor).toHaveBeenCalledOnce();
+    expect(googleAuthOptions).toMatchObject({
+      clientOptions: {
+        transporter: {
+          defaults: {
+            fetchImplementation: expect.any(Function),
+          },
+        },
+      },
+      credentials: {
+        client_email: "bot@example.iam.gserviceaccount.com",
+        token_uri: "https://oauth2.googleapis.com/token",
+      },
+    });
+    expect(mocks.getAccessToken).toHaveBeenCalledOnce();
+    expect("window" in globalThis).toBe(false);
+  });
+
   it("accepts Google Chat app-url tokens from the Chat issuer", async () => {
     mocks.verifyIdToken.mockReset();
     mockTicket({
@@ -222,6 +317,17 @@ describe("verifyGoogleChatRequest", () => {
         audience: "https://example.com/googlechat",
       }),
     ).resolves.toEqual({ ok: true });
+
+    const oauthOptions = mocks.oauthCtor.mock.calls[0]?.[0] as {
+      transporter?: { defaults?: { fetchImplementation?: unknown } };
+    };
+    expect(oauthOptions).toMatchObject({
+      transporter: {
+        defaults: {
+          fetchImplementation: expect.any(Function),
+        },
+      },
+    });
   });
 
   it("rejects add-on tokens when no principal binding is configured", async () => {
@@ -281,5 +387,35 @@ describe("verifyGoogleChatRequest", () => {
       ok: false,
       reason: "unexpected add-on principal: principal-2",
     });
+  });
+
+  it("fetches Chat certs through the guarded fetch for project-number tokens", async () => {
+    const release = vi.fn();
+    mocks.fetchWithSsrFGuard.mockClear();
+    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: new Response(JSON.stringify({ "kid-1": "cert-body" }), { status: 200 }),
+      release,
+    });
+    mocks.verifySignedJwtWithCertsAsync.mockReset().mockResolvedValue(undefined);
+
+    await expect(
+      verifyGoogleChatRequest({
+        bearer: "token",
+        audienceType: "project-number",
+        audience: "123456789",
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledWith({
+      url: "https://www.googleapis.com/service_accounts/v1/metadata/x509/chat@system.gserviceaccount.com",
+      auditContext: "googlechat.auth.certs",
+    });
+    expect(mocks.verifySignedJwtWithCertsAsync).toHaveBeenCalledWith(
+      "token",
+      { "kid-1": "cert-body" },
+      "123456789",
+      ["chat@system.gserviceaccount.com"],
+    );
+    expect(release).toHaveBeenCalledOnce();
   });
 });

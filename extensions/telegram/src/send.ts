@@ -1,41 +1,45 @@
-import type {
-  InlineKeyboardButton,
-  InlineKeyboardMarkup,
-  ReactionType,
-  ReactionTypeEmoji,
-} from "@grammyjs/types";
-import { type ApiClientOptions, Bot, HttpError } from "grammy";
+import type { ReactionType, ReactionTypeEmoji } from "@grammyjs/types";
 import * as grammy from "grammy";
-import { recordChannelActivity } from "openclaw/plugin-sdk/channel-runtime";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import { type ApiClientOptions, Bot, HttpError } from "grammy";
 import { isDiagnosticFlagEnabled } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { formatUncaughtError } from "openclaw/plugin-sdk/error-runtime";
-import type { MediaKind } from "openclaw/plugin-sdk/media-runtime";
-import { buildOutboundMediaLoadOptions } from "openclaw/plugin-sdk/media-runtime";
-import { getImageMetadata } from "openclaw/plugin-sdk/media-runtime";
-import { isGifMedia, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
-import { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/media-runtime";
+import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
 import { createTelegramRetryRunner, type RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
-import { redactSensitiveText } from "openclaw/plugin-sdk/text-runtime";
-import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
+import { normalizeOptionalString, redactSensitiveText } from "openclaw/plugin-sdk/text-runtime";
 import { type ResolvedTelegramAccount, resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
-import { buildTelegramThreadParams, buildTypingThreadParams } from "./bot/helpers.js";
+import { buildTypingThreadParams } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { splitTelegramCaption } from "./caption.js";
-import { resolveTelegramApiBase, resolveTelegramFetch } from "./fetch.js";
+import { resolveTelegramFetch } from "./fetch.js";
 import { renderTelegramHtmlText, splitTelegramHtmlChunks } from "./format.js";
+import { buildInlineKeyboard } from "./inline-keyboard.js";
 import {
   isRecoverableTelegramNetworkError,
   isSafeToRetrySendError,
+  isTelegramRateLimitError,
   isTelegramServerError,
 } from "./network-errors.js";
-import { normalizeTelegramReplyToMessageId } from "./outbound-params.js";
 import { makeProxyFetch } from "./proxy.js";
+import {
+  buildTelegramThreadReplyParams,
+  resolveTelegramSendThreadSpec,
+} from "./reply-parameters.js";
+import {
+  buildOutboundMediaLoadOptions,
+  getImageMetadata,
+  isGifMedia,
+  kindFromMime,
+  loadWebMedia,
+  type MediaKind,
+  normalizePollInput,
+  type OpenClawConfig,
+  type PollInput,
+  requireRuntimeConfig,
+  resolveMarkdownTableMode,
+} from "./send.runtime.js";
 import { recordSentMessage } from "./sent-message-cache.js";
 import { maybePersistResolvedTelegramTarget } from "./target-writeback.js";
 import {
@@ -44,6 +48,8 @@ import {
   parseTelegramTarget,
 } from "./targets.js";
 import { resolveTelegramVoiceSend } from "./voice.js";
+
+export { buildInlineKeyboard } from "./inline-keyboard.js";
 
 type TelegramApi = Bot["api"];
 export type TelegramApiOverride = Partial<TelegramApi>;
@@ -54,22 +60,12 @@ type TelegramCreateForumTopicParams = NonNullable<Parameters<TelegramApi["create
 type TelegramThreadScopedParams = {
   message_thread_id?: number;
 };
-type TelegramReplyParameters = {
-  message_id: number;
-  quote: string;
-  allow_sending_without_reply: true;
-};
-type TelegramThreadReplyParams = TelegramThreadScopedParams & {
-  reply_parameters?: TelegramReplyParameters;
-  reply_to_message_id?: number;
-  allow_sending_without_reply?: true;
-};
 const InputFileCtor = grammy.InputFile;
 const MAX_TELEGRAM_PHOTO_DIMENSION_SUM = 10_000;
 const MAX_TELEGRAM_PHOTO_ASPECT_RATIO = 20;
 
 type TelegramSendOpts = {
-  cfg?: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   token?: string;
   accountId?: string;
   verbose?: boolean;
@@ -111,7 +107,7 @@ type TelegramMessageLike = {
 };
 
 type TelegramReactionOpts = {
-  cfg?: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   token?: string;
   accountId?: string;
   api?: TelegramApiOverride;
@@ -121,7 +117,7 @@ type TelegramReactionOpts = {
 };
 
 type TelegramTypingOpts = {
-  cfg?: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   token?: string;
   accountId?: string;
   verbose?: boolean;
@@ -196,7 +192,7 @@ export function resetTelegramClientOptionsCacheForTests(): void {
   telegramClientOptionsCache.clear();
 }
 
-function createTelegramHttpLogger(cfg: ReturnType<typeof loadConfig>) {
+function createTelegramHttpLogger(cfg: OpenClawConfig) {
   const enabled = isDiagnosticFlagEnabled("telegram.http", cfg);
   if (!enabled) {
     return () => {};
@@ -263,9 +259,9 @@ function resolveTelegramClientOptions(
     return telegramClientOptionsCache.get(cacheKey);
   }
 
-  const proxyUrl = account.config.proxy?.trim();
+  const proxyUrl = normalizeOptionalString(account.config.proxy);
   const proxyFetch = proxyUrl ? makeProxyFetch(proxyUrl) : undefined;
-  const apiRoot = account.config.apiRoot?.trim() || undefined;
+  const apiRoot = normalizeOptionalString(account.config.apiRoot);
   const fetchImpl = resolveTelegramFetch(proxyFetch, {
     network: account.config.network,
   });
@@ -328,7 +324,7 @@ async function resolveChatId(
 }
 
 async function resolveAndPersistChatId(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   api: TelegramApiOverride;
   lookupTarget: string;
   persistTarget: string;
@@ -400,40 +396,6 @@ function isTelegramHtmlParseError(err: unknown): boolean {
   return PARSE_ERR_RE.test(formatErrorMessage(err));
 }
 
-function buildTelegramThreadReplyParams(params: {
-  targetMessageThreadId?: number;
-  messageThreadId?: number;
-  chatType?: "direct" | "group" | "unknown";
-  replyToMessageId?: number;
-  quoteText?: string;
-}): TelegramThreadReplyParams {
-  const messageThreadId =
-    params.messageThreadId != null ? params.messageThreadId : params.targetMessageThreadId;
-  const threadScope = params.chatType === "direct" ? ("dm" as const) : ("forum" as const);
-  // Never blanket-strip DM message_thread_id by chat-id sign.
-  // Telegram supports DM topics; stripping silently misroutes topic replies.
-  // Keep thread id and rely on thread-not-found retry fallback for plain DMs.
-  const threadSpec =
-    messageThreadId != null ? { id: messageThreadId, scope: threadScope } : undefined;
-  const threadIdParams = buildTelegramThreadParams(threadSpec);
-  const threadParams: TelegramThreadReplyParams = threadIdParams ? { ...threadIdParams } : {};
-
-  const replyToMessageId = normalizeTelegramReplyToMessageId(params.replyToMessageId);
-  if (replyToMessageId != null) {
-    if (params.quoteText?.trim()) {
-      threadParams.reply_parameters = {
-        message_id: replyToMessageId,
-        quote: params.quoteText.trim(),
-        allow_sending_without_reply: true,
-      };
-    } else {
-      threadParams.reply_to_message_id = replyToMessageId;
-      threadParams.allow_sending_without_reply = true;
-    }
-  }
-  return threadParams;
-}
-
 async function withTelegramHtmlParseFallback<T>(params: {
   label: string;
   verbose?: boolean;
@@ -458,7 +420,7 @@ async function withTelegramHtmlParseFallback<T>(params: {
 }
 
 type TelegramApiContext = {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   account: ResolvedTelegramAccount;
   api: TelegramApi;
 };
@@ -467,9 +429,9 @@ function resolveTelegramApiContext(opts: {
   token?: string;
   accountId?: string;
   api?: TelegramApiOverride;
-  cfg?: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
 }): TelegramApiContext {
-  const cfg = opts.cfg ?? loadConfig();
+  const cfg = requireRuntimeConfig(opts.cfg, "Telegram API context");
   const account = resolveTelegramAccount({
     cfg,
     accountId: opts.accountId,
@@ -487,7 +449,7 @@ type TelegramRequestWithDiag = <T>(
 ) => Promise<T>;
 
 function createTelegramRequestWithDiag(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   account: ResolvedTelegramAccount;
   retry?: RetryConfig;
   verbose?: boolean;
@@ -594,7 +556,7 @@ function createRequestWithChatNotFound(params: {
 }
 
 function createTelegramNonIdempotentRequestWithDiag(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   account: ResolvedTelegramAccount;
   retry?: RetryConfig;
   verbose?: boolean;
@@ -606,40 +568,15 @@ function createTelegramNonIdempotentRequestWithDiag(params: {
     retry: params.retry,
     verbose: params.verbose,
     useApiErrorLogging: params.useApiErrorLogging,
-    shouldRetry: (err) => isSafeToRetrySendError(err),
+    shouldRetry: (err) => isSafeToRetrySendError(err) || isTelegramRateLimitError(err),
     strictShouldRetry: true,
   });
-}
-
-export function buildInlineKeyboard(
-  buttons?: TelegramSendOpts["buttons"],
-): InlineKeyboardMarkup | undefined {
-  if (!buttons?.length) {
-    return undefined;
-  }
-  const rows = buttons
-    .map((row) =>
-      row
-        .filter((button) => button?.text && button?.callback_data)
-        .map(
-          (button): InlineKeyboardButton => ({
-            text: button.text,
-            callback_data: button.callback_data,
-            ...(button.style ? { style: button.style } : {}),
-          }),
-        ),
-    )
-    .filter((row) => row.length > 0);
-  if (rows.length === 0) {
-    return undefined;
-  }
-  return { inline_keyboard: rows };
 }
 
 export async function sendMessageTelegram(
   to: string,
   text: string,
-  opts: TelegramSendOpts = {},
+  opts: TelegramSendOpts,
 ): Promise<TelegramSendResult> {
   const { cfg, account, api } = resolveTelegramApiContext(opts);
   const target = parseTelegramTarget(to);
@@ -658,11 +595,14 @@ export async function sendMessageTelegram(
   const replyMarkup = buildInlineKeyboard(opts.buttons);
 
   const threadParams = buildTelegramThreadReplyParams({
-    targetMessageThreadId: target.messageThreadId,
-    messageThreadId: opts.messageThreadId,
-    chatType: target.chatType,
+    thread: resolveTelegramSendThreadSpec({
+      targetMessageThreadId: target.messageThreadId,
+      messageThreadId: opts.messageThreadId,
+      chatType: target.chatType,
+    }),
     replyToMessageId: opts.replyToMessageId,
-    quoteText: opts.quoteText,
+    replyQuoteText: opts.quoteText,
+    useReplyIdAsQuoteSource: true,
   });
   const hasThreadParams = Object.keys(threadParams).length > 0;
   const requestWithDiag = createTelegramNonIdempotentRequestWithDiag({
@@ -763,7 +703,7 @@ export async function sendMessageTelegram(
       }
       const res = await sendTelegramTextChunk(chunk, buildTextParams(index === chunks.length - 1));
       const messageId = resolveTelegramMessageIdOrThrow(res, context);
-      recordSentMessage(chatId, messageId);
+      recordSentMessage(chatId, messageId, cfg);
       lastMessageId = String(messageId);
       lastChatId = String(res?.chat?.id ?? chatId);
     }
@@ -989,7 +929,7 @@ export async function sendMessageTelegram(
     const result = await sendMedia(mediaSender.label, mediaSender.sender);
     const mediaMessageId = resolveTelegramMessageIdOrThrow(result, "media send");
     const resolvedChatId = String(result?.chat?.id ?? chatId);
-    recordSentMessage(chatId, mediaMessageId);
+    recordSentMessage(chatId, mediaMessageId, cfg);
     recordChannelActivity({
       channel: "telegram",
       accountId: account.accountId,
@@ -1035,7 +975,7 @@ export async function sendMessageTelegram(
 
 export async function sendTypingTelegram(
   to: string,
-  opts: TelegramTypingOpts = {},
+  opts: TelegramTypingOpts,
 ): Promise<{ ok: true }> {
   const { cfg, account, api } = resolveTelegramApiContext(opts);
   const target = parseTelegramTarget(to);
@@ -1070,7 +1010,7 @@ export async function reactMessageTelegram(
   chatIdInput: string | number,
   messageIdInput: string | number,
   emoji: string,
-  opts: TelegramReactionOpts = {},
+  opts: TelegramReactionOpts,
 ): Promise<{ ok: true } | { ok: false; warning: string }> {
   const { cfg, account, api } = resolveTelegramApiContext(opts);
   const rawTarget = String(chatIdInput);
@@ -1103,7 +1043,7 @@ export async function reactMessageTelegram(
   try {
     await requestWithDiag(() => api.setMessageReaction(chatId, messageId, reactions), "reaction");
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = formatErrorMessage(err);
     if (/REACTION_INVALID/i.test(msg)) {
       return { ok: false as const, warning: `Reaction unavailable: ${trimmedEmoji}` };
     }
@@ -1113,9 +1053,10 @@ export async function reactMessageTelegram(
 }
 
 type TelegramDeleteOpts = {
-  cfg?: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   token?: string;
   accountId?: string;
+  notify?: boolean;
   verbose?: boolean;
   api?: TelegramApiOverride;
   retry?: RetryConfig;
@@ -1124,7 +1065,7 @@ type TelegramDeleteOpts = {
 export async function deleteMessageTelegram(
   chatIdInput: string | number,
   messageIdInput: string | number,
-  opts: TelegramDeleteOpts = {},
+  opts: TelegramDeleteOpts,
 ): Promise<{ ok: true }> {
   const { cfg, account, api } = resolveTelegramApiContext(opts);
   const rawTarget = String(chatIdInput);
@@ -1151,7 +1092,7 @@ export async function deleteMessageTelegram(
 export async function pinMessageTelegram(
   chatIdInput: string | number,
   messageIdInput: string | number,
-  opts: TelegramDeleteOpts = {},
+  opts: TelegramDeleteOpts,
 ): Promise<{ ok: true; messageId: string; chatId: string }> {
   const { cfg, account, api } = resolveTelegramApiContext(opts);
   const rawTarget = String(chatIdInput);
@@ -1170,7 +1111,10 @@ export async function pinMessageTelegram(
     verbose: opts.verbose,
   });
   await requestWithDiag(
-    () => api.pinChatMessage(chatId, messageId, { disable_notification: true }),
+    () =>
+      api.pinChatMessage(chatId, messageId, {
+        disable_notification: opts.notify !== true,
+      }),
     "pinChatMessage",
   );
   logVerbose(`[telegram] Pinned message ${messageId} in chat ${chatId}`);
@@ -1179,8 +1123,8 @@ export async function pinMessageTelegram(
 
 export async function unpinMessageTelegram(
   chatIdInput: string | number,
-  messageIdInput?: string | number,
-  opts: TelegramDeleteOpts = {},
+  messageIdInput: string | number | undefined,
+  opts: TelegramDeleteOpts,
 ): Promise<{ ok: true; chatId: string; messageId?: string }> {
   const { cfg, account, api } = resolveTelegramApiContext(opts);
   const rawTarget = String(chatIdInput);
@@ -1217,7 +1161,7 @@ type TelegramEditForumTopicOpts = TelegramDeleteOpts & {
 export async function editForumTopicTelegram(
   chatIdInput: string | number,
   messageThreadIdInput: string | number,
-  opts: TelegramEditForumTopicOpts = {},
+  opts: TelegramEditForumTopicOpts,
 ): Promise<{
   ok: true;
   chatId: string;
@@ -1281,7 +1225,7 @@ export async function renameForumTopicTelegram(
   chatIdInput: string | number,
   messageThreadIdInput: string | number,
   name: string,
-  opts: TelegramDeleteOpts = {},
+  opts: TelegramDeleteOpts,
 ): Promise<{ ok: true; chatId: string; messageThreadId: number; name: string }> {
   const result = await editForumTopicTelegram(chatIdInput, messageThreadIdInput, {
     ...opts,
@@ -1306,8 +1250,8 @@ type TelegramEditOpts = {
   linkPreview?: boolean;
   /** Inline keyboard buttons (reply markup). Pass empty array to remove buttons. */
   buttons?: TelegramInlineButtons;
-  /** Optional config injection to avoid global loadConfig() (improves testability). */
-  cfg?: ReturnType<typeof loadConfig>;
+  /** Resolved runtime config from the command or gateway boundary. */
+  cfg: OpenClawConfig;
 };
 
 type TelegramEditReplyMarkupOpts = {
@@ -1318,15 +1262,15 @@ type TelegramEditReplyMarkupOpts = {
   retry?: RetryConfig;
   /** Inline keyboard buttons (reply markup). Pass empty array to remove buttons. */
   buttons?: TelegramInlineButtons;
-  /** Optional config injection to avoid global loadConfig() (improves testability). */
-  cfg?: ReturnType<typeof loadConfig>;
+  /** Resolved runtime config from the command or gateway boundary. */
+  cfg: OpenClawConfig;
 };
 
 export async function editMessageReplyMarkupTelegram(
   chatIdInput: string | number,
   messageIdInput: string | number,
   buttons: TelegramInlineButtons,
-  opts: TelegramEditReplyMarkupOpts = {},
+  opts: TelegramEditReplyMarkupOpts,
 ): Promise<{ ok: true; messageId: string; chatId: string }> {
   const { cfg, account, api } = resolveTelegramApiContext({
     ...opts,
@@ -1369,7 +1313,7 @@ export async function editMessageTelegram(
   chatIdInput: string | number,
   messageIdInput: string | number,
   text: string,
-  opts: TelegramEditOpts = {},
+  opts: TelegramEditOpts,
 ): Promise<{ ok: true; messageId: string; chatId: string }> {
   const { cfg, account, api } = resolveTelegramApiContext({
     ...opts,
@@ -1478,7 +1422,7 @@ function inferFilename(kind: MediaKind) {
 }
 
 type TelegramStickerOpts = {
-  cfg?: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   token?: string;
   accountId?: string;
   verbose?: boolean;
@@ -1499,7 +1443,7 @@ type TelegramStickerOpts = {
 export async function sendStickerTelegram(
   to: string,
   fileId: string,
-  opts: TelegramStickerOpts = {},
+  opts: TelegramStickerOpts,
 ): Promise<TelegramSendResult> {
   if (!fileId?.trim()) {
     throw new Error("Telegram sticker file_id is required");
@@ -1516,14 +1460,16 @@ export async function sendStickerTelegram(
   });
 
   const threadParams = buildTelegramThreadReplyParams({
-    targetMessageThreadId: target.messageThreadId,
-    messageThreadId: opts.messageThreadId,
-    chatType: target.chatType,
+    thread: resolveTelegramSendThreadSpec({
+      targetMessageThreadId: target.messageThreadId,
+      messageThreadId: opts.messageThreadId,
+      chatType: target.chatType,
+    }),
     replyToMessageId: opts.replyToMessageId,
   });
   const hasThreadParams = Object.keys(threadParams).length > 0;
 
-  const requestWithDiag = createTelegramRequestWithDiag({
+  const requestWithDiag = createTelegramNonIdempotentRequestWithDiag({
     cfg,
     account,
     retry: opts.retry,
@@ -1548,7 +1494,7 @@ export async function sendStickerTelegram(
 
   const messageId = resolveTelegramMessageIdOrThrow(result, "sticker send");
   const resolvedChatId = String(result?.chat?.id ?? chatId);
-  recordSentMessage(chatId, messageId);
+  recordSentMessage(chatId, messageId, opts.cfg);
   recordChannelActivity({
     channel: "telegram",
     accountId: account.accountId,
@@ -1559,7 +1505,7 @@ export async function sendStickerTelegram(
 }
 
 type TelegramPollOpts = {
-  cfg?: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   token?: string;
   accountId?: string;
   verbose?: boolean;
@@ -1585,7 +1531,7 @@ type TelegramPollOpts = {
 export async function sendPollTelegram(
   to: string,
   poll: PollInput,
-  opts: TelegramPollOpts = {},
+  opts: TelegramPollOpts,
 ): Promise<{ messageId: string; chatId: string; pollId?: string }> {
   const { cfg, account, api } = resolveTelegramApiContext(opts);
   const target = parseTelegramTarget(to);
@@ -1602,9 +1548,11 @@ export async function sendPollTelegram(
   const normalizedPoll = normalizePollInput(poll, { maxOptions: 10 });
 
   const threadParams = buildTelegramThreadReplyParams({
-    targetMessageThreadId: target.messageThreadId,
-    messageThreadId: opts.messageThreadId,
-    chatType: target.chatType,
+    thread: resolveTelegramSendThreadSpec({
+      targetMessageThreadId: target.messageThreadId,
+      messageThreadId: opts.messageThreadId,
+      chatType: target.chatType,
+    }),
     replyToMessageId: opts.replyToMessageId,
   });
 
@@ -1657,7 +1605,7 @@ export async function sendPollTelegram(
   const messageId = resolveTelegramMessageIdOrThrow(result, "poll send");
   const resolvedChatId = String(result?.chat?.id ?? chatId);
   const pollId = result?.poll?.id;
-  recordSentMessage(chatId, messageId);
+  recordSentMessage(chatId, messageId, opts.cfg);
 
   recordChannelActivity({
     channel: "telegram",
@@ -1673,7 +1621,7 @@ export async function sendPollTelegram(
 // ---------------------------------------------------------------------------
 
 type TelegramCreateForumTopicOpts = {
-  cfg?: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   token?: string;
   accountId?: string;
   api?: TelegramApiOverride;
@@ -1702,7 +1650,7 @@ export type TelegramCreateForumTopicResult = {
 export async function createForumTopicTelegram(
   chatId: string,
   name: string,
-  opts: TelegramCreateForumTopicOpts = {},
+  opts: TelegramCreateForumTopicOpts,
 ): Promise<TelegramCreateForumTopicResult> {
   if (!name?.trim()) {
     throw new Error("Forum topic name is required");
