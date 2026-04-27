@@ -4367,35 +4367,86 @@ module.exports = { id: "throws-after-import", register() {} };`,
     ).toBe(true);
   });
 
-  it("fails plugin load when non-memory plugin registers a memory capability", () => {
+  it("fails plugin load when non-memory plugins register memory-only APIs", () => {
     useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "memory-capability-wrong-kind",
-      filename: "memory-capability-wrong-kind.cjs",
-      body: `module.exports = { id: "memory-capability-wrong-kind", register(api) {
-  api.registerMemoryCapability({ promptBuilder: () => ["memory"] });
-} };`,
-    });
-
-    const registry = loadRegistryFromSinglePlugin({
-      plugin,
-      pluginConfig: {
-        allow: ["memory-capability-wrong-kind"],
+    const scenarios = [
+      {
+        pluginId: "memory-capability-wrong-kind",
+        registerCall: `api.registerMemoryCapability({ promptBuilder: () => ["memory"] });`,
+        expectedMessage: "only memory plugins can register a memory capability",
+        assertSideEffects: () => {
+          expect(getMemoryCapabilityRegistration()).toBeUndefined();
+        },
       },
-    });
+      {
+        pluginId: "memory-prompt-section-wrong-kind",
+        registerCall: `api.registerMemoryPromptSection(() => ["memory section"]);`,
+        expectedMessage: "only memory plugins can register a memory prompt section",
+        assertSideEffects: () => {
+          expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([]);
+        },
+      },
+      {
+        pluginId: "memory-flush-plan-wrong-kind",
+        registerCall: `api.registerMemoryFlushPlan(() => ({
+  softThresholdTokens: 1,
+  forceFlushTranscriptBytes: 2,
+  reserveTokensFloor: 3,
+  prompt: "memory",
+  systemPrompt: "memory",
+  relativePath: "memory/non-memory.md",
+}));`,
+        expectedMessage: "only memory plugins can register a memory flush plan",
+        assertSideEffects: () => {
+          expect(resolveMemoryFlushPlan({})).toBeNull();
+        },
+      },
+      {
+        pluginId: "memory-runtime-wrong-kind",
+        registerCall: `api.registerMemoryRuntime({
+  async getMemorySearchManager() {
+    return { manager: null, error: "missing" };
+  },
+  resolveMemoryBackendConfig() {
+    return { backend: "builtin" };
+  },
+});`,
+        expectedMessage: "only memory plugins can register a memory runtime",
+        assertSideEffects: () => {
+          expect(getMemoryRuntime()).toBeUndefined();
+        },
+      },
+    ] as const;
 
-    const loaded = registry.plugins.find((entry) => entry.id === "memory-capability-wrong-kind");
-    expect(loaded?.status).toBe("error");
-    expect(loaded?.error).toContain("only memory plugins can register a memory capability");
-    expect(getMemoryCapabilityRegistration()).toBeUndefined();
-    expect(
-      registry.diagnostics.some(
-        (entry) =>
-          entry.level === "error" &&
-          entry.pluginId === "memory-capability-wrong-kind" &&
-          entry.message.includes("only memory plugins can register a memory capability"),
-      ),
-    ).toBe(true);
+    runScenarioCases(scenarios, (scenario) => {
+      clearMemoryPluginState();
+      const plugin = writePlugin({
+        id: scenario.pluginId,
+        filename: `${scenario.pluginId}.cjs`,
+        body: `module.exports = { id: ${JSON.stringify(scenario.pluginId)}, register(api) {
+  ${scenario.registerCall}
+} };`,
+      });
+      const registry = loadRegistryFromSinglePlugin({
+        plugin,
+        pluginConfig: {
+          allow: [scenario.pluginId],
+        },
+      });
+
+      const loaded = registry.plugins.find((entry) => entry.id === scenario.pluginId);
+      expect(loaded?.status).toBe("error");
+      expect(loaded?.error).toContain(scenario.expectedMessage);
+      scenario.assertSideEffects();
+      expect(
+        registry.diagnostics.some(
+          (entry) =>
+            entry.level === "error" &&
+            entry.pluginId === scenario.pluginId &&
+            entry.message.includes(scenario.expectedMessage),
+        ),
+      ).toBe(true);
+    });
   });
 
   it("repairs incomplete registered channel metadata before storing registry entries", () => {

@@ -1573,13 +1573,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               },
               registerMemoryPromptSection: (builder) => {
                 if (!hasKind(record.kind, "memory")) {
-                  pushDiagnostic({
-                    level: "error",
-                    pluginId: record.id,
-                    source: record.source,
-                    message: "only memory plugins can register a memory prompt section",
-                  });
-                  return;
+                  throw new Error("only memory plugins can register a memory prompt section");
                 }
                 if (
                   Array.isArray(record.kind) &&
@@ -1605,13 +1599,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               },
               registerMemoryFlushPlan: (resolver) => {
                 if (!hasKind(record.kind, "memory")) {
-                  pushDiagnostic({
-                    level: "error",
-                    pluginId: record.id,
-                    source: record.source,
-                    message: "only memory plugins can register a memory flush plan",
-                  });
-                  return;
+                  throw new Error("only memory plugins can register a memory flush plan");
                 }
                 if (
                   Array.isArray(record.kind) &&
@@ -1631,13 +1619,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               },
               registerMemoryRuntime: (runtime) => {
                 if (!hasKind(record.kind, "memory")) {
-                  pushDiagnostic({
-                    level: "error",
-                    pluginId: record.id,
-                    source: record.source,
-                    message: "only memory plugins can register a memory runtime",
-                  });
-                  return;
+                  throw new Error("only memory plugins can register a memory runtime");
                 }
                 if (
                   Array.isArray(record.kind) &&
