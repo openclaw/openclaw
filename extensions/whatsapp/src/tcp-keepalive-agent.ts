@@ -1,6 +1,7 @@
 import type { Agent } from "node:http";
 import type { Agent as HttpsAgent } from "node:https";
 import type { Socket } from "node:net";
+import type { Duplex } from "node:stream";
 import type { TLSSocket } from "node:tls";
 
 /**
@@ -33,9 +34,9 @@ const DEFAULT_INITIAL_DELAY_MS = 15_000;
  * to avoid passing an agent wrapper when no proxy is configured.
  */
 export function wrapAgentWithTcpKeepalive(
-  baseAgent: Agent | HttpsAgent | undefined,
+  baseAgent: Agent | undefined,
   opts: { initialDelayMs?: number } = {},
-): Agent | HttpsAgent | undefined {
+): Agent | undefined {
   if (!baseAgent) {
     return undefined;
   }
@@ -44,13 +45,14 @@ export function wrapAgentWithTcpKeepalive(
   const originalCreateConnection = baseAgent.createConnection.bind(baseAgent);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (baseAgent as any).createConnection = function (...args: Parameters<Agent["createConnection"]>) {
+  const self = baseAgent as any;
+  self.createConnection = function (...args: Parameters<Agent["createConnection"]>) {
     const [options, callback] = args;
-    return originalCreateConnection(options, (err: Error | null, socket: Socket | undefined) => {
-      if (!err && socket) {
-        applyTcpKeepAlive(socket as Socket | TLSSocket, initialDelayMs);
+    return originalCreateConnection(options, (err: Error | null, stream: Duplex) => {
+      if (!err && stream) {
+        applyTcpKeepAlive(stream as Socket | TLSSocket, initialDelayMs);
       }
-      callback(err, socket);
+      callback?.(err, stream);
     });
   };
 

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
-import type { Agent } from "node:https";
+import type { Agent, Agent as HttpsAgent } from "node:https";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
 import { resolveAmbientNodeProxyAgent } from "openclaw/plugin-sdk/extension-shared";
@@ -146,7 +146,7 @@ export async function createWaSocket(
   };
   const { version } = await fetchLatestBaileysVersion();
   const baseAgent = await resolveEnvProxyAgent(sessionLogger);
-  const agent = wrapAgentWithTcpKeepalive(baseAgent);
+  const agent = wrapAgentWithTcpKeepalive(baseAgent) as HttpsAgent | undefined;
   const fetchAgent = await resolveEnvFetchDispatcher(sessionLogger, baseAgent);
   const sock = makeWASocket({
     auth: {
