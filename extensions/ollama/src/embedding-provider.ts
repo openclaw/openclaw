@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { normalizeOptionalSecretInput } from "openclaw/plugin-sdk/provider-auth";
 import { resolveEnvApiKey } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,
@@ -11,6 +12,7 @@ import {
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeOllamaWireModelId } from "./model-id.js";
 import { resolveOllamaApiBase } from "./provider-models.js";
 
 export type OllamaEmbeddingProvider = {
@@ -48,7 +50,6 @@ export type OllamaEmbeddingClient = {
 type OllamaEmbeddingClientConfig = Omit<OllamaEmbeddingClient, "embedBatch">;
 
 export const DEFAULT_OLLAMA_EMBEDDING_MODEL = "nomic-embed-text";
-const OLLAMA_EMBEDDING_BATCH_CONCURRENCY = 1;
 
 function sanitizeAndNormalizeEmbedding(vec: number[]): number[] {
   const sanitized = vec.map((value) => (Number.isFinite(value) ? value : 0));
@@ -78,12 +79,31 @@ async function withRemoteHttpResponse<T>(params: {
   }
 }
 
-function normalizeEmbeddingModel(model: string): string {
+function normalizeEmbeddingModel(model: string, providerId?: string): string {
   const trimmed = model.trim();
   if (!trimmed) {
     return DEFAULT_OLLAMA_EMBEDDING_MODEL;
   }
-  return trimmed.startsWith("ollama/") ? trimmed.slice("ollama/".length) : trimmed;
+  return normalizeOllamaWireModelId(trimmed, providerId);
+}
+
+function resolveConfiguredProvider(options: OllamaEmbeddingOptions) {
+  const providers = options.config.models?.providers;
+  if (!providers) {
+    return undefined;
+  }
+  const providerId = options.provider?.trim() || "ollama";
+  const direct = providers[providerId];
+  if (direct) {
+    return direct;
+  }
+  const normalized = normalizeProviderId(providerId);
+  for (const [candidateId, candidate] of Object.entries(providers)) {
+    if (normalizeProviderId(candidateId) === normalized) {
+      return candidate;
+    }
+  }
+  return providers.ollama;
 }
 
 function resolveMemorySecretInputString(params: {
@@ -107,9 +127,7 @@ function resolveOllamaApiKey(options: OllamaEmbeddingOptions): string | undefine
   if (remoteApiKey) {
     return remoteApiKey;
   }
-  const providerApiKey = normalizeOptionalSecretInput(
-    options.config.models?.providers?.ollama?.apiKey,
-  );
+  const providerApiKey = normalizeOptionalSecretInput(resolveConfiguredProvider(options)?.apiKey);
   if (providerApiKey) {
     return providerApiKey;
   }
@@ -119,10 +137,10 @@ function resolveOllamaApiKey(options: OllamaEmbeddingOptions): string | undefine
 function resolveOllamaEmbeddingClient(
   options: OllamaEmbeddingOptions,
 ): OllamaEmbeddingClientConfig {
-  const providerConfig = options.config.models?.providers?.ollama;
+  const providerConfig = resolveConfiguredProvider(options);
   const rawBaseUrl = options.remote?.baseUrl?.trim() || providerConfig?.baseUrl?.trim();
   const baseUrl = resolveOllamaApiBase(rawBaseUrl);
-  const model = normalizeEmbeddingModel(options.model);
+  const model = normalizeEmbeddingModel(options.model, options.provider);
   const headerOverrides = Object.assign({}, providerConfig?.headers, options.remote?.headers);
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -144,42 +162,54 @@ export async function createOllamaEmbeddingProvider(
   options: OllamaEmbeddingOptions,
 ): Promise<{ provider: OllamaEmbeddingProvider; client: OllamaEmbeddingClient }> {
   const client = resolveOllamaEmbeddingClient(options);
-  const embedUrl = `${client.baseUrl.replace(/\/$/, "")}/api/embeddings`;
+  const embedUrl = `${client.baseUrl.replace(/\/$/, "")}/api/embed`;
 
-  const embedOne = async (text: string): Promise<number[]> => {
+  const embedMany = async (input: string | string[]): Promise<number[][]> => {
     const json = await withRemoteHttpResponse({
       url: embedUrl,
       ssrfPolicy: client.ssrfPolicy,
       init: {
         method: "POST",
         headers: client.headers,
-        body: JSON.stringify({ model: client.model, prompt: text }),
+        body: JSON.stringify({ model: client.model, input }),
       },
       onResponse: async (response) => {
         if (!response.ok) {
-          throw new Error(`Ollama embeddings HTTP ${response.status}: ${await response.text()}`);
+          throw new Error(`Ollama embed HTTP ${response.status}: ${await response.text()}`);
         }
-        return (await response.json()) as { embedding?: number[] };
+        return (await response.json()) as { embeddings?: unknown };
       },
     });
-    if (!Array.isArray(json.embedding)) {
-      throw new Error("Ollama embeddings response missing embedding[]");
+    if (!Array.isArray(json.embeddings)) {
+      throw new Error("Ollama embed response missing embeddings[]");
     }
-    return sanitizeAndNormalizeEmbedding(json.embedding);
+    const expectedCount = Array.isArray(input) ? input.length : 1;
+    if (json.embeddings.length !== expectedCount) {
+      throw new Error(
+        `Ollama embed response returned ${json.embeddings.length} embeddings for ${expectedCount} inputs`,
+      );
+    }
+    return json.embeddings.map((embedding) => {
+      if (!Array.isArray(embedding)) {
+        throw new Error("Ollama embed response contains a non-array embedding");
+      }
+      return sanitizeAndNormalizeEmbedding(embedding);
+    });
+  };
+
+  const embedOne = async (text: string): Promise<number[]> => {
+    const [embedding] = await embedMany(text);
+    if (!embedding) {
+      throw new Error("Ollama embed response returned no embedding");
+    }
+    return embedding;
   };
 
   const provider: OllamaEmbeddingProvider = {
     id: "ollama",
     model: client.model,
     embedQuery: embedOne,
-    embedBatch: async (texts) => {
-      const embeddings: number[][] = [];
-      for (let index = 0; index < texts.length; index += OLLAMA_EMBEDDING_BATCH_CONCURRENCY) {
-        const batch = texts.slice(index, index + OLLAMA_EMBEDDING_BATCH_CONCURRENCY);
-        embeddings.push(...(await Promise.all(batch.map(embedOne))));
-      }
-      return embeddings;
-    },
+    embedBatch: async (texts) => (texts.length === 0 ? [] : await embedMany(texts)),
   };
 
   return {

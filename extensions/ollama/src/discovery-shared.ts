@@ -108,6 +108,7 @@ export async function resolveOllamaDiscoveryResult(params: {
     return null;
   }
   const ollamaKey = params.ctx.resolveProviderApiKey(OLLAMA_PROVIDER_ID).apiKey;
+  const hasOllamaDiscoveryOptIn = typeof ollamaKey === "string" && ollamaKey.trim().length > 0;
   const hasRealOllamaKey =
     typeof ollamaKey === "string" &&
     ollamaKey.trim().length > 0 &&
@@ -129,6 +130,9 @@ export async function resolveOllamaDiscoveryResult(params: {
         }),
       },
     };
+  }
+  if (!hasOllamaDiscoveryOptIn && !hasMeaningfulExplicitConfig) {
+    return null;
   }
   if (
     !hasRealOllamaKey &&

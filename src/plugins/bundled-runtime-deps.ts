@@ -930,9 +930,9 @@ function isBundledPluginConfiguredForRuntimeDeps(params: {
   if (entry?.enabled === false) {
     return false;
   }
+  const manifest = readBundledPluginRuntimeDepsManifest(params.pluginDir, params.manifestCache);
   let hasExplicitChannelDisable = false;
   let hasConfiguredChannel = false;
-  const manifest = readBundledPluginRuntimeDepsManifest(params.pluginDir, params.manifestCache);
   for (const channelId of manifest.channels) {
     const normalizedChannelId = normalizeOptionalLowercaseString(channelId);
     if (!normalizedChannelId) {
@@ -990,11 +990,25 @@ function shouldIncludeBundledPluginRuntimeDeps(params: {
   includeConfiguredChannels?: boolean;
   manifestCache?: BundledPluginRuntimeDepsManifestCache;
 }): boolean {
-  if (params.pluginIds && !params.pluginIds.has(params.pluginId)) {
-    return false;
+  const scopedToPluginIds = Boolean(params.pluginIds);
+  if (params.pluginIds) {
+    if (!params.pluginIds.has(params.pluginId)) {
+      return false;
+    }
+    if (!params.config) {
+      return true;
+    }
   }
   if (!params.config) {
     return true;
+  }
+  if (scopedToPluginIds) {
+    const plugins = normalizePluginsConfig(params.config.plugins);
+    if (!plugins.enabled || plugins.deny.includes(params.pluginId)) {
+      return false;
+    }
+    const entry = plugins.entries[params.pluginId];
+    return entry?.enabled !== false;
   }
   return isBundledPluginConfiguredForRuntimeDeps({
     config: params.config,

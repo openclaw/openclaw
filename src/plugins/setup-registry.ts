@@ -7,6 +7,7 @@ import { buildPluginApi } from "./api-builder.js";
 import { collectPluginConfigContractMatches } from "./config-contracts.js";
 import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "./jiti-loader-cache.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { PluginLruCache, type PluginLruCacheResult } from "./plugin-lru-cache.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 import { resolvePluginCacheInputs } from "./roots.js";
 import type { PluginRuntime } from "./runtime/types.js";
@@ -86,20 +87,22 @@ const NOOP_LOGGER: PluginLogger = {
 const MAX_SETUP_LOOKUP_CACHE_ENTRIES = 128;
 
 const jitiLoaders: PluginJitiLoaderCache = new Map();
-const setupRegistryCache = new Map<string, PluginSetupRegistry>();
-const setupProviderCache = new Map<string, ProviderPlugin | null>();
-const setupCliBackendCache = new Map<string, SetupCliBackendEntry | null>();
-let setupLookupCacheEntryCap = MAX_SETUP_LOOKUP_CACHE_ENTRIES;
+const setupRegistryCache = new PluginLruCache<PluginSetupRegistry>(MAX_SETUP_LOOKUP_CACHE_ENTRIES);
+const setupProviderCache = new PluginLruCache<ProviderPlugin | null>(
+  MAX_SETUP_LOOKUP_CACHE_ENTRIES,
+);
+const setupCliBackendCache = new PluginLruCache<SetupCliBackendEntry | null>(
+  MAX_SETUP_LOOKUP_CACHE_ENTRIES,
+);
 
 export const __testing = {
   get maxSetupLookupCacheEntries() {
-    return setupLookupCacheEntryCap;
+    return setupRegistryCache.maxEntries;
   },
   setMaxSetupLookupCacheEntriesForTest(value?: number) {
-    setupLookupCacheEntryCap =
-      typeof value === "number" && Number.isFinite(value) && value > 0
-        ? Math.max(1, Math.floor(value))
-        : MAX_SETUP_LOOKUP_CACHE_ENTRIES;
+    setupRegistryCache.setMaxEntriesForTest(value);
+    setupProviderCache.setMaxEntriesForTest(value);
+    setupCliBackendCache.setMaxEntriesForTest(value);
   },
   getCacheSizes() {
     return {
@@ -125,31 +128,12 @@ function getJiti(modulePath: string) {
   });
 }
 
-function getCachedSetupValue<T>(
-  cache: Map<string, T>,
-  key: string,
-): { hit: true; value: T } | { hit: false } {
-  if (!cache.has(key)) {
-    return { hit: false };
-  }
-  const cached = cache.get(key) as T;
-  cache.delete(key);
-  cache.set(key, cached);
-  return { hit: true, value: cached };
+function getCachedSetupValue<T>(cache: PluginLruCache<T>, key: string): PluginLruCacheResult<T> {
+  return cache.getResult(key);
 }
 
-function setCachedSetupValue<T>(cache: Map<string, T>, key: string, value: T): void {
-  if (cache.has(key)) {
-    cache.delete(key);
-  }
+function setCachedSetupValue<T>(cache: PluginLruCache<T>, key: string, value: T): void {
   cache.set(key, value);
-  while (cache.size > setupLookupCacheEntryCap) {
-    const oldestKey = cache.keys().next().value;
-    if (typeof oldestKey !== "string") {
-      break;
-    }
-    cache.delete(oldestKey);
-  }
 }
 
 function buildSetupRegistryCacheKey(params: {

@@ -354,6 +354,8 @@ describe("plugin-sdk subpath exports", () => {
       "lobster",
       "pairing-access",
       "provider-model-definitions",
+      "qa-channel",
+      "qa-channel-protocol",
       "reply-prefix",
       "secret-input-schema",
       "signal-core",

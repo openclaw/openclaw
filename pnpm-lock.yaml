@@ -761,6 +761,9 @@ importers:
       '@clawdbot/lobster':
         specifier: 2026.4.6
         version: 2026.4.6
+      ajv:
+        specifier: ^8.18.0
+        version: 8.18.0
       typebox:
         specifier: 1.1.33
         version: 1.1.33

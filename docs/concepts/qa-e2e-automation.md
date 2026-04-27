@@ -65,6 +65,11 @@ model calls must not export `StreamAbandoned` on successful turns; raw diagnosti
 `openclaw.content.*` attributes must stay out of the trace. It writes
 `otel-smoke-summary.json` next to the QA suite artifacts.
 
+Observability QA stays source-checkout only. The npm tarball intentionally omits
+QA Lab, so package Docker release lanes do not run `qa` commands. Use
+`pnpm qa:otel:smoke` from a built source checkout when changing diagnostics
+instrumentation.
+
 For a transport-real Matrix smoke lane, run:
 
 ```bash

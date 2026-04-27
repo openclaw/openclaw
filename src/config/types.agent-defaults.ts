@@ -471,8 +471,9 @@ export type AgentCompactionConfig = {
    */
   provider?: string;
   /**
-   * Truncate the session JSONL file after compaction to remove entries that
-   * were summarized. Prevents unbounded file growth in long-running sessions.
+   * Rotate the active session JSONL file after compaction so the next turn
+   * starts from the compaction summary and unsummarized tail while the old
+   * transcript stays archived.
    * Default: false (existing behavior preserved).
    */
   truncateAfterCompaction?: boolean;

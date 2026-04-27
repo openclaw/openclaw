@@ -135,4 +135,11 @@ export async function appendConfiguredModelRowSources(params: {
   context: RowBuilderContext;
 }): Promise<void> {
   await appendConfiguredRows(params);
+  if (params.context.filter.provider) {
+    await appendConfiguredProviderRows({
+      rows: params.rows,
+      context: params.context,
+      seenKeys: new Set(params.rows.map((row) => row.key)),
+    });
+  }
 }

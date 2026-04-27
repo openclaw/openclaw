@@ -543,7 +543,7 @@ async function waitForCodexSubagentStarted(params: {
   events: CapturedAgentEvent[];
   parentSessionKey: string;
 }): Promise<Record<string, unknown> | undefined> {
-  const deadline = Date.now() + Math.min(CODEX_HARNESS_REQUEST_TIMEOUT_MS, 30_000);
+  const deadline = Date.now() + Math.min(CODEX_HARNESS_REQUEST_TIMEOUT_MS, 120_000);
   let lastRow: Record<string, unknown> | undefined;
   let lastError: unknown;
   while (Date.now() < deadline) {

@@ -37,7 +37,7 @@ afterEach(() => {
 function mockEmbeddingFetch(embedding: number[]) {
   const fetchMock = vi.fn(
     async () =>
-      new Response(JSON.stringify({ embedding }), {
+      new Response(JSON.stringify({ embeddings: [embedding] }), {
         status: 200,
         headers: { "content-type": "application/json" },
       }),
@@ -47,7 +47,7 @@ function mockEmbeddingFetch(embedding: number[]) {
 }
 
 describe("ollama embedding provider", () => {
-  it("calls /api/embeddings and returns normalized vectors", async () => {
+  it("calls /api/embed and returns normalized vectors", async () => {
     const fetchMock = mockEmbeddingFetch([3, 4]);
 
     const { provider } = await createOllamaEmbeddingProvider({
@@ -61,6 +61,13 @@ describe("ollama embedding provider", () => {
     const vector = await provider.embedQuery("hi");
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:11434/api/embed",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ model: "nomic-embed-text", input: "hi" }),
+      }),
+    );
     expect(vector[0]).toBeCloseTo(0.6, 5);
     expect(vector[1]).toBeCloseTo(0.8, 5);
   });
@@ -90,7 +97,7 @@ describe("ollama embedding provider", () => {
     await provider.embedQuery("hello");
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:11434/api/embeddings",
+      "http://127.0.0.1:11434/api/embed",
       expect.objectContaining({
         method: "POST",
         headers: expect.objectContaining({
@@ -141,7 +148,7 @@ describe("ollama embedding provider", () => {
     await provider.embedQuery("hello");
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:11434/api/embeddings",
+      "http://127.0.0.1:11434/api/embed",
       expect.objectContaining({
         headers: expect.objectContaining({
           Authorization: "Bearer ollama-env",
@@ -150,22 +157,25 @@ describe("ollama embedding provider", () => {
     );
   });
 
-  it("serializes batch embeddings to avoid flooding local Ollama", async () => {
-    let inFlight = 0;
-    let maxInFlight = 0;
-    const prompts: string[] = [];
+  it("sends batch embeddings in one Ollama request", async () => {
+    const inputs: unknown[] = [];
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
-      inFlight += 1;
-      maxInFlight = Math.max(maxInFlight, inFlight);
       const rawBody = typeof init?.body === "string" ? init.body : "{}";
-      const body = JSON.parse(rawBody) as { prompt?: string };
-      prompts.push(body.prompt ?? "");
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      inFlight -= 1;
-      return new Response(JSON.stringify({ embedding: [1, 0] }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
+      const body = JSON.parse(rawBody) as { input?: unknown };
+      inputs.push(body.input);
+      return new Response(
+        JSON.stringify({
+          embeddings: [
+            [1, 0],
+            [1, 0],
+            [1, 0],
+          ],
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
     });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -178,9 +188,45 @@ describe("ollama embedding provider", () => {
     });
 
     await expect(provider.embedBatch(["a", "bb", "ccc"])).resolves.toHaveLength(3);
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(prompts).toEqual(["a", "bb", "ccc"]);
-    expect(maxInFlight).toBe(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(inputs).toEqual([["a", "bb", "ccc"]]);
+  });
+
+  it("uses custom Ollama provider config and strips that provider prefix", async () => {
+    const fetchMock = mockEmbeddingFetch([1, 0]);
+
+    const { provider } = await createOllamaEmbeddingProvider({
+      config: {
+        models: {
+          providers: {
+            "ollama-spark": {
+              baseUrl: "http://spark.local:11434/v1",
+              apiKey: "spark-key",
+              headers: {
+                "X-Custom-Ollama": "spark",
+              },
+              models: [],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      provider: "ollama-spark",
+      model: "ollama-spark/qwen3-embedding:4b",
+      fallback: "none",
+    });
+
+    await provider.embedQuery("hello");
+
+    expect(provider.model).toBe("qwen3-embedding:4b");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://spark.local:11434/api/embed",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer spark-key",
+          "X-Custom-Ollama": "spark",
+        }),
+      }),
+    );
   });
 
   it("marks inline memory batches as local-server timeout work", async () => {

@@ -118,6 +118,12 @@ honors that Pi cut-point and keeps the recent tail in rebuilt context. Without
 an explicit keep budget, manual compaction behaves as a hard checkpoint and
 continues from the new summary alone.
 
+When `agents.defaults.compaction.truncateAfterCompaction` is enabled,
+OpenClaw does not rewrite the existing transcript in place. It creates a new
+active successor transcript from the compaction summary, preserved state, and
+unsummarized tail, then keeps the previous JSONL as the archived checkpoint
+source.
+
 ## Using a different model
 
 By default, compaction uses your agent's primary model. You can use a more

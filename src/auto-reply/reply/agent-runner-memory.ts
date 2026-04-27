@@ -506,12 +506,31 @@ export async function runPreflightCompactionIfNeeded(params: {
     sessionKey: params.sessionKey,
     storePath: params.storePath,
     tokensAfter: result.result?.tokensAfter,
+    newSessionId: result.result?.sessionId,
+    newSessionFile: result.result?.sessionFile,
   });
   await appendPostCompactionRefreshPrompt({
     cfg: params.cfg,
     followupRun: params.followupRun,
   });
   entry = params.sessionStore?.[params.sessionKey] ?? entry;
+  if (entry) {
+    const previousSessionId = params.followupRun.run.sessionId;
+    params.followupRun.run.sessionId = entry.sessionId;
+    params.replyOperation.updateSessionId(entry.sessionId);
+    if (entry.sessionFile) {
+      params.followupRun.run.sessionFile = entry.sessionFile;
+    }
+    const queueKey = params.followupRun.run.sessionKey ?? params.sessionKey;
+    if (queueKey) {
+      memoryDeps.refreshQueuedFollowupSession({
+        key: queueKey,
+        previousSessionId,
+        nextSessionId: entry.sessionId,
+        nextSessionFile: entry.sessionFile,
+      });
+    }
+  }
   return entry ?? params.sessionEntry;
 }
 
@@ -749,6 +768,7 @@ export async function runMemoryFlushIfNeeded(params: {
     .filter(Boolean)
     .join("\n\n");
   let postCompactionSessionId: string | undefined;
+  let postCompactionSessionFile: string | undefined;
   try {
     await memoryDeps.runWithModelFallback({
       ...resolveModelFallbackOptions(params.followupRun.run),
@@ -791,6 +811,9 @@ export async function runMemoryFlushIfNeeded(params: {
         if (result.meta?.agentMeta?.sessionId) {
           postCompactionSessionId = result.meta.agentMeta.sessionId;
         }
+        if (result.meta?.agentMeta?.sessionFile) {
+          postCompactionSessionFile = result.meta.agentMeta.sessionFile;
+        }
         bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
           result.meta?.systemPromptReport,
         );
@@ -810,6 +833,7 @@ export async function runMemoryFlushIfNeeded(params: {
         sessionKey: params.sessionKey,
         storePath: params.storePath,
         newSessionId: postCompactionSessionId,
+        newSessionFile: postCompactionSessionFile,
       });
       const updatedEntry = params.sessionKey ? activeSessionStore?.[params.sessionKey] : undefined;
       if (updatedEntry) {

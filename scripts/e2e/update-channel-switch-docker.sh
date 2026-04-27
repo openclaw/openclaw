@@ -1,19 +1,26 @@
 #!/usr/bin/env bash
+# Exercises package-to-git and git-to-package update channel switching in Docker.
+# Both package and git fixtures are derived from the same prepared npm tarball.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-update-channel-switch-e2e" OPENCLAW_UPDATE_CHANNEL_SWITCH_E2E_IMAGE)"
 SKIP_BUILD="${OPENCLAW_UPDATE_CHANNEL_SWITCH_E2E_SKIP_BUILD:-0}"
+PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz update-channel-switch "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}")"
+# Bare lanes mount the package artifact instead of baking app sources into the image.
+docker_e2e_package_mount_args "$PACKAGE_TGZ"
 
-docker_e2e_build_or_reuse "$IMAGE_NAME" update-channel-switch "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "" "$SKIP_BUILD"
+docker_e2e_build_or_reuse "$IMAGE_NAME" update-channel-switch "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "$SKIP_BUILD"
 
 echo "Running update channel switch E2E..."
 docker run --rm \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e OPENCLAW_SKIP_CHANNELS=1 \
   -e OPENCLAW_SKIP_PROVIDERS=1 \
+  "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   "$IMAGE_NAME" \
   bash -lc 'set -euo pipefail
 
@@ -29,32 +36,51 @@ export OPENCLAW_DISABLE_BUNDLED_PLUGINS=1
 export OPENCLAW_NO_ONBOARD=1
 export OPENCLAW_NO_PROMPT=1
 
-cat > /app/.gitignore <<'"'"'GITIGNORE'"'"'
-node_modules
-**/node_modules/
-dist
-dist-runtime
-.turbo
-coverage
-GITIGNORE
-
-node --import tsx scripts/write-package-dist-inventory.ts
+package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
+git_root="/tmp/openclaw-git"
+mkdir -p "$git_root"
+# Build the fake git install from the packed package contents, not the checkout.
+tar -xzf "$package_tgz" -C "$git_root" --strip-components=1
+# The package-derived fixture can carry patchedDependencies whose targets are
+# absent from the trimmed tarball install; that should not block update preflight.
+node - <<'"'"'NODE'"'"'
+const fs = require("node:fs");
+const packageJsonPath = "/tmp/openclaw-git/package.json";
+const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+const fixtureUiBuildSource = `const fs=require("node:fs");fs.mkdirSync("dist/control-ui",{recursive:true});fs.writeFileSync("dist/control-ui/index.html","<!doctype html><title>fixture</title>\\n")`;
+const fixtureUiBuildCommand = `node -e ${JSON.stringify(fixtureUiBuildSource)}`;
+packageJson.pnpm = { ...packageJson.pnpm, allowUnusedPatches: true };
+packageJson.scripts = {
+  ...packageJson.scripts,
+  build: "node -e \"console.log(\\\"fixture build skipped\\\")\"",
+  lint: "node -e \"console.log(\\\"fixture lint skipped\\\")\"",
+  "ui:build": fixtureUiBuildCommand,
+};
+fs.writeFileSync(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`);
+fs.mkdirSync("/tmp/openclaw-git/dist/control-ui", { recursive: true });
+fs.writeFileSync("/tmp/openclaw-git/dist/control-ui/index.html", "<!doctype html><title>fixture</title>\n");
+NODE
+(
+  cd "$git_root"
+  npm install --omit=optional --no-fund --no-audit >/tmp/openclaw-git-install.log 2>&1
+)
+node - <<'"'"'NODE'"'"'
+const fs = require("node:fs");
+fs.mkdirSync("/tmp/openclaw-git/dist/control-ui", { recursive: true });
+fs.writeFileSync("/tmp/openclaw-git/dist/control-ui/index.html", "<!doctype html><title>fixture</title>\n");
+NODE
 
 git config --global user.email "docker-e2e@openclaw.local"
 git config --global user.name "OpenClaw Docker E2E"
 git config --global gc.auto 0
-git -C /app init -q
-git -C /app config gc.auto 0
-git -C /app add -A
-git -C /app commit -qm "test fixture"
-fixture_sha="$(git -C /app rev-parse HEAD)"
+git -C "$git_root" init -q
+git -C "$git_root" config gc.auto 0
+git -C "$git_root" add -A
+git -C "$git_root" add -f dist/control-ui/index.html
+git -C "$git_root" commit -qm "test fixture"
+fixture_sha="$(git -C "$git_root" rev-parse HEAD)"
 
-pkg_tgz="$(npm pack --ignore-scripts --silent --pack-destination /tmp /app | tail -n 1 | tr -d "\r")"
-pkg_tgz_path="/tmp/$pkg_tgz"
-if [ ! -f "$pkg_tgz_path" ]; then
-  echo "npm pack failed (expected $pkg_tgz_path)"
-  exit 1
-fi
+pkg_tgz_path="$package_tgz"
 
 npm install -g --prefix /tmp/npm-prefix --omit=optional "$pkg_tgz_path"
 
@@ -70,7 +96,7 @@ cat > "$HOME/.openclaw/openclaw.json" <<'"'"'JSON'"'"'
 }
 JSON
 
-export OPENCLAW_GIT_DIR=/app
+export OPENCLAW_GIT_DIR="$git_root"
 export OPENCLAW_UPDATE_DEV_TARGET_REF="$fixture_sha"
 
 echo "==> package -> git dev channel"
