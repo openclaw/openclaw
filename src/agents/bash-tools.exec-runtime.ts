@@ -314,60 +314,55 @@ export function applyShellPath(env: Record<string, string>, shellPath?: string |
   }
 }
 
-function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "failed") {
-  if (!session.backgrounded || !session.notifyOnExit || session.exitNotified) {
-    return;
-  }
-
-  let sessionKey = session.sessionKey?.trim();
-  if (!sessionKey) {
-    return;
-  }
-
-  const exitLabel = session.exitSignal
-    ? `signal ${session.exitSignal}`
-    : `code ${session.exitCode ?? 0}`;
-
-  const output = compactNotifyOutput(
-    tail(session.tail || session.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
-  );
-
-  if (status === "failed" && session.exitReason === "manual-cancel" && !output) {
-    return;
-  }
-  if (status === "completed" && !output && session.notifyOnExitEmptySuccess !== true) {
-    return;
-  }
-
-  const cfg = loadConfig();
-  const agentsCfg = cfg.agents;
-  const defaults = agentsCfg 
-    ? (agentsCfg.defaults as (typeof agentsCfg.defaults & { allowFrom?: Array<string | number> }))
-    : undefined;
-
-  sessionKey = normalizeEventRoutingKey({
-    sessionKey: sessionKey,
-    dmScope: cfg.session?.scope,
-    allowFrom: defaults?.allowFrom ?? [],
-    normalizeEntry: (entry) => entry.toLowerCase(),
-    resolveAgentMainSessionKey: (key) => 
-      resolveAgentMainSessionKey({ cfg, agentId: session.scopeKey || "" }),
-  });
-
+export function maybeNotifyOnExit(session: any, _status?: string) {
+  if (session.exitNotified) return;
   session.exitNotified = true;
 
-  const summary = output
-    ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
-    : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
+  const { sessionKey, contextKey, deliveryContext, scopeKey } = session;
+  
+  const process = session.process || {};
+  const exitCode = process.exitCode;
+  const signal = process.signal;
 
-  enqueueSystemEvent(summary, {
-    sessionKey,
-    deliveryContext: session.notifyDeliveryContext,
-    trusted: false,
+  if (session.manuallyCanceled) return;
+
+  const notifyOnExitEmptySuccess = false; 
+  if (exitCode === 0 && !signal && !notifyOnExitEmptySuccess && !session.outputTail) {
+    return;
+  }
+
+  const text = signal 
+    ? `Process exited with signal ${signal}` 
+    : `Exec completed (exit code ${exitCode})`;
+
+  const cfg = loadConfig();
+  const defaults = (cfg.agents?.defaults as any) || {};
+
+  if (!scopeKey) {
+    return enqueueSystemEvent(text, {
+      sessionKey,
+      contextKey,
+      deliveryContext,
+    });
+  }
+
+  const normalizedKey = normalizeEventRoutingKey({
+    sessionKey: sessionKey,
+    dmScope: cfg.session?.scope,
+    allowFrom: defaults.allowFrom ?? [],
+    normalizeEntry: (entry) => entry.toLowerCase(),
+    resolveAgentMainSessionKey: (key) =>
+      resolveAgentMainSessionKey({ cfg, agentId: scopeKey }),
+  });
+
+  enqueueSystemEvent(text, {
+    sessionKey: normalizedKey,
+    contextKey,
+    deliveryContext,
   });
 
   requestHeartbeatNow(
-    scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event", coalesceMs: 0 }),
+    scopedHeartbeatWakeOptions(normalizedKey, { reason: "exec-event", coalesceMs: 0 }),
   );
 }
 

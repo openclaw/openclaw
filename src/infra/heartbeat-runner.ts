@@ -272,7 +272,6 @@ function resolveHeartbeatSession(
     };
   }
 
-  // Guard: never route heartbeats to subagent sessions, regardless of entry path.
   const forced = forcedSessionKey?.trim();
   if (forced && isSubagentSessionKey(forced)) {
     return {
@@ -296,29 +295,31 @@ function resolveHeartbeatSession(
         agentId: resolvedAgentId,
         sessionKey: forcedCandidate,
       });
+      
       if (forcedCanonical !== "global" && !isSubagentSessionKey(forcedCanonical)) {
         const sessionAgentId = resolveAgentIdFromSessionKey(forcedCanonical);
         if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
           const agentsCfg = cfg.agents;
-
           const defaults = agentsCfg 
-          ? (agentsCfg.defaults as (typeof agentsCfg.defaults & { allowFrom?: Array<string | number> }))
-          : undefined;
+            ? (agentsCfg.defaults as any)
+            : undefined;
 
-          const finalSessionKey = normalizeEventRoutingKey({
-            sessionKey: forcedCanonical,
-            dmScope: cfg.session?.scope,
-            allowFrom: defaults?.allowFrom ?? [], 
-            normalizeEntry: (entry) => entry.toLowerCase(),
-            resolveAgentMainSessionKey: (key) => 
-              resolveAgentMainSessionKey({ cfg, agentId: resolvedAgentId }),
-          });
+          const finalSessionKey = (resolvedAgentId)
+            ? normalizeEventRoutingKey({
+                sessionKey: forcedCanonical,
+                dmScope: cfg.session?.scope,
+                allowFrom: defaults?.allowFrom ?? [], 
+                normalizeEntry: (entry) => entry.toLowerCase(),
+                resolveAgentMainSessionKey: (key) => 
+                  resolveAgentMainSessionKey({ cfg, agentId: resolvedAgentId }),
+              })
+            : forcedCanonical;
           
           return {
             sessionKey: finalSessionKey,
             storePath,
             store,
-            entry: store[finalSessionKey],
+            entry: store[forcedCanonical],
             suppressOriginatingContext: false,
           };
         }
@@ -353,6 +354,7 @@ function resolveHeartbeatSession(
     requestKey: trimmed,
     mainKey: cfg.session?.mainKey,
   });
+  
   if (isSubagentSessionKey(candidate)) {
     return {
       sessionKey: mainSessionKey,
@@ -362,11 +364,13 @@ function resolveHeartbeatSession(
       suppressOriginatingContext: false,
     };
   }
+
   const canonical = canonicalizeMainSessionAlias({
     cfg,
     agentId: resolvedAgentId,
     sessionKey: candidate,
   });
+
   if (canonical !== "global" && !isSubagentSessionKey(canonical)) {
     const sessionAgentId = resolveAgentIdFromSessionKey(canonical);
     if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
