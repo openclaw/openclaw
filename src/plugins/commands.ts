@@ -207,9 +207,7 @@ export async function executePluginCommand(params: {
     (scope) => !isOperatorScope(scope),
   );
   if (unknownScope) {
-    logVerbose(
-      `Plugin command /${command.name} blocked: unknown gateway scope ${String(unknownScope)}`,
-    );
+    logVerbose(`Plugin command /${command.name} blocked: unknown gateway scope`);
     return { text: "⚠️ This command has invalid gateway scope configuration." };
   }
   if (requiredScopes.length > 0 && params.gatewayClientScopes) {
