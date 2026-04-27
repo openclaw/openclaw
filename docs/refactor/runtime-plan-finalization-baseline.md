@@ -133,13 +133,19 @@ What PR 6 still has to do:
 
 Smoke `openai/*`, `openai-codex/*`, `codex/*`, and `codex-cli/*` GPT-5.4 paths. Capture transcripts. Add the maintainer handoff doc linking PR 1 through PR 6.
 
-## What this PR does not change
+## What the original baseline PR (#72098) did not change
 
-- No production code.
-- No test code.
-- No public plugin surface.
-- No imports.
-- No file moves or renames.
+The doc-only baseline PR #72098 did not touch:
+
+- Production code.
+- Test code.
+- The public plugin surface.
+- Imports.
+- File moves or renames.
+
+(This file is now landing inside the consolidated PR #72276, which does include
+production-code, test, and import changes — captured in the commit-stack table
+in the PR description and the companion handoff doc.)
 
 ## Notes for reviewers
 
