@@ -735,6 +735,54 @@ describe("gateway bonjour advertiser", () => {
     await started.stop();
   });
 
+  it("truncates service name exceeding 63-byte DNS label limit", async () => {
+    const longHostname = "app-41627eae5842473f9e05f139ea307277-7f9477f4d6-lqqzf";
+    enableAdvertiserUnitMode(longHostname);
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy });
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    const [gatewayCall] = createService.mock.calls as Array<[ServiceCall]>;
+    const serviceName = gatewayCall?.[0]?.name as string;
+    const hostname = gatewayCall?.[0]?.hostname as string;
+
+    // Both name and hostname must be within the 63-byte DNS label limit
+    expect(new TextEncoder().encode(serviceName).byteLength).toBeLessThanOrEqual(63);
+    expect(new TextEncoder().encode(hostname).byteLength).toBeLessThanOrEqual(63);
+
+    await started.stop();
+  });
+
+  it("truncates multi-byte hostname within DNS label byte limit", async () => {
+    // 21 CJK characters = 63 bytes in UTF-8, adding " (OpenClaw)" pushes over
+    const cjkHostname = "你".repeat(21);
+    enableAdvertiserUnitMode(cjkHostname);
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy });
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    const [gatewayCall] = createService.mock.calls as Array<[ServiceCall]>;
+    const serviceName = gatewayCall?.[0]?.name as string;
+
+    expect(new TextEncoder().encode(serviceName).byteLength).toBeLessThanOrEqual(63);
+    // Should not end with a replacement character from incomplete multi-byte truncation
+    expect(serviceName).not.toMatch(/\uFFFD$/);
+
+    await started.stop();
+  });
+
   it("uses system hostname when OPENCLAW_MDNS_HOSTNAME is unset", async () => {
     // Allow advertiser to run in unit tests.
     delete process.env.VITEST;
