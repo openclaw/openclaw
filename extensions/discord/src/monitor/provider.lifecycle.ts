@@ -384,6 +384,20 @@ export async function runDiscordGatewayLifecycle(params: {
   });
   gatewayEmitter?.on("debug", statusObserver.onGatewayDebug);
 
+  // The @buape/carbon ConnectionMonitor fires "metrics" every 60s regardless of
+  // user traffic. Use it as a liveness heartbeat: if the gateway is connected
+  // when the metric fires, bump lastEventAt so the health-monitor does not
+  // misclassify a quiet-but-alive socket as stale (fixes 35-min restart loop).
+  const onGatewayMetrics = () => {
+    if (lifecycleStopping || params.abortSignal?.aborted) {
+      return;
+    }
+    if (gateway?.isConnected) {
+      pushStatus({ lastEventAt: Date.now() });
+    }
+  };
+  gatewayEmitter?.on("metrics", onGatewayMetrics);
+
   let sawDisallowedIntents = false;
   const handleGatewayEvent = (event: DiscordGatewayEvent): "continue" | "stop" => {
     if (event.type === "disallowed-intents") {
@@ -460,6 +474,7 @@ export async function runDiscordGatewayLifecycle(params: {
     stopGatewayLogging();
     statusObserver.dispose();
     gatewayEmitter?.removeListener("debug", statusObserver.onGatewayDebug);
+    gatewayEmitter?.removeListener("metrics", onGatewayMetrics);
     if (params.voiceManager) {
       await params.voiceManager.destroy();
       params.voiceManagerRef.current = null;

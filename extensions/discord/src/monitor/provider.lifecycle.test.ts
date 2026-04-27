@@ -501,6 +501,43 @@ describe("runDiscordGatewayLifecycle", () => {
     }
   });
 
+  it("treats gateway metrics as a liveness heartbeat when connected", async () => {
+    const { emitter, gateway } = createGatewayHarness();
+    gateway.isConnected = true;
+    getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+    waitForDiscordGatewayStopMock.mockImplementationOnce(async () => {
+      emitter.emit("metrics");
+    });
+
+    const { lifecycleParams, statusSink } = createLifecycleHarness({ gateway });
+
+    await expect(runDiscordGatewayLifecycle(lifecycleParams)).resolves.toBeUndefined();
+
+    expect(statusSink).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lastEventAt: expect.any(Number),
+      }),
+    );
+  });
+
+  it("ignores gateway metrics after abort", async () => {
+    const abortController = new AbortController();
+    const { emitter, gateway } = createGatewayHarness();
+    gateway.isConnected = true;
+    getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+    waitForDiscordGatewayStopMock.mockImplementationOnce(async () => {
+      abortController.abort();
+      emitter.emit("metrics");
+    });
+
+    const { lifecycleParams, statusSink } = createLifecycleHarness({ gateway });
+    lifecycleParams.abortSignal = abortController.signal;
+
+    await expect(runDiscordGatewayLifecycle(lifecycleParams)).resolves.toBeUndefined();
+
+    expect(statusSink).toHaveBeenCalledTimes(1);
+  });
+
   it("force-stops when a runtime reconnect opens but never becomes ready", async () => {
     vi.useFakeTimers();
     try {
