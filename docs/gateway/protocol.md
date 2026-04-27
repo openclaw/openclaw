@@ -564,6 +564,13 @@ stable across protocol v3 and are the expected baseline for third-party clients.
 | Tick-timeout close                        | code `4000` when silence exceeds `tickIntervalMs * 2` | `src/gateway/client.ts`                                    |
 | `MAX_PAYLOAD_BYTES`                       | `25 * 1024 * 1024` (25 MB)                            | `src/gateway/server-constants.ts`                          |
 
+After a syntactically valid `connect` request arrives, the gateway clears the
+pre-auth challenge timer and uses the same 10 second handshake budget to bound
+async connect/auth work until the client is registered or rejected. The
+`OPENCLAW_HANDSHAKE_TIMEOUT_MS` override applies to both server-side pre-auth
+phases; `OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS` only changes the client
+challenge watchdog and is clamped to the `250`-`10_000` ms range.
+
 The server advertises the effective `policy.tickIntervalMs`, `policy.maxPayload`,
 and `policy.maxBufferedBytes` in `hello-ok`; clients should honor those values
 rather than the pre-handshake defaults.

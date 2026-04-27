@@ -1,5 +1,7 @@
 export const DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS = 10_000;
 export const MIN_CONNECT_CHALLENGE_TIMEOUT_MS = 250;
+// Keep the client-side connect-challenge watchdog within the server's pre-auth
+// handshake budget so clients fail locally before the gateway's timer expires.
 export const MAX_CONNECT_CHALLENGE_TIMEOUT_MS = DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS;
 
 export function clampConnectChallengeTimeoutMs(timeoutMs: number): number {

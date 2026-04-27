@@ -11,6 +11,7 @@ const {
   getHealthVersionMock,
   incrementPresenceVersionMock,
   loadConfigMock,
+  resolveConnectAuthStateMock,
   upsertPresenceMock,
 } = vi.hoisted(() => ({
   buildGatewaySnapshotMock: vi.fn(() => ({
@@ -37,6 +38,7 @@ const {
       },
     },
   })),
+  resolveConnectAuthStateMock: vi.fn(),
   upsertPresenceMock: vi.fn(),
 }));
 
@@ -63,6 +65,14 @@ vi.mock("../health-state.js", () => ({
   incrementPresenceVersion: incrementPresenceVersionMock,
 }));
 
+vi.mock("./auth-context.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./auth-context.js")>();
+  return {
+    ...actual,
+    resolveConnectAuthState: resolveConnectAuthStateMock,
+  };
+});
+
 import { attachGatewayWsMessageHandler } from "./message-handler.js";
 
 function createLogger() {
@@ -77,6 +87,13 @@ function createLogger() {
 describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resolveConnectAuthStateMock.mockResolvedValue({
+      authResult: { ok: true, method: "none" },
+      authOk: true,
+      authMethod: "none",
+      sharedAuthOk: false,
+      sharedAuthProvided: false,
+    });
   });
 
   it("uses the injected runtime-aware health refresh after hello", async () => {
@@ -177,5 +194,97 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       expect(refreshHealthSnapshot).toHaveBeenCalledWith({ probe: true });
     });
     resolveRefresh?.();
+  });
+
+  it("bounds stalled connect auth after clearing the pre-auth timer", async () => {
+    vi.useFakeTimers();
+    const previousHandshakeTimeout = process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS;
+    process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = "25";
+    resolveConnectAuthStateMock.mockReturnValue(new Promise(() => {}));
+
+    try {
+      let onMessage: ((data: string) => void) | undefined;
+      const socket = {
+        _receiver: {},
+        send: vi.fn(),
+        on: vi.fn((event: string, handler: (data: string) => void) => {
+          if (event === "message") {
+            onMessage = handler;
+          }
+          return socket;
+        }),
+      } as unknown as WebSocket;
+      const close = vi.fn();
+      const clearHandshakeTimer = vi.fn();
+      const resolvedAuth: ResolvedGatewayAuth = {
+        mode: "none",
+        allowTailscale: false,
+      };
+
+      attachGatewayWsMessageHandler({
+        socket,
+        upgradeReq: {
+          headers: { host: "127.0.0.1:19001", origin: "http://127.0.0.1:19001" },
+          socket: { localAddress: "127.0.0.1", remoteAddress: "127.0.0.1" },
+        } as unknown as IncomingMessage,
+        connId: "conn-stalled-auth",
+        remoteAddr: "127.0.0.1",
+        localAddr: "127.0.0.1",
+        requestHost: "127.0.0.1:19001",
+        requestOrigin: "http://127.0.0.1:19001",
+        connectNonce: "nonce-stalled-auth",
+        getResolvedAuth: () => resolvedAuth,
+        gatewayMethods: [],
+        events: [],
+        extraHandlers: {},
+        buildRequestContext: () => ({}) as GatewayRequestContext,
+        refreshHealthSnapshot: vi.fn() as GatewayRequestContext["refreshHealthSnapshot"],
+        send: vi.fn(),
+        close,
+        isClosed: () => false,
+        clearHandshakeTimer,
+        getClient: () => null,
+        setClient: vi.fn(() => true),
+        setHandshakeState: vi.fn(),
+        setCloseCause: vi.fn(),
+        setLastFrameMeta: vi.fn(),
+        originCheckMetrics: { hostHeaderFallbackAccepted: 0 },
+        logGateway: createLogger() as never,
+        logHealth: createLogger() as never,
+        logWsControl: createLogger() as never,
+      });
+
+      onMessage?.(
+        JSON.stringify({
+          type: "req",
+          id: "connect-stalled-auth",
+          method: "connect",
+          params: {
+            minProtocol: PROTOCOL_VERSION,
+            maxProtocol: PROTOCOL_VERSION,
+            client: {
+              id: "openclaw-control-ui",
+              version: "dev",
+              platform: "test",
+              mode: "ui",
+            },
+            role: "operator",
+            caps: [],
+          },
+        }),
+      );
+
+      expect(clearHandshakeTimer).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(25);
+
+      expect(close).toHaveBeenCalledWith(1008, "connect auth timeout");
+    } finally {
+      if (previousHandshakeTimeout === undefined) {
+        delete process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS;
+      } else {
+        process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = previousHandshakeTimeout;
+      }
+      vi.useRealTimers();
+    }
   });
 });

@@ -87,6 +87,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/WS handshake: keep valid connect frames from tripping the pre-auth timer while still timing out stalled async auth before registration, and document the shared 10s timeout plus client challenge clamp. Carries forward #49751; related #62060. Thanks @sashakhar1.
 - Agents/approvals: fail restart-interrupted sessions whose transcript tail is still `approval-pending` instead of replaying stale exec approval IDs into the new Gateway process after restart. Fixes #65486. Thanks @mjmai20682068-create.
 - CLI/Gateway: use method-specific least-privilege scopes for classified CLI Gateway calls while preserving legacy broad scopes for unclassified plugin methods, so read-only commands no longer create admin/write/pairing scope-upgrade prompts. Fixes #68634. Thanks @nightmusher.
 - Gateway/sessions: align `chat.history` and `sessions.list` thinking defaults with owning-agent and catalog-aware resolution so Control UI session defaults match backend runtime state. (#63418) Thanks @jpreagan.

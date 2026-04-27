@@ -325,6 +325,7 @@ export function attachGatewayWsMessageHandler(params: {
     rateLimitClientIp: browserRateLimitClientIp,
     authRateLimiter,
   } = browserSecurity;
+  let clearPendingConnectAuthTimer: (() => void) | undefined;
 
   const handleMessage = async (data: RawData) => {
     if (isClosed()) {
@@ -434,6 +435,7 @@ export function attachGatewayWsMessageHandler(params: {
         const connectAuthStartedAt = Date.now();
         const connectAuthTimeoutMs = getPreauthHandshakeTimeoutMsFromEnv();
         const connectAuthTimer = setTimeout(() => {
+          clearConnectAuthTimer();
           if (isClosed() || getClient()) {
             return;
           }
@@ -449,7 +451,17 @@ export function attachGatewayWsMessageHandler(params: {
           close(1008, "connect auth timeout");
         }, connectAuthTimeoutMs);
         connectAuthTimer.unref?.();
-        const clearConnectAuthTimer = () => clearTimeout(connectAuthTimer);
+        const clearConnectAuthTimer = () => {
+          clearTimeout(connectAuthTimer);
+          if (clearPendingConnectAuthTimer === clearConnectAuthTimer) {
+            clearPendingConnectAuthTimer = undefined;
+          }
+        };
+        clearPendingConnectAuthTimer = clearConnectAuthTimer;
+        const closeConnectAuth = (code?: number, reason?: string) => {
+          clearConnectAuthTimer();
+          close(code, reason);
+        };
 
         // Clear the pre-auth challenge timer once the client has sent a valid
         // connect request. The connect auth timer above still bounds stalled
@@ -486,7 +498,7 @@ export function attachGatewayWsMessageHandler(params: {
           sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, "protocol mismatch", {
             details: { expectedProtocol: PROTOCOL_VERSION },
           });
-          close(1002, "protocol mismatch");
+          closeConnectAuth(1002, "protocol mismatch");
           return;
         }
 
@@ -497,7 +509,7 @@ export function attachGatewayWsMessageHandler(params: {
             role: roleRaw,
           });
           sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, "invalid role");
-          close(1008, "invalid role");
+          closeConnectAuth(1008, "invalid role");
           return;
         }
         // Default-deny: scopes must be explicit. Empty/missing scopes means no permissions.
@@ -539,7 +551,7 @@ export function attachGatewayWsMessageHandler(params: {
                 reason: originCheck.reason,
               },
             });
-            close(1008, truncateCloseReason(errorMessage));
+            closeConnectAuth(1008, truncateCloseReason(errorMessage));
             return;
           }
           if (originCheck.matchedBy === "host-header-fallback") {
@@ -624,7 +636,7 @@ export function attachGatewayWsMessageHandler(params: {
               recommendedNextStep,
             },
           });
-          close(1008, truncateCloseReason(authMessage));
+          closeConnectAuth(1008, truncateCloseReason(authMessage));
         };
         const clearUnboundScopes = () => {
           if (scopes.length > 0) {
@@ -704,7 +716,7 @@ export function attachGatewayWsMessageHandler(params: {
             sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, errorMessage, {
               details: { code: ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED },
             });
-            close(1008, errorMessage);
+            closeConnectAuth(1008, errorMessage);
             return false;
           }
 
@@ -717,7 +729,7 @@ export function attachGatewayWsMessageHandler(params: {
           sendHandshakeErrorResponse(ErrorCodes.NOT_PAIRED, "device identity required", {
             details: { code: ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED },
           });
-          close(1008, "device identity required");
+          closeConnectAuth(1008, "device identity required");
           return false;
         };
         if (!handleMissingDeviceIdentity()) {
@@ -742,7 +754,7 @@ export function attachGatewayWsMessageHandler(params: {
                 },
               }),
             });
-            close(1008, message);
+            closeConnectAuth(1008, message);
           };
           const derivedId = deriveDeviceIdFromPublicKey(device.publicKey);
           if (!derivedId || derivedId !== device.id) {
@@ -850,7 +862,7 @@ export function attachGatewayWsMessageHandler(params: {
             setCloseCause("gateway-auth-rotated", {
               authGenerationStale: true,
             });
-            close(4001, "gateway auth changed");
+            closeConnectAuth(4001, "gateway auth changed");
             return;
           }
         }
@@ -1063,7 +1075,9 @@ export function attachGatewayWsMessageHandler(params: {
                   requestStillPending = recoveryRequestId === pairing.request.requestId;
                 }
                 if (requestStillPending) {
-                  context.broadcast("device.pair.requested", pairing.request, { dropIfSlow: true });
+                  context.broadcast("device.pair.requested", pairing.request, {
+                    dropIfSlow: true,
+                  });
                 }
               }
             } else if (pairing.created) {
@@ -1112,7 +1126,7 @@ export function attachGatewayWsMessageHandler(params: {
                   details: pairingErrorDetails,
                 }),
               });
-              close(
+              closeConnectAuth(
                 1008,
                 truncateCloseReason(
                   buildPairingConnectCloseReason({
@@ -1293,6 +1307,7 @@ export function attachGatewayWsMessageHandler(params: {
         const presenceKey = shouldTrackPresence ? (device?.id ?? instanceId ?? connId) : undefined;
 
         if (isClosed()) {
+          clearConnectAuthTimer();
           setCloseCause("connect-aborted-before-register", {
             ...clientMeta,
             auth: authMethod,
@@ -1473,7 +1488,7 @@ export function attachGatewayWsMessageHandler(params: {
           await sendFrame({ type: "res", id: frame.id, ok: true, payload: helloOk });
         } catch (err) {
           setCloseCause("hello-send-failed", { error: formatForLog(err) });
-          close();
+          closeConnectAuth();
           return;
         }
         if (authMethod === "bootstrap-token" && bootstrapTokenCandidate && device) {
@@ -1616,6 +1631,7 @@ export function attachGatewayWsMessageHandler(params: {
       logGateway.error(`parse/handle error: ${String(err)}`);
       logWs("out", "parse-error", { connId, error: formatForLog(err) });
       if (!getClient()) {
+        clearPendingConnectAuthTimer?.();
         close();
       }
     }

@@ -61,4 +61,18 @@ describe("gateway handshake timeouts", () => {
       }
     }
   });
+
+  test("resolveConnectChallengeTimeoutMs clamps env override to the server handshake budget", () => {
+    const original = process.env.OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS;
+    try {
+      process.env.OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS = "15000";
+      expect(resolveConnectChallengeTimeoutMs()).toBe(MAX_CONNECT_CHALLENGE_TIMEOUT_MS);
+    } finally {
+      if (original === undefined) {
+        delete process.env.OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS;
+      } else {
+        process.env.OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS = original;
+      }
+    }
+  });
 });
