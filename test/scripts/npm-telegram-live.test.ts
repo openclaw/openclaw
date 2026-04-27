@@ -63,7 +63,10 @@ describe("package Telegram live Docker E2E", () => {
       'local source="/npm-global/lib/node_modules/openclaw/node_modules/$name"',
     );
     expect(script).toContain('ln -sfn "$source" "$target"');
-    expect(script).toContain("link_installed_package_dependency zod");
+    expect(script).toContain("link_installed_package_dependency \"$dependency\"");
+    expect(script).toContain("@modelcontextprotocol/sdk");
+    expect(script).toContain("yaml");
+    expect(script).toContain("zod");
   });
 
   it("lets npm-specific credential aliases override shared QA env", () => {
