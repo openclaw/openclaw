@@ -36,7 +36,7 @@ import {
   updatePairedNodeMetadata,
 } from "../../../infra/node-pairing.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../infra/skills-remote.js";
-import { upsertPresence } from "../../../infra/system-presence.js";
+import { listSystemPresence, upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeRoutingConfig } from "../../../infra/voicewake-routing.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { rawDataToString } from "../../../infra/ws.js";
@@ -1380,7 +1380,9 @@ export function attachGatewayWsMessageHandler(params: {
             instanceId: device?.id ?? instanceId,
             reason: "connect",
           });
-          incrementPresenceVersion();
+          const presenceVersion = incrementPresenceVersion();
+          snapshot.presence = listSystemPresence();
+          snapshot.stateVersion.presence = presenceVersion;
         }
         if (role === "node") {
           const context = buildRequestContext();
