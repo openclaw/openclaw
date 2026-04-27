@@ -125,7 +125,6 @@ function createCommandLookupClient(params: {
 }
 
 async function runSlashRequest(params: {
-  commandTokens: Set<string>;
   registeredCommands?: MattermostRegisteredCommand[];
   body: string;
   method?: string;
@@ -134,7 +133,6 @@ async function runSlashRequest(params: {
     account: accountFixture,
     cfg: {} as OpenClawConfig,
     runtime: {} as RuntimeEnv,
-    commandTokens: params.commandTokens,
     registeredCommands: params.registeredCommands ?? [],
   });
   const req = createRequest({ method: params.method, body: params.body });
@@ -153,7 +151,6 @@ describe("slash-http", () => {
       account: accountFixture,
       cfg: {} as OpenClawConfig,
       runtime: {} as RuntimeEnv,
-      commandTokens: new Set(["valid-token"]),
       registeredCommands: [createRegisteredCommand()],
     });
     const req = createRequest({ method: "GET", body: "" });
@@ -171,7 +168,6 @@ describe("slash-http", () => {
       account: accountFixture,
       cfg: {} as OpenClawConfig,
       runtime: {} as RuntimeEnv,
-      commandTokens: new Set(["valid-token"]),
       registeredCommands: [createRegisteredCommand()],
     });
     const req = createRequest({ body: "token=abc&command=%2Foc_status" });
@@ -183,9 +179,8 @@ describe("slash-http", () => {
     expect(response.getBody()).toContain("Invalid slash command payload");
   });
 
-  it("fails closed when no command tokens are registered", async () => {
+  it("fails closed when no commands are registered", async () => {
     const response = await runSlashRequest({
-      commandTokens: new Set<string>(),
       registeredCommands: [],
       body: "token=tok1&team_id=t1&channel_id=c1&user_id=u1&command=%2Foc_status&text=",
     });
@@ -196,9 +191,31 @@ describe("slash-http", () => {
 
   it("rejects unknown slash commands before upstream validation", async () => {
     const response = await runSlashRequest({
-      commandTokens: new Set(["known-token"]),
       registeredCommands: [createRegisteredCommand({ token: "known-token" })],
       body: "token=unknown&team_id=t1&channel_id=c1&user_id=u1&command=%2Foc_unknown&text=",
+    });
+
+    expect(response.res.statusCode).toBe(401);
+    expect(response.getBody()).toContain("Unauthorized: invalid command token.");
+  });
+
+  it("rejects a token valid for one command when used against another command", async () => {
+    // Cross-command spray DoS guard: a payload pointing at command B with the
+    // token for command A must fail at the per-command startup gate, before
+    // upstream validation runs and could poison the failure cache for B.
+    const response = await runSlashRequest({
+      registeredCommands: [
+        createRegisteredCommand({ token: "token-status", trigger: "oc_status" }),
+        {
+          id: "cmd-2",
+          teamId: "t1",
+          trigger: "oc_help",
+          token: "token-help",
+          url: "https://gateway.example.com/slash",
+          managed: false,
+        },
+      ],
+      body: "token=token-status&team_id=t1&channel_id=c1&user_id=u1&command=%2Foc_help&text=",
     });
 
     expect(response.res.statusCode).toBe(401);
@@ -210,7 +227,6 @@ describe("slash-http", () => {
       account: accountFixture,
       cfg: {} as OpenClawConfig,
       runtime: {} as RuntimeEnv,
-      commandTokens: new Set(["valid-token"]),
       registeredCommands: [createRegisteredCommand()],
       bodyTimeoutMs: 1,
     });

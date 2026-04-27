@@ -56,8 +56,6 @@ type SlashHttpHandlerParams = {
   account: ResolvedMattermostAccount;
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
-  /** Tokens learned from registered/current commands, used for fast matching and routing. */
-  commandTokens: Set<string>;
   /** Commands registered or reconciled during monitor startup. */
   registeredCommands: readonly MattermostRegisteredCommand[];
   /** Map from trigger to original command name (for skill commands that start with oc_). */
@@ -100,15 +98,6 @@ function sendJsonResponse(
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.end(JSON.stringify(body));
-}
-
-function matchesRegisteredCommandToken(commandTokens: ReadonlySet<string>, candidate: string) {
-  for (const token of commandTokens) {
-    if (safeEqualSecret(candidate, token)) {
-      return true;
-    }
-  }
-  return false;
 }
 
 function findRegisteredCommandForPayload(params: {
@@ -447,16 +436,7 @@ async function authorizeSlashInvocation(params: {
  * from the Mattermost server when a user invokes a registered slash command.
  */
 export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
-  const {
-    account,
-    cfg,
-    runtime,
-    commandTokens,
-    registeredCommands,
-    triggerMap,
-    log,
-    bodyTimeoutMs,
-  } = params;
+  const { account, cfg, runtime, registeredCommands, triggerMap, log, bodyTimeoutMs } = params;
 
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     if (req.method !== "POST") {
@@ -491,11 +471,19 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
     }
 
     const registeredCommand = findRegisteredCommandForPayload({ registeredCommands, payload });
-    const startupTokenMatches = matchesRegisteredCommandToken(commandTokens, payload.token);
 
-    // Validate token — fail closed: reject when no commands are registered
-    // (e.g. registration failed or startup was partial).
-    if (registeredCommands.length === 0 || !registeredCommand || !startupTokenMatches) {
+    // Fail closed when no commands are registered, the payload doesn't map to
+    // a registered (team, trigger), or the payload token doesn't equal the
+    // resolved command's startup token. Comparing against the resolved
+    // command's token (rather than any token in the account) prevents a token
+    // valid for command A from advancing to upstream validation for command B,
+    // which would otherwise let an attacker poison the per-command failure
+    // cache and DoS legitimate invocations of command B.
+    if (
+      registeredCommands.length === 0 ||
+      !registeredCommand ||
+      !safeEqualSecret(payload.token, registeredCommand.token)
+    ) {
       sendJsonResponse(res, 401, {
         response_type: "ephemeral",
         text: "Unauthorized: invalid command token.",

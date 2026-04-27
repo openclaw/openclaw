@@ -14,7 +14,11 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import type { MattermostConfig } from "../types.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
-import type { OpenClawPluginApi } from "./runtime-api.js";
+import {
+  isRequestBodyLimitError,
+  readRequestBodyWithLimit,
+  type OpenClawPluginApi,
+} from "./runtime-api.js";
 import {
   normalizeSlashCommandTrigger,
   parseSlashCommandPayload,
@@ -25,6 +29,9 @@ import {
   clearMattermostSlashCommandValidationCacheForAccount,
   createSlashCommandHttpHandler,
 } from "./slash-http.js";
+
+const MULTI_ACCOUNT_BODY_MAX_BYTES = 64 * 1024;
+const MULTI_ACCOUNT_BODY_TIMEOUT_MS = 5_000;
 
 // ─── Per-account state ───────────────────────────────────────────────────────
 
@@ -143,7 +150,6 @@ export function activateSlashCommands(params: {
     account,
     cfg: api.cfg,
     runtime: api.runtime,
-    commandTokens: tokenSet,
     registeredCommands,
     triggerMap,
     log,
@@ -271,19 +277,24 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
 
     // Multi-account: buffer the body, find the matching account by token or
     // registered team/trigger, then replay the request to the correct handler.
-    const chunks: Buffer[] = [];
-    const MAX_BODY = 64 * 1024;
-    let size = 0;
-    for await (const chunk of req) {
-      size += (chunk as Buffer).length;
-      if (size > MAX_BODY) {
-        res.statusCode = 413;
-        res.end("Payload Too Large");
+    // Use the bounded helper so a slow/never-finishing client cannot tie up the
+    // routing handler indefinitely (Slowloris).
+    let bodyStr: string;
+    try {
+      bodyStr = await readRequestBodyWithLimit(req, {
+        maxBytes: MULTI_ACCOUNT_BODY_MAX_BYTES,
+        timeoutMs: MULTI_ACCOUNT_BODY_TIMEOUT_MS,
+      });
+    } catch (error) {
+      if (isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT")) {
+        res.statusCode = 408;
+        res.end("Request body timeout");
         return;
       }
-      chunks.push(chunk as Buffer);
+      res.statusCode = 413;
+      res.end("Payload Too Large");
+      return;
     }
-    const bodyStr = Buffer.concat(chunks).toString("utf8");
 
     // Parse the token for the fast path; if it misses, parse the full slash
     // payload so rotated tokens can still route by registered team/trigger.

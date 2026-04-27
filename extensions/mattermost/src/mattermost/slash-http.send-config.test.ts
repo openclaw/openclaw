@@ -238,7 +238,6 @@ describe("slash-http cfg threading", () => {
       account: accountFixture,
       cfg,
       runtime: {} as RuntimeEnv,
-      commandTokens: new Set(["valid-token"]),
       registeredCommands: [
         {
           id: "cmd-1",
@@ -266,41 +265,6 @@ describe("slash-http cfg threading", () => {
     );
   });
 
-  it("does not rely on Set.has for command token validation", async () => {
-    const commandTokens = new Set(["valid-token"]);
-    const hasSpy = vi.fn(() => {
-      throw new Error("Set.has should not be used for slash token validation");
-    });
-    Object.defineProperty(commandTokens, "has", {
-      value: hasSpy,
-      configurable: true,
-    });
-
-    const handler = createSlashCommandHttpHandler({
-      account: accountFixture,
-      cfg: {} as OpenClawConfig,
-      runtime: {} as RuntimeEnv,
-      commandTokens,
-      registeredCommands: [
-        {
-          id: "cmd-1",
-          teamId: "team-1",
-          trigger: "oc_models",
-          token: "valid-token",
-          url: callbackUrlFixture,
-          managed: false,
-        },
-      ],
-    });
-    const response = createResponse();
-
-    await handler(createRequest(), response.res);
-
-    expect(response.res.statusCode).toBe(200);
-    expect(response.getBody()).toContain("Processing");
-    expect(hasSpy).not.toHaveBeenCalled();
-  });
-
   it("rejects a callback when Mattermost reports a different current command token", async () => {
     mockState.parseSlashCommandPayload.mockReturnValueOnce({
       token: "old-token",
@@ -325,7 +289,6 @@ describe("slash-http cfg threading", () => {
       account: accountFixture,
       cfg: {} as OpenClawConfig,
       runtime: {} as RuntimeEnv,
-      commandTokens: new Set(["old-token"]),
       registeredCommands: [
         {
           id: "cmd-1",
@@ -361,7 +324,6 @@ describe("slash-http cfg threading", () => {
       account: accountFixture,
       cfg: {} as OpenClawConfig,
       runtime: {} as RuntimeEnv,
-      commandTokens: new Set(["valid-token"]),
       registeredCommands: [
         {
           id: "cmd-1",
@@ -402,13 +364,11 @@ describe("slash-http cfg threading", () => {
       url: callbackUrlFixture,
       delete_at: 0,
     });
-    const commandTokens = new Set(["old-token"]);
 
     const handler = createSlashCommandHttpHandler({
       account: accountFixture,
       cfg: {} as OpenClawConfig,
       runtime: {} as RuntimeEnv,
-      commandTokens,
       registeredCommands: [
         {
           id: "cmd-1",
@@ -426,7 +386,6 @@ describe("slash-http cfg threading", () => {
 
     expect(response.res.statusCode).toBe(401);
     expect(response.getBody()).toContain("Unauthorized: invalid command token.");
-    expect(commandTokens.has("new-token")).toBe(false);
     expect(mockState.getMattermostCommand).not.toHaveBeenCalled();
     expect(mockState.fetchMattermostChannel).not.toHaveBeenCalled();
     expect(mockState.sendMessageMattermost).not.toHaveBeenCalled();

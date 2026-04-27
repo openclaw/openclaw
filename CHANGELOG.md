@@ -782,7 +782,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- Mattermost: refresh current native slash command registrations before accepting callbacks so stale tokens from deleted or regenerated commands stop being accepted without a gateway restart while failed validations stay briefly cached. Thanks @feynman-hou.
+- Mattermost: refresh current native slash command registrations before accepting callbacks so stale tokens from deleted or regenerated commands stop being accepted without a gateway restart while failed validations stay briefly cached, gate each callback against the resolved command's own startup token so a token leaked for one slash command cannot poison another command's failure cache, and add a body read timeout to the multi-account routing path so slow callback senders cannot tie up the dispatcher. Thanks @feynman-hou.
 
 ## 2026.4.26
 
