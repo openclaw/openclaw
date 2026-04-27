@@ -19,9 +19,9 @@ import { copyPluginToolMeta } from "../plugins/tools.js";
 import { PluginApprovalResolutions, type PluginApprovalResolution } from "../plugins/types.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { isPlainObject } from "../utils.js";
+import type { AnyAgentTool } from "./pi-tools.types.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
 import { normalizeToolName } from "./tool-policy.js";
-import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 export type HookContext = {
@@ -81,6 +81,40 @@ function isAbortSignalCancellation(err: unknown, signal?: AbortSignal): boolean 
     return true;
   }
   return false;
+}
+
+/**
+ * Normalizes tool parameters: converts null to {} for tools with object schema
+ * that have no required properties. This prevents validation errors when models
+ * send null for optional object parameters.
+ */
+function normalizeToolParams(params: unknown, tool: AnyAgentTool): unknown {
+  // Only normalize if params is null
+  if (params !== null) {
+    return params;
+  }
+
+  const schema = tool.parameters;
+  // Check if schema is a plain object with type: "object" and no required properties
+  if (!isPlainObject(schema)) {
+    return params;
+  }
+
+  const isObjectType = (schema as Record<string, unknown>).type === "object";
+  if (!isObjectType) {
+    return params;
+  }
+
+  // Check if there are no required properties (or properties at all)
+  const hasRequired = Array.isArray((schema as Record<string, unknown>).required);
+  const hasProperties = (schema as Record<string, unknown>).properties !== undefined;
+  
+  if (hasRequired || hasProperties) {
+    return params;
+  }
+
+  // For empty object schema, normalize null to {}
+  return {};
 }
 
 function unwrapErrorCause(err: unknown): unknown {
@@ -446,9 +480,11 @@ export function wrapToolWithBeforeToolCallHook(
       if (outcome.blocked) {
         throw new Error(outcome.reason);
       }
+      // Normalize null params to {} for tools with empty object schema
+      const normalizedParams = normalizeToolParams(outcome.params, tool);
       if (toolCallId) {
         const adjustedParamsKey = buildAdjustedParamsKey({ runId: ctx?.runId, toolCallId });
-        adjustedParamsByToolCallId.set(adjustedParamsKey, outcome.params);
+        adjustedParamsByToolCallId.set(adjustedParamsKey, normalizedParams);
         if (adjustedParamsByToolCallId.size > MAX_TRACKED_ADJUSTED_PARAMS) {
           const oldest = adjustedParamsByToolCallId.keys().next().value;
           if (oldest) {
@@ -467,7 +503,7 @@ export function wrapToolWithBeforeToolCallHook(
         ...(trace && { trace }),
         toolName: normalizedToolName,
         ...(toolCallId && { toolCallId }),
-        paramsSummary: summarizeToolParams(outcome.params),
+        paramsSummary: summarizeToolParams(normalizedParams),
       };
       emitTrustedDiagnosticEvent({
         type: "tool.execution.started",
@@ -475,12 +511,12 @@ export function wrapToolWithBeforeToolCallHook(
       });
       const startedAt = Date.now();
       try {
-        const result = await execute(toolCallId, outcome.params, signal, onUpdate);
+        const result = await execute(toolCallId, normalizedParams, signal, onUpdate);
         const durationMs = Date.now() - startedAt;
         await recordLoopOutcome({
           ctx,
           toolName: normalizedToolName,
-          toolParams: outcome.params,
+          toolParams: normalizedParams,
           toolCallId,
           result,
         });
@@ -503,7 +539,7 @@ export function wrapToolWithBeforeToolCallHook(
         await recordLoopOutcome({
           ctx,
           toolName: normalizedToolName,
-          toolParams: outcome.params,
+          toolParams: normalizedParams,
           toolCallId,
           error: err,
         });
@@ -539,4 +575,5 @@ export const __testing = {
   runBeforeToolCallHook,
   mergeParamsWithApprovalOverrides,
   isPlainObject,
+  normalizeToolParams,
 };
