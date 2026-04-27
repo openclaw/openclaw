@@ -141,7 +141,7 @@ describe("registerStatusHealthSessionsCommands", () => {
       expect(statusCommand).not.toHaveBeenCalled();
 
       vi.clearAllMocks();
-      resetRuntimeCapture();
+      // resetRuntimeCapture not needed; vi.clearAllMocks suffices
       runtime.exit.mockImplementation(() => {});
     }
   });

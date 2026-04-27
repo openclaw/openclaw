@@ -42,7 +42,8 @@ export async function callGatewayFromCli(
   params?: unknown,
   extra?: { expectFinal?: boolean; progress?: boolean },
 ) {
-  resolveGatewayRpcTimeoutMs(opts.timeout);
+  const timeoutMs = resolveGatewayRpcTimeoutMs(opts.timeout);
+  opts.timeout = String(timeoutMs);
   const runtime = await loadGatewayRpcRuntime();
   return await runtime.callGatewayFromCliRuntime(method, opts, params, extra);
 }
