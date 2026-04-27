@@ -483,6 +483,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/skills: redact `apiKey` and secret-named `env` values from the `skills.update` RPC response to prevent leaking credentials into WebSocket traffic, client logs, or session transcripts. Config is still written to disk in full; only the response payload is redacted. (#69998) Thanks @Ziy1-Tan.
 
 - Plugins/CLI: let flag-driven `openclaw channels add` install the selected channel plugin from its default source without opening an interactive prompt, fixing published npm Telegram setup in stdin-closed automation.
+- Security/SSRF: add opt-in operator-managed proxy routing configured with `proxy.proxyUrl`, so deployments can route OpenClaw's process-local HTTP and WebSocket clients through a filtering forward proxy while keeping application-level guards active. (#70044) Thanks @jesse-merhi.
 - Onboarding/setup: keep first-run config reads, plugin compatibility notices, and post-model sanity checks on cold metadata paths unless the user chooses to browse all models, avoiding full plugin/runtime catalog work between prompts. Thanks @shakkernerd.
 - Onboarding/auth: run manifest-owned provider auth choices through scoped setup providers so selecting OpenAI Codex browser/device auth no longer loads every provider runtime before OAuth starts. Thanks @shakkernerd.
 - Onboarding/auth: keep the post-auth default-model policy lookup on manifest/setup metadata so the next prompt appears without loading broad provider runtime. Thanks @shakkernerd.
@@ -577,7 +578,6 @@ Docs: https://docs.openclaw.ai
 - ACPX/Droid: add Factory Droid to the live ACP bind Docker matrix, including `.factory` settings staging, `FACTORY_API_KEY` forwarding, and the single-agent `test:docker:live-acp-bind:droid` recipe.
 - TTS/personas: add provider-aware TTS personas with deterministic provider binding merges, `/tts persona` controls, gateway/CLI persona state, Google Gemini `audio-profile-v1` prompt wrapping, and OpenAI instruction mapping. (#70748) Thanks @barronlroth.
 - Voice Wake: add trigger-based routing so macOS voice wake phrases can select a configured agent or session target, with Gateway routing APIs and node update events. (#30354) Thanks @longbiaochen.
-- Security/SSRF: add opt-in operator-managed proxy routing configured with `proxy.proxyUrl`, so deployments can route OpenClaw's process-local HTTP and WebSocket clients through a filtering forward proxy while keeping application-level guards active. (#70044) Thanks @jesse-merhi.
 
 ### Fixes
 
