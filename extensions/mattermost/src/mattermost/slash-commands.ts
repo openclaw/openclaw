@@ -195,9 +195,11 @@ export const DEFAULT_COMMAND_SPECS: MattermostCommandSpec[] = [
 export async function listMattermostCommands(
   client: MattermostClient,
   teamId: string,
+  init?: Pick<RequestInit, "signal">,
 ): Promise<MattermostCommandResponse[]> {
   return await client.request<MattermostCommandResponse[]>(
     `/commands?team_id=${encodeURIComponent(teamId)}&custom_only=true`,
+    init,
   );
 }
 
@@ -207,9 +209,11 @@ export async function listMattermostCommands(
 export async function getMattermostCommand(
   client: MattermostClient,
   commandId: string,
+  init?: Pick<RequestInit, "signal">,
 ): Promise<MattermostCommandResponse> {
   return await client.request<MattermostCommandResponse>(
     `/commands/${encodeURIComponent(commandId)}`,
+    init,
   );
 }
 

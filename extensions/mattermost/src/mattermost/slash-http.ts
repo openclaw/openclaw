@@ -68,6 +68,8 @@ type SlashHttpHandlerParams = {
 
 const MAX_BODY_BYTES = 64 * 1024;
 const BODY_READ_TIMEOUT_MS = 5_000;
+const COMMAND_LOOKUP_TIMEOUT_MS = 1_000;
+const commandLookupInflight = new Map<string, Promise<MattermostCommandResponse | null>>();
 
 /**
  * Read the full request body as a string.
@@ -119,27 +121,77 @@ function isDeletedMattermostCommand(command: { delete_at?: number }): boolean {
   return typeof command.delete_at === "number" && command.delete_at > 0;
 }
 
-async function fetchCurrentMattermostCommand(params: {
+function sanitizeCommandLookupError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  return raw
+    .replace(/[\r\n\t]/gu, " ")
+    .replace(/\b(Bearer|Token)\s+[A-Za-z0-9._~+/=-]+/giu, "$1 [redacted]")
+    .replace(/\b(token|authorization)(=|:)\s*[^,\s;]+/giu, "$1$2[redacted]")
+    .slice(0, 300);
+}
+
+async function withCommandLookupTimeout<T>(task: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), COMMAND_LOOKUP_TIMEOUT_MS);
+  try {
+    return await task(controller.signal);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function commandLookupKey(registered: MattermostRegisteredCommand): string {
+  return `${registered.teamId}:${registered.id}`;
+}
+
+async function fetchCurrentMattermostCommandUncached(params: {
   client: ReturnType<typeof createMattermostClient>;
   registered: MattermostRegisteredCommand;
   log?: (msg: string) => void;
 }): Promise<MattermostCommandResponse | null> {
+  let commandLookupError: unknown;
   try {
-    return await getMattermostCommand(params.client, params.registered.id);
-  } catch {
+    return await withCommandLookupTimeout((signal) =>
+      getMattermostCommand(params.client, params.registered.id, { signal }),
+    );
+  } catch (err) {
+    commandLookupError = err;
     // Older Mattermost servers may not expose GET /commands/{id}; fall back to
     // the team command list, which registration already requires.
   }
 
   try {
-    const currentCommands = await listMattermostCommands(params.client, params.registered.teamId);
+    const currentCommands = await withCommandLookupTimeout((signal) =>
+      listMattermostCommands(params.client, params.registered.teamId, { signal }),
+    );
     return currentCommands.find((cmd) => cmd.id === params.registered.id) ?? null;
   } catch (err) {
+    const primaryDetail = commandLookupError
+      ? `; command lookup: ${sanitizeCommandLookupError(commandLookupError)}`
+      : "";
     params.log?.(
-      `mattermost: slash command registration check failed for /${params.registered.trigger}: ${String(err)}`,
+      `mattermost: slash command registration check failed for /${params.registered.trigger}: ${sanitizeCommandLookupError(err)}${primaryDetail}`,
     );
     return null;
   }
+}
+
+async function fetchCurrentMattermostCommand(params: {
+  client: ReturnType<typeof createMattermostClient>;
+  registered: MattermostRegisteredCommand;
+  log?: (msg: string) => void;
+}): Promise<MattermostCommandResponse | null> {
+  const key = commandLookupKey(params.registered);
+  const existing = commandLookupInflight.get(key);
+  if (existing) {
+    return await existing;
+  }
+
+  const lookup = fetchCurrentMattermostCommandUncached(params).finally(() => {
+    commandLookupInflight.delete(key);
+  });
+  commandLookupInflight.set(key, lookup);
+  return await lookup;
 }
 
 export async function validateMattermostSlashCommandToken(params: {

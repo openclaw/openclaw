@@ -89,6 +89,7 @@ function createRegisteredCommand(params?: {
 function createCommandLookupClient(params: {
   command?: MattermostCommandResponse | null;
   commandLookupError?: Error;
+  listLookupError?: Error;
   listCommands?: MattermostCommandResponse[];
 }): MattermostClient & { requests: string[] } {
   const requests: string[] = [];
@@ -108,6 +109,9 @@ function createCommandLookupClient(params: {
         throw new Error("not found");
       }
       if (path.startsWith("/commands?team_id=")) {
+        if (params.listLookupError) {
+          throw params.listLookupError;
+        }
         return (params.listCommands ?? (params.command ? [params.command] : [])) as T;
       }
       throw new Error(`unexpected request path: ${path}`);
@@ -383,5 +387,37 @@ describe("slash-http", () => {
       }),
     ).resolves.toBe(true);
     expect(client.requests).toEqual(["/commands/cmd-1", "/commands?team_id=t1&custom_only=true"]);
+  });
+
+  it("sanitizes upstream lookup errors before logging fallback failures", async () => {
+    const registeredCommand = createRegisteredCommand();
+    const client = createCommandLookupClient({
+      commandLookupError: new Error("primary\ntoken=secret-token"),
+      listLookupError: new Error("fallback\r\nsecond-line"),
+    });
+    const log = vi.fn();
+
+    await expect(
+      validateMattermostSlashCommandToken({
+        client,
+        registeredCommand,
+        payload: {
+          token: "valid-token",
+          team_id: "t1",
+          channel_id: "c1",
+          user_id: "u1",
+          command: "/oc_status",
+          text: "",
+        },
+        log,
+      }),
+    ).resolves.toBe(false);
+
+    expect(log).toHaveBeenCalledTimes(1);
+    const message = log.mock.calls[0]?.[0] ?? "";
+    expect(message).not.toMatch(/[\r\n\t]/u);
+    expect(message).toContain("fallback  second-line");
+    expect(message).toContain("primary token=[redacted]");
+    expect(message).not.toContain("secret-token");
   });
 });
