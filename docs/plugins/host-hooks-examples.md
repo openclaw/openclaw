@@ -388,11 +388,14 @@ api.registerCommand({
   description: "Save the current model output as a note and inject a summary on the next turn",
   acceptsArgs: false,
   handler: async (ctx) => {
+    if (!ctx.sessionKey) {
+      return { content: "This command must run inside a bound session." };
+    }
     await api.enqueueNextTurnInjection({
       sessionKey: ctx.sessionKey,
       text: `[note saved] previous answer captured at ${new Date().toISOString()}`,
       placement: "prepend_context",
-      idempotencyKey: `note-save:${ctx.sessionKey ?? "unknown"}`,
+      idempotencyKey: `note-save:${ctx.sessionKey}`,
       ttlMs: 5 * 60_000, // 5 min
     });
     return { content: "Saved.", continueAgent: false };
@@ -1036,6 +1039,9 @@ export default definePluginEntry({
       requiredScopes: ["release.admin"],
       handler: async (ctx) => {
         const version = (ctx.args ?? "").trim();
+        if (!ctx.sessionKey) {
+          return { content: "This command must run inside a bound session.", continueAgent: false };
+        }
         if (!version) {
           return { content: "Usage: /release-approve <version>", continueAgent: false };
         }
@@ -1055,6 +1061,9 @@ export default definePluginEntry({
       acceptsArgs: false,
       requiredScopes: ["release.admin"],
       handler: async (ctx) => {
+        if (!ctx.sessionKey) {
+          return { content: "This command must run inside a bound session.", continueAgent: false };
+        }
         await api.enqueueNextTurnInjection({
           sessionKey: ctx.sessionKey,
           text: `Operator initiated release rollback.`,
@@ -1102,6 +1111,9 @@ api.registerCommand({
   acceptsArgs: false,
   requiredScopes: ["release.admin"],
   handler: async (ctx) => {
+    if (!ctx.sessionKey) {
+      return { content: "This command must run inside a bound session.", continueAgent: false };
+    }
     await applyApprovalState(ctx.sessionKey, "approved"); // your helper
     await api.enqueueNextTurnInjection({
       sessionKey: ctx.sessionKey,
@@ -1816,6 +1828,9 @@ export default definePluginEntry({
       requiredScopes: ["release.admin"],
       handler: async (ctx) => {
         const version = (ctx.args ?? "").trim();
+        if (!ctx.sessionKey) {
+          return { content: "This command must run inside a bound session.", continueAgent: false };
+        }
         await api.enqueueNextTurnInjection({
           sessionKey: ctx.sessionKey,
           text: `Operator approved deployment of ${version || "the pending version"}.`,
@@ -1832,6 +1847,9 @@ export default definePluginEntry({
       acceptsArgs: true,
       requiredScopes: ["release.admin"],
       handler: async (ctx) => {
+        if (!ctx.sessionKey) {
+          return { content: "This command must run inside a bound session.", continueAgent: false };
+        }
         await api.enqueueNextTurnInjection({
           sessionKey: ctx.sessionKey,
           text: `Operator denied deployment. Cancel and explain to user.`,
