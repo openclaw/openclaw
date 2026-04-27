@@ -512,6 +512,38 @@ describe("speech-core native voice-note routing", () => {
     });
   });
 
+  it("skips per-provider routed text that exceeds the hard max length", async () => {
+    const synthesize = vi.fn(synthesizeMock);
+    installSpeechProviders([
+      createMockSpeechProvider("mock", {
+        synthesize,
+      }),
+    ]);
+
+    const result = await synthesizeSpeech({
+      text: "short text",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "mock",
+            maxTextLength: 20,
+          },
+        },
+      },
+      resolveText: () => "x".repeat(21),
+      minTextLength: 10,
+    });
+
+    expect(result.success).toBe(false);
+    expect(synthesize).not.toHaveBeenCalled();
+    expect(result.attempts?.[0]).toMatchObject({
+      provider: "mock",
+      outcome: "skipped",
+      reasonCode: "speech_text_too_long",
+    });
+  });
+
   it("preserves expressive source text for tag-aware providers when ttsSourceText metadata is present", async () => {
     const elevenSynthesize = vi.fn(synthesizeMock);
     const eleven = createMockSpeechProvider("elevenlabs", {
@@ -987,6 +1019,60 @@ describe("speech-core native voice-note routing", () => {
       expect(expressiveSynthesize).toHaveBeenCalledWith(
         expect.objectContaining({ text: "[warmly] compact summary" }),
       );
+      expect(plainSynthesize).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "plain fallback text" }),
+      );
+      expect(result.mediaUrl).toMatch(/voice-\d+\.ogg$/);
+      mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
+    } finally {
+      rmSync(prefsPath, { force: true });
+      if (mediaDir) {
+        rmSync(mediaDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("does not choose an unready provider for initial TTS variant selection", async () => {
+    const unavailableExpressive = createMockSpeechProvider("elevenlabs", {
+      capabilities: { sourceTextHandling: "preserve_expressive_tags" },
+      isConfigured: () => false,
+      autoSelectOrder: 1,
+    });
+    const plainSynthesize = vi.fn(async (request: SpeechSynthesisRequest) =>
+      synthesizeMock(request),
+    );
+    const plain = createMockSpeechProvider("mock", {
+      synthesize: plainSynthesize,
+      autoSelectOrder: 2,
+    });
+    installSpeechProviders([unavailableExpressive, plain]);
+    const prefsPath = "/tmp/openclaw-tts-ready-initial-route-test.json";
+    const cfg: OpenClawConfig = {
+      messages: {
+        tts: {
+          enabled: true,
+          provider: "elevenlabs",
+          prefsPath,
+        },
+      },
+    };
+    const payload = setReplyPayloadMetadata({ text: "[warmly] long expressive reply" }, {
+      ttsSourceText: `[warmly] ${"expressive words ".repeat(10)}`,
+      ttsPlainText: "plain fallback text",
+    } satisfies ReplyPayload);
+
+    let mediaDir: string | undefined;
+    try {
+      writeFileSync(prefsPath, JSON.stringify({ tts: { maxLength: 100, summarize: true } }));
+
+      const result = await maybeApplyTtsToPayload({
+        payload,
+        cfg,
+        channel: "slack",
+        kind: "final",
+      });
+
+      expect(summarizeTextMock).not.toHaveBeenCalled();
       expect(plainSynthesize).toHaveBeenCalledWith(
         expect.objectContaining({ text: "plain fallback text" }),
       );

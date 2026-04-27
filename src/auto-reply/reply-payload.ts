@@ -54,6 +54,8 @@ export type ReplyPayloadMetadata = {
    * forwarded byte-for-byte: the TTS pipeline still trims, strips markdown, may
    * summarize when the text exceeds `maxLength`, and applies a hard length cap —
    * `ttsSourceText` only controls *which* string those steps run on.
+   * An explicit empty string is meaningful and is not equivalent to omission:
+   * it tells the TTS pipeline there is no usable tag-aware source variant.
    *
    * Pair with `ttsPlainText` when the visible reply text may still contain expressive
    * tags (e.g. `/emotions full` mode) — otherwise non-tag-aware providers in the
@@ -66,6 +68,9 @@ export type ReplyPayloadMetadata = {
    * runtime falls back to the visible reply text — which is correct in
    * `/emotions off|on` modes where visible text is already display-sanitized, but
    * leaks tag words to plain providers in `/emotions full` mode.
+   * An explicit empty string is meaningful and is not equivalent to omission:
+   * it tells the TTS pipeline to skip plain-text provider variants rather than
+   * falling back to visible text.
    */
   ttsPlainText?: string;
 };
