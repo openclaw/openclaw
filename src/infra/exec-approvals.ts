@@ -232,7 +232,18 @@ function ensureDir(filePath: string) {
   assertNoSymlinkPathComponents(dir, resolveRequiredHomeDir());
   fs.mkdirSync(dir, { recursive: true });
   const dirStat = fs.lstatSync(dir);
-  if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) {
+  if (dirStat.isSymbolicLink()) {
+    // #72572: a `~/.openclaw` symlink at the trusted-root boundary is allowed
+    // when its target passes the same ownership/permission checks the
+    // traversal walk applies. assertNoSymlinkPathComponents already vetted
+    // the symlink and validated its target is a real directory, so the only
+    // remaining concern here is "the realpath target itself must be a
+    // directory" — which we re-verify defensively.
+    const realDirStat = fs.statSync(dir);
+    if (!realDirStat.isDirectory()) {
+      throw new Error(`Refusing to use unsafe exec approvals directory: ${dir}`);
+    }
+  } else if (!dirStat.isDirectory()) {
     throw new Error(`Refusing to use unsafe exec approvals directory: ${dir}`);
   }
   return dir;
@@ -248,18 +259,63 @@ function assertNoSymlinkPathComponents(targetPath: string, trustedRoot: string):
   const relative = path.relative(resolvedRoot, resolvedTarget);
   const segments = relative && relative !== "." ? relative.split(path.sep) : [];
   let current = resolvedRoot;
-  for (const segment of segments) {
+  // #72572: allow EXACTLY ONE trusted symlink hop at the immediate child of
+  // the trusted root (i.e. `~/.openclaw -> /elsewhere/dotfiles/.openclaw`)
+  // — the common GNU Stow / chezmoi dotfile layout. Once we follow it we
+  // continue traversal from the realpath target with the same per-segment
+  // symlink rejection, so deeper symlinks inside the resolved tree remain
+  // disallowed. Trust requires the symlink target to be (a) owned by the
+  // current effective user and (b) not group/other writable, matching the
+  // hardening intent of #64050 / #72377.
+  let trustedSymlinkConsumed = false;
+  for (let i = 0; i < segments.length; i += 1) {
+    const segment = segments[i];
     current = path.join(current, segment);
     try {
       const stat = fs.lstatSync(current);
       if (stat.isSymbolicLink()) {
-        throw new Error(`Refusing to traverse symlink in exec approvals path: ${current}`);
+        const isImmediateRootChild = i === 0;
+        if (!isImmediateRootChild || trustedSymlinkConsumed) {
+          throw new Error(`Refusing to traverse symlink in exec approvals path: ${current}`);
+        }
+        const realTarget = fs.realpathSync(current);
+        assertTrustedSymlinkTarget(current, realTarget);
+        trustedSymlinkConsumed = true;
+        current = realTarget;
       }
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
         throw err;
       }
     }
+  }
+}
+
+// Companion to assertNoSymlinkPathComponents for #72572. A trusted symlink
+// hop is only safe if its realpath target is owned by the current process
+// user and has no group/other write bits — anything else means a less
+// privileged user could swap the target out from under exec-approvals.
+// Falls back to permissive on platforms that don't expose process.geteuid
+// (Windows), where the broader OS ACL model already differs.
+function assertTrustedSymlinkTarget(linkPath: string, realTarget: string): void {
+  const targetStat = fs.statSync(realTarget);
+  if (!targetStat.isDirectory()) {
+    throw new Error(`Refusing to traverse symlink in exec approvals path: ${linkPath}`);
+  }
+  const geteuid = (process as { geteuid?: () => number }).geteuid;
+  if (typeof geteuid === "function") {
+    const euid = geteuid.call(process);
+    if (targetStat.uid !== euid) {
+      throw new Error(
+        `Refusing to traverse symlink in exec approvals path: ${linkPath} (target not owned by current user)`,
+      );
+    }
+  }
+  // Mode bits 0o022 = group-write | other-write. Reject if either is set.
+  if ((targetStat.mode & 0o022) !== 0) {
+    throw new Error(
+      `Refusing to traverse symlink in exec approvals path: ${linkPath} (target is group/other writable)`,
+    );
   }
 }
 
