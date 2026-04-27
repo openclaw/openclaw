@@ -317,7 +317,8 @@ export function applyShellPath(env: Record<string, string>, shellPath?: string |
 export function maybeNotifyOnExit(session: any, statusOverride?: string): void {
   if (!session || session.exitNotified) return;
 
-  if (!session.sessionKey) {
+  const sKey = session.sessionKey;
+  if (!sKey) {
     session.exitNotified = true; 
     return;
   }
@@ -333,7 +334,7 @@ export function maybeNotifyOnExit(session: any, statusOverride?: string): void {
 
   session.exitNotified = true;
 
-  const { sessionKey, contextKey, deliveryContext, scopeKey } = session;
+  const { contextKey, deliveryContext, scopeKey } = session;
 
   let text = "";
   if (signal) {
@@ -346,7 +347,7 @@ export function maybeNotifyOnExit(session: any, statusOverride?: string): void {
 
   const cfg = loadConfig() || {};
   if (!scopeKey) {
-    enqueueSystemEvent(text, { sessionKey, contextKey, deliveryContext });
+    enqueueSystemEvent(text, { sessionKey: sKey, contextKey, deliveryContext });
     return;
   }
 
@@ -357,7 +358,7 @@ export function maybeNotifyOnExit(session: any, statusOverride?: string): void {
   const allowFrom = agentsCfg?.defaults?.allowFrom ?? [];
 
   const finalSessionKey = normalizeEventRoutingKey({
-    sessionKey,
+    sessionKey: sKey,
     dmScope: (cfg as any).session?.scope,
     allowFrom,
     normalizeEntry: (entry: string) => entry.toLowerCase(),
