@@ -178,6 +178,25 @@ const CLI_METADATA_ENTRY_BASENAMES = [
   "cli-metadata.cjs",
 ] as const;
 
+type PluginLoaderHookPolicy = {
+  allowPromptInjection?: boolean;
+  allowConversationAccess?: boolean;
+};
+
+function resolvePluginLoaderHookPolicy(params: {
+  configHooks?: PluginLoaderHookPolicy;
+}): PluginLoaderHookPolicy | undefined {
+  const policy = {
+    ...(typeof params.configHooks?.allowPromptInjection === "boolean"
+      ? { allowPromptInjection: params.configHooks.allowPromptInjection }
+      : {}),
+    ...(typeof params.configHooks?.allowConversationAccess === "boolean"
+      ? { allowConversationAccess: params.configHooks.allowConversationAccess }
+      : {}),
+  } satisfies PluginLoaderHookPolicy;
+  return Object.keys(policy).length > 0 ? policy : undefined;
+}
+
 function resolveDreamingSidecarEngineId(params: {
   cfg: OpenClawConfig;
   memorySlot: string | null | undefined;
@@ -2859,7 +2878,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           const api = createApi(record, {
             config: cfg,
             pluginConfig: {},
-            hookPolicy: entry?.hooks,
+            hookPolicy: resolvePluginLoaderHookPolicy({
+              configHooks: entry?.hooks,
+            }),
             registrationMode,
           });
           let mergedSetupRegistration = setupRegistration;
@@ -3096,7 +3117,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       const api = createApi(record, {
         config: cfg,
         pluginConfig: validatedConfig.value,
-        hookPolicy: entry?.hooks,
+        hookPolicy: resolvePluginLoaderHookPolicy({
+          configHooks: entry?.hooks,
+        }),
         registrationMode,
       });
       const registrySnapshot = snapshotPluginRegistry(registry);

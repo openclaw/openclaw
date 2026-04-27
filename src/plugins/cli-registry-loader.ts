@@ -1,8 +1,8 @@
 import { collectUniqueCommandDescriptors } from "../cli/program/command-descriptor-utils.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
 import { createPluginCliGatewayNodesRuntime } from "./cli-gateway-nodes-runtime.js";
+import { normalizePluginsConfig } from "./config-state.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadOpenClawPluginCliRegistry, loadOpenClawPlugins } from "./loader.js";
 import type { PluginRegistry } from "./registry.js";
@@ -92,17 +92,14 @@ function withPrimaryMemorySlotPluginId(
   if (!memorySlotPluginId) {
     return [...pluginIds];
   }
-  return [...new Set([...pluginIds, memorySlotPluginId])].toSorted((left, right) =>
-    left.localeCompare(right),
-  );
+  return pluginIds.includes(memorySlotPluginId)
+    ? [...pluginIds]
+    : [...pluginIds, memorySlotPluginId];
 }
 
 function resolveConfiguredMemorySlotPluginId(config: OpenClawConfig): string | null {
-  const memorySlotPluginId = normalizeOptionalLowercaseString(config.plugins?.slots?.memory);
-  if (!memorySlotPluginId || memorySlotPluginId === "none") {
-    return null;
-  }
-  return memorySlotPluginId;
+  const memorySlotPluginId = normalizePluginsConfig(config.plugins).slots.memory;
+  return typeof memorySlotPluginId === "string" ? memorySlotPluginId : null;
 }
 
 export function resolvePluginCliLoadContext(params: {

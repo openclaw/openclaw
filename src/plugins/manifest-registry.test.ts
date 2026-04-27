@@ -8,7 +8,7 @@ import {
   clearPluginManifestRegistryCache,
   loadPluginManifestRegistry,
 } from "./manifest-registry.js";
-import type { OpenClawPackageManifest } from "./manifest.js";
+import { loadPluginManifest, type OpenClawPackageManifest } from "./manifest.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 vi.unmock("../version.js");
@@ -312,6 +312,81 @@ afterEach(() => {
 });
 
 describe("loadPluginManifestRegistry", () => {
+  it("preserves manifest conversation access permissions when true", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "conversation-permission",
+      configSchema: { type: "object" },
+      permissions: { conversationAccess: true },
+    });
+
+    const result = loadPluginManifest(dir);
+
+    expect(result.ok).toBe(true);
+    expect(result.ok ? result.manifest.permissions : undefined).toEqual({
+      conversationAccess: true,
+    });
+  });
+
+  it("omits manifest conversation access permissions when missing or not true", () => {
+    for (const [id, permissions] of [
+      ["conversation-permission-missing", undefined],
+      ["conversation-permission-false", { conversationAccess: false }],
+      ["conversation-permission-invalid", { conversationAccess: "yes" }],
+    ] as const) {
+      const dir = makeTempDir();
+      writeManifest(dir, {
+        id,
+        configSchema: { type: "object" },
+        ...(permissions ? { permissions } : {}),
+      });
+
+      const result = loadPluginManifest(dir);
+
+      expect(result.ok).toBe(true);
+      expect(result.ok ? result.manifest.permissions : undefined).toBeUndefined();
+    }
+  });
+
+  it("preserves manifest permissions on registry records", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "conversation-permission-record",
+      configSchema: { type: "object" },
+      permissions: { conversationAccess: true },
+    });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "conversation-permission-record",
+        rootDir: dir,
+        origin: "workspace",
+      }),
+    ]);
+
+    expect(registry.plugins[0]?.permissions).toEqual({
+      conversationAccess: true,
+    });
+  });
+
+  it("leaves registry record permissions unset when manifest permissions are absent", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "conversation-permission-record-default",
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "conversation-permission-record-default",
+        rootDir: dir,
+        origin: "workspace",
+      }),
+    ]);
+
+    expect(registry.plugins[0]?.permissions).toBeUndefined();
+  });
+
   it("keeps only the higher-precedence plugin for truly distinct duplicates", () => {
     const dirA = makeTempDir();
     const dirB = makeTempDir();

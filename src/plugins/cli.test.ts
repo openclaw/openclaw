@@ -410,7 +410,24 @@ describe("registerPluginCliCommands", () => {
 
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
-        onlyPluginIds: ["memory-core", "memory-wiki"],
+        onlyPluginIds: ["memory-wiki", "memory-core"],
+      }),
+    );
+  });
+
+  it("includes default memory slot plugin when primary command is wiki", async () => {
+    const program = createProgram();
+    program.exitOverride();
+    mocks.resolveManifestActivationPluginIds.mockReturnValue(["memory-wiki"]);
+
+    await registerPluginCliCommands(program, {} as OpenClawConfig, undefined, undefined, {
+      mode: "lazy",
+      primary: "wiki",
+    });
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["memory-wiki", "memory-core"],
       }),
     );
   });

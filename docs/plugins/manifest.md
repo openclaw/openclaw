@@ -92,6 +92,9 @@ or npm install metadata. Those belong in your plugin code and `package.json`.
   "providerAuthAliases": {
     "openrouter-coding": "openrouter"
   },
+  "permissions": {
+    "conversationAccess": true
+  },
   "channelEnvVars": {
     "openrouter-chatops": ["OPENROUTER_CHATOPS_TOKEN"]
   },
@@ -151,6 +154,7 @@ or npm install metadata. Those belong in your plugin code and `package.json`.
 | `commandAliases`                     | No       | `object[]`                       | Command names owned by this plugin that should produce plugin-aware config and CLI diagnostics before runtime loads.                                                                                                              |
 | `providerAuthEnvVars`                | No       | `Record<string, string[]>`       | Deprecated compatibility env metadata for provider auth/status lookup. Prefer `setup.providers[].envVars` for new plugins; OpenClaw still reads this during the deprecation window.                                               |
 | `providerAuthAliases`                | No       | `Record<string, string>`         | Provider ids that should reuse another provider id for auth lookup, for example a coding provider that shares the base provider API key and auth profiles.                                                                        |
+| `permissions`                        | No       | `object`                         | Static permission requests OpenClaw can inspect before plugin runtime loads.                                                                                                                                                      |
 | `channelEnvVars`                     | No       | `Record<string, string[]>`       | Cheap channel env metadata that OpenClaw can inspect without loading plugin code. Use this for env-driven channel setup or auth surfaces that generic startup/config helpers should see.                                          |
 | `providerAuthChoices`                | No       | `object[]`                       | Cheap auth-choice metadata for onboarding pickers, preferred-provider resolution, and simple CLI flag wiring.                                                                                                                     |
 | `activation`                         | No       | `object`                         | Cheap activation planner metadata for provider, command, channel, route, and capability-triggered loading. Metadata only; plugin runtime still owns actual behavior.                                                              |
@@ -164,6 +168,27 @@ or npm install metadata. Those belong in your plugin code and `package.json`.
 | `description`                        | No       | `string`                         | Short summary shown in plugin surfaces.                                                                                                                                                                                           |
 | `version`                            | No       | `string`                         | Informational plugin version.                                                                                                                                                                                                     |
 | `uiHints`                            | No       | `Record<string, object>`         | UI labels, placeholders, and sensitivity hints for config fields.                                                                                                                                                                 |
+
+## permissions reference
+
+`permissions` declares sensitive plugin access requests that OpenClaw can
+inspect before plugin runtime loads.
+
+```json
+{
+  "permissions": {
+    "conversationAccess": true
+  }
+}
+```
+
+| Field                | Required | Type   | What it means                                                                                                                                                                                                                                                                 |
+| -------------------- | -------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `conversationAccess` | No       | `true` | Declares that the plugin requests conversation-content typed hooks such as `llm_input`, `llm_output`, `before_agent_finalize`, and `agent_end`. This does not grant access by itself; the host must explicitly set `plugins.entries.<id>.hooks.allowConversationAccess=true`. |
+
+The manifest field is purely declarative metadata;
+`plugins.entries.<id>.hooks.allowConversationAccess` must be explicitly set to
+`true` to grant access regardless of what the manifest declares.
 
 ## providerAuthChoices reference
 
