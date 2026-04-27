@@ -178,6 +178,24 @@ export async function runPluginHostCleanup(params: {
   for (const failure of schedulerFailures) {
     failures.push(failure);
   }
+  if (registry?.sessionSchedulerJobs) {
+    const registrySchedulerJobIds = new Set(
+      registry.sessionSchedulerJobs
+        .filter((record) => !params.pluginId || record.pluginId === params.pluginId)
+        .map((record) => record.job.id)
+        .filter((jobId): jobId is string => typeof jobId === "string" && jobId.length > 0),
+    );
+    const runtimeSchedulerFailures = await cleanupPluginSessionSchedulerJobs({
+      pluginId: params.pluginId,
+      reason: params.reason,
+      sessionKey: params.sessionKey,
+      preserveJobIds: params.preserveSchedulerJobIds,
+      excludeJobIds: registrySchedulerJobIds,
+    });
+    for (const failure of runtimeSchedulerFailures) {
+      failures.push(failure);
+    }
+  }
   if (params.pluginId || params.runId) {
     clearPluginRunContext({ pluginId: params.pluginId, runId: params.runId });
   }

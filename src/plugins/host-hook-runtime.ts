@@ -371,6 +371,7 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
     generation?: number;
   }[];
   preserveJobIds?: ReadonlySet<string>;
+  excludeJobIds?: ReadonlySet<string>;
 }): Promise<Array<{ pluginId: string; hookId: string; error: unknown }>> {
   const state = getPluginHostRuntimeState();
   const failures: Array<{ pluginId: string; hookId: string; error: unknown }> = [];
@@ -446,6 +447,12 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
     }
     for (const [jobId, record] of jobs.entries()) {
       if (params.sessionKey && record.job.sessionKey !== params.sessionKey) {
+        continue;
+      }
+      if (params.excludeJobIds?.has(jobId)) {
+        continue;
+      }
+      if (params.preserveJobIds?.has(jobId)) {
         continue;
       }
       try {
