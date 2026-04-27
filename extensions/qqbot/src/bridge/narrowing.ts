@@ -24,5 +24,8 @@ export async function writeOpenClawConfigThroughRuntime(
   runtime: PluginRuntime,
   cfg: OpenClawConfig,
 ): Promise<void> {
-  await runtime.config.writeConfigFile(cfg);
+  await runtime.config.replaceConfigFile({
+    nextConfig: cfg,
+    afterWrite: { mode: "auto" },
+  });
 }

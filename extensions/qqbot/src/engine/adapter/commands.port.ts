@@ -9,7 +9,7 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 
 /** Runtime getter shape for the `/bot-approve` command. */
 export type ApproveRuntimeGetter = () => {
-  config: Pick<PluginRuntime["config"], "loadConfig" | "writeConfigFile">;
+  config: Pick<PluginRuntime["config"], "current" | "replaceConfigFile">;
 };
 
 export interface CommandsPort {

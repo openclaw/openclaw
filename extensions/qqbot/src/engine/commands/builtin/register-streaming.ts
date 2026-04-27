@@ -94,7 +94,7 @@ export function registerStreamingCommands(registry: SlashCommandRegistry): void 
 
       try {
         const configApi = runtime.config;
-        const currentCfg = structuredClone(configApi.loadConfig());
+        const currentCfg = structuredClone(configApi.current() as Record<string, unknown>);
         const qqbot = ((currentCfg.channels ?? {}) as Record<string, unknown>).qqbot as
           | Record<string, unknown>
           | undefined;
@@ -125,7 +125,7 @@ export function registerStreamingCommands(registry: SlashCommandRegistry): void 
           }
         }
 
-        await configApi.writeConfigFile(currentCfg);
+        await configApi.replaceConfigFile({ nextConfig: currentCfg, afterWrite: { mode: "auto" } });
 
         return [
           `✅ 流式消息已${wantOn ? "开启" : "关闭"}`,

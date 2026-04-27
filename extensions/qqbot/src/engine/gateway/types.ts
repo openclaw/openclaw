@@ -78,8 +78,11 @@ export interface GatewayPluginRuntime {
    * environments provide config write capability.
    */
   config?: {
-    loadConfig: () => Record<string, unknown>;
-    writeConfigFile: (cfg: unknown) => Promise<void>;
+    current: () => Record<string, unknown>;
+    replaceConfigFile: (params: {
+      nextConfig: unknown;
+      afterWrite: { mode: "auto" };
+    }) => Promise<unknown>;
   };
 }
 

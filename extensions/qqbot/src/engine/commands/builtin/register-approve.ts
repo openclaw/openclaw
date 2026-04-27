@@ -46,8 +46,8 @@ export function registerApproveCommands(registry: SlashCommandRegistry): void {
       const configApi = runtime.config;
 
       const loadExecConfig = () => {
-        const cfg = configApi.loadConfig();
-        const tools = (cfg.tools ?? {}) as Record<string, unknown>;
+        const cfg = configApi.current();
+        const tools = ((cfg as Record<string, unknown>).tools ?? {}) as Record<string, unknown>;
         const exec = (tools.exec ?? {}) as Record<string, unknown>;
         const security = typeof exec.security === "string" ? exec.security : "deny";
         const ask = typeof exec.ask === "string" ? exec.ask : "on-miss";
@@ -55,14 +55,14 @@ export function registerApproveCommands(registry: SlashCommandRegistry): void {
       };
 
       const writeExecConfig = async (security: string, ask: string) => {
-        const cfg = structuredClone(configApi.loadConfig());
+        const cfg = structuredClone(configApi.current() as Record<string, unknown>);
         const tools = (cfg.tools ?? {}) as Record<string, unknown>;
         const exec = (tools.exec ?? {}) as Record<string, unknown>;
         exec.security = security;
         exec.ask = ask;
         tools.exec = exec;
         cfg.tools = tools;
-        await configApi.writeConfigFile(cfg);
+        await configApi.replaceConfigFile({ nextConfig: cfg, afterWrite: { mode: "auto" } });
       };
 
       const formatStatus = (security: string, ask: string) => {
@@ -160,7 +160,7 @@ export function registerApproveCommands(registry: SlashCommandRegistry): void {
 
       if (arg === "reset") {
         try {
-          const cfg = structuredClone(configApi.loadConfig());
+          const cfg = structuredClone(configApi.current() as Record<string, unknown>);
           const tools = (cfg.tools ?? {}) as Record<string, unknown>;
           const exec = (tools.exec ?? {}) as Record<string, unknown>;
           delete exec.security;
@@ -175,7 +175,7 @@ export function registerApproveCommands(registry: SlashCommandRegistry): void {
           } else {
             cfg.tools = tools;
           }
-          await configApi.writeConfigFile(cfg);
+          await configApi.replaceConfigFile({ nextConfig: cfg, afterWrite: { mode: "auto" } });
           return [
             `✅ 审批配置已重置`,
             ``,

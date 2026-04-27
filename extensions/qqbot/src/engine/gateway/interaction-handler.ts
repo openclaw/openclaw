@@ -90,7 +90,7 @@ async function applyConfigUpdate(
   const clawCfgUpdate = resolved?.claw_cfg as Record<string, unknown> | undefined;
   const groupOpenid = event.group_openid ?? "";
 
-  const currentCfg = structuredClone(configApi.loadConfig());
+  const currentCfg = structuredClone(configApi.current());
   let changed = false;
 
   if (clawCfgUpdate?.require_mention !== undefined && groupOpenid) {
@@ -99,13 +99,13 @@ async function applyConfigUpdate(
   }
 
   if (changed) {
-    await configApi.writeConfigFile(currentCfg);
+    await configApi.replaceConfigFile({ nextConfig: currentCfg, afterWrite: { mode: "auto" } });
     log?.info(
       `Config updated via interaction ${event.id}: require_mention=${String(clawCfgUpdate?.require_mention)}, group=${groupOpenid}`,
     );
   }
 
-  const latestCfg = changed ? configApi.loadConfig() : currentCfg;
+  const latestCfg = changed ? configApi.current() : currentCfg;
   return buildClawCfgSnapshot(latestCfg, accountId, groupOpenid, runtime);
 }
 
@@ -159,7 +159,7 @@ export function createInteractionHandler(
     // ---- Config query (type=2001) ----
     if (type === InteractionType.CONFIG_QUERY && runtime.config) {
       void handleWithAck(creds, event, log, "CONFIG_QUERY", () => {
-        const cfg = runtime.config!.loadConfig();
+        const cfg = runtime.config!.current();
         return buildClawCfgSnapshot(cfg, account.accountId, event.group_openid ?? "", runtime);
       });
       return;
