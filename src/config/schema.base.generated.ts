@@ -23844,6 +23844,51 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
           },
           additionalProperties: false,
         },
+      securityGuardrail: {
+        type: "object",
+        properties: {
+          enable: {
+            type: "boolean",
+            title: "Enable Security Guardrail",
+            description:
+              "Master switch for the security guardrail. When enabled, every outbound prompt is scanned and sanitized before reaching the cloud model.",
+          },
+          localBaseUrl: {
+            type: "string",
+            format: "uri",
+            title: "Local Model API URL",
+            description:
+              "OpenAI-compatible chat/completions endpoint for the local sanitization model (e.g. http://localhost:1234/v1 for LM Studio). Leave empty to use regex-only mode.",
+          },
+          localApiKey: {
+            type: "string",
+            title: "Local Model API Key",
+            description:
+              "API key for the local model endpoint. Most local servers accept any value (e.g. 'lm-studio').",
+          },
+          localModel: {
+            type: "string",
+            title: "Local Model ID",
+            description:
+              "Model identifier to request from the local endpoint (e.g. 'qwen3-30b-a3b'). Must match a model loaded in your local server.",
+          },
+          customPrompt: {
+            type: "string",
+            title: "Custom Filtering Rules",
+            description:
+              "Additional filtering instructions appended to the local model's system prompt. Use this for org-specific patterns not covered by defaults (e.g. 'also filter project codenames and internal domain names').",
+          },
+          fallbackToRegexOnly: {
+            type: "boolean",
+            title: "Regex Fallback When Model Unavailable",
+            description:
+              "When true (default), falls back to regex-only pattern scanning if the local model is unreachable. Set to false to skip sanitization entirely when the local model is down.",
+          },
+        },
+        additionalProperties: false,
+        title: "Security Guardrail",
+        description:
+          "Reversible sensitive-data sanitization layer for outbound prompts sent to public LLMs. Replaces credentials, keys, IPs, and other secrets with opaque [VAULT_N] tokens before transit; restores real values before tool execution so scripts and commands still work.",
       },
       proxy: {
         type: "object",
@@ -24041,6 +24086,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Voice Wake",
       group: "Voice Wake",
       order: 230,
+      tags: ["advanced"],
+    },
+    securityGuardrail: {
+      label: "Security Guardrail",
+      group: "Security Guardrail",
+      order: 45,
+      help: "Reversible sensitive-data sanitization layer for outbound prompts sent to public LLMs. Replaces credentials, keys, IPs, and other secrets with opaque [VAULT_N] tokens before transit; restores real values before tool execution so scripts and commands still work.",
       tags: ["advanced"],
     },
     meta: {
@@ -28423,6 +28475,116 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Plugin Config",
       help: "Plugin-defined configuration payload interpreted by that plugin's own schema and validation rules. Use only documented fields from the plugin to prevent ignored or invalid settings.",
       tags: ["advanced"],
+    },
+    "plugins.installs": {
+      label: "Plugin Install Records",
+      help: "CLI-managed install metadata (used by `openclaw plugins update` to locate install sources).",
+      tags: ["advanced"],
+    },
+    "plugins.installs.*.source": {
+      label: "Plugin Install Source",
+      help: 'Install source ("npm", "archive", or "path").',
+      tags: ["advanced"],
+    },
+    "plugins.installs.*.spec": {
+      label: "Plugin Install Spec",
+      help: "Original npm spec used for install (if source is npm).",
+      tags: ["advanced"],
+    },
+    "plugins.installs.*.sourcePath": {
+      label: "Plugin Install Source Path",
+      help: "Original archive/path used for install (if any).",
+      tags: ["storage"],
+    },
+    "plugins.installs.*.installPath": {
+      label: "Plugin Install Path",
+      help: "Resolved install directory for the installed plugin bundle.",
+      tags: ["storage"],
+    },
+    "plugins.installs.*.version": {
+      label: "Plugin Install Version",
+      help: "Version recorded at install time (if available).",
+      tags: ["advanced"],
+    },
+    "plugins.installs.*.resolvedName": {
+      label: "Plugin Resolved Package Name",
+      help: "Resolved npm package name from the fetched artifact.",
+      tags: ["advanced"],
+    },
+    "plugins.installs.*.resolvedVersion": {
+      label: "Plugin Resolved Package Version",
+      help: "Resolved npm package version from the fetched artifact (useful for non-pinned specs).",
+      tags: ["advanced"],
+    },
+    "plugins.installs.*.resolvedSpec": {
+      label: "Plugin Resolved Package Spec",
+      help: "Resolved exact npm spec (<name>@<version>) from the fetched artifact.",
+      tags: ["advanced"],
+    },
+    "plugins.installs.*.integrity": {
+      label: "Plugin Resolved Integrity",
+      help: "Resolved npm dist integrity hash for the fetched artifact (if reported by npm).",
+      tags: ["advanced"],
+    },
+    "plugins.installs.*.shasum": {
+      label: "Plugin Resolved Shasum",
+      help: "Resolved npm dist shasum for the fetched artifact (if reported by npm).",
+      tags: ["advanced"],
+    },
+    "plugins.installs.*.resolvedAt": {
+      label: "Plugin Resolution Time",
+      help: "ISO timestamp when npm package metadata was last resolved for this install record.",
+      tags: ["advanced"],
+    },
+    "plugins.installs.*.installedAt": {
+      label: "Plugin Install Time",
+      help: "ISO timestamp of last install/update.",
+      tags: ["advanced"],
+    },
+    "plugins.installs.*.marketplaceName": {
+      label: "Plugin Marketplace Name",
+      help: "Marketplace display name recorded for marketplace-backed plugin installs (if available).",
+      tags: ["advanced"],
+    },
+    "plugins.installs.*.marketplaceSource": {
+      label: "Plugin Marketplace Source",
+      help: "Original marketplace source used to resolve the install (for example a repo path or Git URL).",
+      tags: ["advanced"],
+    },
+    "plugins.installs.*.marketplacePlugin": {
+      label: "Plugin Marketplace Plugin",
+      help: "Plugin entry name inside the source marketplace, used for later updates.",
+      tags: ["advanced"],
+    },
+    "securityGuardrail.enable": {
+      label: "Enable Security Guardrail",
+      help: "Master switch for the security guardrail. When enabled, every outbound prompt is scanned and sanitized before reaching the cloud model.",
+      tags: ["advanced"],
+    },
+    "securityGuardrail.localBaseUrl": {
+      label: "Local Model API URL",
+      help: "OpenAI-compatible chat/completions endpoint for the local sanitization model (e.g. http://localhost:1234/v1 for LM Studio). Leave empty to use regex-only mode.",
+      tags: ["advanced"],
+    },
+    "securityGuardrail.localApiKey": {
+      label: "Local Model API Key",
+      help: "API key for the local model endpoint. Most local servers accept any value (e.g. 'lm-studio').",
+      tags: ["security", "auth"],
+    },
+    "securityGuardrail.localModel": {
+      label: "Local Model ID",
+      help: "Model identifier to request from the local endpoint (e.g. 'qwen3-30b-a3b'). Must match a model loaded in your local server.",
+      tags: ["advanced"],
+    },
+    "securityGuardrail.customPrompt": {
+      label: "Custom Filtering Rules",
+      help: "Additional filtering instructions appended to the local model's system prompt. Use this for org-specific patterns not covered by defaults (e.g. 'also filter project codenames and internal domain names').",
+      tags: ["advanced"],
+    },
+    "securityGuardrail.fallbackToRegexOnly": {
+      label: "Regex Fallback When Model Unavailable",
+      help: "When true (default), falls back to regex-only pattern scanning if the local model is unreachable. Set to false to skip sanitization entirely when the local model is down.",
+      tags: ["reliability"],
     },
     "models.providers.*.headers.*": {
       sensitive: true,

@@ -158,6 +158,37 @@ async function callLocalModelForSensitiveValues(
   }
 }
 
+export function classifyRedactedValue(value: string): string {
+  if (/^(mysql|postgres|postgresql|mongodb|redis|mssql):\/\//i.test(value)) {
+    return "database connection string (complete URI)";
+  }
+  if (/^(ssh-rsa|-----BEGIN)/i.test(value)) {
+    return "private key";
+  }
+  if (/^AKIA[0-9A-Z]{16}$/i.test(value)) {
+    return "AWS access key";
+  }
+  if (/^(sk[_-]live|pk[_-]live)/i.test(value)) {
+    return "payment API key";
+  }
+  if (/^(sk[_-]|api[_-]?key|token)/i.test(value)) {
+    return "API key or token";
+  }
+  if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/.test(value)) {
+    return "IP address";
+  }
+  if (/^1[3-9]\d{9}$/.test(value)) {
+    return "phone number";
+  }
+  if (/^\d{15,18}[xX]?$/.test(value)) {
+    return "ID card number";
+  }
+  if (/@/.test(value)) {
+    return "email address";
+  }
+  return "sensitive credential";
+}
+
 /**
  * 安全护栏主入口。
  *
@@ -196,9 +227,12 @@ export async function applyGuardrail(
       // 对完整 prompt 执行替换（不只是用户消息部分）
       let sanitizedPrompt = vault.redact(prompt, findings);
 
-      // 注入指令：告诉云端模型直接使用 [VAULT_N] 占位符，系统会在执行前自动还原
-      const vaultKeys = Object.keys(vault.toDict()).join(", ");
-      sanitizedPrompt += `\n\n[Security Guardrail Notice] The following placeholders (${vaultKeys}) represent real credentials/values that have been redacted for transit security. When you need to use these values in tool calls, commands, connection strings, or any execution context, use the placeholder as-is (e.g., mysql -h [VAULT_1] or ssh [VAULT_3]). The runtime will automatically resolve them to their real values before execution. Do NOT ask the user to provide the real values again.`;
+      // 注入指令：告诉云端模型每个占位符的语义类型，并直接使用，系统会在执行前自动还原
+      const vaultDict = vault.toDict();
+      const hints = Object.entries(vaultDict)
+        .map(([token, value]) => `${token}: ${classifyRedactedValue(value)}`)
+        .join("; ");
+      sanitizedPrompt += `\n\n[Security Guardrail Notice] The following placeholders have been redacted for transit security: ${hints}. Treat each placeholder as an opaque but COMPLETE value of the described type. Use them directly in commands, connection strings, and tool calls — the runtime resolves them to real values before execution. Do NOT ask the user to re-provide these values or break them into subfields.`;
 
       return {
         vault,

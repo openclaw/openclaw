@@ -19,6 +19,17 @@ export class TokenVault {
     return `[VAULT_${this.counter}]`;
   }
 
+  public importMapping(token: string, value: string): void {
+    if (!this.map[token]) {
+      this.map[token] = value;
+      this.reverse[value] = token;
+      const num = Number.parseInt(token.replace(/\[VAULT_|\]/g, ""), 10);
+      if (num > this.counter) {
+        this.counter = num;
+      }
+    }
+  }
+
   public redact(text: string, findings: Finding[]): string {
     if (!findings || findings.length === 0) {
       return text;
@@ -40,6 +51,14 @@ export class TokenVault {
       result = result.split(fullValue).join(token);
     }
 
+    return result;
+  }
+
+  public redactKnown(text: string): string {
+    let result = text;
+    for (const [original, token] of Object.entries(this.reverse)) {
+      result = result.split(original).join(token);
+    }
     return result;
   }
 
