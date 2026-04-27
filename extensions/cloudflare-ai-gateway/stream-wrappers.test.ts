@@ -1,6 +1,19 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createCloudflareAiGatewayAnthropicThinkingPrefillWrapper } from "./stream-wrappers.js";
+
+const { warnMock } = vi.hoisted(() => ({
+  warnMock: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+  createSubsystemLogger: () => ({
+    debug: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+    warn: warnMock,
+  }),
+}));
 
 function runWrapper(payload: Record<string, unknown>): Record<string, unknown> {
   const wrapper = createCloudflareAiGatewayAnthropicThinkingPrefillWrapper(((
@@ -20,6 +33,10 @@ function runWrapper(payload: Record<string, unknown>): Record<string, unknown> {
 }
 
 describe("createCloudflareAiGatewayAnthropicThinkingPrefillWrapper", () => {
+  beforeEach(() => {
+    warnMock.mockClear();
+  });
+
   it("removes trailing assistant prefill when thinking is enabled", () => {
     const payload = runWrapper({
       thinking: { type: "enabled", budget_tokens: 1024 },
@@ -30,6 +47,9 @@ describe("createCloudflareAiGatewayAnthropicThinkingPrefillWrapper", () => {
     });
 
     expect(payload.messages).toEqual([{ role: "user", content: "Return JSON." }]);
+    expect(warnMock).toHaveBeenCalledWith(
+      "removed 1 trailing assistant prefill message because Anthropic extended thinking requires conversations to end with a user turn",
+    );
   });
 
   it("removes multiple trailing assistant prefill messages until the conversation ends with user", () => {
@@ -43,6 +63,9 @@ describe("createCloudflareAiGatewayAnthropicThinkingPrefillWrapper", () => {
     });
 
     expect(payload.messages).toEqual([{ role: "user", content: "Return JSON." }]);
+    expect(warnMock).toHaveBeenCalledWith(
+      "removed 2 trailing assistant prefill messages because Anthropic extended thinking requires conversations to end with a user turn",
+    );
   });
 
   it("keeps assistant prefill when thinking is disabled", () => {
@@ -55,6 +78,7 @@ describe("createCloudflareAiGatewayAnthropicThinkingPrefillWrapper", () => {
     });
 
     expect(payload.messages).toHaveLength(2);
+    expect(warnMock).not.toHaveBeenCalled();
   });
 
   it("keeps trailing assistant tool use turns when thinking is enabled", () => {
