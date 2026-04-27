@@ -1417,7 +1417,18 @@ describe("gateway server cron", () => {
           accountId: undefined,
           sessionKey: "agent:avery:feishu:direct:ou_founder",
         },
-        '⚠️ Cron job "session target failure fallback" failed: unknown error',
+        [
+          "session target failure fallback missed",
+          "",
+          "Impact",
+          "- This scheduled job did not complete.",
+          "",
+          "What happened",
+          "- unknown error",
+          "",
+          "Next",
+          "- I kept the raw failure details in logs; inspect or rerun the job when you are ready.",
+        ].join("\n"),
       );
     } finally {
       await cleanupCronTestRun({ ws, server, prevSkipCron });

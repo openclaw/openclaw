@@ -333,17 +333,18 @@ function rewriteDiscordFailureHeadline(text: string) {
   return text;
 }
 
-export function sanitizeDiscordDeliveryText(text: string) {
-  let cleaned = String(text ?? "");
+export function sanitizeDiscordDeliveryText(
+  text: string,
+  opts: { preserveOuterWhitespace?: boolean } = {},
+) {
+  let cleaned = text;
   cleaned = cleaned.replace(/<oai-mem-citation>[\s\S]*?<\/oai-mem-citation>/gi, "");
   cleaned = rewriteDiscordFailureHeadline(cleaned);
   const lines = cleaned
     .split(/\r?\n/)
     .filter((line) => !INTERNAL_DISCORD_LINE_PATTERNS.some((pattern) => pattern.test(line)));
-  return lines
-    .join("\n")
-    .replace(/\n{4,}/g, "\n\n\n")
-    .trim();
+  const normalized = lines.join("\n").replace(/\n{4,}/g, "\n\n\n");
+  return opts.preserveOuterWhitespace ? normalized : normalized.trim();
 }
 
 function isTitleOnlyDiscordChunk(chunk: string) {
@@ -380,13 +381,20 @@ function coalesceTitleOnlyDiscordChunk(
 
 export function buildDiscordTextChunks(
   text: string,
-  opts: { maxLinesPerMessage?: number; chunkMode?: ChunkMode; maxChars?: number } = {},
+  opts: {
+    maxLinesPerMessage?: number;
+    chunkMode?: ChunkMode;
+    maxChars?: number;
+    preserveOuterWhitespace?: boolean;
+  } = {},
 ): string[] {
   if (!text) {
     return [];
   }
-  const sanitized = sanitizeDiscordDeliveryText(text);
-  if (!sanitized) {
+  const sanitized = sanitizeDiscordDeliveryText(text, {
+    preserveOuterWhitespace: opts.preserveOuterWhitespace,
+  });
+  if (!sanitized.trim()) {
     return [];
   }
   const chunks = resolveTextChunksWithFallback(
@@ -561,7 +569,12 @@ async function sendDiscordMedia(
     (media.contentType ? `upload${extensionForMime(media.contentType) ?? ""}` : "") ||
     "upload";
   const chunks = text
-    ? buildDiscordTextChunks(text, { maxLinesPerMessage, chunkMode, maxChars })
+    ? buildDiscordTextChunks(text, {
+        maxLinesPerMessage,
+        chunkMode,
+        maxChars,
+        preserveOuterWhitespace: true,
+      })
     : [];
   const caption = chunks[0] ?? "";
   const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
