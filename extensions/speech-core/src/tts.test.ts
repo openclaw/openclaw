@@ -882,6 +882,59 @@ describe("speech-core native voice-note routing", () => {
     }
   });
 
+  it("allows expressive fallback when active plain provider routes to empty text", async () => {
+    const plainSynthesize = vi.fn(async (request: SpeechSynthesisRequest) =>
+      synthesizeMock(request),
+    );
+    const elevenSynthesize = vi.fn(async (request: SpeechSynthesisRequest) =>
+      synthesizeMock(request),
+    );
+    const plain = createMockSpeechProvider("mock", {
+      synthesize: plainSynthesize,
+      autoSelectOrder: 1,
+    });
+    const eleven = createMockSpeechProvider("elevenlabs", {
+      capabilities: { sourceTextHandling: "preserve_expressive_tags" },
+      synthesize: elevenSynthesize,
+      autoSelectOrder: 2,
+    });
+    installSpeechProviders([plain, eleven]);
+    const cfg: OpenClawConfig = {
+      messages: {
+        tts: {
+          enabled: true,
+          provider: "mock",
+          prefsPath: `/tmp/openclaw-tts-pra-empty-primary-fallback-test.json`,
+        },
+      },
+    };
+    const payload = setReplyPayloadMetadata({ text: "[warmly][softly]" } satisfies ReplyPayload, {
+      ttsSourceText: "[warmly][softly]",
+      ttsPlainText: "",
+    });
+
+    let mediaDir: string | undefined;
+    try {
+      const result = await maybeApplyTtsToPayload({
+        payload,
+        cfg,
+        channel: "slack",
+        kind: "final",
+      });
+
+      expect(plainSynthesize).not.toHaveBeenCalled();
+      expect(elevenSynthesize).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "[warmly][softly]" }),
+      );
+      expect(result.mediaUrl).toMatch(/voice-\d+\.ogg$/);
+      mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
+    } finally {
+      if (mediaDir) {
+        rmSync(mediaDir, { recursive: true, force: true });
+      }
+    }
+  });
+
   it("skips plain fallback providers when an explicit plain variant is empty", async () => {
     const elevenSynthesize = vi.fn(async () => {
       throw new Error("elevenlabs unavailable");
