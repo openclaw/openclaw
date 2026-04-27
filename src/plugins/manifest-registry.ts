@@ -145,6 +145,7 @@ export type PluginManifestRecord = {
   >;
   configContracts?: PluginManifestConfigContracts;
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
+  permissions?: PluginManifest["permissions"];
   channelCatalogMeta?: {
     id: string;
     label?: string;
@@ -369,6 +370,7 @@ function buildRecord(params: {
     mediaUnderstandingProviderMetadata: params.manifest.mediaUnderstandingProviderMetadata,
     configContracts: params.manifest.configContracts,
     channelConfigs,
+    permissions: params.manifest.permissions,
     ...(params.candidate.packageManifest?.channel?.id
       ? {
           channelCatalogMeta: {

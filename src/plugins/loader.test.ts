@@ -6168,6 +6168,91 @@ module.exports = {
     ]);
   });
 
+  it("blocks conversation typed hooks from manifest permissions without explicit config approval", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "conversation-hooks-manifest-allowed",
+      filename: "conversation-hooks-manifest-allowed.cjs",
+      body: `module.exports = { id: "conversation-hooks-manifest-allowed", register(api) {
+  api.on("agent_end", () => undefined);
+} };`,
+    });
+    fs.writeFileSync(
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "conversation-hooks-manifest-allowed",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+          permissions: { conversationAccess: true },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["conversation-hooks-manifest-allowed"],
+      },
+    });
+
+    expect(registry.typedHooks).toEqual([]);
+    const blockedDiagnostics = registry.diagnostics.filter((diag) =>
+      diag.message.includes(
+        "non-bundled plugins must set plugins.entries.conversation-hooks-manifest-allowed.hooks.allowConversationAccess=true",
+      ),
+    );
+    expect(blockedDiagnostics).toHaveLength(1);
+  });
+
+  it("blocks conversation typed hooks when config explicitly denies manifest permissions", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "conversation-hooks-manifest-denied",
+      filename: "conversation-hooks-manifest-denied.cjs",
+      body: `module.exports = { id: "conversation-hooks-manifest-denied", register(api) {
+  api.on("agent_end", () => undefined);
+} };`,
+    });
+    fs.writeFileSync(
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "conversation-hooks-manifest-denied",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+          permissions: { conversationAccess: true },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["conversation-hooks-manifest-denied"],
+        entries: {
+          "conversation-hooks-manifest-denied": {
+            hooks: {
+              allowConversationAccess: false,
+            },
+          },
+        },
+      },
+    });
+
+    expect(registry.typedHooks).toEqual([]);
+    const blockedDiagnostics = registry.diagnostics.filter((diag) =>
+      diag.message.includes(
+        "non-bundled plugins must set plugins.entries.conversation-hooks-manifest-denied.hooks.allowConversationAccess=true",
+      ),
+    );
+    expect(blockedDiagnostics).toHaveLength(1);
+  });
+
   it("ignores unknown typed hooks from plugins and keeps loading", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({

@@ -386,6 +386,110 @@ describe("registerPluginCliCommands", () => {
     expect(mocks.memoryListAction).toHaveBeenCalledTimes(1);
   });
 
+  it("includes memory slot plugin when primary command is wiki", async () => {
+    const program = createProgram();
+    program.exitOverride();
+    mocks.resolveManifestActivationPluginIds.mockReturnValue(["memory-wiki"]);
+
+    await registerPluginCliCommands(
+      program,
+      {
+        plugins: {
+          slots: {
+            memory: "memory-core",
+          },
+        },
+      } as OpenClawConfig,
+      undefined,
+      undefined,
+      {
+        mode: "lazy",
+        primary: "wiki",
+      },
+    );
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["memory-wiki", "memory-core"],
+      }),
+    );
+  });
+
+  it("includes default memory slot plugin when primary command is wiki", async () => {
+    const program = createProgram();
+    program.exitOverride();
+    mocks.resolveManifestActivationPluginIds.mockReturnValue(["memory-wiki"]);
+
+    await registerPluginCliCommands(program, {} as OpenClawConfig, undefined, undefined, {
+      mode: "lazy",
+      primary: "wiki",
+    });
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["memory-wiki", "memory-core"],
+      }),
+    );
+  });
+
+  it("does not append memory slot when slot is none", async () => {
+    const program = createProgram();
+    program.exitOverride();
+    mocks.resolveManifestActivationPluginIds.mockReturnValue(["memory-wiki"]);
+
+    await registerPluginCliCommands(
+      program,
+      {
+        plugins: {
+          slots: {
+            memory: "none",
+          },
+        },
+      } as OpenClawConfig,
+      undefined,
+      undefined,
+      {
+        mode: "lazy",
+        primary: "wiki",
+      },
+    );
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["memory-wiki"],
+      }),
+    );
+  });
+
+  it("dedupes memory slot plugin in primary scope", async () => {
+    const program = createProgram();
+    program.exitOverride();
+    mocks.resolveManifestActivationPluginIds.mockReturnValue(["memory-core", "memory-wiki"]);
+
+    await registerPluginCliCommands(
+      program,
+      {
+        plugins: {
+          slots: {
+            memory: "memory-core",
+          },
+        },
+      } as OpenClawConfig,
+      undefined,
+      undefined,
+      {
+        mode: "lazy",
+        primary: "wiki",
+      },
+    );
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["memory-core", "memory-wiki"],
+      }),
+    );
+  });
+
   it("keeps full CLI loading when primary command planning finds no plugin match", async () => {
     const program = createProgram();
     program.exitOverride();
