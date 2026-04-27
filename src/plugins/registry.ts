@@ -10,7 +10,6 @@ import {
   normalizeCommandDescriptorName,
   sanitizeCommandDescriptorDescription,
 } from "../cli/program/command-descriptor-utils.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   clearContextEnginesForOwner,
   registerContextEngineForOwner,
