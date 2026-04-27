@@ -459,3 +459,37 @@ describe("openclaw channel mcp server", () => {
     });
   });
 });
+
+describe("mcp serve stdout isolation", () => {
+  test("tools/list returns proper response with tools capability declared", async () => {
+    const serverHarness = await createOpenClawChannelMcpServer({
+      claudeChannelMode: "off",
+      verbose: false,
+    });
+    const client = new Client({ name: "mcp-tools-list-test", version: "1.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await serverHarness.server.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    try {
+      // Verify tools capability is declared in server capabilities
+      const serverCaps = client.getServerCapabilities();
+      expect(serverCaps?.tools).toBeTruthy();
+
+      // Verify tools/list returns proper response (not "Method not found")
+      const result = await client.listTools();
+      expect(result.tools).toBeDefined();
+      expect(Array.isArray(result.tools)).toBe(true);
+      expect(result.tools.length).toBeGreaterThan(0);
+
+      // Verify expected channel tools are present
+      const toolNames = result.tools.map((t: { name: string }) => t.name);
+      expect(toolNames).toContain("conversations_list");
+      expect(toolNames).toContain("messages_read");
+      expect(toolNames).toContain("messages_send");
+    } finally {
+      await client.close();
+      await serverHarness.close();
+    }
+  });
+});
