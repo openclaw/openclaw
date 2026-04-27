@@ -7371,6 +7371,25 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             {
               type: "boolean",
             },
+            {
+              type: "object",
+              properties: {
+                mode: {
+                  type: "string",
+                  enum: ["partial", "quiet", "off"],
+                },
+                preview: {
+                  type: "object",
+                  properties: {
+                    toolProgress: {
+                      type: "boolean",
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              additionalProperties: false,
+            },
           ],
         },
         replyToMode: {
@@ -10010,6 +10029,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   type: "string",
                   enum: ["off", "partial"],
                 },
+                c2cStreamApi: {
+                  type: "boolean",
+                },
               },
               required: ["mode"],
               additionalProperties: {},
@@ -10249,6 +10271,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                         default: "partial",
                         type: "string",
                         enum: ["off", "partial"],
+                      },
+                      c2cStreamApi: {
+                        type: "boolean",
                       },
                     },
                     required: ["mode"],
@@ -12915,7 +12940,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       },
       "streaming.preview.toolProgress": {
         label: "Slack Draft Tool Progress",
-        help: "Show tool/progress activity in the live draft preview message (default: true). Set false to keep tool updates as separate messages.",
+        help: 'Show tool/progress activity in the live draft preview message. Defaults to false for "partial" and true for "block"/"progress"; set explicitly to override.',
       },
       "thread.historyScope": {
         label: "Slack Thread History Scope",

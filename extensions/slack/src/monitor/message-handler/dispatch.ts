@@ -123,6 +123,12 @@ export function shouldInitializeSlackDraftStream(params: {
   return params.previewStreamingEnabled && !params.useStreaming;
 }
 
+export function resolveSlackPreviewToolProgressDefault(params: {
+  mode: "off" | "partial" | "block" | "progress";
+}): boolean {
+  return params.mode === "block" || params.mode === "progress";
+}
+
 export function resolveSlackDisableBlockStreaming(params: {
   useStreaming: boolean;
   shouldUseDraftStream: boolean;
@@ -877,7 +883,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   let hasStreamedMessage = false;
   const streamMode = slackStreaming.draftMode;
   const previewToolProgressEnabled =
-    Boolean(draftStream) && resolveChannelStreamingPreviewToolProgress(account.config);
+    Boolean(draftStream) &&
+    resolveChannelStreamingPreviewToolProgress(
+      account.config,
+      resolveSlackPreviewToolProgressDefault({ mode: slackStreaming.mode }),
+    );
   let previewToolProgressSuppressed = false;
   let previewToolProgressLines: string[] = [];
   let appendRenderedText = "";
