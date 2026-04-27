@@ -1147,10 +1147,11 @@ extension GatewayConnectionController {
 
     var _test_connectInFlightCount: Int { self.connectInFlightCount }
 
-    func _test_waitForConnectInFlightToDrain() async {
-        for _ in 0..<200 {
-            if self.connectInFlightCount == 0 { return }
-            await Task.yield()
+    func _test_waitForConnectInFlightToDrain(timeoutSeconds: Double = 5.0) async {
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        while self.connectInFlightCount > 0 {
+            if Date() >= deadline { return }
+            try? await Task.sleep(nanoseconds: 5_000_000)
         }
     }
 }
