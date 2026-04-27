@@ -1,9 +1,4 @@
-import {
-  authorizeConfigWrite,
-  canBypassConfigWritePolicy,
-  formatConfigWriteDeniedMessage,
-  resolveConfigWriteTargetFromPath,
-} from "../../channels/plugins/config-writes.js";
+import { resolveConfigWriteTargetFromPath } from "../../channels/plugins/config-writes.js";
 import { normalizeChannelId } from "../../channels/registry.js";
 import {
   getConfigValueAtPath,
@@ -13,8 +8,8 @@ import {
 } from "../../config/config-paths.js";
 import {
   readConfigFileSnapshot,
+  replaceConfigFile,
   validateConfigObjectWithPlugins,
-  writeConfigFile,
 } from "../../config/config.js";
 import {
   getConfigOverrides,
@@ -22,7 +17,9 @@ import {
   setConfigOverride,
   unsetConfigOverride,
 } from "../../config/runtime-overrides.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import { resolveChannelAccountId } from "./channel-context.js";
 import {
   rejectNonOwnerCommand,
   rejectUnauthorizedCommand,
@@ -31,6 +28,7 @@ import {
 } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 import { parseConfigCommand } from "./config-commands.js";
+import { resolveConfigWriteDeniedText } from "./config-write-authorization.js";
 import { parseDebugCommand } from "./debug-commands.js";
 
 export const handleConfigCommand: CommandHandler = async (params, allowTextCommands) => {
@@ -84,20 +82,23 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
     }
     parsedWritePath = parsedPath.path;
     const channelId = params.command.channelId ?? normalizeChannelId(params.command.channel);
-    const writeAuth = authorizeConfigWrite({
+    const deniedText = resolveConfigWriteDeniedText({
       cfg: params.cfg,
-      origin: { channelId, accountId: params.ctx.AccountId },
-      target: resolveConfigWriteTargetFromPath(parsedWritePath),
-      allowBypass: canBypassConfigWritePolicy({
-        channel: params.command.channel,
-        gatewayClientScopes: params.ctx.GatewayClientScopes,
+      channel: params.command.channel,
+      channelId,
+      accountId: resolveChannelAccountId({
+        cfg: params.cfg,
+        ctx: params.ctx,
+        command: params.command,
       }),
+      gatewayClientScopes: params.ctx.GatewayClientScopes,
+      target: resolveConfigWriteTargetFromPath(parsedWritePath),
     });
-    if (!writeAuth.allowed) {
+    if (deniedText) {
       return {
         shouldContinue: false,
         reply: {
-          text: formatConfigWriteDeniedMessage({ result: writeAuth, fallbackChannelId: channelId }),
+          text: deniedText,
         },
       };
     }
@@ -115,7 +116,7 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
   const parsedBase = structuredClone(snapshot.parsed as Record<string, unknown>);
 
   if (configCommand.action === "show") {
-    const pathRaw = configCommand.path?.trim();
+    const pathRaw = normalizeOptionalString(configCommand.path);
     if (pathRaw) {
       const parsedPath = parseConfigPath(pathRaw);
       if (!parsedPath.ok || !parsedPath.path) {
@@ -158,7 +159,10 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
         },
       };
     }
-    await writeConfigFile(validated.config);
+    await replaceConfigFile({
+      nextConfig: validated.config,
+      afterWrite: { mode: "auto" },
+    });
     return {
       shouldContinue: false,
       reply: { text: `⚙️ Config updated: ${configCommand.path} removed.` },
@@ -177,7 +181,10 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
         },
       };
     }
-    await writeConfigFile(validated.config);
+    await replaceConfigFile({
+      nextConfig: validated.config,
+      afterWrite: { mode: "auto" },
+    });
     const valueLabel =
       typeof configCommand.value === "string"
         ? `"${configCommand.value}"`

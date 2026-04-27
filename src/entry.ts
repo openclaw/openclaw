@@ -3,10 +3,12 @@ import { spawn } from "node:child_process";
 import { enableCompileCache } from "node:module";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { isRootHelpInvocation, isRootVersionInvocation } from "./cli/argv.js";
+import { isRootHelpInvocation } from "./cli/argv.js";
+import { parseCliContainerArgs, resolveCliContainerTarget } from "./cli/container-target.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
-import { shouldSkipRespawnForArgv } from "./cli/respawn-policy.js";
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
+import { buildCliRespawnPlan } from "./entry.respawn.js";
+import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
 import { isTruthyEnvValue, normalizeEnv } from "./infra/env.js";
 import { isMainModule } from "./infra/is-main.js";
 import { ensureOpenClawExecMarkerOnProcess } from "./infra/openclaw-exec-env.js";
@@ -62,46 +64,16 @@ if (
     process.env.FORCE_COLOR = "0";
   }
 
-  const EXPERIMENTAL_WARNING_FLAG = "--disable-warning=ExperimentalWarning";
-
-  function hasExperimentalWarningSuppressed(): boolean {
-    const nodeOptions = process.env.NODE_OPTIONS ?? "";
-    if (nodeOptions.includes(EXPERIMENTAL_WARNING_FLAG) || nodeOptions.includes("--no-warnings")) {
-      return true;
-    }
-    for (const arg of process.execArgv) {
-      if (arg === EXPERIMENTAL_WARNING_FLAG || arg === "--no-warnings") {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  function ensureExperimentalWarningSuppressed(): boolean {
-    if (shouldSkipRespawnForArgv(process.argv)) {
-      return false;
-    }
-    if (isTruthyEnvValue(process.env.OPENCLAW_NO_RESPAWN)) {
-      return false;
-    }
-    if (isTruthyEnvValue(process.env.OPENCLAW_NODE_OPTIONS_READY)) {
-      return false;
-    }
-    if (hasExperimentalWarningSuppressed()) {
+  function ensureCliRespawnReady(): boolean {
+    const plan = buildCliRespawnPlan();
+    if (!plan) {
       return false;
     }
 
-    // Respawn guard (and keep recursion bounded if something goes wrong).
-    process.env.OPENCLAW_NODE_OPTIONS_READY = "1";
-    // Pass flag as a Node CLI option, not via NODE_OPTIONS (--disable-warning is disallowed in NODE_OPTIONS).
-    const child = spawn(
-      process.execPath,
-      [EXPERIMENTAL_WARNING_FLAG, ...process.execArgv, ...process.argv.slice(1)],
-      {
-        stdio: "inherit",
-        env: process.env,
-      },
-    );
+    const child = spawn(plan.command, plan.argv, {
+      stdio: "inherit",
+      env: plan.env,
+    });
 
     attachChildProcessBridge(child);
 
@@ -125,51 +97,25 @@ if (
     return true;
   }
 
-  function tryHandleRootVersionFastPath(argv: string[]): boolean {
-    if (!isRootVersionInvocation(argv)) {
-      return false;
-    }
-    Promise.all([import("./version.js"), import("./infra/git-commit.js")])
-      .then(([{ VERSION }, { resolveCommitHash }]) => {
-        const commit = resolveCommitHash({ moduleUrl: import.meta.url });
-        console.log(commit ? `OpenClaw ${VERSION} (${commit})` : `OpenClaw ${VERSION}`);
-        process.exit(0);
-      })
-      .catch((error) => {
-        console.error(
-          "[openclaw] Failed to resolve version:",
-          error instanceof Error ? (error.stack ?? error.message) : error,
-        );
-        process.exitCode = 1;
-      });
-    return true;
-  }
-
-  function tryHandleRootHelpFastPath(argv: string[]): boolean {
-    if (!isRootHelpInvocation(argv)) {
-      return false;
-    }
-    import("./cli/program.js")
-      .then(({ buildProgram }) => {
-        buildProgram().outputHelp();
-      })
-      .catch((error) => {
-        console.error(
-          "[openclaw] Failed to display help:",
-          error instanceof Error ? (error.stack ?? error.message) : error,
-        );
-        process.exitCode = 1;
-      });
-    return true;
-  }
-
   process.argv = normalizeWindowsArgv(process.argv);
 
-  if (!ensureExperimentalWarningSuppressed()) {
-    const parsed = parseCliProfileArgs(process.argv);
+  if (!ensureCliRespawnReady()) {
+    const parsedContainer = parseCliContainerArgs(process.argv);
+    if (!parsedContainer.ok) {
+      console.error(`[openclaw] ${parsedContainer.error}`);
+      process.exit(2);
+    }
+
+    const parsed = parseCliProfileArgs(parsedContainer.argv);
     if (!parsed.ok) {
       // Keep it simple; Commander will handle rich help/errors after we strip flags.
       console.error(`[openclaw] ${parsed.error}`);
+      process.exit(2);
+    }
+
+    const containerTargetName = resolveCliContainerTarget(process.argv);
+    if (containerTargetName && parsed.profile) {
+      console.error("[openclaw] --container cannot be combined with --profile/--dev");
       process.exit(2);
     }
 
@@ -179,16 +125,67 @@ if (
       process.argv = parsed.argv;
     }
 
-    if (!tryHandleRootVersionFastPath(process.argv) && !tryHandleRootHelpFastPath(process.argv)) {
-      import("./cli/run-main.js")
-        .then(({ runCli }) => runCli(process.argv))
-        .catch((error) => {
-          console.error(
-            "[openclaw] Failed to start CLI:",
-            error instanceof Error ? (error.stack ?? error.message) : error,
-          );
-          process.exitCode = 1;
-        });
+    if (!tryHandleRootVersionFastPath(process.argv)) {
+      await runMainOrRootHelp(process.argv);
     }
+  }
+}
+
+export async function tryHandleRootHelpFastPath(
+  argv: string[],
+  deps: {
+    outputPrecomputedRootHelpText?: () => boolean;
+    outputRootHelp?: () => void | Promise<void>;
+    onError?: (error: unknown) => void;
+    env?: NodeJS.ProcessEnv;
+  } = {},
+): Promise<boolean> {
+  if (resolveCliContainerTarget(argv, deps.env)) {
+    return false;
+  }
+  if (!isRootHelpInvocation(argv)) {
+    return false;
+  }
+  const handleError =
+    deps.onError ??
+    ((error: unknown) => {
+      console.error(
+        "[openclaw] Failed to display help:",
+        error instanceof Error ? (error.stack ?? error.message) : error,
+      );
+      process.exitCode = 1;
+    });
+  try {
+    if (deps.outputRootHelp) {
+      await deps.outputRootHelp();
+      return true;
+    }
+    const outputPrecomputedRootHelpText =
+      deps.outputPrecomputedRootHelpText ??
+      (await import("./cli/root-help-metadata.js")).outputPrecomputedRootHelpText;
+    if (!outputPrecomputedRootHelpText()) {
+      const { outputRootHelp } = await import("./cli/program/root-help.js");
+      await outputRootHelp();
+    }
+    return true;
+  } catch (error) {
+    handleError(error);
+    return true;
+  }
+}
+
+async function runMainOrRootHelp(argv: string[]): Promise<void> {
+  if (await tryHandleRootHelpFastPath(argv)) {
+    return;
+  }
+  try {
+    const { runCli } = await import("./cli/run-main.js");
+    await runCli(argv);
+  } catch (error) {
+    console.error(
+      "[openclaw] Failed to start CLI:",
+      error instanceof Error ? (error.stack ?? error.message) : error,
+    );
+    process.exitCode = 1;
   }
 }

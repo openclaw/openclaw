@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
 const NodePendingWorkTypeSchema = Type.String({
@@ -36,6 +36,11 @@ export const NodePairApproveParamsSchema = Type.Object(
 
 export const NodePairRejectParamsSchema = Type.Object(
   { requestId: NonEmptyString },
+  { additionalProperties: false },
+);
+
+export const NodePairRemoveParamsSchema = Type.Object(
+  { nodeId: NonEmptyString },
   { additionalProperties: false },
 );
 

@@ -1,0 +1,52 @@
+{
+  "id": "opencode-go",
+  "enabledByDefault": true,
+  "providers": ["opencode-go"],
+  "providerEndpoints": [
+    {
+      "endpointClass": "opencode-native",
+      "hostSuffixes": ["opencode.ai"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "opencode-go": {
+        "family": "opencode"
+      }
+    }
+  },
+  "providerAuthEnvVars": {
+    "opencode-go": ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "opencode-go",
+      "method": "api-key",
+      "choiceId": "opencode-go",
+      "choiceLabel": "OpenCode Go catalog",
+      "groupId": "opencode",
+      "groupLabel": "OpenCode",
+      "groupHint": "Shared API key for Zen + Go catalogs",
+      "optionKey": "opencodeGoApiKey",
+      "cliFlag": "--opencode-go-api-key",
+      "cliOption": "--opencode-go-api-key <key>",
+      "cliDescription": "OpenCode API key (Go catalog)"
+    }
+  ],
+  "contracts": {
+    "mediaUnderstandingProviders": ["opencode-go"]
+  },
+  "mediaUnderstandingProviderMetadata": {
+    "opencode-go": {
+      "capabilities": ["image"],
+      "defaultModels": {
+        "image": "kimi-k2.6"
+      }
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

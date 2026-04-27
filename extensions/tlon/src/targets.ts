@@ -23,6 +23,15 @@ export function parseChannelNest(raw: string): { hostShip: string; channelName: 
   return { hostShip, channelName };
 }
 
+function makeGroupTarget(parsed: { hostShip: string; channelName: string }): TlonTarget {
+  return {
+    kind: "group",
+    nest: `chat/${parsed.hostShip}/${parsed.channelName}`,
+    hostShip: parsed.hostShip,
+    channelName: parsed.channelName,
+  };
+}
+
 export function parseTlonTarget(raw?: string | null): TlonTarget | null {
   const trimmed = raw?.trim();
   if (!trimmed) {
@@ -43,12 +52,7 @@ export function parseTlonTarget(raw?: string | null): TlonTarget | null {
       if (!parsed) {
         return null;
       }
-      return {
-        kind: "group",
-        nest: `chat/${parsed.hostShip}/${parsed.channelName}`,
-        hostShip: parsed.hostShip,
-        channelName: parsed.channelName,
-      };
+      return makeGroupTarget(parsed);
     }
     const parts = groupTarget.split("/");
     if (parts.length === 2) {
@@ -69,12 +73,7 @@ export function parseTlonTarget(raw?: string | null): TlonTarget | null {
     if (!parsed) {
       return null;
     }
-    return {
-      kind: "group",
-      nest: `chat/${parsed.hostShip}/${parsed.channelName}`,
-      hostShip: parsed.hostShip,
-      channelName: parsed.channelName,
-    };
+    return makeGroupTarget(parsed);
   }
 
   if (SHIP_RE.test(withoutPrefix)) {
@@ -82,6 +81,20 @@ export function parseTlonTarget(raw?: string | null): TlonTarget | null {
   }
 
   return null;
+}
+
+export function resolveTlonOutboundTarget(to?: string | null) {
+  const parsed = parseTlonTarget(to ?? "");
+  if (!parsed) {
+    return {
+      ok: false as const,
+      error: new Error(`Invalid Tlon target. Use ${formatTargetHint()}`),
+    };
+  }
+  if (parsed.kind === "dm") {
+    return { ok: true as const, to: parsed.ship };
+  }
+  return { ok: true as const, to: parsed.nest };
 }
 
 export function formatTargetHint(): string {

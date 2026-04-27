@@ -1,17 +1,37 @@
+import JSON5 from "json5";
 import { html, nothing, type TemplateResult } from "lit";
+import { t } from "../../i18n/index.ts";
 import { icons } from "../icons.ts";
+import { BORDER_RADIUS_STOPS, type BorderRadiusStop } from "../storage.ts";
 import type { ThemeTransitionContext } from "../theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../theme.ts";
 import type { ConfigUiHints } from "../types.ts";
 import {
   countSensitiveConfigValues,
+  hintForPath,
   humanize,
+  isSensitiveConfigPath,
   pathKey,
   REDACTED_PLACEHOLDER,
   schemaType,
   type JsonSchema,
 } from "./config-form.shared.ts";
 import { analyzeConfigSchema, renderConfigForm, SECTION_META } from "./config-form.ts";
+
+const BORDER_RADIUS_LABELS: Record<BorderRadiusStop, string> = {
+  0: "None",
+  25: "Slight",
+  50: "Default",
+  75: "Round",
+  100: "Full",
+};
+
+export type WebPushUiState = {
+  supported: boolean;
+  permission: NotificationPermission | "unsupported";
+  subscribed: boolean;
+  loading: boolean;
+};
 
 export type ConfigProps = {
   raw: string;
@@ -27,6 +47,7 @@ export type ConfigProps = {
   schemaLoading: boolean;
   uiHints: ConfigUiHints;
   formMode: "form" | "raw";
+  rawAvailable?: boolean;
   showModeToggle?: boolean;
   formValue: Record<string, unknown> | null;
   originalValue: Record<string, unknown> | null;
@@ -40,6 +61,7 @@ export type ConfigProps = {
   onSectionChange: (section: string | null) => void;
   onSubsectionChange: (section: string | null) => void;
   onReload: () => void;
+  onReset: () => void;
   onSave: () => void;
   onApply: () => void;
   onUpdate: () => void;
@@ -49,6 +71,20 @@ export type ConfigProps = {
   themeMode: ThemeMode;
   setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
   setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
+  hasCustomTheme: boolean;
+  customThemeLabel: string | null;
+  customThemeSourceUrl: string | null;
+  customThemeImportUrl: string;
+  customThemeImportBusy: boolean;
+  customThemeImportMessage: { kind: "success" | "error"; text: string } | null;
+  customThemeImportExpanded?: boolean;
+  customThemeImportFocusToken?: number;
+  onCustomThemeImportUrlChange: (next: string) => void;
+  onImportCustomTheme: () => void;
+  onClearCustomTheme: () => void;
+  onOpenCustomThemeImport?: () => void;
+  borderRadius: number;
+  setBorderRadius: (value: number) => void;
   gatewayUrl: string;
   assistantName: string;
   configPath?: string | null;
@@ -56,6 +92,15 @@ export type ConfigProps = {
   includeSections?: string[];
   excludeSections?: string[];
   includeVirtualSections?: boolean;
+  /** Layout mode: "tabs" (default flat scroll) or "accordion" (grouped collapsible). */
+  settingsLayout?: "tabs" | "accordion";
+  /** Callback to navigate back to Quick Settings. Shown in accordion mode. */
+  onBackToQuick?: () => void;
+  webPush?: WebPushUiState;
+  onWebPushSubscribe?: () => void;
+  onWebPushUnsubscribe?: () => void;
+  onWebPushTest?: () => void;
+  onRequestUpdate?: () => void;
 };
 
 // SVG Icons for sidebar (Lucide-style)
@@ -278,6 +323,40 @@ const sidebarIcons = {
       <path d="m19.07 10.93-4.24 4.24"></path>
     </svg>
   `,
+  diagnostics: html`
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+    </svg>
+  `,
+  cli: html`
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <polyline points="4 17 10 11 4 5"></polyline>
+      <line x1="12" y1="19" x2="20" y2="19"></line>
+    </svg>
+  `,
+  secrets: html`
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path
+        d="m21 2-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0 3 3L22 7l-3-3m-3.5 3.5L19 4"
+      ></path>
+    </svg>
+  `,
+  acp: html`
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+      <circle cx="9" cy="7" r="4"></circle>
+      <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+      <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+    </svg>
+  `,
+  mcp: html`
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
+      <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
+      <line x1="6" y1="6" x2="6.01" y2="6"></line>
+      <line x1="6" y1="18" x2="6.01" y2="18"></line>
+    </svg>
+  `,
   __appearance__: html`
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <circle cx="12" cy="12" r="5"></circle>
@@ -316,6 +395,9 @@ const SECTION_CATEGORIES: SectionCategory[] = [
       { key: "update", label: "Updates" },
       { key: "meta", label: "Meta" },
       { key: "logging", label: "Logging" },
+      { key: "diagnostics", label: "Diagnostics" },
+      { key: "cli", label: "Cli" },
+      { key: "secrets", label: "Secrets" },
     ],
   },
   {
@@ -364,13 +446,15 @@ const SECTION_CATEGORIES: SectionCategory[] = [
       { key: "canvasHost", label: "CanvasHost" },
       { key: "discovery", label: "Discovery" },
       { key: "media", label: "Media" },
+      { key: "acp", label: "Acp" },
+      { key: "mcp", label: "Mcp" },
     ],
   },
   {
     id: "appearance",
-    label: "Appearance",
+    label: t("tabs.appearance"),
     sections: [
-      { key: "__appearance__", label: "Appearance" },
+      { key: "__appearance__", label: "Theme" },
       { key: "ui", label: "UI" },
       { key: "wizard", label: "Setup Wizard" },
     ],
@@ -447,32 +531,132 @@ function resolveSectionMeta(
   };
 }
 
+const MAX_CONFIG_DIFF_DEPTH = 64;
+const MAX_CONFIG_DIFF_NODES = 20_000;
+const MAX_CONFIG_DIFF_CHANGES = 1_000;
+const MAX_CONFIG_DIFF_ARRAY_COMPARE_ITEMS = 2_000;
+const MAX_RAW_DIFF_CHARS = 200_000;
+
+type ConfigDiffPath = string[];
+type ConfigDiffEntry = { path: ConfigDiffPath; from: unknown; to: unknown };
+
+let rawDiffCache:
+  | {
+      original: string;
+      current: string;
+      diff: ConfigDiffEntry[];
+    }
+  | undefined;
+
+function formatConfigDiffPath(path: ConfigDiffPath): string {
+  return path.length > 0 ? path.join(".") : "<root>";
+}
+
 function computeDiff(
   original: Record<string, unknown> | null,
   current: Record<string, unknown> | null,
-): Array<{ path: string; from: unknown; to: unknown }> {
+): ConfigDiffEntry[] {
   if (!original || !current) {
     return [];
   }
-  const changes: Array<{ path: string; from: unknown; to: unknown }> = [];
+  const changes: ConfigDiffEntry[] = [];
+  let visited = 0;
 
-  function compare(orig: unknown, curr: unknown, path: string) {
+  function pushChange(path: ConfigDiffPath, from: unknown, to: unknown) {
+    if (changes.length < MAX_CONFIG_DIFF_CHANGES) {
+      changes.push({ path, from, to });
+    }
+  }
+
+  function arrayValuesDiffer(orig: unknown[], curr: unknown[], depth: number): boolean {
+    if (orig.length !== curr.length) {
+      return true;
+    }
+    if (orig.length > MAX_CONFIG_DIFF_ARRAY_COMPARE_ITEMS) {
+      return true;
+    }
+    for (let index = 0; index < orig.length; index += 1) {
+      if (valuesDiffer(orig[index], curr[index], depth + 1)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function objectValuesDiffer(
+    orig: Record<string, unknown>,
+    curr: Record<string, unknown>,
+    depth: number,
+  ): boolean {
+    const origKeys = Object.keys(orig);
+    const currKeys = Object.keys(curr);
+    if (origKeys.length !== currKeys.length) {
+      return true;
+    }
+    for (const key of origKeys) {
+      if (
+        !Object.prototype.hasOwnProperty.call(curr, key) ||
+        valuesDiffer(orig[key], curr[key], depth + 1)
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function valuesDiffer(orig: unknown, curr: unknown, depth: number): boolean {
+    visited += 1;
+    if (visited > MAX_CONFIG_DIFF_NODES || depth > MAX_CONFIG_DIFF_DEPTH) {
+      return true;
+    }
+    if (orig === curr) {
+      return false;
+    }
+    if (typeof orig !== typeof curr) {
+      return true;
+    }
+    if (typeof orig !== "object" || orig === null || curr === null) {
+      return orig !== curr;
+    }
+    if (Array.isArray(orig) || Array.isArray(curr)) {
+      return Array.isArray(orig) && Array.isArray(curr)
+        ? arrayValuesDiffer(orig, curr, depth + 1)
+        : true;
+    }
+    return objectValuesDiffer(
+      orig as Record<string, unknown>,
+      curr as Record<string, unknown>,
+      depth + 1,
+    );
+  }
+
+  function compare(orig: unknown, curr: unknown, path: ConfigDiffPath, depth: number) {
+    visited += 1;
+    if (
+      visited > MAX_CONFIG_DIFF_NODES ||
+      depth > MAX_CONFIG_DIFF_DEPTH ||
+      changes.length >= MAX_CONFIG_DIFF_CHANGES
+    ) {
+      return;
+    }
     if (orig === curr) {
       return;
     }
     if (typeof orig !== typeof curr) {
-      changes.push({ path, from: orig, to: curr });
+      pushChange(path, orig, curr);
       return;
     }
     if (typeof orig !== "object" || orig === null || curr === null) {
       if (orig !== curr) {
-        changes.push({ path, from: orig, to: curr });
+        pushChange(path, orig, curr);
       }
       return;
     }
-    if (Array.isArray(orig) && Array.isArray(curr)) {
-      if (JSON.stringify(orig) !== JSON.stringify(curr)) {
-        changes.push({ path, from: orig, to: curr });
+    if (Array.isArray(orig) || Array.isArray(curr)) {
+      if (Array.isArray(orig) && Array.isArray(curr) && arrayValuesDiffer(orig, curr, depth + 1)) {
+        pushChange(path, orig, curr);
+      } else if (!Array.isArray(orig) || !Array.isArray(curr)) {
+        pushChange(path, orig, curr);
       }
       return;
     }
@@ -480,15 +664,52 @@ function computeDiff(
     const currObj = curr as Record<string, unknown>;
     const allKeys = new Set([...Object.keys(origObj), ...Object.keys(currObj)]);
     for (const key of allKeys) {
-      compare(origObj[key], currObj[key], path ? `${path}.${key}` : key);
+      compare(origObj[key], currObj[key], [...path, key], depth + 1);
     }
   }
 
-  compare(original, current, "");
+  compare(original, current, [], 0);
   return changes;
 }
 
+function computeRawDiff(original: string, current: string): ConfigDiffEntry[] {
+  if (rawDiffCache?.original === original && rawDiffCache.current === current) {
+    return rawDiffCache.diff;
+  }
+  if (original.length > MAX_RAW_DIFF_CHARS || current.length > MAX_RAW_DIFF_CHARS) {
+    rawDiffCache = { original, current, diff: [] };
+    return rawDiffCache.diff;
+  }
+  try {
+    const originalValue = JSON5.parse(original) as unknown;
+    const currentValue = JSON5.parse(current) as unknown;
+    if (
+      !originalValue ||
+      !currentValue ||
+      typeof originalValue !== "object" ||
+      typeof currentValue !== "object" ||
+      Array.isArray(originalValue) ||
+      Array.isArray(currentValue)
+    ) {
+      rawDiffCache = { original, current, diff: [] };
+      return [];
+    }
+    const diff = computeDiff(
+      originalValue as Record<string, unknown>,
+      currentValue as Record<string, unknown>,
+    );
+    rawDiffCache = { original, current, diff };
+    return diff;
+  } catch {
+    rawDiffCache = { original, current, diff: [] };
+    return [];
+  }
+}
+
 function truncateValue(value: unknown, maxLen = 40): string {
+  if (Array.isArray(value)) {
+    return `[${value.length} item${value.length === 1 ? "" : "s"}]`;
+  }
   let str: string;
   try {
     const json = JSON.stringify(value);
@@ -502,41 +723,234 @@ function truncateValue(value: unknown, maxLen = 40): string {
   return str.slice(0, maxLen - 3) + "...";
 }
 
-function renderDiffValue(path: string, value: unknown, _uiHints: ConfigUiHints): string {
+function renderDiffValue(path: ConfigDiffPath, value: unknown, _uiHints: ConfigUiHints): string {
+  if (
+    isSensitiveConfigPath(formatConfigDiffPath(path)) &&
+    value != null &&
+    truncateValue(value).trim() !== ""
+  ) {
+    return REDACTED_PLACEHOLDER;
+  }
   return truncateValue(value);
 }
 
-type ThemeOption = { id: ThemeName; label: string; description: string; icon: TemplateResult };
-const THEME_OPTIONS: ThemeOption[] = [
+function hintKeyMatchesPathPrefix(hintKey: string, path: ConfigDiffPath): boolean {
+  const hintSegments = hintKey.split(".");
+  if (hintSegments.length !== path.length) {
+    return false;
+  }
+  return hintSegments.every((segment, index) => segment === "*" || segment === path[index]);
+}
+
+function hasSensitiveHintForPathPrefix(path: ConfigDiffPath, uiHints: ConfigUiHints): boolean {
+  return Object.entries(uiHints).some(
+    ([hintKey, hint]) => Boolean(hint.sensitive) && hintKeyMatchesPathPrefix(hintKey, path),
+  );
+}
+
+function isSensitiveDiffPath(path: ConfigDiffPath, uiHints: ConfigUiHints): boolean {
+  for (let index = 1; index <= path.length; index += 1) {
+    const prefix = path.slice(0, index);
+    const key = formatConfigDiffPath(prefix);
+    if (
+      (hintForPath(prefix, uiHints)?.sensitive ?? false) ||
+      hasSensitiveHintForPathPrefix(prefix, uiHints) ||
+      isSensitiveConfigPath(key)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function renderRawDiffValue(
+  path: ConfigDiffPath,
+  value: unknown,
+  uiHints: ConfigUiHints,
+  rawRevealed: boolean,
+): string {
+  const hasSensitiveValue = countSensitiveConfigValues(value, path, uiHints) > 0;
+  if (!rawRevealed && value != null && (isSensitiveDiffPath(path, uiHints) || hasSensitiveValue)) {
+    return REDACTED_PLACEHOLDER;
+  }
+  return truncateValue(value);
+}
+
+type ThemeOption = {
+  id: ThemeName;
+  label: string;
+  description: string;
+  icon: TemplateResult;
+};
+const BUILTIN_THEME_OPTIONS: ThemeOption[] = [
   { id: "claw", label: "Claw", description: "Chroma family", icon: icons.zap },
-  { id: "knot", label: "Knot", description: "Knot family", icon: icons.link },
-  { id: "dash", label: "Dash", description: "Field family", icon: icons.barChart },
+  { id: "knot", label: "Knot", description: "Black & red", icon: icons.link },
+  { id: "dash", label: "Dash", description: "Chocolate blueprint", icon: icons.barChart },
 ];
 
-function renderAppearanceSection(props: ConfigProps) {
-  const MODE_OPTIONS: Array<{
-    id: ThemeMode;
-    label: string;
-    description: string;
-    icon: TemplateResult;
-  }> = [
-    { id: "system", label: "System", description: "Follow OS light or dark", icon: icons.monitor },
-    { id: "light", label: "Light", description: "Force light mode", icon: icons.sun },
-    { id: "dark", label: "Dark", description: "Force dark mode", icon: icons.moon },
-  ];
+function importedThemeName(props: Pick<ConfigProps, "hasCustomTheme" | "customThemeLabel">) {
+  return props.hasCustomTheme && props.customThemeLabel ? props.customThemeLabel : "Imported theme";
+}
 
+function focusCustomThemeImportInput() {
+  const schedule =
+    typeof requestAnimationFrame === "function"
+      ? requestAnimationFrame
+      : (cb: FrameRequestCallback) => window.setTimeout(() => cb(0), 0);
+  schedule(() => {
+    const input = globalThis.document?.querySelector<HTMLInputElement>(
+      "[data-custom-theme-import-input]",
+    );
+    if (!input) {
+      return;
+    }
+    if (typeof input.scrollIntoView === "function") {
+      input.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+    input.focus();
+    input.select();
+  });
+}
+
+function renderNotificationsSection(props: ConfigProps) {
+  const push = props.webPush;
+  if (!push) {
+    return html`
+      <div class="settings-appearance">
+        <div class="settings-appearance__section">
+          <h3 class="settings-appearance__heading">Push Notifications</h3>
+          <p class="settings-appearance__hint">Not available in this browser.</p>
+        </div>
+      </div>
+    `;
+  }
+
+  const permissionLabel =
+    push.permission === "granted"
+      ? "Granted"
+      : push.permission === "denied"
+        ? "Denied"
+        : push.permission === "default"
+          ? "Not requested"
+          : "Unsupported";
+  const statusDot = push.subscribed ? "settings-status-dot--ok" : "";
+
+  return html`
+    <div class="settings-appearance">
+      <div class="settings-appearance__section">
+        <h3 class="settings-appearance__heading">Push Notifications</h3>
+        <p class="settings-appearance__hint">
+          Subscribe to receive browser push notifications from your gateway.
+        </p>
+
+        <div class="settings-info-grid">
+          <div class="settings-info-row">
+            <span class="settings-info-row__label">Browser support</span>
+            <span class="settings-info-row__value"
+              >${push.supported ? "Available" : "Not supported"}</span
+            >
+          </div>
+          <div class="settings-info-row">
+            <span class="settings-info-row__label">Permission</span>
+            <span class="settings-info-row__value">${permissionLabel}</span>
+          </div>
+          <div class="settings-info-row">
+            <span class="settings-info-row__label">Status</span>
+            <span class="settings-info-row__value">
+              <span class="settings-status-dot ${statusDot}"></span>
+              ${push.subscribed ? "Subscribed" : "Not subscribed"}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      ${push.supported && push.permission !== "denied"
+        ? html`
+            <div class="settings-appearance__section">
+              <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                ${push.subscribed
+                  ? html`
+                      <button
+                        class="config-bar__btn"
+                        ?disabled=${push.loading || !props.connected}
+                        @click=${() => props.onWebPushUnsubscribe?.()}
+                      >
+                        Unsubscribe
+                      </button>
+                      <button
+                        class="config-bar__btn"
+                        ?disabled=${push.loading || !props.connected}
+                        @click=${() => props.onWebPushTest?.()}
+                      >
+                        Send test
+                      </button>
+                    `
+                  : html`
+                      <button
+                        class="config-bar__btn config-bar__btn--primary"
+                        ?disabled=${push.loading || !props.connected}
+                        @click=${() => props.onWebPushSubscribe?.()}
+                      >
+                        ${push.loading ? "Subscribing..." : "Enable notifications"}
+                      </button>
+                    `}
+              </div>
+            </div>
+          `
+        : push.permission === "denied"
+          ? html`
+              <div class="settings-appearance__section">
+                <p class="settings-appearance__hint">
+                  Notifications are blocked. Update your browser site permissions to allow
+                  notifications.
+                </p>
+              </div>
+            `
+          : nothing}
+    </div>
+  `;
+}
+
+function renderAppearanceSection(props: ConfigProps) {
+  const showCustomThemeImport = props.hasCustomTheme || props.customThemeImportExpanded === true;
+  if (
+    showCustomThemeImport &&
+    props.customThemeImportFocusToken != null &&
+    props.customThemeImportFocusToken !== cvs.lastCustomThemeImportFocusToken
+  ) {
+    cvs.lastCustomThemeImportFocusToken = props.customThemeImportFocusToken;
+    focusCustomThemeImportInput();
+  }
+  const importedName = importedThemeName(props);
+  const themeOptions: ThemeOption[] = [
+    ...BUILTIN_THEME_OPTIONS,
+    {
+      id: "custom",
+      label: props.hasCustomTheme ? importedName : "Import",
+      description: props.hasCustomTheme
+        ? `Imported from tweakcn: ${importedName}`
+        : "Import a tweakcn theme into this browser-local slot",
+      icon: icons.spark,
+    },
+  ];
   return html`
     <div class="settings-appearance">
       <div class="settings-appearance__section">
         <h3 class="settings-appearance__heading">Theme</h3>
         <p class="settings-appearance__hint">Choose a theme family.</p>
         <div class="settings-theme-grid">
-          ${THEME_OPTIONS.map(
+          ${themeOptions.map(
             (opt) => html`
               <button
-                class="settings-theme-card ${opt.id === props.theme ? "settings-theme-card--active" : ""}"
+                class="settings-theme-card ${opt.id === props.theme
+                  ? "settings-theme-card--active"
+                  : ""}"
                 title=${opt.description}
                 @click=${(e: Event) => {
+                  if (opt.id === "custom" && !props.hasCustomTheme) {
+                    props.onOpenCustomThemeImport?.();
+                    return;
+                  }
                   if (opt.id !== props.theme) {
                     const context: ThemeTransitionContext = {
                       element: (e.currentTarget as HTMLElement) ?? undefined,
@@ -547,45 +961,121 @@ function renderAppearanceSection(props: ConfigProps) {
               >
                 <span class="settings-theme-card__icon" aria-hidden="true">${opt.icon}</span>
                 <span class="settings-theme-card__label">${opt.label}</span>
-                ${
-                  opt.id === props.theme
-                    ? html`<span class="settings-theme-card__check" aria-hidden="true">${icons.check}</span>`
-                    : nothing
-                }
+                ${opt.id === props.theme
+                  ? html`<span class="settings-theme-card__check" aria-hidden="true"
+                      >${icons.check}</span
+                    >`
+                  : nothing}
               </button>
             `,
           )}
         </div>
+        ${showCustomThemeImport
+          ? html`
+              <div class="settings-theme-import">
+                <div class="settings-theme-import__copy">
+                  <div class="settings-theme-import__title">Import from tweakcn</div>
+                  <p class="settings-theme-import__hint">
+                    Open tweakcn.com, choose or create a theme, click Share, then paste the copied
+                    theme link here. Share links, editor URLs, registry URLs, theme IDs, and default
+                    theme names like amethyst-haze are accepted.
+                  </p>
+                </div>
+                <a
+                  class="settings-theme-import__external"
+                  href="https://tweakcn.com/themes"
+                  target="_blank"
+                  rel="noreferrer noopener"
+                >
+                  Browse tweakcn themes ${icons.externalLink}
+                </a>
+                <label class="settings-theme-import__field">
+                  <span class="settings-theme-import__label">Theme link or ID</span>
+                  <input
+                    class="settings-theme-import__input"
+                    data-custom-theme-import-input
+                    type="text"
+                    spellcheck="false"
+                    placeholder="https://tweakcn.com/editor/theme?theme=... or amethyst-haze"
+                    .value=${props.customThemeImportUrl}
+                    @input=${(e: Event) =>
+                      props.onCustomThemeImportUrlChange(
+                        (e.currentTarget as HTMLInputElement).value,
+                      )}
+                  />
+                </label>
+                <div class="settings-theme-import__actions">
+                  <button
+                    class="btn btn--sm primary"
+                    ?disabled=${props.customThemeImportBusy ||
+                    props.customThemeImportUrl.trim().length === 0}
+                    @click=${props.onImportCustomTheme}
+                  >
+                    ${props.customThemeImportBusy
+                      ? "Importing…"
+                      : props.hasCustomTheme
+                        ? `Replace ${importedName}`
+                        : "Import theme"}
+                  </button>
+                  ${props.hasCustomTheme
+                    ? html`
+                        <button class="btn btn--sm danger" @click=${props.onClearCustomTheme}>
+                          Clear ${importedName}
+                        </button>
+                      `
+                    : nothing}
+                </div>
+                ${props.hasCustomTheme
+                  ? html`
+                      <div class="settings-theme-import__meta">
+                        <span class="settings-theme-import__meta-label">Loaded</span>
+                        <span class="settings-theme-import__meta-value"
+                          >${importedName} · ${props.customThemeSourceUrl ?? "tweakcn"}</span
+                        >
+                      </div>
+                    `
+                  : nothing}
+                ${props.customThemeImportMessage
+                  ? html`
+                      <div
+                        class="settings-theme-import__message settings-theme-import__message--${props
+                          .customThemeImportMessage.kind}"
+                      >
+                        ${props.customThemeImportMessage.text}
+                      </div>
+                    `
+                  : nothing}
+              </div>
+            `
+          : html`
+              <p class="settings-theme-import__inline-hint">
+                Click <strong>Import</strong> to add one browser-local tweakcn theme. In tweakcn,
+                use Share and paste the copied link here.
+              </p>
+            `}
       </div>
 
       <div class="settings-appearance__section">
-        <h3 class="settings-appearance__heading">Mode</h3>
-        <p class="settings-appearance__hint">Choose light or dark mode for the selected theme.</p>
-        <div class="settings-theme-grid">
-          ${MODE_OPTIONS.map(
-            (opt) => html`
-              <button
-                class="settings-theme-card ${opt.id === props.themeMode ? "settings-theme-card--active" : ""}"
-                title=${opt.description}
-                @click=${(e: Event) => {
-                  if (opt.id !== props.themeMode) {
-                    const context: ThemeTransitionContext = {
-                      element: (e.currentTarget as HTMLElement) ?? undefined,
-                    };
-                    props.setThemeMode(opt.id, context);
-                  }
-                }}
-              >
-                <span class="settings-theme-card__icon" aria-hidden="true">${opt.icon}</span>
-                <span class="settings-theme-card__label">${opt.label}</span>
-                ${
-                  opt.id === props.themeMode
-                    ? html`<span class="settings-theme-card__check" aria-hidden="true">${icons.check}</span>`
-                    : nothing
-                }
-              </button>
-            `,
-          )}
+        <h3 class="settings-appearance__heading">Roundness</h3>
+        <p class="settings-appearance__hint">Adjust corner radius across the UI.</p>
+        <div class="settings-roundness">
+          <div class="settings-roundness__options">
+            ${BORDER_RADIUS_STOPS.map(
+              (stop) => html`
+                <button
+                  type="button"
+                  class="settings-roundness__btn ${stop === props.borderRadius ? "active" : ""}"
+                  @click=${() => props.setBorderRadius(stop)}
+                >
+                  <span
+                    class="settings-roundness__swatch"
+                    style="border-radius: ${Math.round(10 * (stop / 50))}px"
+                  ></span>
+                  <span class="settings-roundness__label">${BORDER_RADIUS_LABELS[stop]}</span>
+                </button>
+              `,
+            )}
+          </div>
         </div>
       </div>
 
@@ -599,20 +1089,20 @@ function renderAppearanceSection(props: ConfigProps) {
           <div class="settings-info-row">
             <span class="settings-info-row__label">Status</span>
             <span class="settings-info-row__value">
-              <span class="settings-status-dot ${props.connected ? "settings-status-dot--ok" : ""}"></span>
-              ${props.connected ? "Connected" : "Offline"}
+              <span
+                class="settings-status-dot ${props.connected ? "settings-status-dot--ok" : ""}"
+              ></span>
+              ${props.connected ? t("common.connected") : t("common.offline")}
             </span>
           </div>
-          ${
-            props.assistantName
-              ? html`
+          ${props.assistantName
+            ? html`
                 <div class="settings-info-row">
                   <span class="settings-info-row__label">Assistant</span>
                   <span class="settings-info-row__value">${props.assistantName}</span>
                 </div>
               `
-              : nothing
-          }
+            : nothing}
         </div>
       </div>
     </div>
@@ -621,21 +1111,43 @@ function renderAppearanceSection(props: ConfigProps) {
 
 interface ConfigEphemeralState {
   rawRevealed: boolean;
+  rawDiffOpen: boolean;
   envRevealed: boolean;
   validityDismissed: boolean;
   revealedSensitivePaths: Set<string>;
+  lastCustomThemeImportFocusToken: number | null;
 }
 
 function createConfigEphemeralState(): ConfigEphemeralState {
   return {
     rawRevealed: false,
+    rawDiffOpen: false,
     envRevealed: false,
     validityDismissed: false,
     revealedSensitivePaths: new Set(),
+    lastCustomThemeImportFocusToken: null,
   };
 }
 
 const cvs = createConfigEphemeralState();
+let lastConfigContextKey: string | null = null;
+
+function resetConfigEphemeralState() {
+  Object.assign(cvs, createConfigEphemeralState());
+  rawDiffCache = undefined;
+}
+
+function configContextKey(props: ConfigProps): string {
+  const include = props.includeSections?.join("\u001f") ?? "";
+  const exclude = props.excludeSections?.join("\u001f") ?? "";
+  return [
+    props.configPath ?? "",
+    props.gatewayUrl,
+    props.navRootLabel ?? "",
+    include,
+    exclude,
+  ].join("\u001e");
+}
 
 function isSensitivePathRevealed(path: Array<string | number>): boolean {
   const key = pathKey(path);
@@ -655,7 +1167,8 @@ function toggleSensitivePathReveal(path: Array<string | number>) {
 }
 
 export function resetConfigViewStateForTests() {
-  Object.assign(cvs, createConfigEphemeralState());
+  resetConfigEphemeralState();
+  lastConfigContextKey = null;
 }
 
 export function renderConfig(props: ConfigProps) {
@@ -670,19 +1183,30 @@ export function renderConfig(props: ConfigProps) {
     unsupportedPaths: scopeUnsupportedPaths(rawAnalysis.unsupportedPaths, { include, exclude }),
   };
   const formUnsafe = analysis.schema ? analysis.unsupportedPaths.length > 0 : false;
-  const formMode = showModeToggle ? props.formMode : "form";
+  const rawAvailable = props.rawAvailable ?? true;
+  const formMode = showModeToggle && rawAvailable ? props.formMode : "form";
+  const requestUpdate = props.onRequestUpdate ?? (() => {});
+  const currentContextKey = configContextKey(props);
+  if (lastConfigContextKey !== currentContextKey) {
+    resetConfigEphemeralState();
+    lastConfigContextKey = currentContextKey;
+  }
   const envSensitiveVisible = cvs.envRevealed;
 
   // Build categorised nav from schema - only include sections that exist in the schema
   const schemaProps = analysis.schema?.properties ?? {};
 
-  const VIRTUAL_SECTIONS = new Set(["__appearance__"]);
-  const visibleCategories = SECTION_CATEGORIES.map((cat) => ({
-    ...cat,
-    sections: cat.sections.filter(
-      (s) => (includeVirtualSections && VIRTUAL_SECTIONS.has(s.key)) || s.key in schemaProps,
-    ),
-  })).filter((cat) => cat.sections.length > 0);
+  const VIRTUAL_SECTIONS = new Set(["__appearance__", "__notifications__"]);
+  const visibleCategories = SECTION_CATEGORIES.map((cat) =>
+    Object.assign({}, cat, {
+      sections: cat.sections.filter(
+        (s) =>
+          ((includeVirtualSections && VIRTUAL_SECTIONS.has(s.key)) || s.key in schemaProps) &&
+          (!include || include.has(s.key)) &&
+          (!exclude || !exclude.has(s.key)),
+      ),
+    }),
+  ).filter((cat) => cat.sections.length > 0);
 
   // Catch any schema keys not in our categories
   const extraSections = Object.keys(schemaProps)
@@ -717,9 +1241,128 @@ export function renderConfig(props: ConfigProps) {
     ),
   ];
 
+  const settingsLayout = props.settingsLayout ?? "tabs";
+  const allCategories = [...visibleCategories, ...(otherCategory ? [otherCategory] : [])];
+
+  const resetContentScroll = (target: EventTarget | null) => {
+    queueMicrotask(() => {
+      const origin = target instanceof Element ? target : null;
+      const content = origin
+        ?.closest(".config-main")
+        ?.querySelector<HTMLElement>(".config-content");
+      if (!content) {
+        return;
+      }
+      if (typeof content.scrollTo === "function") {
+        content.scrollTo({ top: 0, left: 0, behavior: "auto" });
+        return;
+      }
+      content.scrollTop = 0;
+      content.scrollLeft = 0;
+    });
+  };
+
+  function renderAccordionNav() {
+    return html`
+      <div class="config-accordion-nav">
+        ${props.onBackToQuick
+          ? html`
+              <button class="config-accordion-nav__back" @click=${props.onBackToQuick}>
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  width="14"
+                  height="14"
+                >
+                  <polyline points="15 18 9 12 15 6"></polyline>
+                </svg>
+                Quick Settings
+              </button>
+            `
+          : nothing}
+        ${allCategories.map(
+          (cat) => html`
+            <div class="config-accordion-group">
+              <button
+                class="config-accordion-group__header ${props.activeSection != null &&
+                cat.sections.some((s) => s.key === props.activeSection)
+                  ? "config-accordion-group__header--active"
+                  : ""}"
+                @click=${(e: Event) => {
+                  const firstKey = cat.sections[0]?.key ?? null;
+                  const isCurrentlyInGroup = cat.sections.some(
+                    (s) => s.key === props.activeSection,
+                  );
+                  props.onSectionChange(isCurrentlyInGroup ? null : firstKey);
+                  resetContentScroll(e.currentTarget);
+                }}
+              >
+                <span class="config-accordion-group__icon">
+                  ${getSectionIcon(cat.sections[0]?.key ?? "default")}
+                </span>
+                <span>${cat.label}</span>
+                <svg
+                  class="config-accordion-group__chevron ${cat.sections.some(
+                    (s) => s.key === props.activeSection,
+                  )
+                    ? "config-accordion-group__chevron--open"
+                    : ""}"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  width="14"
+                  height="14"
+                >
+                  <polyline points="6 9 12 15 18 9"></polyline>
+                </svg>
+              </button>
+              ${cat.sections.some((s) => s.key === props.activeSection)
+                ? html`
+                    <div class="config-accordion-group__items">
+                      ${cat.sections.map(
+                        (s) => html`
+                          <button
+                            class="config-accordion-group__item ${props.activeSection === s.key
+                              ? "config-accordion-group__item--active"
+                              : ""}"
+                            @click=${(e: Event) => {
+                              props.onSectionChange(s.key);
+                              resetContentScroll(e.currentTarget);
+                            }}
+                          >
+                            <span class="config-accordion-group__item-icon">
+                              ${getSectionIcon(s.key)}
+                            </span>
+                            ${s.label}
+                          </button>
+                        `,
+                      )}
+                    </div>
+                  `
+                : nothing}
+            </div>
+          `,
+        )}
+      </div>
+    `;
+  }
+
   // Compute diff for showing changes (works for both form and raw modes)
   const diff = formMode === "form" ? computeDiff(props.originalValue, props.formValue) : [];
   const hasRawChanges = formMode === "raw" && props.raw !== props.originalRaw;
+  if ((!hasRawChanges || formMode !== "raw") && cvs.rawDiffOpen) {
+    cvs.rawDiffOpen = false;
+  }
+  if (!hasRawChanges || formMode !== "raw" || !cvs.rawDiffOpen) {
+    rawDiffCache = undefined;
+  }
+  const rawDiff =
+    formMode === "raw" && hasRawChanges && cvs.rawDiffOpen
+      ? computeRawDiff(props.originalRaw, props.raw)
+      : [];
   const hasChanges = formMode === "form" ? diff.length > 0 : hasRawChanges;
 
   // Save/apply buttons require actual changes to be enabled.
@@ -746,25 +1389,50 @@ export function renderConfig(props: ConfigProps) {
       <main class="config-main">
         <div class="config-actions">
           <div class="config-actions__left">
-            ${
-              hasChanges
-                ? html`
-	                  <span class="config-changes-badge"
-	                    >${
-                        formMode === "raw"
-                          ? "Unsaved changes"
-                          : `${diff.length} unsaved change${diff.length !== 1 ? "s" : ""}`
-                      }</span
-	                  >
-	                `
-                : html`
-                    <span class="config-status muted">No changes</span>
-                  `
-            }
+            ${showModeToggle
+              ? html`
+                  <div class="config-mode-toggle">
+                    <button
+                      class="config-mode-toggle__btn ${formMode === "form" ? "active" : ""}"
+                      ?disabled=${props.schemaLoading || !props.schema}
+                      title=${formUnsafe ? "Form view can't safely edit some fields" : ""}
+                      @click=${() => props.onFormModeChange("form")}
+                    >
+                      Form
+                    </button>
+                    <button
+                      class="config-mode-toggle__btn ${formMode === "raw" ? "active" : ""}"
+                      ?disabled=${!rawAvailable}
+                      title=${rawAvailable
+                        ? "Edit raw JSON/JSON5 config"
+                        : "Raw mode unavailable for this snapshot"}
+                      @click=${() => props.onFormModeChange("raw")}
+                    >
+                      Raw
+                    </button>
+                  </div>
+                `
+              : nothing}
+            ${hasChanges
+              ? html`
+                  <span class="config-changes-badge"
+                    >${formMode === "raw"
+                      ? "Unsaved changes"
+                      : `${diff.length} unsaved change${diff.length !== 1 ? "s" : ""}`}</span
+                  >
+                `
+              : html` <span class="config-status muted">No changes</span> `}
           </div>
           <div class="config-actions__right">
-            ${
-              props.onOpenFile
+            ${!rawAvailable
+              ? html`
+                  <span class="config-status muted config-actions__notice"
+                    >Raw mode disabled (snapshot cannot safely round-trip raw text).</span
+                  >
+                `
+              : nothing}
+            <div class="config-actions__buttons">
+              ${props.onOpenFile
                 ? html`
                     <button
                       class="btn btn--sm"
@@ -774,153 +1442,137 @@ export function renderConfig(props: ConfigProps) {
                       ${icons.fileText} Open
                     </button>
                   `
-                : nothing
-            }
-            <button
-              class="btn btn--sm"
-              ?disabled=${props.loading}
-              @click=${props.onReload}
-            >
-              ${props.loading ? "Loading…" : "Reload"}
-            </button>
-            <button
-              class="btn btn--sm primary"
-              ?disabled=${!canSave}
-              @click=${props.onSave}
-            >
-              ${props.saving ? "Saving…" : "Save"}
-            </button>
-            <button
-              class="btn btn--sm"
-              ?disabled=${!canApply}
-              @click=${props.onApply}
-            >
-              ${props.applying ? "Applying…" : "Apply"}
-            </button>
-            <button
-              class="btn btn--sm"
-              ?disabled=${!canUpdate}
-              @click=${props.onUpdate}
-            >
-              ${props.updating ? "Updating…" : "Update"}
-            </button>
+                : nothing}
+              <button class="btn btn--sm" ?disabled=${props.loading} @click=${props.onReload}>
+                ${props.loading ? t("common.loading") : t("common.reload")}
+              </button>
+              <button class="btn btn--sm" ?disabled=${!hasChanges} @click=${props.onReset}>
+                Clear
+              </button>
+              <button class="btn btn--sm primary" ?disabled=${!canSave} @click=${props.onSave}>
+                ${props.saving ? "Saving…" : "Save"}
+              </button>
+              <button class="btn btn--sm" ?disabled=${!canApply} @click=${props.onApply}>
+                ${props.applying ? "Applying…" : "Apply"}
+              </button>
+              <button class="btn btn--sm" ?disabled=${!canUpdate} @click=${props.onUpdate}>
+                ${props.updating ? "Updating…" : "Update"}
+              </button>
+            </div>
           </div>
         </div>
 
-        <div class="config-top-tabs">
-          ${
-            formMode === "form"
-              ? html`
-                  <div class="config-search config-search--top">
-                    <svg
-                      class="config-search__icon"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="2"
-                    >
-                      <circle cx="11" cy="11" r="8"></circle>
-                      <path d="M21 21l-4.35-4.35"></path>
-                    </svg>
-                    <input
-                      type="text"
-                      class="config-search__input"
-                      placeholder="Search settings..."
-                      .value=${props.searchQuery}
-                      @input=${(e: Event) =>
-                        props.onSearchChange((e.target as HTMLInputElement).value)}
-                    />
-                    ${
-                      props.searchQuery
-                        ? html`
-                            <button
-                              class="config-search__clear"
-                              @click=${() => props.onSearchChange("")}
-                            >
-                              ×
-                            </button>
-                          `
-                        : nothing
-                    }
-                  </div>
-                `
-              : nothing
-          }
+        ${settingsLayout === "accordion"
+          ? renderAccordionNav()
+          : html`
+              <div class="config-top-tabs">
+                ${formMode === "form"
+                  ? html`
+                      <div class="config-search config-search--top">
+                        <div class="config-search__input-row">
+                          <svg
+                            class="config-search__icon"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                          >
+                            <circle cx="11" cy="11" r="8"></circle>
+                            <path d="M21 21l-4.35-4.35"></path>
+                          </svg>
+                          <input
+                            type="text"
+                            class="config-search__input"
+                            placeholder="Search settings..."
+                            aria-label="Search settings"
+                            .value=${props.searchQuery}
+                            @input=${(e: Event) =>
+                              props.onSearchChange((e.target as HTMLInputElement).value)}
+                          />
+                          ${props.searchQuery
+                            ? html`
+                                <button
+                                  class="config-search__clear"
+                                  aria-label="Clear search"
+                                  @click=${() => props.onSearchChange("")}
+                                >
+                                  ×
+                                </button>
+                              `
+                            : nothing}
+                        </div>
+                      </div>
+                    `
+                  : nothing}
 
-          <div class="config-top-tabs__scroller" role="tablist" aria-label="Settings sections">
-            ${topTabs.map(
-              (tab) => html`
-                <button
-                  class="config-top-tabs__tab ${props.activeSection === tab.key ? "active" : ""}"
-                  role="tab"
-                  aria-selected=${props.activeSection === tab.key}
-                  @click=${() => props.onSectionChange(tab.key)}
-                  title=${tab.label}
+                <div
+                  class="config-top-tabs__scroller"
+                  role="tablist"
+                  aria-label="${t("common.settingsSections")}"
                 >
-                  ${tab.label}
-                </button>
-              `,
-            )}
-          </div>
-
-          <div class="config-top-tabs__right">
-            ${
-              showModeToggle
-                ? html`
-                    <div class="config-mode-toggle">
+                  ${topTabs.map(
+                    (tab) => html`
                       <button
-                        class="config-mode-toggle__btn ${formMode === "form" ? "active" : ""}"
-                        ?disabled=${props.schemaLoading || !props.schema}
-                        title=${formUnsafe ? "Form view can't safely edit some fields" : ""}
-                        @click=${() => props.onFormModeChange("form")}
+                        class="config-top-tabs__tab ${props.activeSection === tab.key
+                          ? "active"
+                          : ""}"
+                        role="tab"
+                        aria-selected=${props.activeSection === tab.key}
+                        @click=${(e: Event) => {
+                          props.onSectionChange(tab.key);
+                          resetContentScroll(e.currentTarget);
+                        }}
+                        title=${tab.label}
                       >
-                        Form
+                        ${tab.label}
                       </button>
-                      <button
-                        class="config-mode-toggle__btn ${formMode === "raw" ? "active" : ""}"
-                        @click=${() => props.onFormModeChange("raw")}
-                      >
-                        Raw
-                      </button>
-                    </div>
-                  `
-                : nothing
-            }
-          </div>
-        </div>
-
-        ${
-          validity === "invalid" && !cvs.validityDismissed
-            ? html`
+                    `,
+                  )}
+                </div>
+              </div>
+            `}
+        ${validity === "invalid" && !cvs.validityDismissed
+          ? html`
               <div class="config-validity-warning">
-                <svg class="config-validity-warning__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
-                  <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                <svg
+                  class="config-validity-warning__icon"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  width="16"
+                  height="16"
+                >
+                  <path
+                    d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"
+                  ></path>
                   <line x1="12" y1="9" x2="12" y2="13"></line>
                   <line x1="12" y1="17" x2="12.01" y2="17"></line>
                 </svg>
-                <span class="config-validity-warning__text">Your configuration is invalid. Some settings may not work as expected.</span>
+                <span class="config-validity-warning__text"
+                  >Your configuration is invalid. Some settings may not work as expected.</span
+                >
                 <button
                   class="btn btn--sm"
                   @click=${() => {
                     cvs.validityDismissed = true;
-                    props.onRawChange(props.raw);
+                    requestUpdate();
                   }}
-                >Don't remind again</button>
+                >
+                  Don't remind again
+                </button>
               </div>
             `
-            : nothing
-        }
+          : nothing}
 
-        <!-- Diff panel (form mode only - raw mode doesn't have granular diff) -->
-        ${
-          hasChanges && formMode === "form"
-            ? html`
+        <!-- Diff panel -->
+        ${hasChanges && formMode === "form"
+          ? html`
               <details class="config-diff">
                 <summary class="config-diff__summary">
-                  <span
-                    >View ${diff.length} pending
-                    change${diff.length !== 1 ? "s" : ""}</span
-                  >
+                  <span>View ${diff.length} pending change${diff.length !== 1 ? "s" : ""}</span>
                   <svg
                     class="config-diff__chevron"
                     viewBox="0 0 24 24"
@@ -935,7 +1587,7 @@ export function renderConfig(props: ConfigProps) {
                   ${diff.map(
                     (change) => html`
                       <div class="config-diff__item">
-                        <div class="config-diff__path">${change.path}</div>
+                        <div class="config-diff__path">${formatConfigDiffPath(change.path)}</div>
                         <div class="config-diff__values">
                           <span class="config-diff__from"
                             >${renderDiffValue(change.path, change.from, props.uiHints)}</span
@@ -951,89 +1603,161 @@ export function renderConfig(props: ConfigProps) {
                 </div>
               </details>
             `
-            : nothing
-        }
-	        ${
-            activeSectionMeta && formMode === "form"
-              ? html`
-	              <div class="config-section-hero">
-	                <div class="config-section-hero__icon">
-	                  ${getSectionIcon(props.activeSection ?? "")}
+          : nothing}
+        ${hasRawChanges && formMode === "raw"
+          ? html`
+              <details
+                class="config-diff"
+                ?open=${cvs.rawDiffOpen}
+                @toggle=${(e: Event) => {
+                  const details = e.target as HTMLDetailsElement;
+                  if (cvs.rawDiffOpen === details.open) {
+                    return;
+                  }
+                  cvs.rawDiffOpen = details.open;
+                  if (!details.open) {
+                    rawDiffCache = undefined;
+                  }
+                  requestUpdate();
+                }}
+              >
+                <summary class="config-diff__summary">
+                  <span>View pending changes</span>
+                  <svg
+                    class="config-diff__chevron"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                  >
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                  </svg>
+                </summary>
+                <div class="config-diff__content">
+                  ${rawDiff.length > 0
+                    ? rawDiff.map(
+                        (change) => html`
+                          <div class="config-diff__item">
+                            <div class="config-diff__path">
+                              ${formatConfigDiffPath(change.path)}
+                            </div>
+                            <div class="config-diff__values">
+                              <span class="config-diff__from"
+                                >${renderRawDiffValue(
+                                  change.path,
+                                  change.from,
+                                  props.uiHints,
+                                  cvs.rawRevealed,
+                                )}</span
+                              >
+                              <span class="config-diff__arrow">→</span>
+                              <span class="config-diff__to"
+                                >${renderRawDiffValue(
+                                  change.path,
+                                  change.to,
+                                  props.uiHints,
+                                  cvs.rawRevealed,
+                                )}</span
+                              >
+                            </div>
+                          </div>
+                        `,
+                      )
+                    : html`
+                        <div class="config-diff__item">
+                          Changes detected (JSON diff not available)
+                        </div>
+                      `}
+                </div>
+              </details>
+            `
+          : nothing}
+        ${activeSectionMeta && formMode === "form"
+          ? html`
+              <div class="config-section-hero">
+                <div class="config-section-hero__icon">
+                  ${getSectionIcon(props.activeSection ?? "")}
                 </div>
                 <div class="config-section-hero__text">
-                  <div class="config-section-hero__title">
-                    ${activeSectionMeta.label}
-                  </div>
-                  ${
-                    activeSectionMeta.description
-                      ? html`<div class="config-section-hero__desc">
+                  <div class="config-section-hero__title">${activeSectionMeta.label}</div>
+                  ${activeSectionMeta.description
+                    ? html`<div class="config-section-hero__desc">
                         ${activeSectionMeta.description}
                       </div>`
-                      : nothing
-                  }
+                    : nothing}
                 </div>
-                ${
-                  props.activeSection === "env"
-                    ? html`
+                ${props.activeSection === "env"
+                  ? html`
                       <button
-                        class="config-env-peek-btn ${envSensitiveVisible ? "config-env-peek-btn--active" : ""}"
+                        class="config-env-peek-btn ${envSensitiveVisible
+                          ? "config-env-peek-btn--active"
+                          : ""}"
                         title=${envSensitiveVisible ? "Hide env values" : "Reveal env values"}
                         @click=${() => {
                           cvs.envRevealed = !cvs.envRevealed;
-                          props.onRawChange(props.raw);
+                          requestUpdate();
                         }}
                       >
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+                        <svg
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="2"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          width="16"
+                          height="16"
+                        >
                           <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
                           <circle cx="12" cy="12" r="3"></circle>
                         </svg>
                         Peek
                       </button>
                     `
-                    : nothing
-                }
+                  : nothing}
               </div>
             `
-              : nothing
-          }
+          : nothing}
         <!-- Form content -->
         <div class="config-content">
-          ${
-            props.activeSection === "__appearance__"
+          ${props.activeSection === "__appearance__"
+            ? includeVirtualSections
+              ? renderAppearanceSection(props)
+              : nothing
+            : props.activeSection === "__notifications__"
               ? includeVirtualSections
-                ? renderAppearanceSection(props)
+                ? renderNotificationsSection(props)
                 : nothing
               : formMode === "form"
                 ? html`
-                ${showAppearanceOnRoot ? renderAppearanceSection(props) : nothing}
-                ${
-                  props.schemaLoading
-                    ? html`
-                        <div class="config-loading">
-                          <div class="config-loading__spinner"></div>
-                          <span>Loading schema…</span>
-                        </div>
-                      `
-                    : renderConfigForm({
-                        schema: analysis.schema,
-                        uiHints: props.uiHints,
-                        value: props.formValue,
-                        disabled: props.loading || !props.formValue,
-                        unsupportedPaths: analysis.unsupportedPaths,
-                        onPatch: props.onFormPatch,
-                        searchQuery: props.searchQuery,
-                        activeSection: props.activeSection,
-                        activeSubsection: effectiveSubsection,
-                        revealSensitive:
-                          props.activeSection === "env" ? envSensitiveVisible : false,
-                        isSensitivePathRevealed,
-                        onToggleSensitivePath: (path) => {
-                          toggleSensitivePathReveal(path);
-                          props.onRawChange(props.raw);
-                        },
-                      })
-                }
-              `
+                    ${showAppearanceOnRoot ? renderAppearanceSection(props) : nothing}
+                    ${props.schemaLoading
+                      ? html`
+                          <div class="config-loading">
+                            <div class="config-loading__spinner"></div>
+                            <span>Loading schema…</span>
+                          </div>
+                        `
+                      : renderConfigForm({
+                          schema: analysis.schema,
+                          uiHints: props.uiHints,
+                          value: props.formValue,
+                          rawAvailable,
+                          disabled: props.loading || !props.formValue,
+                          unsupportedPaths: analysis.unsupportedPaths,
+                          onPatch: props.onFormPatch,
+                          searchQuery: props.searchQuery,
+                          activeSection: props.activeSection,
+                          activeSubsection: effectiveSubsection,
+                          revealSensitive:
+                            props.activeSection === "env" ? envSensitiveVisible : false,
+                          isSensitivePathRevealed,
+                          onToggleSensitivePath: (path) => {
+                            toggleSensitivePathReveal(path);
+                            requestUpdate();
+                          },
+                        })}
+                  `
                 : (() => {
                     const sensitiveCount = countSensitiveConfigValues(
                       props.formValue,
@@ -1042,69 +1766,66 @@ export function renderConfig(props: ConfigProps) {
                     );
                     const blurred = sensitiveCount > 0 && !cvs.rawRevealed;
                     return html`
-                    ${
-                      formUnsafe
+                      ${formUnsafe
                         ? html`
                             <div class="callout info" style="margin-bottom: 12px">
-                              Your config contains fields the form editor can't safely represent. Use Raw mode to edit those
-                              entries.
+                              Your config contains fields the form editor can't safely represent.
+                              Use Raw mode to edit those entries.
                             </div>
                           `
-                        : nothing
-                    }
-                    <label class="field config-raw-field">
-                      <span style="display:flex;align-items:center;gap:8px;">
-                        Raw JSON5
-                        ${
-                          sensitiveCount > 0
+                        : nothing}
+                      <div class="field config-raw-field">
+                        <span style="display:flex;align-items:center;gap:8px;">
+                          Raw config (JSON/JSON5)
+                          ${sensitiveCount > 0
                             ? html`
-                              <span class="pill pill--sm">${sensitiveCount} secret${sensitiveCount === 1 ? "" : "s"} ${blurred ? "redacted" : "visible"}</span>
-                              <button
-                                class="btn btn--icon ${blurred ? "" : "active"}"
-                                style="width:28px;height:28px;padding:0;"
-                                title=${
-                                  blurred ? "Reveal sensitive values" : "Hide sensitive values"
-                                }
-                                aria-label="Toggle raw config redaction"
-                                aria-pressed=${!blurred}
-                                @click=${() => {
-                                  cvs.rawRevealed = !cvs.rawRevealed;
-                                  props.onRawChange(props.raw);
-                                }}
-                              >
-                                ${blurred ? icons.eyeOff : icons.eye}
-                              </button>
+                                <span class="pill pill--sm"
+                                  >${sensitiveCount} secret${sensitiveCount === 1 ? "" : "s"}
+                                  ${blurred ? "redacted" : "visible"}</span
+                                >
+                                <button
+                                  class="btn btn--icon config-raw-toggle ${blurred ? "" : "active"}"
+                                  title=${blurred
+                                    ? "Reveal sensitive values"
+                                    : "Hide sensitive values"}
+                                  aria-label="Toggle raw config redaction"
+                                  aria-pressed=${!blurred}
+                                  @click=${() => {
+                                    cvs.rawRevealed = !cvs.rawRevealed;
+                                    requestUpdate();
+                                  }}
+                                >
+                                  ${blurred ? icons.eyeOff : icons.eye}
+                                </button>
+                              `
+                            : nothing}
+                        </span>
+                        ${blurred
+                          ? html`
+                              <div class="callout info" style="margin-top: 12px">
+                                ${sensitiveCount} sensitive value${sensitiveCount === 1 ? "" : "s"}
+                                hidden. Use the reveal button above to edit the raw config.
+                              </div>
                             `
-                            : nothing
-                        }
-                      </span>
-                      <textarea
-                        class="${blurred ? "config-raw-redacted" : ""}"
-                        placeholder=${blurred ? REDACTED_PLACEHOLDER : "Raw JSON5 config"}
-                        .value=${blurred ? "" : props.raw}
-                        ?readonly=${blurred}
-                        @input=${(e: Event) => {
-                          if (blurred) {
-                            return;
-                          }
-                          props.onRawChange((e.target as HTMLTextAreaElement).value);
-                        }}
-                      ></textarea>
-                    </label>
-                  `;
-                  })()
-          }
+                          : html`
+                              <textarea
+                                placeholder="Raw config (JSON/JSON5)"
+                                .value=${props.raw}
+                                @input=${(e: Event) => {
+                                  props.onRawChange((e.target as HTMLTextAreaElement).value);
+                                }}
+                              ></textarea>
+                            `}
+                      </div>
+                    `;
+                  })()}
         </div>
 
-        ${
-          props.issues.length > 0
-            ? html`<div class="callout danger" style="margin-top: 12px;">
-              <pre class="code-block">
-${JSON.stringify(props.issues, null, 2)}</pre
-              >
+        ${props.issues.length > 0
+          ? html`<div class="callout danger" style="margin-top: 12px;">
+              <pre class="code-block">${JSON.stringify(props.issues, null, 2)}</pre>
             </div>`
-            : nothing
-        }
+          : nothing}
       </main>
     </div>
   `;

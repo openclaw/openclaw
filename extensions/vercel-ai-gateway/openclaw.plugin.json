@@ -1,0 +1,58 @@
+{
+  "id": "vercel-ai-gateway",
+  "enabledByDefault": true,
+  "providers": ["vercel-ai-gateway"],
+  "modelIdNormalization": {
+    "providers": {
+      "vercel-ai-gateway": {
+        "aliases": {
+          "opus-4.6": "claude-opus-4-6",
+          "opus-4.5": "claude-opus-4-5",
+          "sonnet-4.6": "claude-sonnet-4-6",
+          "sonnet-4.5": "claude-sonnet-4-5"
+        },
+        "prefixWhenBareAfterAliasStartsWith": [
+          {
+            "modelPrefix": "claude-",
+            "prefix": "anthropic"
+          }
+        ]
+      }
+    }
+  },
+  "modelPricing": {
+    "providers": {
+      "vercel-ai-gateway": {
+        "openRouter": {
+          "passthroughProviderModel": true
+        },
+        "liteLLM": {
+          "passthroughProviderModel": true
+        }
+      }
+    }
+  },
+  "providerAuthEnvVars": {
+    "vercel-ai-gateway": ["AI_GATEWAY_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "vercel-ai-gateway",
+      "method": "api-key",
+      "choiceId": "ai-gateway-api-key",
+      "choiceLabel": "Vercel AI Gateway API key",
+      "groupId": "ai-gateway",
+      "groupLabel": "Vercel AI Gateway",
+      "groupHint": "API key",
+      "optionKey": "aiGatewayApiKey",
+      "cliFlag": "--ai-gateway-api-key",
+      "cliOption": "--ai-gateway-api-key <key>",
+      "cliDescription": "Vercel AI Gateway API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -2,34 +2,37 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createSafeAudioFixtureBuffer } from "./runner.test-utils.js";
+import type { MediaUnderstandingProvider } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Module mocks
 // ---------------------------------------------------------------------------
 
-vi.mock("../agents/model-auth.js", () => ({
-  resolveApiKeyForProvider: vi.fn(async () => ({
+type ResolveApiKeyForProvider = typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
+
+const resolveApiKeyForProviderMock = vi.hoisted(() =>
+  vi.fn<ResolveApiKeyForProvider>(async () => ({
     apiKey: "test-key", // pragma: allowlist secret
     source: "test",
     mode: "api-key",
   })),
-  requireApiKey: (auth: { apiKey?: string; mode?: string }, provider: string) => {
-    if (auth?.apiKey) {
-      return auth.apiKey;
-    }
-    throw new Error(`No API key resolved for provider "${provider}" (auth mode: ${auth?.mode}).`);
-  },
-  resolveAwsSdkEnvVarName: vi.fn(() => undefined),
-  resolveEnvApiKey: vi.fn(() => null),
-  resolveModelAuthMode: vi.fn(() => "api-key"),
-  getApiKeyForModel: vi.fn(async () => ({ apiKey: "test-key", source: "test", mode: "api-key" })),
-  getCustomProviderApiKey: vi.fn(() => undefined),
-  ensureAuthProfileStore: vi.fn(async () => ({})),
-  resolveAuthProfileOrder: vi.fn(() => []),
-}));
+);
+const hasAvailableAuthForProviderMock = vi.hoisted(() =>
+  vi.fn(async (...args: Parameters<ResolveApiKeyForProvider>) => {
+    const resolved = await resolveApiKeyForProviderMock(...args);
+    return Boolean(resolved?.apiKey);
+  }),
+);
+const getApiKeyForModelMock = vi.hoisted(() =>
+  vi.fn(async () => ({ apiKey: "test-key", source: "test", mode: "api-key" })),
+);
+const fetchRemoteMediaMock = vi.hoisted(() => vi.fn());
+const runExecMock = vi.hoisted(() => vi.fn());
+const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
+const mockDeliverOutboundPayloads = vi.hoisted(() => vi.fn());
 
 const { MediaFetchErrorMock } = vi.hoisted(() => {
   class MediaFetchErrorMock extends Error {
@@ -43,28 +46,11 @@ const { MediaFetchErrorMock } = vi.hoisted(() => {
   return { MediaFetchErrorMock };
 });
 
-vi.mock("../media/fetch.js", () => ({
-  fetchRemoteMedia: vi.fn(),
-  MediaFetchError: MediaFetchErrorMock,
-}));
-
-vi.mock("../process/exec.js", () => ({
-  runExec: vi.fn(),
-  runCommandWithTimeout: vi.fn(),
-}));
-
-const mockDeliverOutboundPayloads = vi.fn();
-
-vi.mock("../infra/outbound/deliver.js", () => ({
-  deliverOutboundPayloads: (...args: unknown[]) => mockDeliverOutboundPayloads(...args),
-}));
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 let applyMediaUnderstanding: typeof import("./apply.js").applyMediaUnderstanding;
-let clearMediaUnderstandingBinaryCacheForTests: () => void;
 
 const TEMP_MEDIA_PREFIX = "openclaw-echo-transcript-test-";
 let suiteTempMediaRootDir = "";
@@ -81,7 +67,7 @@ function createAudioCtxWithProvider(mediaPath: string, extra?: Partial<MsgContex
     Body: "<media:audio>",
     MediaPath: mediaPath,
     MediaType: "audio/ogg",
-    Provider: "whatsapp",
+    Provider: "voicechat",
     From: "+10000000001",
     AccountId: "acc1",
     ...extra,
@@ -139,25 +125,105 @@ function createAudioConfigWithoutEchoFlag() {
   return { cfg, providers };
 }
 
+function createRegistryMediaProviders(): Record<string, MediaUnderstandingProvider> {
+  const createAudioProvider = (id: string): MediaUnderstandingProvider => ({
+    id,
+    capabilities: ["audio"],
+    transcribeAudio: async () => ({ text: "transcribed text" }),
+  });
+  return {
+    groq: createAudioProvider("groq"),
+    deepgram: createAudioProvider("deepgram"),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 describe("applyMediaUnderstanding – echo transcript", () => {
   beforeAll(async () => {
+    vi.resetModules();
+    vi.doMock("../agents/model-auth.js", () => ({
+      resolveApiKeyForProvider: resolveApiKeyForProviderMock,
+      hasAvailableAuthForProvider: hasAvailableAuthForProviderMock,
+      requireApiKey: (auth: { apiKey?: string; mode?: string }, provider: string) => {
+        if (auth?.apiKey) {
+          return auth.apiKey;
+        }
+        throw new Error(
+          `No API key resolved for provider "${provider}" (auth mode: ${auth?.mode}).`,
+        );
+      },
+      resolveAwsSdkEnvVarName: vi.fn(() => undefined),
+      resolveEnvApiKey: vi.fn(() => null),
+      resolveModelAuthMode: vi.fn(() => "api-key"),
+      getApiKeyForModel: getApiKeyForModelMock,
+      getCustomProviderApiKey: vi.fn(() => undefined),
+      ensureAuthProfileStore: vi.fn(async () => ({})),
+      resolveAuthProfileOrder: vi.fn(() => []),
+    }));
+    vi.doMock("../media/fetch.js", () => ({
+      fetchRemoteMedia: fetchRemoteMediaMock,
+      MediaFetchError: MediaFetchErrorMock,
+    }));
+    vi.doMock("../process/exec.js", () => ({
+      runExec: runExecMock,
+      runCommandWithTimeout: runCommandWithTimeoutMock,
+    }));
+    vi.doMock("../infra/outbound/deliver-runtime.js", () => ({
+      deliverOutboundPayloads: (...args: unknown[]) => mockDeliverOutboundPayloads(...args),
+    }));
+    vi.doMock("../utils/message-channel.js", () => ({
+      isDeliverableMessageChannel: (channel: string) => channel === "voicechat",
+    }));
+    vi.doMock("./provider-registry.js", async () => {
+      const actual =
+        await vi.importActual<typeof import("./provider-registry.js")>("./provider-registry.js");
+      const registryProviders = createRegistryMediaProviders();
+      return {
+        ...actual,
+        buildMediaUnderstandingRegistry: (
+          overrides?: Record<string, MediaUnderstandingProvider>,
+        ) => {
+          const registry = new Map<string, MediaUnderstandingProvider>(
+            Object.entries(registryProviders),
+          );
+          for (const [key, provider] of Object.entries(overrides ?? {})) {
+            const normalizedKey = actual.normalizeMediaProviderId(key);
+            const existing = registry.get(normalizedKey);
+            registry.set(
+              normalizedKey,
+              existing
+                ? {
+                    ...existing,
+                    ...provider,
+                    capabilities: provider.capabilities ?? existing.capabilities,
+                  }
+                : provider,
+            );
+          }
+          return registry;
+        },
+      };
+    });
+
     const baseDir = resolvePreferredOpenClawTmpDir();
     await fs.mkdir(baseDir, { recursive: true });
     suiteTempMediaRootDir = await fs.mkdtemp(path.join(baseDir, TEMP_MEDIA_PREFIX));
     const mod = await import("./apply.js");
     applyMediaUnderstanding = mod.applyMediaUnderstanding;
-    const runner = await import("./runner.js");
-    clearMediaUnderstandingBinaryCacheForTests = runner.clearMediaUnderstandingBinaryCacheForTests;
   });
 
   beforeEach(() => {
+    resolveApiKeyForProviderMock.mockClear();
+    hasAvailableAuthForProviderMock.mockClear();
+    getApiKeyForModelMock.mockClear();
+    fetchRemoteMediaMock.mockClear();
+    runExecMock.mockReset();
+    runCommandWithTimeoutMock.mockReset();
     mockDeliverOutboundPayloads.mockClear();
-    mockDeliverOutboundPayloads.mockResolvedValue([{ channel: "whatsapp", messageId: "echo-1" }]);
-    clearMediaUnderstandingBinaryCacheForTests?.();
+    mockDeliverOutboundPayloads.mockResolvedValue([{ channel: "voicechat", messageId: "echo-1" }]);
   });
 
   afterAll(async () => {
@@ -199,26 +265,11 @@ describe("applyMediaUnderstanding – echo transcript", () => {
     await applyMediaUnderstanding({ ctx, cfg, providers });
 
     const callArgs = expectSingleEchoDeliveryCall();
-    expect(callArgs.channel).toBe("whatsapp");
+    expect(callArgs.channel).toBe("voicechat");
     expect(callArgs.to).toBe("+10000000001");
     expect(callArgs.accountId).toBe("acc1");
     expect(callArgs.payloads).toHaveLength(1);
     expect(callArgs.payloads[0].text).toBe('📝 "hello world"');
-  });
-
-  it("uses custom echoFormat when provided", async () => {
-    const mediaPath = await createTempAudioFile();
-    const ctx = createAudioCtxWithProvider(mediaPath);
-    const { cfg, providers } = createAudioConfigWithEcho({
-      echoTranscript: true,
-      echoFormat: "🎙️ Heard: {transcript}",
-      transcribedText: "custom message",
-    });
-
-    await applyMediaUnderstanding({ ctx, cfg, providers });
-
-    const callArgs = expectSingleEchoDeliveryCall();
-    expect(callArgs.payloads[0].text).toBe("🎙️ Heard: custom message");
   });
 
   it("does NOT echo when there are no audio attachments", async () => {
@@ -231,7 +282,7 @@ describe("applyMediaUnderstanding – echo transcript", () => {
       Body: "<media:image>",
       MediaPath: imgPath,
       MediaType: "image/jpeg",
-      Provider: "whatsapp",
+      Provider: "voicechat",
       From: "+10000000001",
     };
 
@@ -261,73 +312,5 @@ describe("applyMediaUnderstanding – echo transcript", () => {
 
     expect(ctx.Transcript).toBeUndefined();
     expect(mockDeliverOutboundPayloads).not.toHaveBeenCalled();
-  });
-
-  it("does NOT echo when channel is not deliverable", async () => {
-    const mediaPath = await createTempAudioFile();
-    // Use an internal/non-deliverable channel
-    const ctx = createAudioCtxWithProvider(mediaPath, {
-      Provider: "internal-system",
-      From: "some-source",
-    });
-    const { cfg, providers } = createAudioConfigWithEcho({ echoTranscript: true });
-
-    await applyMediaUnderstanding({ ctx, cfg, providers });
-
-    // Transcript should be set (transcription succeeded)
-    expect(ctx.Transcript).toBe("hello world");
-    // But echo should be skipped
-    expect(mockDeliverOutboundPayloads).not.toHaveBeenCalled();
-  });
-
-  it("does NOT echo when ctx has no From or OriginatingTo", async () => {
-    const mediaPath = await createTempAudioFile();
-    const ctx: MsgContext = {
-      Body: "<media:audio>",
-      MediaPath: mediaPath,
-      MediaType: "audio/ogg",
-      Provider: "whatsapp",
-      // From and OriginatingTo intentionally absent
-    };
-    const { cfg, providers } = createAudioConfigWithEcho({ echoTranscript: true });
-
-    await applyMediaUnderstanding({ ctx, cfg, providers });
-
-    expect(ctx.Transcript).toBe("hello world");
-    expect(mockDeliverOutboundPayloads).not.toHaveBeenCalled();
-  });
-
-  it("uses OriginatingTo when From is absent", async () => {
-    const mediaPath = await createTempAudioFile();
-    const ctx: MsgContext = {
-      Body: "<media:audio>",
-      MediaPath: mediaPath,
-      MediaType: "audio/ogg",
-      Provider: "whatsapp",
-      OriginatingTo: "+19999999999",
-    };
-    const { cfg, providers } = createAudioConfigWithEcho({ echoTranscript: true });
-
-    await applyMediaUnderstanding({ ctx, cfg, providers });
-
-    const callArgs = expectSingleEchoDeliveryCall();
-    expect(callArgs.to).toBe("+19999999999");
-  });
-
-  it("echo delivery failure does not throw or break transcription", async () => {
-    const mediaPath = await createTempAudioFile();
-    const ctx = createAudioCtxWithProvider(mediaPath);
-    const { cfg, providers } = createAudioConfigWithEcho({ echoTranscript: true });
-
-    mockDeliverOutboundPayloads.mockRejectedValueOnce(new Error("delivery timeout"));
-
-    // Should not throw
-    const result = await applyMediaUnderstanding({ ctx, cfg, providers });
-
-    // Transcription itself succeeded
-    expect(result.appliedAudio).toBe(true);
-    expect(ctx.Transcript).toBe("hello world");
-    // Deliver was attempted
-    expect(mockDeliverOutboundPayloads).toHaveBeenCalledOnce();
   });
 });

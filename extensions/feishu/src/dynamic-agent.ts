@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/feishu";
+import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
 
 export type MaybeCreateDynamicAgentResult = {
@@ -72,7 +72,10 @@ export async function maybeCreateDynamicAgent(params: {
       ],
     };
 
-    await runtime.config.writeConfigFile(updatedCfg);
+    await runtime.config.replaceConfigFile({
+      nextConfig: updatedCfg,
+      afterWrite: { mode: "auto" },
+    });
     return { created: true, updatedCfg, agentId };
   }
 
@@ -115,7 +118,10 @@ export async function maybeCreateDynamicAgent(params: {
   };
 
   // Write updated config using PluginRuntime API
-  await runtime.config.writeConfigFile(updatedCfg);
+  await runtime.config.replaceConfigFile({
+    nextConfig: updatedCfg,
+    afterWrite: { mode: "auto" },
+  });
 
   return { created: true, updatedCfg, agentId };
 }

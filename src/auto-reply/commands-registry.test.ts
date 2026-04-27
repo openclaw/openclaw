@@ -1,10 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   buildCommandText,
   buildCommandTextFromArgs,
   findCommandByNativeName,
+  formatCommandArgMenuTitle,
   getCommandDetection,
   listChatCommands,
   listChatCommandsForConfig,
@@ -19,7 +20,49 @@ import {
 } from "./commands-registry.js";
 import type { ChatCommandDefinition } from "./commands-registry.types.js";
 
+type NativeCommandNameResolver = (params: { commandKey: string; defaultName: string }) => string;
+
+function installNativeCommandOverridePlugin(params: {
+  id: "discord" | "slack";
+  resolveNativeCommandName: NativeCommandNameResolver;
+}) {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: params.id,
+        plugin: {
+          ...createChannelTestPluginBase({
+            id: params.id,
+            capabilities: { nativeCommands: true, chatTypes: ["direct"] },
+          }),
+          commands: {
+            resolveNativeCommandName: params.resolveNativeCommandName,
+          },
+        },
+        source: "test",
+      },
+    ]),
+  );
+}
+
+function installDiscordNativeCommandOverrides() {
+  installNativeCommandOverridePlugin({
+    id: "discord",
+    resolveNativeCommandName: ({ commandKey, defaultName }) =>
+      commandKey === "tts" ? "voice" : defaultName,
+  });
+}
+
+function installSlackNativeCommandOverrides() {
+  installNativeCommandOverridePlugin({
+    id: "slack",
+    resolveNativeCommandName: ({ commandKey, defaultName }) =>
+      commandKey === "status" ? "agentstatus" : defaultName,
+  });
+}
+
 beforeEach(() => {
+  vi.doUnmock("../channels/plugins/index.js");
   setActivePluginRegistry(createTestRegistry([]));
 });
 
@@ -30,6 +73,7 @@ afterEach(() => {
 describe("commands registry", () => {
   it("builds command text with args", () => {
     expect(buildCommandText("status")).toBe("/status");
+    expect(buildCommandText("tasks")).toBe("/tasks");
     expect(buildCommandText("model", "gpt-5")).toBe("/model gpt-5");
     expect(buildCommandText("models")).toBe("/models");
   });
@@ -39,33 +83,38 @@ describe("commands registry", () => {
     expect(specs.find((spec) => spec.name === "help")).toBeTruthy();
     expect(specs.find((spec) => spec.name === "stop")).toBeTruthy();
     expect(specs.find((spec) => spec.name === "skill")).toBeTruthy();
+    expect(specs.find((spec) => spec.name === "tasks")).toBeTruthy();
     expect(specs.find((spec) => spec.name === "whoami")).toBeTruthy();
     expect(specs.find((spec) => spec.name === "compact")).toBeTruthy();
   });
 
   it("filters commands based on config flags", () => {
     const disabled = listChatCommandsForConfig({
-      commands: { config: false, debug: false },
+      commands: { config: false, plugins: false, debug: false },
     });
     expect(disabled.find((spec) => spec.key === "config")).toBeFalsy();
+    expect(disabled.find((spec) => spec.key === "plugins")).toBeFalsy();
     expect(disabled.find((spec) => spec.key === "debug")).toBeFalsy();
 
     const enabled = listChatCommandsForConfig({
-      commands: { config: true, debug: true },
+      commands: { config: true, plugins: true, debug: true },
     });
     expect(enabled.find((spec) => spec.key === "config")).toBeTruthy();
+    expect(enabled.find((spec) => spec.key === "plugins")).toBeTruthy();
     expect(enabled.find((spec) => spec.key === "debug")).toBeTruthy();
 
     const nativeDisabled = listNativeCommandSpecsForConfig({
-      commands: { config: false, debug: false, native: true },
+      commands: { config: false, plugins: false, debug: false, native: true },
     });
     expect(nativeDisabled.find((spec) => spec.name === "config")).toBeFalsy();
+    expect(nativeDisabled.find((spec) => spec.name === "plugins")).toBeFalsy();
     expect(nativeDisabled.find((spec) => spec.name === "debug")).toBeFalsy();
   });
 
   it("does not enable restricted commands from inherited flags", () => {
     const inheritedCommands = Object.create({
       config: true,
+      plugins: true,
       debug: true,
       bash: true,
     }) as Record<string, unknown>;
@@ -73,6 +122,7 @@ describe("commands registry", () => {
       commands: inheritedCommands as never,
     });
     expect(commands.find((spec) => spec.key === "config")).toBeFalsy();
+    expect(commands.find((spec) => spec.key === "plugins")).toBeFalsy();
     expect(commands.find((spec) => spec.key === "debug")).toBeFalsy();
     expect(commands.find((spec) => spec.key === "bash")).toBeFalsy();
   });
@@ -87,20 +137,24 @@ describe("commands registry", () => {
     ];
     const commands = listChatCommandsForConfig(
       {
-        commands: { config: false, debug: false },
+        commands: { config: false, plugins: false, debug: false },
       },
       { skillCommands },
     );
     expect(commands.find((spec) => spec.nativeName === "demo_skill")).toBeTruthy();
+    expect(commands.find((spec) => spec.nativeName === "demo_skill")).toMatchObject({
+      category: "tools",
+    });
 
     const native = listNativeCommandSpecsForConfig(
-      { commands: { config: false, debug: false, native: true } },
+      { commands: { config: false, plugins: false, debug: false, native: true } },
       { skillCommands },
     );
     expect(native.find((spec) => spec.name === "demo_skill")).toBeTruthy();
   });
 
-  it("applies provider-specific native names", () => {
+  it("applies discord native command overrides", () => {
+    installDiscordNativeCommandOverrides();
     const native = listNativeCommandSpecsForConfig(
       { commands: { native: true } },
       { provider: "discord" },
@@ -110,18 +164,37 @@ describe("commands registry", () => {
     expect(findCommandByNativeName("tts", "discord")).toBeUndefined();
   });
 
-  it("renames status to agentstatus for slack", () => {
+  it("applies slack native command overrides", () => {
+    installSlackNativeCommandOverrides();
     const native = listNativeCommandSpecsForConfig(
       { commands: { native: true } },
       { provider: "slack" },
     );
     expect(native.find((spec) => spec.name === "agentstatus")).toBeTruthy();
-    expect(native.find((spec) => spec.name === "status")).toBeFalsy();
     expect(findCommandByNativeName("agentstatus", "slack")?.key).toBe("status");
     expect(findCommandByNativeName("status", "slack")).toBeUndefined();
+    expect(
+      findCommandByNativeName("agentstatus", "slack", {
+        includeBundledChannelFallback: false,
+      })?.key,
+    ).toBe("status");
+    expect(
+      findCommandByNativeName("status", "slack", {
+        includeBundledChannelFallback: false,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("can resolve default native command names without loading bundled channel fallbacks", () => {
+    expect(
+      findCommandByNativeName("status", "discord", {
+        includeBundledChannelFallback: false,
+      })?.key,
+    ).toBe("status");
   });
 
   it("keeps discord native command specs within slash-command limits", () => {
+    installDiscordNativeCommandOverrides();
     const cfg = { commands: { native: true } };
     const native = listNativeCommandSpecsForConfig(cfg, { provider: "discord" });
     for (const spec of native) {
@@ -235,6 +308,18 @@ describe("commands registry", () => {
   });
 
   it("respects text command gating", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "discord",
+          plugin: createChannelTestPluginBase({
+            id: "discord",
+            capabilities: { nativeCommands: true, chatTypes: ["direct"] },
+          }),
+          source: "test",
+        },
+      ]),
+    );
     const cfg = { commands: { text: false } };
     expect(
       shouldHandleTextCommands({
@@ -279,8 +364,8 @@ describe("commands registry", () => {
     );
   });
 
-  it("normalizes dock command aliases", () => {
-    expect(normalizeCommandBody("/dock_telegram")).toBe("/dock-telegram");
+  it("keeps unregistered dock underscore aliases unchanged", () => {
+    expect(normalizeCommandBody("/dock_telegram")).toBe("/dock_telegram");
   });
 });
 
@@ -335,12 +420,10 @@ describe("commands registry args", () => {
       args: [{ name: "model", description: "model", type: "string", captureRemaining: true }],
     };
 
-    expect(serializeCommandArgs(command, { raw: "gpt-5.2-codex" })).toBe("gpt-5.2-codex");
-    expect(serializeCommandArgs(command, { values: { model: "gpt-5.2-codex" } })).toBe(
-      "gpt-5.2-codex",
-    );
-    expect(buildCommandTextFromArgs(command, { values: { model: "gpt-5.2-codex" } })).toBe(
-      "/model gpt-5.2-codex",
+    expect(serializeCommandArgs(command, { raw: "gpt-5.4" })).toBe("gpt-5.4");
+    expect(serializeCommandArgs(command, { values: { model: "gpt-5.4" } })).toBe("gpt-5.4");
+    expect(buildCommandTextFromArgs(command, { values: { model: "gpt-5.4" } })).toBe(
+      "/model gpt-5.4",
     );
   });
 
@@ -402,6 +485,9 @@ describe("commands registry args", () => {
       { label: "low", value: "low" },
       { label: "high", value: "high" },
     ]);
+    expect(formatCommandArgMenuTitle({ command, menu: menu! })).toBe(
+      "Choose level for /think.\nOptions: low, high.",
+    );
     const seenChoice = seen as {
       provider?: string;
       model?: string;

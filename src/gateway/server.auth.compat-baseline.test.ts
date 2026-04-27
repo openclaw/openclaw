@@ -1,5 +1,8 @@
+import os from "node:os";
+import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import {
+  BACKEND_GATEWAY_CLIENT,
   connectReq,
   CONTROL_UI_CLIENT,
   ConnectErrorDetailCodes,
@@ -10,7 +13,10 @@ import {
   restoreGatewayToken,
   startGatewayServer,
   testState,
+  installGatewayTestHooks,
 } from "./server.auth.shared.js";
+
+installGatewayTestHooks({ scope: "suite" });
 
 function expectAuthErrorDetails(params: {
   details: unknown;
@@ -31,6 +37,57 @@ function expectAuthErrorDetails(params: {
   }
   if (params.recommendedNextStep !== undefined) {
     expect(details?.recommendedNextStep).toBe(params.recommendedNextStep);
+  }
+}
+
+async function expectSharedOperatorScopesCleared(
+  port: number,
+  auth: { token?: string; password?: string },
+) {
+  const ws = await openWs(port);
+  try {
+    const res = await connectReq(ws, {
+      ...auth,
+      scopes: ["operator.admin"],
+      device: null,
+    });
+    expect(res.ok).toBe(true);
+
+    const adminRes = await rpcReq(ws, "set-heartbeats", { enabled: false });
+    expect(adminRes.ok).toBe(false);
+    expect(adminRes.error?.message ?? "").toContain("missing scope");
+  } finally {
+    ws.close();
+  }
+}
+
+async function expectLocalBackendGatewayClientScopesPreserved(
+  port: number,
+  auth: { token?: string; password?: string },
+) {
+  const ws = await openWs(port);
+  try {
+    const res = await connectReq(ws, {
+      ...auth,
+      client: { ...BACKEND_GATEWAY_CLIENT },
+      scopes: ["operator.admin"],
+      device: null,
+    });
+    expect(res.ok).toBe(true);
+
+    const helloOk = res.payload as
+      | {
+          auth?: {
+            scopes?: unknown;
+          };
+        }
+      | undefined;
+    expect(helloOk?.auth?.scopes).toEqual(["operator.admin"]);
+
+    const adminRes = await rpcReq(ws, "set-heartbeats", { enabled: false });
+    expect(adminRes.ok).toBe(true);
+  } finally {
+    ws.close();
   }
 }
 
@@ -63,22 +120,12 @@ describe("gateway auth compatibility baseline", () => {
       }
     });
 
-    test("clears client-declared scopes for shared-token operator connects", async () => {
-      const ws = await openWs(port);
-      try {
-        const res = await connectReq(ws, {
-          token: "secret",
-          scopes: ["operator.admin"],
-          device: null,
-        });
-        expect(res.ok).toBe(true);
+    test("clears requested scopes for shared-token operator connects without device identity", async () => {
+      await expectSharedOperatorScopesCleared(port, { token: "secret" });
+    });
 
-        const adminRes = await rpcReq(ws, "set-heartbeats", { enabled: false });
-        expect(adminRes.ok).toBe(false);
-        expect(adminRes.error?.message).toBe("missing scope: operator.admin");
-      } finally {
-        ws.close();
-      }
+    test("preserves scopes for direct-local backend shared-token connects without device identity", async () => {
+      await expectLocalBackendGatewayClientScopesPreserved(port, { token: "secret" });
     });
 
     test("returns stable token-missing details for control ui without token", async () => {
@@ -137,6 +184,69 @@ describe("gateway auth compatibility baseline", () => {
         ws.close();
       }
     });
+
+    test("keeps local backend device-token reconnects out of pairing", async () => {
+      const identityPath = path.join(
+        os.tmpdir(),
+        `openclaw-backend-device-${process.pid}-${port}.json`,
+      );
+      const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
+        await import("../infra/device-identity.js");
+      const { approveDevicePairing, requestDevicePairing, rotateDeviceToken } =
+        await import("../infra/device-pairing.js");
+
+      const identity = loadOrCreateDeviceIdentity(identityPath);
+      const pending = await requestDevicePairing({
+        deviceId: identity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+        clientId: BACKEND_GATEWAY_CLIENT.id,
+        clientMode: BACKEND_GATEWAY_CLIENT.mode,
+        role: "operator",
+        scopes: ["operator.admin"],
+      });
+      await approveDevicePairing(pending.request.requestId, {
+        callerScopes: ["operator.admin"],
+      });
+
+      const rotated = await rotateDeviceToken({
+        deviceId: identity.deviceId,
+        role: "operator",
+        scopes: ["operator.admin"],
+      });
+      expect(rotated.ok).toBe(true);
+      const rotatedToken = rotated.ok ? rotated.entry.token : "";
+      expect(rotatedToken).toBeTruthy();
+
+      const ws = await openWs(port);
+      try {
+        const res = await connectReq(ws, {
+          skipDefaultAuth: true,
+          client: { ...BACKEND_GATEWAY_CLIENT },
+          deviceIdentityPath: identityPath,
+          deviceToken: rotatedToken,
+          scopes: ["operator.admin"],
+        });
+        expect(res.ok).toBe(true);
+        const payload = res.payload as
+          | {
+              type?: string;
+              snapshot?: {
+                configPath?: string;
+                stateDir?: string;
+                authMode?: string;
+              };
+            }
+          | undefined;
+        expect(payload?.type).toBe("hello-ok");
+        expect(typeof payload?.snapshot?.configPath).toBe("string");
+        expect((payload?.snapshot?.configPath ?? "").length).toBeGreaterThan(0);
+        expect(typeof payload?.snapshot?.stateDir).toBe("string");
+        expect((payload?.snapshot?.stateDir ?? "").length).toBeGreaterThan(0);
+        expect(payload?.snapshot?.authMode).toBe("token");
+      } finally {
+        ws.close();
+      }
+    });
   });
 
   describe("password mode", () => {
@@ -183,22 +293,12 @@ describe("gateway auth compatibility baseline", () => {
       }
     });
 
-    test("clears client-declared scopes for shared-password operator connects", async () => {
-      const ws = await openWs(port);
-      try {
-        const res = await connectReq(ws, {
-          password: "secret",
-          scopes: ["operator.admin"],
-          device: null,
-        });
-        expect(res.ok).toBe(true);
+    test("clears requested scopes for shared-password operator connects without device identity", async () => {
+      await expectSharedOperatorScopesCleared(port, { password: "secret" });
+    });
 
-        const adminRes = await rpcReq(ws, "set-heartbeats", { enabled: false });
-        expect(adminRes.ok).toBe(false);
-        expect(adminRes.error?.message).toBe("missing scope: operator.admin");
-      } finally {
-        ws.close();
-      }
+    test("preserves scopes for direct-local backend shared-password connects without device identity", async () => {
+      await expectLocalBackendGatewayClientScopesPreserved(port, { password: "secret" });
     });
   });
 

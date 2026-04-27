@@ -1,4 +1,5 @@
 export type TuiOptions = {
+  local?: boolean;
   url?: string;
   token?: string;
   password?: string;
@@ -10,12 +11,30 @@ export type TuiOptions = {
   message?: string;
 };
 
+export type TuiExitReason = "exit" | "return-to-crestodian";
+
+export type TuiResult = {
+  exitReason: TuiExitReason;
+  crestodianMessage?: string;
+};
+
 export type ChatEvent = {
   runId: string;
   sessionKey: string;
   state: "delta" | "final" | "aborted" | "error";
   message?: unknown;
   errorMessage?: string;
+};
+
+export type BtwEvent = {
+  kind: "btw";
+  runId?: string;
+  sessionKey?: string;
+  question: string;
+  text: string;
+  isError?: boolean;
+  seq?: number;
+  ts?: number;
 };
 
 export type AgentEvent = {
@@ -30,6 +49,7 @@ export type SessionInfo = {
   thinkingLevel?: string;
   fastMode?: boolean;
   verboseLevel?: string;
+  traceLevel?: string;
   reasoningLevel?: string;
   model?: string;
   modelProvider?: string;
@@ -47,6 +67,14 @@ export type SessionScope = "per-sender" | "global";
 export type AgentSummary = {
   id: string;
   name?: string;
+};
+
+export type QueuedMessageMode = "steer" | "followUp";
+
+export type QueuedMessage = {
+  runId: string;
+  text: string;
+  mode: QueuedMessageMode;
 };
 
 export type GatewayStatusSummary = {
@@ -97,6 +125,8 @@ export type TuiStateAccess = {
   currentSessionKey: string;
   currentSessionId: string | null;
   activeChatRunId: string | null;
+  pendingOptimisticUserMessage?: boolean;
+  queuedMessages?: QueuedMessage[];
   historyLoaded: boolean;
   sessionInfo: SessionInfo;
   initialSessionApplied: boolean;

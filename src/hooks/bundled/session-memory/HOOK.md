@@ -26,14 +26,13 @@ When you run `/new` or `/reset` to start a fresh session:
 2. **Extracts conversation** - Reads the last N user/assistant messages from the session (default: 15, configurable)
 3. **Generates descriptive slug** - Uses LLM to create a meaningful filename slug based on conversation content
 4. **Saves to memory** - Creates a new file at `<workspace>/memory/YYYY-MM-DD-slug.md`
-5. **Sends confirmation** - Notifies you with the file path
 
 ## Output Format
 
 Memory files are created with the following format:
 
 ```markdown
-# Session: 2026-01-16 14:30:00 UTC
+# Session: 2026-01-16 14:30:00 EST
 
 - **Session Key**: agent:main:main
 - **Session ID**: abc123def456
@@ -47,11 +46,11 @@ The LLM generates descriptive slugs based on your conversation:
 - `2026-01-16-vendor-pitch.md` - Discussion about vendor evaluation
 - `2026-01-16-api-design.md` - API architecture planning
 - `2026-01-16-bug-fix.md` - Debugging session
-- `2026-01-16-1430.md` - Fallback timestamp if slug generation fails
+- `2026-01-16-1430.md` - Fallback local timestamp if slug generation fails
 
 ## Requirements
 
-- **Config**: `workspace.dir` must be set (automatically configured during onboarding)
+- **Config**: `workspace.dir` must be set (automatically configured during setup)
 
 The hook uses your configured LLM provider to generate slugs, so it works with any provider (Anthropic, OpenAI, etc.).
 

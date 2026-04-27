@@ -1,5 +1,5 @@
 ---
-summary: "Install OpenClaw — installer script, npm/pnpm, from source, Docker, and more"
+summary: "Install OpenClaw — installer script, npm/pnpm/bun, from source, Docker, and more"
 read_when:
   - You need an install method other than the Getting Started quickstart
   - You want to deploy to a cloud platform
@@ -7,150 +7,140 @@ read_when:
 title: "Install"
 ---
 
-# Install
-
-Already followed [Getting Started](/start/getting-started)? You're all set — this page is for alternative install methods, platform-specific instructions, and maintenance.
-
 ## System requirements
 
-- **[Node 24 (recommended)](/install/node)** (Node 22 LTS, currently `22.16+`, is still supported for compatibility; the [installer script](#install-methods) will install Node 24 if missing)
-- macOS, Linux, or Windows
-- `pnpm` only if you build from source
+- **Node 24** (recommended) or Node 22.14+ — the installer script handles this automatically
+- **macOS, Linux, or Windows** — both native Windows and WSL2 are supported; WSL2 is more stable. See [Windows](/platforms/windows).
+- `pnpm` is only needed if you build from source
 
-<Note>
-On Windows, we strongly recommend running OpenClaw under [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install).
-</Note>
+## Recommended: installer script
 
-## Install methods
+The fastest way to install. It detects your OS, installs Node if needed, installs OpenClaw, and launches onboarding.
 
-<Tip>
-The **installer script** is the recommended way to install OpenClaw. It handles Node detection, installation, and onboarding in one step.
-</Tip>
+<Tabs>
+  <Tab title="macOS / Linux / WSL2">
+    ```bash
+    curl -fsSL https://openclaw.ai/install.sh | bash
+    ```
+  </Tab>
+  <Tab title="Windows (PowerShell)">
+    ```powershell
+    iwr -useb https://openclaw.ai/install.ps1 | iex
+    ```
+  </Tab>
+</Tabs>
 
-<Warning>
-For VPS/cloud hosts, avoid third-party "1-click" marketplace images when possible. Prefer a clean base OS image (for example Ubuntu LTS), then install OpenClaw yourself with the installer script.
-</Warning>
+To install without running onboarding:
 
-<AccordionGroup>
-  <Accordion title="Installer script" icon="rocket" defaultOpen>
-    Downloads the CLI, installs it globally via npm, and launches the onboarding wizard.
+<Tabs>
+  <Tab title="macOS / Linux / WSL2">
+    ```bash
+    curl -fsSL https://openclaw.ai/install.sh | bash -s -- --no-onboard
+    ```
+  </Tab>
+  <Tab title="Windows (PowerShell)">
+    ```powershell
+    & ([scriptblock]::Create((iwr -useb https://openclaw.ai/install.ps1))) -NoOnboard
+    ```
+  </Tab>
+</Tabs>
 
-    <Tabs>
-      <Tab title="macOS / Linux / WSL2">
-        ```bash
-        curl -fsSL https://openclaw.ai/install.sh | bash
-        ```
-      </Tab>
-      <Tab title="Windows (PowerShell)">
-        ```powershell
-        iwr -useb https://openclaw.ai/install.ps1 | iex
-        ```
-      </Tab>
-    </Tabs>
+For all flags and CI/automation options, see [Installer internals](/install/installer).
 
-    That's it — the script handles Node detection, installation, and onboarding.
+## Alternative install methods
 
-    To skip onboarding and just install the binary:
+### Local prefix installer (`install-cli.sh`)
 
-    <Tabs>
-      <Tab title="macOS / Linux / WSL2">
-        ```bash
-        curl -fsSL https://openclaw.ai/install.sh | bash -s -- --no-onboard
-        ```
-      </Tab>
-      <Tab title="Windows (PowerShell)">
-        ```powershell
-        & ([scriptblock]::Create((iwr -useb https://openclaw.ai/install.ps1))) -NoOnboard
-        ```
-      </Tab>
-    </Tabs>
+Use this when you want OpenClaw and Node kept under a local prefix such as
+`~/.openclaw`, without depending on a system-wide Node install:
 
-    For all flags, env vars, and CI/automation options, see [Installer internals](/install/installer).
+```bash
+curl -fsSL https://openclaw.ai/install-cli.sh | bash
+```
 
-  </Accordion>
+It supports npm installs by default, plus git-checkout installs under the same
+prefix flow. Full reference: [Installer internals](/install/installer#install-clish).
 
-  <Accordion title="npm / pnpm" icon="package">
-    If you already manage Node yourself, we recommend Node 24. OpenClaw still supports Node 22 LTS, currently `22.16+`, for compatibility:
+Already installed? Switch between package and git installs with
+`openclaw update --channel dev` and `openclaw update --channel stable`. See
+[Updating](/install/updating#switch-between-npm-and-git-installs).
 
-    <Tabs>
-      <Tab title="npm">
-        ```bash
-        npm install -g openclaw@latest
-        openclaw onboard --install-daemon
-        ```
+### npm, pnpm, or bun
 
-        <Accordion title="sharp build errors?">
-          If you have libvips installed globally (common on macOS via Homebrew) and `sharp` fails, force prebuilt binaries:
+If you already manage Node yourself:
 
-          ```bash
-          SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install -g openclaw@latest
-          ```
+<Tabs>
+  <Tab title="npm">
+    ```bash
+    npm install -g openclaw@latest
+    openclaw onboard --install-daemon
+    ```
+  </Tab>
+  <Tab title="pnpm">
+    ```bash
+    pnpm add -g openclaw@latest
+    pnpm approve-builds -g
+    openclaw onboard --install-daemon
+    ```
 
-          If you see `sharp: Please add node-gyp to your dependencies`, either install build tooling (macOS: Xcode CLT + `npm install -g node-gyp`) or use the env var above.
-        </Accordion>
-      </Tab>
-      <Tab title="pnpm">
-        ```bash
-        pnpm add -g openclaw@latest
-        pnpm approve-builds -g        # approve openclaw, node-llama-cpp, sharp, etc.
-        openclaw onboard --install-daemon
-        ```
+    <Note>
+    pnpm requires explicit approval for packages with build scripts. Run `pnpm approve-builds -g` after the first install.
+    </Note>
 
-        <Note>
-        pnpm requires explicit approval for packages with build scripts. After the first install shows the "Ignored build scripts" warning, run `pnpm approve-builds -g` and select the listed packages.
-        </Note>
-      </Tab>
-    </Tabs>
+  </Tab>
+  <Tab title="bun">
+    ```bash
+    bun add -g openclaw@latest
+    openclaw onboard --install-daemon
+    ```
 
-  </Accordion>
+    <Note>
+    Bun is supported for the global CLI install path. For the Gateway runtime, Node remains the recommended daemon runtime.
+    </Note>
 
-  <Accordion title="From source" icon="github">
-    For contributors or anyone who wants to run from a local checkout.
+  </Tab>
+</Tabs>
 
-    <Steps>
-      <Step title="Clone and build">
-        Clone the [OpenClaw repo](https://github.com/openclaw/openclaw) and build:
+<Accordion title="Troubleshooting: sharp build errors (npm)">
+  If `sharp` fails due to a globally installed libvips:
 
-        ```bash
-        git clone https://github.com/openclaw/openclaw.git
-        cd openclaw
-        pnpm install
-        pnpm ui:build
-        pnpm build
-        ```
-      </Step>
-      <Step title="Link the CLI">
-        Make the `openclaw` command available globally:
+```bash
+SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install -g openclaw@latest
+```
 
-        ```bash
-        pnpm link --global
-        ```
+</Accordion>
 
-        Alternatively, skip the link and run commands via `pnpm openclaw ...` from inside the repo.
-      </Step>
-      <Step title="Run onboarding">
-        ```bash
-        openclaw onboard --install-daemon
-        ```
-      </Step>
-    </Steps>
+### From source
 
-    For deeper development workflows, see [Setup](/start/setup).
+For contributors or anyone who wants to run from a local checkout:
 
-  </Accordion>
-</AccordionGroup>
+```bash
+git clone https://github.com/openclaw/openclaw.git
+cd openclaw
+pnpm install && pnpm build && pnpm ui:build
+pnpm link --global
+openclaw onboard --install-daemon
+```
 
-## Other install methods
+Or skip the link and use `pnpm openclaw ...` from inside the repo. See [Setup](/start/setup) for full development workflows.
+
+### Install from GitHub main
+
+```bash
+npm install -g github:openclaw/openclaw#main
+```
+
+### Containers and package managers
 
 <CardGroup cols={2}>
   <Card title="Docker" href="/install/docker" icon="container">
     Containerized or headless deployments.
   </Card>
   <Card title="Podman" href="/install/podman" icon="container">
-    Rootless container: run `setup-podman.sh` once, then the launch script.
+    Rootless container alternative to Docker.
   </Card>
   <Card title="Nix" href="/install/nix" icon="snowflake">
-    Declarative install via Nix.
+    Declarative install via Nix flake.
   </Card>
   <Card title="Ansible" href="/install/ansible" icon="server">
     Automated fleet provisioning.
@@ -160,50 +150,38 @@ For VPS/cloud hosts, avoid third-party "1-click" marketplace images when possibl
   </Card>
 </CardGroup>
 
-## After install
-
-Verify everything is working:
+## Verify the install
 
 ```bash
+openclaw --version      # confirm the CLI is available
 openclaw doctor         # check for config issues
-openclaw status         # gateway status
-openclaw dashboard      # open the browser UI
+openclaw gateway status # verify the Gateway is running
 ```
 
-If you need custom runtime paths, use:
+If you want managed startup after install:
 
-- `OPENCLAW_HOME` for home-directory based internal paths
-- `OPENCLAW_STATE_DIR` for mutable state location
-- `OPENCLAW_CONFIG_PATH` for config file location
+- macOS: LaunchAgent via `openclaw onboard --install-daemon` or `openclaw gateway install`
+- Linux/WSL2: systemd user service via the same commands
+- Native Windows: Scheduled Task first, with a per-user Startup-folder login item fallback if task creation is denied
 
-See [Environment vars](/help/environment) for precedence and full details.
+## Hosting and deployment
 
-## Troubleshooting: `openclaw` not found
+Deploy OpenClaw on a cloud server or VPS:
 
-<Accordion title="PATH diagnosis and fix">
-  Quick diagnosis:
+<CardGroup cols={3}>
+  <Card title="VPS" href="/vps">Any Linux VPS</Card>
+  <Card title="Docker VM" href="/install/docker-vm-runtime">Shared Docker steps</Card>
+  <Card title="Kubernetes" href="/install/kubernetes">K8s</Card>
+  <Card title="Fly.io" href="/install/fly">Fly.io</Card>
+  <Card title="Hetzner" href="/install/hetzner">Hetzner</Card>
+  <Card title="GCP" href="/install/gcp">Google Cloud</Card>
+  <Card title="Azure" href="/install/azure">Azure</Card>
+  <Card title="Railway" href="/install/railway">Railway</Card>
+  <Card title="Render" href="/install/render">Render</Card>
+  <Card title="Northflank" href="/install/northflank">Northflank</Card>
+</CardGroup>
 
-```bash
-node -v
-npm -v
-npm prefix -g
-echo "$PATH"
-```
-
-If `$(npm prefix -g)/bin` (macOS/Linux) or `$(npm prefix -g)` (Windows) is **not** in your `$PATH`, your shell can't find global npm binaries (including `openclaw`).
-
-Fix — add it to your shell startup file (`~/.zshrc` or `~/.bashrc`):
-
-```bash
-export PATH="$(npm prefix -g)/bin:$PATH"
-```
-
-On Windows, add the output of `npm prefix -g` to your PATH.
-
-Then open a new terminal (or `rehash` in zsh / `hash -r` in bash).
-</Accordion>
-
-## Update / uninstall
+## Update, migrate, or uninstall
 
 <CardGroup cols={3}>
   <Card title="Updating" href="/install/updating" icon="refresh-cw">
@@ -216,3 +194,21 @@ Then open a new terminal (or `rehash` in zsh / `hash -r` in bash).
     Remove OpenClaw completely.
   </Card>
 </CardGroup>
+
+## Troubleshooting: `openclaw` not found
+
+If the install succeeded but `openclaw` is not found in your terminal:
+
+```bash
+node -v           # Node installed?
+npm prefix -g     # Where are global packages?
+echo "$PATH"      # Is the global bin dir in PATH?
+```
+
+If `$(npm prefix -g)/bin` is not in your `$PATH`, add it to your shell startup file (`~/.zshrc` or `~/.bashrc`):
+
+```bash
+export PATH="$(npm prefix -g)/bin:$PATH"
+```
+
+Then open a new terminal. See [Node setup](/install/node) for more details.

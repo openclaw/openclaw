@@ -3,7 +3,7 @@ summary: "Logging surfaces, file logs, WS log styles, and console formatting"
 read_when:
   - Changing logging output or formats
   - Debugging CLI or gateway output
-title: "Logging"
+title: "Gateway logging"
 ---
 
 # Logging
@@ -19,6 +19,8 @@ OpenClaw has two log “surfaces”:
 
 - Default rolling log file is under `/tmp/openclaw/` (one file per day): `openclaw-YYYY-MM-DD.log`
   - Date uses the gateway host's local timezone.
+- Active log files rotate at `logging.maxFileBytes` (default: 100 MB), keeping
+  up to five numbered archives and continuing to write a fresh active file.
 - The log file path and level can be configured via `~/.openclaw/openclaw.json`:
   - `logging.file`
   - `logging.level`
@@ -50,10 +52,12 @@ You can tune console verbosity independently via:
 - `logging.consoleLevel` (default `info`)
 - `logging.consoleStyle` (`pretty` | `compact` | `json`)
 
-## Tool summary redaction
+## Redaction
 
-Verbose tool summaries (e.g. `🛠️ Exec: ...`) can mask sensitive tokens before they hit the
-console stream. This is **tools-only** and does not alter file logs.
+OpenClaw can mask sensitive tokens before log or transcript output leaves the
+process. The same redaction policy is applied at console, file-log, OTLP
+log-record, and session transcript text sinks, so matching secret values are
+masked before JSONL lines or messages are written to disk.
 
 - `logging.redactSensitive`: `off` | `tools` (default: `tools`)
 - `logging.redactPatterns`: array of regex strings (overrides defaults)
@@ -111,3 +115,9 @@ Behavior:
 - **WhatsApp message bodies** are logged at `debug` (use `--verbose` to see them)
 
 This keeps existing file logs stable while making interactive output scannable.
+
+## Related
+
+- [Logging](/logging)
+- [OpenTelemetry export](/gateway/opentelemetry)
+- [Diagnostics export](/gateway/diagnostics)

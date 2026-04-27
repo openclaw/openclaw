@@ -1,0 +1,159 @@
+{
+  "id": "google",
+  "enabledByDefault": true,
+  "providers": ["google", "google-gemini-cli", "google-vertex"],
+  "autoEnableWhenConfiguredProviders": ["google-gemini-cli"],
+  "modelIdNormalization": {
+    "providers": {
+      "google": {
+        "aliases": {
+          "gemini-3-pro": "gemini-3-pro-preview",
+          "gemini-3-flash": "gemini-3-flash-preview",
+          "gemini-3.1-pro": "gemini-3.1-pro-preview",
+          "gemini-3.1-flash-lite": "gemini-3.1-flash-lite-preview",
+          "gemini-3.1-flash": "gemini-3-flash-preview",
+          "gemini-3.1-flash-preview": "gemini-3-flash-preview"
+        }
+      },
+      "google-vertex": {
+        "aliases": {
+          "gemini-3-pro": "gemini-3-pro-preview",
+          "gemini-3-flash": "gemini-3-flash-preview",
+          "gemini-3.1-pro": "gemini-3.1-pro-preview",
+          "gemini-3.1-flash-lite": "gemini-3.1-flash-lite-preview",
+          "gemini-3.1-flash": "gemini-3-flash-preview",
+          "gemini-3.1-flash-preview": "gemini-3-flash-preview"
+        }
+      }
+    }
+  },
+  "modelPricing": {
+    "providers": {
+      "google-gemini-cli": {
+        "openRouter": {
+          "provider": "google"
+        },
+        "liteLLM": {
+          "provider": "google"
+        }
+      }
+    }
+  },
+  "providerEndpoints": [
+    {
+      "endpointClass": "google-generative-ai",
+      "hosts": ["generativelanguage.googleapis.com"]
+    },
+    {
+      "endpointClass": "google-vertex",
+      "hosts": ["aiplatform.googleapis.com"],
+      "googleVertexRegion": "global"
+    },
+    {
+      "endpointClass": "google-vertex",
+      "hostSuffixes": ["-aiplatform.googleapis.com"],
+      "googleVertexRegionHostSuffix": "-aiplatform.googleapis.com"
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "google": {
+        "family": "google"
+      },
+      "google-gemini-cli": {
+        "family": "google"
+      },
+      "google-vertex": {
+        "family": "google"
+      }
+    }
+  },
+  "cliBackends": ["google-gemini-cli"],
+  "providerAuthEnvVars": {
+    "google": ["GEMINI_API_KEY", "GOOGLE_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "google",
+      "method": "api-key",
+      "choiceId": "gemini-api-key",
+      "choiceLabel": "Google Gemini API key",
+      "groupId": "google",
+      "groupLabel": "Google",
+      "groupHint": "Gemini API key + OAuth",
+      "optionKey": "geminiApiKey",
+      "cliFlag": "--gemini-api-key",
+      "cliOption": "--gemini-api-key <key>",
+      "cliDescription": "Gemini API key"
+    },
+    {
+      "provider": "google-gemini-cli",
+      "method": "oauth",
+      "choiceId": "google-gemini-cli",
+      "choiceLabel": "Gemini CLI OAuth",
+      "choiceHint": "Google OAuth with project-aware token payload",
+      "groupId": "google",
+      "groupLabel": "Google",
+      "groupHint": "Gemini API key + OAuth"
+    }
+  ],
+  "uiHints": {
+    "webSearch.apiKey": {
+      "label": "Gemini Search API Key",
+      "help": "Gemini API key for Google Search grounding (fallback: GEMINI_API_KEY env var).",
+      "sensitive": true,
+      "placeholder": "AIza..."
+    },
+    "webSearch.model": {
+      "label": "Gemini Search Model",
+      "help": "Gemini model override for web search grounding."
+    }
+  },
+  "contracts": {
+    "mediaUnderstandingProviders": ["google"],
+    "memoryEmbeddingProviders": ["gemini"],
+    "imageGenerationProviders": ["google"],
+    "musicGenerationProviders": ["google"],
+    "realtimeVoiceProviders": ["google"],
+    "speechProviders": ["google"],
+    "videoGenerationProviders": ["google"],
+    "webSearchProviders": ["gemini"]
+  },
+  "mediaUnderstandingProviderMetadata": {
+    "google": {
+      "capabilities": ["image", "audio", "video"],
+      "defaultModels": {
+        "image": "gemini-3-flash-preview",
+        "audio": "gemini-3-flash-preview",
+        "video": "gemini-3-flash-preview"
+      },
+      "autoPriority": {
+        "image": 30,
+        "audio": 40,
+        "video": 10
+      },
+      "nativeDocumentInputs": ["pdf"]
+    }
+  },
+  "configContracts": {
+    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": ["string", "object"]
+          },
+          "model": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

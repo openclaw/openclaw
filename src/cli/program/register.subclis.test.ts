@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { registerSubCliByName, registerSubCliCommands } from "./register.subclis.js";
 
 const { acpAction, registerAcpCli } = vi.hoisted(() => {
   const action = vi.fn();
@@ -18,21 +19,52 @@ const { nodesAction, registerNodesCli } = vi.hoisted(() => {
   return { nodesAction: action, registerNodesCli: register };
 });
 
-const configModule = vi.hoisted(() => ({
-  loadConfig: vi.fn(),
-  readConfigFileSnapshot: vi.fn(),
+const { registerQaLabCli } = vi.hoisted(() => ({
+  registerQaLabCli: vi.fn((program: Command) => {
+    const qa = program.command("qa");
+    qa.command("run").action(() => undefined);
+  }),
+}));
+const { loadPrivateQaCliModule } = vi.hoisted(() => ({
+  loadPrivateQaCliModule: vi.fn(async () => ({ registerQaLabCli })),
+}));
+
+const { inferAction, registerCapabilityCli } = vi.hoisted(() => {
+  const action = vi.fn();
+  const register = vi.fn((program: Command) => {
+    program.command("infer").alias("capability").action(action);
+  });
+  return { inferAction: action, registerCapabilityCli: register };
+});
+
+const { registerPluginsCli, registerPluginCliCommandsFromValidatedConfig } = vi.hoisted(() => ({
+  registerPluginsCli: vi.fn((program: Command) => {
+    const plugins = program.command("plugins");
+    plugins
+      .command("update")
+      .argument("[id]")
+      .action(() => undefined);
+  }),
+  registerPluginCliCommandsFromValidatedConfig: vi.fn(async () => null),
 }));
 
 vi.mock("../acp-cli.js", () => ({ registerAcpCli }));
 vi.mock("../nodes-cli.js", () => ({ registerNodesCli }));
-vi.mock("../../config/config.js", () => configModule);
-
-const { loadValidatedConfigForPluginRegistration, registerSubCliByName, registerSubCliCommands } =
-  await import("./register.subclis.js");
+vi.mock("../capability-cli.js", () => ({ registerCapabilityCli }));
+vi.mock("../plugins-cli.js", () => ({ registerPluginsCli }));
+vi.mock("../../plugins/cli.js", () => ({ registerPluginCliCommandsFromValidatedConfig }));
+vi.mock("./private-qa-cli.js", async () => {
+  const actual = await vi.importActual<typeof import("./private-qa-cli.js")>("./private-qa-cli.js");
+  return {
+    ...actual,
+    loadPrivateQaCliModule,
+  };
+});
 
 describe("registerSubCliCommands", () => {
   const originalArgv = process.argv;
   const originalDisableLazySubcommands = process.env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS;
+  const originalEnablePrivateQaCli = process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
 
   const createRegisteredProgram = (argv: string[], name?: string) => {
     process.argv = argv;
@@ -50,12 +82,17 @@ describe("registerSubCliCommands", () => {
     } else {
       process.env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS = originalDisableLazySubcommands;
     }
+    process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = "1";
     registerAcpCli.mockClear();
     acpAction.mockClear();
     registerNodesCli.mockClear();
     nodesAction.mockClear();
-    configModule.loadConfig.mockReset();
-    configModule.readConfigFileSnapshot.mockReset();
+    registerQaLabCli.mockClear();
+    loadPrivateQaCliModule.mockClear();
+    registerCapabilityCli.mockClear();
+    inferAction.mockClear();
+    registerPluginsCli.mockClear();
+    registerPluginCliCommandsFromValidatedConfig.mockClear();
   });
 
   afterEach(() => {
@@ -65,12 +102,17 @@ describe("registerSubCliCommands", () => {
     } else {
       process.env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS = originalDisableLazySubcommands;
     }
+    if (originalEnablePrivateQaCli === undefined) {
+      delete process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
+    } else {
+      process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = originalEnablePrivateQaCli;
+    }
   });
 
-  it("registers only the primary placeholder and dispatches", async () => {
+  it("registers the primary placeholder plus completion and dispatches", async () => {
     const program = createRegisteredProgram(["node", "openclaw", "acp"]);
 
-    expect(program.commands.map((cmd) => cmd.name())).toEqual(["acp"]);
+    expect(program.commands.map((cmd) => cmd.name())).toEqual(["acp", "completion"]);
 
     await program.parseAsync(["acp"], { from: "user" });
 
@@ -85,40 +127,38 @@ describe("registerSubCliCommands", () => {
     expect(names).toContain("acp");
     expect(names).toContain("gateway");
     expect(names).toContain("clawbot");
+    expect(names).toContain("qa");
     expect(registerAcpCli).not.toHaveBeenCalled();
   });
 
-  it("returns null for plugin registration when the config snapshot is invalid", async () => {
-    configModule.readConfigFileSnapshot.mockResolvedValueOnce({
-      valid: false,
-      config: { plugins: { load: { paths: ["/tmp/evil"] } } },
-    });
+  it("omits the qa placeholder when the private qa cli is disabled", () => {
+    delete process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
 
-    await expect(loadValidatedConfigForPluginRegistration()).resolves.toBeNull();
-    expect(configModule.loadConfig).not.toHaveBeenCalled();
-  });
+    const program = createRegisteredProgram(["node", "openclaw"]);
 
-  it("loads validated config for plugin registration when the snapshot is valid", async () => {
-    const loadedConfig = { plugins: { enabled: true } };
-    configModule.readConfigFileSnapshot.mockResolvedValueOnce({
-      valid: true,
-      config: loadedConfig,
-    });
-    configModule.loadConfig.mockReturnValueOnce(loadedConfig);
-
-    await expect(loadValidatedConfigForPluginRegistration()).resolves.toBe(loadedConfig);
-    expect(configModule.loadConfig).toHaveBeenCalledTimes(1);
+    expect(program.commands.map((cmd) => cmd.name())).not.toContain("qa");
   });
 
   it("re-parses argv for lazy subcommands", async () => {
     const program = createRegisteredProgram(["node", "openclaw", "nodes", "list"], "openclaw");
 
-    expect(program.commands.map((cmd) => cmd.name())).toEqual(["nodes"]);
+    expect(program.commands.map((cmd) => cmd.name())).toEqual(["nodes", "completion"]);
 
     await program.parseAsync(["nodes", "list"], { from: "user" });
 
     expect(registerNodesCli).toHaveBeenCalledTimes(1);
     expect(nodesAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("registers the infer placeholder and dispatches through the capability registrar", async () => {
+    const program = createRegisteredProgram(["node", "openclaw", "infer"], "openclaw");
+
+    expect(program.commands.map((cmd) => cmd.name())).toEqual(["infer", "completion"]);
+
+    await program.parseAsync(["infer"], { from: "user" });
+
+    expect(registerCapabilityCli).toHaveBeenCalledTimes(1);
+    expect(inferAction).toHaveBeenCalledTimes(1);
   });
 
   it("replaces placeholder when registering a subcommand by name", async () => {
@@ -132,5 +172,34 @@ describe("registerSubCliCommands", () => {
     await program.parseAsync(["acp"], { from: "user" });
     expect(registerAcpCli).toHaveBeenCalledTimes(1);
     expect(acpAction).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["plugins update", ["plugins", "update", "lossless-claw"]],
+    ["plugins update --all", ["plugins", "update", "--all"]],
+    ["plugins install", ["plugins", "install", "lossless-claw"]],
+    ["plugins list", ["plugins", "list"]],
+    ["plugins inspect", ["plugins", "inspect", "lossless-claw"]],
+    ["plugins registry --refresh", ["plugins", "registry", "--refresh"]],
+    ["plugins doctor", ["plugins", "doctor"]],
+    ["plugins --help", ["plugins", "--help"]],
+  ])("does not preload plugin CLI registrations for builtin %s", async (_label, args) => {
+    process.argv = ["node", "openclaw", ...args];
+    const program = new Command().name("openclaw");
+
+    await registerSubCliByName(program, "plugins");
+
+    expect(registerPluginsCli).toHaveBeenCalledTimes(1);
+    expect(registerPluginCliCommandsFromValidatedConfig).not.toHaveBeenCalled();
+  });
+
+  it("keeps plugin CLI registrations available for the plugins command root", async () => {
+    process.argv = ["node", "openclaw", "plugins"];
+    const program = new Command().name("openclaw");
+
+    await registerSubCliByName(program, "plugins");
+
+    expect(registerPluginsCli).toHaveBeenCalledTimes(1);
+    expect(registerPluginCliCommandsFromValidatedConfig).toHaveBeenCalledTimes(1);
   });
 });

@@ -5,6 +5,8 @@ read_when:
 title: "Credits"
 ---
 
+# Credits and Acknowledgments
+
 ## The name
 
 OpenClaw = CLAW + TARDIS, because every space lobster needs a time and space machine.
@@ -26,3 +28,8 @@ OpenClaw = CLAW + TARDIS, because every space lobster needs a time and space mac
 MIT - Free as a lobster in the ocean.
 
 > "We are all just playing with our own prompts." (An AI, probably high on tokens)
+
+## Related
+
+- [Token use and costs](/reference/token-use)
+- [Release policy](/reference/RELEASING)

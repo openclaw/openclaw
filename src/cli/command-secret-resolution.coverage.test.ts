@@ -1,10 +1,11 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { bundledPluginFile } from "../../test/helpers/bundled-plugin-paths.js";
+import { readCommandSource } from "./command-source.test-helpers.js";
 
 const SECRET_TARGET_CALLSITES = [
-  "src/cli/memory-cli.ts",
+  bundledPluginFile("memory-core", "src/cli.runtime.ts"),
   "src/cli/qr-cli.ts",
+  "src/agents/agent-runtime-config.ts",
   "src/commands/agent.ts",
   "src/commands/channels/resolve.ts",
   "src/commands/channels/shared.ts",
@@ -14,15 +15,38 @@ const SECRET_TARGET_CALLSITES = [
   "src/commands/status.scan.ts",
 ] as const;
 
+function hasSupportedTargetIdsWiring(source: string): boolean {
+  return (
+    source.includes("resolveAgentRuntimeConfig(") ||
+    /targetIds:\s*get[A-Za-z0-9_]+\(\)/m.test(source) ||
+    /targetIds:\s*getAgentRuntimeCommandSecretTargetIds\(/m.test(source) ||
+    /targetIds:\s*scopedTargets\.targetIds/m.test(source) ||
+    source.includes("collectStatusScanOverview({")
+  );
+}
+
+function hasSupportedSecretResolutionWiring(source: string): boolean {
+  return (
+    source.includes("resolveAgentRuntimeConfig(") ||
+    source.includes("resolveCommandConfigWithSecrets(") ||
+    source.includes("resolveCommandSecretRefsViaGateway(") ||
+    source.includes("collectStatusScanOverview(")
+  );
+}
+
+function usesDelegatedStatusOverviewFlow(source: string): boolean {
+  return source.includes("collectStatusScanOverview(");
+}
+
 describe("command secret resolution coverage", () => {
   it.each(SECRET_TARGET_CALLSITES)(
-    "routes target-id command path through shared gateway resolver: %s",
+    "routes target-id command path through shared secret resolution flow: %s",
     async (relativePath) => {
-      const absolutePath = path.join(process.cwd(), relativePath);
-      const source = await fs.readFile(absolutePath, "utf8");
-      expect(source).toContain("resolveCommandSecretRefsViaGateway");
-      expect(source).toContain("targetIds: get");
-      expect(source).toContain("resolveCommandSecretRefsViaGateway({");
+      const source = await readCommandSource(relativePath);
+      expect(hasSupportedSecretResolutionWiring(source)).toBe(true);
+      if (!usesDelegatedStatusOverviewFlow(source)) {
+        expect(hasSupportedTargetIdsWiring(source)).toBe(true);
+      }
     },
   );
 });

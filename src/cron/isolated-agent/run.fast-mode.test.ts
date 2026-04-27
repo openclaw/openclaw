@@ -7,6 +7,8 @@ import {
 import {
   loadRunCronIsolatedAgentTurn,
   makeCronSession,
+  retireSessionMcpRuntimeMock,
+  resolveFastModeStateMock,
   resolveCronSessionMock,
   runEmbeddedPiAgentMock,
   runWithModelFallbackMock,
@@ -14,169 +16,154 @@ import {
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 
+const OPENAI_GPT4_MODEL = "openai/gpt-4";
+const EXPECTED_OPENAI_MODEL = "gpt-5.4";
+
+function mockSuccessfulModelFallback() {
+  runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
+    await run(provider, model);
+    return {
+      result: {
+        payloads: [{ text: "ok" }],
+        meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+      },
+      provider,
+      model,
+      attempts: [],
+    };
+  });
+}
+
+async function runFastModeCase(params: {
+  configFastMode: boolean;
+  expectedFastMode: boolean;
+  expectedCleanupBundleMcpOnRunEnd?: boolean;
+  expectedRetiredSessionId?: string;
+  message: string;
+  previousSessionId?: string;
+  sessionId?: string;
+  sessionFastMode?: boolean;
+  sessionTarget?: string;
+}) {
+  const baseSession = makeCronSession();
+  resolveCronSessionMock.mockReturnValue(
+    makeCronSession({
+      ...baseSession,
+      ...(params.previousSessionId ? { previousSessionId: params.previousSessionId } : {}),
+      sessionEntry: {
+        ...baseSession.sessionEntry,
+        ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+        ...(params.sessionFastMode === undefined ? {} : { fastMode: params.sessionFastMode }),
+      },
+    }),
+  );
+  mockSuccessfulModelFallback();
+  resolveFastModeStateMock.mockImplementation(({ cfg, sessionEntry }) => {
+    const sessionFastMode = sessionEntry?.fastMode;
+    if (typeof sessionFastMode === "boolean") {
+      return { enabled: sessionFastMode };
+    }
+    return {
+      enabled: Boolean(cfg.agents?.defaults?.models?.[OPENAI_GPT4_MODEL]?.params?.fastMode),
+    };
+  });
+
+  const result = await runCronIsolatedAgentTurn(
+    makeIsolatedAgentTurnParams({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              [OPENAI_GPT4_MODEL]: {
+                params: {
+                  fastMode: params.configFastMode,
+                },
+              },
+            },
+          },
+        },
+      },
+      job: makeIsolatedAgentTurnJob({
+        sessionTarget: params.sessionTarget ?? "isolated",
+        payload: {
+          kind: "agentTurn",
+          message: params.message,
+          model: OPENAI_GPT4_MODEL,
+        },
+      }),
+    }),
+  );
+
+  expect(result.status).toBe("ok");
+  expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
+  expect(runEmbeddedPiAgentMock.mock.calls[0][0]).toMatchObject({
+    provider: "openai",
+    model: EXPECTED_OPENAI_MODEL,
+    fastMode: params.expectedFastMode,
+    cleanupBundleMcpOnRunEnd: params.expectedCleanupBundleMcpOnRunEnd ?? true,
+    allowGatewaySubagentBinding: true,
+  });
+  if (params.expectedRetiredSessionId) {
+    expect(retireSessionMcpRuntimeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: params.expectedRetiredSessionId,
+        reason: "cron-session-rollover",
+      }),
+    );
+    return;
+  }
+  expect(retireSessionMcpRuntimeMock).not.toHaveBeenCalled();
+}
+
 describe("runCronIsolatedAgentTurn — fast mode", () => {
   setupRunCronIsolatedAgentTurnSuite();
 
   it("passes config-driven fast mode into embedded cron runs", async () => {
-    const cronSession = makeCronSession();
-    resolveCronSessionMock.mockReturnValue(cronSession);
-
-    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
-      await run(provider, model);
-      return {
-        result: {
-          payloads: [{ text: "ok" }],
-          meta: { agentMeta: { usage: { input: 10, output: 20 } } },
-        },
-        provider,
-        model,
-        attempts: [],
-      };
-    });
-
-    const result = await runCronIsolatedAgentTurn(
-      makeIsolatedAgentTurnParams({
-        cfg: {
-          agents: {
-            defaults: {
-              models: {
-                "openai/gpt-4": {
-                  params: {
-                    fastMode: true,
-                  },
-                },
-              },
-            },
-          },
-        },
-        job: makeIsolatedAgentTurnJob({
-          payload: {
-            kind: "agentTurn",
-            message: "test fast mode",
-            model: "openai/gpt-4",
-          },
-        }),
-      }),
-    );
-
-    expect(result.status).toBe("ok");
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-    expect(runEmbeddedPiAgentMock.mock.calls[0][0]).toMatchObject({
-      provider: "openai",
-      model: "gpt-4",
-      fastMode: true,
+    await runFastModeCase({
+      configFastMode: true,
+      expectedFastMode: true,
+      message: "test fast mode",
     });
   });
 
   it("honors session fastMode=false over config fastMode=true", async () => {
-    const cronSession = makeCronSession({
-      sessionEntry: {
-        ...makeCronSession().sessionEntry,
-        fastMode: false,
-      },
-    });
-    resolveCronSessionMock.mockReturnValue(cronSession);
-
-    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
-      await run(provider, model);
-      return {
-        result: {
-          payloads: [{ text: "ok" }],
-          meta: { agentMeta: { usage: { input: 10, output: 20 } } },
-        },
-        provider,
-        model,
-        attempts: [],
-      };
-    });
-
-    const result = await runCronIsolatedAgentTurn(
-      makeIsolatedAgentTurnParams({
-        cfg: {
-          agents: {
-            defaults: {
-              models: {
-                "openai/gpt-4": {
-                  params: {
-                    fastMode: true,
-                  },
-                },
-              },
-            },
-          },
-        },
-        job: makeIsolatedAgentTurnJob({
-          payload: {
-            kind: "agentTurn",
-            message: "test fast mode override",
-            model: "openai/gpt-4",
-          },
-        }),
-      }),
-    );
-
-    expect(result.status).toBe("ok");
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-    expect(runEmbeddedPiAgentMock.mock.calls[0][0]).toMatchObject({
-      provider: "openai",
-      model: "gpt-4",
-      fastMode: false,
+    await runFastModeCase({
+      configFastMode: true,
+      expectedFastMode: false,
+      message: "test fast mode override",
+      sessionFastMode: false,
     });
   });
 
   it("honors session fastMode=true over config fastMode=false", async () => {
-    const cronSession = makeCronSession({
-      sessionEntry: {
-        ...makeCronSession().sessionEntry,
-        fastMode: true,
-      },
+    await runFastModeCase({
+      configFastMode: false,
+      expectedFastMode: true,
+      message: "test fast mode session override",
+      sessionFastMode: true,
     });
-    resolveCronSessionMock.mockReturnValue(cronSession);
+  });
 
-    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
-      await run(provider, model);
-      return {
-        result: {
-          payloads: [{ text: "ok" }],
-          meta: { agentMeta: { usage: { input: 10, output: 20 } } },
-        },
-        provider,
-        model,
-        attempts: [],
-      };
+  it("preserves bundled MCP runtime state for persistent cron session targets", async () => {
+    await runFastModeCase({
+      configFastMode: true,
+      expectedFastMode: true,
+      expectedCleanupBundleMcpOnRunEnd: false,
+      message: "test persistent cron session",
+      sessionTarget: "session:agent:main:main:thread:9999",
     });
+  });
 
-    const result = await runCronIsolatedAgentTurn(
-      makeIsolatedAgentTurnParams({
-        cfg: {
-          agents: {
-            defaults: {
-              models: {
-                "openai/gpt-4": {
-                  params: {
-                    fastMode: false,
-                  },
-                },
-              },
-            },
-          },
-        },
-        job: makeIsolatedAgentTurnJob({
-          payload: {
-            kind: "agentTurn",
-            message: "test fast mode session override",
-            model: "openai/gpt-4",
-          },
-        }),
-      }),
-    );
-
-    expect(result.status).toBe("ok");
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-    expect(runEmbeddedPiAgentMock.mock.calls[0][0]).toMatchObject({
-      provider: "openai",
-      model: "gpt-4",
-      fastMode: true,
+  it("retires the previous bundled MCP runtime when a persistent cron session rolls over", async () => {
+    await runFastModeCase({
+      configFastMode: true,
+      expectedFastMode: true,
+      expectedCleanupBundleMcpOnRunEnd: false,
+      expectedRetiredSessionId: "stale-session-id",
+      message: "test persistent cron session rollover",
+      previousSessionId: "stale-session-id",
+      sessionId: "rotated-session-id",
+      sessionTarget: "session:agent:main:main:thread:9999",
     });
   });
 });

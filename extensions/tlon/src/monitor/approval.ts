@@ -5,11 +5,17 @@
  * a notification and can approve or deny the request.
  */
 
+// Extensions cannot import core internals directly, so use node:crypto here.
+import { randomBytes } from "node:crypto";
 import type { PendingApproval } from "../settings.js";
 
 export type { PendingApproval };
 
 export type ApprovalType = "dm" | "channel" | "group";
+
+function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
 
 export type CreateApprovalParams = {
   type: ApprovalType;
@@ -32,7 +38,7 @@ export type CreateApprovalParams = {
  */
 export function generateApprovalId(type: ApprovalType): string {
   const timestamp = Date.now();
-  const randomPart = Math.random().toString(36).substring(2, 6);
+  const randomPart = randomBytes(3).toString("hex");
   return `${type}-${timestamp}-${randomPart}`;
 }
 
@@ -59,7 +65,7 @@ function truncate(text: string, maxLength: number): string {
   if (text.length <= maxLength) {
     return text;
   }
-  return text.substring(0, maxLength - 3) + "...";
+  return text.slice(0, maxLength - 3) + "...";
 }
 
 /**
@@ -89,6 +95,7 @@ export function formatApprovalRequest(approval: PendingApproval): string {
         `(ID: ${approval.id})`
       );
   }
+  throw new Error("Unsupported approval type");
 }
 
 export type ApprovalResponse = {
@@ -104,7 +111,7 @@ export type ApprovalResponse = {
  *   - "block" permanently blocks the ship via Tlon's native blocking
  */
 export function parseApprovalResponse(text: string): ApprovalResponse | null {
-  const trimmed = text.trim().toLowerCase();
+  const trimmed = normalizeLowercaseStringOrEmpty(text);
 
   // Match "approve", "deny", or "block" optionally followed by an ID
   const match = trimmed.match(/^(approve|deny|block)(?:\s+(.+))?$/);
@@ -123,7 +130,7 @@ export function parseApprovalResponse(text: string): ApprovalResponse | null {
  * Used to determine if we should intercept the message before normal processing.
  */
 export function isApprovalResponse(text: string): boolean {
-  const trimmed = text.trim().toLowerCase();
+  const trimmed = normalizeLowercaseStringOrEmpty(text);
   return trimmed.startsWith("approve") || trimmed.startsWith("deny") || trimmed.startsWith("block");
 }
 
@@ -208,6 +215,7 @@ export function formatApprovalConfirmation(
       }
       return `${actionText} group invite from ${approval.requestingShip} to ${approval.groupFlag}.`;
   }
+  throw new Error("Unsupported approval type");
 }
 
 // ============================================================================
@@ -227,7 +235,7 @@ export type AdminCommand =
  *   - "pending" - list all pending approvals
  */
 export function parseAdminCommand(text: string): AdminCommand | null {
-  const trimmed = text.trim().toLowerCase();
+  const trimmed = normalizeLowercaseStringOrEmpty(text);
 
   // "blocked" - list blocked ships
   if (trimmed === "blocked") {

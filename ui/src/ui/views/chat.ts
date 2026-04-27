@@ -1,10 +1,16 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
+import type { CompactionStatus, FallbackStatus } from "../app-tool-stream.ts";
 import {
   CHAT_ATTACHMENT_ACCEPT,
-  isSupportedChatAttachmentMimeType,
+  isSupportedChatAttachmentFile,
 } from "../chat/attachment-support.ts";
+import { buildChatItems } from "../chat/build-chat-items.ts";
+import { renderChatQueue } from "../chat/chat-queue.ts";
+import { buildRawSidebarContent } from "../chat/chat-sidebar-raw.ts";
+import { renderWelcomeState, resolveAssistantDisplayAvatar } from "../chat/chat-welcome.ts";
+import { renderContextNotice } from "../chat/context-notice.ts";
 import { DeletedMessages } from "../chat/deleted-messages.ts";
 import { exportChatMarkdown } from "../chat/export.ts";
 import {
@@ -12,56 +18,47 @@ import {
   renderReadingIndicatorGroup,
   renderStreamingGroup,
 } from "../chat/grouped-render.ts";
-import { InputHistory } from "../chat/input-history.ts";
-import { normalizeMessage, normalizeRoleForGrouping } from "../chat/message-normalizer.ts";
+import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../chat/input-history.ts";
 import { PinnedMessages } from "../chat/pinned-messages.ts";
 import { getPinnedMessageSummary } from "../chat/pinned-summary.ts";
-import { messageMatchesSearchQuery } from "../chat/search-match.ts";
+import type { RealtimeTalkStatus } from "../chat/realtime-talk.ts";
+import { renderChatRunControls } from "../chat/run-controls.ts";
 import { getOrCreateSessionCacheValue } from "../chat/session-cache.ts";
+import { renderSideResult } from "../chat/side-result-render.ts";
+import type { ChatSideResult } from "../chat/side-result.ts";
 import {
   CATEGORY_LABELS,
   SLASH_COMMANDS,
+  getHiddenCommandCount,
   getSlashCommandCompletions,
   type SlashCommandCategory,
   type SlashCommandDef,
 } from "../chat/slash-commands.ts";
-import { isSttSupported, startStt, stopStt } from "../chat/speech.ts";
+import { renderCompactionIndicator, renderFallbackIndicator } from "../chat/status-indicators.ts";
+import { getExpandedToolCards, syncToolCardExpansionState } from "../chat/tool-expansion-state.ts";
+import type { EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
+import type { SidebarContent } from "../sidebar-content.ts";
 import { detectTextDirection } from "../text-direction.ts";
-import type { GatewaySessionRow, SessionsListResult } from "../types.ts";
-import type { ChatItem, MessageGroup } from "../types/chat-types.ts";
+import type { SessionsListResult } from "../types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
-import { agentLogoUrl, resolveAgentAvatarUrl } from "./agents-utils.ts";
+import { resolveLocalUserName } from "../user-identity.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
 import "../components/resizable-divider.ts";
-
-export type CompactionIndicatorStatus = {
-  active: boolean;
-  startedAt: number | null;
-  completedAt: number | null;
-};
-
-export type FallbackIndicatorStatus = {
-  phase?: "active" | "cleared";
-  selected: string;
-  active: string;
-  previous?: string;
-  reason?: string;
-  attempts: string[];
-  occurredAt: number;
-};
 
 export type ChatProps = {
   sessionKey: string;
   onSessionKeyChange: (next: string) => void;
   thinkingLevel: string | null;
   showThinking: boolean;
+  showToolCalls: boolean;
   loading: boolean;
   sending: boolean;
   canAbort?: boolean;
-  compactionStatus?: CompactionIndicatorStatus | null;
-  fallbackStatus?: FallbackIndicatorStatus | null;
+  compactionStatus?: CompactionStatus | null;
+  fallbackStatus?: FallbackStatus | null;
   messages: unknown[];
+  sideResult?: ChatSideResult | null;
   toolMessages: unknown[];
   streamSegments: Array<{ text: string; ts: number }>;
   stream: string | null;
@@ -69,6 +66,10 @@ export type ChatProps = {
   assistantAvatarUrl?: string | null;
   draft: string;
   queue: ChatQueueItem[];
+  realtimeTalkActive?: boolean;
+  realtimeTalkStatus?: RealtimeTalkStatus;
+  realtimeTalkDetail?: string | null;
+  realtimeTalkTranscript?: string | null;
   connected: boolean;
   canSend: boolean;
   disabledReason: string | null;
@@ -76,11 +77,19 @@ export type ChatProps = {
   sessions: SessionsListResult | null;
   focusMode: boolean;
   sidebarOpen?: boolean;
-  sidebarContent?: string | null;
+  sidebarContent?: SidebarContent | null;
   sidebarError?: string | null;
   splitRatio?: number;
+  canvasHostUrl?: string | null;
+  embedSandboxMode?: EmbedSandboxMode;
+  allowExternalEmbedUrls?: boolean;
   assistantName: string;
   assistantAvatar: string | null;
+  userName?: string | null;
+  userAvatar?: string | null;
+  localMediaPreviewRoots?: string[];
+  assistantAttachmentAuthToken?: string | null;
+  autoExpandToolCalls?: boolean;
   attachments?: ChatAttachment[];
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
   showNewMessages?: boolean;
@@ -90,9 +99,14 @@ export type ChatProps = {
   getDraft?: () => string;
   onDraftChange: (next: string) => void;
   onRequestUpdate?: () => void;
+  onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
   onSend: () => void;
+  onCompact?: () => void | Promise<void>;
+  onToggleRealtimeTalk?: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
+  onQueueSteer?: (id: string) => void;
+  onDismissSideResult?: () => void;
   onNewSession: () => void;
   onClearHistory?: () => void;
   agentsList: {
@@ -103,24 +117,15 @@ export type ChatProps = {
   onAgentChange: (agentId: string) => void;
   onNavigateToAgent?: () => void;
   onSessionSelect?: (sessionKey: string) => void;
-  onOpenSidebar?: (content: string) => void;
+  onOpenSidebar?: (content: SidebarContent) => void;
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
   basePath?: string;
 };
 
-const COMPACTION_TOAST_DURATION_MS = 5000;
-const FALLBACK_TOAST_DURATION_MS = 8000;
-
-// Persistent instances keyed by session
-const inputHistories = new Map<string, InputHistory>();
 const pinnedMessagesMap = new Map<string, PinnedMessages>();
 const deletedMessagesMap = new Map<string, DeletedMessages>();
-
-function getInputHistory(sessionKey: string): InputHistory {
-  return getOrCreateSessionCacheValue(inputHistories, sessionKey, () => new InputHistory());
-}
 
 function getPinnedMessages(sessionKey: string): PinnedMessages {
   return getOrCreateSessionCacheValue(
@@ -139,14 +144,13 @@ function getDeletedMessages(sessionKey: string): DeletedMessages {
 }
 
 interface ChatEphemeralState {
-  sttRecording: boolean;
-  sttInterimText: string;
   slashMenuOpen: boolean;
   slashMenuItems: SlashCommandDef[];
   slashMenuIndex: number;
   slashMenuMode: "command" | "args";
   slashMenuCommand: SlashCommandDef | null;
   slashMenuArgItems: string[];
+  slashMenuExpanded: boolean;
   searchOpen: boolean;
   searchQuery: string;
   pinnedExpanded: boolean;
@@ -154,14 +158,13 @@ interface ChatEphemeralState {
 
 function createChatEphemeralState(): ChatEphemeralState {
   return {
-    sttRecording: false,
-    sttInterimText: "",
     slashMenuOpen: false,
     slashMenuItems: [],
     slashMenuIndex: 0,
     slashMenuMode: "command",
     slashMenuCommand: null,
     slashMenuArgItems: [],
+    slashMenuExpanded: false,
     searchOpen: false,
     searchQuery: "",
     pinnedExpanded: false,
@@ -172,12 +175,9 @@ const vs = createChatEphemeralState();
 
 /**
  * Reset chat view ephemeral state when navigating away.
- * Stops STT recording and clears search/slash UI that should not survive navigation.
+ * Clears search/slash UI that should not survive navigation.
  */
 export function resetChatViewState() {
-  if (vs.sttRecording) {
-    stopStt();
-  }
   Object.assign(vs, createChatEphemeralState());
 }
 
@@ -188,113 +188,33 @@ function adjustTextareaHeight(el: HTMLTextAreaElement) {
   el.style.height = `${Math.min(el.scrollHeight, 150)}px`;
 }
 
-function renderCompactionIndicator(status: CompactionIndicatorStatus | null | undefined) {
-  if (!status) {
-    return nothing;
-  }
-  if (status.active) {
-    return html`
-      <div class="compaction-indicator compaction-indicator--active" role="status" aria-live="polite">
-        ${icons.loader} Compacting context...
-      </div>
-    `;
-  }
-  if (status.completedAt) {
-    const elapsed = Date.now() - status.completedAt;
-    if (elapsed < COMPACTION_TOAST_DURATION_MS) {
-      return html`
-        <div class="compaction-indicator compaction-indicator--complete" role="status" aria-live="polite">
-          ${icons.check} Context compacted
-        </div>
-      `;
+function restoreHistoryCaret(target: HTMLTextAreaElement, direction: "up" | "down") {
+  requestAnimationFrame(() => {
+    if (document.activeElement !== target) {
+      return;
     }
-  }
-  return nothing;
-}
-
-function renderFallbackIndicator(status: FallbackIndicatorStatus | null | undefined) {
-  if (!status) {
-    return nothing;
-  }
-  const phase = status.phase ?? "active";
-  const elapsed = Date.now() - status.occurredAt;
-  if (elapsed >= FALLBACK_TOAST_DURATION_MS) {
-    return nothing;
-  }
-  const details = [
-    `Selected: ${status.selected}`,
-    phase === "cleared" ? `Active: ${status.selected}` : `Active: ${status.active}`,
-    phase === "cleared" && status.previous ? `Previous fallback: ${status.previous}` : null,
-    status.reason ? `Reason: ${status.reason}` : null,
-    status.attempts.length > 0 ? `Attempts: ${status.attempts.slice(0, 3).join(" | ")}` : null,
-  ]
-    .filter(Boolean)
-    .join(" • ");
-  const message =
-    phase === "cleared"
-      ? `Fallback cleared: ${status.selected}`
-      : `Fallback active: ${status.active}`;
-  const className =
-    phase === "cleared"
-      ? "compaction-indicator compaction-indicator--fallback-cleared"
-      : "compaction-indicator compaction-indicator--fallback";
-  const icon = phase === "cleared" ? icons.check : icons.brain;
-  return html`
-    <div class=${className} role="status" aria-live="polite" title=${details}>
-      ${icon} ${message}
-    </div>
-  `;
-}
-
-/**
- * Compact notice when context usage reaches 85%+.
- * Progressively shifts from amber (85%) to red (90%+).
- */
-function renderContextNotice(
-  session: GatewaySessionRow | undefined,
-  defaultContextTokens: number | null,
-) {
-  const used = session?.inputTokens ?? 0;
-  const limit = session?.contextTokens ?? defaultContextTokens ?? 0;
-  if (!used || !limit) {
-    return nothing;
-  }
-  const ratio = used / limit;
-  if (ratio < 0.85) {
-    return nothing;
-  }
-  const pct = Math.min(Math.round(ratio * 100), 100);
-  // Lerp from amber (#d97706) at 85% to red (#dc2626) at 95%+
-  const t = Math.min(Math.max((ratio - 0.85) / 0.1, 0), 1);
-  // RGB: amber(217,119,6) → red(220,38,38)
-  const r = Math.round(217 + (220 - 217) * t);
-  const g = Math.round(119 + (38 - 119) * t);
-  const b = Math.round(6 + (38 - 6) * t);
-  const color = `rgb(${r}, ${g}, ${b})`;
-  const bgOpacity = 0.08 + 0.08 * t;
-  const bg = `rgba(${r}, ${g}, ${b}, ${bgOpacity})`;
-  return html`
-    <div class="context-notice" role="status" style="--ctx-color:${color};--ctx-bg:${bg}">
-      <svg class="context-notice__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-      <span>${pct}% context used</span>
-      <span class="context-notice__detail">${formatTokensCompact(used)} / ${formatTokensCompact(limit)}</span>
-    </div>
-  `;
-}
-
-/** Format token count compactly (e.g. 128000 → "128k"). */
-function formatTokensCompact(n: number): string {
-  if (n >= 1_000_000) {
-    return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
-  }
-  if (n >= 1_000) {
-    return `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
-  }
-  return String(n);
+    adjustTextareaHeight(target);
+    const caret = direction === "up" ? 0 : target.value.length;
+    target.selectionStart = caret;
+    target.selectionEnd = caret;
+  });
 }
 
 function generateAttachmentId(): string {
   return `att-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function chatAttachmentFromFile(file: File, dataUrl: string): ChatAttachment {
+  return {
+    id: generateAttachmentId(),
+    dataUrl,
+    mimeType: file.type || "application/octet-stream",
+    fileName: file.name || undefined,
+  };
+}
+
+function isImageAttachment(att: ChatAttachment): boolean {
+  return att.mimeType.startsWith("image/");
 }
 
 function handlePaste(e: ClipboardEvent, props: ChatProps) {
@@ -321,11 +241,7 @@ function handlePaste(e: ClipboardEvent, props: ChatProps) {
     const reader = new FileReader();
     reader.addEventListener("load", () => {
       const dataUrl = reader.result as string;
-      const newAttachment: ChatAttachment = {
-        id: generateAttachmentId(),
-        dataUrl,
-        mimeType: file.type,
-      };
+      const newAttachment = chatAttachmentFromFile(file, dataUrl);
       const current = props.attachments ?? [];
       props.onAttachmentsChange?.([...current, newAttachment]);
     });
@@ -342,17 +258,13 @@ function handleFileSelect(e: Event, props: ChatProps) {
   const additions: ChatAttachment[] = [];
   let pending = 0;
   for (const file of input.files) {
-    if (!isSupportedChatAttachmentMimeType(file.type)) {
+    if (!isSupportedChatAttachmentFile(file)) {
       continue;
     }
     pending++;
     const reader = new FileReader();
     reader.addEventListener("load", () => {
-      additions.push({
-        id: generateAttachmentId(),
-        dataUrl: reader.result as string,
-        mimeType: file.type,
-      });
+      additions.push(chatAttachmentFromFile(file, reader.result as string));
       pending--;
       if (pending === 0) {
         props.onAttachmentsChange?.([...current, ...additions]);
@@ -373,17 +285,13 @@ function handleDrop(e: DragEvent, props: ChatProps) {
   const additions: ChatAttachment[] = [];
   let pending = 0;
   for (const file of files) {
-    if (!isSupportedChatAttachmentMimeType(file.type)) {
+    if (!isSupportedChatAttachmentFile(file)) {
       continue;
     }
     pending++;
     const reader = new FileReader();
     reader.addEventListener("load", () => {
-      additions.push({
-        id: generateAttachmentId(),
-        dataUrl: reader.result as string,
-        mimeType: file.type,
-      });
+      additions.push(chatAttachmentFromFile(file, reader.result as string));
       pending--;
       if (pending === 0) {
         props.onAttachmentsChange?.([...current, ...additions]);
@@ -402,8 +310,24 @@ function renderAttachmentPreview(props: ChatProps): TemplateResult | typeof noth
     <div class="chat-attachments-preview">
       ${attachments.map(
         (att) => html`
-          <div class="chat-attachment-thumb">
-            <img src=${att.dataUrl} alt="Attachment preview" />
+          <div
+            class=${[
+              "chat-attachment-thumb",
+              isImageAttachment(att) ? "" : "chat-attachment-thumb--file",
+            ]
+              .filter(Boolean)
+              .join(" ")}
+          >
+            ${isImageAttachment(att)
+              ? html`<img src=${att.dataUrl} alt="Attachment preview" />`
+              : html`
+                  <div class="chat-attachment-file" title=${att.fileName ?? "Attached file"}>
+                    <span class="chat-attachment-file__icon">${icons.paperclip}</span>
+                    <span class="chat-attachment-file__name"
+                      >${att.fileName ?? "Attached file"}</span
+                    >
+                  </div>
+                `}
             <button
               class="chat-attachment-remove"
               type="button"
@@ -412,7 +336,9 @@ function renderAttachmentPreview(props: ChatProps): TemplateResult | typeof noth
                 const next = (props.attachments ?? []).filter((a) => a.id !== att.id);
                 props.onAttachmentsChange?.(next);
               }}
-            >&times;</button>
+            >
+              &times;
+            </button>
           </div>
         `,
       )}
@@ -425,6 +351,7 @@ function resetSlashMenuState(): void {
   vs.slashMenuCommand = null;
   vs.slashMenuArgItems = [];
   vs.slashMenuItems = [];
+  vs.slashMenuExpanded = false;
 }
 
 function updateSlashMenu(value: string, requestUpdate: () => void): void {
@@ -458,7 +385,7 @@ function updateSlashMenu(value: string, requestUpdate: () => void): void {
   // Command mode: /partial-command
   const match = value.match(/^\/(\S*)$/);
   if (match) {
-    const items = getSlashCommandCompletions(match[1]);
+    const items = getSlashCommandCompletions(match[1], { showAll: vs.slashMenuExpanded });
     vs.slashMenuItems = items;
     vs.slashMenuOpen = items.length > 0;
     vs.slashMenuIndex = 0;
@@ -557,56 +484,6 @@ function exportMarkdown(props: ChatProps): void {
   exportChatMarkdown(props.messages, props.assistantName);
 }
 
-const WELCOME_SUGGESTIONS = [
-  "What can you do?",
-  "Summarize my recent sessions",
-  "Help me configure a channel",
-  "Check system health",
-];
-
-function renderWelcomeState(props: ChatProps): TemplateResult {
-  const name = props.assistantName || "Assistant";
-  const avatar = resolveAgentAvatarUrl({
-    identity: {
-      avatar: props.assistantAvatar ?? undefined,
-      avatarUrl: props.assistantAvatarUrl ?? undefined,
-    },
-  });
-  const logoUrl = agentLogoUrl(props.basePath ?? "");
-
-  return html`
-    <div class="agent-chat__welcome" style="--agent-color: var(--accent)">
-      <div class="agent-chat__welcome-glow"></div>
-      ${
-        avatar
-          ? html`<img src=${avatar} alt=${name} style="width:56px; height:56px; border-radius:50%; object-fit:cover;" />`
-          : html`<div class="agent-chat__avatar agent-chat__avatar--logo"><img src=${logoUrl} alt="OpenClaw" /></div>`
-      }
-      <h2>${name}</h2>
-      <div class="agent-chat__badges">
-        <span class="agent-chat__badge"><img src=${logoUrl} alt="" /> Ready to chat</span>
-      </div>
-      <p class="agent-chat__hint">
-        Type a message below &middot; <kbd>/</kbd> for commands
-      </p>
-      <div class="agent-chat__suggestions">
-        ${WELCOME_SUGGESTIONS.map(
-          (text) => html`
-            <button
-              type="button"
-              class="agent-chat__suggestion"
-              @click=${() => {
-                props.onDraftChange(text);
-                props.onSend();
-              }}
-            >${text}</button>
-          `,
-        )}
-      </div>
-    </div>
-  `;
-}
-
 function renderSearchBar(requestUpdate: () => void): TemplateResult | typeof nothing {
   if (!vs.searchOpen) {
     return nothing;
@@ -617,17 +494,22 @@ function renderSearchBar(requestUpdate: () => void): TemplateResult | typeof not
       <input
         type="text"
         placeholder="Search messages..."
+        aria-label="Search messages"
         .value=${vs.searchQuery}
         @input=${(e: Event) => {
           vs.searchQuery = (e.target as HTMLInputElement).value;
           requestUpdate();
         }}
       />
-      <button class="btn-ghost" @click=${() => {
-        vs.searchOpen = false;
-        vs.searchQuery = "";
-        requestUpdate();
-      }}>
+      <button
+        class="btn btn--ghost"
+        aria-label="Close search"
+        @click=${() => {
+          vs.searchOpen = false;
+          vs.searchQuery = "";
+          requestUpdate();
+        }}
+      >
         ${icons.x}
       </button>
     </div>
@@ -639,6 +521,10 @@ function renderPinnedSection(
   pinned: PinnedMessages,
   requestUpdate: () => void,
 ): TemplateResult | typeof nothing {
+  const userRoleLabel = resolveLocalUserName({
+    name: props.userName ?? null,
+    avatar: props.userAvatar ?? null,
+  });
   const messages = Array.isArray(props.messages) ? props.messages : [];
   const entries: Array<{ index: number; text: string; role: string }> = [];
   for (const idx of pinned.indices) {
@@ -655,36 +541,47 @@ function renderPinnedSection(
   }
   return html`
     <div class="agent-chat__pinned">
-      <button class="agent-chat__pinned-toggle" @click=${() => {
-        vs.pinnedExpanded = !vs.pinnedExpanded;
-        requestUpdate();
-      }}>
-        ${icons.bookmark}
-        ${entries.length} pinned
-        ${vs.pinnedExpanded ? icons.chevronDown : icons.chevronRight}
+      <button
+        class="agent-chat__pinned-toggle"
+        aria-expanded=${vs.pinnedExpanded}
+        @click=${() => {
+          vs.pinnedExpanded = !vs.pinnedExpanded;
+          requestUpdate();
+        }}
+      >
+        ${icons.bookmark} ${entries.length} pinned
+        <span class="collapse-chevron ${vs.pinnedExpanded ? "" : "collapse-chevron--collapsed"}"
+          >${icons.chevronDown}</span
+        >
       </button>
-      ${
-        vs.pinnedExpanded
-          ? html`
+      ${vs.pinnedExpanded
+        ? html`
             <div class="agent-chat__pinned-list">
               ${entries.map(
                 ({ index, text, role }) => html`
-                <div class="agent-chat__pinned-item">
-                  <span class="agent-chat__pinned-role">${role === "user" ? "You" : "Assistant"}</span>
-                  <span class="agent-chat__pinned-text">${text.slice(0, 100)}${text.length > 100 ? "..." : ""}</span>
-                  <button class="btn-ghost" @click=${() => {
-                    pinned.unpin(index);
-                    requestUpdate();
-                  }} title="Unpin">
-                    ${icons.x}
-                  </button>
-                </div>
-              `,
+                  <div class="agent-chat__pinned-item">
+                    <span class="agent-chat__pinned-role"
+                      >${role === "user" ? userRoleLabel : "Assistant"}</span
+                    >
+                    <span class="agent-chat__pinned-text"
+                      >${text.slice(0, 100)}${text.length > 100 ? "..." : ""}</span
+                    >
+                    <button
+                      class="btn btn--ghost"
+                      @click=${() => {
+                        pinned.unpin(index);
+                        requestUpdate();
+                      }}
+                      title="Unpin"
+                    >
+                      ${icons.x}
+                    </button>
+                  </div>
+                `,
               )}
             </div>
           `
-          : nothing
-      }
+        : nothing}
     </div>
   `;
 }
@@ -700,20 +597,26 @@ function renderSlashMenu(
   // Arg-picker mode: show options for the selected command
   if (vs.slashMenuMode === "args" && vs.slashMenuCommand && vs.slashMenuArgItems.length > 0) {
     return html`
-      <div class="slash-menu">
+      <div class="slash-menu" role="listbox" aria-label="Command arguments">
         <div class="slash-menu-group">
-          <div class="slash-menu-group__label">/${vs.slashMenuCommand.name} ${vs.slashMenuCommand.description}</div>
+          <div class="slash-menu-group__label">
+            /${vs.slashMenuCommand.name} ${vs.slashMenuCommand.description}
+          </div>
           ${vs.slashMenuArgItems.map(
             (arg, i) => html`
               <div
                 class="slash-menu-item ${i === vs.slashMenuIndex ? "slash-menu-item--active" : ""}"
+                role="option"
+                aria-selected=${i === vs.slashMenuIndex}
                 @click=${() => selectSlashArg(arg, props, requestUpdate, true)}
                 @mouseenter=${() => {
                   vs.slashMenuIndex = i;
                   requestUpdate();
                 }}
               >
-                ${vs.slashMenuCommand?.icon ? html`<span class="slash-menu-icon">${icons[vs.slashMenuCommand.icon]}</span>` : nothing}
+                ${vs.slashMenuCommand?.icon
+                  ? html`<span class="slash-menu-icon">${icons[vs.slashMenuCommand.icon]}</span>`
+                  : nothing}
                 <span class="slash-menu-name">${arg}</span>
                 <span class="slash-menu-desc">/${vs.slashMenuCommand?.name} ${arg}</span>
               </div>
@@ -721,10 +624,7 @@ function renderSlashMenu(
           )}
         </div>
         <div class="slash-menu-footer">
-          <kbd>↑↓</kbd> navigate
-          <kbd>Tab</kbd> fill
-          <kbd>Enter</kbd> run
-          <kbd>Esc</kbd> close
+          <kbd>↑↓</kbd> navigate <kbd>Tab</kbd> fill <kbd>Enter</kbd> run <kbd>Esc</kbd> close
         </div>
       </div>
     `;
@@ -758,7 +658,11 @@ function renderSlashMenu(
         ${entries.map(
           ({ cmd, globalIdx }) => html`
             <div
-              class="slash-menu-item ${globalIdx === vs.slashMenuIndex ? "slash-menu-item--active" : ""}"
+              class="slash-menu-item ${globalIdx === vs.slashMenuIndex
+                ? "slash-menu-item--active"
+                : ""}"
+              role="option"
+              aria-selected=${globalIdx === vs.slashMenuIndex}
               @click=${() => selectSlashCommand(cmd, props, requestUpdate)}
               @mouseenter=${() => {
                 vs.slashMenuIndex = globalIdx;
@@ -769,15 +673,11 @@ function renderSlashMenu(
               <span class="slash-menu-name">/${cmd.name}</span>
               ${cmd.args ? html`<span class="slash-menu-args">${cmd.args}</span>` : nothing}
               <span class="slash-menu-desc">${cmd.description}</span>
-              ${
-                cmd.argOptions?.length
-                  ? html`<span class="slash-menu-badge">${cmd.argOptions.length} options</span>`
-                  : cmd.executeLocal && !cmd.args
-                    ? html`
-                        <span class="slash-menu-badge">instant</span>
-                      `
-                    : nothing
-              }
+              ${cmd.argOptions?.length
+                ? html`<span class="slash-menu-badge">${cmd.argOptions.length} options</span>`
+                : cmd.executeLocal && !cmd.args
+                  ? html` <span class="slash-menu-badge">instant</span> `
+                  : nothing}
             </div>
           `,
         )}
@@ -785,14 +685,26 @@ function renderSlashMenu(
     `);
   }
 
+  const hiddenCount = vs.slashMenuExpanded ? 0 : getHiddenCommandCount();
+
   return html`
-    <div class="slash-menu">
+    <div class="slash-menu" role="listbox" aria-label="Slash commands">
       ${sections}
+      ${hiddenCount > 0
+        ? html`<button
+            class="slash-menu-show-more"
+            @click=${(e: Event) => {
+              e.preventDefault();
+              e.stopPropagation();
+              vs.slashMenuExpanded = true;
+              updateSlashMenu(props.draft, requestUpdate);
+            }}
+          >
+            Show ${hiddenCount} more command${hiddenCount !== 1 ? "s" : ""}
+          </button>`
+        : nothing}
       <div class="slash-menu-footer">
-        <kbd>↑↓</kbd> navigate
-        <kbd>Tab</kbd> fill
-        <kbd>Enter</kbd> select
-        <kbd>Esc</kbd> close
+        <kbd>↑↓</kbd> navigate <kbd>Tab</kbd> fill <kbd>Enter</kbd> select <kbd>Esc</kbd> close
       </div>
     </div>
   `;
@@ -802,22 +714,17 @@ export function renderChat(props: ChatProps) {
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
   const canAbort = Boolean(props.canAbort && props.onAbort);
+  const compactBusy =
+    props.compactionStatus?.phase === "active" || props.compactionStatus?.phase === "retrying";
   const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
   const reasoningLevel = activeSession?.reasoningLevel ?? "off";
   const showReasoning = props.showThinking && reasoningLevel !== "off";
   const assistantIdentity = {
     name: props.assistantName,
-    avatar:
-      resolveAgentAvatarUrl({
-        identity: {
-          avatar: props.assistantAvatar ?? undefined,
-          avatarUrl: props.assistantAvatarUrl ?? undefined,
-        },
-      }) ?? null,
+    avatar: resolveAssistantDisplayAvatar(props),
   };
   const pinned = getPinnedMessages(props.sessionKey);
   const deleted = getDeletedMessages(props.sessionKey);
-  const inputHistory = getInputHistory(props.sessionKey);
   const hasAttachments = (props.attachments?.length ?? 0) > 0;
   const tokens = tokenEstimate(props.draft);
 
@@ -828,8 +735,6 @@ export function renderChat(props: ChatProps) {
     : "Connect to the gateway to start chatting...";
 
   const requestUpdate = props.onRequestUpdate ?? (() => {});
-  const getDraft = props.getDraft ?? (() => props.draft);
-
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
 
@@ -848,8 +753,25 @@ export function renderChat(props: ChatProps) {
     );
   };
 
-  const chatItems = buildChatItems(props);
+  const chatItems = buildChatItems({
+    sessionKey: props.sessionKey,
+    messages: props.messages,
+    toolMessages: props.toolMessages,
+    streamSegments: props.streamSegments,
+    stream: props.stream,
+    streamStartedAt: props.streamStartedAt,
+    showToolCalls: props.showToolCalls,
+    searchOpen: vs.searchOpen,
+    searchQuery: vs.searchQuery,
+  });
+  syncToolCardExpansionState(props.sessionKey, chatItems, Boolean(props.autoExpandToolCalls));
+  const expandedToolCards = getExpandedToolCards(props.sessionKey);
+  const toggleToolCardExpanded = (toolCardId: string) => {
+    expandedToolCards.set(toolCardId, !expandedToolCards.get(toolCardId));
+    requestUpdate();
+  };
   const isEmpty = chatItems.length === 0 && !props.loading;
+  const showLoadingSkeleton = props.loading && chatItems.length === 0;
 
   const thread = html`
     <div
@@ -860,15 +782,20 @@ export function renderChat(props: ChatProps) {
       @click=${handleCodeBlockCopy}
     >
       <div class="chat-thread-inner">
-      ${
-        props.loading
+        ${showLoadingSkeleton
           ? html`
               <div class="chat-loading-skeleton" aria-label="Loading chat">
                 <div class="chat-line assistant">
                   <div class="chat-msg">
                     <div class="chat-bubble">
-                      <div class="skeleton skeleton-line skeleton-line--long" style="margin-bottom: 8px"></div>
-                      <div class="skeleton skeleton-line skeleton-line--medium" style="margin-bottom: 8px"></div>
+                      <div
+                        class="skeleton skeleton-line skeleton-line--long"
+                        style="margin-bottom: 8px"
+                      ></div>
+                      <div
+                        class="skeleton skeleton-line skeleton-line--medium"
+                        style="margin-bottom: 8px"
+                      ></div>
                       <div class="skeleton skeleton-line skeleton-line--short"></div>
                     </div>
                   </div>
@@ -883,69 +810,90 @@ export function renderChat(props: ChatProps) {
                 <div class="chat-line assistant" style="margin-top: 12px">
                   <div class="chat-msg">
                     <div class="chat-bubble">
-                      <div class="skeleton skeleton-line skeleton-line--long" style="margin-bottom: 8px"></div>
+                      <div
+                        class="skeleton skeleton-line skeleton-line--long"
+                        style="margin-bottom: 8px"
+                      ></div>
                       <div class="skeleton skeleton-line skeleton-line--short"></div>
                     </div>
                   </div>
                 </div>
               </div>
             `
-          : nothing
-      }
-      ${isEmpty && !vs.searchOpen ? renderWelcomeState(props) : nothing}
-      ${
-        isEmpty && vs.searchOpen
-          ? html`
-              <div class="agent-chat__empty">No matching messages</div>
-            `
-          : nothing
-      }
-      ${repeat(
-        chatItems,
-        (item) => item.key,
-        (item) => {
-          if (item.kind === "divider") {
-            return html`
-              <div class="chat-divider" role="separator" data-ts=${String(item.timestamp)}>
-                <span class="chat-divider__line"></span>
-                <span class="chat-divider__label">${item.label}</span>
-                <span class="chat-divider__line"></span>
-              </div>
-            `;
-          }
-          if (item.kind === "reading-indicator") {
-            return renderReadingIndicatorGroup(assistantIdentity, props.basePath);
-          }
-          if (item.kind === "stream") {
-            return renderStreamingGroup(
-              item.text,
-              item.startedAt,
-              props.onOpenSidebar,
-              assistantIdentity,
-              props.basePath,
-            );
-          }
-          if (item.kind === "group") {
-            if (deleted.has(item.key)) {
-              return nothing;
+          : nothing}
+        ${isEmpty && !vs.searchOpen ? renderWelcomeState(props) : nothing}
+        ${isEmpty && vs.searchOpen
+          ? html` <div class="agent-chat__empty">No matching messages</div> `
+          : nothing}
+        ${repeat(
+          chatItems,
+          (item) => item.key,
+          (item) => {
+            if (item.kind === "divider") {
+              return html`
+                <div class="chat-divider" role="separator" data-ts=${String(item.timestamp)}>
+                  <span class="chat-divider__line"></span>
+                  <span class="chat-divider__label">${item.label}</span>
+                  <span class="chat-divider__line"></span>
+                </div>
+              `;
             }
-            return renderMessageGroup(item, {
-              onOpenSidebar: props.onOpenSidebar,
-              showReasoning,
-              assistantName: props.assistantName,
-              assistantAvatar: assistantIdentity.avatar,
-              basePath: props.basePath,
-              contextWindow:
-                activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null,
-              onDelete: () => {
-                deleted.delete(item.key);
-                requestUpdate();
-              },
-            });
-          }
-          return nothing;
-        },
-      )}
+            if (item.kind === "reading-indicator") {
+              return renderReadingIndicatorGroup(
+                assistantIdentity,
+                props.basePath,
+                props.assistantAttachmentAuthToken ?? null,
+              );
+            }
+            if (item.kind === "stream") {
+              return renderStreamingGroup(
+                item.text,
+                item.startedAt,
+                props.onOpenSidebar,
+                assistantIdentity,
+                props.basePath,
+                props.assistantAttachmentAuthToken ?? null,
+              );
+            }
+            if (item.kind === "group") {
+              if (deleted.has(item.key)) {
+                return nothing;
+              }
+              return renderMessageGroup(item, {
+                onOpenSidebar: props.onOpenSidebar,
+                showReasoning,
+                showToolCalls: props.showToolCalls,
+                autoExpandToolCalls: Boolean(props.autoExpandToolCalls),
+                isToolMessageExpanded: (messageId: string) =>
+                  expandedToolCards.get(messageId) ?? false,
+                onToggleToolMessageExpanded: (messageId: string) => {
+                  expandedToolCards.set(messageId, !expandedToolCards.get(messageId));
+                  requestUpdate();
+                },
+                isToolExpanded: (toolCardId: string) => expandedToolCards.get(toolCardId) ?? false,
+                onToggleToolExpanded: toggleToolCardExpanded,
+                onRequestUpdate: requestUpdate,
+                assistantName: props.assistantName,
+                assistantAvatar: assistantIdentity.avatar,
+                userName: props.userName ?? null,
+                userAvatar: props.userAvatar ?? null,
+                basePath: props.basePath,
+                localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
+                assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
+                canvasHostUrl: props.canvasHostUrl,
+                embedSandboxMode: props.embedSandboxMode ?? "scripts",
+                allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
+                contextWindow:
+                  activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null,
+                onDelete: () => {
+                  deleted.delete(item.key);
+                  requestUpdate();
+                },
+              });
+            }
+            return nothing;
+          },
+        )}
       </div>
     </div>
   `;
@@ -1013,20 +961,33 @@ export function renderChat(props: ChatProps) {
       }
     }
 
-    // Input history (only when input is empty)
-    if (!props.draft.trim()) {
-      if (e.key === "ArrowUp") {
-        const prev = inputHistory.up();
-        if (prev !== null) {
+    if (e.key === "Escape" && props.sideResult && !vs.searchOpen) {
+      e.preventDefault();
+      props.onDismissSideResult?.();
+      return;
+    }
+
+    if ((e.key === "ArrowUp" || e.key === "ArrowDown") && props.onHistoryKeydown) {
+      const target = e.target as HTMLTextAreaElement;
+      const result = props.onHistoryKeydown({
+        key: e.key,
+        selectionStart: target.selectionStart,
+        selectionEnd: target.selectionEnd,
+        valueLength: target.value.length,
+        altKey: e.altKey,
+        ctrlKey: e.ctrlKey,
+        metaKey: e.metaKey,
+        shiftKey: e.shiftKey,
+        isComposing: e.isComposing,
+        keyCode: e.keyCode,
+      });
+      if (result.handled) {
+        if (result.preventDefault) {
           e.preventDefault();
-          props.onDraftChange(prev);
         }
-        return;
-      }
-      if (e.key === "ArrowDown") {
-        const next = inputHistory.down();
-        e.preventDefault();
-        props.onDraftChange(next ?? "");
+        if (result.restoreCaret) {
+          restoreHistoryCaret(target, result.restoreCaret);
+        }
         return;
       }
     }
@@ -1052,9 +1013,6 @@ export function renderChat(props: ChatProps) {
       }
       e.preventDefault();
       if (canCompose) {
-        if (props.draft.trim()) {
-          inputHistory.push(props.draft);
-        }
         props.onSend();
       }
     }
@@ -1064,7 +1022,6 @@ export function renderChat(props: ChatProps) {
     const target = e.target as HTMLTextAreaElement;
     adjustTextareaHeight(target);
     updateSlashMenu(target.value, requestUpdate);
-    inputHistory.reset();
     props.onDraftChange(target.value);
   };
 
@@ -1076,10 +1033,8 @@ export function renderChat(props: ChatProps) {
     >
       ${props.disabledReason ? html`<div class="callout">${props.disabledReason}</div>` : nothing}
       ${props.error ? html`<div class="callout danger">${props.error}</div>` : nothing}
-
-      ${
-        props.focusMode
-          ? html`
+      ${props.focusMode
+        ? html`
             <button
               class="chat-focus-exit"
               type="button"
@@ -1090,11 +1045,8 @@ export function renderChat(props: ChatProps) {
               ${icons.x}
             </button>
           `
-          : nothing
-      }
-
-      ${renderSearchBar(requestUpdate)}
-      ${renderPinnedSection(props, pinned, requestUpdate)}
+        : nothing}
+      ${renderSearchBar(requestUpdate)} ${renderPinnedSection(props, pinned, requestUpdate)}
 
       <div class="chat-split-container ${sidebarOpen ? "chat-split-container--open" : ""}">
         <div
@@ -1104,9 +1056,8 @@ export function renderChat(props: ChatProps) {
           ${thread}
         </div>
 
-        ${
-          sidebarOpen
-            ? html`
+        ${sidebarOpen
+          ? html`
               <resizable-divider
                 .splitRatio=${splitRatio}
                 @resize=${(e: CustomEvent) => props.onSplitRatioChange?.(e.detail.splitRatio)}
@@ -1115,74 +1066,50 @@ export function renderChat(props: ChatProps) {
                 ${renderMarkdownSidebar({
                   content: props.sidebarContent ?? null,
                   error: props.sidebarError ?? null,
+                  canvasHostUrl: props.canvasHostUrl,
+                  embedSandboxMode: props.embedSandboxMode ?? "scripts",
+                  allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
                   onClose: props.onCloseSidebar!,
                   onViewRawText: () => {
-                    if (!props.sidebarContent || !props.onOpenSidebar) {
+                    if (!props.onOpenSidebar) {
                       return;
                     }
-                    props.onOpenSidebar(`\`\`\`\n${props.sidebarContent}\n\`\`\``);
+                    const rawContent = buildRawSidebarContent(props.sidebarContent);
+                    if (rawContent) {
+                      props.onOpenSidebar(rawContent);
+                    }
                   },
                 })}
               </div>
             `
-            : nothing
-        }
+          : nothing}
       </div>
 
-      ${
-        props.queue.length
-          ? html`
-            <div class="chat-queue" role="status" aria-live="polite">
-              <div class="chat-queue__title">Queued (${props.queue.length})</div>
-              <div class="chat-queue__list">
-                ${props.queue.map(
-                  (item) => html`
-                    <div class="chat-queue__item">
-                      <div class="chat-queue__text">
-                        ${
-                          item.text ||
-                          (item.attachments?.length ? `Image (${item.attachments.length})` : "")
-                        }
-                      </div>
-                      <button
-                        class="btn chat-queue__remove"
-                        type="button"
-                        aria-label="Remove queued message"
-                        @click=${() => props.onQueueRemove(item.id)}
-                      >
-                        ${icons.x}
-                      </button>
-                    </div>
-                  `,
-                )}
-              </div>
-            </div>
-          `
-          : nothing
-      }
-
+      ${renderChatQueue({
+        queue: props.queue,
+        canAbort: props.canAbort,
+        onQueueSteer: props.onQueueSteer,
+        onQueueRemove: props.onQueueRemove,
+      })}
+      ${renderSideResult(props.sideResult, props.onDismissSideResult)}
       ${renderFallbackIndicator(props.fallbackStatus)}
       ${renderCompactionIndicator(props.compactionStatus)}
-      ${renderContextNotice(activeSession, props.sessions?.defaults?.contextTokens ?? null)}
-
-      ${
-        props.showNewMessages
-          ? html`
-            <button
-              class="agent-chat__scroll-pill"
-              type="button"
-              @click=${props.onScrollToBottom}
-            >
+      ${renderContextNotice(activeSession, props.sessions?.defaults?.contextTokens ?? null, {
+        compactBusy,
+        compactDisabled: !props.connected || isBusy || Boolean(props.canAbort),
+        onCompact: props.onCompact,
+      })}
+      ${props.showNewMessages
+        ? html`
+            <button class="chat-new-messages" type="button" @click=${props.onScrollToBottom}>
               ${icons.arrowDown} New messages
             </button>
           `
-          : nothing
-      }
+        : nothing}
 
       <!-- Input bar -->
       <div class="agent-chat__input">
-        ${renderSlashMenu(requestUpdate, props)}
-        ${renderAttachmentPreview(props)}
+        ${renderSlashMenu(requestUpdate, props)} ${renderAttachmentPreview(props)}
 
         <input
           type="file"
@@ -1192,7 +1119,19 @@ export function renderChat(props: ChatProps) {
           @change=${(e: Event) => handleFileSelect(e, props)}
         />
 
-        ${vs.sttRecording && vs.sttInterimText ? html`<div class="agent-chat__stt-interim">${vs.sttInterimText}</div>` : nothing}
+        ${props.realtimeTalkActive || props.realtimeTalkDetail || props.realtimeTalkTranscript
+          ? html`
+              <div class="agent-chat__stt-interim agent-chat__talk-status">
+                ${props.realtimeTalkDetail ??
+                props.realtimeTalkTranscript ??
+                (props.realtimeTalkStatus === "thinking"
+                  ? "Asking OpenClaw..."
+                  : props.realtimeTalkStatus === "connecting"
+                    ? "Connecting Talk..."
+                    : "Talk live")}
+              </div>
+            `
+          : nothing}
 
         <textarea
           ${ref((el) => el && adjustTextareaHeight(el as HTMLTextAreaElement))}
@@ -1202,7 +1141,7 @@ export function renderChat(props: ChatProps) {
           @keydown=${handleKeyDown}
           @input=${handleInput}
           @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
-          placeholder=${vs.sttRecording ? "Listening..." : placeholder}
+          placeholder=${placeholder}
           rows="1"
         ></textarea>
 
@@ -1214,274 +1153,45 @@ export function renderChat(props: ChatProps) {
                 document.querySelector<HTMLInputElement>(".agent-chat__file-input")?.click();
               }}
               title="Attach file"
+              aria-label="Attach file"
               ?disabled=${!props.connected}
             >
               ${icons.paperclip}
             </button>
 
-            ${
-              isSttSupported()
-                ? html`
+            ${props.onToggleRealtimeTalk
+              ? html`
                   <button
-                    class="agent-chat__input-btn ${vs.sttRecording ? "agent-chat__input-btn--recording" : ""}"
-                    @click=${() => {
-                      if (vs.sttRecording) {
-                        stopStt();
-                        vs.sttRecording = false;
-                        vs.sttInterimText = "";
-                        requestUpdate();
-                      } else {
-                        const started = startStt({
-                          onTranscript: (text, isFinal) => {
-                            if (isFinal) {
-                              const current = getDraft();
-                              const sep = current && !current.endsWith(" ") ? " " : "";
-                              props.onDraftChange(current + sep + text);
-                              vs.sttInterimText = "";
-                            } else {
-                              vs.sttInterimText = text;
-                            }
-                            requestUpdate();
-                          },
-                          onStart: () => {
-                            vs.sttRecording = true;
-                            requestUpdate();
-                          },
-                          onEnd: () => {
-                            vs.sttRecording = false;
-                            vs.sttInterimText = "";
-                            requestUpdate();
-                          },
-                          onError: () => {
-                            vs.sttRecording = false;
-                            vs.sttInterimText = "";
-                            requestUpdate();
-                          },
-                        });
-                        if (started) {
-                          vs.sttRecording = true;
-                          requestUpdate();
-                        }
-                      }
-                    }}
-                    title=${vs.sttRecording ? "Stop recording" : "Voice input"}
+                    class="agent-chat__input-btn ${props.realtimeTalkActive
+                      ? "agent-chat__input-btn--talk"
+                      : ""}"
+                    @click=${props.onToggleRealtimeTalk}
+                    title=${props.realtimeTalkActive ? "Stop Talk" : "Start Talk"}
+                    aria-label=${props.realtimeTalkActive ? "Stop Talk" : "Start Talk"}
                     ?disabled=${!props.connected}
                   >
-                    ${vs.sttRecording ? icons.micOff : icons.mic}
+                    ${props.realtimeTalkActive ? icons.volume2 : icons.radio}
                   </button>
                 `
-                : nothing
-            }
-
+              : nothing}
             ${tokens ? html`<span class="agent-chat__token-count">${tokens}</span>` : nothing}
           </div>
 
-          <div class="agent-chat__toolbar-right">
-            ${nothing /* search hidden for now */}
-            ${
-              canAbort
-                ? nothing
-                : html`
-                    <button
-                      class="btn-ghost"
-                      @click=${props.onNewSession}
-                      title="New session"
-                      aria-label="New session"
-                    >
-                      ${icons.plus}
-                    </button>
-                  `
-            }
-            <button class="btn-ghost" @click=${() => exportMarkdown(props)} title="Export" ?disabled=${props.messages.length === 0}>
-              ${icons.download}
-            </button>
-
-            ${
-              canAbort && (isBusy || props.sending)
-                ? html`
-                  <button class="chat-send-btn chat-send-btn--stop" @click=${props.onAbort} title="Stop">
-                    ${icons.stop}
-                  </button>
-                `
-                : html`
-                  <button
-                    class="chat-send-btn"
-                    @click=${() => {
-                      if (props.draft.trim()) {
-                        inputHistory.push(props.draft);
-                      }
-                      props.onSend();
-                    }}
-                    ?disabled=${!props.connected || props.sending}
-                    title=${isBusy ? "Queue" : "Send"}
-                  >
-                    ${icons.send}
-                  </button>
-                `
-            }
-          </div>
+          ${renderChatRunControls({
+            canAbort,
+            connected: props.connected,
+            draft: props.draft,
+            hasMessages: props.messages.length > 0,
+            isBusy,
+            sending: props.sending,
+            onAbort: props.onAbort,
+            onExport: () => exportMarkdown(props),
+            onNewSession: props.onNewSession,
+            onSend: props.onSend,
+            onStoreDraft: () => {},
+          })}
         </div>
       </div>
     </section>
   `;
-}
-
-const CHAT_HISTORY_RENDER_LIMIT = 200;
-
-function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
-  const result: Array<ChatItem | MessageGroup> = [];
-  let currentGroup: MessageGroup | null = null;
-
-  for (const item of items) {
-    if (item.kind !== "message") {
-      if (currentGroup) {
-        result.push(currentGroup);
-        currentGroup = null;
-      }
-      result.push(item);
-      continue;
-    }
-
-    const normalized = normalizeMessage(item.message);
-    const role = normalizeRoleForGrouping(normalized.role);
-    const senderLabel = role.toLowerCase() === "user" ? (normalized.senderLabel ?? null) : null;
-    const timestamp = normalized.timestamp || Date.now();
-
-    if (
-      !currentGroup ||
-      currentGroup.role !== role ||
-      (role.toLowerCase() === "user" && currentGroup.senderLabel !== senderLabel)
-    ) {
-      if (currentGroup) {
-        result.push(currentGroup);
-      }
-      currentGroup = {
-        kind: "group",
-        key: `group:${role}:${item.key}`,
-        role,
-        senderLabel,
-        messages: [{ message: item.message, key: item.key }],
-        timestamp,
-        isStreaming: false,
-      };
-    } else {
-      currentGroup.messages.push({ message: item.message, key: item.key });
-    }
-  }
-
-  if (currentGroup) {
-    result.push(currentGroup);
-  }
-  return result;
-}
-
-function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
-  const items: ChatItem[] = [];
-  const history = Array.isArray(props.messages) ? props.messages : [];
-  const tools = Array.isArray(props.toolMessages) ? props.toolMessages : [];
-  const historyStart = Math.max(0, history.length - CHAT_HISTORY_RENDER_LIMIT);
-  if (historyStart > 0) {
-    items.push({
-      kind: "message",
-      key: "chat:history:notice",
-      message: {
-        role: "system",
-        content: `Showing last ${CHAT_HISTORY_RENDER_LIMIT} messages (${historyStart} hidden).`,
-        timestamp: Date.now(),
-      },
-    });
-  }
-  for (let i = historyStart; i < history.length; i++) {
-    const msg = history[i];
-    const normalized = normalizeMessage(msg);
-    const raw = msg as Record<string, unknown>;
-    const marker = raw.__openclaw as Record<string, unknown> | undefined;
-    if (marker && marker.kind === "compaction") {
-      items.push({
-        kind: "divider",
-        key:
-          typeof marker.id === "string"
-            ? `divider:compaction:${marker.id}`
-            : `divider:compaction:${normalized.timestamp}:${i}`,
-        label: "Compaction",
-        timestamp: normalized.timestamp ?? Date.now(),
-      });
-      continue;
-    }
-
-    if (!props.showThinking && normalized.role.toLowerCase() === "toolresult") {
-      continue;
-    }
-
-    // Apply search filter if active
-    if (vs.searchOpen && vs.searchQuery.trim() && !messageMatchesSearchQuery(msg, vs.searchQuery)) {
-      continue;
-    }
-
-    items.push({
-      kind: "message",
-      key: messageKey(msg, i),
-      message: msg,
-    });
-  }
-  // Interleave stream segments and tool cards in order. Each segment
-  // contains text that was streaming before the corresponding tool started.
-  // This ensures correct visual ordering: text → tool → text → tool → ...
-  const segments = props.streamSegments ?? [];
-  const maxLen = Math.max(segments.length, tools.length);
-  for (let i = 0; i < maxLen; i++) {
-    if (i < segments.length && segments[i].text.trim().length > 0) {
-      items.push({
-        kind: "stream" as const,
-        key: `stream-seg:${props.sessionKey}:${i}`,
-        text: segments[i].text,
-        startedAt: segments[i].ts,
-      });
-    }
-    if (i < tools.length) {
-      items.push({
-        kind: "message",
-        key: messageKey(tools[i], i + history.length),
-        message: tools[i],
-      });
-    }
-  }
-
-  if (props.stream !== null) {
-    const key = `stream:${props.sessionKey}:${props.streamStartedAt ?? "live"}`;
-    if (props.stream.trim().length > 0) {
-      items.push({
-        kind: "stream",
-        key,
-        text: props.stream,
-        startedAt: props.streamStartedAt ?? Date.now(),
-      });
-    } else {
-      items.push({ kind: "reading-indicator", key });
-    }
-  }
-
-  return groupMessages(items);
-}
-
-function messageKey(message: unknown, index: number): string {
-  const m = message as Record<string, unknown>;
-  const toolCallId = typeof m.toolCallId === "string" ? m.toolCallId : "";
-  if (toolCallId) {
-    return `tool:${toolCallId}`;
-  }
-  const id = typeof m.id === "string" ? m.id : "";
-  if (id) {
-    return `msg:${id}`;
-  }
-  const messageId = typeof m.messageId === "string" ? m.messageId : "";
-  if (messageId) {
-    return `msg:${messageId}`;
-  }
-  const timestamp = typeof m.timestamp === "number" ? m.timestamp : null;
-  const role = typeof m.role === "string" ? m.role : "unknown";
-  if (timestamp != null) {
-    return `msg:${role}:${timestamp}:${index}`;
-  }
-  return `msg:${role}:${index}`;
 }

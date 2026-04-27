@@ -1,33 +1,65 @@
 import { html, nothing } from "lit";
-import { repeat } from "lit/directives/repeat.js";
-import { parseAgentSessionKey } from "../../../src/sessions/session-key-utils.js";
 import { t } from "../i18n/index.ts";
-import { refreshChat } from "./app-chat.ts";
+import { refreshChat, refreshChatAvatar } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
-import { OpenClawApp } from "./app.ts";
+import {
+  isCronSessionKey,
+  parseSessionKey,
+  renderChatSessionSelect as renderChatSessionSelectBase,
+  renderChatThinkingSelect,
+  resolveSessionDisplayName,
+  resolveSessionOptionGroups,
+} from "./chat/session-controls.ts";
+import { refreshSlashCommands } from "./chat/slash-commands.ts";
+import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
-import type { ThemeTransitionContext } from "./theme-transition.ts";
-import type { ThemeMode, ThemeName } from "./theme.ts";
+import { parseAgentSessionKey } from "./session-key.ts";
+import { normalizeOptionalString } from "./string-coerce.ts";
+import type { ThemeMode } from "./theme.ts";
 import type { SessionsListResult } from "./types.ts";
+
+export { isCronSessionKey, parseSessionKey, resolveSessionDisplayName, resolveSessionOptionGroups };
 
 type SessionDefaultsSnapshot = {
   mainSessionKey?: string;
   mainKey?: string;
 };
 
+type SessionSwitchHost = AppViewState & {
+  chatStreamStartedAt: number | null;
+  chatSideResultTerminalRuns: Set<string>;
+  resetChatInputHistoryNavigation(): void;
+  resetToolStream(): void;
+  resetChatScroll(): void;
+};
+
+type ChatRefreshHost = AppViewState & {
+  chatManualRefreshInFlight: boolean;
+  chatNewMessagesBelow: boolean;
+  resetToolStream(): void;
+  scrollToBottom(opts?: { smooth?: boolean }): void;
+  updateComplete?: Promise<unknown>;
+};
+
+export function resolveAssistantAttachmentAuthToken(
+  state: Pick<AppViewState, "hello" | "settings" | "password">,
+) {
+  return resolveControlUiAuthToken(state);
+}
+
 function resolveSidebarChatSessionKey(state: AppViewState): string {
   const snapshot = state.hello?.snapshot as
     | { sessionDefaults?: SessionDefaultsSnapshot }
     | undefined;
-  const mainSessionKey = snapshot?.sessionDefaults?.mainSessionKey?.trim();
+  const mainSessionKey = normalizeOptionalString(snapshot?.sessionDefaults?.mainSessionKey);
   if (mainSessionKey) {
     return mainSessionKey;
   }
-  const mainKey = snapshot?.sessionDefaults?.mainKey?.trim();
+  const mainKey = normalizeOptionalString(snapshot?.sessionDefaults?.mainKey);
   if (mainKey) {
     return mainKey;
   }
@@ -35,13 +67,30 @@ function resolveSidebarChatSessionKey(state: AppViewState): string {
 }
 
 function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string) {
+  const host = state as unknown as SessionSwitchHost;
   state.sessionKey = sessionKey;
   state.chatMessage = "";
+  state.chatAttachments = [];
+  state.chatMessages = [];
+  state.chatToolMessages = [];
+  state.chatStreamSegments = [];
+  state.chatThinkingLevel = null;
   state.chatStream = null;
-  (state as unknown as OpenClawApp).chatStreamStartedAt = null;
+  state.chatSideResult = null;
+  state.lastError = null;
+  state.compactionStatus = null;
+  state.fallbackStatus = null;
+  state.chatAvatarUrl = null;
+  state.chatAvatarSource = null;
+  state.chatAvatarStatus = null;
+  state.chatAvatarReason = null;
+  state.chatQueue = [];
+  host.resetChatInputHistoryNavigation();
+  host.chatStreamStartedAt = null;
   state.chatRunId = null;
-  (state as unknown as OpenClawApp).resetToolStream();
-  (state as unknown as OpenClawApp).resetChatScroll();
+  host.chatSideResultTerminalRuns.clear();
+  host.resetToolStream();
+  host.resetChatScroll();
   state.applySettings({
     ...state.settings,
     sessionKey,
@@ -49,10 +98,10 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   });
 }
 
-export function renderTab(state: AppViewState, tab: Tab) {
+export function renderTab(state: AppViewState, tab: Tab, opts?: { collapsed?: boolean }) {
   const href = pathForTab(tab, state.basePath);
   const isActive = state.tab === tab;
-  const collapsed = state.settings.navCollapsed;
+  const collapsed = opts?.collapsed ?? state.settings.navCollapsed;
   return html`
     <a
       href=${href}
@@ -70,9 +119,11 @@ export function renderTab(state: AppViewState, tab: Tab) {
         }
         event.preventDefault();
         if (tab === "chat") {
-          const mainSessionKey = resolveSidebarChatSessionKey(state);
-          if (state.sessionKey !== mainSessionKey) {
+          if (!state.sessionKey) {
+            const mainSessionKey = resolveSidebarChatSessionKey(state);
             resetChatStateForSessionSwitch(state, mainSessionKey);
+          }
+          if (state.tab !== "chat") {
             void state.loadAssistantIdentity();
           }
         }
@@ -103,64 +154,29 @@ function renderCronFilterIcon(hiddenCount: number) {
         <circle cx="12" cy="12" r="10"></circle>
         <polyline points="12 6 12 12 16 14"></polyline>
       </svg>
-      ${
-        hiddenCount > 0
-          ? html`<span
+      ${hiddenCount > 0
+        ? html`<span
             style="
               position: absolute;
               top: -5px;
               right: -6px;
               background: var(--color-accent, #6366f1);
               color: #fff;
-              border-radius: 999px;
+              border-radius: var(--radius-full);
               font-size: 9px;
               line-height: 1;
               padding: 1px 3px;
               pointer-events: none;
             "
-          >${hiddenCount}</span
+            >${hiddenCount}</span
           >`
-          : ""
-      }
+        : ""}
     </span>
   `;
 }
 
 export function renderChatSessionSelect(state: AppViewState) {
-  const sessionGroups = resolveSessionOptionGroups(state, state.sessionKey, state.sessionsResult);
-  return html`
-    <div class="chat-controls__session-row">
-      <label class="field chat-controls__session">
-        <select
-          .value=${state.sessionKey}
-          ?disabled=${!state.connected || sessionGroups.length === 0}
-          @change=${(e: Event) => {
-            const next = (e.target as HTMLSelectElement).value;
-            if (state.sessionKey === next) {
-              return;
-            }
-            switchChatSession(state, next);
-          }}
-        >
-          ${repeat(
-            sessionGroups,
-            (group) => group.id,
-            (group) =>
-              html`<optgroup label=${group.label}>
-                ${repeat(
-                  group.options,
-                  (entry) => entry.key,
-                  (entry) =>
-                    html`<option value=${entry.key} title=${entry.title}>
-                      ${entry.label}
-                    </option>`,
-                )}
-              </optgroup>`,
-          )}
-        </select>
-      </label>
-    </div>
-  `;
+  return renderChatSessionSelectBase(state, switchChatSession);
 }
 
 export function renderChatControls(state: AppViewState) {
@@ -171,7 +187,37 @@ export function renderChatControls(state: AppViewState) {
   const disableThinkingToggle = state.onboarding;
   const disableFocusToggle = state.onboarding;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
+  const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
   const focusActive = state.onboarding ? true : state.settings.chatFocusMode;
+  const refreshLabel = t("chat.refreshTitle");
+  const thinkingLabel = disableThinkingToggle
+    ? t("chat.onboardingDisabled")
+    : t("chat.thinkingToggle");
+  const toolCallsLabel = disableThinkingToggle
+    ? t("chat.onboardingDisabled")
+    : t("chat.toolCallsToggle");
+  const focusLabel = disableFocusToggle ? t("chat.onboardingDisabled") : t("chat.focusToggle");
+  const cronLabel = hideCron
+    ? hiddenCronCount > 0
+      ? t("chat.showCronSessionsHidden", { count: String(hiddenCronCount) })
+      : t("chat.showCronSessions")
+    : t("chat.hideCronSessions");
+  const toolCallsIcon = html`
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    >
+      <path
+        d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"
+      ></path>
+    </svg>
+  `;
   const refreshIcon = html`
     <svg
       width="18"
@@ -211,7 +257,7 @@ export function renderChatControls(state: AppViewState) {
         class="btn btn--sm btn--icon"
         ?disabled=${state.chatLoading || !state.connected}
         @click=${async () => {
-          const app = state as unknown as OpenClawApp;
+          const app = state as unknown as ChatRefreshHost;
           app.chatManualRefreshInFlight = true;
           app.chatNewMessagesBelow = false;
           await app.updateComplete;
@@ -228,7 +274,9 @@ export function renderChatControls(state: AppViewState) {
             });
           }
         }}
-        title=${t("chat.refreshTitle")}
+        title=${refreshLabel}
+        aria-label=${refreshLabel}
+        data-tooltip=${refreshLabel}
       >
         ${refreshIcon}
       </button>
@@ -246,9 +294,30 @@ export function renderChatControls(state: AppViewState) {
           });
         }}
         aria-pressed=${showThinking}
-        title=${disableThinkingToggle ? t("chat.onboardingDisabled") : t("chat.thinkingToggle")}
+        title=${thinkingLabel}
+        aria-label=${thinkingLabel}
+        data-tooltip=${thinkingLabel}
       >
         ${icons.brain}
+      </button>
+      <button
+        class="btn btn--sm btn--icon ${showToolCalls ? "active" : ""}"
+        ?disabled=${disableThinkingToggle}
+        @click=${() => {
+          if (disableThinkingToggle) {
+            return;
+          }
+          state.applySettings({
+            ...state.settings,
+            chatShowToolCalls: !state.settings.chatShowToolCalls,
+          });
+        }}
+        aria-pressed=${showToolCalls}
+        title=${toolCallsLabel}
+        aria-label=${toolCallsLabel}
+        data-tooltip=${toolCallsLabel}
+      >
+        ${toolCallsIcon}
       </button>
       <button
         class="btn btn--sm btn--icon ${focusActive ? "active" : ""}"
@@ -263,7 +332,9 @@ export function renderChatControls(state: AppViewState) {
           });
         }}
         aria-pressed=${focusActive}
-        title=${disableFocusToggle ? t("chat.onboardingDisabled") : t("chat.focusToggle")}
+        title=${focusLabel}
+        aria-label=${focusLabel}
+        data-tooltip=${focusLabel}
       >
         ${focusIcon}
       </button>
@@ -273,13 +344,9 @@ export function renderChatControls(state: AppViewState) {
           state.sessionsHideCron = !hideCron;
         }}
         aria-pressed=${hideCron}
-        title=${
-          hideCron
-            ? hiddenCronCount > 0
-              ? t("chat.showCronSessionsHidden", { count: String(hiddenCronCount) })
-              : t("chat.showCronSessions")
-            : t("chat.hideCronSessions")
-        }
+        title=${cronLabel}
+        aria-label=${cronLabel}
+        data-tooltip=${cronLabel}
       >
         ${renderCronFilterIcon(hiddenCronCount)}
       </button>
@@ -287,22 +354,190 @@ export function renderChatControls(state: AppViewState) {
   `;
 }
 
-function switchChatSession(state: AppViewState, nextSessionKey: string) {
-  state.sessionKey = nextSessionKey;
-  state.chatMessage = "";
-  state.chatStream = null;
-  // P1: Clear queued chat items from the previous session
-  (state as unknown as { chatQueue: unknown[] }).chatQueue = [];
-  (state as unknown as OpenClawApp).chatStreamStartedAt = null;
-  state.chatRunId = null;
-  (state as unknown as OpenClawApp).resetToolStream();
-  (state as unknown as OpenClawApp).resetChatScroll();
-  state.applySettings({
-    ...state.settings,
-    sessionKey: nextSessionKey,
-    lastActiveSessionKey: nextSessionKey,
-  });
+/**
+ * Mobile-only gear toggle + dropdown for chat controls.
+ * Rendered in the topbar so it doesn't consume content-header space.
+ * Hidden on desktop via CSS.
+ */
+export function renderChatMobileToggle(state: AppViewState) {
+  const sessionGroups = resolveSessionOptionGroups(state, state.sessionKey, state.sessionsResult);
+  const disableThinkingToggle = state.onboarding;
+  const disableFocusToggle = state.onboarding;
+  const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
+  const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
+  const focusActive = state.onboarding ? true : state.settings.chatFocusMode;
+  const toolCallsIcon = html`
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    >
+      <path
+        d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"
+      ></path>
+    </svg>
+  `;
+  const focusIcon = html`
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    >
+      <path d="M4 7V4h3"></path>
+      <path d="M20 7V4h-3"></path>
+      <path d="M4 17v3h3"></path>
+      <path d="M20 17v3h-3"></path>
+      <circle cx="12" cy="12" r="3"></circle>
+    </svg>
+  `;
+
+  return html`
+    <div class="chat-mobile-controls-wrapper">
+      <button
+        class="btn btn--sm btn--icon chat-controls-mobile-toggle"
+        @click=${(e: Event) => {
+          e.stopPropagation();
+          const btn = e.currentTarget as HTMLElement;
+          const dropdown = btn.nextElementSibling as HTMLElement;
+          if (dropdown) {
+            const isOpen = dropdown.classList.toggle("open");
+            if (isOpen) {
+              const close = () => {
+                dropdown.classList.remove("open");
+                document.removeEventListener("click", close);
+              };
+              setTimeout(() => document.addEventListener("click", close, { once: true }), 0);
+            }
+          }
+        }}
+        title="Chat settings"
+        aria-label="Chat settings"
+      >
+        <svg
+          width="18"
+          height="18"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <circle cx="12" cy="12" r="3"></circle>
+          <path
+            d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
+          ></path>
+        </svg>
+      </button>
+      <div
+        class="chat-controls-dropdown"
+        @click=${(e: Event) => {
+          e.stopPropagation();
+        }}
+      >
+        <div class="chat-controls">
+          <label class="field chat-controls__session">
+            <select
+              .value=${state.sessionKey}
+              @change=${(e: Event) => {
+                const next = (e.target as HTMLSelectElement).value;
+                switchChatSession(state, next);
+              }}
+            >
+              ${sessionGroups.map(
+                (group) => html`
+                  <optgroup label=${group.label}>
+                    ${group.options.map(
+                      (opt) => html`
+                        <option
+                          value=${opt.key}
+                          title=${opt.title}
+                          ?selected=${opt.key === state.sessionKey}
+                        >
+                          ${opt.label}
+                        </option>
+                      `,
+                    )}
+                  </optgroup>
+                `,
+              )}
+            </select>
+          </label>
+          ${renderChatThinkingSelect(state)}
+          <div class="chat-controls__thinking">
+            <button
+              class="btn btn--sm btn--icon ${showThinking ? "active" : ""}"
+              ?disabled=${disableThinkingToggle}
+              @click=${() => {
+                if (!disableThinkingToggle) {
+                  state.applySettings({
+                    ...state.settings,
+                    chatShowThinking: !state.settings.chatShowThinking,
+                  });
+                }
+              }}
+              aria-pressed=${showThinking}
+              title=${t("chat.thinkingToggle")}
+            >
+              ${icons.brain}
+            </button>
+            <button
+              class="btn btn--sm btn--icon ${showToolCalls ? "active" : ""}"
+              ?disabled=${disableThinkingToggle}
+              @click=${() => {
+                if (!disableThinkingToggle) {
+                  state.applySettings({
+                    ...state.settings,
+                    chatShowToolCalls: !state.settings.chatShowToolCalls,
+                  });
+                }
+              }}
+              aria-pressed=${showToolCalls}
+              title=${t("chat.toolCallsToggle")}
+            >
+              ${toolCallsIcon}
+            </button>
+            <button
+              class="btn btn--sm btn--icon ${focusActive ? "active" : ""}"
+              ?disabled=${disableFocusToggle}
+              @click=${() => {
+                if (!disableFocusToggle) {
+                  state.applySettings({
+                    ...state.settings,
+                    chatFocusMode: !state.settings.chatFocusMode,
+                  });
+                }
+              }}
+              aria-pressed=${focusActive}
+              title=${t("chat.focusToggle")}
+            >
+              ${focusIcon}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+export function switchChatSession(state: AppViewState, nextSessionKey: string) {
+  resetChatStateForSessionSwitch(state, nextSessionKey);
   void state.loadAssistantIdentity();
+  void refreshChatAvatar(state);
+  void refreshSlashCommands({
+    client: state.client,
+    agentId: parseAgentSessionKey(nextSessionKey)?.agentId,
+  });
   syncUrlWithSessionKey(
     state as unknown as Parameters<typeof syncUrlWithSessionKey>[0],
     nextSessionKey,
@@ -316,201 +551,9 @@ async function refreshSessionOptions(state: AppViewState) {
   await loadSessions(state as unknown as Parameters<typeof loadSessions>[0], {
     activeMinutes: 0,
     limit: 0,
-    includeGlobal: false,
-    includeUnknown: false,
+    includeGlobal: true,
+    includeUnknown: true,
   });
-}
-
-/* ── Channel display labels ────────────────────────────── */
-const CHANNEL_LABELS: Record<string, string> = {
-  bluebubbles: "iMessage",
-  telegram: "Telegram",
-  discord: "Discord",
-  signal: "Signal",
-  slack: "Slack",
-  whatsapp: "WhatsApp",
-  matrix: "Matrix",
-  email: "Email",
-  sms: "SMS",
-};
-
-const KNOWN_CHANNEL_KEYS = Object.keys(CHANNEL_LABELS);
-
-/** Parsed type / context extracted from a session key. */
-export type SessionKeyInfo = {
-  /** Prefix for typed sessions (Subagent:/Cron:). Empty for others. */
-  prefix: string;
-  /** Human-readable fallback when no label / displayName is available. */
-  fallbackName: string;
-};
-
-function capitalize(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}
-
-/**
- * Parse a session key to extract type information and a human-readable
- * fallback display name.  Exported for testing.
- */
-export function parseSessionKey(key: string): SessionKeyInfo {
-  const normalized = key.toLowerCase();
-
-  // ── Main session ─────────────────────────────────
-  if (key === "main" || key === "agent:main:main") {
-    return { prefix: "", fallbackName: "Main Session" };
-  }
-
-  // ── Subagent ─────────────────────────────────────
-  if (key.includes(":subagent:")) {
-    return { prefix: "Subagent:", fallbackName: "Subagent:" };
-  }
-
-  // ── Cron job ─────────────────────────────────────
-  if (normalized.startsWith("cron:") || key.includes(":cron:")) {
-    return { prefix: "Cron:", fallbackName: "Cron Job:" };
-  }
-
-  // ── Direct chat  (agent:<x>:<channel>:direct:<id>) ──
-  const directMatch = key.match(/^agent:[^:]+:([^:]+):direct:(.+)$/);
-  if (directMatch) {
-    const channel = directMatch[1];
-    const identifier = directMatch[2];
-    const channelLabel = CHANNEL_LABELS[channel] ?? capitalize(channel);
-    return { prefix: "", fallbackName: `${channelLabel} · ${identifier}` };
-  }
-
-  // ── Group chat  (agent:<x>:<channel>:group:<id>) ────
-  const groupMatch = key.match(/^agent:[^:]+:([^:]+):group:(.+)$/);
-  if (groupMatch) {
-    const channel = groupMatch[1];
-    const channelLabel = CHANNEL_LABELS[channel] ?? capitalize(channel);
-    return { prefix: "", fallbackName: `${channelLabel} Group` };
-  }
-
-  // ── Channel-prefixed legacy keys (e.g. "bluebubbles:g-…") ──
-  for (const ch of KNOWN_CHANNEL_KEYS) {
-    if (key === ch || key.startsWith(`${ch}:`)) {
-      return { prefix: "", fallbackName: `${CHANNEL_LABELS[ch]} Session` };
-    }
-  }
-
-  // ── Unknown — return key as-is ───────────────────
-  return { prefix: "", fallbackName: key };
-}
-
-export function resolveSessionDisplayName(
-  key: string,
-  row?: SessionsListResult["sessions"][number],
-): string {
-  const label = row?.label?.trim() || "";
-  const displayName = row?.displayName?.trim() || "";
-  const { prefix, fallbackName } = parseSessionKey(key);
-
-  const applyTypedPrefix = (name: string): string => {
-    if (!prefix) {
-      return name;
-    }
-    const prefixPattern = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\s*`, "i");
-    return prefixPattern.test(name) ? name : `${prefix} ${name}`;
-  };
-
-  if (label && label !== key) {
-    return applyTypedPrefix(label);
-  }
-  if (displayName && displayName !== key) {
-    return applyTypedPrefix(displayName);
-  }
-  return fallbackName;
-}
-
-export function isCronSessionKey(key: string): boolean {
-  const normalized = key.trim().toLowerCase();
-  if (!normalized) {
-    return false;
-  }
-  if (normalized.startsWith("cron:")) {
-    return true;
-  }
-  if (!normalized.startsWith("agent:")) {
-    return false;
-  }
-  const parts = normalized.split(":").filter(Boolean);
-  if (parts.length < 3) {
-    return false;
-  }
-  const rest = parts.slice(2).join(":");
-  return rest.startsWith("cron:");
-}
-
-type SessionOptionEntry = {
-  key: string;
-  label: string;
-  title: string;
-};
-
-type SessionOptionGroup = {
-  id: string;
-  label: string;
-  options: SessionOptionEntry[];
-};
-
-export function resolveSessionOptionGroups(
-  state: AppViewState,
-  sessionKey: string,
-  sessions: SessionsListResult | null,
-): SessionOptionGroup[] {
-  const rows = sessions?.sessions ?? [];
-  const hideCron = state.sessionsHideCron ?? true;
-  const byKey = new Map<string, SessionsListResult["sessions"][number]>();
-  for (const row of rows) {
-    byKey.set(row.key, row);
-  }
-
-  const seenKeys = new Set<string>();
-  const groups = new Map<string, SessionOptionGroup>();
-  const ensureGroup = (groupId: string, label: string): SessionOptionGroup => {
-    const existing = groups.get(groupId);
-    if (existing) {
-      return existing;
-    }
-    const created: SessionOptionGroup = {
-      id: groupId,
-      label,
-      options: [],
-    };
-    groups.set(groupId, created);
-    return created;
-  };
-
-  const addOption = (key: string) => {
-    if (!key || seenKeys.has(key)) {
-      return;
-    }
-    seenKeys.add(key);
-    const row = byKey.get(key);
-    const parsed = parseAgentSessionKey(key);
-    const group = parsed
-      ? ensureGroup(
-          `agent:${parsed.agentId.toLowerCase()}`,
-          resolveAgentGroupLabel(state, parsed.agentId),
-        )
-      : ensureGroup("other", "Other Sessions");
-    const label = resolveSessionScopedOptionLabel(key, row, parsed?.rest);
-    group.options.push({
-      key,
-      label,
-      title: key,
-    });
-  };
-
-  for (const row of rows) {
-    if (hideCron && row.key !== sessionKey && isCronSessionKey(row.key)) {
-      continue;
-    }
-    addOption(row.key);
-  }
-  addOption(sessionKey);
-  return Array.from(groups.values());
 }
 
 /** Count sessions with a cron: key that would be hidden when hideCron=true. */
@@ -522,55 +565,12 @@ function countHiddenCronSessions(sessionKey: string, sessions: SessionsListResul
   return sessions.sessions.filter((s) => isCronSessionKey(s.key) && s.key !== sessionKey).length;
 }
 
-function resolveAgentGroupLabel(state: AppViewState, agentIdRaw: string): string {
-  const normalized = agentIdRaw.trim().toLowerCase();
-  const agent = (state.agentsList?.agents ?? []).find(
-    (entry) => entry.id.trim().toLowerCase() === normalized,
-  );
-  const name = agent?.identity?.name?.trim() || agent?.name?.trim() || "";
-  return name && name !== agentIdRaw ? `${name} (${agentIdRaw})` : agentIdRaw;
-}
-
-function resolveSessionScopedOptionLabel(
-  key: string,
-  row?: SessionsListResult["sessions"][number],
-  rest?: string,
-) {
-  const base = rest?.trim() || key;
-  if (!row) {
-    return base;
-  }
-  const displayName =
-    typeof row.displayName === "string" && row.displayName.trim().length > 0
-      ? row.displayName.trim()
-      : null;
-  const label = typeof row.label === "string" ? row.label.trim() : "";
-  const showDisplayName = Boolean(
-    displayName && displayName !== key && displayName !== label && displayName !== base,
-  );
-  if (!showDisplayName) {
-    return base;
-  }
-  return `${base} · ${displayName}`;
-}
-
-type ThemeOption = { id: ThemeName; label: string; icon: string };
-const THEME_OPTIONS: ThemeOption[] = [
-  { id: "claw", label: "Claw", icon: "🦀" },
-  { id: "knot", label: "Knot", icon: "🪢" },
-  { id: "dash", label: "Dash", icon: "📊" },
-];
-
 type ThemeModeOption = { id: ThemeMode; label: string; short: string };
 const THEME_MODE_OPTIONS: ThemeModeOption[] = [
   { id: "system", label: "System", short: "SYS" },
   { id: "light", label: "Light", short: "LIGHT" },
   { id: "dark", label: "Dark", short: "DARK" },
 ];
-
-function currentThemeIcon(theme: ThemeName): string {
-  return THEME_OPTIONS.find((o) => o.id === theme)?.icon ?? "🎨";
-}
 
 export function renderTopbarThemeModeToggle(state: AppViewState) {
   const modeIcon = (mode: ThemeMode) => {
@@ -596,7 +596,9 @@ export function renderTopbarThemeModeToggle(state: AppViewState) {
         (opt) => html`
           <button
             type="button"
-            class="topbar-theme-mode__btn ${opt.id === state.themeMode ? "topbar-theme-mode__btn--active" : ""}"
+            class="topbar-theme-mode__btn ${opt.id === state.themeMode
+              ? "topbar-theme-mode__btn--active"
+              : ""}"
             title=${opt.label}
             aria-label="Color mode: ${opt.label}"
             aria-pressed=${opt.id === state.themeMode}
@@ -610,74 +612,19 @@ export function renderTopbarThemeModeToggle(state: AppViewState) {
   `;
 }
 
-export function renderThemeToggle(state: AppViewState) {
-  const setOpen = (orb: HTMLElement, nextOpen: boolean) => {
-    orb.classList.toggle("theme-orb--open", nextOpen);
-    const trigger = orb.querySelector<HTMLButtonElement>(".theme-orb__trigger");
-    const menu = orb.querySelector<HTMLElement>(".theme-orb__menu");
-    if (trigger) {
-      trigger.setAttribute("aria-expanded", nextOpen ? "true" : "false");
-    }
-    if (menu) {
-      menu.setAttribute("aria-hidden", nextOpen ? "false" : "true");
-    }
-  };
-
-  const toggleOpen = (e: Event) => {
-    const orb = (e.currentTarget as HTMLElement).closest<HTMLElement>(".theme-orb");
-    if (!orb) {
-      return;
-    }
-    const isOpen = orb.classList.contains("theme-orb--open");
-    if (isOpen) {
-      setOpen(orb, false);
-    } else {
-      setOpen(orb, true);
-      const close = (ev: MouseEvent) => {
-        if (!orb.contains(ev.target as Node)) {
-          setOpen(orb, false);
-          document.removeEventListener("click", close);
-        }
-      };
-      requestAnimationFrame(() => document.addEventListener("click", close));
-    }
-  };
-
-  const pick = (opt: ThemeOption, e: Event) => {
-    const orb = (e.currentTarget as HTMLElement).closest<HTMLElement>(".theme-orb");
-    if (orb) {
-      setOpen(orb, false);
-    }
-    if (opt.id !== state.theme) {
-      const context: ThemeTransitionContext = { element: orb ?? undefined };
-      state.setTheme(opt.id, context);
-    }
-  };
+export function renderSidebarConnectionStatus(state: AppViewState) {
+  const label = state.connected ? t("common.online") : t("common.offline");
+  const toneClass = state.connected
+    ? "sidebar-connection-status--online"
+    : "sidebar-connection-status--offline";
 
   return html`
-    <div class="theme-orb" aria-label="Theme">
-      <button
-        type="button"
-        class="theme-orb__trigger"
-        title="Theme"
-        aria-haspopup="menu"
-        aria-expanded="false"
-        @click=${toggleOpen}
-      >${currentThemeIcon(state.theme)}</button>
-      <div class="theme-orb__menu" role="menu" aria-hidden="true">
-        ${THEME_OPTIONS.map(
-          (opt) => html`
-            <button
-              type="button"
-              class="theme-orb__option ${opt.id === state.theme ? "theme-orb__option--active" : ""}"
-              title=${opt.label}
-              role="menuitemradio"
-              aria-checked=${opt.id === state.theme}
-              aria-label=${opt.label}
-              @click=${(e: Event) => pick(opt, e)}
-            >${opt.icon}</button>`,
-        )}
-      </div>
-    </div>
+    <span
+      class="sidebar-version__status ${toneClass}"
+      role="img"
+      aria-live="polite"
+      aria-label="Gateway status: ${label}"
+      title="Gateway status: ${label}"
+    ></span>
   `;
 }

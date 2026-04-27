@@ -5,18 +5,20 @@ read_when:
 title: "Tlon"
 ---
 
-# Tlon (plugin)
-
 Tlon is a decentralized messenger built on Urbit. OpenClaw connects to your Urbit ship and can
 respond to DMs and group chat messages. Group replies require an @ mention by default and can
 be further restricted via allowlists.
 
-Status: supported via plugin. DMs, group mentions, thread replies, rich text formatting, and
+Status: bundled plugin. DMs, group mentions, thread replies, rich text formatting, and
 image uploads are supported. Reactions and polls are not yet supported.
 
-## Plugin required
+## Bundled plugin
 
-Tlon ships as a plugin and is not bundled with the core install.
+Tlon ships as a bundled plugin in current OpenClaw releases, so normal packaged
+builds do not need a separate install.
+
+If you are on an older build or a custom install that excludes Tlon, install it
+manually:
 
 Install via CLI (npm registry):
 
@@ -27,14 +29,16 @@ openclaw plugins install @openclaw/tlon
 Local checkout (when running from a git repo):
 
 ```bash
-openclaw plugins install ./extensions/tlon
+openclaw plugins install ./path/to/local/tlon-plugin
 ```
 
 Details: [Plugins](/tools/plugin)
 
 ## Setup
 
-1. Install the Tlon plugin.
+1. Ensure the Tlon plugin is available.
+   - Current packaged OpenClaw releases already bundle it.
+   - Older/custom installs can add it manually with the commands above.
 2. Gather your ship URL and login code.
 3. Configure `channels.tlon`.
 4. Restart the gateway.
@@ -274,3 +278,11 @@ Provider options:
 - Thread replies: if the inbound message is in a thread, OpenClaw replies in-thread.
 - Rich text: Markdown formatting (bold, italic, code, headers, lists) is converted to Tlon's native format.
 - Images: URLs are uploaded to Tlon storage and embedded as image blocks.
+
+## Related
+
+- [Channels Overview](/channels) — all supported channels
+- [Pairing](/channels/pairing) — DM authentication and pairing flow
+- [Groups](/channels/groups) — group chat behavior and mention gating
+- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Security](/gateway/security) — access model and hardening

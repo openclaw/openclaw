@@ -1,24 +1,44 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } from "./store.js";
+import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
+import {
+  resolveTrajectoryFilePath,
+  resolveTrajectoryPointerFilePath,
+} from "../../trajectory/paths.js";
 import type { SessionEntry } from "./types.js";
 
 // Keep integration tests deterministic: never read a real openclaw.json.
-vi.mock("../config.js", () => ({
-  loadConfig: vi.fn().mockReturnValue({}),
+vi.mock("../config.js", async () => ({
+  ...(await vi.importActual<typeof import("../config.js")>("../config.js")),
+  getRuntimeConfig: vi.fn().mockReturnValue({}),
 }));
-const { loadConfig } = await import("../config.js");
-const mockLoadConfig = vi.mocked(loadConfig) as ReturnType<typeof vi.fn>;
+
+import { getRuntimeConfig } from "../config.js";
+import {
+  clearSessionStoreCacheForTest,
+  loadSessionStore,
+  saveSessionStore,
+  updateSessionStore,
+} from "./store.js";
+
+let mockLoadConfig: ReturnType<typeof vi.fn>;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const ENFORCED_MAINTENANCE_OVERRIDE = {
+  mode: "enforce" as const,
+  pruneAfterMs: 7 * DAY_MS,
+  maxEntries: 500,
+  rotateBytes: 10_485_760,
+  resetArchiveRetentionMs: 7 * DAY_MS,
+  maxDiskBytes: null,
+  highWaterBytes: null,
+};
 
 const archiveTimestamp = (ms: number) => new Date(ms).toISOString().replaceAll(":", "-");
 
-let fixtureRoot = "";
-let fixtureCount = 0;
+const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-pruning-integ-" });
 
 function makeEntry(updatedAt: number): SessionEntry {
   return { sessionId: crypto.randomUUID(), updatedAt };
@@ -51,9 +71,7 @@ function applyCappedMaintenanceConfig(mockLoadConfig: ReturnType<typeof vi.fn>) 
 }
 
 async function createCaseDir(prefix: string): Promise<string> {
-  const dir = path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
-  await fs.mkdir(dir, { recursive: true });
-  return dir;
+  return await suiteRootTracker.make(prefix);
 }
 
 function createStaleAndFreshStore(now = Date.now()): Record<string, SessionEntry> {
@@ -69,24 +87,25 @@ describe("Integration: saveSessionStore with pruning", () => {
   let savedCacheTtl: string | undefined;
 
   beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pruning-integ-"));
+    await suiteRootTracker.setup();
   });
 
   afterAll(async () => {
-    await fs.rm(fixtureRoot, { recursive: true, force: true });
+    await suiteRootTracker.cleanup();
   });
 
   beforeEach(async () => {
+    mockLoadConfig = vi.mocked(getRuntimeConfig) as ReturnType<typeof vi.fn>;
+    mockLoadConfig.mockReset();
     testDir = await createCaseDir("pruning-integ");
     storePath = path.join(testDir, "sessions.json");
     savedCacheTtl = process.env.OPENCLAW_SESSION_CACHE_TTL_MS;
     process.env.OPENCLAW_SESSION_CACHE_TTL_MS = "0";
     clearSessionStoreCacheForTest();
-    mockLoadConfig.mockClear();
   });
 
   afterEach(() => {
-    vi.restoreAllMocks();
+    mockLoadConfig.mockReset();
     clearSessionStoreCacheForTest();
     if (savedCacheTtl === undefined) {
       delete process.env.OPENCLAW_SESSION_CACHE_TTL_MS;
@@ -100,9 +119,11 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     const store = createStaleAndFreshStore();
 
-    await saveSessionStore(storePath, store);
+    await saveSessionStore(storePath, store, {
+      maintenanceOverride: ENFORCED_MAINTENANCE_OVERRIDE,
+    });
 
-    const loaded = loadSessionStore(storePath);
+    const loaded = loadSessionStore(storePath, { skipCache: true });
     expect(loaded.stale).toBeUndefined();
     expect(loaded.fresh).toBeDefined();
   });
@@ -134,6 +155,63 @@ describe("Integration: saveSessionStore with pruning", () => {
       entry.startsWith(`${staleSessionId}.jsonl.deleted.`),
     );
     expect(archived).toHaveLength(1);
+  });
+
+  it("removes trajectory sidecars for stale sessions pruned on write", async () => {
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
+
+    const now = Date.now();
+    const staleSessionId = "stale-trajectory-session";
+    const freshSessionId = "fresh-trajectory-session";
+    const store: Record<string, SessionEntry> = {
+      stale: { sessionId: staleSessionId, updatedAt: now - 30 * DAY_MS },
+      fresh: { sessionId: freshSessionId, updatedAt: now },
+    };
+    const staleTranscript = path.join(testDir, `${staleSessionId}.jsonl`);
+    const freshTranscript = path.join(testDir, `${freshSessionId}.jsonl`);
+    const staleRuntime = resolveTrajectoryFilePath({
+      env: {},
+      sessionFile: staleTranscript,
+      sessionId: staleSessionId,
+    });
+    const freshRuntime = resolveTrajectoryFilePath({
+      env: {},
+      sessionFile: freshTranscript,
+      sessionId: freshSessionId,
+    });
+    const stalePointer = resolveTrajectoryPointerFilePath(staleTranscript);
+    const freshPointer = resolveTrajectoryPointerFilePath(freshTranscript);
+    await fs.writeFile(staleTranscript, '{"type":"session"}\n', "utf-8");
+    await fs.writeFile(freshTranscript, '{"type":"session"}\n', "utf-8");
+    await fs.writeFile(staleRuntime, '{"traceSchema":"openclaw-trajectory"}\n', "utf-8");
+    await fs.writeFile(freshRuntime, '{"traceSchema":"openclaw-trajectory"}\n', "utf-8");
+    await fs.writeFile(
+      stalePointer,
+      JSON.stringify({
+        traceSchema: "openclaw-trajectory-pointer",
+        schemaVersion: 1,
+        sessionId: staleSessionId,
+        runtimeFile: staleRuntime,
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      freshPointer,
+      JSON.stringify({
+        traceSchema: "openclaw-trajectory-pointer",
+        schemaVersion: 1,
+        sessionId: freshSessionId,
+        runtimeFile: freshRuntime,
+      }),
+      "utf-8",
+    );
+
+    await saveSessionStore(storePath, store);
+
+    await expect(fs.stat(staleRuntime)).rejects.toThrow();
+    await expect(fs.stat(stalePointer)).rejects.toThrow();
+    await expect(fs.stat(freshRuntime)).resolves.toBeDefined();
+    await expect(fs.stat(freshPointer)).resolves.toBeDefined();
   });
 
   it("cleans up archived transcripts older than the prune window", async () => {
@@ -228,6 +306,168 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(Object.keys(loaded)).toHaveLength(2);
   });
 
+  it("loadSessionStore prunes stale entries from oversized stores by default", async () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      stale: makeEntry(now - 31 * DAY_MS),
+      recent: makeEntry(now - DAY_MS),
+      newest: makeEntry(now),
+    };
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
+
+    const loaded = loadSessionStore(storePath, {
+      skipCache: true,
+      maintenanceConfig: {
+        ...ENFORCED_MAINTENANCE_OVERRIDE,
+        maxEntries: 2,
+        pruneAfterMs: 7 * DAY_MS,
+      },
+    });
+
+    expect(loaded.stale).toBeUndefined();
+    expect(loaded.recent).toBeDefined();
+    expect(loaded.newest).toBeDefined();
+  });
+
+  it("loadSessionStore caps oversized stores by default", async () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      oldest: makeEntry(now - 3 * DAY_MS),
+      recent: makeEntry(now - DAY_MS),
+      newest: makeEntry(now),
+    };
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
+
+    const loaded = loadSessionStore(storePath, {
+      skipCache: true,
+      maintenanceConfig: {
+        ...ENFORCED_MAINTENANCE_OVERRIDE,
+        maxEntries: 2,
+        pruneAfterMs: 365 * DAY_MS,
+      },
+    });
+
+    expect(Object.keys(loaded)).toHaveLength(2);
+    expect(loaded.oldest).toBeUndefined();
+    expect(loaded.recent).toBeDefined();
+    expect(loaded.newest).toBeDefined();
+  });
+
+  it("loadSessionStore batches entry-count cleanup until the high-water mark", async () => {
+    const now = Date.now();
+    const store = Object.fromEntries(
+      Array.from({ length: 51 }, (_, index) => [`session-${index}`, makeEntry(now - index)]),
+    );
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
+
+    const loaded = loadSessionStore(storePath, {
+      skipCache: true,
+      maintenanceConfig: {
+        ...ENFORCED_MAINTENANCE_OVERRIDE,
+        maxEntries: 50,
+        pruneAfterMs: 365 * DAY_MS,
+      },
+    });
+
+    expect(Object.keys(loaded)).toHaveLength(51);
+  });
+
+  it("loadSessionStore caps production-sized stores once they reach the high-water mark", async () => {
+    const now = Date.now();
+    const store = Object.fromEntries(
+      Array.from({ length: 75 }, (_, index) => [`session-${index}`, makeEntry(now - index)]),
+    );
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
+
+    const loaded = loadSessionStore(storePath, {
+      skipCache: true,
+      maintenanceConfig: {
+        ...ENFORCED_MAINTENANCE_OVERRIDE,
+        maxEntries: 50,
+        pruneAfterMs: 365 * DAY_MS,
+      },
+    });
+
+    expect(Object.keys(loaded)).toHaveLength(50);
+    expect(loaded["session-0"]).toBeDefined();
+    expect(loaded["session-74"]).toBeUndefined();
+  });
+
+  it("updateSessionStore batches cap-hit maintenance instead of pruning every new session", async () => {
+    const now = Date.now();
+    const store = Object.fromEntries(
+      Array.from({ length: 50 }, (_, index) => [`session-${index}`, makeEntry(now - index)]),
+    );
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "365d",
+          maxEntries: 50,
+          rotateBytes: 10_485_760,
+        },
+      },
+    });
+
+    await updateSessionStore(storePath, (next) => {
+      next["session-50"] = makeEntry(now + 1);
+    });
+
+    const loaded = loadSessionStore(storePath, { skipCache: true });
+    expect(Object.keys(loaded)).toHaveLength(51);
+    expect(loaded["session-50"]).toBeDefined();
+  });
+
+  it("loadSessionStore honors configured maxEntries without an explicit override", async () => {
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "365d",
+          maxEntries: 1000,
+          rotateBytes: 10_485_760,
+        },
+      },
+    });
+
+    const now = Date.now();
+    const store = Object.fromEntries(
+      Array.from({ length: 501 }, (_, index) => [`session-${index}`, makeEntry(now - index)]),
+    );
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
+
+    const loaded = loadSessionStore(storePath, { skipCache: true });
+
+    expect(Object.keys(loaded)).toHaveLength(501);
+  });
+
+  it("loadSessionStore honors configured warn mode without an explicit override", async () => {
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "warn",
+          pruneAfter: "365d",
+          maxEntries: 1,
+          rotateBytes: 10_485_760,
+        },
+      },
+    });
+
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      oldest: makeEntry(now - DAY_MS),
+      newest: makeEntry(now),
+    };
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
+
+    const loaded = loadSessionStore(storePath, { skipCache: true });
+
+    expect(Object.keys(loaded)).toHaveLength(2);
+    expect(loaded.oldest).toBeDefined();
+    expect(loaded.newest).toBeDefined();
+  });
+
   it("archives transcript files for entries evicted by maxEntries capping", async () => {
     applyCappedMaintenanceConfig(mockLoadConfig);
 
@@ -258,7 +498,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     applyCappedMaintenanceConfig(mockLoadConfig);
 
     const now = Date.now();
-    const externalDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-external-cap-"));
+    const externalDir = await createCaseDir("external-cap");
     const externalTranscript = path.join(externalDir, "outside.jsonl");
     await fs.writeFile(externalTranscript, "external", "utf-8");
     const store: Record<string, SessionEntry> = {
@@ -278,7 +518,7 @@ describe("Integration: saveSessionStore with pruning", () => {
       expect(loaded.newest).toBeDefined();
       await expect(fs.stat(externalTranscript)).resolves.toBeDefined();
     } finally {
-      await fs.rm(externalDir, { recursive: true, force: true });
+      await expect(fs.stat(externalTranscript)).resolves.toBeDefined();
     }
   });
 
@@ -362,7 +602,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     });
 
     const now = Date.now();
-    const externalDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-external-session-"));
+    const externalDir = await createCaseDir("external-session");
     const externalTranscript = path.join(externalDir, "outside.jsonl");
     await fs.writeFile(externalTranscript, "z".repeat(400), "utf-8");
 
@@ -383,7 +623,7 @@ describe("Integration: saveSessionStore with pruning", () => {
       await saveSessionStore(storePath, store);
       await expect(fs.stat(externalTranscript)).resolves.toBeDefined();
     } finally {
-      await fs.rm(externalDir, { recursive: true, force: true });
+      await expect(fs.stat(externalTranscript)).resolves.toBeDefined();
     }
   });
 });

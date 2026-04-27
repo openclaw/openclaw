@@ -1,8 +1,13 @@
 import fs from "node:fs/promises";
-import { listChannelPlugins } from "../../channels/plugins/index.js";
+import { normalizeChannelId as normalizeBundledChannelId } from "../../channels/registry.js";
 import { getResolvedLoggerSettings } from "../../logging.js";
 import { parseLogLine } from "../../logging/parse-log-line.js";
-import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import {
+  listPluginContributionIds,
+  loadPluginRegistrySnapshot,
+} from "../../plugins/plugin-registry.js";
+import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { theme } from "../../terminal/theme.js";
 
 export type ChannelsLogsOptions = {
@@ -16,15 +21,29 @@ type LogLine = ReturnType<typeof parseLogLine>;
 const DEFAULT_LIMIT = 200;
 const MAX_BYTES = 1_000_000;
 
-const getChannelSet = () =>
-  new Set<string>([...listChannelPlugins().map((plugin) => plugin.id), "all"]);
+function listManifestChannelIds(): Set<string> {
+  const index = loadPluginRegistrySnapshot({
+    env: process.env,
+  });
+  return new Set(
+    listPluginContributionIds({
+      index,
+      contribution: "channels",
+      includeDisabled: true,
+    }),
+  );
+}
 
 function parseChannelFilter(raw?: string) {
-  const trimmed = raw?.trim().toLowerCase();
-  if (!trimmed) {
+  const trimmed = normalizeLowercaseStringOrEmpty(raw);
+  if (!trimmed || trimmed === "all") {
     return "all";
   }
-  return getChannelSet().has(trimmed) ? trimmed : "all";
+  const bundled = normalizeBundledChannelId(trimmed);
+  if (bundled) {
+    return bundled;
+  }
+  return listManifestChannelIds().has(trimmed) ? trimmed : "all";
 }
 
 function matchesChannel(line: NonNullable<LogLine>, channel: string) {
@@ -93,7 +112,7 @@ export async function channelsLogsCommand(
   const lines = filtered.slice(Math.max(0, filtered.length - limit));
 
   if (opts.json) {
-    runtime.log(JSON.stringify({ file, channel, lines }, null, 2));
+    writeRuntimeJson(runtime, { file, channel, lines });
     return;
   }
 
@@ -107,7 +126,7 @@ export async function channelsLogsCommand(
   }
   for (const line of lines) {
     const ts = line.time ? `${line.time} ` : "";
-    const level = line.level ? `${line.level.toLowerCase()} ` : "";
+    const level = line.level ? `${normalizeLowercaseStringOrEmpty(line.level)} ` : "";
     runtime.log(`${ts}${level}${line.message}`.trim());
   }
 }

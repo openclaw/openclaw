@@ -9,11 +9,17 @@ const runDaemonStatus = vi.fn(async (_opts: unknown) => {});
 const runDaemonStop = vi.fn(async (_opts: unknown) => {});
 const runDaemonUninstall = vi.fn(async (_opts: unknown) => {});
 
-vi.mock("./runners.js", () => ({
+vi.mock("./install.runtime.js", () => ({
   runDaemonInstall: (opts: unknown) => runDaemonInstall(opts),
+}));
+
+vi.mock("./status.runtime.js", () => ({
+  runDaemonStatus: (opts: unknown) => runDaemonStatus(opts),
+}));
+
+vi.mock("./lifecycle.runtime.js", () => ({
   runDaemonRestart: (opts: unknown) => runDaemonRestart(opts),
   runDaemonStart: (opts: unknown) => runDaemonStart(opts),
-  runDaemonStatus: (opts: unknown) => runDaemonStatus(opts),
   runDaemonStop: (opts: unknown) => runDaemonStop(opts),
   runDaemonUninstall: (opts: unknown) => runDaemonUninstall(opts),
 }));
@@ -63,6 +69,17 @@ describe("addGatewayServiceCommands", () => {
               token: "tok_status",
               password: "pw_status", // pragma: allowlist secret
             }),
+          }),
+        );
+      },
+    },
+    {
+      name: "forwards require-rpc for status",
+      argv: ["status", "--require-rpc"],
+      assert: () => {
+        expect(runDaemonStatus).toHaveBeenCalledWith(
+          expect.objectContaining({
+            requireRpc: true,
           }),
         );
       },

@@ -1,5 +1,11 @@
 import os from "node:os";
 import path from "node:path";
+import {
+  isNodeVersionManagerRuntime,
+  resolveLinuxSystemCaBundle,
+} from "../bootstrap/node-extra-ca-certs.js";
+import { resolveNodeStartupTlsEnvironment } from "../bootstrap/node-startup-env.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { VERSION } from "../version.js";
 import {
   GATEWAY_SERVICE_KIND,
@@ -14,6 +20,9 @@ import {
   resolveNodeSystemdServiceName,
   resolveNodeWindowsTaskName,
 } from "./constants.js";
+import { resolveGatewayStateDir } from "./paths.js";
+
+export { isNodeVersionManagerRuntime, resolveLinuxSystemCaBundle };
 
 export type MinimalServicePathOptions = {
   platform?: NodeJS.Platform;
@@ -31,12 +40,11 @@ type SharedServiceEnvironmentFields = {
   configPath: string | undefined;
   tmpDir: string;
   minimalPath: string | undefined;
-  proxyEnv: Record<string, string | undefined>;
   nodeCaCerts: string | undefined;
   nodeUseSystemCa: string | undefined;
 };
 
-const SERVICE_PROXY_ENV_KEYS = [
+export const SERVICE_PROXY_ENV_KEYS = [
   "HTTP_PROXY",
   "HTTPS_PROXY",
   "NO_PROXY",
@@ -46,24 +54,6 @@ const SERVICE_PROXY_ENV_KEYS = [
   "no_proxy",
   "all_proxy",
 ] as const;
-
-function readServiceProxyEnvironment(
-  env: Record<string, string | undefined>,
-): Record<string, string | undefined> {
-  const out: Record<string, string | undefined> = {};
-  for (const key of SERVICE_PROXY_ENV_KEYS) {
-    const value = env[key];
-    if (typeof value !== "string") {
-      continue;
-    }
-    const trimmed = value.trim();
-    if (!trimmed) {
-      continue;
-    }
-    out[key] = trimmed;
-  }
-  return out;
-}
 
 function addNonEmptyDir(dirs: string[], dir: string | undefined): void {
   if (dir) {
@@ -96,6 +86,23 @@ function addCommonEnvConfiguredBinDirs(
   addNonEmptyDir(dirs, appendSubdir(env?.BUN_INSTALL, "bin"));
   addNonEmptyDir(dirs, appendSubdir(env?.VOLTA_HOME, "bin"));
   addNonEmptyDir(dirs, appendSubdir(env?.ASDF_DATA_DIR, "shims"));
+}
+
+// Nix shell precedence: rightmost profile in NIX_PROFILES = highest priority.
+// When NIX_PROFILES is absent, fall back to the default single-user profile.
+function addNixProfileBinDirs(
+  dirs: string[],
+  home: string,
+  env: Record<string, string | undefined> | undefined,
+): void {
+  const nixProfiles = env?.NIX_PROFILES?.trim();
+  if (nixProfiles) {
+    for (const profile of nixProfiles.split(/\s+/).toReversed()) {
+      addNonEmptyDir(dirs, appendSubdir(profile, "bin"));
+    }
+  } else {
+    dirs.push(`${home}/.nix-profile/bin`);
+  }
 }
 
 function resolveSystemPathDirs(platform: NodeJS.Platform): string[] {
@@ -140,6 +147,9 @@ export function resolveDarwinUserBinDirs(
   // Common user bin directories
   addCommonUserBinDirs(dirs, home);
 
+  // Nix Home Manager (cross-platform)
+  addNixProfileBinDirs(dirs, home, env);
+
   // Node version managers - macOS specific paths
   // nvm: no stable default path, depends on user's shell configuration
   // fnm: macOS default is ~/Library/Application Support/fnm, not ~/.fnm
@@ -169,14 +179,21 @@ export function resolveLinuxUserBinDirs(
   // Env-configured bin roots (override defaults when present).
   addCommonEnvConfiguredBinDirs(dirs, env);
   addNonEmptyDir(dirs, appendSubdir(env?.NVM_DIR, "current/bin"));
+  addNonEmptyDir(dirs, appendSubdir(env?.FNM_DIR, "aliases/default/bin"));
   addNonEmptyDir(dirs, appendSubdir(env?.FNM_DIR, "current/bin"));
 
   // Common user bin directories
   addCommonUserBinDirs(dirs, home);
 
+  // Nix Home Manager (cross-platform)
+  addNixProfileBinDirs(dirs, home, env);
+
   // Node version managers
   dirs.push(`${home}/.nvm/current/bin`); // nvm with current symlink
-  dirs.push(`${home}/.fnm/current/bin`); // fnm
+  dirs.push(`${home}/.local/share/fnm/aliases/default/bin`); // fnm default
+  dirs.push(`${home}/.local/share/fnm/current/bin`); // fnm legacy current symlink
+  dirs.push(`${home}/.fnm/aliases/default/bin`); // fnm if customized to ~/.fnm
+  dirs.push(`${home}/.fnm/current/bin`); // fnm legacy current symlink
   dirs.push(`${home}/.local/share/pnpm`); // pnpm global bin
 
   return dirs;
@@ -247,17 +264,26 @@ export function buildServiceEnvironment(params: {
   port: number;
   launchdLabel?: string;
   platform?: NodeJS.Platform;
+  extraPathDirs?: string[];
+  execPath?: string;
 }): Record<string, string | undefined> {
-  const { env, port, launchdLabel } = params;
+  const { env, port, launchdLabel, extraPathDirs } = params;
   const platform = params.platform ?? process.platform;
-  const sharedEnv = resolveSharedServiceEnvironmentFields(env, platform);
+  const sharedEnv = resolveSharedServiceEnvironmentFields(
+    env,
+    platform,
+    extraPathDirs,
+    params.execPath,
+  );
   const profile = env.OPENCLAW_PROFILE;
+  const wrapperPath = normalizeOptionalString(env.OPENCLAW_WRAPPER);
   const resolvedLaunchdLabel =
     launchdLabel || (platform === "darwin" ? resolveGatewayLaunchAgentLabel(profile) : undefined);
   const systemdUnit = `${resolveGatewaySystemdServiceName(profile)}.service`;
   return {
     ...buildCommonServiceEnvironment(env, sharedEnv),
     OPENCLAW_PROFILE: profile,
+    OPENCLAW_WRAPPER: wrapperPath,
     OPENCLAW_GATEWAY_PORT: String(port),
     OPENCLAW_LAUNCHD_LABEL: resolvedLaunchdLabel,
     OPENCLAW_SYSTEMD_UNIT: systemdUnit,
@@ -271,15 +297,23 @@ export function buildServiceEnvironment(params: {
 export function buildNodeServiceEnvironment(params: {
   env: Record<string, string | undefined>;
   platform?: NodeJS.Platform;
+  extraPathDirs?: string[];
+  execPath?: string;
 }): Record<string, string | undefined> {
-  const { env } = params;
+  const { env, extraPathDirs } = params;
   const platform = params.platform ?? process.platform;
-  const sharedEnv = resolveSharedServiceEnvironmentFields(env, platform);
-  const gatewayToken =
-    env.OPENCLAW_GATEWAY_TOKEN?.trim() || env.CLAWDBOT_GATEWAY_TOKEN?.trim() || undefined;
+  const sharedEnv = resolveSharedServiceEnvironmentFields(
+    env,
+    platform,
+    extraPathDirs,
+    params.execPath,
+  );
+  const gatewayToken = normalizeOptionalString(env.OPENCLAW_GATEWAY_TOKEN);
+  const allowInsecurePrivateWs = normalizeOptionalString(env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS);
   return {
     ...buildCommonServiceEnvironment(env, sharedEnv),
     OPENCLAW_GATEWAY_TOKEN: gatewayToken,
+    OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: allowInsecurePrivateWs,
     OPENCLAW_LAUNCHD_LABEL: resolveNodeLaunchAgentLabel(),
     OPENCLAW_SYSTEMD_UNIT: resolveNodeSystemdServiceName(),
     OPENCLAW_WINDOWS_TASK_NAME: resolveNodeWindowsTaskName(),
@@ -298,7 +332,6 @@ function buildCommonServiceEnvironment(
   const serviceEnv: Record<string, string | undefined> = {
     HOME: env.HOME,
     TMPDIR: sharedEnv.tmpDir,
-    ...sharedEnv.proxyEnv,
     NODE_EXTRA_CA_CERTS: sharedEnv.nodeCaCerts,
     NODE_USE_SYSTEM_CA: sharedEnv.nodeUseSystemCa,
     OPENCLAW_STATE_DIR: sharedEnv.stateDir,
@@ -310,30 +343,49 @@ function buildCommonServiceEnvironment(
   return serviceEnv;
 }
 
+function resolveServiceTmpDir(
+  env: Record<string, string | undefined>,
+  platform: NodeJS.Platform,
+): string {
+  if (platform === "darwin") {
+    try {
+      return path.join(resolveGatewayStateDir(env), "tmp");
+    } catch {
+      return env.TMPDIR?.trim() || os.tmpdir();
+    }
+  }
+  return env.TMPDIR?.trim() || os.tmpdir();
+}
+
 function resolveSharedServiceEnvironmentFields(
   env: Record<string, string | undefined>,
   platform: NodeJS.Platform,
+  extraPathDirs: string[] | undefined,
+  execPath?: string,
 ): SharedServiceEnvironmentFields {
   const stateDir = env.OPENCLAW_STATE_DIR;
   const configPath = env.OPENCLAW_CONFIG_PATH;
-  // Keep a usable temp directory for supervised services even when the host env omits TMPDIR.
-  const tmpDir = env.TMPDIR?.trim() || os.tmpdir();
-  const proxyEnv = readServiceProxyEnvironment(env);
+  const tmpDir = resolveServiceTmpDir(env, platform);
   // On macOS, launchd services don't inherit the shell environment, so Node's undici/fetch
   // cannot locate the system CA bundle. Default to /etc/ssl/cert.pem so TLS verification
   // works correctly when running as a LaunchAgent without extra user configuration.
-  const nodeCaCerts =
-    env.NODE_EXTRA_CA_CERTS ?? (platform === "darwin" ? "/etc/ssl/cert.pem" : undefined);
-  const nodeUseSystemCa = env.NODE_USE_SYSTEM_CA ?? (platform === "darwin" ? "1" : undefined);
+  // On Linux, nvm-installed Node may need the host CA bundle injected before startup.
+  const startupTlsEnv = resolveNodeStartupTlsEnvironment({
+    env,
+    platform,
+    execPath,
+  });
   return {
     stateDir,
     configPath,
     tmpDir,
     // On Windows, Scheduled Tasks should inherit the current task PATH instead of
     // freezing the install-time snapshot into gateway.cmd/node-host.cmd.
-    minimalPath: platform === "win32" ? undefined : buildMinimalServicePath({ env, platform }),
-    proxyEnv,
-    nodeCaCerts,
-    nodeUseSystemCa,
+    minimalPath:
+      platform === "win32"
+        ? undefined
+        : buildMinimalServicePath({ env, platform, extraDirs: extraPathDirs }),
+    nodeCaCerts: startupTlsEnv.NODE_EXTRA_CA_CERTS,
+    nodeUseSystemCa: startupTlsEnv.NODE_USE_SYSTEM_CA,
   };
 }

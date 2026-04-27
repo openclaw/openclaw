@@ -1,54 +1,80 @@
+import { readSnakeCaseParamRaw } from "./param-key.js";
+import { normalizeLowercaseStringOrEmpty } from "./shared/string-coerce.js";
+
 export type PollCreationParamKind = "string" | "stringArray" | "number" | "boolean";
 
 export type PollCreationParamDef = {
   kind: PollCreationParamKind;
-  telegramOnly?: boolean;
 };
 
-export const POLL_CREATION_PARAM_DEFS: Record<string, PollCreationParamDef> = {
+const SHARED_POLL_CREATION_PARAM_DEFS = {
   pollQuestion: { kind: "string" },
   pollOption: { kind: "stringArray" },
   pollDurationHours: { kind: "number" },
   pollMulti: { kind: "boolean" },
-  pollDurationSeconds: { kind: "number", telegramOnly: true },
-  pollAnonymous: { kind: "boolean", telegramOnly: true },
-  pollPublic: { kind: "boolean", telegramOnly: true },
-};
+} satisfies Record<string, PollCreationParamDef>;
 
-export type PollCreationParamName = keyof typeof POLL_CREATION_PARAM_DEFS;
+export const POLL_CREATION_PARAM_DEFS: Record<string, PollCreationParamDef> =
+  SHARED_POLL_CREATION_PARAM_DEFS;
 
-export const POLL_CREATION_PARAM_NAMES = Object.keys(POLL_CREATION_PARAM_DEFS);
+type SharedPollCreationParamName = keyof typeof SHARED_POLL_CREATION_PARAM_DEFS;
 
-function toSnakeCaseKey(key: string): string {
-  return key
-    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
-    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
-    .toLowerCase();
-}
+export const SHARED_POLL_CREATION_PARAM_NAMES = Object.keys(
+  SHARED_POLL_CREATION_PARAM_DEFS,
+) as SharedPollCreationParamName[];
+const SHARED_POLL_CREATION_PARAM_KEY_SET = new Set(
+  SHARED_POLL_CREATION_PARAM_NAMES.map(normalizePollParamKey),
+);
+const POLL_VOTE_PARAM_KEY_SET = new Set(
+  ["pollId", "pollOptionId", "pollOptionIds", "pollOptionIndex", "pollOptionIndexes"].map(
+    normalizePollParamKey,
+  ),
+);
 
 function readPollParamRaw(params: Record<string, unknown>, key: string): unknown {
-  if (Object.hasOwn(params, key)) {
-    return params[key];
-  }
-  const snakeKey = toSnakeCaseKey(key);
-  if (snakeKey !== key && Object.hasOwn(params, snakeKey)) {
-    return params[snakeKey];
-  }
-  return undefined;
+  return readSnakeCaseParamRaw(params, key);
 }
 
-export function resolveTelegramPollVisibility(params: {
-  pollAnonymous?: boolean;
-  pollPublic?: boolean;
-}): boolean | undefined {
-  if (params.pollAnonymous && params.pollPublic) {
-    throw new Error("pollAnonymous and pollPublic are mutually exclusive");
+function normalizePollParamKey(key: string): string {
+  return normalizeLowercaseStringOrEmpty(key.replaceAll("_", ""));
+}
+
+function isChannelPollCreationParamName(key: string): boolean {
+  const normalized = normalizePollParamKey(key);
+  return (
+    normalized.startsWith("poll") &&
+    !SHARED_POLL_CREATION_PARAM_KEY_SET.has(normalized) &&
+    !POLL_VOTE_PARAM_KEY_SET.has(normalized)
+  );
+}
+
+function hasExplicitUnknownPollValue(key: string, value: unknown): boolean {
+  if (value === true) {
+    return true;
   }
-  return params.pollAnonymous ? true : params.pollPublic ? false : undefined;
+  if (typeof value === "number") {
+    return Number.isFinite(value) && value !== 0;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.length === 0) {
+      return false;
+    }
+    if (normalizePollParamKey(key).includes("duration")) {
+      const parsed = Number(trimmed);
+      return Number.isFinite(parsed) && parsed !== 0;
+    }
+    const normalized = normalizeLowercaseStringOrEmpty(trimmed);
+    return normalized !== "false" && normalized !== "0";
+  }
+  if (Array.isArray(value)) {
+    return value.some((entry) => hasExplicitUnknownPollValue(key, entry));
+  }
+  return false;
 }
 
 export function hasPollCreationParams(params: Record<string, unknown>): boolean {
-  for (const key of POLL_CREATION_PARAM_NAMES) {
+  for (const key of SHARED_POLL_CREATION_PARAM_NAMES) {
     const def = POLL_CREATION_PARAM_DEFS[key];
     const value = readPollParamRaw(params, key);
     if (def.kind === "string" && typeof value === "string" && value.trim().length > 0) {
@@ -66,12 +92,16 @@ export function hasPollCreationParams(params: Record<string, unknown>): boolean 
       }
     }
     if (def.kind === "number") {
-      if (typeof value === "number" && Number.isFinite(value)) {
+      // Treat zero-valued numeric defaults as unset, but preserve any non-zero
+      // numeric value as explicit poll intent so invalid durations still hit
+      // the poll-only validation path.
+      if (typeof value === "number" && Number.isFinite(value) && value !== 0) {
         return true;
       }
       if (typeof value === "string") {
         const trimmed = value.trim();
-        if (trimmed.length > 0 && Number.isFinite(Number(trimmed))) {
+        const parsed = Number(trimmed);
+        if (trimmed.length > 0 && Number.isFinite(parsed) && parsed !== 0) {
           return true;
         }
       }
@@ -80,9 +110,14 @@ export function hasPollCreationParams(params: Record<string, unknown>): boolean 
       if (value === true) {
         return true;
       }
-      if (typeof value === "string" && value.trim().toLowerCase() === "true") {
+      if (typeof value === "string" && normalizeLowercaseStringOrEmpty(value) === "true") {
         return true;
       }
+    }
+  }
+  for (const [key, value] of Object.entries(params)) {
+    if (isChannelPollCreationParamName(key) && hasExplicitUnknownPollValue(key, value)) {
+      return true;
     }
   }
   return false;

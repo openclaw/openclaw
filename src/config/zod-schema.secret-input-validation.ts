@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { hasConfiguredSecretInput } from "./types.secrets.js";
 
 type TelegramAccountLike = {
@@ -44,7 +45,7 @@ export function validateTelegramWebhookSecretRequirements(
   value: TelegramConfigLike,
   ctx: z.RefinementCtx,
 ): void {
-  const baseWebhookUrl = typeof value.webhookUrl === "string" ? value.webhookUrl.trim() : "";
+  const baseWebhookUrl = normalizeOptionalString(value.webhookUrl) ?? "";
   const hasBaseWebhookSecret = hasConfiguredSecretInput(value.webhookSecret);
   if (baseWebhookUrl && !hasBaseWebhookSecret) {
     ctx.addIssue({
@@ -54,8 +55,7 @@ export function validateTelegramWebhookSecretRequirements(
     });
   }
   forEachEnabledAccount(value.accounts, (accountId, account) => {
-    const accountWebhookUrl =
-      typeof account.webhookUrl === "string" ? account.webhookUrl.trim() : "";
+    const accountWebhookUrl = normalizeOptionalString(account.webhookUrl) ?? "";
     if (!accountWebhookUrl) {
       return;
     }

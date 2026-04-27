@@ -1,31 +1,49 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import {
   formatSessionArchiveTimestamp,
   isPrimarySessionTranscriptFileName,
-  loadSessionStore,
-  resolveMainSessionKey,
+} from "../config/sessions/artifacts.js";
+import { resolveMainSessionKey } from "../config/sessions/main-session.js";
+import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   resolveSessionTranscriptsDirForAgent,
   resolveStorePath,
-} from "../config/sessions.js";
+} from "../config/sessions/paths.js";
+import { loadSessionStore } from "../config/sessions/store-load.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { resolveMemoryBackendConfig } from "../memory-host-sdk/engine-storage.js";
+import { listConfiguredChannelIdsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { asNullableObjectRecord } from "../shared/record-coerce.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 
 type DoctorPrompterLike = {
-  confirmSkipInNonInteractive: (params: {
-    message: string;
-    initialValue?: boolean;
-  }) => Promise<boolean>;
+  confirmRuntimeRepair: (params: { message: string; initialValue?: boolean }) => Promise<boolean>;
+  note?: typeof note;
 };
+
+function countLabel(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function formatFilePreview(paths: string[], limit = 3): string {
+  const names = paths.slice(0, limit).map((filePath) => path.basename(filePath));
+  const remaining = paths.length - names.length;
+  if (remaining > 0) {
+    return `${names.join(", ")}, and ${remaining} more`;
+  }
+  return names.join(", ");
+}
 
 function existsDir(dir: string): boolean {
   try {
@@ -40,6 +58,90 @@ function existsFile(filePath: string): boolean {
     return fs.existsSync(filePath) && fs.statSync(filePath).isFile();
   } catch {
     return false;
+  }
+}
+
+type OrphanAgentDir = {
+  dirName: string;
+  agentId: string;
+};
+
+function tryResolveNativeRealPath(targetPath: string): string | null {
+  try {
+    return fs.realpathSync.native(targetPath);
+  } catch {
+    return null;
+  }
+}
+
+function resolveComparableTranscriptPath(filePath: string): string {
+  return tryResolveNativeRealPath(filePath) ?? path.resolve(filePath);
+}
+
+function isReachableConfiguredAgentDir(params: {
+  agentsRoot: string;
+  dirName: string;
+  agentId: string;
+}): boolean {
+  if (params.dirName === params.agentId) {
+    return true;
+  }
+  const rawDir = path.join(params.agentsRoot, params.dirName, "agent");
+  const normalizedDir = path.join(params.agentsRoot, params.agentId, "agent");
+  const rawRealPath = tryResolveNativeRealPath(rawDir);
+  const normalizedRealPath = tryResolveNativeRealPath(normalizedDir);
+  return rawRealPath !== null && rawRealPath === normalizedRealPath;
+}
+
+function formatOrphanAgentDirLabel(entry: OrphanAgentDir): string {
+  return entry.dirName === entry.agentId ? entry.agentId : `${entry.dirName} (id ${entry.agentId})`;
+}
+
+function formatOrphanAgentDirPreview(entries: OrphanAgentDir[], limit = 3): string {
+  const labels = entries.slice(0, limit).map(formatOrphanAgentDirLabel);
+  const remaining = entries.length - labels.length;
+  if (remaining > 0) {
+    return `${labels.join(", ")}, and ${remaining} more`;
+  }
+  return labels.join(", ");
+}
+
+function listOrphanAgentDirs(cfg: OpenClawConfig, stateDir: string): OrphanAgentDir[] {
+  const configuredIds = new Set<string>();
+  configuredIds.add(normalizeAgentId(resolveDefaultAgentId(cfg)));
+  for (const entry of listAgentEntries(cfg)) {
+    configuredIds.add(normalizeAgentId(entry.id));
+  }
+
+  const agentsRoot = path.join(stateDir, "agents");
+  try {
+    const entries = fs.readdirSync(agentsRoot, { withFileTypes: true });
+    return entries
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => ({
+        dirName: entry.name,
+        agentId: normalizeAgentId(entry.name),
+      }))
+      .filter(({ dirName, agentId }) => {
+        const hasNestedAgentDir = existsDir(path.join(agentsRoot, dirName, "agent"));
+        if (!hasNestedAgentDir) {
+          return false;
+        }
+        if (!configuredIds.has(agentId)) {
+          return true;
+        }
+        return !isReachableConfiguredAgentDir({
+          agentsRoot,
+          dirName,
+          agentId,
+        });
+      })
+      .toSorted(
+        (left, right) =>
+          left.agentId.localeCompare(right.agentId) || left.dirName.localeCompare(right.dirName),
+      );
+  } catch {
+    return [];
   }
 }
 
@@ -405,28 +507,27 @@ export function detectMacCloudSyncedStateDir(
   return null;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
 function isPairingPolicy(value: unknown): boolean {
-  return typeof value === "string" && value.trim().toLowerCase() === "pairing";
+  return normalizeOptionalLowercaseString(value) === "pairing";
 }
 
 function hasPairingPolicy(value: unknown): boolean {
-  if (!isRecord(value)) {
+  const record = asNullableObjectRecord(value);
+  if (!record) {
     return false;
   }
-  if (isPairingPolicy(value.dmPolicy)) {
+  if (isPairingPolicy(record.dmPolicy)) {
     return true;
   }
-  if (isRecord(value.dm) && isPairingPolicy(value.dm.policy)) {
+  const dm = asNullableObjectRecord(record.dm);
+  if (dm && isPairingPolicy(dm.policy)) {
     return true;
   }
-  if (!isRecord(value.accounts)) {
+  const accounts = asNullableObjectRecord(record.accounts);
+  if (!accounts) {
     return false;
   }
-  for (const accountCfg of Object.values(value.accounts)) {
+  for (const accountCfg of Object.values(accounts)) {
     if (hasPairingPolicy(accountCfg)) {
       return true;
     }
@@ -435,7 +536,7 @@ function hasPairingPolicy(value: unknown): boolean {
 }
 
 function isSlashRoutingSessionKey(sessionKey: string): boolean {
-  const raw = sessionKey.trim().toLowerCase();
+  const raw = normalizeOptionalLowercaseString(sessionKey);
   if (!raw) {
     return false;
   }
@@ -447,12 +548,26 @@ function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boo
   if (env.OPENCLAW_OAUTH_DIR?.trim()) {
     return true;
   }
-  const channels = cfg.channels;
-  if (!isRecord(channels)) {
+  const channels = asNullableObjectRecord(cfg.channels);
+  if (!channels) {
     return false;
   }
-  // WhatsApp auth always uses the credentials tree.
-  if (isRecord(channels.whatsapp)) {
+  const withPersistedAuth = new Set(
+    listConfiguredChannelIdsForReadOnlyScope({
+      config: cfg,
+      env,
+      cache: true,
+    }),
+  );
+  const withoutPersistedAuth = new Set(
+    listConfiguredChannelIdsForReadOnlyScope({
+      config: cfg,
+      env,
+      cache: true,
+      includePersistedAuthState: false,
+    }),
+  );
+  if ([...withPersistedAuth].some((channelId) => !withoutPersistedAuth.has(channelId))) {
     return true;
   }
   // Pairing allowlists are persisted under credentials/<channel>-allowFrom.json.
@@ -467,6 +582,11 @@ function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boo
   return false;
 }
 
+function shouldSuppressOrphanTranscriptWarning(cfg: OpenClawConfig, agentId: string): boolean {
+  const backendConfig = resolveMemoryBackendConfig({ cfg, agentId });
+  return backendConfig?.backend === "qmd" && backendConfig.qmd?.sessions.enabled === true;
+}
+
 export async function noteStateIntegrity(
   cfg: OpenClawConfig,
   prompter: DoctorPrompterLike,
@@ -474,6 +594,7 @@ export async function noteStateIntegrity(
 ) {
   const warnings: string[] = [];
   const changes: string[] = [];
+  const noteFn = prompter.note ?? note;
   const env = process.env;
   const homedir = () => resolveRequiredHomeDir(env, os.homedir);
   const stateDir = resolveStateDir(env, homedir);
@@ -492,6 +613,7 @@ export async function noteStateIntegrity(
   const requireOAuthDir = shouldRequireOAuthDir(cfg, env);
   const cloudSyncedStateDir = detectMacCloudSyncedStateDir(stateDir);
   const linuxSdBackedStateDir = detectLinuxSdBackedStateDir(stateDir);
+  const suppressOrphanTranscriptWarning = shouldSuppressOrphanTranscriptWarning(cfg, agentId);
 
   if (cloudSyncedStateDir) {
     warnings.push(
@@ -517,7 +639,7 @@ export async function noteStateIntegrity(
         "- Gateway is in remote mode; run doctor on the remote host where the gateway runs.",
       );
     }
-    const create = await prompter.confirmSkipInNonInteractive({
+    const create = await prompter.confirmRuntimeRepair({
       message: `Create ${displayStateDir} now?`,
       initialValue: false,
     });
@@ -538,7 +660,7 @@ export async function noteStateIntegrity(
     if (hint) {
       warnings.push(`  ${hint}`);
     }
-    const repair = await prompter.confirmSkipInNonInteractive({
+    const repair = await prompter.confirmRuntimeRepair({
       message: `Repair permissions on ${displayStateDir}?`,
       initialValue: true,
     });
@@ -567,7 +689,7 @@ export async function noteStateIntegrity(
         warnings.push(
           `- State directory permissions are too open (${displayStateDir}). Recommend chmod 700.`,
         );
-        const tighten = await prompter.confirmSkipInNonInteractive({
+        const tighten = await prompter.confirmRuntimeRepair({
           message: `Tighten permissions on ${displayStateDir} to 700?`,
           initialValue: true,
         });
@@ -594,7 +716,7 @@ export async function noteStateIntegrity(
         warnings.push(
           `- Config file is group/world readable (${displayConfigPath ?? configPath}). Recommend chmod 600.`,
         );
-        const tighten = await prompter.confirmSkipInNonInteractive({
+        const tighten = await prompter.confirmRuntimeRepair({
           message: `Tighten permissions on ${displayConfigPath ?? configPath} to 600?`,
           initialValue: true,
         });
@@ -638,7 +760,7 @@ export async function noteStateIntegrity(
       const displayDir = displayDirFor(dir);
       if (!existsDir(dir)) {
         warnings.push(`- CRITICAL: ${label} missing (${displayDir}).`);
-        const create = await prompter.confirmSkipInNonInteractive({
+        const create = await prompter.confirmRuntimeRepair({
           message: `Create ${label} at ${displayDir}?`,
           initialValue: true,
         });
@@ -658,7 +780,7 @@ export async function noteStateIntegrity(
         if (hint) {
           warnings.push(`  ${hint}`);
         }
-        const repair = await prompter.confirmSkipInNonInteractive({
+        const repair = await prompter.confirmRuntimeRepair({
           message: `Repair permissions on ${label}?`,
           initialValue: true,
         });
@@ -691,6 +813,18 @@ export async function noteStateIntegrity(
         "- Multiple state directories detected. This can split session history.",
         ...Array.from(extraStateDirs).map((dir) => `  - ${shortenHomePath(dir)}`),
         `  Active state dir: ${displayStateDir}`,
+      ].join("\n"),
+    );
+  }
+
+  const orphanAgentDirs = listOrphanAgentDirs(cfg, stateDir);
+  if (orphanAgentDirs.length > 0) {
+    warnings.push(
+      [
+        `- Found ${countLabel(orphanAgentDirs.length, "agent directory", "agent directories")} on disk without a matching agents.list entry.`,
+        "  These agents can still have sessions/auth state on disk, but config-driven routing, identity, and model selection will ignore them.",
+        `  Examples: ${formatOrphanAgentDirPreview(orphanAgentDirs)}`,
+        `  Restore the missing agents.list entries or remove stale dirs after confirming they are no longer needed: ${shortenHomePath(path.join(stateDir, "agents"))}`,
       ].join("\n"),
     );
   }
@@ -758,7 +892,9 @@ export async function noteStateIntegrity(
       }
       try {
         referencedTranscriptPaths.add(
-          path.resolve(resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts)),
+          resolveComparableTranscriptPath(
+            resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts),
+          ),
         );
       } catch {
         // ignore invalid legacy paths
@@ -767,14 +903,23 @@ export async function noteStateIntegrity(
     const sessionDirEntries = fs.readdirSync(sessionsDir, { withFileTypes: true });
     const orphanTranscriptPaths = sessionDirEntries
       .filter((entry) => entry.isFile() && isPrimarySessionTranscriptFileName(entry.name))
-      .map((entry) => path.resolve(path.join(sessionsDir, entry.name)))
-      .filter((filePath) => !referencedTranscriptPaths.has(filePath));
-    if (orphanTranscriptPaths.length > 0) {
-      warnings.push(
-        `- Found ${orphanTranscriptPaths.length} orphan transcript file(s) in ${displaySessionsDir}. They are not referenced by sessions.json and can consume disk over time.`,
+      .map((entry) => path.join(sessionsDir, entry.name))
+      .filter(
+        (filePath) => !referencedTranscriptPaths.has(resolveComparableTranscriptPath(filePath)),
       );
-      const archiveOrphans = await prompter.confirmSkipInNonInteractive({
-        message: `Archive ${orphanTranscriptPaths.length} orphan transcript file(s) in ${displaySessionsDir}?`,
+    if (orphanTranscriptPaths.length > 0 && !suppressOrphanTranscriptWarning) {
+      const orphanCount = countLabel(orphanTranscriptPaths.length, "orphan transcript file");
+      const orphanPreview = formatFilePreview(orphanTranscriptPaths);
+      warnings.push(
+        [
+          `- Found ${orphanCount} in ${displaySessionsDir}.`,
+          "  These .jsonl files are no longer referenced by sessions.json, so they are not part of any active session history.",
+          "  Doctor can archive them safely by renaming each file to *.deleted.<timestamp>.",
+          `  Examples: ${orphanPreview}`,
+        ].join("\n"),
+      );
+      const archiveOrphans = await prompter.confirmRuntimeRepair({
+        message: `Archive ${orphanCount} in ${displaySessionsDir}? This only renames them to *.deleted.<timestamp>.`,
         initialValue: false,
       });
       if (archiveOrphans) {
@@ -792,17 +937,19 @@ export async function noteStateIntegrity(
           }
         }
         if (archived > 0) {
-          changes.push(`- Archived ${archived} orphan transcript file(s) in ${displaySessionsDir}`);
+          changes.push(
+            `- Archived ${countLabel(archived, "orphan transcript file")} in ${displaySessionsDir} as .deleted timestamped backups.`,
+          );
         }
       }
     }
   }
 
   if (warnings.length > 0) {
-    note(warnings.join("\n"), "State integrity");
+    noteFn(warnings.join("\n"), "State integrity");
   }
   if (changes.length > 0) {
-    note(changes.join("\n"), "Doctor changes");
+    noteFn(changes.join("\n"), "Doctor changes");
   }
 }
 

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   NODE_BROWSER_PROXY_COMMAND,
   NODE_SYSTEM_NOTIFY_COMMAND,
@@ -21,6 +21,7 @@ const CANVAS_COMMANDS = [
 const CAMERA_COMMANDS = ["camera.list"];
 const CAMERA_DANGEROUS_COMMANDS = ["camera.snap", "camera.clip"];
 
+const SCREEN_COMMANDS = ["screen.snapshot"];
 const SCREEN_DANGEROUS_COMMANDS = ["screen.record"];
 
 const LOCATION_COMMANDS = ["location.get"];
@@ -36,6 +37,8 @@ const CONTACTS_DANGEROUS_COMMANDS = ["contacts.add"];
 const CALENDAR_COMMANDS = ["calendar.events"];
 const CALENDAR_DANGEROUS_COMMANDS = ["calendar.add"];
 
+const CALL_LOG_COMMANDS = ["callLog.search"];
+
 const REMINDERS_COMMANDS = ["reminders.list"];
 const REMINDERS_DANGEROUS_COMMANDS = ["reminders.add"];
 
@@ -43,7 +46,7 @@ const PHOTOS_COMMANDS = ["photos.latest"];
 
 const MOTION_COMMANDS = ["motion.activity", "motion.pedometer"];
 
-const SMS_DANGEROUS_COMMANDS = ["sms.send"];
+const SMS_DANGEROUS_COMMANDS = ["sms.send", "sms.search"];
 
 // iOS nodes don't implement system.run/which, but they do support notifications.
 const IOS_SYSTEM_COMMANDS = [NODE_SYSTEM_NOTIFY_COMMAND];
@@ -93,6 +96,7 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...ANDROID_DEVICE_COMMANDS,
     ...CONTACTS_COMMANDS,
     ...CALENDAR_COMMANDS,
+    ...CALL_LOG_COMMANDS,
     ...REMINDERS_COMMANDS,
     ...PHOTOS_COMMANDS,
     ...MOTION_COMMANDS,
@@ -108,6 +112,7 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...PHOTOS_COMMANDS,
     ...MOTION_COMMANDS,
     ...SYSTEM_COMMANDS,
+    ...SCREEN_COMMANDS,
   ],
   linux: [...SYSTEM_COMMANDS],
   windows: [...SYSTEM_COMMANDS],
@@ -186,6 +191,32 @@ export function resolveNodeCommandAllowlist(
     }
   }
   return allow;
+}
+
+function normalizeDeclaredCommands(commands?: readonly string[]): string[] {
+  if (!Array.isArray(commands)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const value of commands) {
+    const trimmed = value.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    normalized.push(trimmed);
+  }
+  return normalized;
+}
+
+export function normalizeDeclaredNodeCommands(params: {
+  declaredCommands?: readonly string[];
+  allowlist: Set<string>;
+}): string[] {
+  return normalizeDeclaredCommands(params.declaredCommands).filter((command) =>
+    params.allowlist.has(command),
+  );
 }
 
 export function isNodeCommandAllowed(params: {

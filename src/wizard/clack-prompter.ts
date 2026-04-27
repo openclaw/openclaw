@@ -1,4 +1,5 @@
 import {
+  autocomplete,
   autocompleteMultiselect,
   cancel,
   confirm,
@@ -12,6 +13,7 @@ import {
   text,
 } from "@clack/prompts";
 import { createCliProgress } from "../cli/progress.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { stripAnsi } from "../terminal/ansi.js";
 import { note as emitNote } from "../terminal/note.js";
 import { stylePromptHint, stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
@@ -28,8 +30,7 @@ function guardCancel<T>(value: T | symbol): T {
 }
 
 function normalizeSearchTokens(search: string): string[] {
-  return search
-    .toLowerCase()
+  return normalizeLowercaseStringOrEmpty(search)
     .split(/\s+/)
     .map((token) => token.trim())
     .filter((token) => token.length > 0);
@@ -39,7 +40,7 @@ function buildOptionSearchText<T>(option: Option<T>): string {
   const label = stripAnsi(option.label ?? "");
   const hint = stripAnsi(option.hint ?? "");
   const value = String(option.value ?? "");
-  return `${label} ${hint} ${value}`.toLowerCase();
+  return normalizeLowercaseStringOrEmpty(`${label} ${hint} ${value}`);
 }
 
 export function tokenizedOptionFilter<T>(search: string, option: Option<T>): boolean {
@@ -62,17 +63,31 @@ export function createClackPrompter(): WizardPrompter {
     note: async (message, title) => {
       emitNote(message, title);
     },
-    select: async (params) =>
-      guardCancel(
+    select: async (params) => {
+      const options = params.options.map((opt) => {
+        const base = { value: opt.value, label: opt.label };
+        return opt.hint === undefined ? base : { ...base, hint: stylePromptHint(opt.hint) };
+      }) as Option<(typeof params.options)[number]["value"]>[];
+
+      if (params.searchable) {
+        return guardCancel(
+          await autocomplete({
+            message: stylePromptMessage(params.message),
+            options,
+            initialValue: params.initialValue,
+            filter: tokenizedOptionFilter,
+          }),
+        );
+      }
+
+      return guardCancel(
         await select({
           message: stylePromptMessage(params.message),
-          options: params.options.map((opt) => {
-            const base = { value: opt.value, label: opt.label };
-            return opt.hint === undefined ? base : { ...base, hint: stylePromptHint(opt.hint) };
-          }) as Option<(typeof params.options)[number]["value"]>[],
+          options,
           initialValue: params.initialValue,
         }),
-      ),
+      );
+    },
     multiselect: async (params) => {
       const options = params.options.map((opt) => {
         const base = { value: opt.value, label: opt.label };
@@ -132,7 +147,11 @@ export function createClackPrompter(): WizardPrompter {
         },
         stop: (message) => {
           osc.done();
-          spin.stop(message);
+          if (message === undefined) {
+            spin.clear();
+          } else {
+            spin.stop(message);
+          }
         },
       };
     },

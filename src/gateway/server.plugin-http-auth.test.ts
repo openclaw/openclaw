@@ -1,5 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, test, vi } from "vitest";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { canonicalizePathVariant, isProtectedPluginRoutePath } from "./security-path.js";
 import {
   AUTH_NONE,
@@ -9,7 +11,10 @@ import {
   CANONICAL_UNAUTH_VARIANTS,
   createCanonicalizedChannelPluginHandler,
   createHooksHandler,
+  createRequest,
+  createResponse,
   createTestGatewayServer,
+  dispatchRequest,
   expectAuthorizedVariants,
   expectUnauthorizedResponse,
   expectUnauthorizedVariants,
@@ -17,6 +22,8 @@ import {
   withGatewayServer,
   withGatewayTempConfig,
 } from "./server-http.test-harness.js";
+import { createTestRegistry } from "./server/__tests__/test-utils.js";
+import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
 import { withTempConfig } from "./test-temp-config.js";
 
 type PluginRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
@@ -30,6 +37,37 @@ function respondJsonRoute(res: ServerResponse, route: string): true {
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.end(JSON.stringify({ ok: true, route }));
   return true;
+}
+
+function createHealthzPluginHandler() {
+  return vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+    const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+    if (pathname !== "/healthz") {
+      return false;
+    }
+    return respondJsonRoute(res, "plugin-health");
+  });
+}
+
+async function expectHealthzProbeReserved(params: {
+  server: Parameters<typeof sendRequest>[0];
+  handlePluginRequest: ReturnType<typeof createHealthzPluginHandler>;
+}) {
+  const response = await sendRequest(params.server, { path: "/healthz" });
+  expect(response.res.statusCode).toBe(200);
+  expect(response.getBody()).toBe(JSON.stringify({ ok: true, status: "live" }));
+  expect(params.handlePluginRequest).not.toHaveBeenCalled();
+}
+
+function createMattermostCallbackConfig(callbackPath: string) {
+  return {
+    gateway: { trustedProxies: [] },
+    channels: {
+      mattermost: {
+        commands: { callbackPath },
+      },
+    },
+  };
 }
 
 function createRootMountedControlUiOverrides(handlePluginRequest: PluginRequestHandler) {
@@ -81,6 +119,45 @@ function createProtectedPluginAuthOverrides(handlePluginRequest: PluginRequestHa
   };
 }
 
+function createRuntimeScopeRecorderHandler(params: {
+  pluginId: string;
+  path: string;
+  method: string;
+  observedRuntimeScopes: string[][];
+  allowedResults: boolean[];
+  gatewayRuntimeScopeSurface?: "trusted-operator";
+}) {
+  return createGatewayPluginRequestHandler({
+    registry: createTestRegistry({
+      httpRoutes: [
+        {
+          pluginId: params.pluginId,
+          source: params.pluginId,
+          path: params.path,
+          auth: "gateway",
+          ...(params.gatewayRuntimeScopeSurface
+            ? { gatewayRuntimeScopeSurface: params.gatewayRuntimeScopeSurface }
+            : {}),
+          match: "exact",
+          handler: async (_req: IncomingMessage, res: ServerResponse) => {
+            const runtimeScopes =
+              getPluginRuntimeGatewayRequestScope()?.client?.connect?.scopes?.slice() ?? [];
+            params.observedRuntimeScopes.push(runtimeScopes);
+            const auth = authorizeOperatorScopesForMethod(params.method, runtimeScopes);
+            params.allowedResults.push(auth.allowed);
+            res.statusCode = 200;
+            res.end("ok");
+            return true;
+          },
+        },
+      ],
+    }),
+    log: { warn: vi.fn() } as unknown as Parameters<
+      typeof createGatewayPluginRequestHandler
+    >[0]["log"],
+  });
+}
+
 describe("gateway plugin HTTP auth boundary", () => {
   test("applies default security headers and optional strict transport security", async () => {
     await withGatewayTempConfig("openclaw-plugin-http-security-headers-test-", async () => {
@@ -120,27 +197,15 @@ describe("gateway plugin HTTP auth boundary", () => {
     });
   });
 
-  test("does not shadow plugin routes mounted on probe paths", async () => {
-    const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
-      const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
-      if (pathname === "/healthz") {
-        res.statusCode = 200;
-        res.setHeader("Content-Type", "application/json; charset=utf-8");
-        res.end(JSON.stringify({ ok: true, route: "plugin-health" }));
-        return true;
-      }
-      return false;
-    });
+  test("reserves gateway probe routes ahead of plugin routes", async () => {
+    const handlePluginRequest = createHealthzPluginHandler();
 
     await withGatewayServer({
       prefix: "openclaw-plugin-http-probes-shadow-test-",
       resolvedAuth: AUTH_NONE,
       overrides: { handlePluginRequest },
       run: async (server) => {
-        const response = await sendRequest(server, { path: "/healthz" });
-        expect(response.res.statusCode).toBe(200);
-        expect(response.getBody()).toBe(JSON.stringify({ ok: true, route: "plugin-health" }));
-        expect(handlePluginRequest).toHaveBeenCalledTimes(1);
+        await expectHealthzProbeReserved({ server, handlePluginRequest });
       },
     });
   });
@@ -221,6 +286,146 @@ describe("gateway plugin HTTP auth boundary", () => {
     });
   });
 
+  test("preserves trusted-proxy read scopes for gateway-auth plugin runtime routes", async () => {
+    const observedRuntimeScopes: string[][] = [];
+    const writeAllowedResults: boolean[] = [];
+    const handlePluginRequest = createRuntimeScopeRecorderHandler({
+      pluginId: "runtime-scope",
+      path: "/secure-hook",
+      method: "node.invoke",
+      observedRuntimeScopes,
+      allowedResults: writeAllowedResults,
+    });
+
+    await withTempConfig({
+      cfg: {
+        gateway: {
+          trustedProxies: ["203.0.113.10"],
+        },
+      },
+      prefix: "openclaw-plugin-http-runtime-scope-trusted-proxy-test-",
+      run: async () => {
+        const server = createTestGatewayServer({
+          resolvedAuth: {
+            mode: "trusted-proxy",
+            allowTailscale: false,
+            trustedProxy: { userHeader: "x-forwarded-user" },
+          },
+          overrides: {
+            handlePluginRequest,
+            shouldEnforcePluginGatewayAuth: (pathContext) =>
+              pathContext.pathname === "/secure-hook",
+          },
+        });
+
+        const response = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({
+            path: "/secure-hook",
+            remoteAddress: "203.0.113.10",
+            headers: {
+              "x-forwarded-user": "operator",
+              "x-forwarded-for": "198.51.100.20",
+              "x-openclaw-scopes": "operator.read",
+            },
+          }),
+          response.res,
+        );
+
+        expect(response.res.statusCode).toBe(200);
+        expect(response.getBody()).toBe("ok");
+      },
+    });
+
+    expect(observedRuntimeScopes).toEqual([["operator.read"]]);
+    expect(writeAllowedResults).toEqual([false]);
+  });
+
+  test("keeps write runtime scopes for shared-secret bearer gateway-auth plugin routes", async () => {
+    const observedRuntimeScopes: string[][] = [];
+    const writeAllowedResults: boolean[] = [];
+    const handlePluginRequest = createRuntimeScopeRecorderHandler({
+      pluginId: "runtime-scope-bearer",
+      path: "/secure-hook",
+      method: "node.invoke",
+      observedRuntimeScopes,
+      allowedResults: writeAllowedResults,
+    });
+
+    await withGatewayServer({
+      prefix: "openclaw-plugin-http-runtime-scope-bearer-test-",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: {
+        handlePluginRequest,
+        shouldEnforcePluginGatewayAuth: (pathContext) => pathContext.pathname === "/secure-hook",
+      },
+      run: async (server) => {
+        const response = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({
+            path: "/secure-hook",
+            authorization: "Bearer test-token",
+            headers: {
+              "x-openclaw-scopes": "operator.read",
+            },
+          }),
+          response.res,
+        );
+
+        expect(response.res.statusCode).toBe(200);
+        expect(response.getBody()).toBe("ok");
+      },
+    });
+
+    expect(observedRuntimeScopes).toEqual([["operator.write"]]);
+    expect(writeAllowedResults).toEqual([true]);
+  });
+
+  test("allows trusted-operator plugin routes to resolve admin-capable runtime scopes for shared-secret bearer auth without scope headers", async () => {
+    const observedRuntimeScopes: string[][] = [];
+    const adminAllowedResults: boolean[] = [];
+    const handlePluginRequest = createRuntimeScopeRecorderHandler({
+      pluginId: "runtime-scope-bearer-trusted-operator",
+      path: "/secure-admin-hook",
+      method: "set-heartbeats",
+      observedRuntimeScopes,
+      allowedResults: adminAllowedResults,
+      gatewayRuntimeScopeSurface: "trusted-operator",
+    });
+
+    await withGatewayServer({
+      prefix: "openclaw-plugin-http-runtime-scope-bearer-trusted-operator-test-",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: {
+        handlePluginRequest,
+        shouldEnforcePluginGatewayAuth: (pathContext) =>
+          pathContext.pathname === "/secure-admin-hook",
+      },
+      run: async (server) => {
+        const response = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({
+            path: "/secure-admin-hook",
+            authorization: "Bearer test-token",
+          }),
+          response.res,
+        );
+
+        expect(response.res.statusCode).toBe(200);
+        expect(response.getBody()).toBe("ok");
+      },
+    });
+
+    expect(observedRuntimeScopes).toHaveLength(1);
+    expect(observedRuntimeScopes[0]).toEqual(
+      expect.arrayContaining(["operator.admin", "operator.read", "operator.write"]),
+    );
+    expect(adminAllowedResults).toEqual([true]);
+  });
+
   test("allows unauthenticated Mattermost slash callback routes while keeping other channel routes protected", async () => {
     const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
       const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
@@ -238,14 +443,7 @@ describe("gateway plugin HTTP auth boundary", () => {
     });
 
     await withTempConfig({
-      cfg: {
-        gateway: { trustedProxies: [] },
-        channels: {
-          mattermost: {
-            commands: { callbackPath: "/api/channels/mattermost/command" },
-          },
-        },
-      },
+      cfg: createMattermostCallbackConfig("/api/channels/mattermost/command"),
       prefix: "openclaw-plugin-http-auth-mm-callback-",
       run: async () => {
         const server = createTestGatewayServer({
@@ -281,14 +479,7 @@ describe("gateway plugin HTTP auth boundary", () => {
     });
 
     await withTempConfig({
-      cfg: {
-        gateway: { trustedProxies: [] },
-        channels: {
-          mattermost: {
-            commands: { callbackPath: "/api/channels/nostr/default/profile" },
-          },
-        },
-      },
+      cfg: createMattermostCallbackConfig("/api/channels/nostr/default/profile"),
       prefix: "openclaw-plugin-http-auth-mm-misconfig-",
       run: async () => {
         const server = createTestGatewayServer({
@@ -506,32 +697,19 @@ describe("gateway plugin HTTP auth boundary", () => {
       handlePluginRequest,
       run: async (server) => {
         await expectProbeRoutesHealthy(server);
-        expect(handlePluginRequest).toHaveBeenCalledTimes(PROBE_CASES.length);
+        expect(handlePluginRequest).not.toHaveBeenCalled();
       },
     });
   });
 
-  test("root-mounted control ui still lets plugins claim probe paths first", async () => {
-    const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
-      const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
-      if (pathname !== "/healthz") {
-        return false;
-      }
-      res.statusCode = 200;
-      res.setHeader("Content-Type", "application/json; charset=utf-8");
-      res.end(JSON.stringify({ ok: true, route: "plugin-health" }));
-      return true;
-    });
+  test("root-mounted control ui keeps gateway probe routes reserved ahead of plugins", async () => {
+    const handlePluginRequest = createHealthzPluginHandler();
 
     await withRootMountedControlUiServer({
       prefix: "openclaw-plugin-http-control-ui-probe-shadow-test-",
       handlePluginRequest,
       run: async (server) => {
-        const response = await sendRequest(server, { path: "/healthz" });
-
-        expect(response.res.statusCode).toBe(200);
-        expect(response.getBody()).toBe(JSON.stringify({ ok: true, route: "plugin-health" }));
-        expect(handlePluginRequest).toHaveBeenCalledTimes(1);
+        await expectHealthzProbeReserved({ server, handlePluginRequest });
       },
     });
   });

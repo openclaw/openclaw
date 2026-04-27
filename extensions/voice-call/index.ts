@@ -1,37 +1,33 @@
-import { Type } from "@sinclair/typebox";
-import type {
-  GatewayRequestHandlerOptions,
-  OpenClawPluginApi,
-} from "openclaw/plugin-sdk/voice-call";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { Type } from "typebox";
+import {
+  definePluginEntry,
+  type GatewayRequestHandlerOptions,
+  type OpenClawPluginApi,
+} from "./api.js";
+import { createVoiceCallRuntime, type VoiceCallRuntime } from "./runtime-entry.js";
 import { registerVoiceCallCli } from "./src/cli.js";
 import {
-  VoiceCallConfigSchema,
+  formatVoiceCallLegacyConfigWarnings,
+  normalizeVoiceCallLegacyConfigInput,
+  parseVoiceCallPluginConfig,
+} from "./src/config-compat.js";
+import {
   resolveVoiceCallConfig,
   validateProviderConfig,
   type VoiceCallConfig,
 } from "./src/config.js";
 import type { CoreConfig } from "./src/core-bridge.js";
-import { createVoiceCallRuntime, type VoiceCallRuntime } from "./src/runtime.js";
 
 const voiceCallConfigSchema = {
   parse(value: unknown): VoiceCallConfig {
-    const raw =
-      value && typeof value === "object" && !Array.isArray(value)
-        ? (value as Record<string, unknown>)
-        : {};
-
-    const twilio = raw.twilio as Record<string, unknown> | undefined;
-    const legacyFrom = typeof twilio?.from === "string" ? twilio.from : undefined;
-
-    const enabled = typeof raw.enabled === "boolean" ? raw.enabled : true;
-    const providerRaw = raw.provider === "log" ? "mock" : raw.provider;
-    const provider = providerRaw ?? (enabled ? "mock" : undefined);
-
-    return VoiceCallConfigSchema.parse({
-      ...raw,
+    const normalized = normalizeVoiceCallLegacyConfigInput(value);
+    const enabled = typeof normalized.enabled === "boolean" ? normalized.enabled : true;
+    return parseVoiceCallPluginConfig({
+      ...normalized,
       enabled,
-      provider,
-      fromNumber: raw.fromNumber ?? legacyFrom,
+      provider: normalized.provider ?? (enabled ? "mock" : undefined),
     });
   },
   uiHints: {
@@ -71,40 +67,49 @@ const voiceCallConfigSchema = {
       advanced: true,
     },
     "streaming.enabled": { label: "Enable Streaming", advanced: true },
-    "streaming.openaiApiKey": {
-      label: "OpenAI Realtime API Key",
-      sensitive: true,
+    "streaming.provider": {
+      label: "Streaming Provider",
+      help: "Uses the first registered realtime transcription provider when unset.",
       advanced: true,
     },
-    "streaming.sttModel": { label: "Realtime STT Model", advanced: true },
+    "streaming.providers": { label: "Streaming Provider Config", advanced: true },
     "streaming.streamPath": { label: "Media Stream Path", advanced: true },
+    "realtime.enabled": { label: "Enable Realtime Voice", advanced: true },
+    "realtime.provider": {
+      label: "Realtime Voice Provider",
+      help: "Uses the first registered realtime voice provider when unset.",
+      advanced: true,
+    },
+    "realtime.streamPath": { label: "Realtime Stream Path", advanced: true },
+    "realtime.instructions": { label: "Realtime Instructions", advanced: true },
+    "realtime.toolPolicy": {
+      label: "Realtime Tool Policy",
+      help: "Controls the shared openclaw_agent_consult tool.",
+      advanced: true,
+    },
+    "realtime.providers": { label: "Realtime Provider Config", advanced: true },
     "tts.provider": {
       label: "TTS Provider Override",
-      help: "Deep-merges with messages.tts (Edge is ignored for calls).",
+      help: "Deep-merges with messages.tts (Microsoft is ignored for calls).",
       advanced: true,
     },
-    "tts.openai.model": { label: "OpenAI TTS Model", advanced: true },
-    "tts.openai.voice": { label: "OpenAI TTS Voice", advanced: true },
-    "tts.openai.apiKey": {
-      label: "OpenAI API Key",
-      sensitive: true,
-      advanced: true,
-    },
-    "tts.elevenlabs.modelId": { label: "ElevenLabs Model ID", advanced: true },
-    "tts.elevenlabs.voiceId": { label: "ElevenLabs Voice ID", advanced: true },
-    "tts.elevenlabs.apiKey": {
-      label: "ElevenLabs API Key",
-      sensitive: true,
-      advanced: true,
-    },
-    "tts.elevenlabs.baseUrl": { label: "ElevenLabs Base URL", advanced: true },
+    "tts.providers": { label: "TTS Provider Config", advanced: true },
     publicUrl: { label: "Public Webhook URL", advanced: true },
     skipSignatureVerification: {
       label: "Skip Signature Verification",
       advanced: true,
     },
     store: { label: "Call Log Store Path", advanced: true },
-    responseModel: { label: "Response Model", advanced: true },
+    agentId: {
+      label: "Response Agent ID",
+      help: 'Agent workspace used for voice response generation. Defaults to "main".',
+      advanced: true,
+    },
+    responseModel: {
+      label: "Response Model",
+      help: "Optional override. Falls back to the runtime default model when unset.",
+      advanced: true,
+    },
     responseSystemPrompt: { label: "Response System Prompt", advanced: true },
     responseTimeoutMs: { label: "Response Timeout (ms)", advanced: true },
   },
@@ -128,6 +133,11 @@ const VoiceCallToolSchema = Type.Union([
     message: Type.String({ description: "Message to speak" }),
   }),
   Type.Object({
+    action: Type.Literal("send_dtmf"),
+    callId: Type.String({ description: "Call ID" }),
+    digits: Type.String({ description: "DTMF digits to send" }),
+  }),
+  Type.Object({
     action: Type.Literal("end_call"),
     callId: Type.String({ description: "Call ID" }),
   }),
@@ -143,7 +153,31 @@ const VoiceCallToolSchema = Type.Union([
   }),
 ]);
 
-const voiceCallPlugin = {
+function asParamRecord(params: unknown): Record<string, unknown> {
+  return params && typeof params === "object" && !Array.isArray(params)
+    ? (params as Record<string, unknown>)
+    : {};
+}
+
+const VOICE_CALL_RUNTIME_KEY = Symbol.for("openclaw.voice-call.runtime");
+const VOICE_CALL_RUNTIME_PROMISE_KEY = Symbol.for("openclaw.voice-call.runtimePromise");
+const VOICE_CALL_RUNTIME_STOP_PROMISE_KEY = Symbol.for("openclaw.voice-call.runtimeStopPromise");
+
+type VoiceCallRuntimeGlobalState = typeof globalThis & {
+  [VOICE_CALL_RUNTIME_KEY]?: VoiceCallRuntime | null;
+  [VOICE_CALL_RUNTIME_PROMISE_KEY]?: Promise<VoiceCallRuntime> | null;
+  [VOICE_CALL_RUNTIME_STOP_PROMISE_KEY]?: Promise<void> | null;
+};
+
+function getVoiceCallRuntimeGlobalState(): VoiceCallRuntimeGlobalState {
+  const state = globalThis as VoiceCallRuntimeGlobalState;
+  state[VOICE_CALL_RUNTIME_KEY] ??= null;
+  state[VOICE_CALL_RUNTIME_PROMISE_KEY] ??= null;
+  state[VOICE_CALL_RUNTIME_STOP_PROMISE_KEY] ??= null;
+  return state;
+}
+
+export default definePluginEntry({
   id: "voice-call",
   name: "Voice Call",
   description: "Voice-call plugin with Telnyx/Twilio/Plivo providers",
@@ -153,56 +187,78 @@ const voiceCallPlugin = {
     const validation = validateProviderConfig(config);
 
     if (api.pluginConfig && typeof api.pluginConfig === "object") {
-      const raw = api.pluginConfig as Record<string, unknown>;
-      const twilio = raw.twilio as Record<string, unknown> | undefined;
-      if (raw.provider === "log") {
-        api.logger.warn('[voice-call] provider "log" is deprecated; use "mock" instead');
-      }
-      if (typeof twilio?.from === "string") {
-        api.logger.warn("[voice-call] twilio.from is deprecated; use fromNumber instead");
+      for (const warning of formatVoiceCallLegacyConfigWarnings({
+        value: api.pluginConfig,
+        configPathPrefix: "plugins.entries.voice-call.config",
+        doctorFixCommand: "openclaw doctor --fix",
+      })) {
+        api.logger.warn(warning);
       }
     }
 
-    let runtimePromise: Promise<VoiceCallRuntime> | null = null;
-    let runtime: VoiceCallRuntime | null = null;
+    const runtimeState = getVoiceCallRuntimeGlobalState();
 
-    const ensureRuntime = async () => {
+    const ensureRuntime = async (): Promise<VoiceCallRuntime> => {
       if (!config.enabled) {
         throw new Error("Voice call disabled in plugin config");
       }
       if (!validation.valid) {
         throw new Error(validation.errors.join("; "));
       }
-      if (runtime) {
-        return runtime;
+
+      while (true) {
+        if (runtimeState[VOICE_CALL_RUNTIME_STOP_PROMISE_KEY]) {
+          await runtimeState[VOICE_CALL_RUNTIME_STOP_PROMISE_KEY];
+          continue;
+        }
+
+        const runtime = runtimeState[VOICE_CALL_RUNTIME_KEY];
+        if (runtime) {
+          return runtime;
+        }
+
+        let runtimePromise = runtimeState[VOICE_CALL_RUNTIME_PROMISE_KEY];
+        if (!runtimePromise) {
+          runtimePromise = createVoiceCallRuntime({
+            config,
+            coreConfig: api.config as CoreConfig,
+            fullConfig: api.config,
+            agentRuntime: api.runtime.agent,
+            ttsRuntime: api.runtime.tts,
+            logger: api.logger,
+          });
+          runtimeState[VOICE_CALL_RUNTIME_PROMISE_KEY] = runtimePromise;
+        }
+
+        try {
+          const createdRuntime = await runtimePromise;
+          if (runtimeState[VOICE_CALL_RUNTIME_STOP_PROMISE_KEY]) {
+            continue;
+          }
+          if (runtimeState[VOICE_CALL_RUNTIME_PROMISE_KEY] !== runtimePromise) {
+            continue;
+          }
+          runtimeState[VOICE_CALL_RUNTIME_KEY] = createdRuntime;
+          return createdRuntime;
+        } catch (err) {
+          if (runtimeState[VOICE_CALL_RUNTIME_PROMISE_KEY] === runtimePromise) {
+            // Reset shared state so the next call can retry instead of caching
+            // a rejected promise across plugin contexts. See: #32387, #58115.
+            runtimeState[VOICE_CALL_RUNTIME_PROMISE_KEY] = null;
+            runtimeState[VOICE_CALL_RUNTIME_KEY] = null;
+          }
+          throw err;
+        }
       }
-      if (!runtimePromise) {
-        runtimePromise = createVoiceCallRuntime({
-          config,
-          coreConfig: api.config as CoreConfig,
-          ttsRuntime: api.runtime.tts,
-          logger: api.logger,
-        });
-      }
-      try {
-        runtime = await runtimePromise;
-      } catch (err) {
-        // Reset so the next call can retry instead of caching the
-        // rejected promise forever (which also leaves the port orphaned
-        // if the server started before the failure).  See: #32387
-        runtimePromise = null;
-        throw err;
-      }
-      return runtime;
     };
 
     const sendError = (respond: (ok: boolean, payload?: unknown) => void, err: unknown) => {
-      respond(false, { error: err instanceof Error ? err.message : String(err) });
+      respond(false, { error: formatErrorMessage(err) });
     };
 
     const resolveCallMessageRequest = async (params: GatewayRequestHandlerOptions["params"]) => {
-      const callId = typeof params?.callId === "string" ? params.callId.trim() : "";
-      const message = typeof params?.message === "string" ? params.message.trim() : "";
+      const callId = normalizeOptionalString(params?.callId) ?? "";
+      const message = normalizeOptionalString(params?.message) ?? "";
       if (!callId || !message) {
         return { error: "callId and message required" } as const;
       }
@@ -227,20 +283,48 @@ const voiceCallPlugin = {
       params.respond(true, { callId: result.callId, initiated: true });
     };
 
+    const respondToCallMessageAction = async (params: {
+      requestParams: GatewayRequestHandlerOptions["params"];
+      respond: GatewayRequestHandlerOptions["respond"];
+      action: (
+        request: Exclude<Awaited<ReturnType<typeof resolveCallMessageRequest>>, { error: string }>,
+      ) => Promise<{
+        success: boolean;
+        error?: string;
+        transcript?: string;
+      }>;
+      failure: string;
+      includeTranscript?: boolean;
+    }) => {
+      const request = await resolveCallMessageRequest(params.requestParams);
+      if ("error" in request) {
+        params.respond(false, { error: request.error });
+        return;
+      }
+      const result = await params.action(request);
+      if (!result.success) {
+        params.respond(false, { error: result.error || params.failure });
+        return;
+      }
+      params.respond(
+        true,
+        params.includeTranscript
+          ? { success: true, transcript: result.transcript }
+          : { success: true },
+      );
+    };
+
     api.registerGatewayMethod(
       "voicecall.initiate",
       async ({ params, respond }: GatewayRequestHandlerOptions) => {
         try {
-          const message = typeof params?.message === "string" ? params.message.trim() : "";
+          const message = normalizeOptionalString(params?.message) ?? "";
           if (!message) {
             respond(false, { error: "message required" });
             return;
           }
           const rt = await ensureRuntime();
-          const to =
-            typeof params?.to === "string" && params.to.trim()
-              ? params.to.trim()
-              : rt.config.toNumber;
+          const to = normalizeOptionalString(params?.to) ?? rt.config.toNumber;
           if (!to) {
             respond(false, { error: "to required" });
             return;
@@ -264,17 +348,13 @@ const voiceCallPlugin = {
       "voicecall.continue",
       async ({ params, respond }: GatewayRequestHandlerOptions) => {
         try {
-          const request = await resolveCallMessageRequest(params);
-          if ("error" in request) {
-            respond(false, { error: request.error });
-            return;
-          }
-          const result = await request.rt.manager.continueCall(request.callId, request.message);
-          if (!result.success) {
-            respond(false, { error: result.error || "continue failed" });
-            return;
-          }
-          respond(true, { success: true, transcript: result.transcript });
+          await respondToCallMessageAction({
+            requestParams: params,
+            respond,
+            action: (request) => request.rt.manager.continueCall(request.callId, request.message),
+            failure: "continue failed",
+            includeTranscript: true,
+          });
         } catch (err) {
           sendError(respond, err);
         }
@@ -285,14 +365,32 @@ const voiceCallPlugin = {
       "voicecall.speak",
       async ({ params, respond }: GatewayRequestHandlerOptions) => {
         try {
-          const request = await resolveCallMessageRequest(params);
-          if ("error" in request) {
-            respond(false, { error: request.error });
+          await respondToCallMessageAction({
+            requestParams: params,
+            respond,
+            action: (request) => request.rt.manager.speak(request.callId, request.message),
+            failure: "speak failed",
+          });
+        } catch (err) {
+          sendError(respond, err);
+        }
+      },
+    );
+
+    api.registerGatewayMethod(
+      "voicecall.dtmf",
+      async ({ params, respond }: GatewayRequestHandlerOptions) => {
+        try {
+          const callId = normalizeOptionalString(params?.callId) ?? "";
+          const digits = normalizeOptionalString(params?.digits) ?? "";
+          if (!callId || !digits) {
+            respond(false, { error: "callId and digits required" });
             return;
           }
-          const result = await request.rt.manager.speak(request.callId, request.message);
+          const rt = await ensureRuntime();
+          const result = await rt.manager.sendDtmf(callId, digits);
           if (!result.success) {
-            respond(false, { error: result.error || "speak failed" });
+            respond(false, { error: result.error || "dtmf failed" });
             return;
           }
           respond(true, { success: true });
@@ -306,7 +404,7 @@ const voiceCallPlugin = {
       "voicecall.end",
       async ({ params, respond }: GatewayRequestHandlerOptions) => {
         try {
-          const callId = typeof params?.callId === "string" ? params.callId.trim() : "";
+          const callId = normalizeOptionalString(params?.callId) ?? "";
           if (!callId) {
             respond(false, { error: "callId required" });
             return;
@@ -329,11 +427,7 @@ const voiceCallPlugin = {
       async ({ params, respond }: GatewayRequestHandlerOptions) => {
         try {
           const raw =
-            typeof params?.callId === "string"
-              ? params.callId.trim()
-              : typeof params?.sid === "string"
-                ? params.sid.trim()
-                : "";
+            normalizeOptionalString(params?.callId) ?? normalizeOptionalString(params?.sid) ?? "";
           if (!raw) {
             respond(false, { error: "callId required" });
             return;
@@ -355,8 +449,8 @@ const voiceCallPlugin = {
       "voicecall.start",
       async ({ params, respond }: GatewayRequestHandlerOptions) => {
         try {
-          const to = typeof params?.to === "string" ? params.to.trim() : "";
-          const message = typeof params?.message === "string" ? params.message.trim() : "";
+          const to = normalizeOptionalString(params?.to) ?? "";
+          const message = normalizeOptionalString(params?.message) ?? "";
           if (!to) {
             respond(false, { error: "to required" });
             return;
@@ -380,6 +474,7 @@ const voiceCallPlugin = {
       description: "Make phone calls and have voice conversations via the voice-call plugin.",
       parameters: VoiceCallToolSchema,
       async execute(_toolCallId, params) {
+        const rawParams = asParamRecord(params);
         const json = (payload: unknown) => ({
           content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
           details: payload,
@@ -388,25 +483,22 @@ const voiceCallPlugin = {
         try {
           const rt = await ensureRuntime();
 
-          if (typeof params?.action === "string") {
-            switch (params.action) {
+          if (typeof rawParams.action === "string") {
+            switch (rawParams.action) {
               case "initiate_call": {
-                const message = String(params.message || "").trim();
+                const message = normalizeOptionalString(rawParams.message) ?? "";
                 if (!message) {
                   throw new Error("message required");
                 }
-                const to =
-                  typeof params.to === "string" && params.to.trim()
-                    ? params.to.trim()
-                    : rt.config.toNumber;
+                const to = normalizeOptionalString(rawParams.to) ?? rt.config.toNumber;
                 if (!to) {
                   throw new Error("to required");
                 }
                 const result = await rt.manager.initiateCall(to, undefined, {
                   message,
                   mode:
-                    params.mode === "notify" || params.mode === "conversation"
-                      ? params.mode
+                    rawParams.mode === "notify" || rawParams.mode === "conversation"
+                      ? rawParams.mode
                       : undefined,
                 });
                 if (!result.success) {
@@ -415,8 +507,8 @@ const voiceCallPlugin = {
                 return json({ callId: result.callId, initiated: true });
               }
               case "continue_call": {
-                const callId = String(params.callId || "").trim();
-                const message = String(params.message || "").trim();
+                const callId = normalizeOptionalString(rawParams.callId) ?? "";
+                const message = normalizeOptionalString(rawParams.message) ?? "";
                 if (!callId || !message) {
                   throw new Error("callId and message required");
                 }
@@ -427,8 +519,8 @@ const voiceCallPlugin = {
                 return json({ success: true, transcript: result.transcript });
               }
               case "speak_to_user": {
-                const callId = String(params.callId || "").trim();
-                const message = String(params.message || "").trim();
+                const callId = normalizeOptionalString(rawParams.callId) ?? "";
+                const message = normalizeOptionalString(rawParams.message) ?? "";
                 if (!callId || !message) {
                   throw new Error("callId and message required");
                 }
@@ -438,8 +530,20 @@ const voiceCallPlugin = {
                 }
                 return json({ success: true });
               }
+              case "send_dtmf": {
+                const callId = normalizeOptionalString(rawParams.callId) ?? "";
+                const digits = normalizeOptionalString(rawParams.digits) ?? "";
+                if (!callId || !digits) {
+                  throw new Error("callId and digits required");
+                }
+                const result = await rt.manager.sendDtmf(callId, digits);
+                if (!result.success) {
+                  throw new Error(result.error || "dtmf failed");
+                }
+                return json({ success: true });
+              }
               case "end_call": {
-                const callId = String(params.callId || "").trim();
+                const callId = normalizeOptionalString(rawParams.callId) ?? "";
                 if (!callId) {
                   throw new Error("callId required");
                 }
@@ -450,7 +554,7 @@ const voiceCallPlugin = {
                 return json({ success: true });
               }
               case "get_status": {
-                const callId = String(params.callId || "").trim();
+                const callId = normalizeOptionalString(rawParams.callId) ?? "";
                 if (!callId) {
                   throw new Error("callId required");
                 }
@@ -461,9 +565,9 @@ const voiceCallPlugin = {
             }
           }
 
-          const mode = params?.mode ?? "call";
+          const mode = rawParams.mode ?? "call";
           if (mode === "status") {
-            const sid = typeof params.sid === "string" ? params.sid.trim() : "";
+            const sid = normalizeOptionalString(rawParams.sid) ?? "";
             if (!sid) {
               throw new Error("sid required for status");
             }
@@ -471,18 +575,12 @@ const voiceCallPlugin = {
             return json(call ? { found: true, call } : { found: false });
           }
 
-          const to =
-            typeof params.to === "string" && params.to.trim()
-              ? params.to.trim()
-              : rt.config.toNumber;
+          const to = normalizeOptionalString(rawParams.to) ?? rt.config.toNumber;
           if (!to) {
             throw new Error("to required for call");
           }
           const result = await rt.manager.initiateCall(to, undefined, {
-            message:
-              typeof params.message === "string" && params.message.trim()
-                ? params.message.trim()
-                : undefined,
+            message: normalizeOptionalString(rawParams.message),
           });
           if (!result.success) {
             throw new Error(result.error || "initiate failed");
@@ -490,7 +588,7 @@ const voiceCallPlugin = {
           return json({ callId: result.callId, initiated: true });
         } catch (err) {
           return json({
-            error: err instanceof Error ? err.message : String(err),
+            error: formatErrorMessage(err),
           });
         }
       },
@@ -509,34 +607,45 @@ const voiceCallPlugin = {
 
     api.registerService({
       id: "voicecall",
-      start: async () => {
+      start: () => {
         if (!config.enabled) {
           return;
         }
-        try {
-          await ensureRuntime();
-        } catch (err) {
-          api.logger.error(
-            `[voice-call] Failed to start runtime: ${
-              err instanceof Error ? err.message : String(err)
-            }`,
+        if (!validation.valid) {
+          api.logger.warn(
+            `[voice-call] Runtime not started; setup incomplete: ${validation.errors.join("; ")}`,
           );
-        }
-      },
-      stop: async () => {
-        if (!runtimePromise) {
           return;
         }
-        try {
-          const rt = await runtimePromise;
+        void ensureRuntime().catch((err) => {
+          api.logger.error(`[voice-call] Failed to start runtime: ${formatErrorMessage(err)}`);
+        });
+      },
+      stop: async () => {
+        if (runtimeState[VOICE_CALL_RUNTIME_STOP_PROMISE_KEY]) {
+          await runtimeState[VOICE_CALL_RUNTIME_STOP_PROMISE_KEY];
+          return;
+        }
+        const runtime = runtimeState[VOICE_CALL_RUNTIME_KEY];
+        const runtimePromise = runtimeState[VOICE_CALL_RUNTIME_PROMISE_KEY];
+        if (!runtime && !runtimePromise) {
+          return;
+        }
+        runtimeState[VOICE_CALL_RUNTIME_KEY] = null;
+        runtimeState[VOICE_CALL_RUNTIME_PROMISE_KEY] = null;
+        const stopPromise = (async () => {
+          const rt = runtime ?? (await runtimePromise!);
           await rt.stop();
+        })();
+        runtimeState[VOICE_CALL_RUNTIME_STOP_PROMISE_KEY] = stopPromise;
+        try {
+          await stopPromise;
         } finally {
-          runtimePromise = null;
-          runtime = null;
+          if (runtimeState[VOICE_CALL_RUNTIME_STOP_PROMISE_KEY] === stopPromise) {
+            runtimeState[VOICE_CALL_RUNTIME_STOP_PROMISE_KEY] = null;
+          }
         }
       },
     });
   },
-};
-
-export default voiceCallPlugin;
+});

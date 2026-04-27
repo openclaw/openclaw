@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
+import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
-const writeConfigFileMock = vi.hoisted(() => vi.fn());
+const readConfigFileSnapshotForWriteMock = vi.hoisted(() => vi.fn());
+const replaceConfigFileMock = vi.hoisted(() => vi.fn());
 const resolveSecretInputRefMock = vi.hoisted(() =>
   vi.fn((): { ref: unknown } => ({ ref: undefined })),
 );
@@ -27,9 +29,10 @@ const resolveSecretRefValuesMock = vi.hoisted(() => vi.fn());
 const secretRefKeyMock = vi.hoisted(() => vi.fn(() => "env:default:OPENCLAW_GATEWAY_TOKEN"));
 const randomTokenMock = vi.hoisted(() => vi.fn(() => "generated-token"));
 
-vi.mock("../config/config.js", () => ({
+vi.mock("./gateway-install-token.persist.runtime.js", () => ({
   readConfigFileSnapshot: readConfigFileSnapshotMock,
-  writeConfigFile: writeConfigFileMock,
+  readConfigFileSnapshotForWrite: readConfigFileSnapshotForWriteMock,
+  replaceConfigFile: replaceConfigFileMock,
 }));
 
 vi.mock("../config/types.secrets.js", () => ({
@@ -53,16 +56,18 @@ vi.mock("../secrets/resolve.js", () => ({
   resolveSecretRefValues: resolveSecretRefValuesMock,
 }));
 
-vi.mock("./onboard-helpers.js", () => ({
+vi.mock("./random-token.js", () => ({
   randomToken: randomTokenMock,
 }));
-
-const { resolveGatewayInstallToken } = await import("./gateway-install-token.js");
 
 describe("resolveGatewayInstallToken", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     readConfigFileSnapshotMock.mockResolvedValue({ exists: false, valid: true, config: {} });
+    readConfigFileSnapshotForWriteMock.mockImplementation(async () => ({
+      snapshot: await readConfigFileSnapshotMock(),
+      writeOptions: {},
+    }));
     resolveSecretInputRefMock.mockReturnValue({ ref: undefined });
     hasConfiguredSecretInputMock.mockImplementation((value: unknown) => {
       if (typeof value === "string") {
@@ -153,7 +158,7 @@ describe("resolveGatewayInstallToken", () => {
     expect(result.unavailableReason).toContain("gateway.auth.mode is unset");
     expect(result.unavailableReason).toContain("openclaw config set gateway.auth.mode token");
     expect(result.unavailableReason).toContain("openclaw config set gateway.auth.mode password");
-    expect(writeConfigFileMock).not.toHaveBeenCalled();
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
     expect(resolveSecretRefValuesMock).not.toHaveBeenCalled();
   });
 
@@ -171,7 +176,7 @@ describe("resolveGatewayInstallToken", () => {
     expect(
       result.warnings.some((message) => message.includes("without saving to config")),
     ).toBeTruthy();
-    expect(writeConfigFileMock).not.toHaveBeenCalled();
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
   });
 
   it("persists auto-generated token when requested", async () => {
@@ -185,14 +190,21 @@ describe("resolveGatewayInstallToken", () => {
     });
 
     expect(result.warnings.some((message) => message.includes("saving to config"))).toBeTruthy();
-    expect(writeConfigFileMock).toHaveBeenCalledWith(
+    expect(replaceConfigFileMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        gateway: {
-          auth: {
-            mode: "token",
-            token: "generated-token",
+        nextConfig: expect.objectContaining({
+          gateway: {
+            auth: {
+              mode: "token",
+              token: "generated-token",
+            },
           },
-        },
+        }),
+        writeOptions: expect.objectContaining({
+          baseSnapshot: expect.any(Object),
+          skipRuntimeSnapshotRefresh: true,
+        }),
+        afterWrite: { mode: "auto" },
       }),
     );
   });
@@ -227,7 +239,7 @@ describe("resolveGatewayInstallToken", () => {
     expect(
       result.warnings.some((message) => message.includes("skipping plaintext token persistence")),
     ).toBeTruthy();
-    expect(writeConfigFileMock).not.toHaveBeenCalled();
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
   });
 
   it("does not auto-generate when inferred mode has password SecretRef configured", async () => {
@@ -254,7 +266,39 @@ describe("resolveGatewayInstallToken", () => {
     expect(result.token).toBeUndefined();
     expect(result.unavailableReason).toBeUndefined();
     expect(result.warnings.some((message) => message.includes("Auto-generated"))).toBe(false);
-    expect(writeConfigFileMock).not.toHaveBeenCalled();
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
+  });
+
+  it("passes the install env through to gateway auth resolution", async () => {
+    const env = {
+      OPENCLAW_GATEWAY_PASSWORD: "dotenv-password", // pragma: allowlist secret
+    } as NodeJS.ProcessEnv;
+    shouldRequireGatewayTokenForInstallMock.mockReturnValue(false);
+    resolveGatewayAuthMock.mockReturnValue({
+      mode: "password",
+      token: undefined,
+      password: undefined,
+      allowTailscale: false,
+    });
+
+    const result = await resolveGatewayInstallToken({
+      config: {
+        gateway: { auth: {} },
+      } as OpenClawConfig,
+      env,
+      autoGenerateWhenMissing: true,
+      persistGeneratedToken: true,
+    });
+
+    expect(resolveGatewayAuthMock).toHaveBeenCalledWith({
+      authConfig: {},
+      env,
+      tailscaleMode: "off",
+    });
+    expect(result.token).toBeUndefined();
+    expect(result.unavailableReason).toBeUndefined();
+    expect(result.warnings.some((message) => message.includes("Auto-generated"))).toBe(false);
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
   });
 
   it("skips token SecretRef resolution when token auth is not required", async () => {

@@ -9,12 +9,15 @@ import {
   PROFILE_OPTIONS,
   resolveCoreToolProfiles,
 } from "../../agents/tool-catalog.js";
-import { loadConfig } from "../../config/config.js";
+import { summarizeToolDescriptionText } from "../../agents/tool-description-summary.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginToolMeta, resolvePluginTools } from "../../plugins/tools.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
+  type ToolsCatalogResult,
   validateToolsCatalogParams,
 } from "../protocol/index.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
@@ -37,10 +40,13 @@ type ToolCatalogGroup = {
   tools: ToolCatalogEntry[];
 };
 
-function resolveAgentIdOrRespondError(rawAgentId: unknown, respond: RespondFn) {
-  const cfg = loadConfig();
+function resolveAgentIdOrRespondError(
+  rawAgentId: unknown,
+  respond: RespondFn,
+  cfg: OpenClawConfig,
+) {
   const knownAgents = listAgentIds(cfg);
-  const requestedAgentId = typeof rawAgentId === "string" ? rawAgentId.trim() : "";
+  const requestedAgentId = normalizeOptionalString(rawAgentId) ?? "";
   const agentId = requestedAgentId || resolveDefaultAgentId(cfg);
   if (requestedAgentId && !knownAgents.includes(agentId)) {
     respond(
@@ -69,7 +75,7 @@ function buildCoreGroups(): ToolCatalogGroup[] {
 }
 
 function buildPluginGroups(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   agentId: string;
   existingToolNames: Set<string>;
 }): ToolCatalogGroup[] {
@@ -85,6 +91,7 @@ function buildPluginGroups(params: {
     existingToolNames: params.existingToolNames,
     toolAllowlist: ["group:plugins"],
     suppressNameConflicts: true,
+    allowGatewaySubagentBinding: true,
   });
   const groups = new Map<string, ToolCatalogGroup>();
   for (const tool of pluginTools) {
@@ -102,11 +109,11 @@ function buildPluginGroups(params: {
       } as ToolCatalogGroup);
     existing.tools.push({
       id: tool.name,
-      label: typeof tool.label === "string" && tool.label.trim() ? tool.label.trim() : tool.name,
-      description:
-        typeof tool.description === "string" && tool.description.trim()
-          ? tool.description.trim()
-          : "Plugin tool",
+      label: normalizeOptionalString(tool.label) ?? tool.name,
+      description: summarizeToolDescriptionText({
+        rawDescription: typeof tool.description === "string" ? tool.description : undefined,
+        displaySummary: tool.displaySummary,
+      }),
       source: "plugin",
       pluginId,
       optional: meta?.optional,
@@ -115,15 +122,41 @@ function buildPluginGroups(params: {
     groups.set(groupId, existing);
   }
   return [...groups.values()]
-    .map((group) => ({
-      ...group,
-      tools: group.tools.toSorted((a, b) => a.id.localeCompare(b.id)),
-    }))
+    .map((group) =>
+      Object.assign({}, group, { tools: group.tools.toSorted((a, b) => a.id.localeCompare(b.id)) }),
+    )
     .toSorted((a, b) => a.label.localeCompare(b.label));
 }
 
+export function buildToolsCatalogResult(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  includePlugins?: boolean;
+}): ToolsCatalogResult {
+  const agentId = normalizeOptionalString(params.agentId) || resolveDefaultAgentId(params.cfg);
+  const includePlugins = params.includePlugins !== false;
+  const groups = buildCoreGroups();
+  if (includePlugins) {
+    const existingToolNames = new Set(
+      groups.flatMap((group) => group.tools.map((tool) => tool.id)),
+    );
+    groups.push(
+      ...buildPluginGroups({
+        cfg: params.cfg,
+        agentId,
+        existingToolNames,
+      }),
+    );
+  }
+  return {
+    agentId,
+    profiles: PROFILE_OPTIONS.map((profile) => ({ id: profile.id, label: profile.label })),
+    groups,
+  };
+}
+
 export const toolsCatalogHandlers: GatewayRequestHandlers = {
-  "tools.catalog": ({ params, respond }) => {
+  "tools.catalog": ({ params, respond, context }) => {
     if (!validateToolsCatalogParams(params)) {
       respond(
         false,
@@ -135,31 +168,21 @@ export const toolsCatalogHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const resolved = resolveAgentIdOrRespondError(params.agentId, respond);
+    const resolved = resolveAgentIdOrRespondError(
+      params.agentId,
+      respond,
+      context.getRuntimeConfig(),
+    );
     if (!resolved) {
       return;
     }
-    const includePlugins = params.includePlugins !== false;
-    const groups = buildCoreGroups();
-    if (includePlugins) {
-      const existingToolNames = new Set(
-        groups.flatMap((group) => group.tools.map((tool) => tool.id)),
-      );
-      groups.push(
-        ...buildPluginGroups({
-          cfg: resolved.cfg,
-          agentId: resolved.agentId,
-          existingToolNames,
-        }),
-      );
-    }
     respond(
       true,
-      {
+      buildToolsCatalogResult({
+        cfg: resolved.cfg,
         agentId: resolved.agentId,
-        profiles: PROFILE_OPTIONS.map((profile) => ({ id: profile.id, label: profile.label })),
-        groups,
-      },
+        includePlugins: params.includePlugins,
+      }),
       undefined,
     );
   },

@@ -1,8 +1,29 @@
 import { EnvHttpProxyAgent } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as ssrf from "../../infra/net/ssrf.js";
+import type { LookupFn } from "../../infra/net/ssrf.js";
+import { resolveRequestUrl } from "../../plugin-sdk/request-url.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
-import { createWebFetchTool } from "./web-tools.js";
+import { makeFetchHeaders } from "./web-fetch.test-harness.js";
+const { extractReadableContentMock, resolveWebFetchDefinitionMock } = vi.hoisted(() => ({
+  extractReadableContentMock: vi.fn(),
+  resolveWebFetchDefinitionMock: vi.fn(),
+}));
+
+vi.mock("../../web-fetch/content-extractors.runtime.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../web-fetch/content-extractors.runtime.js")
+  >("../../web-fetch/content-extractors.runtime.js");
+  return {
+    ...actual,
+    extractReadableContent: extractReadableContentMock,
+  };
+});
+vi.mock("../../web-fetch/runtime.js", () => ({
+  resolveWebFetchDefinition: resolveWebFetchDefinitionMock,
+}));
+import { createWebFetchTool } from "./web-fetch.js";
+
+const lookupMock = vi.fn();
 
 type MockResponse = {
   ok: boolean;
@@ -13,43 +34,13 @@ type MockResponse = {
   json?: () => Promise<unknown>;
 };
 
-function makeHeaders(map: Record<string, string>): { get: (key: string) => string | null } {
-  return {
-    get: (key) => map[key.toLowerCase()] ?? null,
-  };
-}
-
 function htmlResponse(html: string, url = "https://example.com/"): MockResponse {
   return {
     ok: true,
     status: 200,
     url,
-    headers: makeHeaders({ "content-type": "text/html; charset=utf-8" }),
+    headers: makeFetchHeaders({ "content-type": "text/html; charset=utf-8" }),
     text: async () => html,
-  };
-}
-
-const apiKeyField = ["api", "Key"].join("");
-
-function firecrawlResponse(markdown: string, url = "https://example.com/"): MockResponse {
-  return {
-    ok: true,
-    status: 200,
-    json: async () => ({
-      success: true,
-      data: {
-        markdown,
-        metadata: { title: "Firecrawl Title", sourceURL: url, statusCode: 200 },
-      },
-    }),
-  };
-}
-
-function firecrawlError(): MockResponse {
-  return {
-    ok: false,
-    status: 403,
-    json: async () => ({ success: false, error: "blocked" }),
   };
 }
 
@@ -62,7 +53,7 @@ function textResponse(
     ok: true,
     status: 200,
     url,
-    headers: makeHeaders({ "content-type": contentType }),
+    headers: makeFetchHeaders({ "content-type": contentType }),
     text: async () => text,
   };
 }
@@ -77,23 +68,10 @@ function errorHtmlResponse(
     ok: false,
     status,
     url,
-    headers: contentType ? makeHeaders({ "content-type": contentType }) : makeHeaders({}),
+    headers: contentType ? makeFetchHeaders({ "content-type": contentType }) : makeFetchHeaders({}),
     text: async () => html,
   };
 }
-function requestUrl(input: RequestInfo | URL): string {
-  if (typeof input === "string") {
-    return input;
-  }
-  if (input instanceof URL) {
-    return input.toString();
-  }
-  if ("url" in input && typeof input.url === "string") {
-    return input.url;
-  }
-  return "";
-}
-
 function installMockFetch(
   impl: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
 ) {
@@ -117,6 +95,7 @@ function createFetchTool(fetchOverrides: Record<string, unknown> = {}) {
       },
     },
     sandboxed: false,
+    lookupFn: lookupMock as unknown as LookupFn,
   });
 }
 
@@ -125,19 +104,19 @@ function installPlainTextFetch(text: string) {
     Promise.resolve({
       ok: true,
       status: 200,
-      headers: makeHeaders({ "content-type": "text/plain" }),
+      headers: makeFetchHeaders({ "content-type": "text/plain" }),
       text: async () => text,
-      url: requestUrl(input),
+      url: resolveRequestUrl(input),
     } as Response),
   );
 }
 
-function createFirecrawlTool(apiKey = defaultFirecrawlApiKey()) {
-  return createFetchTool({ firecrawl: { [apiKeyField]: apiKey } });
+function createProviderFallbackTool() {
+  return createFetchTool();
 }
 
-function defaultFirecrawlApiKey() {
-  return "firecrawl-test"; // pragma: allowlist secret
+function withoutAmbientFirecrawlEnv() {
+  vi.stubEnv("FIRECRAWL_API_KEY", "");
 }
 
 async function executeFetch(
@@ -163,19 +142,23 @@ describe("web_fetch extraction fallbacks", () => {
   const priorFetch = global.fetch;
 
   beforeEach(() => {
-    vi.spyOn(ssrf, "resolvePinnedHostname").mockImplementation(async (hostname) => {
-      const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
-      const addresses = ["93.184.216.34", "93.184.216.35"];
-      return {
-        hostname: normalized,
-        addresses,
-        lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
-      };
+    withoutAmbientFirecrawlEnv();
+    extractReadableContentMock.mockReset();
+    extractReadableContentMock.mockResolvedValue(null);
+    resolveWebFetchDefinitionMock.mockReset();
+    resolveWebFetchDefinitionMock.mockReturnValue(null);
+    lookupMock.mockImplementation(async (hostname: string) => {
+      void hostname;
+      return [
+        { address: "93.184.216.34", family: 4 },
+        { address: "93.184.216.35", family: 4 },
+      ];
     });
   });
 
   afterEach(() => {
     global.fetch = priorFetch;
+    lookupMock.mockReset();
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
@@ -215,9 +198,9 @@ describe("web_fetch extraction fallbacks", () => {
       Promise.resolve({
         ok: true,
         status: 200,
-        headers: makeHeaders({ "content-type": "text/plain" }),
+        headers: makeFetchHeaders({ "content-type": "text/plain" }),
         text: async () => longText,
-        url: requestUrl(input),
+        url: resolveRequestUrl(input),
       } as Response),
     );
 
@@ -277,9 +260,9 @@ describe("web_fetch extraction fallbacks", () => {
       Promise.resolve({
         ok: true,
         status: 200,
-        headers: makeHeaders({ "content-type": "text/plain" }),
+        headers: makeFetchHeaders({ "content-type": "text/plain" }),
         text: async () => "proxy body",
-        url: requestUrl(input),
+        url: resolveRequestUrl(input),
       } as Response),
     );
     const tool = createFetchTool({ firecrawl: { enabled: false } });
@@ -296,56 +279,38 @@ describe("web_fetch extraction fallbacks", () => {
   // NOTE: Test for wrapping url/finalUrl/warning fields requires DNS mocking.
   // The sanitization of these fields is verified by external-content.test.ts tests.
 
-  it("falls back to firecrawl when readability returns no content", async () => {
+  it("falls back to a configured provider when readability returns no content", async () => {
     installMockFetch((input: RequestInfo | URL) => {
-      const url = requestUrl(input);
-      if (url.includes("api.firecrawl.dev")) {
-        return Promise.resolve(firecrawlResponse("firecrawl content")) as Promise<Response>;
-      }
+      const url = resolveRequestUrl(input);
       return Promise.resolve(
         htmlResponse("<!doctype html><html><head></head><body></body></html>", url),
       ) as Promise<Response>;
     });
 
-    const tool = createFirecrawlTool();
+    resolveWebFetchDefinitionMock.mockReturnValue({
+      provider: { id: "test-fetch", label: "Test Fetch" },
+      definition: {
+        description: "test provider",
+        parameters: {},
+        execute: async () => ({
+          extractor: "test-fetch",
+          text: "provider content",
+        }),
+      },
+    });
+
+    const tool = createProviderFallbackTool();
     const result = await executeFetch(tool, { url: "https://example.com/empty" });
     const details = result?.details as { extractor?: string; text?: string };
-    expect(details.extractor).toBe("firecrawl");
-    expect(details.text).toContain("firecrawl content");
-  });
-
-  it("normalizes firecrawl Authorization header values", async () => {
-    const fetchSpy = installMockFetch((input: RequestInfo | URL) => {
-      const url = requestUrl(input);
-      if (url.includes("api.firecrawl.dev/v2/scrape")) {
-        return Promise.resolve(firecrawlResponse("firecrawl normalized")) as Promise<Response>;
-      }
-      return Promise.resolve(
-        htmlResponse("<!doctype html><html><head></head><body></body></html>", url),
-      ) as Promise<Response>;
-    });
-
-    const tool = createFirecrawlTool("firecrawl-test-\r\nkey");
-    const result = await executeFetch(tool, {
-      url: "https://example.com/firecrawl",
-      extractMode: "text",
-    });
-
-    expect(result?.details).toMatchObject({ extractor: "firecrawl" });
-    const firecrawlCall = fetchSpy.mock.calls.find((call) =>
-      requestUrl(call[0]).includes("/v2/scrape"),
-    );
-    expect(firecrawlCall).toBeTruthy();
-    const init = firecrawlCall?.[1];
-    const authHeader = new Headers(init?.headers).get("Authorization");
-    expect(authHeader).toBe("Bearer firecrawl-test-key");
+    expect(details.extractor).toBe("test-fetch");
+    expect(details.text).toContain("provider content");
   });
 
   it("throws when readability is disabled and firecrawl is unavailable", async () => {
     installMockFetch(
       (input: RequestInfo | URL) =>
         Promise.resolve(
-          htmlResponse("<html><body>hi</body></html>", requestUrl(input)),
+          htmlResponse("<html><body>hi</body></html>", resolveRequestUrl(input)),
         ) as Promise<Response>,
     );
 
@@ -359,52 +324,90 @@ describe("web_fetch extraction fallbacks", () => {
     ).rejects.toThrow("Readability disabled");
   });
 
-  it("throws when readability is empty and firecrawl fails", async () => {
-    installMockFetch((input: RequestInfo | URL) => {
-      const url = requestUrl(input);
-      if (url.includes("api.firecrawl.dev")) {
-        return Promise.resolve(firecrawlError()) as Promise<Response>;
-      }
-      return Promise.resolve(
-        htmlResponse("<!doctype html><html><head></head><body></body></html>", url),
-      ) as Promise<Response>;
+  it("throws when readability is empty and the provider fallback yields no content", async () => {
+    installMockFetch(
+      (input: RequestInfo | URL) =>
+        Promise.resolve(
+          htmlResponse(
+            "<!doctype html><html><head></head><body></body></html>",
+            resolveRequestUrl(input),
+          ),
+        ) as Promise<Response>,
+    );
+
+    resolveWebFetchDefinitionMock.mockReturnValue({
+      provider: { id: "test-fetch", label: "Test Fetch" },
+      definition: {
+        description: "test provider",
+        parameters: {},
+        execute: async () => {
+          throw new Error("provider returned no content");
+        },
+      },
     });
 
-    const tool = createFirecrawlTool();
+    const tool = createProviderFallbackTool();
     await expect(
       executeFetch(tool, { url: "https://example.com/readability-empty" }),
-    ).rejects.toThrow("Readability and Firecrawl returned no content");
+    ).rejects.toThrow("Readability, Test Fetch, and basic HTML cleanup returned no content");
   });
 
-  it("uses firecrawl when direct fetch fails", async () => {
-    installMockFetch((input: RequestInfo | URL) => {
-      const url = requestUrl(input);
-      if (url.includes("api.firecrawl.dev")) {
-        return Promise.resolve(firecrawlResponse("firecrawl fallback", url)) as Promise<Response>;
-      }
+  it("falls back to basic HTML cleanup after readability and before giving up", async () => {
+    installMockFetch(
+      (input: RequestInfo | URL) =>
+        Promise.resolve(
+          htmlResponse(
+            "<!doctype html><html><head><title>Shell App</title></head><body><div id='app'></div></body></html>",
+            resolveRequestUrl(input),
+          ),
+        ) as Promise<Response>,
+    );
+
+    const tool = createFetchTool({
+      firecrawl: { enabled: false },
+    });
+    const result = await executeFetch(tool, { url: "https://example.com/shell" });
+    const details = result?.details as { extractor?: string; text?: string; title?: string };
+
+    expect(details.extractor).toBe("raw-html");
+    expect(details.text).toContain("Shell App");
+    expect(details.title).toContain("Shell App");
+  });
+
+  it("uses the provider fallback when direct fetch fails", async () => {
+    installMockFetch((_input: RequestInfo | URL) => {
       return Promise.resolve({
         ok: false,
         status: 403,
-        headers: makeHeaders({ "content-type": "text/html" }),
+        headers: makeFetchHeaders({ "content-type": "text/html" }),
         text: async () => "blocked",
       } as Response);
     });
 
-    const tool = createFetchTool({
-      firecrawl: { apiKey: "firecrawl-test" }, // pragma: allowlist secret
+    resolveWebFetchDefinitionMock.mockReturnValue({
+      provider: { id: "test-fetch", label: "Test Fetch" },
+      definition: {
+        description: "test provider",
+        parameters: {},
+        execute: async () => ({
+          extractor: "test-fetch",
+          text: "provider fallback",
+        }),
+      },
     });
 
+    const tool = createProviderFallbackTool();
     const result = await tool?.execute?.("call", { url: "https://example.com/blocked" });
     const details = result?.details as { extractor?: string; text?: string };
-    expect(details.extractor).toBe("firecrawl");
-    expect(details.text).toContain("firecrawl fallback");
+    expect(details.extractor).toBe("test-fetch");
+    expect(details.text).toContain("provider fallback");
   });
 
   it("wraps external content and clamps oversized maxChars", async () => {
     const large = "a".repeat(80_000);
     installMockFetch(
       (input: RequestInfo | URL) =>
-        Promise.resolve(textResponse(large, requestUrl(input))) as Promise<Response>,
+        Promise.resolve(textResponse(large, resolveRequestUrl(input))) as Promise<Response>,
     );
 
     const tool = createFetchTool({
@@ -432,7 +435,7 @@ describe("web_fetch extraction fallbacks", () => {
     installMockFetch(
       (input: RequestInfo | URL) =>
         Promise.resolve(
-          errorHtmlResponse(html, 404, requestUrl(input), "Text/HTML; charset=utf-8"),
+          errorHtmlResponse(html, 404, resolveRequestUrl(input), "Text/HTML; charset=utf-8"),
         ) as Promise<Response>,
     );
 
@@ -455,7 +458,9 @@ describe("web_fetch extraction fallbacks", () => {
       "<!DOCTYPE HTML><html><head><title>Oops</title></head><body><h1>Oops</h1></body></html>";
     installMockFetch(
       (input: RequestInfo | URL) =>
-        Promise.resolve(errorHtmlResponse(html, 500, requestUrl(input), null)) as Promise<Response>,
+        Promise.resolve(
+          errorHtmlResponse(html, 500, resolveRequestUrl(input), null),
+        ) as Promise<Response>,
     );
 
     const tool = createFetchTool({ firecrawl: { enabled: false } });
@@ -469,30 +474,25 @@ describe("web_fetch extraction fallbacks", () => {
     expect(message).toContain("Oops");
   });
 
-  it("wraps firecrawl error details", async () => {
-    installMockFetch((input: RequestInfo | URL) => {
-      const url = requestUrl(input);
-      if (url.includes("api.firecrawl.dev")) {
-        return Promise.resolve({
-          ok: false,
-          status: 403,
-          json: async () => ({ success: false, error: "blocked" }),
-        } as Response);
-      }
-      return Promise.reject(new Error("network down"));
+  it("surfaces provider fallback errors when direct fetch throws", async () => {
+    installMockFetch(() => Promise.reject(new Error("network down")));
+    resolveWebFetchDefinitionMock.mockReturnValue({
+      provider: { id: "test-fetch", label: "Test Fetch" },
+      definition: {
+        description: "test provider",
+        parameters: {},
+        execute: async () => {
+          throw new Error("provider fallback failed");
+        },
+      },
     });
 
-    const tool = createFetchTool({
-      firecrawl: { apiKey: "firecrawl-test" }, // pragma: allowlist secret
-    });
-
-    const message = await captureToolErrorMessage({
-      tool,
-      url: "https://example.com/firecrawl-error",
-    });
-
-    expect(message).toContain("Firecrawl fetch failed (403):");
-    expect(message).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
-    expect(message).toContain("blocked");
+    const tool = createProviderFallbackTool();
+    await expect(
+      captureToolErrorMessage({
+        tool,
+        url: "https://example.com/provider-error",
+      }),
+    ).resolves.toContain("provider fallback failed");
   });
 });
