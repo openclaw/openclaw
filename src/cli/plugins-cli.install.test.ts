@@ -420,6 +420,42 @@ describe("plugins cli install", () => {
     expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
   });
 
+  it("does not persist incomplete config entries for config-gated bundled installs", async () => {
+    const cfg = {
+      plugins: {
+        entries: {
+          "memory-lancedb": {
+            config: {
+              embedding: {},
+            },
+          },
+        },
+        load: {
+          paths: ["/existing/plugin"],
+        },
+      },
+    } as OpenClawConfig;
+    loadConfig.mockReturnValue(cfg);
+
+    await runPluginsCommand(["plugins", "install", "memory-lancedb"]);
+
+    const writtenConfig = writeConfigFile.mock.calls.at(-1)?.[0] as OpenClawConfig;
+    expect(writtenConfig.plugins?.entries?.["memory-lancedb"]).toBeUndefined();
+    expect(writtenConfig.plugins?.load?.paths).toEqual(
+      expect.arrayContaining(["/existing/plugin", expect.stringContaining("memory-lancedb")]),
+    );
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({
+      "memory-lancedb": expect.objectContaining({
+        source: "path",
+        sourcePath: expect.stringContaining("memory-lancedb"),
+        installPath: expect.stringContaining("memory-lancedb"),
+      }),
+    });
+    expect(enablePluginInConfig).not.toHaveBeenCalled();
+    expect(applyExclusiveSlotSelection).not.toHaveBeenCalled();
+    expect(runtimeLogs.some((line) => line.includes("requires configuration first"))).toBe(true);
+  });
+
   it("passes force through as overwrite mode for ClawHub installs", async () => {
     const cfg = {
       plugins: {

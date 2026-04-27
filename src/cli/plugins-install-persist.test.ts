@@ -132,15 +132,7 @@ describe("persistPluginInstall", () => {
       },
     });
 
-    expect(next).toEqual({
-      plugins: {
-        entries: {
-          "memory-lancedb": {
-            enabled: false,
-          },
-        },
-      },
-    });
+    expect(next).toEqual(baseConfig);
     expect(enablePluginInConfig).not.toHaveBeenCalled();
     expect(applyExclusiveSlotSelection).not.toHaveBeenCalled();
     expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({
@@ -149,15 +141,7 @@ describe("persistPluginInstall", () => {
         sourcePath: "/app/dist/extensions/memory-lancedb",
       }),
     });
-    expect(writeConfigFile).toHaveBeenCalledWith({
-      plugins: {
-        entries: {
-          "memory-lancedb": {
-            enabled: false,
-          },
-        },
-      },
-    });
+    expect(writeConfigFile).toHaveBeenCalledWith(baseConfig);
   });
 
   it("does not add disabled installs to restrictive allowlists", async () => {
@@ -186,6 +170,6 @@ describe("persistPluginInstall", () => {
 
     expect(next.plugins?.allow).toEqual(["memory-core"]);
     expect(next.plugins?.deny).toEqual(["memory-lancedb"]);
-    expect(next.plugins?.entries?.["memory-lancedb"]?.enabled).toBe(false);
+    expect(next.plugins?.entries?.["memory-lancedb"]).toBeUndefined();
   });
 });

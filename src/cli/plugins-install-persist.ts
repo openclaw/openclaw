@@ -52,23 +52,6 @@ function removeInstalledPluginFromDenylist(cfg: OpenClawConfig, pluginId: string
   };
 }
 
-function markPluginDisabledInConfig(cfg: OpenClawConfig, pluginId: string): OpenClawConfig {
-  const entries = cfg.plugins?.entries ?? {};
-  return {
-    ...cfg,
-    plugins: {
-      ...cfg.plugins,
-      entries: {
-        ...entries,
-        [pluginId]: {
-          ...entries[pluginId],
-          enabled: false,
-        },
-      },
-    },
-  };
-}
-
 export type ConfigSnapshotForInstallPersist = {
   config: OpenClawConfig;
   baseHash: string | undefined;
@@ -84,7 +67,7 @@ export async function persistPluginInstall(params: {
 }): Promise<OpenClawConfig> {
   const installConfig =
     params.enable === false
-      ? markPluginDisabledInConfig(params.snapshot.config, params.pluginId)
+      ? params.snapshot.config
       : removeInstalledPluginFromDenylist(
           addInstalledPluginToAllowlist(params.snapshot.config, params.pluginId),
           params.pluginId,
