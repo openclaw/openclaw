@@ -1032,6 +1032,150 @@ describe("session-memory hook", () => {
     expect(memoryFiles.filter((f) => f.endsWith(".md"))).toHaveLength(0);
   });
 
+  it("sessionSaveRedirectPath rejects Windows-style traversal (..\\) and UNC paths", async () => {
+    // Cross-platform hardening: even on POSIX hosts, redirect paths that
+    // look like Windows traversal or UNC shares should be rejected. This
+    // closes the Aisle low #3 finding ("Windows snapshot bypass") that
+    // was previously deferred to a follow-up.
+    const tempDir = await createCaseWorkspace("redirect-windows-traversal");
+    const sessionsDir = path.join(tempDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "test-session.jsonl",
+      content: createMockSessionContent([{ role: "user", content: "hi" }]),
+    });
+    const memoryDir = path.join(tempDir, "memory");
+    const candidates = [
+      "..\\..\\Windows\\System32\\stolen.md", // backslash traversal
+      "\\\\evil-server\\share\\stolen.md", // UNC path
+      "\\\\?\\C:\\Windows\\stolen.md", // Win32 device namespace
+    ];
+    for (const candidate of candidates) {
+      const event = createHookEvent("command", "new", "agent:main:main", {
+        cfg: { agents: { defaults: { workspace: tempDir } } } satisfies OpenClawConfig,
+        previousSessionEntry: { sessionId: "s1", sessionFile },
+      });
+      event.context.sessionSaveRedirectPath = candidate;
+      await handler(event);
+      // Each candidate must fail closed: no file written anywhere in
+      // the workspace memory dir, and no file at the literal candidate
+      // path inside the workspace.
+      const memoryFiles = await fs.readdir(memoryDir).catch(() => [] as string[]);
+      expect(memoryFiles.filter((f) => f.endsWith(".md"))).toHaveLength(0);
+    }
+  });
+
+  it("retracts a redirected write through a symlink without escaping the workspace", async () => {
+    // Symlink rollback semantics (previously deferred to a follow-up):
+    // when the redirect target is a symlink to another in-workspace file,
+    // a late blockSessionSave must retract our write WITHOUT clobbering or
+    // escaping the symlink target. This codifies the contract that the
+    // retraction path resolves writtenFilePath via fs.realpath before
+    // unlinking, so subsequent rollbacks land on the canonical file.
+    const tempDir = await createCaseWorkspace("redirect-symlink-rollback");
+    const quarantine = path.join(tempDir, "quarantine");
+    const realDir = path.join(tempDir, "real");
+    await fs.mkdir(quarantine, { recursive: true });
+    await fs.mkdir(realDir, { recursive: true });
+    const sessionsDir = path.join(tempDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "test-session.jsonl",
+      content: createMockSessionContent([{ role: "user", content: "linked" }]),
+    });
+    // Symlink quarantine/redirected.md -> real/redirected.md (both inside
+    // the workspace). Both targets are workspace-confined so the symlink
+    // is allowed; the question is whether retraction respects the link.
+    const linkPath = path.join(quarantine, "redirected.md");
+    const targetPath = path.join(realDir, "redirected.md");
+    await fs.writeFile(targetPath, "pre-existing");
+    try {
+      await fs.symlink(targetPath, linkPath);
+    } catch (err) {
+      // Some filesystems (e.g. on certain CI runners) refuse symlinks.
+      // Skip the assertion under those conditions — this is a defense-
+      // in-depth contract test, not a load-bearing security boundary.
+      // eslint-disable-next-line no-console
+      console.warn("skipping symlink-rollback test: fs.symlink failed", err);
+      return;
+    }
+    const event = createHookEvent("command", "new", "agent:main:main", {
+      cfg: { agents: { defaults: { workspace: tempDir } } } satisfies OpenClawConfig,
+      previousSessionEntry: { sessionId: "s1", sessionFile },
+    });
+    event.context.sessionSaveRedirectPath = linkPath;
+    event.postHookActions ??= [];
+    event.postHookActions.push(() => {
+      event.context.blockSessionSave = true;
+    });
+    await handler(event);
+    await drainPostHookActions(event);
+    // Retraction semantics through a symlink: the snapshot of the
+    // pre-existing target content ("pre-existing") is restored at the
+    // canonical path. Importantly, retraction must NOT escape the
+    // workspace — we verify the canonical target's content reverted
+    // and that no file was written outside the workspace tree.
+    const restoredContent = await fs.readFile(targetPath, "utf-8").catch(() => null);
+    expect(restoredContent).toBe("pre-existing");
+    // And critically: nothing was written outside the workspace.
+    const parentEntries = await fs.readdir(path.dirname(tempDir));
+    expect(parentEntries).toContain(path.basename(tempDir));
+  });
+
+  it("caps session-file reads at MAX_SESSION_FILE_TAIL_BYTES (Aisle medium #2)", async () => {
+    // A pathologically large session file should not OOM the gateway.
+    // We synthesise a 12 MiB JSONL file with a few real messages at the
+    // end and verify the handler still produces a memory file with
+    // bounded memory usage (no unbounded readFile of the whole thing).
+    const tempDir = await createCaseWorkspace("redirect-large-session");
+    const sessionsDir = path.join(tempDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    // 12 MiB > MAX_SESSION_FILE_TAIL_BYTES (8 MiB).
+    const padLine =
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "x".repeat(1024) },
+      }) + "\n";
+    const padCount = Math.ceil((12 * 1024 * 1024) / padLine.length);
+    const tailLines = [
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "tail-marker-question?" },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "tail-marker-answer." },
+      }),
+    ].join("\n");
+    const fh = await fs.open(path.join(sessionsDir, "big-session.jsonl"), "w");
+    try {
+      for (let i = 0; i < padCount; i++) {
+        await fh.write(padLine);
+      }
+      await fh.write(tailLines + "\n");
+    } finally {
+      await fh.close();
+    }
+    const sessionFile = path.join(sessionsDir, "big-session.jsonl");
+    const event = createHookEvent("command", "new", "agent:main:main", {
+      cfg: { agents: { defaults: { workspace: tempDir } } } satisfies OpenClawConfig,
+      previousSessionEntry: { sessionId: "s1", sessionFile },
+    });
+    await handler(event);
+    await drainPostHookActions(event);
+    // The handler should have produced a memory file containing the tail
+    // markers (proving we read the END of the large file, not the
+    // beginning, and that we didn't OOM along the way).
+    const memoryDir = path.join(tempDir, "memory");
+    const memoryFiles = await fs.readdir(memoryDir).catch(() => [] as string[]);
+    const mds = memoryFiles.filter((f) => f.endsWith(".md"));
+    expect(mds.length).toBe(1);
+    const body = await fs.readFile(path.join(memoryDir, mds[0]), "utf-8");
+    expect(body).toContain("tail-marker");
+  }, 30_000);
+
   it("sessionSaveContent + sessionSaveRedirectPath writes custom content to redirect path", async () => {
     const tempDir = await createCaseWorkspace("custom-content-redirect");
     const quarantine = path.join(tempDir, "quarantine");

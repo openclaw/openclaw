@@ -133,14 +133,52 @@ async function canonicalizeViaAncestor(absPath: string): Promise<string> {
 }
 
 /**
- * Read recent messages from session file for slug generation
+ * Hard cap on the bytes we will read from a session JSONL file when we
+ * only need the last N messages. Long-running sessions can produce
+ * multi-hundred-MB transcripts (large pasted contexts, base64 images,
+ * etc.); reading them whole into memory just to slice off the tail is
+ * a real OOM / DoS surface (Aisle medium #2, addressed in this PR
+ * instead of deferred).
+ *
+ * 8 MiB comfortably covers the last 15 user/assistant messages even
+ * with verbose tool I/O, while bounding the worst-case allocation.
+ * If the file is larger, we read only the trailing window from disk.
+ */
+const MAX_SESSION_FILE_TAIL_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Read recent messages from session file for slug generation. Bounded
+ * by MAX_SESSION_FILE_TAIL_BYTES so that pathologically large session
+ * files cannot OOM the gateway.
  */
 async function getRecentSessionContent(
   sessionFilePath: string,
   messageCount: number = 15,
 ): Promise<string | null> {
   try {
-    const content = await fs.readFile(sessionFilePath, "utf-8");
+    let content: string;
+    const stat = await fs.stat(sessionFilePath).catch(() => null);
+    if (stat && stat.size > MAX_SESSION_FILE_TAIL_BYTES) {
+      // File exceeds the cap — read only the trailing window. We slice
+      // off the (likely partial) first line after splitting so we don't
+      // hand a half-message to JSON.parse and corrupt slug input.
+      const fh = await fs.open(sessionFilePath, "r");
+      try {
+        const buf = Buffer.alloc(MAX_SESSION_FILE_TAIL_BYTES);
+        const offset = stat.size - MAX_SESSION_FILE_TAIL_BYTES;
+        const { bytesRead } = await fh.read(buf, 0, MAX_SESSION_FILE_TAIL_BYTES, offset);
+        content = buf.subarray(0, bytesRead).toString("utf-8");
+      } finally {
+        await fh.close();
+      }
+      // Drop the first (partial) line; the remaining lines are whole.
+      const firstNewline = content.indexOf("\n");
+      if (firstNewline >= 0) {
+        content = content.slice(firstNewline + 1);
+      }
+    } else {
+      content = await fs.readFile(sessionFilePath, "utf-8");
+    }
     const lines = content.trim().split("\n");
 
     // Parse JSONL and extract user/assistant messages first
@@ -166,9 +204,7 @@ async function getRecentSessionContent(
             // (Codex review on PR #38162.)
             const text = Array.isArray(msg.content)
               ? // oxlint-disable-next-line typescript/no-explicit-any
-                msg.content.find(
-                  (c: any) => c && typeof c === "object" && c.type === "text",
-                )?.text
+                msg.content.find((c: any) => c && typeof c === "object" && c.type === "text")?.text
               : msg.content;
             if (text && !text.startsWith("/")) {
               allMessages.push(`${role}: ${text}`);
@@ -489,16 +525,37 @@ const saveSessionToMemory: HookHandler = async (event) => {
     // the redirect target is outside the workspace.  writeFileWithinRoot
     // will catch this anyway, but failing early with a clear log message
     // is more useful for debugging than a generic SafeOpenError.
+    //
+    // Cross-platform hardening (Aisle low #3, addressed in this PR
+    // instead of deferred): also reject backslash-separator traversal
+    // (`..\`) and Windows-style absolute paths in the resolved relative
+    // (drive letters like `C:` and UNC prefixes like `\\server\share`
+    // or `\\?\`). The raw redirectPath is also screened for UNC because
+    // path.relative() collapses UNC into something that may LOOK
+    // workspace-relative on POSIX hosts but would resolve to a server
+    // share if this code ran on Windows.
+    const looksLikeWindowsTraversal =
+      writeRelativePath === "..\\" ||
+      writeRelativePath.startsWith("..\\") ||
+      /^[A-Za-z]:[\\/]/.test(writeRelativePath) ||
+      writeRelativePath.startsWith("\\\\");
+    const looksLikeUNC =
+      typeof redirectPath === "string" &&
+      (redirectPath.startsWith("\\\\") || redirectPath.startsWith("//?/"));
     if (
       isRedirected &&
       (writeRelativePath === ".." ||
         writeRelativePath.startsWith(`..${path.sep}`) ||
-        writeRelativePath.startsWith("../"))
+        writeRelativePath.startsWith("../") ||
+        looksLikeWindowsTraversal ||
+        looksLikeUNC)
     ) {
       log.warn("Redirect path resolves outside workspace, rejecting", {
         redirectPath,
         resolvedRelative: writeRelativePath,
         workspace: canonicalWorkspace,
+        windowsTraversal: looksLikeWindowsTraversal,
+        unc: looksLikeUNC,
       });
       return;
     }
@@ -609,7 +666,9 @@ const saveSessionToMemory: HookHandler = async (event) => {
       // logged path is consistent regardless of symlinks.
       const writePath = path.resolve(canonicalWorkspace, writeRelativePath);
       const relPath = writePath.replace(os.homedir(), "~");
-      log.info(`Session context staged at ${relPath} (redirected; final disposition decided by post-hook drain)`);
+      log.info(
+        `Session context staged at ${relPath} (redirected; final disposition decided by post-hook drain)`,
+      );
     } else {
       await fs.mkdir(memoryDir, { recursive: true });
       await writeFileWithinRoot({
@@ -627,7 +686,9 @@ const saveSessionToMemory: HookHandler = async (event) => {
       log.debug("Memory file written inline (pre-post-hook, may be retracted/replaced)");
 
       const relPath = memoryFilePath.replace(os.homedir(), "~");
-      log.info(`Session context staged at ${relPath} (final disposition decided by post-hook drain)`);
+      log.info(
+        `Session context staged at ${relPath} (final disposition decided by post-hook drain)`,
+      );
     }
 
     // Defer retraction/replacement to post-hook phase so that hooks
