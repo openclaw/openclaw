@@ -139,3 +139,16 @@ test("process poll resets retryInMs when output appears and clears on completion
   expect(pollStatus(pollFinished)).toBe("completed");
   expect(retryMs(pollFinished)).toBeUndefined();
 });
+
+test("process poll reports timeout exit reasons for finished sessions", async () => {
+  const sessionId = "sess-timeout";
+  const { processTool, session } = createProcessSessionHarness(sessionId);
+
+  markExited(session, null, null, "failed", "overall-timeout");
+
+  const poll = await pollSession(processTool, "toolcall-timeout", sessionId);
+  const text = poll.content[0]?.type === "text" ? poll.content[0].text : "";
+  expect(pollStatus(poll)).toBe("failed");
+  expect(text).toContain("Process exited with timeout.");
+  expect(text).not.toContain("code 0");
+});

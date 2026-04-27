@@ -76,6 +76,29 @@ function failText(text: string): AgentToolResult<unknown> {
   };
 }
 
+function isFailedExitReason(reason: unknown): boolean {
+  return (
+    reason === "overall-timeout" || reason === "no-output-timeout" || reason === "manual-cancel"
+  );
+}
+
+function formatProcessExitLabel(params: {
+  exitCode?: number | null;
+  exitSignal?: NodeJS.Signals | number | null;
+  exitReason?: unknown;
+}) {
+  if (params.exitReason === "overall-timeout") {
+    return "timeout";
+  }
+  if (params.exitReason === "no-output-timeout") {
+    return "no-output timeout";
+  }
+  if (params.exitReason === "manual-cancel") {
+    return "manual cancel";
+  }
+  return params.exitSignal ? `signal ${params.exitSignal}` : `code ${params.exitCode ?? 0}`;
+}
+
 function recordPollRetrySuggestion(sessionId: string, hasNewOutput: boolean): number | undefined {
   try {
     const sessionState = getDiagnosticSessionState({ sessionId });
@@ -281,11 +304,11 @@ export function createProcessTool(
                         `(no output recorded${
                           scopedFinished.truncated ? " — truncated to cap" : ""
                         })`) +
-                      `\n\nProcess exited with ${
-                        scopedFinished.exitSignal
-                          ? `signal ${scopedFinished.exitSignal}`
-                          : `code ${scopedFinished.exitCode ?? 0}`
-                      }.`,
+                      `\n\nProcess exited with ${formatProcessExitLabel({
+                        exitCode: scopedFinished.exitCode,
+                        exitSignal: scopedFinished.exitSignal,
+                        exitReason: scopedFinished.exitReason,
+                      })}.`,
                   },
                 ],
                 details: {
@@ -316,17 +339,22 @@ export function createProcessTool(
           const exited = scopedSession.exited;
           const exitCode = scopedSession.exitCode ?? 0;
           const exitSignal = scopedSession.exitSignal ?? undefined;
+          const exitReason = scopedSession.exitReason;
           if (exited) {
-            const status = exitCode === 0 && exitSignal == null ? "completed" : "failed";
+            const status =
+              exitCode === 0 && exitSignal == null && !isFailedExitReason(exitReason)
+                ? "completed"
+                : "failed";
             markExited(
               scopedSession,
               scopedSession.exitCode ?? null,
               scopedSession.exitSignal ?? null,
               status,
+              exitReason,
             );
           }
           const status = exited
-            ? exitCode === 0 && exitSignal == null
+            ? exitCode === 0 && exitSignal == null && !isFailedExitReason(exitReason)
               ? "completed"
               : "failed"
             : "running";
@@ -345,9 +373,11 @@ export function createProcessTool(
                 text:
                   (output || "(no new output)") +
                   (exited
-                    ? `\n\nProcess exited with ${
-                        exitSignal ? `signal ${exitSignal}` : `code ${exitCode}`
-                      }.`
+                    ? `\n\nProcess exited with ${formatProcessExitLabel({
+                        exitCode,
+                        exitSignal,
+                        exitReason,
+                      })}.`
                     : "\n\nProcess still running."),
               },
             ],

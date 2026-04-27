@@ -123,7 +123,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("## Heartbeats");
     expect(prompt).toContain("## Safety");
     expect(prompt).toContain(
-      "For long waits, avoid rapid poll loops: use exec with enough yieldMs or process(action=poll, timeout=<ms>).",
+      "For long waits, avoid rapid poll loops: use exec with enough yieldMs plus timeout=0 or a higher timeout for long-lived commands, or process(action=poll, timeout=<ms>).",
     );
     expect(prompt).toContain("You have no independent goals");
     expect(prompt).toContain("Prioritize safety and human oversight");
@@ -296,7 +296,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain(
-      "For long waits, avoid rapid poll loops: use exec with enough yieldMs or process(action=poll, timeout=<ms>).",
+      "For long waits, avoid rapid poll loops: use exec with enough yieldMs plus timeout=0 or a higher timeout for long-lived commands, or process(action=poll, timeout=<ms>).",
     );
     expect(prompt).toContain("Completion is push-based: it will auto-announce when done.");
     expect(prompt).toContain("Do not poll `subagents list` / `sessions_list` in a loop");

@@ -730,7 +730,7 @@ export function buildAgentSystemPrompt(params: {
           '- session_status: show usage/time/model state and answer "what model are we using?"',
         ].join("\n"),
     "TOOLS.md does not control tool availability; it is user guidance for how to use external tools.",
-    `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
+    `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs plus timeout=0 or a higher timeout for long-lived commands, or ${processToolName}(action=poll, timeout=<ms>).`,
     "If a task is more complex or takes longer, spawn a sub-agent. Completion is push-based: it will auto-announce when done.",
     'Sub-agents start isolated by default. Use `sessions_spawn` with `context:"fork"` only when the child needs the current transcript context; otherwise omit `context` or use `context:"isolated"`.',
     ...(nativeCodexCommandAvailable

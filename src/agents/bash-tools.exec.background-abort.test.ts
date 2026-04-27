@@ -198,6 +198,8 @@ async function expectBackgroundSessionTimesOut(params: {
   try {
     expect(finished).toBeTruthy();
     expect(finished?.status).toBe("failed");
+    expect(finished?.aggregated).toContain("Command timed out");
+    expect(finished?.aggregated).toContain("timeout=0");
   } finally {
     cleanupRunningSession(sessionId);
   }

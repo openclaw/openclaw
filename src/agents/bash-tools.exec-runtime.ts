@@ -427,6 +427,18 @@ function joinExecFailureOutput(aggregated: string, reason: string) {
   return aggregated ? `${aggregated}\n\n${reason}` : reason;
 }
 
+function persistBackgroundFailureReason(session: ProcessSession, outcome: ExecProcessOutcome) {
+  if (!session.backgrounded || outcome.status !== "failed" || !outcome.timedOut) {
+    return;
+  }
+  const reason = outcome.reason.trim();
+  if (!reason) {
+    return;
+  }
+  session.aggregated = reason;
+  session.tail = tail(reason, 2000);
+}
+
 function classifyExecFailureKind(params: {
   exitReason: TerminationReason;
   exitCode: number;
@@ -844,6 +856,7 @@ export async function runExecProcess(opts: {
         timeoutSec: opts.timeoutSec,
       });
 
+      persistBackgroundFailureReason(session, outcome);
       markExited(session, exit.exitCode, exit.exitSignal, outcome.status, exit.reason);
       maybeNotifyOnExit(session, outcome.status);
       if (!session.child && session.stdin) {
@@ -868,13 +881,14 @@ export async function runExecProcess(opts: {
     })
     .catch((err): ExecProcessOutcome => {
       updatesDisabled = true;
-      markExited(session, null, null, "failed");
-      maybeNotifyOnExit(session, "failed");
       const outcome = buildExecRuntimeErrorOutcome({
         error: err,
         aggregated: session.aggregated.trim(),
         durationMs: Date.now() - startedAt,
       });
+      persistBackgroundFailureReason(session, outcome);
+      markExited(session, null, null, "failed");
+      maybeNotifyOnExit(session, "failed");
       emitExecProcessCompleted({
         command: opts.command,
         mode: usingPty ? "pty" : "child",
