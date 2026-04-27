@@ -4,6 +4,7 @@ import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
+  suggestPeerAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
@@ -224,7 +225,12 @@ export async function agentsAddCommand(
       }
     }
 
-    const workspaceDefault = resolveAgentWorkspaceDir(cfg, agentId);
+    // Brand-new agents get the documented peer-level suggestion (#71889);
+    // updating an existing agent must preserve its current workspace so a
+    // pressed-Enter on this prompt does not silently relocate the agent.
+    const workspaceDefault = existingAgent
+      ? resolveAgentWorkspaceDir(cfg, agentId)
+      : suggestPeerAgentWorkspaceDir(cfg, agentId);
     const workspaceInput = await prompter.text({
       message: "Workspace directory",
       initialValue: workspaceDefault,

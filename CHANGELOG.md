@@ -752,6 +752,7 @@ Docs: https://docs.openclaw.ai
 - Agents/sessions: stop session write-lock timeouts from entering model failover, so local lock contention surfaces directly instead of cascading across providers. (#68700) Thanks @MonkeyLeeT.
 - Auto-reply: run inbound reply delivery through `message_sending` hooks so plugins can transform or cancel generated replies before they are sent. (#70118) Thanks @jzakirov.
 - CI/release-checks: pass workflow inputs and matrix values through step environment variables instead of embedding them directly into `run:` shell commands, reducing template-injection surface in the cross-OS release-check workflow. (#66884) Thanks @alexlomt.
+- Agents wizard: pre-fill `agents add <id>` with a peer-level `~/.openclaw/workspace-<id>` path matching `docs/concepts/multi-agent.md` instead of nesting the new agent under `~/.openclaw/workspace/<id>`, avoiding silent skill leakage and `rm -rf` data-loss footguns when accepting the default. Fixes #71889. Thanks @pushpendrachauhan.
 
 ## 2026.4.23
 
