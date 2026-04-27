@@ -226,8 +226,25 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## OpenClaw CLI Quick Reference");
+    expect(prompt).toContain("use the first-class `gateway` tool");
+    expect(prompt).toContain(
+      "Only use CLI service lifecycle commands when the user explicitly asks",
+    );
     expect(prompt).toContain("openclaw gateway restart");
+    expect(prompt).toContain("Do not chain `openclaw gateway stop`");
     expect(prompt).toContain("Do not invent commands");
+  });
+
+  it("points agents to config field docs and broader configuration docs", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      docsPath: "/tmp/openclaw/docs",
+    });
+
+    expect(prompt).toContain("For config field docs");
+    expect(prompt).toContain("`gateway` tool action `config.schema.lookup`");
+    expect(prompt).toContain("docs/gateway/configuration.md");
+    expect(prompt).toContain("docs/gateway/configuration-reference.md");
   });
 
   it("guides runtime completion events without exposing internal metadata", () => {
@@ -304,6 +321,7 @@ describe("buildAgentSystemPrompt", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["sessions_spawn"],
+      acpEnabled: true,
     });
 
     expect(prompt).toContain("sessions_spawn");
@@ -318,6 +336,7 @@ describe("buildAgentSystemPrompt", () => {
       workspaceDir: "/tmp/openclaw",
       toolNames: ["sessions_spawn", "subagents", "agents_list", "exec"],
       nativeCommandNames: ["codex"],
+      acpEnabled: true,
     });
 
     expect(prompt).toContain("Native Codex app-server plugin is available");
@@ -358,6 +377,7 @@ describe("buildAgentSystemPrompt", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["sessions_spawn", "subagents", "agents_list", "exec"],
+      acpEnabled: true,
       sandboxInfo: {
         enabled: true,
       },
@@ -556,6 +576,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("config.schema.lookup");
     expect(prompt).toContain("config.apply");
     expect(prompt).toContain("config.patch");
+    expect(prompt).toContain("Config writes hot-reload when possible");
     expect(prompt).toContain("update.run");
     expect(prompt).not.toContain("Use config.schema to");
     expect(prompt).not.toContain("config.schema, config.apply");
@@ -935,6 +956,7 @@ describe("buildSubagentSystemPrompt", () => {
       task: "research task",
       childDepth: 1,
       maxSpawnDepth: 2,
+      acpEnabled: true,
     });
 
     expect(prompt).toContain("## Sub-Agent Spawning");
@@ -981,6 +1003,19 @@ describe("buildSubagentSystemPrompt", () => {
     expect(prompt).toContain("You CAN spawn your own sub-agents");
   });
 
+  it("omits ACP spawning guidance by default", () => {
+    const prompt = buildSubagentSystemPrompt({
+      childSessionKey: "agent:main:subagent:abc",
+      task: "research task",
+      childDepth: 1,
+      maxSpawnDepth: 2,
+    });
+
+    expect(prompt).not.toContain('runtime: "acp"');
+    expect(prompt).not.toContain("For ACP harness sessions (claudecode/gemini/opencode");
+    expect(prompt).toContain("You CAN spawn your own sub-agents");
+  });
+
   it("prefers native Codex commands over Codex ACP when available", () => {
     const prompt = buildSubagentSystemPrompt({
       childSessionKey: "agent:main:subagent:abc",
@@ -988,6 +1023,7 @@ describe("buildSubagentSystemPrompt", () => {
       childDepth: 1,
       maxSpawnDepth: 2,
       nativeCommandNames: ["codex"],
+      acpEnabled: true,
     });
 
     expect(prompt).toContain("Native Codex app-server plugin is available");

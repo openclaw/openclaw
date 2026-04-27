@@ -68,6 +68,8 @@ Key wizard behaviors:
 - Room allowlist entries accept room IDs and aliases directly. Prefer `!room:server` or `#alias:server`; unresolved names are ignored at runtime by allowlist resolution.
 - In invite auto-join allowlist mode, use only stable invite targets: `!roomId:server`, `#alias:server`, or `*`. Plain room names are rejected.
 - To resolve room names before saving, use `openclaw channels resolve --channel matrix "Project Room"`.
+- When setup enables E2EE, OpenClaw writes the encryption config and runs the
+  same verification bootstrap used by `openclaw matrix encryption setup`.
 
 <Warning>
 `channels.matrix.autoJoin` defaults to `off`.
@@ -292,7 +294,32 @@ Use strict room allowlists and mention requirements when enabling bot-to-bot tra
 
 In encrypted (E2EE) rooms, outbound image events use `thumbnail_file` so image previews are encrypted alongside the full attachment. Unencrypted rooms still use plain `thumbnail_url`. No configuration is needed — the plugin detects E2EE state automatically.
 
-Enable encryption:
+Recommended setup flow:
+
+```bash
+openclaw matrix encryption setup
+```
+
+This enables `channels.matrix.encryption`, bootstraps Matrix secret storage and
+cross-signing, creates room-key backup state when needed, then prints the
+current verification and backup status with next steps.
+
+For a new account, enable E2EE during account creation:
+
+```bash
+openclaw matrix account add \
+  --homeserver https://matrix.example.org \
+  --access-token syt_xxx \
+  --enable-e2ee
+```
+
+Multi-account setups can target a specific account:
+
+```bash
+openclaw matrix encryption setup --account assistant
+```
+
+Manual config equivalent:
 
 ```json5
 {
@@ -882,6 +909,11 @@ Matrix accepts these target forms anywhere OpenClaw asks you for a room or user 
 - Users: `@user:server`, `user:@user:server`, or `matrix:user:@user:server`
 - Rooms: `!room:server`, `room:!room:server`, or `matrix:room:!room:server`
 - Aliases: `#alias:server`, `channel:#alias:server`, or `matrix:channel:#alias:server`
+
+Matrix room IDs are case-sensitive. Use the exact room ID casing from Matrix
+when configuring explicit delivery targets, cron jobs, bindings, or allowlists.
+OpenClaw keeps internal session keys canonical for storage, so those lowercase
+keys are not a reliable source for Matrix delivery IDs.
 
 Live directory lookup uses the logged-in Matrix account:
 

@@ -21,6 +21,7 @@ import {
   recordHookInstall,
   recordPluginInstall,
   resetPluginsCliTestState,
+  replaceConfigFile,
   runPluginsCommand,
   runtimeErrors,
   runtimeLogs,
@@ -336,6 +337,12 @@ describe("plugins cli install", () => {
       }),
     });
     expect(writeConfigFile).toHaveBeenCalledWith(enabledCfg);
+    expect(replaceConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseHash: "mock",
+        nextConfig: enabledCfg,
+      }),
+    );
     expect(runtimeLogs.some((line) => line.includes("slot adjusted"))).toBe(true);
     expect(runtimeLogs.some((line) => line.includes("Installed plugin: alpha"))).toBe(true);
   });

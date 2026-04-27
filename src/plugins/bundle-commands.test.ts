@@ -13,6 +13,10 @@ vi.mock("./manifest-registry.js", () => ({
   loadPluginManifestRegistry: () => ({ diagnostics: [], plugins: mocks.plugins }),
 }));
 
+vi.mock("./plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: () => ({ diagnostics: [], plugins: mocks.plugins }),
+}));
+
 vi.mock("./config-state.js", () => ({
   hasExplicitPluginConfig: (plugins?: { entries?: Record<string, unknown> }) =>
     Boolean(plugins?.entries && Object.keys(plugins.entries).length > 0),

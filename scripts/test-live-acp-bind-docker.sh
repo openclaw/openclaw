@@ -30,10 +30,11 @@ openclaw_live_acp_bind_resolve_auth_provider() {
   case "${1:-}" in
     claude) printf '%s\n' "claude-cli" ;;
     codex) printf '%s\n' "codex-cli" ;;
+    droid) printf '%s\n' "droid" ;;
     gemini) printf '%s\n' "google-gemini-cli" ;;
     opencode) printf '%s\n' "opencode" ;;
     *)
-      echo "Unsupported OPENCLAW_LIVE_ACP_BIND agent: ${1:-} (expected claude, codex, gemini, or opencode)" >&2
+      echo "Unsupported OPENCLAW_LIVE_ACP_BIND agent: ${1:-} (expected claude, codex, droid, gemini, or opencode)" >&2
       return 1
       ;;
   esac
@@ -43,6 +44,7 @@ openclaw_live_acp_bind_resolve_agent_command() {
   case "${1:-}" in
     claude) printf '%s' "${OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND_CLAUDE:-${OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND:-}}" ;;
     codex) printf '%s' "${OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND_CODEX:-${OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND:-}}" ;;
+    droid) printf '%s' "${OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND_DROID:-${OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND:-}}" ;;
     gemini) printf '%s' "${OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND_GEMINI:-${OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND:-}}" ;;
     opencode) printf '%s' "${OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND_OPENCODE:-${OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND:-}}" ;;
     *) return 1 ;;
@@ -95,9 +97,9 @@ export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
 export COREPACK_HOME="${COREPACK_HOME:-$XDG_CACHE_HOME/node/corepack}"
 export NPM_CONFIG_CACHE="${NPM_CONFIG_CACHE:-$XDG_CACHE_HOME/npm}"
 export npm_config_cache="$NPM_CONFIG_CACHE"
-mkdir -p "$NPM_CONFIG_PREFIX" "$XDG_CACHE_HOME" "$COREPACK_HOME" "$NPM_CONFIG_CACHE"
+mkdir -p "$NPM_CONFIG_PREFIX" "$HOME/.local/bin" "$XDG_CACHE_HOME" "$COREPACK_HOME" "$NPM_CONFIG_CACHE"
 chmod 700 "$XDG_CACHE_HOME" "$COREPACK_HOME" "$NPM_CONFIG_CACHE" || true
-export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
+export PATH="$HOME/.local/bin:$NPM_CONFIG_PREFIX/bin:$PATH"
 if [ "${OPENCLAW_DOCKER_AUTH_PRESTAGED:-0}" != "1" ]; then
   IFS=',' read -r -a auth_dirs <<<"${OPENCLAW_DOCKER_AUTH_DIRS_RESOLVED:-}"
   IFS=',' read -r -a auth_files <<<"${OPENCLAW_DOCKER_AUTH_FILES_RESOLVED:-}"
@@ -146,6 +148,7 @@ exec "\$script_dir/claude-real" "\$@"
 WRAP
       chmod +x "$NPM_CONFIG_PREFIX/bin/claude"
     fi
+    export CLAUDE_CODE_EXECUTABLE="$NPM_CONFIG_PREFIX/bin/claude"
     claude auth status || true
     ;;
   codex)
@@ -153,10 +156,47 @@ WRAP
       npm install -g @openai/codex
     fi
     ;;
+  droid)
+    if ! command -v droid >/dev/null 2>&1; then
+      curl -fsSL https://app.factory.ai/cli | sh
+      export PATH="$HOME/.local/bin:$PATH"
+    fi
+    droid --version
+    if [ -z "${FACTORY_API_KEY:-}" ]; then
+      echo "SKIP: Droid Docker ACP bind requires FACTORY_API_KEY; Factory OAuth/keyring auth in ~/.factory is not portable into the container." >&2
+      exit 0
+    fi
+    ;;
   gemini)
     mkdir -p "$HOME/.gemini"
     if [ ! -x "$NPM_CONFIG_PREFIX/bin/gemini" ]; then
       npm install -g @google/gemini-cli
+    fi
+    if [ -n "${GEMINI_API_KEY:-}" ] || [ -n "${GOOGLE_API_KEY:-}" ]; then
+      gemini_auth_type="gemini-api-key"
+      if [ -z "${GEMINI_API_KEY:-}" ] && [ -n "${GOOGLE_API_KEY:-}" ]; then
+        gemini_auth_type="vertex-ai"
+        export GOOGLE_GENAI_USE_VERTEXAI="${GOOGLE_GENAI_USE_VERTEXAI:-true}"
+      fi
+      GEMINI_CLI_AUTH_TYPE="$gemini_auth_type" node <<'NODE'
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+
+const settingsPath = path.join(os.homedir(), ".gemini", "settings.json");
+let settings = {};
+try {
+  settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+} catch {}
+settings.security = settings.security && typeof settings.security === "object" ? settings.security : {};
+settings.security.auth =
+  settings.security.auth && typeof settings.security.auth === "object" ? settings.security.auth : {};
+settings.security.auth.selectedType = process.env.GEMINI_CLI_AUTH_TYPE;
+settings.security.auth.enforcedType = process.env.GEMINI_CLI_AUTH_TYPE;
+fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+NODE
+      echo "Using Gemini CLI auth type $gemini_auth_type"
     fi
     ;;
   opencode)
@@ -197,7 +237,7 @@ for token in "${ACP_AGENT_TOKENS[@]}"; do
 done
 
 if ((${#ACP_AGENTS[@]} == 0)); then
-  echo "No ACP bind agents selected. Use OPENCLAW_LIVE_ACP_BIND_AGENTS=claude,codex,gemini,opencode." >&2
+  echo "No ACP bind agents selected. Use OPENCLAW_LIVE_ACP_BIND_AGENTS=claude,codex,droid,gemini,opencode." >&2
   exit 1
 fi
 
@@ -249,6 +289,16 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
     DOCKER_AUTH_PRESTAGED=1
   fi
 
+  if [[ "$ACP_AGENT" == "droid" && -z "${FACTORY_API_KEY:-}" ]]; then
+    echo "==> Run ACP bind live test in Docker"
+    echo "==> Agent: $ACP_AGENT"
+    echo "==> Profile file: $PROFILE_STATUS"
+    echo "==> Auth dirs: ${AUTH_DIRS_CSV:-none}"
+    echo "==> Auth files: ${AUTH_FILES_CSV:-none}"
+    echo "SKIP: Droid Docker ACP bind requires FACTORY_API_KEY; Factory OAuth/keyring auth in ~/.factory is not portable into the container." >&2
+    continue
+  fi
+
   EXTERNAL_AUTH_MOUNTS=()
   if ((${#AUTH_DIRS[@]} > 0)); then
     for auth_dir in "${AUTH_DIRS[@]}"; do
@@ -283,6 +333,7 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
     -e OPENCLAW_LIVE_ACP_BIND_ANTHROPIC_API_KEY_OLD="${ANTHROPIC_API_KEY_OLD:-}" \
     -e GEMINI_API_KEY \
     -e GOOGLE_API_KEY \
+    -e FACTORY_API_KEY \
     -e OPENAI_API_KEY \
     -e OPENCODE_API_KEY \
     -e OPENCODE_ZEN_API_KEY \

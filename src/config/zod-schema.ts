@@ -306,6 +306,9 @@ export const OpenClawSchema = z
           .object({
             enabled: z.boolean().optional(),
             endpoint: z.string().optional(),
+            tracesEndpoint: z.string().optional(),
+            metricsEndpoint: z.string().optional(),
+            logsEndpoint: z.string().optional(),
             protocol: z.union([z.literal("http/protobuf"), z.literal("grpc")]).optional(),
             headers: z.record(z.string(), z.string()).optional(),
             serviceName: z.string().optional(),

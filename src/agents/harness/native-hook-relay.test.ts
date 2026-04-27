@@ -355,7 +355,7 @@ describe("native hook relay registry", () => {
       runId: "run-1",
     });
 
-    for (const event of ["pre_tool_use", "post_tool_use"] as const) {
+    for (const event of ["pre_tool_use", "post_tool_use", "before_agent_finalize"] as const) {
       await expect(
         invokeNativeHookRelay({
           provider: "codex",
@@ -707,6 +707,108 @@ describe("native hook relay registry", () => {
         },
       }),
     );
+  });
+
+  it("maps Codex Stop to before_agent_finalize revision output", async () => {
+    const beforeAgentFinalize = vi.fn(async () => ({
+      action: "revise",
+      reason: "please run the focused tests before finalizing",
+    }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "before_agent_finalize", handler: beforeAgentFinalize },
+      ]),
+    );
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+    });
+
+    const response = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "before_agent_finalize",
+      rawPayload: {
+        hook_event_name: "Stop",
+        session_id: "codex-session-1",
+        turn_id: "turn-1",
+        cwd: "/repo",
+        transcript_path: "/tmp/session.jsonl",
+        model: "gpt-5.4",
+        permission_mode: "workspace-write",
+        stop_hook_active: true,
+        last_assistant_message: "done",
+      },
+    });
+
+    expect(response).toEqual({
+      stdout: `${JSON.stringify({
+        decision: "block",
+        reason: "please run the focused tests before finalizing",
+      })}\n`,
+      stderr: "",
+      exitCode: 0,
+    });
+    expect(beforeAgentFinalize).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-1",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        turnId: "turn-1",
+        provider: "codex",
+        model: "gpt-5.4",
+        cwd: "/repo",
+        transcriptPath: "/tmp/session.jsonl",
+        stopHookActive: true,
+        lastAssistantMessage: "done",
+      }),
+      expect.objectContaining({
+        agentId: "agent-1",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        runId: "run-1",
+        workspaceDir: "/repo",
+        modelId: "gpt-5.4",
+      }),
+    );
+  });
+
+  it("maps before_agent_finalize finalize output to Codex continue false", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_agent_finalize",
+          handler: vi.fn(async () => ({ action: "finalize", reason: "already checked" })),
+        },
+      ]),
+    );
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+    });
+
+    const response = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "before_agent_finalize",
+      rawPayload: {
+        hook_event_name: "Stop",
+        stop_hook_active: false,
+      },
+    });
+
+    expect(response).toEqual({
+      stdout: `${JSON.stringify({
+        continue: false,
+        stopReason: "already checked",
+      })}\n`,
+      stderr: "",
+      exitCode: 0,
+    });
   });
 
   it("maps PermissionRequest approval allow and deny decisions to Codex hook output", async () => {

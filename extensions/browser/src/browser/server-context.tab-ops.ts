@@ -106,6 +106,7 @@ function assignTabAlias(params: {
     }
     entry.label = label;
   }
+  entry.url = params.tab.url;
   const labelFields = entry.label ? { label: entry.label } : {};
   return {
     ...params.tab,
@@ -115,9 +116,51 @@ function assignTabAlias(params: {
   };
 }
 
+function isConfidentReplacement(params: {
+  staleEntry: { url?: string };
+  tab: BrowserTab;
+  staleCount: number;
+  newCandidateCount: number;
+}): boolean {
+  const staleUrl = params.staleEntry.url?.trim();
+  const tabUrl = params.tab.url?.trim();
+  if (staleUrl && tabUrl && staleUrl === tabUrl) {
+    return true;
+  }
+  return params.staleCount === 1 && params.newCandidateCount === 1;
+}
+
 function assignTabAliases(profileState: ProfileRuntimeState, tabs: BrowserTab[]): BrowserTab[] {
   const aliases = getTabAliasState(profileState);
   const liveTargetIds = new Set(tabs.map((tab) => tab.targetId));
+  const staleEntries = Object.entries(aliases.byTargetId).filter(
+    ([targetId]) => !liveTargetIds.has(targetId),
+  );
+  const newCandidates = tabs.filter((tab) => !aliases.byTargetId[tab.targetId]);
+  const claimedTargetIds = new Set<string>();
+
+  for (const [oldTargetId, staleEntry] of staleEntries) {
+    const candidate = newCandidates.find(
+      (tab) =>
+        !claimedTargetIds.has(tab.targetId) &&
+        isConfidentReplacement({
+          staleEntry,
+          tab,
+          staleCount: staleEntries.length,
+          newCandidateCount: newCandidates.length,
+        }),
+    );
+    if (!candidate) {
+      continue;
+    }
+    aliases.byTargetId[candidate.targetId] = staleEntry;
+    delete aliases.byTargetId[oldTargetId];
+    claimedTargetIds.add(candidate.targetId);
+    if (profileState.lastTargetId === oldTargetId) {
+      profileState.lastTargetId = candidate.targetId;
+    }
+  }
+
   for (const targetId of Object.keys(aliases.byTargetId)) {
     if (!liveTargetIds.has(targetId)) {
       delete aliases.byTargetId[targetId];
