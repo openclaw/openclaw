@@ -90,7 +90,8 @@ function looksLikeAuthClose(code: number | undefined, reason: string | undefined
     normalized.includes("auth") ||
     normalized === "connect failed" ||
     normalized.includes("device") ||
-    normalized.includes("pairing") ||
+    normalized === "pairing required" ||
+    normalized.startsWith("pairing required:") ||
     normalized.includes("token") ||
     normalized.includes("password") ||
     normalized.includes("scope") ||

@@ -266,6 +266,8 @@ describe("inspectGatewayRestart", () => {
     "",
     " ",
     "repair required",
+    "repairing required",
+    "unpairing required",
     "connect challenge missing nonce",
     "connect challenge timeout",
   ])(
