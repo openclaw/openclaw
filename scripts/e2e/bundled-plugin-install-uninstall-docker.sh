@@ -108,8 +108,12 @@ if (!paths.includes(record.sourcePath)) {
 if (config.plugins?.entries?.[pluginId]?.enabled !== true) {
   throw new Error(`config entry is not enabled after install for ${pluginId}`);
 }
-if (!Array.isArray(config.plugins?.allow) || !config.plugins.allow.includes(pluginId)) {
-  throw new Error(`allowlist does not include ${pluginId} after install`);
+const allow = config.plugins?.allow || [];
+if (Array.isArray(allow) && allow.length > 0 && !allow.includes(pluginId)) {
+  throw new Error(`existing allowlist does not include ${pluginId} after install`);
+}
+if ((config.plugins?.deny || []).includes(pluginId)) {
+  throw new Error(`denylist contains ${pluginId} after install`);
 }
 NODE
 }
