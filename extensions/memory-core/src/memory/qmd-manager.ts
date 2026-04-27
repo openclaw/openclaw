@@ -34,9 +34,9 @@ import {
   buildMemoryReadResultFromSlice,
   DEFAULT_MEMORY_READ_LINES,
   isFileMissingError,
+  resolveContainedRegularFile,
   type MemoryReadResult,
   requireNodeSqlite,
-  statRegularFile,
   type MemoryEmbeddingProbeResult,
   type MemoryProviderStatus,
   type MemorySearchManager,
@@ -1269,7 +1269,10 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (!absPath.endsWith(".md")) {
       throw new Error("path required");
     }
-    const statResult = await statRegularFile(absPath);
+    const statResult = await resolveContainedRegularFile({
+      absPath,
+      allowedRoots: [this.resolveReadAllowedRoot(relPath)],
+    });
     if (statResult.missing) {
       return { text: "", path: relPath };
     }
@@ -1279,7 +1282,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         1,
         params.lines ?? contextLimits?.memoryGetDefaultLines ?? DEFAULT_MEMORY_READ_LINES,
       );
-      const partial = await this.readPartialText(absPath, params.from, requestedCount);
+      const partial = await this.readPartialText(statResult.realPath, params.from, requestedCount);
       if (partial.missing) {
         return { text: "", path: relPath };
       }
@@ -1292,7 +1295,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         suggestReadFallback: isDefaultMemoryPath(relPath),
       });
     }
-    const full = await this.readFullText(absPath);
+    const full = await this.readFullText(statResult.realPath);
     if (full.missing) {
       return { text: "", path: relPath };
     }
@@ -2686,6 +2689,18 @@ export class QmdMemoryManager implements MemorySearchManager {
       throw new Error("path required");
     }
     return absPath;
+  }
+
+  private resolveReadAllowedRoot(relPath: string): string {
+    if (relPath.startsWith("qmd/")) {
+      const [, collection] = relPath.split("/");
+      const root = collection ? this.collectionRoots.get(collection) : undefined;
+      if (!root) {
+        throw new Error("invalid qmd path");
+      }
+      return root.path;
+    }
+    return this.workspaceDir;
   }
 
   private isIndexedWorkspaceReadPath(absPath: string): boolean {
