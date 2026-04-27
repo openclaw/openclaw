@@ -573,6 +573,62 @@ describe("config view", () => {
     expect(revealedText).toContain("TOKEN_AFTER");
   });
 
+  it("resets raw reveal state when the config context changes", () => {
+    const container = document.createElement("div");
+    const props: ConfigProps = {
+      ...baseProps(),
+      configPath: "/tmp/openclaw-a.json5",
+      formMode: "raw",
+      raw: '{\n  token: "TOKEN_A_AFTER"\n}\n',
+      originalRaw: '{\n  token: "TOKEN_A_BEFORE"\n}\n',
+      uiHints: {
+        token: { sensitive: true },
+      },
+      formValue: {
+        token: "TOKEN_A_AFTER",
+      },
+      originalValue: {
+        token: "TOKEN_A_BEFORE",
+      },
+    };
+    const rerender = () =>
+      render(
+        renderConfig({
+          ...props,
+          onRequestUpdate: rerender,
+        }),
+        container,
+      );
+    rerender();
+
+    const details = container.querySelector<HTMLDetailsElement>(".config-diff");
+    expect(details).not.toBeNull();
+    details!.open = true;
+    details!.dispatchEvent(new Event("toggle"));
+    const revealButton = container.querySelector<HTMLButtonElement>(".config-raw-toggle");
+    expect(revealButton).not.toBeNull();
+    revealButton!.click();
+    expect(normalizedText(container)).toContain("TOKEN_A_AFTER");
+
+    props.configPath = "/tmp/openclaw-b.json5";
+    props.raw = '{\n  token: "TOKEN_B_AFTER"\n}\n';
+    props.originalRaw = '{\n  token: "TOKEN_B_BEFORE"\n}\n';
+    props.formValue = {
+      token: "TOKEN_B_AFTER",
+    };
+    props.originalValue = {
+      token: "TOKEN_B_BEFORE",
+    };
+    rerender();
+
+    const text = normalizedText(container);
+    expect(text).toContain("1 secret redacted");
+    expect(text).not.toContain("TOKEN_A_AFTER");
+    expect(text).not.toContain("TOKEN_B_AFTER");
+    expect(container.querySelector("textarea")).toBeNull();
+    expect(container.querySelector<HTMLDetailsElement>(".config-diff")?.open).toBe(false);
+  });
+
   it("redacts raw diff values under wildcard sensitive hints when keys contain dots", () => {
     const container = document.createElement("div");
     const props: ConfigProps = {

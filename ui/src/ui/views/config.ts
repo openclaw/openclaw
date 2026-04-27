@@ -1048,6 +1048,24 @@ function createConfigEphemeralState(): ConfigEphemeralState {
 }
 
 const cvs = createConfigEphemeralState();
+let lastConfigContextKey: string | null = null;
+
+function resetConfigEphemeralState() {
+  Object.assign(cvs, createConfigEphemeralState());
+  rawDiffCache = undefined;
+}
+
+function configContextKey(props: ConfigProps): string {
+  const include = props.includeSections?.join("\u001f") ?? "";
+  const exclude = props.excludeSections?.join("\u001f") ?? "";
+  return [
+    props.configPath ?? "",
+    props.gatewayUrl,
+    props.navRootLabel ?? "",
+    include,
+    exclude,
+  ].join("\u001e");
+}
 
 function isSensitivePathRevealed(path: Array<string | number>): boolean {
   const key = pathKey(path);
@@ -1067,8 +1085,8 @@ function toggleSensitivePathReveal(path: Array<string | number>) {
 }
 
 export function resetConfigViewStateForTests() {
-  Object.assign(cvs, createConfigEphemeralState());
-  rawDiffCache = undefined;
+  resetConfigEphemeralState();
+  lastConfigContextKey = null;
 }
 
 export function renderConfig(props: ConfigProps) {
@@ -1085,8 +1103,13 @@ export function renderConfig(props: ConfigProps) {
   const formUnsafe = analysis.schema ? analysis.unsupportedPaths.length > 0 : false;
   const rawAvailable = props.rawAvailable ?? true;
   const formMode = showModeToggle && rawAvailable ? props.formMode : "form";
-  const envSensitiveVisible = cvs.envRevealed;
   const requestUpdate = props.onRequestUpdate ?? (() => {});
+  const currentContextKey = configContextKey(props);
+  if (lastConfigContextKey !== currentContextKey) {
+    resetConfigEphemeralState();
+    lastConfigContextKey = currentContextKey;
+  }
+  const envSensitiveVisible = cvs.envRevealed;
 
   // Build categorised nav from schema - only include sections that exist in the schema
   const schemaProps = analysis.schema?.properties ?? {};
@@ -1248,8 +1271,11 @@ export function renderConfig(props: ConfigProps) {
   // Compute diff for showing changes (works for both form and raw modes)
   const diff = formMode === "form" ? computeDiff(props.originalValue, props.formValue) : [];
   const hasRawChanges = formMode === "raw" && props.raw !== props.originalRaw;
-  if (!hasRawChanges && cvs.rawDiffOpen) {
+  if ((!hasRawChanges || formMode !== "raw") && cvs.rawDiffOpen) {
     cvs.rawDiffOpen = false;
+  }
+  if (!hasRawChanges || formMode !== "raw" || !cvs.rawDiffOpen) {
+    rawDiffCache = undefined;
   }
   const rawDiff =
     formMode === "raw" && hasRawChanges && cvs.rawDiffOpen
@@ -1507,6 +1533,9 @@ export function renderConfig(props: ConfigProps) {
                     return;
                   }
                   cvs.rawDiffOpen = details.open;
+                  if (!details.open) {
+                    rawDiffCache = undefined;
+                  }
                   requestUpdate();
                 }}
               >
