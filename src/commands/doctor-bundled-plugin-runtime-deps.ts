@@ -1,3 +1,4 @@
+import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
@@ -7,6 +8,7 @@ import {
   scanBundledPluginRuntimeDeps,
   type BundledRuntimeDepsInstallParams,
 } from "../plugins/bundled-runtime-deps.js";
+import { resolveEffectivePluginIds } from "../plugins/effective-plugin-ids.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
@@ -31,11 +33,23 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
     return;
   }
 
+  const env = params.env ?? process.env;
+  const bundledPluginsDir = path.join(packageRoot, "dist", "extensions");
+  const effectivePluginIds = params.config
+    ? resolveEffectivePluginIds({
+        config: params.config,
+        env: {
+          ...env,
+          OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
+        },
+      })
+    : undefined;
   const { deps, missing, conflicts } = scanBundledPluginRuntimeDeps({
     packageRoot,
     config: params.config,
+    pluginIds: effectivePluginIds,
     includeConfiguredChannels: params.includeConfiguredChannels,
-    env: params.env ?? process.env,
+    env,
   });
   if (conflicts.length > 0) {
     const conflictLines = conflicts.flatMap((conflict) =>
@@ -92,9 +106,11 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
       installSpecs,
       env: params.env ?? process.env,
       installDeps: params.installDeps,
+      warn: (message) => params.runtime.log(message),
     });
     note(`Installed bundled plugin deps: ${result.installSpecs.join(", ")}`, "Bundled plugins");
   } catch (error) {
     params.runtime.error(`Failed to install bundled plugin runtime deps: ${String(error)}`);
+    throw error instanceof Error ? error : new Error(String(error));
   }
 }

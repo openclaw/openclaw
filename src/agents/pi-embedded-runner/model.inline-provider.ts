@@ -22,6 +22,7 @@ export type InlineProviderConfig = {
   models?: ModelDefinitionConfig[];
   headers?: unknown;
   authHeader?: boolean;
+  timeoutSeconds?: ModelProviderConfig["timeoutSeconds"];
   request?: ModelProviderConfig["request"];
 };
 

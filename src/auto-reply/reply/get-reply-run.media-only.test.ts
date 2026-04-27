@@ -77,6 +77,23 @@ vi.mock("./groups.js", () => ({
   buildDirectChatContext: vi.fn().mockReturnValue(""),
   buildGroupIntro: vi.fn().mockReturnValue(""),
   buildGroupChatContext: vi.fn().mockReturnValue(""),
+  resolveGroupSilentReplyBehavior: vi.fn(
+    (params: {
+      sessionEntry?: SessionEntry;
+      defaultActivation: "always" | "mention";
+      silentReplyPolicy?: "allow" | "disallow";
+      silentReplyRewrite?: boolean;
+    }) => {
+      const activation = params.sessionEntry?.groupActivation ?? params.defaultActivation;
+      const canUseSilentReply =
+        params.silentReplyPolicy !== "disallow" || params.silentReplyRewrite === true;
+      return {
+        activation,
+        canUseSilentReply,
+        allowEmptyAssistantReplyAsSilent: params.silentReplyPolicy === "allow",
+      };
+    },
+  ),
 }));
 
 vi.mock("./inbound-meta.js", () => ({
@@ -264,6 +281,51 @@ describe("runPreparedReply media-only handling", () => {
         }),
       }),
     );
+  });
+
+  it("propagates non-visible assistant silence for group runs", async () => {
+    await runPreparedReply(baseParams());
+
+    let call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(true);
+
+    await runPreparedReply(
+      baseParams({
+        defaultActivation: "mention",
+      }),
+    );
+
+    call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(true);
+  });
+
+  it("does not propagate empty-assistant silence for direct runs", async () => {
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+          ThreadHistoryBody: "Earlier direct message",
+          OriginatingChannel: "slack",
+          OriginatingTo: "D123",
+          ChatType: "direct",
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          ThreadHistoryBody: "Earlier direct message",
+          MediaPath: "/tmp/input.png",
+          Provider: "slack",
+          ChatType: "direct",
+          OriginatingChannel: "slack",
+          OriginatingTo: "D123",
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(false);
   });
 
   it("allows media-only prompts and preserves thread context in queued followups", async () => {
@@ -923,6 +985,37 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.prompt).toContain("System: [t] Initial event.");
     expect(call?.followupRun.prompt).not.toContain("System: [t] Post-compaction context.");
     expect(call?.followupRun.transcriptPrompt).not.toContain("System: [t] Initial event.");
+  });
+
+  it("keeps heartbeat prompts out of visible transcript prompt", async () => {
+    const heartbeatPrompt = "Read HEARTBEAT.md and run any due maintenance.";
+
+    await runPreparedReply(
+      baseParams({
+        opts: { isHeartbeat: true },
+        ctx: {
+          Body: heartbeatPrompt,
+          RawBody: heartbeatPrompt,
+          CommandBody: heartbeatPrompt,
+          Provider: "heartbeat",
+          Surface: "heartbeat",
+          ChatType: "direct",
+        },
+        sessionCtx: {
+          Body: heartbeatPrompt,
+          BodyStripped: heartbeatPrompt,
+          Provider: "heartbeat",
+          Surface: "heartbeat",
+          ChatType: "direct",
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    expect(call?.commandBody).toContain(heartbeatPrompt);
+    expect(call?.followupRun.prompt).toContain(heartbeatPrompt);
+    expect(call?.transcriptCommandBody).toBe("");
+    expect(call?.followupRun.transcriptPrompt).toBe("");
   });
   it("uses inbound origin channel for run messageProvider", async () => {
     await runPreparedReply(

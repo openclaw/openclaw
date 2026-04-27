@@ -1,8 +1,46 @@
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createEmbeddedLobsterRunner, resolveLobsterCwd } from "./lobster-runner.js";
+import {
+  createEmbeddedLobsterRunner,
+  loadEmbeddedToolRuntimeFromPackage,
+  resolveLobsterCwd,
+} from "./lobster-runner.js";
+
+const requireForTest = createRequire(import.meta.url);
+
+type AjvCacheOwner = {
+  _cache?: { size: number };
+};
+
+function readAjvInternalCacheSize(ajv: unknown): number {
+  return (ajv as AjvCacheOwner)._cache?.size ?? 0;
+}
+
+function createRepeatedResponseSchema() {
+  return {
+    type: "object",
+    properties: {
+      answer: { type: "string" },
+    },
+    required: ["answer"],
+    additionalProperties: false,
+  };
+}
+
+function createUniqueResponseSchema(index: number) {
+  return {
+    type: "object",
+    properties: {
+      [`answer${index}`]: { type: "string" },
+    },
+    required: [`answer${index}`],
+    additionalProperties: false,
+  };
+}
 
 describe("resolveLobsterCwd", () => {
   it("defaults to the current working directory", () => {
@@ -350,6 +388,107 @@ describe("createEmbeddedLobsterRunner", () => {
     });
 
     expect(loadRuntime).toHaveBeenCalledTimes(1);
+  });
+
+  it("installs an Ajv content cache before loading the embedded runtime", async () => {
+    const AjvModule = await import("ajv");
+    const AjvCtor = AjvModule.default as unknown as new (opts?: object) => import("ajv").default;
+    const ajv = new AjvCtor({ allErrors: true, strict: false, addUsedSchema: false });
+    const before = readAjvInternalCacheSize(ajv);
+
+    await loadEmbeddedToolRuntimeFromPackage({
+      importModule: async () => ({
+        runToolRequest: vi.fn(),
+        resumeToolRequest: vi.fn(),
+      }),
+    });
+
+    const first = ajv.compile(createRepeatedResponseSchema());
+    const second = ajv.compile(createRepeatedResponseSchema());
+    const afterRepeated = readAjvInternalCacheSize(ajv);
+
+    expect(second).toBe(first);
+    expect(afterRepeated - before).toBe(1);
+
+    for (let index = 0; index < 520; index += 1) {
+      ajv.compile(createUniqueResponseSchema(index));
+    }
+
+    expect(readAjvInternalCacheSize(ajv)).toBeLessThanOrEqual(before + 512);
+  });
+
+  it("deduplicates content-identical schema compilation in the installed Lobster runtime", async () => {
+    await loadEmbeddedToolRuntimeFromPackage();
+
+    const corePath = requireForTest.resolve("@clawdbot/lobster/core");
+    const validationPath = path.join(path.dirname(path.dirname(corePath)), "validation.js");
+    const validationModule = (await import(pathToFileURL(validationPath).href)) as {
+      sharedAjv: import("ajv").default;
+    };
+    const before = readAjvInternalCacheSize(validationModule.sharedAjv);
+
+    const first = validationModule.sharedAjv.compile(createRepeatedResponseSchema());
+    for (let index = 0; index < 1000; index += 1) {
+      validationModule.sharedAjv.compile(createRepeatedResponseSchema());
+    }
+    const second = validationModule.sharedAjv.compile(createRepeatedResponseSchema());
+
+    expect(second).toBe(first);
+    expect(readAjvInternalCacheSize(validationModule.sharedAjv) - before).toBe(1);
+  });
+
+  it("falls back to the installed package core file when the core export is unavailable", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lobster-package-"));
+    const packageRoot = path.join(tempDir, "node_modules", "@clawdbot", "lobster");
+    const packageEntryPath = path.join(packageRoot, "dist", "src", "sdk", "index.js");
+    const packageCorePath = path.join(packageRoot, "dist", "src", "core", "index.js");
+
+    try {
+      await fs.mkdir(path.dirname(packageEntryPath), { recursive: true });
+      await fs.mkdir(path.dirname(packageCorePath), { recursive: true });
+      await fs.writeFile(
+        path.join(packageRoot, "package.json"),
+        JSON.stringify({
+          name: "@clawdbot/lobster",
+          type: "module",
+          main: "./dist/src/sdk/index.js",
+        }),
+        "utf8",
+      );
+      await fs.writeFile(packageEntryPath, "export {};\n", "utf8");
+      await fs.writeFile(
+        packageCorePath,
+        [
+          "export async function runToolRequest() {",
+          "  return { ok: true, status: 'ok', output: [{ source: 'fallback' }], requiresApproval: null };",
+          "}",
+          "export async function resumeToolRequest() {",
+          "  return { ok: true, status: 'cancelled', output: [], requiresApproval: null };",
+          "}",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const runtime = await loadEmbeddedToolRuntimeFromPackage({
+        importModule: async (specifier) => {
+          if (specifier === "@clawdbot/lobster/core") {
+            throw new Error("package export missing");
+          }
+          return (await import(`${specifier}?t=${Date.now()}`)) as object;
+        },
+        resolvePackageEntry: () => packageEntryPath,
+      });
+
+      await expect(runtime.runToolRequest({ pipeline: "commands.list" })).resolves.toEqual({
+        ok: true,
+        status: "ok",
+        output: [{ source: "fallback" }],
+        requiresApproval: null,
+      });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("requires a pipeline for run", async () => {

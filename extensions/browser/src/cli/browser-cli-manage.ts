@@ -135,7 +135,7 @@ function formatDoctorLine(check: BrowserDoctorCheck): string {
   return `${check.ok ? "OK" : "FAIL"} ${check.name}${check.detail ? `: ${check.detail}` : ""}`;
 }
 
-async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string) {
+async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, deep?: boolean) {
   const checks: BrowserDoctorCheck[] = [];
   let status: BrowserStatus | null = null;
 
@@ -212,6 +212,42 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string) {
     } catch (err) {
       checks.push({
         name: "tabs",
+        ok: false,
+        detail: String(err),
+      });
+    }
+  }
+
+  if (deep && status.running) {
+    try {
+      const result = await callBrowserRequest<
+        | { ok: true; format: "aria"; nodes?: unknown[] }
+        | { ok: true; format: "ai"; snapshot?: string }
+      >(
+        parent,
+        {
+          method: "GET",
+          path: "/snapshot",
+          query: resolveProfileQuery(profile, { format: "aria", limit: 25 }),
+        },
+        { timeoutMs: 10_000 },
+      );
+      const count =
+        result.format === "aria"
+          ? Array.isArray(result.nodes)
+            ? result.nodes.length
+            : 0
+          : typeof result.snapshot === "string"
+            ? result.snapshot.split("\n").length
+            : 0;
+      checks.push({
+        name: "live-snapshot",
+        ok: count > 0,
+        detail: count > 0 ? `${count} nodes/lines` : "snapshot returned no content",
+      });
+    } catch (err) {
+      checks.push({
+        name: "live-snapshot",
         ok: false,
         detail: String(err),
       });
@@ -296,11 +332,12 @@ export function registerBrowserManageCommands(
   browser
     .command("doctor")
     .description("Check browser plugin readiness")
-    .action(async (_opts, cmd) => {
+    .option("--deep", "Run a live snapshot probe")
+    .action(async (opts: { deep?: boolean }, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       await runBrowserCommand(async () => {
-        const result = await runBrowserDoctor(parent, profile);
+        const result = await runBrowserDoctor(parent, profile, opts.deep === true);
         if (printJsonResult(parent, result)) {
           return;
         }

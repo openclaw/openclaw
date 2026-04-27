@@ -8,6 +8,7 @@ import {
 } from "../../../../src/config/sessions/artifacts.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../../../src/config/sessions/paths.js";
 import { redactSensitiveText } from "../../../../src/logging/redact.js";
+import { hasInterSessionUserProvenance } from "../../../../src/sessions/input-provenance.js";
 import { hashText } from "./hash.js";
 
 export type SessionFileEntry = {
@@ -170,12 +171,15 @@ export async function buildSessionEntry(absPath: string): Promise<SessionFileEnt
         continue;
       }
       const message = (record as { message?: unknown }).message as
-        | { role?: unknown; content?: unknown }
+        | { role?: unknown; content?: unknown; provenance?: unknown }
         | undefined;
       if (!message || typeof message.role !== "string") {
         continue;
       }
       if (message.role !== "user" && message.role !== "assistant") {
+        continue;
+      }
+      if (message.role === "user" && hasInterSessionUserProvenance(message)) {
         continue;
       }
       const text = extractSessionText(message.content, message.role);

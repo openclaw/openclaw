@@ -129,6 +129,17 @@ function agentMessageDelta(delta: string, itemId = "msg-1"): ProjectorNotificati
   return forCurrentTurn("item/agentMessage/delta", { itemId, delta });
 }
 
+function appServerError(params: { message: string; willRetry: boolean }): ProjectorNotification {
+  return forCurrentTurn("error", {
+    error: {
+      message: params.message,
+      codexErrorInfo: null,
+      additionalDetails: null,
+    },
+    willRetry: params.willRetry,
+  });
+}
+
 function turnCompleted(items: unknown[] = []): ProjectorNotification {
   return {
     method: "turn/completed",
@@ -156,7 +167,7 @@ describe("CodexAppServerEventProjector", () => {
             outputTokens: 100_000,
           },
           last: {
-            totalTokens: 14,
+            totalTokens: 12,
             inputTokens: 5,
             cachedInputTokens: 2,
             outputTokens: 7,
@@ -175,12 +186,12 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.assistantTexts).toEqual(["hello"]);
     expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["user", "assistant"]);
     expect(result.lastAssistant?.content).toEqual([{ type: "text", text: "hello" }]);
-    expect(result.attemptUsage).toMatchObject({ input: 5, output: 7, cacheRead: 2, total: 14 });
+    expect(result.attemptUsage).toMatchObject({ input: 3, output: 7, cacheRead: 2, total: 12 });
     expect(result.lastAssistant?.usage).toMatchObject({
-      input: 5,
+      input: 3,
       output: 7,
       cacheRead: 2,
-      totalTokens: 14,
+      totalTokens: 12,
     });
     expect(result.replayMetadata.replaySafe).toBe(true);
   });
@@ -235,6 +246,40 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.lastAssistant?.content).toEqual([{ type: "text", text: "OK from raw" }]);
   });
 
+  it("does not fail a completed reply after a retryable app-server error notification", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(agentMessageDelta("still working"));
+    await projector.handleNotification(
+      appServerError({ message: "stream disconnected", willRetry: true }),
+    );
+    await projector.handleNotification(
+      turnCompleted([{ type: "agentMessage", id: "msg-1", text: "final answer" }]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.assistantTexts).toEqual(["final answer"]);
+    expect(result.promptError).toBeNull();
+    expect(result.promptErrorSource).toBeNull();
+    expect(result.lastAssistant?.stopReason).toBe("stop");
+    expect(result.lastAssistant?.errorMessage).toBeUndefined();
+  });
+
+  it("uses nested app-server error messages for terminal errors", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      appServerError({ message: "stream failed permanently", willRetry: false }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.promptError).toBe("stream failed permanently");
+    expect(result.promptErrorSource).toBe("prompt");
+    expect(result.lastAssistant).toBeUndefined();
+  });
+
   it("normalizes snake_case current token usage fields", async () => {
     const projector = await createProjector();
 
@@ -244,7 +289,7 @@ describe("CodexAppServerEventProjector", () => {
         tokenUsage: {
           total: { total_tokens: 1_000_000 },
           last_token_usage: {
-            total_tokens: 20,
+            total_tokens: 17,
             input_tokens: 8,
             cached_input_tokens: 3,
             output_tokens: 9,
@@ -255,12 +300,12 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(result.attemptUsage).toMatchObject({ input: 8, output: 9, cacheRead: 3, total: 20 });
+    expect(result.attemptUsage).toMatchObject({ input: 5, output: 9, cacheRead: 3, total: 17 });
     expect(result.lastAssistant?.usage).toMatchObject({
-      input: 8,
+      input: 5,
       output: 9,
       cacheRead: 3,
-      totalTokens: 20,
+      totalTokens: 17,
     });
   });
 

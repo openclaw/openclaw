@@ -20,6 +20,8 @@ import {
   type InstalledPluginIndexRecord,
   type LoadInstalledPluginIndexParams,
 } from "../../../plugins/installed-plugin-index.js";
+import { loadPluginManifestRegistryForInstalledIndex } from "../../../plugins/manifest-registry-installed.js";
+import type { PluginManifestRecord } from "../../../plugins/manifest-registry.js";
 
 export const DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV = "OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION";
 export const FORCE_PLUGIN_REGISTRY_MIGRATION_ENV = "OPENCLAW_FORCE_PLUGIN_REGISTRY_MIGRATION";
@@ -124,6 +126,7 @@ function normalizeRegistryReference(value: unknown): string | undefined {
 
 function createMigrationPluginIdNormalizer(
   index: InstalledPluginIndex,
+  manifests: readonly PluginManifestRecord[],
 ): (pluginId: string) => string {
   const aliases = new Map<string, string>();
   for (const plugin of index.plugins) {
@@ -132,16 +135,25 @@ function createMigrationPluginIdNormalizer(
       continue;
     }
     aliases.set(pluginId, plugin.pluginId);
+  }
+  for (const plugin of manifests) {
+    const pluginId = normalizeRegistryReference(plugin.id);
+    if (!pluginId) {
+      continue;
+    }
+    aliases.set(pluginId, plugin.id);
     for (const alias of [
-      ...plugin.contributions.providers,
-      ...plugin.contributions.channels,
-      ...plugin.contributions.setupProviders,
-      ...plugin.contributions.cliBackends,
-      ...plugin.contributions.modelCatalogProviders,
+      ...plugin.providers,
+      ...plugin.channels,
+      ...(plugin.setup?.providers?.map((provider) => provider.id) ?? []),
+      ...plugin.cliBackends,
+      ...(plugin.setup?.cliBackends ?? []),
+      ...Object.keys(plugin.modelCatalog?.providers ?? {}),
+      ...(plugin.legacyPluginIds ?? []),
     ]) {
       const normalizedAlias = normalizeRegistryReference(alias);
       if (normalizedAlias && !aliases.has(normalizedAlias)) {
-        aliases.set(normalizedAlias, plugin.pluginId);
+        aliases.set(normalizedAlias, plugin.id);
       }
     }
   }
@@ -193,8 +205,21 @@ export function listMigrationRelevantPluginRecords(params: {
   index: InstalledPluginIndex;
   config: OpenClawConfig;
   installRecords: Record<string, unknown>;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
 }): readonly InstalledPluginIndexRecord[] {
-  const normalizePluginId = createMigrationPluginIdNormalizer(params.index);
+  const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
+    index: params.index,
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    includeDisabled: true,
+  });
+  const manifestByPluginId = new Map(manifestRegistry.plugins.map((plugin) => [plugin.id, plugin]));
+  const normalizePluginId = createMigrationPluginIdNormalizer(
+    params.index,
+    manifestRegistry.plugins,
+  );
   const referencedPluginIds = new Set<string>();
   const installedPluginIds = new Set<string>();
 
@@ -226,17 +251,21 @@ export function listMigrationRelevantPluginRecords(params: {
     if (plugin.origin !== "bundled") {
       return true;
     }
+    const manifest = manifestByPluginId.get(plugin.pluginId);
+    if (plugin.enabledByDefault && (manifest?.providers.length ?? 0) > 0) {
+      return true;
+    }
     if (installedPluginIds.has(plugin.pluginId) || referencedPluginIds.has(plugin.pluginId)) {
       return true;
     }
     if (
-      plugin.contributions.channels.some((channelId) =>
+      (manifest?.channels ?? []).some((channelId) =>
         configuredChannelIds.has(normalizeRegistryReference(channelId) ?? ""),
       )
     ) {
       return true;
     }
-    return plugin.contributions.providers.some((providerId) =>
+    return (manifest?.providers ?? []).some((providerId) =>
       configuredModelProviderIds.has(normalizeProviderId(providerId)),
     );
   });
@@ -279,6 +308,8 @@ export async function migratePluginRegistryForInstall(
       index: candidateIndex,
       config,
       installRecords,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
     }),
   };
   await writePersistedInstalledPluginIndex(current, params);

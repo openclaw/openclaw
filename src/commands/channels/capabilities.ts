@@ -1,15 +1,16 @@
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
-import { listChannelPlugins } from "../../channels/plugins/index.js";
 import {
   createMessageActionDiscoveryContext,
   resolveMessageActionDiscoveryForPlugin,
 } from "../../channels/plugins/message-action-discovery.js";
+import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import type {
   ChannelCapabilities,
   ChannelCapabilitiesDiagnostics,
   ChannelCapabilitiesDisplayLine,
   ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
+import { commitConfigWithPendingPluginInstalls } from "../../cli/plugins-install-record-commit.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
 import {
   readConfigFileSnapshot,
@@ -18,11 +19,6 @@ import {
 } from "../../config/config.js";
 import { danger } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import {
-  PLUGIN_INSTALLS_CONFIG_PATH,
-  withoutPluginInstallRecords,
-  writePersistedInstalledPluginIndexInstallRecords,
-} from "../../plugins/installed-plugin-index-records.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -243,7 +239,9 @@ export async function channelsCapabilitiesCommand(
     return;
   }
 
-  const plugins = listChannelPlugins();
+  const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
+    includeSetupRuntimeFallback: true,
+  });
   const selected =
     !rawChannel || rawChannel === "all"
       ? plugins
@@ -260,22 +258,29 @@ export async function channelsCapabilitiesCommand(
               cfg.plugins?.installs && Object.keys(cfg.plugins.installs).length > 0,
             );
             if (shouldMovePluginInstalls) {
-              await writePersistedInstalledPluginIndexInstallRecords(cfg.plugins?.installs ?? {});
-              cfg = withoutPluginInstallRecords(cfg);
-            }
-            await replaceConfigFile({
-              nextConfig: cfg,
-              baseHash: (await sourceSnapshotPromise)?.hash,
-              ...(shouldMovePluginInstalls
-                ? { writeOptions: { unsetPaths: [Array.from(PLUGIN_INSTALLS_CONFIG_PATH)] } }
-                : {}),
-            });
-            if (shouldMovePluginInstalls || resolved.pluginInstalled) {
+              const committed = await commitConfigWithPendingPluginInstalls({
+                nextConfig: cfg,
+                baseHash: (await sourceSnapshotPromise)?.hash,
+              });
+              cfg = committed.config;
               await refreshPluginRegistryAfterConfigMutation({
                 config: cfg,
                 reason: "source-changed",
+                installRecords: committed.installRecords,
                 logger: { warn: (message) => runtime.log(message) },
               });
+            } else {
+              await replaceConfigFile({
+                nextConfig: cfg,
+                baseHash: (await sourceSnapshotPromise)?.hash,
+              });
+              if (resolved.pluginInstalled) {
+                await refreshPluginRegistryAfterConfigMutation({
+                  config: cfg,
+                  reason: "source-changed",
+                  logger: { warn: (message) => runtime.log(message) },
+                });
+              }
             }
           }
           return resolved.plugin ? [resolved.plugin] : null;
@@ -312,6 +317,7 @@ export async function channelsCapabilitiesCommand(
       channel: report.channel,
       accountId: report.accountId,
       name: report.accountName,
+      channelLabel: report.plugin.meta.label ?? report.channel,
       channelStyle: theme.accent,
       accountStyle: theme.heading,
     });

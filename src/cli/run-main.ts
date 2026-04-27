@@ -15,7 +15,6 @@ import { enableConsoleCapture } from "../logging.js";
 import type { PluginManifestCommandAliasRegistry } from "../plugins/manifest-command-aliases.js";
 import { resolveManifestCommandAliasOwner } from "../plugins/manifest-command-aliases.runtime.js";
 import { hasMemoryRuntime } from "../plugins/memory-state.js";
-import { createCliProgress } from "./progress.js";
 import { maybeWarnAboutDebugProxyCoverage } from "../proxy-capture/coverage.js";
 import {
   finalizeDebugProxyCapture,
@@ -34,6 +33,7 @@ import {
 import { shouldEnsureCliPathForCommandPath } from "./command-startup-policy.js";
 import { maybeRunCliInContainer, parseCliContainerArgs } from "./container-target.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
+import { createCliProgress } from "./progress.js";
 import { tryRouteCli } from "./route.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
 
@@ -69,9 +69,13 @@ export function shouldEnsureCliPath(argv: string[]): boolean {
 }
 
 export function shouldUseRootHelpFastPath(argv: string[]): boolean {
+  const invocation = resolveCliArgvInvocation(argv);
   return (
     process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH !== "1" &&
-    resolveCliArgvInvocation(argv).isRootHelpInvocation
+    (invocation.isRootHelpInvocation ||
+      (invocation.commandPath.length === 1 &&
+        invocation.commandPath[0] === "help" &&
+        invocation.hasHelpOrVersion))
   );
 }
 
@@ -309,7 +313,7 @@ export async function runCli(argv: string[] = process.argv) {
       const [
         { buildProgram },
         { runFatalErrorHooks },
-        { installUnhandledRejectionHandler },
+        { installUnhandledRejectionHandler, isUncaughtExceptionHandled },
         { restoreTerminalState },
       ] = await Promise.all([
         import("./program.js"),
@@ -324,6 +328,9 @@ export async function runCli(argv: string[] = process.argv) {
       installUnhandledRejectionHandler();
 
       process.on("uncaughtException", (error) => {
+        if (isUncaughtExceptionHandled(error)) {
+          return;
+        }
         console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
         for (const message of runFatalErrorHooks({ reason: "uncaught_exception", error })) {
           console.error("[openclaw]", message);
