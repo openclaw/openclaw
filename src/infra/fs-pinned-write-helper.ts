@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process";
-import { once } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -133,6 +132,19 @@ function resolvePinnedWritePython(): string {
   return cachedPinnedWritePython;
 }
 
+export function isPinnedWriteHelperSpawnError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const maybeErrno = error as NodeJS.ErrnoException;
+  if (typeof maybeErrno.syscall !== "string" || !maybeErrno.syscall.startsWith("spawn")) {
+    return false;
+  }
+
+  return ["EACCES", "ENOENT", "ENOEXEC"].includes(maybeErrno.code ?? "");
+}
+
 function parsePinnedIdentity(stdout: string): FileIdentityStat {
   const line = stdout
     .trim()
@@ -186,9 +198,24 @@ export async function runPinnedWriteHelper(params: {
     stderr += chunk;
   });
 
-  const exitPromise = once(child, "close") as Promise<[number | null, NodeJS.Signals | null]>;
+  let spawnError: unknown;
+  child.once("error", (error) => {
+    spawnError = error;
+  });
+  const exitPromise = new Promise<[number | null, NodeJS.Signals | null]>((resolve) => {
+    child.once("close", (code, signal) => resolve([code, signal]));
+  });
   try {
     if (!child.stdin) {
+      const identity = await runPinnedWriteFallback(params);
+      await exitPromise.catch(() => {});
+      return identity;
+    }
+
+    // spawn(2) failures such as missing python3 are reported asynchronously. Give
+    // Node one turn to surface them before consuming streams into the child stdin.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    if (isPinnedWriteHelperSpawnError(spawnError)) {
       const identity = await runPinnedWriteFallback(params);
       await exitPromise.catch(() => {});
       return identity;
@@ -209,6 +236,9 @@ export async function runPinnedWriteHelper(params: {
     }
 
     const [code, signal] = await exitPromise;
+    if (isPinnedWriteHelperSpawnError(spawnError)) {
+      return await runPinnedWriteFallback(params);
+    }
     if (code !== 0) {
       throw new Error(
         stderr.trim() ||
