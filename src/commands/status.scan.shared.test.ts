@@ -29,6 +29,103 @@ vi.mock("./gateway-presence.js", () => ({
   pickGatewaySelfPresence: mocks.pickGatewaySelfPresence,
 }));
 
+describe("resolveSharedMemoryStatusSnapshot", () => {
+  it("passes purpose 'status' to getMemorySearchManager", async () => {
+    const { resolveSharedMemoryStatusSnapshot } = await import("./status.scan.shared.js");
+
+    const getMemorySearchManager = vi.fn().mockResolvedValue({
+      manager: {
+        probeVectorAvailability: vi.fn().mockResolvedValue(true),
+        status: vi.fn().mockReturnValue({
+          backend: "builtin",
+          provider: "test",
+          model: "test",
+          files: 0,
+          chunks: 10,
+          dirty: false,
+          dbPath: "/tmp/test.db",
+          sources: ["memory"],
+        }),
+        close: vi.fn().mockResolvedValue(undefined),
+      },
+    });
+
+    await resolveSharedMemoryStatusSnapshot({
+      cfg: { agents: { defaults: { memorySearch: { enabled: true } } } } as any,
+      agentStatus: { defaultId: "main" },
+      memoryPlugin: { enabled: true, slot: "test-plugin" },
+      resolveMemoryConfig: () => ({ store: { path: "/tmp/test.db" } }),
+      getMemorySearchManager,
+    });
+
+    expect(getMemorySearchManager).toHaveBeenCalledWith(
+      expect.objectContaining({ purpose: "status" }),
+    );
+  });
+
+  it("survives probeVectorAvailability throwing in status context", async () => {
+    const { resolveSharedMemoryStatusSnapshot } = await import("./status.scan.shared.js");
+
+    const getMemorySearchManager = vi.fn().mockResolvedValue({
+      manager: {
+        probeVectorAvailability: vi.fn().mockRejectedValue(new Error("out of memory")),
+        status: vi.fn().mockReturnValue({
+          backend: "builtin",
+          provider: "test",
+          model: "test",
+          files: 0,
+          chunks: 5,
+          dirty: false,
+          dbPath: "/tmp/test.db",
+          sources: ["memory"],
+        }),
+        close: vi.fn().mockResolvedValue(undefined),
+      },
+    });
+
+    const result = await resolveSharedMemoryStatusSnapshot({
+      cfg: { agents: { defaults: { memorySearch: { enabled: true } } } } as any,
+      agentStatus: { defaultId: "main" },
+      memoryPlugin: { enabled: true, slot: "test-plugin" },
+      resolveMemoryConfig: () => ({ store: { path: "/tmp/test.db" } }),
+      getMemorySearchManager,
+    });
+
+    // Should still return status even when probe fails
+    expect(result).not.toBeNull();
+    expect(result?.agentId).toBe("main");
+    expect(result?.chunks).toBe(5);
+  });
+
+  it("returns null when memory plugin is disabled", async () => {
+    const { resolveSharedMemoryStatusSnapshot } = await import("./status.scan.shared.js");
+
+    const result = await resolveSharedMemoryStatusSnapshot({
+      cfg: {} as any,
+      agentStatus: { defaultId: "main" },
+      memoryPlugin: { enabled: false, slot: null },
+      resolveMemoryConfig: () => null,
+      getMemorySearchManager: vi.fn(),
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("returns null when manager is null", async () => {
+    const { resolveSharedMemoryStatusSnapshot } = await import("./status.scan.shared.js");
+
+    const result = await resolveSharedMemoryStatusSnapshot({
+      cfg: { agents: { defaults: { memorySearch: { enabled: true } } } } as any,
+      agentStatus: { defaultId: "main" },
+      memoryPlugin: { enabled: true, slot: "test-plugin" },
+      resolveMemoryConfig: () => ({ store: { path: "/tmp/test.db" } }),
+      getMemorySearchManager: vi.fn().mockResolvedValue({ manager: null }),
+    });
+
+    expect(result).toBeNull();
+  });
+});
+
 describe("resolveGatewayProbeSnapshot", () => {
   beforeEach(() => {
     vi.clearAllMocks();

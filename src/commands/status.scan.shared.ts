@@ -207,9 +207,17 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
   if (!manager) {
     return null;
   }
+  // Probe is always called; failures are non-fatal in a status context.
+  // Third-party memory plugins loaded in the CLI status process may not
+  // have completed async startup (embedder, extensions, backfill) and
+  // probing them can trigger side effects or report false negatives.
+  // The `purpose: "status"` contract signals that the manager should
+  // return current in-memory state without mutating plugin runtime.
   try {
     await manager.probeVectorAvailability();
-  } catch {}
+  } catch {
+    // Probe failure in a status context is non-fatal — report what we have.
+  }
   const status = manager.status();
   await manager.close?.().catch(() => {});
   return { agentId, ...status };

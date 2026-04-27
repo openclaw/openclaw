@@ -94,6 +94,24 @@ export type MemoryRuntimeBackendConfig =
     };
 
 export type MemoryPluginRuntime = {
+  /**
+   * Returns a memory search manager for the given agent.
+   *
+   * When `purpose` is omitted or set to `"default"`, this is the normal
+   * gateway/runtime path and plugins may perform their usual startup work.
+   *
+   * When `purpose` is `"status"`, the caller is `openclaw status` or a similar
+   * read-only inspection path running in the CLI process (not the gateway).
+   * Memory plugins **should not** trigger heavyweight async startup work
+   * (embedder init, vector extension loading, backfill, network calls) in
+   * this context. The manager should return current in-memory state only.
+   *
+   * Rationale: the CLI status process loads plugins locally to inspect memory
+   * state. If a plugin performs eager async work during `register()` and then
+   * reports the result of that incomplete or failed work via `status()` /
+   * `probeVectorAvailability()`, the status output can disagree with the live
+   * gateway runtime.
+   */
   getMemorySearchManager(params: {
     cfg: OpenClawConfig;
     agentId: string;
