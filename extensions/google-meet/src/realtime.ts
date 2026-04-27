@@ -14,6 +14,7 @@ import {
   consultOpenClawAgentForGoogleMeet,
   GOOGLE_MEET_AGENT_CONSULT_TOOL_NAME,
   resolveGoogleMeetRealtimeTools,
+  submitGoogleMeetConsultWorkingResponse,
 } from "./agent-consult.js";
 import type { GoogleMeetConfig } from "./config.js";
 import type { GoogleMeetChromeHealth } from "./transports/types.js";
@@ -216,6 +217,7 @@ export async function startCommandRealtimeAudioBridge(params: {
         });
         return;
       }
+      submitGoogleMeetConsultWorkingResponse(session, event.callId || event.itemId);
       void consultOpenClawAgentForGoogleMeet({
         config: params.config,
         fullConfig: params.fullConfig,

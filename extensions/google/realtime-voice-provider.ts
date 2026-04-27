@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import {
   ActivityHandling,
+  Behavior,
   EndSensitivity,
+  FunctionResponseScheduling,
   Modality,
   StartSensitivity,
   TurnCoverage,
@@ -20,8 +22,14 @@ import type {
   RealtimeVoiceProviderConfig,
   RealtimeVoiceProviderPlugin,
   RealtimeVoiceTool,
+  RealtimeVoiceToolResultOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
-import { convertPcmToMulaw8k, mulawToPcm, resamplePcm } from "openclaw/plugin-sdk/realtime-voice";
+import {
+  convertPcmToMulaw8k,
+  mulawToPcm,
+  REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+  resamplePcm,
+} from "openclaw/plugin-sdk/realtime-voice";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { createGoogleGenAI } from "./google-genai-runtime.js";
@@ -288,11 +296,17 @@ function buildRealtimeInputConfig(
 }
 
 function buildFunctionDeclarations(tools: RealtimeVoiceTool[] | undefined): FunctionDeclaration[] {
-  return (tools ?? []).map((tool) => ({
-    name: tool.name,
-    description: tool.description,
-    parametersJsonSchema: tool.parameters,
-  }));
+  return (tools ?? []).map((tool) => {
+    const declaration: FunctionDeclaration = {
+      name: tool.name,
+      description: tool.description,
+      parametersJsonSchema: tool.parameters,
+    };
+    if (tool.name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
+      declaration.behavior = Behavior.NON_BLOCKING;
+    }
+    return declaration;
+  });
 }
 
 function parsePcmSampleRate(mimeType: string | undefined): number {
@@ -306,6 +320,8 @@ function isMulawSilence(audio: Buffer): boolean {
 }
 
 class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
+  readonly supportsToolResultContinuation = true;
+
   private session: GoogleLiveSession | null = null;
   private connected = false;
   private sessionConfigured = false;
@@ -448,7 +464,11 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.sendUserMessage(greetingPrompt);
   }
 
-  submitToolResult(callId: string, result: unknown): void {
+  submitToolResult(
+    callId: string,
+    result: unknown,
+    options?: RealtimeVoiceToolResultOptions,
+  ): void {
     if (!this.session) {
       return;
     }
@@ -462,19 +482,34 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       return;
     }
     try {
+      const isConsultTool = name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME;
+      const functionResponse: FunctionResponse = {
+        id: callId,
+        name,
+        response:
+          result && typeof result === "object" && !Array.isArray(result)
+            ? (result as Record<string, unknown>)
+            : { output: result },
+      };
+      if (isConsultTool) {
+        functionResponse.scheduling = FunctionResponseScheduling.WHEN_IDLE;
+        if (options?.willContinue === true) {
+          functionResponse.willContinue = true;
+        }
+      } else if (options?.willContinue === true) {
+        this.config.onError?.(
+          new Error(
+            `Google Live continuation is only supported for ${REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME}`,
+          ),
+        );
+        return;
+      }
       this.session.sendToolResponse({
-        functionResponses: [
-          {
-            id: callId,
-            name,
-            response:
-              result && typeof result === "object" && !Array.isArray(result)
-                ? (result as Record<string, unknown>)
-                : { output: result },
-          },
-        ],
+        functionResponses: [functionResponse],
       });
-      this.pendingFunctionNames.delete(callId);
+      if (options?.willContinue !== true) {
+        this.pendingFunctionNames.delete(callId);
+      }
     } catch (error) {
       this.config.onError?.(
         error instanceof Error ? error : new Error("Failed to send Google Live function response"),
