@@ -22,6 +22,7 @@ describe("stripEmotionTags", () => {
     const uppercase = stripEmotionTags("[Warmly] hello there");
     const technical = stripEmotionTags("Keep [SOFTLY_TYPED] as a literal token");
     const spacedLink = stripEmotionTags("[Warmly] (https://example.test)");
+    const parenthetical = stripEmotionTags("[Warmly] (smiles) hello there");
 
     expect(uppercase).toEqual({ text: "hello there", changed: true });
     expect(technical).toEqual({
@@ -32,6 +33,7 @@ describe("stripEmotionTags", () => {
       text: "[Warmly] (https://example.test)",
       changed: false,
     });
+    expect(parenthetical).toEqual({ text: "(smiles) hello there", changed: true });
   });
 
   test("preserves newlines after stripping a standalone emotion tag", () => {
