@@ -1,5 +1,0 @@
-{
-  "$schema": "./node_modules/oxfmt/configuration_schema.json",
-  "indentWidth": 2,
-  "printWidth": 100
-}
