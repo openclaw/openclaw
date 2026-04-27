@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildVertexExpressUrl, createVertexExpressTransportStreamFn } from "./transport.js";
 import {
-  VERTEX_EXPRESS_BASE_URL,
   VERTEX_EXPRESS_DEFAULT_MODEL_REF,
   VERTEX_EXPRESS_MODELS,
   VERTEX_EXPRESS_PROVIDER_ID,
