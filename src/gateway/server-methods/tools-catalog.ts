@@ -12,7 +12,11 @@ import {
 import { summarizeToolDescriptionText } from "../../agents/tool-description-summary.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
-import { getPluginToolMeta, resolvePluginTools } from "../../plugins/tools.js";
+import {
+  buildPluginToolMetadataKey,
+  getPluginToolMeta,
+  resolvePluginTools,
+} from "../../plugins/tools.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   ErrorCodes,
@@ -22,12 +26,6 @@ import {
   validateToolsCatalogParams,
 } from "../protocol/index.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
-
-const PLUGIN_TOOL_METADATA_KEY_SEPARATOR = "\u0000";
-
-function buildPluginToolMetadataKey(pluginId: string, toolName: string): string {
-  return `${pluginId}${PLUGIN_TOOL_METADATA_KEY_SEPARATOR}${toolName}`;
-}
 
 type ToolCatalogEntry = {
   id: string;

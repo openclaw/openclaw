@@ -35,6 +35,17 @@ export function copyPluginToolMeta(source: AnyAgentTool, target: AnyAgentTool): 
   }
 }
 
+// Single-source key shape for `(pluginId, toolName)` used by the plugin tool
+// metadata maps in src/agents/tools-effective-inventory.ts and
+// src/gateway/server-methods/tools-catalog.ts. Keeping the separator + builder
+// here prevents drift between callers; if the keying scheme changes, both
+// consumers update together.
+const PLUGIN_TOOL_METADATA_KEY_SEPARATOR = "\u0000";
+
+export function buildPluginToolMetadataKey(pluginId: string, toolName: string): string {
+  return `${pluginId}${PLUGIN_TOOL_METADATA_KEY_SEPARATOR}${toolName}`;
+}
+
 function normalizeAllowlist(list?: string[]) {
   return new Set((list ?? []).map(normalizeToolName).filter(Boolean));
 }

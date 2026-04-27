@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { extractModelCompat } from "../plugins/provider-model-compat.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
-import { getPluginToolMeta } from "../plugins/tools.js";
+import { buildPluginToolMetadataKey, getPluginToolMeta } from "../plugins/tools.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -24,12 +24,6 @@ import type {
   ResolveEffectiveToolInventoryParams,
 } from "./tools-effective-inventory.types.js";
 import type { AnyAgentTool } from "./tools/common.js";
-
-const PLUGIN_TOOL_METADATA_KEY_SEPARATOR = "\u0000";
-
-function buildPluginToolMetadataKey(pluginId: string, toolName: string): string {
-  return `${pluginId}${PLUGIN_TOOL_METADATA_KEY_SEPARATOR}${toolName}`;
-}
 
 function resolveEffectiveToolLabel(tool: AnyAgentTool): string {
   const rawLabel = normalizeOptionalString(tool.label) ?? "";

@@ -69,7 +69,10 @@ export function isPluginJsonValue(value: unknown): value is PluginJsonValue {
     return false;
   }
   try {
-    return JSON.stringify(value).length <= PLUGIN_JSON_VALUE_LIMITS.maxSerializedBytes;
+    return (
+      Buffer.byteLength(JSON.stringify(value), "utf8") <=
+      PLUGIN_JSON_VALUE_LIMITS.maxSerializedBytes
+    );
   } catch {
     return false;
   }
