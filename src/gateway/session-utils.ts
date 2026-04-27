@@ -1388,7 +1388,17 @@ export function buildGatewaySessionRow(params: {
     }) ?? resolveNonNegativeNumber(transcriptUsage?.estimatedCostUsd);
   const contextTokens =
     resolvePositiveNumber(entry?.contextTokens) ??
-    resolvePositiveNumber(transcriptUsage?.contextTokens) ??
+    // Only use the transcript-derived context window when we are also using
+    // the transcript model identity. Otherwise, the transcript snapshot
+    // reflects the previous model (e.g. right after a model switch, before
+    // the first turn on the new model has produced a transcript line), and
+    // its contextTokens would be derived from the old model. That mismatch
+    // is exactly what produces a wrong /status window for one message after
+    // a switch — and at worst, triggers compaction on the first message if
+    // the previous model's window was smaller than the new model's.
+    (shouldUseTranscriptModelIdentity
+      ? resolvePositiveNumber(transcriptUsage?.contextTokens)
+      : undefined) ??
     resolvePositiveNumber(
       resolveContextTokensForModel({
         cfg,
