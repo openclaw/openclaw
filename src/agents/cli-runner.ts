@@ -403,6 +403,7 @@ export function buildRunClaudeCliAgentParams(params: RunClaudeCliAgentParams): R
     silentReplyPromptMode: params.silentReplyPromptMode,
     extraSystemPromptStatic: params.extraSystemPromptStatic,
     ownerNumbers: params.ownerNumbers,
+    disableTools: params.disableTools,
     // Legacy `claudeSessionId` callers predate the shared CLI session contract.
     // Ignore it here so the compatibility wrapper does not accidentally resume
     // an incompatible Claude session on the generic runner path.

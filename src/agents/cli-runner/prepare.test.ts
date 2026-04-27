@@ -128,6 +128,9 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         contextFiles: [],
       })),
       resolveOpenClawReferencePaths: vi.fn(async () => ({ docsPath: null, sourcePath: null })),
+      getActiveMcpLoopbackRuntime: vi.fn(() => undefined),
+      ensureMcpLoopbackServer: vi.fn(async () => undefined),
+      createMcpLoopbackServerConfig: vi.fn(() => ({ mcpServers: {} })),
     });
     mockGetGlobalHookRunner.mockReturnValue(null);
     mockBuildActiveVideoGenerationTaskPromptContextForSession.mockReturnValue(undefined);
@@ -499,6 +502,59 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
 
       expect(context.extraSystemPromptHash).toBe(hashCliSessionText(staticPrompt));
       expect(context.reusableCliSession).toEqual({ sessionId: "cli-session" });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not prepare bundled MCP tools when tools are disabled", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const ensureMcpLoopbackServerMock = vi.fn(async () => undefined);
+    try {
+      setCliRunnerPrepareTestDeps({
+        getActiveMcpLoopbackRuntime: vi.fn(() => ({
+          port: 3210,
+          ownerToken: "owner-token",
+          nonOwnerToken: "agent-token",
+        })),
+        ensureMcpLoopbackServer: ensureMcpLoopbackServerMock,
+        createMcpLoopbackServerConfig: vi.fn(() => ({
+          mcpServers: {
+            openclaw: {
+              url: "http://127.0.0.1:3210/mcp",
+            },
+          },
+        })),
+      });
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-no-tools",
+        disableTools: true,
+        config: {
+          agents: {
+            defaults: {
+              cliBackends: {
+                "test-cli": {
+                  command: "test-cli",
+                  bundleMcp: true,
+                  bundleMcpMode: "claude-config-file",
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+      });
+
+      expect(ensureMcpLoopbackServerMock).not.toHaveBeenCalled();
+      expect(context.preparedBackend.env?.OPENCLAW_MCP_TOKEN).toBeUndefined();
+      expect(context.preparedBackend.mcpConfigHash).toBeUndefined();
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

@@ -118,6 +118,7 @@ describe("runAuthProbes CLI backend dispatch", () => {
         model: "opus",
         thinkLevel: "off",
         streamParams: { maxTokens: 16 },
+        disableTools: true,
         cleanupCliLiveSessionOnRunEnd: true,
       }),
     );
