@@ -1286,7 +1286,6 @@ export function attachGatewayWsMessageHandler(params: {
           canvasHostUrl && canvasCapability
             ? (buildCanvasScopedHostUrl(canvasHostUrl, canvasCapability) ?? canvasHostUrl)
             : canvasHostUrl;
-
         clearHandshakeTimer();
         const nextClient: GatewayWsClient = {
           socket,
@@ -1344,7 +1343,6 @@ export function attachGatewayWsMessageHandler(params: {
           });
           incrementPresenceVersion();
         }
-
         const snapshot = buildGatewaySnapshot({
           includeSensitive: scopes.includes(ADMIN_SCOPE),
         });
