@@ -164,6 +164,9 @@ chat channel.
 <ParamField path="context" type='"isolated" | "fork"' default="isolated">
   `fork` branches the requester's current transcript into the child session. Native sub-agents only. Use `fork` only when the child needs the current transcript.
 </ParamField>
+<ParamField path="streamTo" type='"parent"'>
+  Streams sub-agent output to the parent session in real-time instead of waiting for the announce step. Useful for long-running tasks where you want incremental visibility.
+</ParamField>
 
 <Warning>
 `sessions_spawn` does **not** accept channel-delivery params (`target`,
@@ -182,11 +185,12 @@ same sub-agent session.
 **Discord** is currently the only supported channel. It supports
 persistent thread-bound subagent sessions (`sessions_spawn` with
 `thread: true`), manual thread controls (`/focus`, `/unfocus`, `/agents`,
-`/session idle`, `/session max-age`), and adapter keys
-`channels.discord.threadBindings.enabled`,
-`channels.discord.threadBindings.idleHours`,
-`channels.discord.threadBindings.maxAgeHours`, and
-`channels.discord.threadBindings.spawnSubagentSessions`.
+`/session idle`, `/session max-age`), and adapter-specific keys:
+
+- `channels.discord.threadBindings.enabled`
+- `channels.discord.threadBindings.idleHours`
+- `channels.discord.threadBindings.maxAgeHours`
+- `channels.discord.threadBindings.spawnSubagentSessions`
 
 ### Quick flow
 
@@ -221,8 +225,8 @@ persistent thread-bound subagent sessions (`sessions_spawn` with
 
 ### Config switches
 
-- **Global default:** `session.threadBindings.enabled`, `session.threadBindings.idleHours`, `session.threadBindings.maxAgeHours`.
-- **Channel override and spawn auto-bind keys** are adapter-specific. See [Thread supporting channels](#thread-supporting-channels) above.
+- **Global defaults:** `session.threadBindings.enabled`, `session.threadBindings.idleHours`, `session.threadBindings.maxAgeHours`. These apply to any channel that supports thread bindings.
+- **Discord-specific overrides:** `channels.discord.threadBindings.*` keys override the global defaults for Discord only. See [Thread supporting channels](#thread-supporting-channels) above.
 
 See [Configuration reference](/gateway/configuration-reference) and
 [Slash commands](/tools/slash-commands) for current adapter details.
@@ -256,7 +260,7 @@ app-server, and other configured native runtimes.
 - `cleanup: "delete"` archives immediately after announce (still keeps the transcript via rename).
 - Auto-archive is best-effort; pending timers are lost if the gateway restarts.
 - `runTimeoutSeconds` does **not** auto-archive; it only stops the run. The session remains until auto-archive.
-- Auto-archive applies equally to depth-1 and depth-2 sessions.
+- Auto-archive applies to sub-agent sessions at any depth, not just depth-1 or depth-2.
 - Browser cleanup is separate from archive cleanup: tracked browser tabs/processes are best-effort closed when the run finishes, even if the transcript/session record is kept.
 
 ## Nested sub-agents
@@ -275,6 +279,7 @@ worker sub-sub-agents.
         maxChildrenPerAgent: 5, // max active children per agent session (default: 5)
         maxConcurrent: 8, // global concurrency lane cap (default: 8)
         runTimeoutSeconds: 900, // default timeout for sessions_spawn when omitted (0 = no timeout)
+        announceTimeoutMs: 120000, // max time for the announce step (default: 120000)
       },
     },
   },
@@ -283,11 +288,14 @@ worker sub-sub-agents.
 
 ### Depth levels
 
-| Depth | Session key shape                            | Role                                          | Can spawn?                   |
-| ----- | -------------------------------------------- | --------------------------------------------- | ---------------------------- |
-| 0     | `agent:<id>:main`                            | Main agent                                    | Always                       |
-| 1     | `agent:<id>:subagent:<uuid>`                 | Sub-agent (orchestrator when depth 2 allowed) | Only if `maxSpawnDepth >= 2` |
-| 2     | `agent:<id>:subagent:<uuid>:subagent:<uuid>` | Sub-sub-agent (leaf worker)                   | Never                        |
+| Depth | Session key shape                            | Role                                          | Can spawn?                             |
+| ----- | -------------------------------------------- | --------------------------------------------- | -------------------------------------- |
+| 0     | `agent:<id>:main`                            | Main agent                                    | Always                                 |
+| 1     | `agent:<id>:subagent:<uuid>`                 | Sub-agent (orchestrator when depth 2 allowed) | Only if `maxSpawnDepth >= 2`           |
+| 2     | `agent:<id>:subagent:<uuid>:subagent:<uuid>` | Sub-sub-agent (leaf worker)                   | Only if `maxSpawnDepth >= 3`           |
+| 3–5   | `...subagent:<uuid>` (repeated)              | Deeper nested agents                          | Only if `maxSpawnDepth > currentDepth` |
+
+**General rule:** spawning is allowed when `maxSpawnDepth > currentDepth`. The maximum configurable depth is 5 (`maxSpawnDepth` range: 1–5). Depth 2 is recommended for most use cases.
 
 ### Announce chain
 
@@ -418,19 +426,17 @@ target agent first. After that, OpenClaw applies the sub-agent restriction
 layer.
 
 With no restrictive `tools.profile`, sub-agents get **all tools except
-session tools** and system tools:
+these four session tools**:
 
 - `sessions_list`
 - `sessions_history`
 - `sessions_send`
 - `sessions_spawn`
 
-`sessions_history` remains a bounded, sanitized recall view here too — it
-is not a raw transcript dump.
-
-When `maxSpawnDepth >= 2`, depth-1 orchestrator sub-agents additionally
-receive `sessions_spawn`, `subagents`, `sessions_list`, and
-`sessions_history` so they can manage their children.
+When `maxSpawnDepth >= 2`, depth-1 orchestrator sub-agents are re-granted
+`sessions_spawn`, `subagents`, `sessions_list`, and `sessions_history`
+so they can manage their children. `sessions_send` remains denied at all
+depths.
 
 ### Override via config
 
