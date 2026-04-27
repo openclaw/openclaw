@@ -79,4 +79,33 @@ describe("runtime postbuild static assets", () => {
     );
     await expect(fs.stat(path.join(distDir, "library.js"))).rejects.toThrow();
   });
+
+  it("writes synthetic wrapper aliases for source runtime shims whose hashed chunk name dropped .runtime", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    const srcTasksDir = path.join(rootDir, "src", "tasks");
+    const distDir = path.join(rootDir, "dist");
+    await fs.mkdir(srcTasksDir, { recursive: true });
+    await fs.mkdir(distDir, { recursive: true });
+    await fs.writeFile(
+      path.join(srcTasksDir, "task-registry-control.runtime.ts"),
+      'export { getAcpSessionManager } from "../acp/control-plane/manager.js";\nexport { killSubagentRunAdmin } from "../agents/subagent-control.js";\n',
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(distDir, "manager-Hash123.js"),
+      "const x = 1;\nexport { getAcpSessionManager as n };\n",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(distDir, "subagent-control-Hash456.js"),
+      "const y = 1;\nexport { killSubagentRunAdmin as a };\n",
+      "utf8",
+    );
+
+    writeStableRootRuntimeAliases({ rootDir });
+
+    expect(await fs.readFile(path.join(distDir, "task-registry-control.runtime.js"), "utf8")).toBe(
+      'export { n as getAcpSessionManager } from "./manager-Hash123.js";\nexport { a as killSubagentRunAdmin } from "./subagent-control-Hash456.js";\n',
+    );
+  });
 });

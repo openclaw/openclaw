@@ -1932,6 +1932,52 @@ describe("task-registry", () => {
     });
   });
 
+  it("marks stale subagent-backed tasks cancelled when the child session is already missing", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      hoisted.killSubagentRunAdminMock.mockResolvedValue({
+        found: false,
+        killed: false,
+      });
+
+      const task = createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "telegram",
+          to: "telegram:123",
+        },
+        childSessionKey: "agent:worker:subagent:missing-child",
+        runId: "run-cancel-stale-subagent",
+        task: "Investigate stale issue",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+
+      const result = await cancelTaskById({
+        cfg: {} as never,
+        taskId: task.taskId,
+      });
+
+      expect(hoisted.killSubagentRunAdminMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cfg: {},
+          sessionKey: "agent:worker:subagent:missing-child",
+        }),
+      );
+      expect(result).toMatchObject({
+        found: true,
+        cancelled: true,
+        task: expect.objectContaining({
+          taskId: task.taskId,
+          status: "cancelled",
+          error: "Cancelled by operator.",
+        }),
+      });
+    });
+  });
+
   it("cancels CLI-tracked tasks in the registry without ACP or subagent teardown", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;

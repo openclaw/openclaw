@@ -11,6 +11,37 @@ import { writeOfficialChannelCatalog } from "./write-official-channel-catalog.mj
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ROOT_RUNTIME_ALIAS_PATTERN = /^(?<base>.+\.(?:runtime|contract))-[A-Za-z0-9_-]+\.js$/u;
+const SYNTHETIC_RUNTIME_WRAPPERS = {
+  "subagent-registry.runtime.js": (params) => {
+    const registryChunk = resolveDistChunkExporting("resolveContextEngine", params);
+    const runtimePluginsChunk = resolveDistChunkExporting("ensureRuntimePluginsLoaded", params);
+    if (!registryChunk || !runtimePluginsChunk) {
+      return null;
+    }
+    return [
+      "let initialized = false;",
+      "export function ensureContextEnginesInitialized() {",
+      "  if (initialized) return;",
+      "  initialized = true;",
+      "}",
+      `export { resolveContextEngine } from "./${registryChunk}";`,
+      `export { ensureRuntimePluginsLoaded } from "./${runtimePluginsChunk}";`,
+      "",
+    ].join("\n");
+  },
+  "task-registry-control.runtime.js": (params) => {
+    const acpManagerExport = resolveDistChunkBindingExport("getAcpSessionManager", params);
+    const subagentControlExport = resolveDistChunkBindingExport("killSubagentRunAdmin", params);
+    if (!acpManagerExport || !subagentControlExport) {
+      return null;
+    }
+    return [
+      `export { ${acpManagerExport.binding} as getAcpSessionManager } from "./${acpManagerExport.chunkName}";`,
+      `export { ${subagentControlExport.binding} as killSubagentRunAdmin } from "./${subagentControlExport.chunkName}";`,
+      "",
+    ].join("\n");
+  },
+};
 
 /**
  * Copy static (non-transpiled) runtime assets that are referenced by their
@@ -56,6 +87,32 @@ export function copyStaticExtensionAssets(params = {}) {
       warn(`[runtime-postbuild] static asset not found, skipping: ${src}`);
     }
   }
+}
+
+function resolveDistChunkExporting(exportName, params) {
+  return resolveDistChunkBindingExport(exportName, params)?.chunkName ?? null;
+}
+
+function resolveDistChunkBindingExport(exportName, params) {
+  const { distDir, distFileNames, fsImpl } = params;
+  for (const name of distFileNames) {
+    const text = fsImpl.readFileSync(path.join(distDir, name), "utf8");
+    const exportTail = text.slice(Math.max(0, text.lastIndexOf("export {")));
+    if (!exportTail.includes(exportName)) {
+      continue;
+    }
+    const minifiedExportMatch = exportTail.match(
+      new RegExp(`\\b${exportName}\\s+as\\s+(?<binding>[A-Za-z_$][\\w$]*)\\b`, "u"),
+    );
+    if (minifiedExportMatch?.groups?.binding) {
+      return { chunkName: name, binding: minifiedExportMatch.groups.binding };
+    }
+    const directMatch = exportTail.match(new RegExp(`\\b${exportName}\\b`, "u"));
+    if (directMatch) {
+      return { chunkName: name, binding: exportName };
+    }
+  }
+  return null;
 }
 
 function extractNamedRuntimeExports(sourceText) {
@@ -137,6 +194,16 @@ export function writeStableRootRuntimeAliases(params = {}) {
   for (const srcFilePath of globSync(path.join(srcDir, "**", "*.runtime.ts"))) {
     const aliasFileName = path.basename(srcFilePath).replace(/\.ts$/u, ".js");
     const aliasPath = path.join(distDir, aliasFileName);
+    const syntheticContent = SYNTHETIC_RUNTIME_WRAPPERS[aliasFileName]?.({
+      distDir,
+      distFileNames,
+      fsImpl,
+      srcFilePath,
+    });
+    if (syntheticContent) {
+      writeTextFileIfChanged(aliasPath, syntheticContent);
+      continue;
+    }
     if (fsImpl.existsSync(aliasPath)) {
       continue;
     }

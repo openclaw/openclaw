@@ -1770,11 +1770,11 @@ export async function cancelTaskById(params: {
           cfg: params.cfg,
           sessionKey: childSessionKey,
         });
-        if (!result.found || !result.killed) {
+        if (result.found && !result.killed) {
           return {
             found: true,
             cancelled: false,
-            reason: result.found ? "Subagent was not running." : "Subagent task not found.",
+            reason: "Subagent was not running.",
             task: cloneTaskRecord(task),
           };
         }
