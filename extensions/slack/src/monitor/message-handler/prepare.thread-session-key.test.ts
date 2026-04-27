@@ -97,6 +97,40 @@ describe("thread-level session keys", () => {
     expect(sessionKey).not.toContain("1770408522.168859");
   });
 
+  it("routes actual Slack thread replies by parent thread_ts, not the child message ts", () => {
+    const ctx = buildCtx({ replyToMode: "all" });
+    const account = buildAccount("all");
+    const rootTs = "1777244748.777299";
+    const childTs = "1777245202.803289";
+
+    // Slack prepare routing receives Slack's native thread_ts. The persisted
+    // reply_to_id/topic_id names are derived runtime metadata, not inbound
+    // fields used by this routing layer.
+    const routing = resolveSlackRoutingContext({
+      ctx,
+      account,
+      message: buildChannelMessage({
+        channel: "C0AHZFCAS1K",
+        user: "U_BEK",
+        text: "<@B1> ?",
+        ts: childTs,
+        thread_ts: rootTs,
+        parent_user_id: "U_ROOT",
+      }),
+      isDirectMessage: false,
+      isGroupDm: false,
+      isRoom: true,
+      isRoomish: true,
+    });
+
+    const expectedSessionKey = "agent:main:slack:channel:c0ahzfcas1k:thread:1777244748.777299";
+    const childTsSessionKey = "agent:main:slack:channel:c0ahzfcas1k:thread:1777245202.803289";
+    expect(routing.sessionKey).toBe(expectedSessionKey);
+    expect(routing.sessionKey).not.toBe(childTsSessionKey);
+    expect(routing.threadContext.replyToId).toBe(rootTs);
+    expect(routing.threadContext.messageThreadId).toBe(rootTs);
+  });
+
   it("keeps top-level channel messages on the per-channel session regardless of replyToMode", () => {
     for (const mode of ["all", "first", "off"] as const) {
       const ctx = buildCtx({ replyToMode: mode });
