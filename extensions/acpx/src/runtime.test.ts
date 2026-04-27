@@ -353,6 +353,37 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
   });
 
+  it("ignores unsupported Codex ACP timeout config controls", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:codex:acp:test",
+        agentCommand: CODEX_ACP_COMMAND,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    const setConfigOption = vi.spyOn(delegate, "setConfigOption").mockResolvedValue(undefined);
+    const handle: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0]["handle"] = {
+      sessionKey: "agent:codex:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "agent:codex:acp:test",
+      acpxRecordId: "agent:codex:acp:test",
+    };
+
+    await runtime.setConfigOption({
+      handle,
+      key: "timeout",
+      value: "60000",
+    });
+    await runtime.setConfigOption({
+      handle,
+      key: "timeout_seconds",
+      value: "60",
+    });
+
+    expect(setConfigOption).not.toHaveBeenCalled();
+  });
+
   it("keeps stale persistent loads hidden until a fresh record is saved", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => ({ acpxRecordId: "stale" }) as never),
