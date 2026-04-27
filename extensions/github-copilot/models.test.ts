@@ -101,6 +101,22 @@ describe("github-copilot model defaults", () => {
       expect(() => buildCopilotModelDefinition("")).toThrow("Model id required");
       expect(() => buildCopilotModelDefinition("  ")).toThrow("Model id required");
     });
+
+    it("applies known capability overrides for claude-opus-4.7-1m-internal", () => {
+      const def = buildCopilotModelDefinition("claude-opus-4.7-1m-internal");
+      expect(def.contextWindow).toBe(1_000_000);
+      expect(def.maxTokens).toBe(64_000);
+      expect(def.reasoning).toBe(true);
+      expect(def.api).toBe("anthropic-messages");
+    });
+
+    it("applies known capability overrides for claude-opus-4.6-1m", () => {
+      const def = buildCopilotModelDefinition("claude-opus-4.6-1m");
+      expect(def.contextWindow).toBe(1_000_000);
+      expect(def.maxTokens).toBe(64_000);
+      expect(def.reasoning).toBe(true);
+      expect(def.api).toBe("anthropic-messages");
+    });
   });
 });
 
@@ -223,6 +239,26 @@ describe("resolveCopilotForwardCompatModel", () => {
       const result = requireResolvedModel(ctx);
       expect((result as unknown as Record<string, unknown>).reasoning).toBe(false);
     }
+  });
+
+  it("applies known capability overrides for claude-opus-4.7-1m-internal", () => {
+    const ctx = createMockCtx("claude-opus-4.7-1m-internal");
+    const result = requireResolvedModel(ctx) as unknown as Record<string, unknown>;
+    expect(result.id).toBe("claude-opus-4.7-1m-internal");
+    expect(result.api).toBe("anthropic-messages");
+    expect(result.reasoning).toBe(true);
+    expect(result.contextWindow).toBe(1_000_000);
+    expect(result.maxTokens).toBe(64_000);
+  });
+
+  it("applies known capability overrides for claude-opus-4.6-1m", () => {
+    const ctx = createMockCtx("claude-opus-4.6-1m");
+    const result = requireResolvedModel(ctx) as unknown as Record<string, unknown>;
+    expect(result.id).toBe("claude-opus-4.6-1m");
+    expect(result.api).toBe("anthropic-messages");
+    expect(result.reasoning).toBe(true);
+    expect(result.contextWindow).toBe(1_000_000);
+    expect(result.maxTokens).toBe(64_000);
   });
 });
 

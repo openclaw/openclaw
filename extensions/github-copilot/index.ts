@@ -23,7 +23,16 @@ import { wrapCopilotProviderStream } from "./stream.js";
 const COPILOT_ENV_VARS = ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"];
 const DEFAULT_COPILOT_MODEL = "github-copilot/claude-opus-4.7";
 const DEFAULT_COPILOT_PROFILE_ID = "github-copilot:github";
-const COPILOT_XHIGH_MODEL_IDS = ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2", "gpt-5.2-codex"] as const;
+const COPILOT_XHIGH_MODEL_IDS = [
+  "gpt-5.4",
+  "gpt-5.3-codex",
+  "gpt-5.2",
+  "gpt-5.2-codex",
+  // Copilot advertises reasoning_effort=[low, medium, high, xhigh] for the
+  // long-context Opus 4.7 variant. The base claude-opus-4.7 endpoint only
+  // exposes "medium" upstream, so it stays out of this list.
+  "claude-opus-4.7-1m-internal",
+] as const;
 
 type GithubCopilotPluginConfig = {
   discovery?: {
