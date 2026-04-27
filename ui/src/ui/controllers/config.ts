@@ -39,7 +39,11 @@ export type ConfigState = {
   lastError: string | null;
 };
 
-export async function loadConfig(state: ConfigState) {
+export type LoadConfigOptions = {
+  discardPendingChanges?: boolean;
+};
+
+export async function loadConfig(state: ConfigState, options: LoadConfigOptions = {}) {
   if (!state.client || !state.connected) {
     return;
   }
@@ -47,7 +51,7 @@ export async function loadConfig(state: ConfigState) {
   state.lastError = null;
   try {
     const res = await state.client.request<ConfigSnapshot>("config.get", {});
-    applyConfigSnapshot(state, res);
+    applyConfigSnapshot(state, res, options);
   } catch (err) {
     state.lastError = String(err);
   } finally {
@@ -79,8 +83,13 @@ export function applyConfigSchema(state: ConfigState, res: ConfigSchemaResponse)
   state.configSchemaVersion = res.version ?? null;
 }
 
-export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot) {
+export function applyConfigSnapshot(
+  state: ConfigState,
+  snapshot: ConfigSnapshot,
+  options: LoadConfigOptions = {},
+) {
   state.configSnapshot = snapshot;
+  const preservePendingChanges = state.configFormDirty && options.discardPendingChanges !== true;
   const rawAvailable = typeof snapshot.raw === "string";
   if (!rawAvailable && state.configFormMode === "raw") {
     state.configFormMode = "form";
@@ -91,7 +100,7 @@ export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot
       : snapshot.config && typeof snapshot.config === "object"
         ? serializeConfigForm(snapshot.config)
         : state.configRaw;
-  if (!state.configFormDirty || state.configFormMode === "raw") {
+  if (!preservePendingChanges || state.configFormMode === "raw") {
     state.configRaw = rawFromSnapshot;
   } else if (state.configForm) {
     state.configRaw = serializeConfigForm(state.configForm);
@@ -101,10 +110,11 @@ export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot
   state.configValid = typeof snapshot.valid === "boolean" ? snapshot.valid : null;
   state.configIssues = Array.isArray(snapshot.issues) ? snapshot.issues : [];
 
-  if (!state.configFormDirty) {
+  if (!preservePendingChanges) {
     state.configForm = cloneConfigObject(snapshot.config ?? {});
     state.configFormOriginal = cloneConfigObject(snapshot.config ?? {});
     state.configRawOriginal = rawFromSnapshot;
+    state.configFormDirty = false;
   }
 }
 

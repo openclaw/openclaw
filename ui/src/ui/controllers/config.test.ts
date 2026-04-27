@@ -4,6 +4,7 @@ import {
   applyConfig,
   ensureAgentConfigEntry,
   findAgentConfigEntryIndex,
+  loadConfig,
   resetConfigPendingChanges,
   runUpdate,
   saveConfig,
@@ -115,6 +116,33 @@ describe("applyConfigSnapshot", () => {
     expect(state.configFormOriginal).toEqual({ original: true });
   });
 
+  it("discards dirty form edits when explicitly requested", () => {
+    const state = createState();
+    state.configFormMode = "form";
+    state.configFormDirty = true;
+    state.configForm = { gateway: { mode: "local", port: 18789 } };
+    state.configFormOriginal = { gateway: { mode: "local", port: 18789 } };
+    state.configRawOriginal =
+      '{\n  "gateway": {\n    "mode": "local",\n    "port": 18789\n  }\n}\n';
+
+    applyConfigSnapshot(
+      state,
+      {
+        config: { gateway: { mode: "remote", port: 9999 } },
+        valid: true,
+        issues: [],
+        raw: '{\n  "gateway": { "mode": "remote", "port": 9999 }\n}\n',
+      },
+      { discardPendingChanges: true },
+    );
+
+    expect(state.configFormDirty).toBe(false);
+    expect(state.configForm).toEqual({ gateway: { mode: "remote", port: 9999 } });
+    expect(state.configFormOriginal).toEqual({ gateway: { mode: "remote", port: 9999 } });
+    expect(state.configRaw).toBe('{\n  "gateway": { "mode": "remote", "port": 9999 }\n}\n');
+    expect(state.configRawOriginal).toBe('{\n  "gateway": { "mode": "remote", "port": 9999 }\n}\n');
+  });
+
   it("forces form mode when the snapshot does not include raw text", () => {
     const state = createState();
     state.configFormMode = "raw";
@@ -128,6 +156,28 @@ describe("applyConfigSnapshot", () => {
 
     expect(state.configFormMode).toBe("form");
     expect(state.configRaw).toBe('{\n  "gateway": {\n    "mode": "local"\n  }\n}\n');
+  });
+});
+
+describe("loadConfig", () => {
+  it("passes explicit reload mode through to snapshot application", async () => {
+    const request = vi.fn().mockResolvedValue({
+      config: { gateway: { mode: "remote" } },
+      valid: true,
+      issues: [],
+      raw: '{\n  "gateway": { "mode": "remote" }\n}\n',
+    });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.configFormDirty = true;
+    state.configForm = { gateway: { mode: "local" } };
+
+    await loadConfig(state, { discardPendingChanges: true });
+
+    expect(state.configFormDirty).toBe(false);
+    expect(state.configForm).toEqual({ gateway: { mode: "remote" } });
+    expect(state.configRawOriginal).toBe('{\n  "gateway": { "mode": "remote" }\n}\n');
   });
 });
 
