@@ -333,14 +333,6 @@ function assertSafeExecApprovalsDirectoryPath(targetPath: string): void {
 
 function resolveTrustedOpenClawSymlink(linkPath: string): string {
   const targetPath = resolveOpenClawSymlinkDestinationPath(linkPath);
-  assertNoAdditionalOpenClawSymlinkTargetHops(targetPath, linkPath);
-  const realPath = fs.realpathSync(linkPath);
-  const targetStat = fs.statSync(realPath);
-  if (!targetStat.isDirectory()) {
-    throw new UnsafeExecApprovalsPathError(
-      `Refusing to use unsafe exec approvals .openclaw symlink target: ${linkPath}`,
-    );
-  }
   if (process.platform === "win32") {
     throw new UnsafeExecApprovalsPathError(
       `Refusing to use exec approvals .openclaw symlink target on Windows without ACL validation: ${linkPath}`,
@@ -348,9 +340,19 @@ function resolveTrustedOpenClawSymlink(linkPath: string): string {
   }
   const getuid = process.getuid;
   if (typeof getuid !== "function") {
-    return realPath;
+    throw new UnsafeExecApprovalsPathError(
+      `Refusing to use exec approvals .openclaw symlink target without ownership validation: ${linkPath}`,
+    );
   }
   const currentUid = getuid.call(process);
+  assertNoAdditionalOpenClawSymlinkTargetHops(targetPath, linkPath, currentUid);
+  const realPath = fs.realpathSync(linkPath);
+  const targetStat = fs.statSync(realPath);
+  if (!targetStat.isDirectory()) {
+    throw new UnsafeExecApprovalsPathError(
+      `Refusing to use unsafe exec approvals .openclaw symlink target: ${linkPath}`,
+    );
+  }
   if (targetStat.uid !== currentUid) {
     throw new UnsafeExecApprovalsPathError(
       `Refusing to use exec approvals .openclaw symlink target not owned by current user: ${linkPath}`,
@@ -370,7 +372,11 @@ function resolveOpenClawSymlinkDestinationPath(linkPath: string): string {
   return path.resolve(path.dirname(linkPath), destination);
 }
 
-function assertNoAdditionalOpenClawSymlinkTargetHops(targetPath: string, linkPath: string): void {
+function assertNoAdditionalOpenClawSymlinkTargetHops(
+  targetPath: string,
+  linkPath: string,
+  currentUid: number,
+): void {
   const root = path.parse(targetPath).root;
   let current = root;
   const relative = path.relative(root, targetPath);
@@ -380,6 +386,7 @@ function assertNoAdditionalOpenClawSymlinkTargetHops(targetPath: string, linkPat
     const stat = fs.lstatSync(current);
     if (stat.isSymbolicLink()) {
       if (isTrustedSystemSymlink(stat)) {
+        assertStableOpenClawSymlinkHopLocation(current, linkPath, currentUid);
         continue;
       }
       throw new UnsafeExecApprovalsPathError(
@@ -391,6 +398,15 @@ function assertNoAdditionalOpenClawSymlinkTargetHops(targetPath: string, linkPat
 
 function isTrustedSystemSymlink(stat: fs.Stats): boolean {
   return process.platform !== "win32" && stat.uid === 0;
+}
+
+function assertStableOpenClawSymlinkHopLocation(
+  hopPath: string,
+  linkPath: string,
+  currentUid: number,
+): void {
+  const parentRealPath = fs.realpathSync(path.dirname(hopPath));
+  assertStableResolvedOpenClawSymlinkTarget(parentRealPath, linkPath, currentUid);
 }
 
 function assertStableResolvedOpenClawSymlinkTarget(

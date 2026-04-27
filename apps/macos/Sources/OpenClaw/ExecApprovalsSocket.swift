@@ -751,6 +751,7 @@ enum ExecApprovalsSocketPathGuard {
             let kind = try self.pathKind(at: path)
             if kind == .symlink {
                 if try self.isTrustedSystemSymlink(at: path) {
+                    try self.validateStableSymlinkHopLocation(at: path, reportedPath: reportedPath)
                     continue
                 }
                 throw ExecApprovalsSocketPathGuardError.parentSymlinkTargetInvalid(
@@ -768,6 +769,15 @@ enum ExecApprovalsSocketPathGuard {
                 message: "symlink lstat failed (errno \(errno))")
         }
         return status.st_uid == 0
+    }
+
+    private static func validateStableSymlinkHopLocation(at path: String, reportedPath: String)
+        throws
+    {
+        let parentURL = URL(fileURLWithPath: path)
+            .deletingLastPathComponent()
+            .resolvingSymlinksInPath()
+        try self.validateResolvedAncestorChain(for: parentURL, reportedPath: reportedPath)
     }
 
     private static func validateResolvedAncestorChain(for targetURL: URL, reportedPath: String)
