@@ -189,9 +189,9 @@ async function submitConfigChange(
   method: ConfigSubmitMethod,
   busyKey: ConfigSubmitBusyKey,
   extraParams: Record<string, unknown> = {},
-) {
+): Promise<boolean> {
   if (!state.client || !state.connected) {
-    return;
+    return false;
   }
   state[busyKey] = true;
   state.lastError = null;
@@ -200,13 +200,15 @@ async function submitConfigChange(
     const baseHash = state.configSnapshot?.hash;
     if (!baseHash) {
       state.lastError = "Config hash missing; reload and retry.";
-      return;
+      return false;
     }
     await state.client.request(method, { raw, baseHash, ...extraParams });
     state.configFormDirty = false;
     await loadConfig(state);
+    return true;
   } catch (err) {
     state.lastError = String(err);
+    return false;
   } finally {
     state[busyKey] = false;
   }
@@ -223,12 +225,12 @@ function syncConfigDraft(state: ConfigState, nextForm: Record<string, unknown>) 
   state.configFormDirty = nextRaw !== originalRaw;
 }
 
-export async function saveConfig(state: ConfigState) {
-  await submitConfigChange(state, "config.set", "configSaving");
+export async function saveConfig(state: ConfigState): Promise<boolean> {
+  return submitConfigChange(state, "config.set", "configSaving");
 }
 
-export async function applyConfig(state: ConfigState) {
-  await submitConfigChange(state, "config.apply", "configApplying", {
+export async function applyConfig(state: ConfigState): Promise<boolean> {
+  return submitConfigChange(state, "config.apply", "configApplying", {
     sessionKey: state.applySessionKey,
   });
 }
