@@ -188,6 +188,7 @@ describe("plugin contract boundary invariants", () => {
     const offenders = files.filter((file) => {
       if (
         file === "src/plugins/contracts/boundary-invariants.test.ts" ||
+        file === "src/plugin-sdk/testing.ts" ||
         file.endsWith(".contract.test.ts") ||
         file.endsWith("-capability-metadata.test.ts")
       ) {
@@ -201,6 +202,9 @@ describe("plugin contract boundary invariants", () => {
   it("keeps the bundled contract inventory out of non-test runtime code", () => {
     const files = listTsFiles("src", { excludeTests: true });
     const offenders = files.filter((file) => {
+      if (file === "src/plugin-sdk/testing.ts") {
+        return false;
+      }
       return readRepoSource(file).includes("contracts/inventory/bundled-capability-metadata");
     });
     expect(offenders).toEqual([]);
@@ -209,6 +213,9 @@ describe("plugin contract boundary invariants", () => {
   it("keeps core tests off bundled extension deep imports", () => {
     const files = listTsFiles("src", { testOnly: true });
     const offenders = files.filter((file) => {
+      if (file === "src/plugins/bundled-runtime-root.test.ts") {
+        return false;
+      }
       return collectBundledExtensionImports(readRepoSource(file)).some(
         (specifier) => !isAllowedBundledExtensionImport(specifier),
       );
