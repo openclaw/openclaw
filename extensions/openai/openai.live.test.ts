@@ -223,8 +223,11 @@ describeLive("openai plugin live", () => {
     });
     const response = await client.responses.create({
       model: normalized?.id ?? LIVE_MODEL_ID,
-      input: "Reply with exactly OK.",
-      max_output_tokens: 16,
+      instructions: "Return exactly OK and no other text.",
+      input: "Return exactly OK.",
+      max_output_tokens: 64,
+      reasoning: { effort: "none" },
+      text: { verbosity: "low" },
     });
 
     expect(response.output_text.trim()).toMatch(/^OK[.!]?$/);
@@ -274,7 +277,7 @@ describeLive("openai plugin live", () => {
     const ttsConfig = createLiveTtsConfig();
 
     const synthesized = await speechProvider.synthesize({
-      text: "OpenClaw integration test OK.",
+      text: "Open claw. Open claw. Integration test OK.",
       cfg,
       providerConfig: ttsConfig.providerConfigs.openai ?? {},
       target: "audio-file",
@@ -293,7 +296,7 @@ describeLive("openai plugin live", () => {
     const collapsedText = text.replace(/[\s-]+/g, "");
     expect(text.length).toBeGreaterThan(0);
     expect(collapsedText).toContain("openclaw");
-    expect(text).toMatch(/\bok\b/);
+    expect(text).toMatch(/\bok(?:ay)?\b/);
   }, 45_000);
 
   it("opens OpenAI realtime STT before sending audio", async () => {

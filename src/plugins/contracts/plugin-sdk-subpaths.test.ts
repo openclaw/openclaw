@@ -1137,8 +1137,8 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof textRuntimeSdk.createScopedExpiringIdCache).toBe("function");
     expect(typeof textRuntimeSdk.resolveGlobalMap).toBe("function");
     expect(typeof textRuntimeSdk.resolveGlobalSingleton).toBe("function");
-    expectSourceMentions("infra-runtime", ["createRuntimeOutboundDelegates"]);
-    expectSourceContains("infra-runtime", "../infra/outbound/send-deps.js");
+    expectSourceMentions("delivery-queue-runtime", ["drainPendingDeliveries"]);
+    expectSourceContains("delivery-queue-runtime", "../infra/outbound/deliver-runtime.js");
     expectSourceMentions("error-runtime", ["formatUncaughtError", "isApprovalNotFoundError"]);
 
     expect(typeof channelLifecycleSdk.createDraftStreamLoop).toBe("function");

@@ -80,6 +80,11 @@ function createCandidate(rootDir: string): PluginCandidate {
         },
       },
       modelCatalog: {
+        aliases: {
+          "demo-alias": {
+            provider: "demo",
+          },
+        },
         providers: {
           demo: {
             models: [{ id: "demo-model" }],
@@ -157,7 +162,18 @@ describe("plugin registry facade", () => {
     });
     expect(isPluginEnabled({ index, pluginId: "demo" })).toBe(true);
     expect(listPluginContributionIds({ index, contribution: "providers" })).toEqual(["demo"]);
+    expect(listPluginContributionIds({ index, contribution: "modelCatalogProviders" })).toEqual([
+      "demo",
+      "demo-alias",
+    ]);
     expect(resolveProviderOwners({ index, providerId: "demo" })).toEqual(["demo"]);
+    expect(
+      resolvePluginContributionOwners({
+        index,
+        contribution: "modelCatalogProviders",
+        matches: "demo-alias",
+      }),
+    ).toEqual(["demo"]);
     expect(resolveChannelOwners({ index, channelId: "demo-chat" })).toEqual(["demo"]);
     expect(resolveCliBackendOwners({ index, cliBackendId: "demo-cli" })).toEqual(["demo"]);
     expect(

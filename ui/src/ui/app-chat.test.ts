@@ -41,10 +41,12 @@ function requestUrl(input: string | URL | Request): string {
 }
 
 function makeHost(overrides?: Partial<ChatHost>): ChatHost {
-  return {
+  const host = {
     client: null,
     chatMessages: [],
     chatStream: null,
+    chatStreamSegments: [],
+    chatToolMessages: [],
     connected: true,
     chatLoading: false,
     chatMessage: "",
@@ -71,9 +73,13 @@ function makeHost(overrides?: Partial<ChatHost>): ChatHost {
     chatModelsLoading: false,
     chatModelCatalog: [],
     refreshSessionsAfterChat: new Set<string>(),
+    toolStreamById: new Map(),
+    toolStreamOrder: [],
+    toolStreamSyncTimer: null,
     updateComplete: Promise.resolve(),
     ...overrides,
   };
+  return host as ChatHost;
 }
 
 function createSessionsResult(sessions: GatewaySessionRow[]): SessionsListResult {
@@ -546,6 +552,32 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("");
     expect(navigateChatInputHistory(host, "up")).toBe(true);
     expect(host.chatMessage).toBe("queued while busy");
+  });
+
+  it("coalesces duplicate in-flight chat submits before the gateway acknowledges them", async () => {
+    const sent = createDeferred<unknown>();
+    const request = vi.fn((method: string) => {
+      if (method === "chat.send") {
+        return sent.promise;
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+    });
+
+    const first = handleSendChat(host, "same prompt");
+    const second = handleSendChat(host, "same prompt");
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(host.chatQueue).toEqual([]);
+    expect(host.chatMessages).toHaveLength(1);
+
+    sent.resolve({ runId: host.chatRunId, status: "started" });
+    await Promise.all([first, second]);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(host.chatMessages).toHaveLength(1);
   });
 
   it("restores the BTW draft when detached send fails", async () => {

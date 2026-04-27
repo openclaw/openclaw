@@ -218,7 +218,7 @@ describe("installPackageDir", () => {
       installBaseDir,
       preservedDir: preservedInstallRoot,
       outsideTarget: outsideInstallRoot,
-      rebindAtCall: 3,
+      rebindAtCall: 4,
       run: async () => {
         await expect(
           installPackageDir({
@@ -259,7 +259,7 @@ describe("installPackageDir", () => {
       installBaseDir,
       preservedDir: preservedInstallRoot,
       outsideTarget: outsideInstallRoot,
-      rebindAtCall: 7,
+      rebindAtCall: 8,
       run: async () =>
         await installPackageDir({
           sourceDir,

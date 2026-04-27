@@ -264,7 +264,7 @@ function messageDisplaySignature(message: unknown): string | null {
   }
 }
 
-function preserveOptimisticTailMessages(
+export function preserveOptimisticTailMessages(
   historyMessages: unknown[],
   previousMessages: unknown[],
 ): unknown[] {
@@ -279,20 +279,28 @@ function preserveOptimisticTailMessages(
       ? previousMessages
       : historyMessages;
   }
-  const historySignatures = new Set(
-    historyMessages
-      .map((message) => messageDisplaySignature(message))
-      .filter((signature): signature is string => Boolean(signature)),
-  );
+  const historySignatureIndexes = new Map<string, number>();
+  historyMessages.forEach((message, index) => {
+    const signature = messageDisplaySignature(message);
+    if (signature) {
+      historySignatureIndexes.set(signature, index);
+    }
+  });
   let sharedPreviousIndex = -1;
+  let sharedHistoryIndex = -1;
   for (let index = previousMessages.length - 1; index >= 0; index--) {
     const signature = messageDisplaySignature(previousMessages[index]);
-    if (signature && historySignatures.has(signature)) {
+    const historyIndex = signature ? historySignatureIndexes.get(signature) : undefined;
+    if (typeof historyIndex === "number") {
       sharedPreviousIndex = index;
+      sharedHistoryIndex = historyIndex;
       break;
     }
   }
   if (sharedPreviousIndex < 0) {
+    return historyMessages;
+  }
+  if (sharedHistoryIndex < historyMessages.length - 1) {
     return historyMessages;
   }
   const optimisticTail: unknown[] = [];
@@ -301,7 +309,7 @@ function preserveOptimisticTailMessages(
       return historyMessages;
     }
     const signature = messageDisplaySignature(message);
-    if (!signature || historySignatures.has(signature)) {
+    if (!signature || historySignatureIndexes.has(signature)) {
       return historyMessages;
     }
     optimisticTail.push(message);
@@ -543,6 +551,9 @@ export async function sendChatMessage(
   const hasAttachments = attachments && attachments.length > 0;
   if (!msg && !hasAttachments) {
     return null;
+  }
+  if (state.chatSending) {
+    return state.chatRunId;
   }
 
   const now = Date.now();

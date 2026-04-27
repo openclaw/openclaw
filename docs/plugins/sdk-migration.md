@@ -22,6 +22,12 @@ anything they needed from a single entry point:
 - **`openclaw/plugin-sdk/compat`** — a single import that re-exported dozens of
   helpers. It was introduced to keep older hook-based plugins working while the
   new plugin architecture was being built.
+- **`openclaw/plugin-sdk/infra-runtime`** — a broad runtime helper barrel that
+  mixed system events, heartbeat state, delivery queues, fetch/proxy helpers,
+  file helpers, approval types, and unrelated utilities.
+- **`openclaw/plugin-sdk/config-runtime`** — a broad config compatibility barrel
+  that still carries deprecated direct load/write helpers during the migration
+  window.
 - **`openclaw/extension-api`** — a bridge that gave plugins direct access to
   host-side helpers like the embedded agent runner.
 - **`api.registerEmbeddedExtensionFactory(...)`** — a removed Pi-only bundled
@@ -235,6 +241,7 @@ releases.
 
     ```bash
     grep -r "plugin-sdk/compat" my-plugin/
+    grep -r "plugin-sdk/infra-runtime" my-plugin/
     grep -r "plugin-sdk/config-runtime" my-plugin/
     grep -r "openclaw/extension-api" my-plugin/
     ```
@@ -281,6 +288,37 @@ releases.
     | `resolveAgentTimeoutMs` | `api.runtime.agent.resolveAgentTimeoutMs` |
     | `ensureAgentWorkspace` | `api.runtime.agent.ensureAgentWorkspace` |
     | session store helpers | `api.runtime.agent.session.*` |
+
+  </Step>
+
+  <Step title="Replace broad infra-runtime imports">
+    `openclaw/plugin-sdk/infra-runtime` still exists for external
+    compatibility, but new code should import the focused helper surface it
+    actually needs:
+
+    | Need | Import |
+    | --- | --- |
+    | System event queue helpers | `openclaw/plugin-sdk/system-event-runtime` |
+    | Heartbeat event and visibility helpers | `openclaw/plugin-sdk/heartbeat-runtime` |
+    | Pending delivery queue drain | `openclaw/plugin-sdk/delivery-queue-runtime` |
+    | Channel activity telemetry | `openclaw/plugin-sdk/channel-activity-runtime` |
+    | In-memory dedupe caches | `openclaw/plugin-sdk/dedupe-runtime` |
+    | Safe local-file/media path helpers | `openclaw/plugin-sdk/file-access-runtime` |
+    | Dispatcher-aware fetch | `openclaw/plugin-sdk/runtime-fetch` |
+    | Proxy and guarded fetch helpers | `openclaw/plugin-sdk/fetch-runtime` |
+    | SSRF dispatcher policy types | `openclaw/plugin-sdk/ssrf-dispatcher` |
+    | Approval request/resolution types | `openclaw/plugin-sdk/approval-runtime` |
+    | Approval reply payload and command helpers | `openclaw/plugin-sdk/approval-reply-runtime` |
+    | Error formatting helpers | `openclaw/plugin-sdk/error-runtime` |
+    | Transport readiness waits | `openclaw/plugin-sdk/transport-ready-runtime` |
+    | Secure token helpers | `openclaw/plugin-sdk/secure-random-runtime` |
+    | Bounded async task concurrency | `openclaw/plugin-sdk/concurrency-runtime` |
+    | Numeric coercion | `openclaw/plugin-sdk/number-runtime` |
+    | Process-local async lock | `openclaw/plugin-sdk/async-lock-runtime` |
+    | File locks | `openclaw/plugin-sdk/file-lock` |
+
+    Bundled plugins are scanner-guarded against `infra-runtime`, so repo code
+    cannot regress to the broad barrel.
 
   </Step>
 
@@ -338,7 +376,7 @@ releases.
   | `plugin-sdk/process-runtime` | Process helpers | Shared exec helpers |
   | `plugin-sdk/cli-runtime` | CLI runtime helpers | Command formatting, waits, version helpers |
   | `plugin-sdk/gateway-runtime` | Gateway helpers | Gateway client and channel-status patch helpers |
-  | `plugin-sdk/config-runtime` | Config helpers | Config load/write helpers |
+  | `plugin-sdk/config-runtime` | Deprecated config compatibility shim | Prefer `config-types`, `plugin-config-runtime`, `runtime-config-snapshot`, and `config-mutation` |
   | `plugin-sdk/telegram-command-config` | Telegram command helpers | Fallback-stable Telegram command validation helpers when the bundled Telegram contract surface is unavailable |
   | `plugin-sdk/approval-runtime` | Approval prompt helpers | Exec/plugin approval payload, approval capability/profile helpers, native approval routing/runtime helpers, and structured approval display path formatting |
   | `plugin-sdk/approval-auth-runtime` | Approval auth helpers | Approver resolution, same-chat action auth |
@@ -353,6 +391,13 @@ releases.
   | `plugin-sdk/security-runtime` | Security helpers | Shared trust, DM gating, external-content, and secret-collection helpers |
   | `plugin-sdk/ssrf-policy` | SSRF policy helpers | Host allowlist and private-network policy helpers |
   | `plugin-sdk/ssrf-runtime` | SSRF runtime helpers | Pinned-dispatcher, guarded fetch, SSRF policy helpers |
+  | `plugin-sdk/system-event-runtime` | System event helpers | `enqueueSystemEvent`, `peekSystemEventEntries` |
+  | `plugin-sdk/heartbeat-runtime` | Heartbeat helpers | Heartbeat event and visibility helpers |
+  | `plugin-sdk/delivery-queue-runtime` | Delivery queue helpers | `drainPendingDeliveries` |
+  | `plugin-sdk/channel-activity-runtime` | Channel activity helpers | `recordChannelActivity` |
+  | `plugin-sdk/dedupe-runtime` | Dedupe helpers | In-memory dedupe caches |
+  | `plugin-sdk/file-access-runtime` | File access helpers | Safe local-file/media path helpers |
+  | `plugin-sdk/transport-ready-runtime` | Transport readiness helpers | `waitForTransportReady` |
   | `plugin-sdk/collection-runtime` | Bounded cache helpers | `pruneMapToMaxSize` |
   | `plugin-sdk/diagnostic-runtime` | Diagnostic gating helpers | `isDiagnosticFlagEnabled`, `isDiagnosticsEnabled` |
   | `plugin-sdk/error-runtime` | Error formatting helpers | `formatUncaughtError`, `isApprovalNotFoundError`, error graph helpers |

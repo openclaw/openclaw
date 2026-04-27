@@ -1,4 +1,4 @@
-import { getRuntimeConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { getAgentRunContext, registerAgentRunContext } from "../infra/agent-events.js";
 import { toAgentRequestSessionKey } from "../routing/session-key.js";

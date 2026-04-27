@@ -73,6 +73,52 @@ function shouldUseInstalledManifestRegistryCache(params: {
   return !params.env.OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE?.trim();
 }
 
+function buildInstalledManifestRegistryIndexKey(index: InstalledPluginIndex) {
+  return {
+    version: index.version,
+    hostContractVersion: index.hostContractVersion,
+    compatRegistryVersion: index.compatRegistryVersion,
+    migrationVersion: index.migrationVersion,
+    policyHash: index.policyHash,
+    installRecords: index.installRecords,
+    diagnostics: index.diagnostics,
+    plugins: index.plugins.map((record) => {
+      const packageJsonPath = resolvePackageJsonPath(record);
+      return {
+        pluginId: record.pluginId,
+        packageName: record.packageName,
+        packageVersion: record.packageVersion,
+        installRecord: record.installRecord,
+        installRecordHash: record.installRecordHash,
+        packageInstall: record.packageInstall,
+        packageChannel: record.packageChannel,
+        manifestPath: record.manifestPath,
+        manifestHash: record.manifestHash,
+        manifestFile: safeFileSignature(record.manifestPath),
+        format: record.format,
+        bundleFormat: record.bundleFormat,
+        source: record.source,
+        setupSource: record.setupSource,
+        packageJson: record.packageJson,
+        packageJsonFile: safeFileSignature(packageJsonPath),
+        rootDir: record.rootDir,
+        origin: record.origin,
+        enabled: record.enabled,
+        enabledByDefault: record.enabledByDefault,
+        syntheticAuthRefs: record.syntheticAuthRefs,
+        startup: record.startup,
+        compat: record.compat,
+      };
+    }),
+  };
+}
+
+export function resolveInstalledManifestRegistryIndexFingerprint(
+  index: InstalledPluginIndex,
+): string {
+  return hashJson(buildInstalledManifestRegistryIndexKey(index));
+}
+
 function buildInstalledManifestRegistryCacheKey(params: {
   index: InstalledPluginIndex;
   config?: OpenClawConfig;
@@ -82,43 +128,7 @@ function buildInstalledManifestRegistryCacheKey(params: {
   includeDisabled?: boolean;
 }): string {
   return hashJson({
-    index: {
-      version: params.index.version,
-      hostContractVersion: params.index.hostContractVersion,
-      compatRegistryVersion: params.index.compatRegistryVersion,
-      migrationVersion: params.index.migrationVersion,
-      policyHash: params.index.policyHash,
-      installRecords: params.index.installRecords,
-      diagnostics: params.index.diagnostics,
-      plugins: params.index.plugins.map((record) => {
-        const packageJsonPath = resolvePackageJsonPath(record);
-        return {
-          pluginId: record.pluginId,
-          packageName: record.packageName,
-          packageVersion: record.packageVersion,
-          installRecord: record.installRecord,
-          installRecordHash: record.installRecordHash,
-          packageInstall: record.packageInstall,
-          packageChannel: record.packageChannel,
-          manifestPath: record.manifestPath,
-          manifestHash: record.manifestHash,
-          manifestFile: safeFileSignature(record.manifestPath),
-          format: record.format,
-          bundleFormat: record.bundleFormat,
-          source: record.source,
-          setupSource: record.setupSource,
-          packageJson: record.packageJson,
-          packageJsonFile: safeFileSignature(packageJsonPath),
-          rootDir: record.rootDir,
-          origin: record.origin,
-          enabled: record.enabled,
-          enabledByDefault: record.enabledByDefault,
-          syntheticAuthRefs: record.syntheticAuthRefs,
-          startup: record.startup,
-          compat: record.compat,
-        };
-      }),
-    },
+    index: buildInstalledManifestRegistryIndexKey(params.index),
     request: {
       workspaceDir: params.workspaceDir,
       pluginIds: normalizePluginIdFilter(params.pluginIds),

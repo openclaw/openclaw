@@ -18,20 +18,38 @@ describe("scripts/test-live-shard", () => {
     expect(new Set(selectedFiles).size).toBe(selectedFiles.length);
   });
 
-  it("keeps media-capable extension and test harness files in their own shards", () => {
+  it("keeps slow gateway backend and media-capable extension files in their own shards", () => {
     const allFiles = collectAllLiveTestFiles();
 
+    expect(selectLiveShardFiles("native-live-src-gateway-backends", allFiles)).toEqual(
+      expect.arrayContaining([
+        "src/gateway/gateway-acp-bind.live.test.ts",
+        "src/gateway/gateway-cli-backend.live.test.ts",
+        "src/gateway/gateway-codex-bind.live.test.ts",
+        "src/gateway/gateway-codex-harness.live.test.ts",
+      ]),
+    );
+    expect(selectLiveShardFiles("native-live-src-gateway-core", allFiles)).not.toEqual(
+      expect.arrayContaining(["src/gateway/gateway-cli-backend.live.test.ts"]),
+    );
     expect(selectLiveShardFiles("native-live-test", allFiles)).toEqual(
       expect.arrayContaining([
         "test/image-generation.infer-cli.live.test.ts",
         "test/image-generation.runtime.live.test.ts",
       ]),
     );
-    expect(selectLiveShardFiles("native-live-extensions-l-z", allFiles)).toEqual(
+    expect(selectLiveShardFiles("native-live-extensions-media", allFiles)).toEqual(
       expect.arrayContaining([
+        "extensions/openai/openai-tts.live.test.ts",
+        "extensions/minimax/minimax.live.test.ts",
         "extensions/music-generation-providers.live.test.ts",
         "extensions/video-generation-providers.live.test.ts",
+        "extensions/volcengine/tts.live.test.ts",
+        "extensions/vydra/vydra.live.test.ts",
       ]),
+    );
+    expect(selectLiveShardFiles("native-live-extensions-openai", allFiles)).toEqual(
+      expect.arrayContaining(["extensions/openai/openai-provider.live.test.ts"]),
     );
   });
 

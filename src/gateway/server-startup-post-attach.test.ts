@@ -398,6 +398,45 @@ describe("startGatewayPostAttachRuntime", () => {
     params.deps.cron = reloadedCron as never;
     expect(getCron()).toBe(reloadedCron);
   });
+
+  it("resolves gateway_start cron from the live runtime getter before deps fallback", async () => {
+    const runGatewayStart = vi.fn<
+      (event: PluginHookGatewayStartEvent, ctx: PluginHookGatewayContext) => Promise<void>
+    >(async () => undefined);
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "gateway_start"),
+      runGatewayStart,
+    };
+    const depsCron = { list: vi.fn(), add: vi.fn(), update: vi.fn(), remove: vi.fn() };
+    const liveCron = { list: vi.fn(), add: vi.fn(), update: vi.fn(), remove: vi.fn() };
+    const reloadedCron = { list: vi.fn(), add: vi.fn(), update: vi.fn(), remove: vi.fn() };
+    let currentLiveCron = liveCron;
+    const params = createPostAttachParams({
+      deps: { cron: depsCron } as never,
+      getCronService: () => currentLiveCron,
+    });
+
+    await startGatewayPostAttachRuntime(
+      params,
+      createPostAttachRuntimeDeps({
+        getGlobalHookRunner: vi.fn(async () => hookRunner as never),
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(runGatewayStart).toHaveBeenCalledTimes(1);
+    });
+
+    const ctx = runGatewayStart.mock.calls[0]?.[1];
+    if (!ctx?.getCron) {
+      throw new Error("gateway_start context did not expose getCron");
+    }
+    expect(ctx.getCron()).toBe(liveCron);
+
+    params.deps.cron = depsCron as never;
+    currentLiveCron = reloadedCron;
+    expect(ctx.getCron()).toBe(reloadedCron);
+  });
 });
 
 function createPostAttachRuntimeDeps(

@@ -1063,7 +1063,7 @@ describe("plugin sdk alias helpers", () => {
     fs.writeFileSync(jitiBaseFile, "export {};\n", "utf-8");
     fs.writeFileSync(
       path.join(copiedSourceDir, "channel.runtime.ts"),
-      `import { resolveOutboundSendDep } from "@openclaw/plugin-sdk/infra-runtime";
+      `import { resolveOutboundSendDep } from "@openclaw/plugin-sdk/outbound-send-deps";
 
 export const syntheticRuntimeMarker = {
   resolveOutboundSendDep,
@@ -1071,7 +1071,7 @@ export const syntheticRuntimeMarker = {
 `,
       "utf-8",
     );
-    const copiedChannelRuntimeShim = path.join(copiedPluginSdkDir, "infra-runtime.ts");
+    const copiedChannelRuntimeShim = path.join(copiedPluginSdkDir, "outbound-send-deps.ts");
     fs.writeFileSync(
       copiedChannelRuntimeShim,
       `export function resolveOutboundSendDep() {
@@ -1092,8 +1092,8 @@ export const syntheticRuntimeMarker = {
 
     const withAlias = createJiti(jitiBaseUrl, {
       ...buildPluginLoaderJitiOptions({
-        "openclaw/plugin-sdk/infra-runtime": copiedChannelRuntimeShim,
-        "@openclaw/plugin-sdk/infra-runtime": copiedChannelRuntimeShim,
+        "openclaw/plugin-sdk/outbound-send-deps": copiedChannelRuntimeShim,
+        "@openclaw/plugin-sdk/outbound-send-deps": copiedChannelRuntimeShim,
       }),
       tryNative: false,
     });

@@ -48,6 +48,10 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.lanes.map((lane) => lane.name)).toContain("bundled-channel-update-acpx");
     expect(plan.lanes.map((lane) => lane.name)).toContain("bundled-plugin-install-uninstall-0");
     expect(plan.lanes.map((lane) => lane.name)).toContain("bundled-plugin-install-uninstall-7");
+    expect(plan.lanes.filter((lane) => lane.name === "install-e2e-openai")).toHaveLength(1);
+    expect(
+      plan.lanes.filter((lane) => lane.name === "bundled-plugin-install-uninstall-0"),
+    ).toHaveLength(1);
     expect(plan.lanes.map((lane) => lane.name)).not.toContain("bundled-plugin-install-uninstall");
     expect(plan.lanes.map((lane) => lane.name)).not.toContain("bundled-channel-deps");
     expect(plan.lanes.map((lane) => lane.name)).not.toContain("openwebui");
@@ -69,11 +73,36 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(withOpenWebUI.lanes.map((lane) => lane.name)).toContain("openwebui");
   });
 
-  it("splits the old plugins/integrations release chunk across plugin and bundled-channel chunks", () => {
-    const pluginsRuntime = planFor({
+  it("splits release-path package and plugin chunks across shorter CI jobs", () => {
+    const packageInstallOpenAi = planFor({
       includeOpenWebUI: true,
       profile: RELEASE_PATH_PROFILE,
-      releaseChunk: "plugins-runtime",
+      releaseChunk: "package-update-openai",
+    });
+    const packageInstallAnthropic = planFor({
+      includeOpenWebUI: true,
+      profile: RELEASE_PATH_PROFILE,
+      releaseChunk: "package-update-anthropic",
+    });
+    const packageUpdateCore = planFor({
+      includeOpenWebUI: true,
+      profile: RELEASE_PATH_PROFILE,
+      releaseChunk: "package-update-core",
+    });
+    const pluginsRuntimeCore = planFor({
+      includeOpenWebUI: true,
+      profile: RELEASE_PATH_PROFILE,
+      releaseChunk: "plugins-runtime-core",
+    });
+    const pluginsRuntimeInstallA = planFor({
+      includeOpenWebUI: true,
+      profile: RELEASE_PATH_PROFILE,
+      releaseChunk: "plugins-runtime-install-a",
+    });
+    const pluginsRuntimeInstallB = planFor({
+      includeOpenWebUI: true,
+      profile: RELEASE_PATH_PROFILE,
+      releaseChunk: "plugins-runtime-install-b",
     });
     const bundledChannels = planFor({
       includeOpenWebUI: true,
@@ -81,17 +110,38 @@ describe("scripts/lib/docker-e2e-plan", () => {
       releaseChunk: "bundled-channels",
     });
 
-    expect(pluginsRuntime.lanes.map((lane) => lane.name)).toEqual(
+    expect(packageInstallOpenAi.lanes.map((lane) => lane.name)).toEqual(["install-e2e-openai"]);
+    expect(packageInstallAnthropic.lanes.map((lane) => lane.name)).toEqual([
+      "install-e2e-anthropic",
+    ]);
+    expect(packageUpdateCore.lanes.map((lane) => lane.name)).toEqual([
+      "npm-onboard-channel-agent",
+      "doctor-switch",
+      "update-channel-switch",
+    ]);
+    expect(pluginsRuntimeCore.lanes.map((lane) => lane.name)).toEqual(
       expect.arrayContaining([
         "plugins",
-        "bundled-plugin-install-uninstall-0",
-        "bundled-plugin-install-uninstall-7",
         "cron-mcp-cleanup",
         "openai-web-search-minimal",
         "openwebui",
       ]),
     );
-    expect(pluginsRuntime.lanes.map((lane) => lane.name)).not.toContain("bundled-channel-telegram");
+    expect(pluginsRuntimeCore.lanes.map((lane) => lane.name)).not.toContain(
+      "bundled-plugin-install-uninstall-0",
+    );
+    expect(pluginsRuntimeInstallA.lanes.map((lane) => lane.name)).toEqual([
+      "bundled-plugin-install-uninstall-0",
+      "bundled-plugin-install-uninstall-1",
+      "bundled-plugin-install-uninstall-2",
+      "bundled-plugin-install-uninstall-3",
+    ]);
+    expect(pluginsRuntimeInstallB.lanes.map((lane) => lane.name)).toEqual([
+      "bundled-plugin-install-uninstall-4",
+      "bundled-plugin-install-uninstall-5",
+      "bundled-plugin-install-uninstall-6",
+      "bundled-plugin-install-uninstall-7",
+    ]);
     expect(bundledChannels.lanes.map((lane) => lane.name)).toEqual(
       expect.arrayContaining([
         "plugin-update",
@@ -103,13 +153,38 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(bundledChannels.lanes.map((lane) => lane.name)).not.toContain("openwebui");
   });
 
-  it("keeps the legacy plugins-integrations release chunk as an aggregate alias", () => {
+  it("keeps legacy release chunk names as aggregate aliases", () => {
+    const packageUpdate = planFor({
+      includeOpenWebUI: true,
+      profile: RELEASE_PATH_PROFILE,
+      releaseChunk: "package-update",
+    });
+    const pluginsRuntime = planFor({
+      includeOpenWebUI: true,
+      profile: RELEASE_PATH_PROFILE,
+      releaseChunk: "plugins-runtime",
+    });
     const legacy = planFor({
       includeOpenWebUI: true,
       profile: RELEASE_PATH_PROFILE,
       releaseChunk: "plugins-integrations",
     });
 
+    expect(packageUpdate.lanes.map((lane) => lane.name)).toEqual(
+      expect.arrayContaining([
+        "install-e2e-openai",
+        "install-e2e-anthropic",
+        "update-channel-switch",
+      ]),
+    );
+    expect(pluginsRuntime.lanes.map((lane) => lane.name)).toEqual(
+      expect.arrayContaining([
+        "plugins",
+        "bundled-plugin-install-uninstall-0",
+        "bundled-plugin-install-uninstall-7",
+        "openwebui",
+      ]),
+    );
     expect(legacy.lanes.map((lane) => lane.name)).toEqual(
       expect.arrayContaining([
         "plugins",

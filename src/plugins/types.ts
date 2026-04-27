@@ -966,11 +966,11 @@ export type ProviderBuildUnknownModelHintContext = {
 };
 
 /**
- * Built-in model suppression hook.
+ * Built-in model suppression hook context.
  *
- * Use this when a provider/plugin needs to hide stale upstream catalog rows or
- * replace them with a vendor-specific hint. This hook is consulted by model
- * resolution, model listing, and catalog loading.
+ * @deprecated Use manifest `modelCatalog.suppressions` for static suppression
+ * rules. Runtime suppression hooks remain as compatibility fallback for
+ * plugins that cannot express a rule declaratively yet.
  */
 export type ProviderBuiltInModelSuppressionContext = {
   config?: OpenClawConfig;
@@ -1480,6 +1480,10 @@ export type ProviderPlugin = {
    * Return `{ suppress: true }` to hide a stale upstream row. Include
    * `errorMessage` when OpenClaw should surface a provider-specific hint for
    * direct model resolution failures.
+   *
+   * @deprecated Use manifest `modelCatalog.suppressions` for static suppression
+   * rules. Runtime suppression hooks remain as compatibility fallback for
+   * plugins that cannot express a rule declaratively yet.
    */
   suppressBuiltInModel?: (
     ctx: ProviderBuiltInModelSuppressionContext,

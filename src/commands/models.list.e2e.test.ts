@@ -25,6 +25,7 @@ const loadStaticManifestCatalogRowsForList = vi.fn<() => Array<Record<string, un
 const loadProviderIndexCatalogRowsForList = vi.fn<() => Array<Record<string, unknown>>>(() => []);
 const hasProviderStaticCatalogForFilter = vi.fn().mockResolvedValue(false);
 const shouldSuppressBuiltInModel = vi.fn().mockReturnValue(false);
+const shouldSuppressBuiltInModelFromManifest = vi.fn().mockReturnValue(false);
 const modelRegistryState = {
   models: [] as Array<Record<string, unknown>>,
   available: [] as Array<Record<string, unknown>>,
@@ -203,6 +204,7 @@ vi.mock("./models/list.provider-index-catalog.js", () => ({
 
 vi.mock("../agents/model-suppression.js", () => ({
   shouldSuppressBuiltInModel,
+  shouldSuppressBuiltInModelFromManifest,
 }));
 
 function makeRuntime() {

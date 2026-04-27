@@ -14,6 +14,8 @@ import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 
 const RELAY_SESSION_TTL_MS = 30 * 60 * 1000;
 const MAX_AUDIO_BASE64_BYTES = 512 * 1024;
+const MAX_RELAY_SESSIONS_PER_CONN = 2;
+const MAX_RELAY_SESSIONS_GLOBAL = 64;
 const RELAY_EVENT = "talk.realtime.relay";
 
 export type TalkRealtimeRelayEvent =
@@ -94,9 +96,38 @@ function closeRelaySession(session: RelaySession, reason: "completed" | "error")
   });
 }
 
+function pruneExpiredRelaySessions(nowMs = Date.now()): void {
+  for (const session of relaySessions.values()) {
+    if (nowMs > session.expiresAtMs) {
+      closeRelaySession(session, "completed");
+    }
+  }
+}
+
+function countRelaySessionsForConn(connId: string): number {
+  let count = 0;
+  for (const session of relaySessions.values()) {
+    if (session.connId === connId) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function enforceRelaySessionLimits(connId: string): void {
+  pruneExpiredRelaySessions();
+  if (relaySessions.size >= MAX_RELAY_SESSIONS_GLOBAL) {
+    throw new Error("Too many active realtime relay sessions");
+  }
+  if (countRelaySessionsForConn(connId) >= MAX_RELAY_SESSIONS_PER_CONN) {
+    throw new Error("Too many active realtime relay sessions for this connection");
+  }
+}
+
 export function createTalkRealtimeRelaySession(
   params: CreateTalkRealtimeRelaySessionParams,
 ): TalkRealtimeRelaySessionResult {
+  enforceRelaySessionLimits(params.connId);
   const relaySessionId = randomUUID();
   const expiresAtMs = Date.now() + RELAY_SESSION_TTL_MS;
   let relay: RelaySession | undefined;
