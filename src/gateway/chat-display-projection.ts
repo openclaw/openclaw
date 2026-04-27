@@ -555,12 +555,17 @@ export function projectChatDisplayMessages(
   options?: { maxChars?: number; stripEnvelope?: boolean; emotionMode?: EmotionMode },
 ): Array<Record<string, unknown>> {
   const source = options?.stripEnvelope === false ? messages : stripEnvelopeFromMessages(messages);
+  // Default emotionMode to "off" so callers that omit the option still
+  // strip emotion tags. Sanitizers treat undefined as a no-op, which would
+  // otherwise let raw [warmly] / [softly] etc. leak through whenever a
+  // caller forgets to pass the mode (e.g. server-methods/chat.ts).
+  const emotionMode: EmotionMode = options?.emotionMode ?? "off";
   return filterVisibleProjectedHistoryMessages(
     toProjectedMessages(
       sanitizeChatHistoryMessages(
         source,
         options?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
-        options?.emotionMode,
+        emotionMode,
       ),
     ),
   );

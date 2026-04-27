@@ -186,6 +186,17 @@ export function stripInlineDirectiveTagsFromMessageForDisplay(
   if (!Array.isArray(message.content)) {
     return message;
   }
+  // Emotion-tag sanitization is only valid against assistant-authored content.
+  // User/system messages may contain allowlisted bracket text like [sad] or
+  // [warmly] that must survive intact; only directive sanitization should
+  // run on those.
+  const role = (message as { role?: unknown }).role;
+  const isAssistant = typeof role === "string" && role.toLowerCase() === "assistant";
+  const effectiveOptions = isAssistant
+    ? options
+    : options
+      ? { ...options, emotionMode: undefined }
+      : options;
   const cleaned = message.content.map((part) => {
     if (!part || typeof part !== "object") {
       return part;
@@ -196,7 +207,7 @@ export function stripInlineDirectiveTagsFromMessageForDisplay(
     }
     return {
       ...record,
-      text: sanitizeDirectiveAndEmotionTagsForDisplay(record.text, options).text,
+      text: sanitizeDirectiveAndEmotionTagsForDisplay(record.text, effectiveOptions).text,
     };
   });
   return { ...message, content: cleaned };
