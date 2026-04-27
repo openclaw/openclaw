@@ -43,16 +43,83 @@ function readStringValue(value: unknown): string | undefined {
 
 export function resolveOllamaDiscoveryApiKey(params: {
   env: NodeJS.ProcessEnv;
+  baseUrl?: string;
   explicitApiKey?: string;
+  hasDeclaredApiKey?: boolean;
   resolvedApiKey?: unknown;
-}): string {
-  const envApiKey = params.env.OLLAMA_API_KEY?.trim() ? "OLLAMA_API_KEY" : undefined;
+}): string | undefined {
+  const envValue = normalizeOptionalString(params.env.OLLAMA_API_KEY);
+  const envApiKey = envValue ? "OLLAMA_API_KEY" : undefined;
   const resolvedApiKey = normalizeOptionalString(params.resolvedApiKey);
-  return envApiKey ?? params.explicitApiKey ?? resolvedApiKey ?? OLLAMA_DEFAULT_API_KEY;
+  const explicitApiKey = normalizeOptionalString(params.explicitApiKey);
+  if (explicitApiKey) {
+    return explicitApiKey;
+  }
+  if (params.hasDeclaredApiKey && resolvedApiKey) {
+    return resolvedApiKey;
+  }
+  if (!isLocalOllamaBaseUrl(params.baseUrl)) {
+    return envApiKey ?? (resolvedApiKey !== OLLAMA_DEFAULT_API_KEY ? resolvedApiKey : undefined);
+  }
+  if (resolvedApiKey && resolvedApiKey !== envValue && resolvedApiKey !== OLLAMA_DEFAULT_API_KEY) {
+    return resolvedApiKey;
+  }
+  return OLLAMA_DEFAULT_API_KEY;
 }
 
 function shouldSkipAmbientOllamaDiscovery(env: NodeJS.ProcessEnv): boolean {
   return Boolean(env.VITEST) || env.NODE_ENV === "test";
+}
+
+const LOCAL_OLLAMA_HOSTNAMES = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1", "::"]);
+
+function isIpv4PrivateRange(host: string): boolean {
+  if (!/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
+    return false;
+  }
+  const octets = host.split(".").map((part) => Number.parseInt(part, 10));
+  if (octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return false;
+  }
+  const [a, b] = octets;
+  return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+}
+
+function isIpv6LocalRange(host: string): boolean {
+  const lower = host.toLowerCase();
+  return /^fe[89ab][0-9a-f]:/.test(lower) || /^f[cd][0-9a-f]{2}:/.test(lower);
+}
+
+export function isLocalOllamaBaseUrl(baseUrl: string | undefined | null): boolean {
+  if (!baseUrl) {
+    return true;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    return false;
+  }
+  let host = parsed.hostname.toLowerCase();
+  if (host.startsWith("[") && host.endsWith("]")) {
+    host = host.slice(1, -1);
+  }
+  return (
+    LOCAL_OLLAMA_HOSTNAMES.has(host) ||
+    host.endsWith(".local") ||
+    isIpv4PrivateRange(host) ||
+    isIpv6LocalRange(host) ||
+    (!host.includes(".") && !host.includes(":"))
+  );
+}
+
+export function shouldUseSyntheticOllamaAuth(
+  providerConfig: ModelProviderConfig | undefined,
+): boolean {
+  if (!hasMeaningfulExplicitOllamaConfig(providerConfig)) {
+    return false;
+  }
+  return isLocalOllamaBaseUrl(readProviderBaseUrl(providerConfig));
 }
 
 export function hasMeaningfulExplicitOllamaConfig(
@@ -116,17 +183,22 @@ export async function resolveOllamaDiscoveryResult(params: {
     ollamaKey.trim().length > 0 &&
     ollamaKey.trim() !== OLLAMA_DEFAULT_API_KEY;
   const explicitApiKey = readStringValue(explicit?.apiKey);
+  const hasDeclaredApiKey = explicit?.apiKey !== undefined;
   if (hasExplicitModels && explicit) {
+    const baseUrl = resolveOllamaApiBase(readProviderBaseUrl(explicit) ?? OLLAMA_DEFAULT_BASE_URL);
+    const apiKey = resolveOllamaDiscoveryApiKey({
+      env: params.ctx.env,
+      baseUrl,
+      explicitApiKey,
+      hasDeclaredApiKey,
+      resolvedApiKey: ollamaKey,
+    });
     return {
       provider: {
         ...explicit,
-        baseUrl: resolveOllamaApiBase(readProviderBaseUrl(explicit) ?? OLLAMA_DEFAULT_BASE_URL),
+        baseUrl,
         api: explicit.api ?? "ollama",
-        apiKey: resolveOllamaDiscoveryApiKey({
-          env: params.ctx.env,
-          explicitApiKey,
-          resolvedApiKey: ollamaKey,
-        }),
+        ...(apiKey ? { apiKey } : {}),
       },
     };
   }
@@ -141,20 +213,24 @@ export async function resolveOllamaDiscoveryResult(params: {
     return null;
   }
 
-  const provider = await params.buildProvider(readProviderBaseUrl(explicit), {
+  const configuredBaseUrl = readProviderBaseUrl(explicit);
+  const provider = await params.buildProvider(configuredBaseUrl, {
     quiet: !hasRealOllamaKey && !hasMeaningfulExplicitConfig,
   });
   if (provider.models?.length === 0 && !ollamaKey && !explicit?.apiKey) {
     return null;
   }
+  const apiKey = resolveOllamaDiscoveryApiKey({
+    env: params.ctx.env,
+    baseUrl: provider.baseUrl ?? configuredBaseUrl,
+    explicitApiKey,
+    hasDeclaredApiKey,
+    resolvedApiKey: ollamaKey,
+  });
   return {
     provider: {
       ...provider,
-      apiKey: resolveOllamaDiscoveryApiKey({
-        env: params.ctx.env,
-        explicitApiKey,
-        resolvedApiKey: ollamaKey,
-      }),
+      ...(apiKey ? { apiKey } : {}),
     },
   };
 }

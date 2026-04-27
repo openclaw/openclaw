@@ -68,4 +68,22 @@ describe("docker build helper", () => {
       'OPENCLAW_VERSION="$INSTALL_TAG" curl -fsSL "$INSTALL_URL" | bash',
     );
   });
+
+  it("keeps installer E2E agent turns out of the interactive bootstrap ritual", () => {
+    const runner = readFileSync(INSTALL_E2E_RUNNER_PATH, "utf8");
+
+    expect(runner).toContain('rm -f "$workspace/BOOTSTRAP.md"');
+    expect(runner.indexOf('rm -f "$workspace/BOOTSTRAP.md"')).toBeLessThan(
+      runner.indexOf('echo "==> Agent turns ($profile)"'),
+    );
+  });
+
+  it("keeps installer E2E tool smokes in isolated sessions", () => {
+    const runner = readFileSync(INSTALL_E2E_RUNNER_PATH, "utf8");
+
+    expect(runner).toContain('SESSION_ID_PREFIX="e2e-tools-${profile}"');
+    expect(runner).toContain('TURN1_SESSION_ID="${SESSION_ID_PREFIX}-read-proof"');
+    expect(runner).toContain('TURN3_SESSION_ID="${SESSION_ID_PREFIX}-exec-hostname"');
+    expect(runner).toContain('TURN4_SESSION_ID="${SESSION_ID_PREFIX}-image-write"');
+  });
 });

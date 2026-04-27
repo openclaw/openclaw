@@ -38,6 +38,11 @@ on:
         required: false
         default: false
         type: boolean
+      live_model_providers:
+        description: Comma/space separated provider ids for the Docker live model matrix; blank runs all providers
+        required: false
+        default: ""
+        type: string
   workflow_call:
     inputs:
       ref:
@@ -74,6 +79,11 @@ on:
         required: false
         default: false
         type: boolean
+      live_model_providers:
+        description: Comma/space separated provider ids for the Docker live model matrix; blank runs all providers
+        required: false
+        default: ""
+        type: string
     secrets:
       OPENAI_API_KEY:
         required: false
@@ -837,7 +847,7 @@ jobs:
   validate_live_models_docker:
     name: Docker live models (${{ matrix.provider_label }})
     needs: validate_selected_ref
-    if: inputs.include_live_suites
+    if: inputs.include_live_suites && inputs.live_model_providers == ''
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     strategy:
@@ -947,6 +957,163 @@ jobs:
               exit 1
               ;;
           esac
+
+      - name: Run Docker live model sweep
+        run: pnpm test:docker:live-models
+
+  validate_live_models_docker_targeted:
+    name: Docker live models (selected providers)
+    needs: validate_selected_ref
+    if: inputs.include_live_suites && inputs.live_model_providers != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
+      ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
+      BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
+      CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+      DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+      MODELSTUDIO_API_KEY: ${{ secrets.MODELSTUDIO_API_KEY }}
+      MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+      MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+      OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+      XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+      ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+      Z_AI_API_KEY: ${{ secrets.Z_AI_API_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      OPENCLAW_CODEX_AUTH_JSON: ${{ secrets.OPENCLAW_CODEX_AUTH_JSON }}
+      OPENCLAW_CODEX_CONFIG_TOML: ${{ secrets.OPENCLAW_CODEX_CONFIG_TOML }}
+      OPENCLAW_CLAUDE_JSON: ${{ secrets.OPENCLAW_CLAUDE_JSON }}
+      OPENCLAW_CLAUDE_CREDENTIALS_JSON: ${{ secrets.OPENCLAW_CLAUDE_CREDENTIALS_JSON }}
+      OPENCLAW_CLAUDE_SETTINGS_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_JSON }}
+      OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON }}
+      OPENCLAW_GEMINI_SETTINGS_JSON: ${{ secrets.OPENCLAW_GEMINI_SETTINGS_JSON }}
+      FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+      REQUESTED_LIVE_MODEL_PROVIDERS: ${{ inputs.live_model_providers }}
+      OPENCLAW_VITEST_MAX_WORKERS: "2"
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+
+      - name: Normalize provider allowlist
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          all_providers=(anthropic google minimax openai opencode-go openrouter xai zai fireworks)
+
+          normalize_provider() {
+            local value="${1,,}"
+            case "$value" in
+              z.ai|z-ai) echo "zai" ;;
+              opencode|opencode-go) echo "opencode-go" ;;
+              open-router|openrouter) echo "openrouter" ;;
+              *) echo "$value" ;;
+            esac
+          }
+
+          is_known_provider() {
+            local value="$1"
+            local provider
+            for provider in "${all_providers[@]}"; do
+              [[ "$provider" == "$value" ]] && return 0
+            done
+            return 1
+          }
+
+          selected=()
+          declare -A seen=()
+          raw="${REQUESTED_LIVE_MODEL_PROVIDERS:-}"
+          normalized_all="${raw,,}"
+          normalized_all="${normalized_all//[[:space:],]/}"
+          if [[ -z "$normalized_all" || "$normalized_all" == "all" ]]; then
+            selected=("${all_providers[@]}")
+          else
+            while IFS= read -r entry; do
+              [[ -z "$entry" ]] && continue
+              provider="$(normalize_provider "$entry")"
+              if ! is_known_provider "$provider"; then
+                echo "Unknown live model provider '${entry}'. Expected one of: ${all_providers[*]}" >&2
+                exit 1
+              fi
+              if [[ -z "${seen[$provider]:-}" ]]; then
+                selected+=("$provider")
+                seen[$provider]=1
+              fi
+            done < <(printf '%s\n' "$raw" | tr ',' '\n' | tr '[:space:]' '\n')
+          fi
+
+          if [[ "${#selected[@]}" -eq 0 ]]; then
+            echo "No live model providers selected." >&2
+            exit 1
+          fi
+
+          providers_csv="$(IFS=,; echo "${selected[*]}")"
+          echo "OPENCLAW_LIVE_PROVIDERS=$providers_csv" >> "$GITHUB_ENV"
+          {
+            echo "Live model providers: \`$providers_csv\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Hydrate live auth/profile inputs
+        run: bash scripts/ci-hydrate-live-auth.sh
+
+      - name: Validate provider credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          require_any() {
+            local label="$1"
+            shift
+            local key
+            for key in "$@"; do
+              if [[ -n "${!key:-}" ]]; then
+                return 0
+              fi
+            done
+            echo "Missing credential for ${label}: expected one of $*" >&2
+            exit 1
+          }
+
+          IFS=',' read -r -a providers <<<"${OPENCLAW_LIVE_PROVIDERS}"
+          for provider in "${providers[@]}"; do
+            case "$provider" in
+              anthropic) require_any Anthropic ANTHROPIC_API_KEY ANTHROPIC_API_KEY_OLD ANTHROPIC_API_TOKEN ;;
+              google) require_any Google GEMINI_API_KEY GOOGLE_API_KEY ;;
+              minimax) require_any MiniMax MINIMAX_API_KEY ;;
+              openai) require_any OpenAI OPENAI_API_KEY ;;
+              opencode-go) require_any OpenCode OPENCODE_API_KEY OPENCODE_ZEN_API_KEY ;;
+              openrouter) require_any OpenRouter OPENROUTER_API_KEY ;;
+              xai) require_any xAI XAI_API_KEY ;;
+              zai) require_any Z.ai ZAI_API_KEY Z_AI_API_KEY ;;
+              fireworks) require_any Fireworks FIREWORKS_API_KEY ;;
+              *)
+                echo "Unhandled live model provider shard: ${provider}" >&2
+                exit 1
+                ;;
+            esac
+          done
 
       - name: Run Docker live model sweep
         run: pnpm test:docker:live-models

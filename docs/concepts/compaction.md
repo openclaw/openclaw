@@ -124,6 +124,16 @@ active successor transcript from the compaction summary, preserved state, and
 unsummarized tail, then keeps the previous JSONL as the archived checkpoint
 source.
 
+When `agents.defaults.compaction.maxActiveTranscriptBytes` is set, OpenClaw can
+trigger normal local compaction before a run if the active JSONL reaches that
+size. This is useful for long-running sessions where provider-side context
+management may keep model context healthy while the local transcript keeps
+growing. It does not split raw JSONL bytes; it only asks the normal compaction
+pipeline to create a semantic summary. Combine it with
+`truncateAfterCompaction: true` to move future turns onto the smaller successor
+transcript; without transcript rotation, the byte guard remains inactive because
+the active file would not shrink.
+
 ## Using a different model
 
 By default, compaction uses your agent's primary model. You can use a more

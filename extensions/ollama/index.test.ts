@@ -236,7 +236,7 @@ describe("ollama plugin", () => {
         baseUrl: "http://127.0.0.1:11434",
         api: "ollama",
         models: [{ id: "llama3.2", name: "Llama 3.2" }],
-        apiKey: "OLLAMA_API_KEY",
+        apiKey: "ollama-local",
       },
     });
   });
@@ -417,6 +417,34 @@ describe("ollama plugin", () => {
       source: "models.providers.ollama (synthetic local key)",
       mode: "api-key",
     });
+  });
+
+  it("does not mint synthetic auth for Ollama Cloud baseUrl", () => {
+    const provider = registerProvider();
+
+    const auth = provider.resolveSyntheticAuth?.({
+      providerConfig: {
+        baseUrl: "https://ollama.com",
+        api: "ollama",
+        models: [],
+      },
+    });
+
+    expect(auth).toBeUndefined();
+  });
+
+  it("does not mint synthetic auth for public IPv4 baseUrl", () => {
+    const provider = registerProvider();
+
+    const auth = provider.resolveSyntheticAuth?.({
+      providerConfig: {
+        baseUrl: "http://8.8.8.8:11434",
+        api: "ollama",
+        models: [],
+      },
+    });
+
+    expect(auth).toBeUndefined();
   });
 
   it("wraps OpenAI-compatible payloads with num_ctx for Ollama compat routes", () => {

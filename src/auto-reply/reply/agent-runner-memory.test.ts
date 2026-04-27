@@ -364,6 +364,116 @@ describe("runMemoryFlushIfNeeded", () => {
     });
   });
 
+  it("triggers preflight compaction when the active transcript exceeds the configured byte threshold", async () => {
+    const sessionFile = path.join(rootDir, "large-session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({ message: { role: "user", content: "x".repeat(256) } })}\n`,
+      "utf8",
+    );
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokens: 10,
+      totalTokensFresh: true,
+      compactionCount: 0,
+    };
+    const sessionStore = { main: sessionEntry };
+    const replyOperation = {
+      abortSignal: new AbortController().signal,
+      setPhase: vi.fn(),
+      updateSessionId: vi.fn(),
+    };
+
+    const entry = await runPreflightCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              truncateAfterCompaction: true,
+              maxActiveTranscriptBytes: "10b",
+            },
+          },
+        },
+      },
+      followupRun: createTestFollowupRun({
+        sessionId: "session",
+        sessionFile,
+        sessionKey: "main",
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: replyOperation as never,
+    });
+
+    expect(entry?.compactionCount).toBe(1);
+    expect(replyOperation.setPhase).toHaveBeenCalledWith("preflight_compacting");
+    const compactCall = compactEmbeddedPiSessionMock.mock.calls[0]?.[0] as {
+      currentTokenCount?: number;
+      sessionFile?: string;
+      sessionId?: string;
+      trigger?: string;
+    };
+    expect(compactCall).toEqual(
+      expect.objectContaining({
+        sessionId: "session",
+        trigger: "budget",
+        currentTokenCount: 10,
+      }),
+    );
+    expect(compactCall.sessionFile).toContain("large-session.jsonl");
+  });
+
+  it("keeps the active transcript byte threshold inactive unless transcript rotation is enabled", async () => {
+    const sessionFile = path.join(rootDir, "large-session-no-rotation.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({ message: { role: "user", content: "x".repeat(256) } })}\n`,
+      "utf8",
+    );
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokens: 10,
+      totalTokensFresh: true,
+      compactionCount: 0,
+    };
+
+    const entry = await runPreflightCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              maxActiveTranscriptBytes: "10b",
+            },
+          },
+        },
+      },
+      followupRun: createTestFollowupRun({
+        sessionId: "session",
+        sessionFile,
+        sessionKey: "main",
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(entry).toBe(sessionEntry);
+    expect(compactEmbeddedPiSessionMock).not.toHaveBeenCalled();
+  });
+
   it("uses configured prompts and stored bootstrap warning signatures", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",

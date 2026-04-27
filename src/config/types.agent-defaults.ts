@@ -478,6 +478,14 @@ export type AgentCompactionConfig = {
    */
   truncateAfterCompaction?: boolean;
   /**
+   * Trigger a normal local compaction when the active session JSONL reaches
+   * this size (bytes, or byte-size string like "20mb"). Set to 0/unset to
+   * disable. Requires truncateAfterCompaction so successful compaction can
+   * rotate to a smaller successor transcript. This does not split raw
+   * transcript bytes.
+   */
+  maxActiveTranscriptBytes?: number | string;
+  /**
    * Send brief compaction notices to the user when compaction starts and completes.
    * Default: false (silent by default).
    */

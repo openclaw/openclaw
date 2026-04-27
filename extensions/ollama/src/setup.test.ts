@@ -398,28 +398,77 @@ describe("ollama setup", () => {
 
   describe("ensureOllamaModelPulled", () => {
     it("pulls model when not available locally", async () => {
-      const progress = { update: vi.fn(), stop: vi.fn() };
-      const prompter = {
-        progress: vi.fn(() => progress),
-      } as unknown as WizardPrompter;
+      vi.useFakeTimers();
+      try {
+        const progress = { update: vi.fn(), stop: vi.fn() };
+        const prompter = {
+          progress: vi.fn(() => progress),
+        } as unknown as WizardPrompter;
 
-      const fetchMock = createOllamaFetchMock({
-        tags: ["llama3:8b"],
-        pullResponse: new Response('{"status":"success"}\n', { status: 200 }),
-      });
-      vi.stubGlobal("fetch", fetchMock);
+        const fetchMock = createOllamaFetchMock({
+          tags: ["llama3:8b"],
+          pullResponse: new Response('{"status":"success"}\n', { status: 200 }),
+        });
+        vi.stubGlobal("fetch", fetchMock);
 
-      await ensureOllamaModelPulled({
-        config: createDefaultOllamaConfig("ollama/gemma4"),
-        model: "ollama/gemma4",
-        prompter,
-      });
+        await ensureOllamaModelPulled({
+          config: createDefaultOllamaConfig("ollama/gemma4"),
+          model: "ollama/gemma4",
+          prompter,
+        });
 
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-      expect(fetchMock.mock.calls[1][0]).toContain("/api/pull");
-      const pullInit = fetchMock.mock.calls[1][1];
-      expect(pullInit?.signal).toBeInstanceOf(AbortSignal);
-      expect(pullInit?.signal?.aborted).toBe(false);
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(fetchMock.mock.calls[1][0]).toContain("/api/pull");
+        const pullInit = fetchMock.mock.calls[1][1];
+        expect(pullInit?.signal).toBeInstanceOf(AbortSignal);
+        expect(pullInit?.signal?.aborted).toBe(false);
+
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(pullInit?.signal?.aborted).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("fails stalled model pull streams after an idle timeout", async () => {
+      vi.useFakeTimers();
+      try {
+        const progress = { update: vi.fn(), stop: vi.fn() };
+        const prompter = {
+          progress: vi.fn(() => progress),
+        } as unknown as WizardPrompter;
+        const fetchMock = vi.fn(async (input: string | URL | Request) => {
+          const url = requestUrl(input);
+          if (url.endsWith("/api/tags")) {
+            return jsonResponse({ models: [] });
+          }
+          if (url.endsWith("/api/pull")) {
+            return new Response(new ReadableStream<Uint8Array>(), { status: 200 });
+          }
+          throw new Error(`Unexpected fetch: ${url}`);
+        });
+        vi.stubGlobal("fetch", fetchMock);
+
+        const pullPromise = ensureOllamaModelPulled({
+          config: createDefaultOllamaConfig("ollama/gemma4"),
+          model: "ollama/gemma4",
+          prompter,
+        }).catch((err: unknown) => err);
+
+        for (let attempts = 0; attempts < 50 && fetchMock.mock.calls.length < 2; attempts += 1) {
+          await vi.advanceTimersByTimeAsync(0);
+          await Promise.resolve();
+        }
+        expect(fetchMock.mock.calls[1]?.[0]).toContain("/api/pull");
+
+        await vi.advanceTimersByTimeAsync(300_000);
+        await expect(pullPromise).resolves.toEqual(
+          expect.objectContaining({ message: "Failed to download selected Ollama model" }),
+        );
+        expect(progress.stop).toHaveBeenCalledWith(expect.stringContaining("Ollama pull stalled"));
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("skips pull when model is already available", async () => {
