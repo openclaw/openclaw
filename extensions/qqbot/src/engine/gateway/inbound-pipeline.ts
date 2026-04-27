@@ -198,6 +198,7 @@ export async function buildInboundContext(
     uniqueVoicePaths: media.uniqueVoicePaths,
     uniqueVoiceUrls: media.uniqueVoiceUrls,
     uniqueVoiceAsrReferTexts: media.uniqueVoiceAsrReferTexts,
+    voiceMediaTypes: media.voiceMediaTypes,
     hasAsrReferFallback: media.hasAsrReferFallback,
     voiceTranscriptSources: media.voiceTranscriptSources,
     replyTo,

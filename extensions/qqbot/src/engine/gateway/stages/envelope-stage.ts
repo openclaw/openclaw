@@ -102,6 +102,7 @@ export interface MediaClassification {
   uniqueVoicePaths: string[];
   uniqueVoiceUrls: string[];
   uniqueVoiceAsrReferTexts: string[];
+  voiceMediaTypes: string[];
   hasAsrReferFallback: boolean;
   voiceTranscriptSources: string[];
 }
@@ -124,14 +125,19 @@ export function classifyMedia(processed: ProcessedAttachments): MediaClassificat
     }
   }
 
+  const uniqueVoicePaths = [...new Set(processed.voiceAttachmentPaths)];
+  const uniqueVoiceUrls = [...new Set(processed.voiceAttachmentUrls)];
+  const voiceMediaTypes = [...uniqueVoicePaths, ...uniqueVoiceUrls].map(() => "audio/wav");
+
   return {
     localMediaPaths,
     localMediaTypes,
     remoteMediaUrls,
     remoteMediaTypes,
-    uniqueVoicePaths: [...new Set(processed.voiceAttachmentPaths)],
-    uniqueVoiceUrls: [...new Set(processed.voiceAttachmentUrls)],
+    uniqueVoicePaths,
+    uniqueVoiceUrls,
     uniqueVoiceAsrReferTexts: [...new Set(processed.voiceAsrReferTexts)].filter(Boolean),
+    voiceMediaTypes,
     hasAsrReferFallback: processed.voiceTranscriptSources.includes("asr"),
     voiceTranscriptSources: processed.voiceTranscriptSources,
   };

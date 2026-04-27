@@ -58,6 +58,7 @@ export function emptyInboundContext(fields: BaseStubFields): InboundContext {
     uniqueVoicePaths: [],
     uniqueVoiceUrls: [],
     uniqueVoiceAsrReferTexts: [],
+    voiceMediaTypes: [],
     hasAsrReferFallback: false,
     voiceTranscriptSources: [],
     replyTo: undefined,
