@@ -228,7 +228,8 @@ describe("searchVector sqlite-vec KNN", () => {
       addChunk({ id: "target-3", model: "target-model", vector: [0, 1] });
       addChunk({ id: "other-1", model: "other-model", vector: [1, 0] });
 
-      const originalPrepare = db.prepare.bind(db);
+      const prepareTarget = db as unknown as { prepare: (sql: string) => unknown };
+      const originalPrepare = prepareTarget.prepare.bind(db);
       const chunkRows = (
         originalPrepare(
           "SELECT id, path, start_line, end_line, text, embedding, source\n" +
@@ -236,7 +237,7 @@ describe("searchVector sqlite-vec KNN", () => {
             " WHERE model = ?",
         ) as StatementWithAll
       ).all("target-model");
-      const prepareSpy = vi.spyOn(db, "prepare").mockImplementation((sql: string) => {
+      const prepareSpy = vi.spyOn(prepareTarget, "prepare").mockImplementation((sql: string) => {
         if (
           sql.includes("SELECT id, path, start_line, end_line, text, embedding, source") &&
           sql.includes("FROM chunks")
