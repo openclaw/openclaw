@@ -319,6 +319,7 @@ describe("matrix live qa scenarios", () => {
     expect(scenarios.get("matrix-room-generated-image-delivery")?.timeoutMs).toBeGreaterThanOrEqual(
       180_000,
     );
+    expect(scenarios.get("matrix-room-block-streaming")?.timeoutMs).toBeGreaterThanOrEqual(75_000);
     expect(scenarios.get("matrix-e2ee-restart-resume")?.timeoutMs).toBeGreaterThanOrEqual(150_000);
     expect(scenarios.get("matrix-e2ee-artifact-redaction")?.timeoutMs).toBeGreaterThanOrEqual(
       150_000,
@@ -2245,10 +2246,11 @@ describe("matrix live qa scenarios", () => {
   it("preserves separate finalized block events when Matrix block streaming is enabled", async () => {
     const primeRoom = vi.fn().mockResolvedValue("driver-sync-start");
     const sendTextMessage = vi.fn().mockResolvedValue("$block-stream-trigger");
-    const readBlockText = (label: "First" | "Second") =>
-      new RegExp(`${label} exact marker: \`([^\\\`]+)\``).exec(
-        String(sendTextMessage.mock.calls[0]?.[0]?.body),
-      )?.[1] ?? `MATRIX_QA_BLOCK_${label.toUpperCase()}_FIXED`;
+    const readBlockText = (label: "ONE" | "TWO") =>
+      String(sendTextMessage.mock.calls[0]?.[0]?.body)
+        .split("\n")
+        .find((line) => line.startsWith(`MATRIX_QA_BLOCK_${label}_`)) ??
+      `MATRIX_QA_BLOCK_${label}_FIXED`;
     const waitForRoomEvent = vi
       .fn()
       .mockImplementationOnce(async () => ({
@@ -2258,7 +2260,7 @@ describe("matrix live qa scenarios", () => {
           eventId: "$block-one",
           sender: "@sut:matrix-qa.test",
           type: "m.room.message",
-          body: readBlockText("First"),
+          body: readBlockText("ONE"),
         },
         since: "driver-sync-block-one",
       }))
@@ -2269,7 +2271,7 @@ describe("matrix live qa scenarios", () => {
           eventId: "$block-two",
           sender: "@sut:matrix-qa.test",
           type: "m.room.message",
-          body: readBlockText("Second"),
+          body: readBlockText("TWO"),
         },
         since: "driver-sync-next",
       }));
@@ -2332,6 +2334,10 @@ describe("matrix live qa scenarios", () => {
       mentionUserIds: ["@sut:matrix-qa.test"],
       roomId: "!block:matrix-qa.test",
     });
+    const body = String(sendTextMessage.mock.calls[0]?.[0]?.body);
+    expect(body).toMatch(
+      /reply with exactly this two-line body and no extra text:\nMATRIX_QA_BLOCK_ONE_[A-F0-9]{8}\nMATRIX_QA_BLOCK_TWO_[A-F0-9]{8}$/,
+    );
     expect(waitForRoomEvent).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({

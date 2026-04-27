@@ -87,12 +87,10 @@ export function buildMatrixBlockStreamingPrompt(
   secondText: string,
 ) {
   return [
-    sutUserId,
-    "Block streaming QA check:",
-    "emit exactly two assistant message blocks in order.",
-    `First exact marker: \`${firstText}\`.`,
-    `Second exact marker: \`${secondText}\`.`,
-  ].join(" ");
+    `${sutUserId} Block streaming QA check: reply with exactly this two-line body and no extra text:`,
+    firstText,
+    secondText,
+  ].join("\n");
 }
 
 export function isMatrixQaMessageLikeKind(kind: MatrixQaObservedEvent["kind"]) {

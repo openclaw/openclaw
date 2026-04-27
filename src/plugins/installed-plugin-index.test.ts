@@ -226,6 +226,43 @@ describe("installed plugin index", () => {
     expect(index.plugins[0]?.installRecordHash).toBeUndefined();
   });
 
+  it("does not classify migration-provider-only plugins as gateway startup sidecars", () => {
+    const rootDir = makeTempDir();
+    writeRuntimeEntry(rootDir);
+    writePackageJson(rootDir, {
+      name: "@vendor/migration-plugin",
+      version: "1.0.0",
+    });
+    writePluginManifest(rootDir, {
+      id: "migration-plugin",
+      name: "Migration Plugin",
+      enabledByDefault: true,
+      configSchema: { type: "object" },
+      contracts: {
+        migrationProviders: ["legacy-import"],
+      },
+    });
+
+    const index = loadInstalledPluginIndex({
+      candidates: [
+        createPluginCandidate({
+          rootDir,
+          packageName: "@vendor/migration-plugin",
+          packageVersion: "1.0.0",
+        }),
+      ],
+      env: hermeticEnv(),
+    });
+
+    expect(index.plugins[0]).toMatchObject({
+      pluginId: "migration-plugin",
+      enabledByDefault: true,
+      startup: {
+        sidecar: false,
+      },
+    });
+  });
+
   it("keeps bundle format metadata needed for manifest reconstruction", () => {
     const rootDir = makeTempDir();
     fs.mkdirSync(path.join(rootDir, ".claude-plugin"), { recursive: true });

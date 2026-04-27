@@ -443,7 +443,7 @@ vi.mock("./reply-media-paths.runtime.js", () => ({
   createReplyMediaPathNormalizer: (params: unknown) =>
     replyMediaPathMocks.createReplyMediaPathNormalizer(params),
 }));
-vi.mock("../../agents/runtime-plugins.js", () => ({
+vi.mock("./runtime-plugins.runtime.js", () => ({
   ensureRuntimePluginsLoaded: runtimePluginMocks.ensureRuntimePluginsLoaded,
 }));
 vi.mock("./conversation-binding-input.js", () => ({
@@ -3481,7 +3481,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyResolver).toHaveBeenCalledTimes(1);
   });
 
-  it("passes configOverride to replyResolver when provided", async () => {
+  it("passes the loaded config plus configOverride patch to replyResolver when provided", async () => {
     setNoAbort();
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
@@ -3509,10 +3509,12 @@ describe("dispatchReplyFromConfig", () => {
       configOverride: overrideCfg,
     });
 
-    expect(receivedCfg).toBe(overrideCfg);
+    expect(receivedCfg).not.toBe(cfg);
+    expect(receivedCfg).not.toBe(overrideCfg);
+    expect(receivedCfg).toEqual(overrideCfg);
   });
 
-  it("does not pass cfg as implicit configOverride when configOverride is not provided", async () => {
+  it("passes the already loaded config to replyResolver when configOverride is not provided", async () => {
     setNoAbort();
     const cfg = { agents: { defaults: { userTimezone: "UTC" } } } as OpenClawConfig;
     const dispatcher = createDispatcher();
@@ -3530,7 +3532,7 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(receivedCfg).toBeUndefined();
+    expect(receivedCfg).toBe(cfg);
   });
 
   it("suppresses isReasoning payloads from final replies (WhatsApp channel)", async () => {

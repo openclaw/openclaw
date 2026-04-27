@@ -2,6 +2,13 @@
   "id": "together",
   "enabledByDefault": true,
   "providers": ["together"],
+  "providerRequest": {
+    "providers": {
+      "together": {
+        "family": "together"
+      }
+    }
+  },
   "providerAuthEnvVars": {
     "together": ["TOGETHER_API_KEY"]
   },

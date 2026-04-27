@@ -3,7 +3,7 @@
 
 import path from "node:path";
 import { isHelpOrVersionInvocation } from "../cli/argv.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
 import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
@@ -21,7 +21,11 @@ type ModelRegistryLike = {
   getAll: () => ModelEntry[];
 };
 type ConfigModelEntry = { id?: string; contextWindow?: number; contextTokens?: number };
-type ProviderConfigEntry = { models?: ConfigModelEntry[] };
+type ProviderConfigEntry = {
+  contextWindow?: number;
+  contextTokens?: number;
+  models?: ConfigModelEntry[];
+};
 type ModelsConfig = { providers?: Record<string, ProviderConfigEntry | undefined> };
 type AgentModelEntry = { params?: Record<string, unknown> };
 
@@ -83,7 +87,11 @@ export function applyConfiguredContextWindows(params: {
           ? model.contextTokens
           : typeof model?.contextWindow === "number"
             ? model.contextWindow
-            : undefined;
+            : typeof provider?.contextTokens === "number"
+              ? provider.contextTokens
+              : typeof provider?.contextWindow === "number"
+                ? provider.contextWindow
+                : undefined;
       if (!modelId || !contextTokens || contextTokens <= 0) {
         continue;
       }
@@ -185,7 +193,7 @@ function primeConfiguredContextWindows(): OpenClawConfig | undefined {
     return undefined;
   }
   try {
-    const cfg = loadConfig();
+    const cfg = getRuntimeConfig();
     applyConfiguredContextWindows({
       cache: MODEL_CONTEXT_TOKEN_CACHE,
       modelsConfig: cfg.models as ModelsConfig | undefined,
@@ -340,29 +348,40 @@ function resolveConfiguredProviderContextTokens(
   // Mirror the lookup order in pi-embedded-runner/model.ts: exact key first,
   // then normalized fallback. This prevents alias collisions from picking the
   // wrong configured cap based on Object.entries iteration order.
+  function readProviderContextTokens(providerConfig: ProviderConfigEntry | undefined) {
+    return typeof providerConfig?.contextTokens === "number"
+      ? providerConfig.contextTokens
+      : typeof providerConfig?.contextWindow === "number"
+        ? providerConfig.contextWindow
+        : undefined;
+  }
+
   function findContextTokens(matchProviderId: (id: string) => boolean): number | undefined {
     for (const [providerId, providerConfig] of Object.entries(providers!)) {
       if (!matchProviderId(providerId)) {
         continue;
       }
-      if (!Array.isArray(providerConfig?.models)) {
-        continue;
-      }
-      for (const m of providerConfig.models) {
-        const contextTokens =
-          typeof m?.contextTokens === "number"
-            ? m.contextTokens
-            : typeof m?.contextWindow === "number"
-              ? m.contextWindow
-              : undefined;
-        if (
-          typeof m?.id === "string" &&
-          m.id === model &&
-          typeof contextTokens === "number" &&
-          contextTokens > 0
-        ) {
-          return contextTokens;
+      if (Array.isArray(providerConfig?.models)) {
+        for (const m of providerConfig.models) {
+          const contextTokens =
+            typeof m?.contextTokens === "number"
+              ? m.contextTokens
+              : typeof m?.contextWindow === "number"
+                ? m.contextWindow
+                : undefined;
+          if (
+            typeof m?.id === "string" &&
+            m.id === model &&
+            typeof contextTokens === "number" &&
+            contextTokens > 0
+          ) {
+            return contextTokens;
+          }
         }
+      }
+      const providerContextTokens = readProviderContextTokens(providerConfig);
+      if (typeof providerContextTokens === "number" && providerContextTokens > 0) {
+        return providerContextTokens;
       }
     }
     return undefined;

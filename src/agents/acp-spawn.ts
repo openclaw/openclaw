@@ -32,7 +32,7 @@ import {
   DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT,
   DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
 } from "../config/agent-limits.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore } from "../config/sessions/store.js";
 import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
@@ -82,6 +82,7 @@ import {
 } from "./subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { countActiveRunsForSession, getSubagentRunByChildSessionKey } from "./subagent-registry.js";
+import { resolveSubagentTargetPolicy } from "./subagent-target-policy.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
 
 const log = createSubsystemLogger("agents/acp-spawn");
@@ -786,24 +787,18 @@ function resolveAcpSubagentEnvelopeState(params: {
     };
   }
 
-  if (params.targetAgentId !== requesterAgentId) {
-    const allowAgents =
+  const targetPolicy = resolveSubagentTargetPolicy({
+    requesterAgentId,
+    targetAgentId: params.targetAgentId,
+    requestedAgentId: params.requestedAgentId,
+    allowAgents:
       resolveAgentConfig(params.cfg, requesterAgentId)?.subagents?.allowAgents ??
-      params.cfg.agents?.defaults?.subagents?.allowAgents ??
-      [];
-    const allowAny = allowAgents.some((value) => value.trim() === "*");
-    const normalizedTargetId = normalizeOptionalLowercaseString(params.targetAgentId) ?? "";
-    const allowSet = new Set(
-      allowAgents
-        .filter((value) => value.trim() && value.trim() !== "*")
-        .map((value) => normalizeOptionalLowercaseString(normalizeAgentId(value)) ?? ""),
-    );
-    if (!allowAny && !allowSet.has(normalizedTargetId)) {
-      const allowedText = allowSet.size > 0 ? Array.from(allowSet).join(", ") : "none";
-      return {
-        error: `agentId is not allowed for sessions_spawn (allowed: ${allowedText})`,
-      };
-    }
+      params.cfg.agents?.defaults?.subagents?.allowAgents,
+  });
+  if (!targetPolicy.ok) {
+    return {
+      error: targetPolicy.error,
+    };
   }
 
   const childCapabilities = resolveSubagentCapabilities({
@@ -1063,7 +1058,7 @@ export async function spawnAcpDirect(
   params: SpawnAcpParams,
   ctx: SpawnAcpContext,
 ): Promise<SpawnAcpResult> {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const requesterInternalKey = resolveRequesterInternalSessionKey({
     cfg,
     requesterSessionKey: ctx.agentSessionKey,
@@ -1318,6 +1313,7 @@ export async function spawnAcpDirect(
         idempotencyKey: childIdem,
         deliver: deliveryPlan.useInlineDelivery,
         lane: AGENT_LANE_SUBAGENT,
+        acpTurnSource: "manual_spawn",
         ...(params.runTimeoutSeconds != null ? { timeout: params.runTimeoutSeconds } : {}),
         label: params.label || undefined,
       },

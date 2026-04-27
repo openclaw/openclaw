@@ -31,14 +31,6 @@ on:
           - e2ee-smoke
           - e2ee-deep
           - e2ee-cli
-      matrix_shards:
-        description: Shard matrix_profile=all into parallel Matrix profile jobs
-        required: false
-        default: "false"
-        type: choice
-        options:
-          - "false"
-          - "true"
 
 permissions:
   contents: read
@@ -220,7 +212,7 @@ jobs:
   run_live_matrix:
     name: Run Matrix live QA lane
     needs: [authorize_actor, validate_selected_ref]
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.matrix_profile == 'all' && inputs.matrix_shards == 'true') }}
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.matrix_profile == 'all') }}
     runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 60
     environment: qa-live-shared
@@ -267,15 +259,20 @@ jobs:
           output_dir=".artifacts/qa-e2e/matrix-live-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
 
-          pnpm openclaw qa matrix \
+          matrix_args=(
             --repo-root . \
             --output-dir "${output_dir}" \
             --provider-mode live-frontier \
             --model "${OPENCLAW_CI_OPENAI_MODEL}" \
             --alt-model "${OPENCLAW_CI_OPENAI_MODEL}" \
             --profile "${INPUT_MATRIX_PROFILE}" \
-            --fast \
-            --fail-fast
+            --fast
+          )
+          if pnpm openclaw qa matrix --help 2>/dev/null | grep -F -q -- "--fail-fast"; then
+            matrix_args+=(--fail-fast)
+          fi
+
+          pnpm openclaw qa matrix "${matrix_args[@]}"
 
       - name: Upload Matrix QA artifacts
         if: always()
@@ -289,7 +286,7 @@ jobs:
   run_live_matrix_sharded:
     name: Run Matrix live QA lane (${{ matrix.profile }})
     needs: [authorize_actor, validate_selected_ref]
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.matrix_profile == 'all' && inputs.matrix_shards == 'true' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.matrix_profile == 'all' }}
     runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 60
     environment: qa-live-shared
@@ -344,15 +341,20 @@ jobs:
           output_dir=".artifacts/qa-e2e/matrix-live-${{ matrix.profile }}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
 
-          pnpm openclaw qa matrix \
+          matrix_args=(
             --repo-root . \
             --output-dir "${output_dir}" \
             --provider-mode live-frontier \
             --model "${OPENCLAW_CI_OPENAI_MODEL}" \
             --alt-model "${OPENCLAW_CI_OPENAI_MODEL}" \
             --profile "${{ matrix.profile }}" \
-            --fast \
-            --fail-fast
+            --fast
+          )
+          if pnpm openclaw qa matrix --help 2>/dev/null | grep -F -q -- "--fail-fast"; then
+            matrix_args+=(--fail-fast)
+          fi
+
+          pnpm openclaw qa matrix "${matrix_args[@]}"
 
       - name: Upload Matrix QA shard artifacts
         if: always()

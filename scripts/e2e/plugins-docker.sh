@@ -38,6 +38,31 @@ else
   exit 1
 fi
 export OPENCLAW_ENTRY
+PACKAGE_VERSION="$(node -p 'require("./package.json").version')"
+OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT="$(
+  node - "$PACKAGE_VERSION" <<'NODE'
+const version = process.argv[2] || "";
+const match = /^(\d{4})\.(\d{1,2})\.(\d{1,2})(?:[-+].*)?$/.exec(version);
+if (!match) {
+  console.log("0");
+  process.exit(0);
+}
+const value = [Number(match[1]), Number(match[2]), Number(match[3])];
+const max = [2026, 4, 25];
+for (let i = 0; i < value.length; i += 1) {
+  if (value[i] < max[i]) {
+    console.log("1");
+    process.exit(0);
+  }
+  if (value[i] > max[i]) {
+    console.log("0");
+    process.exit(0);
+  }
+}
+console.log("1");
+NODE
+)"
+export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
 
 home_dir=$(mktemp -d "/tmp/openclaw-plugins-e2e.XXXXXX")
 export HOME="$home_dir"
@@ -562,12 +587,21 @@ const indexPath = path.join(process.env.HOME, ".openclaw", "plugins", "installs.
 const index = JSON.parse(fs.readFileSync(indexPath, "utf8"));
 const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
 const config = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, "utf8")) : {};
-const installRecords = index.installRecords ?? index.records ?? config.plugins?.installs ?? {};
+const allowLegacyCompat = process.env.OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT === "1";
+if (!allowLegacyCompat && !index.installRecords) {
+  throw new Error("expected modern installRecords in installed plugin index");
+}
+const installRecords = allowLegacyCompat
+  ? index.installRecords ?? index.records ?? config.plugins?.installs ?? {}
+  : index.installRecords ?? {};
 for (const id of ["marketplace-shortcut", "marketplace-direct"]) {
   const record = installRecords[id];
   if (!record) {
-    console.log(`legacy package did not persist marketplace install record for ${id}`);
-    continue;
+    if (allowLegacyCompat) {
+      console.log(`legacy package did not persist marketplace install record for ${id}`);
+      continue;
+    }
+    throw new Error(`missing marketplace install record for ${id}`);
   }
   if (record.source !== "marketplace") {
     throw new Error(`unexpected source for ${id}: ${record.source}`);
@@ -853,7 +887,13 @@ const indexPath = path.join(process.env.HOME, ".openclaw", "plugins", "installs.
 const index = JSON.parse(fs.readFileSync(indexPath, "utf8"));
 const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
 const config = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, "utf8")) : {};
-const installRecords = index.installRecords ?? index.records ?? config.plugins?.installs ?? {};
+const allowLegacyCompat = process.env.OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT === "1";
+if (!allowLegacyCompat && !index.installRecords) {
+  throw new Error("expected modern installRecords in installed plugin index");
+}
+const installRecords = allowLegacyCompat
+  ? index.installRecords ?? index.records ?? config.plugins?.installs ?? {}
+  : index.installRecords ?? {};
 const record = installRecords[pluginId];
 if (!record) throw new Error(`missing ClawHub install record for ${pluginId}`);
 if (record.source !== "clawhub") {
@@ -906,15 +946,17 @@ if (installRecords[pluginId]) {
   throw new Error(`ClawHub install record still present after uninstall: ${pluginId}`);
 }
 
-const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
-const config = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, "utf8")) : {};
-if (config.plugins?.entries?.[pluginId]) {
+const configAfterUninstallPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
+const configAfterUninstall = fs.existsSync(configAfterUninstallPath)
+  ? JSON.parse(fs.readFileSync(configAfterUninstallPath, "utf8"))
+  : {};
+if (configAfterUninstall.plugins?.entries?.[pluginId]) {
   throw new Error(`ClawHub config entry still present after uninstall: ${pluginId}`);
 }
-if ((config.plugins?.allow || []).includes(pluginId)) {
+if ((configAfterUninstall.plugins?.allow || []).includes(pluginId)) {
   throw new Error(`ClawHub allowlist entry still present after uninstall: ${pluginId}`);
 }
-if ((config.plugins?.deny || []).includes(pluginId)) {
+if ((configAfterUninstall.plugins?.deny || []).includes(pluginId)) {
   throw new Error(`ClawHub denylist entry still present after uninstall: ${pluginId}`);
 }
 if (fs.existsSync(installPath)) {

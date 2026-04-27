@@ -191,7 +191,9 @@ Quick `/acp` flow from chat:
 
     For `sessions_spawn`, `runtime: "acp"` is advertised only when ACP
     is enabled, the requester is not sandboxed, and an ACP runtime
-    backend is loaded. It targets ACP harness ids such as `codex`,
+    backend is loaded. `acp.dispatch.enabled=false` pauses automatic
+    ACP thread dispatch but does not hide or block explicit
+    `sessions_spawn({ runtime: "acp" })` calls. It targets ACP harness ids such as `codex`,
     `claude`, `droid`, `gemini`, or `opencode`. Do not pass a normal
     OpenClaw config agent id from `agents_list` unless that entry is
     explicitly configured with `agents.list[].runtime.type="acp"`;
@@ -286,7 +288,7 @@ Examples:
     Required feature flags for thread-bound ACP:
 
     - `acp.enabled=true`
-    - `acp.dispatch.enabled` is on by default (set `false` to pause ACP dispatch).
+    - `acp.dispatch.enabled` is on by default (set `false` to pause automatic ACP thread dispatch; explicit `sessions_spawn({ runtime: "acp" })` calls still work).
     - Channel-adapter ACP thread-spawn flag enabled (adapter-specific):
       - Discord: `channels.discord.threadBindings.spawnAcpSessions=true`
       - Telegram: `channels.telegram.threadBindings.spawnAcpSessions=true`
@@ -792,7 +794,7 @@ permission modes, see
 | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `ACP runtime backend is not configured`                                     | Backend plugin missing, disabled, or blocked by `plugins.allow`.                | Install and enable backend plugin, include `acpx` in `plugins.allow` when that allowlist is set, then run `/acp doctor`.                                                 |
 | `ACP is disabled by policy (acp.enabled=false)`                             | ACP globally disabled.                                                          | Set `acp.enabled=true`.                                                                                                                                                  |
-| `ACP dispatch is disabled by policy (acp.dispatch.enabled=false)`           | Dispatch from normal thread messages disabled.                                  | Set `acp.dispatch.enabled=true`.                                                                                                                                         |
+| `ACP dispatch is disabled by policy (acp.dispatch.enabled=false)`           | Automatic dispatch from normal thread messages disabled.                        | Set `acp.dispatch.enabled=true` to resume automatic thread routing; explicit `sessions_spawn({ runtime: "acp" })` calls still work.                                      |
 | `ACP agent "<id>" is not allowed by policy`                                 | Agent not in allowlist.                                                         | Use allowed `agentId` or update `acp.allowedAgents`.                                                                                                                     |
 | `/acp doctor` reports backend not ready right after startup                 | Plugin dependency probe or self-repair is still running.                        | Wait briefly and rerun `/acp doctor`; if it stays unhealthy, inspect the backend install error and plugin allow/deny policy.                                             |
 | Harness command not found                                                   | Adapter CLI is not installed or first-run `npx` fetch failed.                   | Install/prewarm the adapter on the Gateway host, or configure the acpx agent command explicitly.                                                                         |

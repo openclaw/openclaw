@@ -35,9 +35,11 @@ import {
   clearBundledRuntimeDependencyNodePaths,
   ensureBundledPluginRuntimeDeps,
   installBundledRuntimeDeps,
-  resolveBundledRuntimeDependencyInstallRoot,
+  materializeBundledRuntimeMirrorDistFile,
+  resolveBundledRuntimeDependencyInstallRootPlan,
   resolveBundledRuntimeDependencyPackageRoot,
   registerBundledRuntimeDependencyNodePath,
+  shouldMaterializeBundledRuntimeMirrorDistFile,
   withBundledRuntimeDepsFilesystemLock,
   type BundledRuntimeDepsInstallParams,
 } from "./bundled-runtime-deps.js";
@@ -64,6 +66,7 @@ import {
 } from "./config-state.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import { getGlobalHookRunner, initializeGlobalHookRunner } from "./hook-runner-global.js";
+import { toSafeImportPath } from "./import-specifier.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import {
   clearPluginInteractiveHandlers,
@@ -289,6 +292,7 @@ type PluginRegistrySnapshot = {
     musicGenerationProviders: PluginRegistry["musicGenerationProviders"];
     webFetchProviders: PluginRegistry["webFetchProviders"];
     webSearchProviders: PluginRegistry["webSearchProviders"];
+    migrationProviders: PluginRegistry["migrationProviders"];
     codexAppServerExtensionFactories: PluginRegistry["codexAppServerExtensionFactories"];
     agentToolResultMiddlewares: PluginRegistry["agentToolResultMiddlewares"];
     memoryEmbeddingProviders: PluginRegistry["memoryEmbeddingProviders"];
@@ -327,6 +331,7 @@ function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistrySnapsho
       musicGenerationProviders: [...registry.musicGenerationProviders],
       webFetchProviders: [...registry.webFetchProviders],
       webSearchProviders: [...registry.webSearchProviders],
+      migrationProviders: [...registry.migrationProviders],
       codexAppServerExtensionFactories: [...registry.codexAppServerExtensionFactories],
       agentToolResultMiddlewares: [...registry.agentToolResultMiddlewares],
       memoryEmbeddingProviders: [...registry.memoryEmbeddingProviders],
@@ -364,6 +369,7 @@ function restorePluginRegistry(registry: PluginRegistry, snapshot: PluginRegistr
   registry.musicGenerationProviders = snapshot.arrays.musicGenerationProviders;
   registry.webFetchProviders = snapshot.arrays.webFetchProviders;
   registry.webSearchProviders = snapshot.arrays.webSearchProviders;
+  registry.migrationProviders = snapshot.arrays.migrationProviders;
   registry.codexAppServerExtensionFactories = snapshot.arrays.codexAppServerExtensionFactories;
   registry.agentToolResultMiddlewares = snapshot.arrays.agentToolResultMiddlewares;
   registry.memoryEmbeddingProviders = snapshot.arrays.memoryEmbeddingProviders;
@@ -422,32 +428,6 @@ function runPluginRegisterSync(
   } finally {
     guarded.close();
   }
-}
-
-/**
- * On Windows, the Node.js ESM loader requires absolute paths to be expressed
- * as file:// URLs (e.g. file:///C:/Users/...). Raw drive-letter paths like
- * C:\... are rejected with ERR_UNSUPPORTED_ESM_URL_SCHEME because the loader
- * mistakes the drive letter for an unknown URL scheme.
- *
- * This helper converts Windows absolute import specifiers to file:// URLs and
- * leaves everything else unchanged.
- */
-function toSafeImportPath(specifier: string): string {
-  if (process.platform !== "win32") {
-    return specifier;
-  }
-  if (specifier.startsWith("file://")) {
-    return specifier;
-  }
-  if (path.win32.isAbsolute(specifier)) {
-    const normalizedSpecifier = specifier.replaceAll("\\", "/");
-    if (normalizedSpecifier.startsWith("//")) {
-      return new URL(`file:${encodeURI(normalizedSpecifier)}`).href;
-    }
-    return new URL(`file:///${encodeURI(normalizedSpecifier)}`).href;
-  }
-  return specifier;
 }
 
 type RuntimeDependencyPackageJson = {
@@ -720,6 +700,9 @@ function mirrorBundledPluginRuntimeRoot(params: {
         // Best-effort only: the access check below will surface non-writable dirs.
       }
       fs.accessSync(mirrorParent, fs.constants.W_OK);
+      if (path.resolve(mirrorRoot) === path.resolve(params.pluginRoot)) {
+        return mirrorRoot;
+      }
       const tempDir = fs.mkdtempSync(path.join(mirrorParent, `.plugin-${params.pluginId}-`));
       const stagedRoot = path.join(tempDir, "plugin");
       try {
@@ -743,14 +726,56 @@ function prepareBundledPluginRuntimeDistMirror(params: {
   const sourceDistRootName = path.basename(sourceDistRoot);
   const mirrorDistRoot = path.join(params.installRoot, sourceDistRootName);
   const mirrorExtensionsRoot = path.join(mirrorDistRoot, "extensions");
+  ensureBundledRuntimeMirrorDirectory(mirrorDistRoot);
   fs.mkdirSync(mirrorExtensionsRoot, { recursive: true, mode: 0o755 });
   ensureBundledRuntimeDistPackageJson(mirrorDistRoot);
-  for (const entry of fs.readdirSync(sourceDistRoot, { withFileTypes: true })) {
+  mirrorBundledRuntimeDistRootEntries({
+    sourceDistRoot,
+    mirrorDistRoot,
+  });
+  if (sourceDistRootName === "dist-runtime") {
+    mirrorCanonicalBundledRuntimeDistRoot({
+      installRoot: params.installRoot,
+      pluginRoot: params.pluginRoot,
+      sourceRuntimeDistRoot: sourceDistRoot,
+    });
+  }
+  ensureOpenClawPluginSdkAlias(mirrorDistRoot);
+  return mirrorExtensionsRoot;
+}
+
+function ensureBundledRuntimeMirrorDirectory(targetRoot: string): void {
+  try {
+    const stat = fs.lstatSync(targetRoot);
+    if (stat.isDirectory() && !stat.isSymbolicLink()) {
+      return;
+    }
+    fs.rmSync(targetRoot, { recursive: true, force: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+  fs.mkdirSync(targetRoot, { recursive: true, mode: 0o755 });
+}
+
+function mirrorBundledRuntimeDistRootEntries(params: {
+  sourceDistRoot: string;
+  mirrorDistRoot: string;
+}): void {
+  for (const entry of fs.readdirSync(params.sourceDistRoot, { withFileTypes: true })) {
     if (entry.name === "extensions") {
       continue;
     }
-    const sourcePath = path.join(sourceDistRoot, entry.name);
-    const targetPath = path.join(mirrorDistRoot, entry.name);
+    const sourcePath = path.join(params.sourceDistRoot, entry.name);
+    const targetPath = path.join(params.mirrorDistRoot, entry.name);
+    if (path.resolve(sourcePath) === path.resolve(targetPath)) {
+      continue;
+    }
+    if (entry.isFile() && shouldMaterializeBundledRuntimeMirrorDistFile(sourcePath)) {
+      materializeBundledRuntimeMirrorDistFile(sourcePath, targetPath);
+      continue;
+    }
     if (fs.existsSync(targetPath)) {
       continue;
     }
@@ -767,26 +792,44 @@ function prepareBundledPluginRuntimeDistMirror(params: {
       }
     }
   }
-  if (sourceDistRootName === "dist-runtime") {
-    const sourceCanonicalDistRoot = path.join(path.dirname(sourceDistRoot), "dist");
-    const targetCanonicalDistRoot = path.join(params.installRoot, "dist");
-    if (fs.existsSync(sourceCanonicalDistRoot)) {
-      const targetMatchesSource =
-        fs.existsSync(targetCanonicalDistRoot) &&
-        safeRealpathOrResolve(targetCanonicalDistRoot) ===
-          safeRealpathOrResolve(sourceCanonicalDistRoot);
-      if (!targetMatchesSource) {
-        fs.rmSync(targetCanonicalDistRoot, { recursive: true, force: true });
-        try {
-          fs.symlinkSync(sourceCanonicalDistRoot, targetCanonicalDistRoot, "junction");
-        } catch {
-          copyBundledPluginRuntimeRoot(sourceCanonicalDistRoot, targetCanonicalDistRoot);
-        }
-      }
-    }
+}
+
+function mirrorCanonicalBundledRuntimeDistRoot(params: {
+  installRoot: string;
+  pluginRoot: string;
+  sourceRuntimeDistRoot: string;
+}): void {
+  const sourceCanonicalDistRoot = path.join(path.dirname(params.sourceRuntimeDistRoot), "dist");
+  if (!fs.existsSync(sourceCanonicalDistRoot)) {
+    return;
   }
-  ensureOpenClawPluginSdkAlias(mirrorDistRoot);
-  return mirrorExtensionsRoot;
+  const targetCanonicalDistRoot = path.join(params.installRoot, "dist");
+  ensureBundledRuntimeMirrorDirectory(targetCanonicalDistRoot);
+  fs.mkdirSync(path.join(targetCanonicalDistRoot, "extensions"), { recursive: true, mode: 0o755 });
+  ensureBundledRuntimeDistPackageJson(targetCanonicalDistRoot);
+  mirrorBundledRuntimeDistRootEntries({
+    sourceDistRoot: sourceCanonicalDistRoot,
+    mirrorDistRoot: targetCanonicalDistRoot,
+  });
+  ensureOpenClawPluginSdkAlias(targetCanonicalDistRoot);
+
+  const pluginId = path.basename(params.pluginRoot);
+  const sourceCanonicalPluginRoot = path.join(sourceCanonicalDistRoot, "extensions", pluginId);
+  if (!fs.existsSync(sourceCanonicalPluginRoot)) {
+    return;
+  }
+  const targetCanonicalPluginRoot = path.join(targetCanonicalDistRoot, "extensions", pluginId);
+  const tempDir = fs.mkdtempSync(
+    path.join(path.dirname(targetCanonicalPluginRoot), `.plugin-${pluginId}-`),
+  );
+  const stagedRoot = path.join(tempDir, "plugin");
+  try {
+    copyBundledPluginRuntimeRoot(sourceCanonicalPluginRoot, stagedRoot);
+    fs.rmSync(targetCanonicalPluginRoot, { recursive: true, force: true });
+    fs.renameSync(stagedRoot, targetCanonicalPluginRoot);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
 }
 
 function ensureBundledRuntimeDistPackageJson(mirrorDistRoot: string): void {
@@ -798,6 +841,9 @@ function ensureBundledRuntimeDistPackageJson(mirrorDistRoot: string): void {
 }
 
 function copyBundledPluginRuntimeRoot(sourceRoot: string, targetRoot: string): void {
+  if (path.resolve(sourceRoot) === path.resolve(targetRoot)) {
+    return;
+  }
   fs.mkdirSync(targetRoot, { recursive: true, mode: 0o755 });
   for (const entry of fs.readdirSync(sourceRoot, { withFileTypes: true })) {
     if (entry.name === "node_modules") {
@@ -1762,6 +1808,7 @@ function createPluginRecord(params: {
     musicGenerationProviderIds: [],
     webFetchProviderIds: [],
     webSearchProviderIds: [],
+    migrationProviderIds: [],
     contextEngineIds: [],
     memoryEmbeddingProviderIds: [],
     agentHarnessIds: [],
@@ -2505,7 +2552,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         let runtimeDepsInstallStartedAt: number | null = null;
         let runtimeDepsInstallSpecs: string[] = [];
         try {
-          const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env });
+          const installRootPlan = resolveBundledRuntimeDependencyInstallRootPlan(pluginRoot, {
+            env,
+          });
+          const installRoot = installRootPlan.installRoot;
           const retainSpecs = bundledRuntimeDepsRetainSpecsByInstallRoot.get(installRoot) ?? [];
           const depsInstallResult = ensureBundledPluginRuntimeDeps({
             pluginId: record.id,
@@ -2558,8 +2608,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
               registerBundledRuntimeDependencyNodePath(packageRoot);
               registerBundledRuntimeDependencyJitiAliases(packageRoot);
             }
-            registerBundledRuntimeDependencyNodePath(installRoot);
-            registerBundledRuntimeDependencyJitiAliases(installRoot);
+            for (const searchRoot of installRootPlan.searchRoots) {
+              registerBundledRuntimeDependencyNodePath(searchRoot);
+              registerBundledRuntimeDependencyJitiAliases(searchRoot);
+            }
             runtimePluginRoot = mirrorBundledPluginRuntimeRoot({
               pluginId: record.id,
               pluginRoot,

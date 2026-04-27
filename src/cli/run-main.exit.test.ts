@@ -20,6 +20,15 @@ const getProgramContextMock = vi.hoisted(() => vi.fn(() => null));
 const registerCoreCliByNameMock = vi.hoisted(() => vi.fn());
 const registerSubCliByNameMock = vi.hoisted(() => vi.fn());
 const restoreTerminalStateMock = vi.hoisted(() => vi.fn());
+const hasEnvHttpProxyAgentConfiguredMock = vi.hoisted(() => vi.fn(() => false));
+const ensureGlobalUndiciEnvProxyDispatcherMock = vi.hoisted(() => vi.fn());
+const runCrestodianMock = vi.hoisted(() => vi.fn(async () => {}));
+const progressDoneMock = vi.hoisted(() => vi.fn());
+const createCliProgressMock = vi.hoisted(() =>
+  vi.fn(() => ({
+    done: progressDoneMock,
+  })),
+);
 const maybeRunCliInContainerMock = vi.hoisted(() =>
   vi.fn<
     (argv: string[]) => { handled: true; exitCode: number } | { handled: false; argv: string[] }
@@ -96,12 +105,29 @@ vi.mock("../terminal/restore.js", () => ({
   restoreTerminalState: restoreTerminalStateMock,
 }));
 
+vi.mock("../infra/net/proxy-env.js", () => ({
+  hasEnvHttpProxyAgentConfigured: hasEnvHttpProxyAgentConfiguredMock,
+}));
+
+vi.mock("../infra/net/undici-global-dispatcher.js", () => ({
+  ensureGlobalUndiciEnvProxyDispatcher: ensureGlobalUndiciEnvProxyDispatcherMock,
+}));
+
+vi.mock("../crestodian/crestodian.js", () => ({
+  runCrestodian: runCrestodianMock,
+}));
+
+vi.mock("./progress.js", () => ({
+  createCliProgress: createCliProgressMock,
+}));
+
 describe("runCli exit behavior", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     hasMemoryRuntimeMock.mockReturnValue(false);
     outputPrecomputedBrowserHelpTextMock.mockReturnValue(false);
     outputPrecomputedRootHelpTextMock.mockReturnValue(false);
+    hasEnvHttpProxyAgentConfiguredMock.mockReturnValue(false);
     getProgramContextMock.mockReturnValue(null);
     delete process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH;
   });
@@ -146,6 +172,17 @@ describe("runCli exit behavior", () => {
     exitSpy.mockRestore();
   });
 
+  it("keeps root help on the precomputed path without proxy bootstrap", async () => {
+    outputPrecomputedRootHelpTextMock.mockReturnValueOnce(true);
+
+    await runCli(["node", "openclaw", "--help"]);
+
+    expect(outputPrecomputedRootHelpTextMock).toHaveBeenCalledTimes(1);
+    expect(hasEnvHttpProxyAgentConfiguredMock).not.toHaveBeenCalled();
+    expect(ensureGlobalUndiciEnvProxyDispatcherMock).not.toHaveBeenCalled();
+    expect(runCrestodianMock).not.toHaveBeenCalled();
+  });
+
   it("renders root help without building the full program", async () => {
     const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
       throw new Error(`unexpected process.exit(${String(code)})`);
@@ -161,6 +198,52 @@ describe("runCli exit behavior", () => {
     expect(closeActiveMemorySearchManagersMock).not.toHaveBeenCalled();
     expect(exitSpy).not.toHaveBeenCalled();
     exitSpy.mockRestore();
+  });
+
+  it("bootstraps env proxy before bare Crestodian startup", async () => {
+    hasEnvHttpProxyAgentConfiguredMock.mockReturnValue(true);
+    const stdinTty = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+    const stdoutTty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
+    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
+
+    try {
+      await runCli(["node", "openclaw"]);
+    } finally {
+      if (stdinTty) {
+        Object.defineProperty(process.stdin, "isTTY", stdinTty);
+      } else {
+        delete (process.stdin as { isTTY?: boolean }).isTTY;
+      }
+      if (stdoutTty) {
+        Object.defineProperty(process.stdout, "isTTY", stdoutTty);
+      } else {
+        delete (process.stdout as { isTTY?: boolean }).isTTY;
+      }
+    }
+
+    expect(ensureGlobalUndiciEnvProxyDispatcherMock).toHaveBeenCalledTimes(1);
+    expect(runCrestodianMock).toHaveBeenCalledWith({ onReady: expect.any(Function) });
+    expect(ensureGlobalUndiciEnvProxyDispatcherMock.mock.invocationCallOrder[0]).toBeLessThan(
+      runCrestodianMock.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("bootstraps env proxy before modern onboard Crestodian startup", async () => {
+    hasEnvHttpProxyAgentConfiguredMock.mockReturnValue(true);
+
+    await runCli(["node", "openclaw", "onboard", "--modern", "--json"]);
+
+    expect(ensureGlobalUndiciEnvProxyDispatcherMock).toHaveBeenCalledTimes(1);
+    expect(runCrestodianMock).toHaveBeenCalledWith({
+      message: undefined,
+      yes: false,
+      json: true,
+      interactive: true,
+    });
+    expect(ensureGlobalUndiciEnvProxyDispatcherMock.mock.invocationCallOrder[0]).toBeLessThan(
+      runCrestodianMock.mock.invocationCallOrder[0],
+    );
   });
 
   it("closes memory managers when a runtime was registered", async () => {

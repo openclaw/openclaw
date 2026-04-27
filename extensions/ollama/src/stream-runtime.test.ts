@@ -207,7 +207,7 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
         };
         expect(requestBody.think).toBe(false);
         expect(requestBody.options?.think).toBeUndefined();
-        expect(requestBody.options?.num_ctx).toBe(131072);
+        expect(requestBody.options?.num_ctx).toBeUndefined();
       },
     );
   });
@@ -260,7 +260,7 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
         };
         expect(requestBody.think).toBe("low");
         expect(requestBody.options?.think).toBeUndefined();
-        expect(requestBody.options?.num_ctx).toBe(131072);
+        expect(requestBody.options?.num_ctx).toBeUndefined();
       },
     );
   });
@@ -332,7 +332,7 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
         };
         expect(requestBody.think).toBe("high");
         expect(requestBody.options?.think).toBeUndefined();
-        expect(requestBody.options?.num_ctx).toBe(131072);
+        expect(requestBody.options?.num_ctx).toBeUndefined();
       },
     );
   });
@@ -1296,9 +1296,12 @@ describe("createOllamaStreamFn", () => {
         }
 
         const requestBody = JSON.parse(requestInit.body) as {
-          options: { num_ctx?: number; num_predict?: number };
+          options?: { num_ctx?: number; num_predict?: number };
         };
-        expect(requestBody.options.num_ctx).toBe(131072);
+        if (!requestBody.options) {
+          throw new Error("Expected Ollama request options");
+        }
+        expect(requestBody.options?.num_ctx).toBeUndefined();
         expect(requestBody.options.num_predict).toBe(123);
       },
     );

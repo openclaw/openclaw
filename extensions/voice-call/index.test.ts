@@ -178,6 +178,32 @@ describe("voice-call plugin", () => {
     expect(respond).toHaveBeenCalledWith(true, { callId: "call-1", initiated: true });
   });
 
+  it("does not block service startup while runtime exposure initializes", async () => {
+    let resolveRuntime: ((runtime: VoiceCallRuntime) => void) | undefined;
+    vi.mocked(createVoiceCallRuntime).mockReturnValueOnce(
+      new Promise<VoiceCallRuntime>((resolve) => {
+        resolveRuntime = resolve;
+      }),
+    );
+    const { service, methods } = setup({ provider: "mock" });
+
+    expect(service).toBeDefined();
+    expect(service!.start(createServiceContext())).toBeUndefined();
+    expect(createVoiceCallRuntime).toHaveBeenCalledTimes(1);
+
+    resolveRuntime?.(runtimeStub);
+    const handler = methods.get("voicecall.initiate") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+    await handler?.({ params: { message: "Hi" }, respond });
+
+    expect(respond).toHaveBeenCalledWith(true, { callId: "call-1", initiated: true });
+  });
+
   it("creates a fresh shared runtime after service stop", async () => {
     const first = setup({ provider: "mock" });
     await first.service?.start(createServiceContext());

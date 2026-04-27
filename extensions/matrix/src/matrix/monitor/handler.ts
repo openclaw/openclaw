@@ -673,7 +673,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         };
         const storeAllowFrom = isDirectMessage ? await readStoreAllowFrom() : [];
         const roomUsers = roomConfig?.users ?? [];
-        const liveCfg = core.config.loadConfig() as CoreConfig;
+        const liveCfg = core.config.current() as CoreConfig;
         const liveAccountAllowlists = resolveMatrixAccountAllowlistConfig({
           cfg: liveCfg,
           accountId,

@@ -1,6 +1,6 @@
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { getHealthSnapshot, type HealthSummary } from "../../commands/health.js";
-import { STATE_DIR, createConfigIO, loadConfig } from "../../config/config.js";
+import { getRuntimeConfig, STATE_DIR, createConfigIO } from "../../config/config.js";
 import { resolveMainSessionKey } from "../../config/sessions.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
 import { getUpdateAvailable } from "../../infra/update-startup.js";
@@ -15,7 +15,7 @@ let healthRefresh: Promise<HealthSummary> | null = null;
 let broadcastHealthUpdate: ((snap: HealthSummary) => void) | null = null;
 
 export function buildGatewaySnapshot(opts?: { includeSensitive?: boolean }): Snapshot {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const defaultAgentId = resolveDefaultAgentId(cfg);
   const mainKey = normalizeMainKey(cfg.session?.mainKey);
   const mainSessionKey = resolveMainSessionKey(cfg);

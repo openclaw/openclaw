@@ -9,3 +9,5 @@ export * from "../security/context-visibility.js";
 export * from "../security/dm-policy-shared.js";
 export * from "../security/external-content.js";
 export * from "../security/safe-regex.js";
+export { redactSensitiveText } from "../logging/redact.js";
+export { safeEqualSecret } from "../security/secret-equal.js";

@@ -42,6 +42,15 @@ describe("clawhub helpers", () => {
       name: "demo",
       version: "1.2.3",
     });
+    expect(parseClawHubPluginSpec("clawhub:@scope/pkg")).toEqual({
+      name: "@scope/pkg",
+    });
+    expect(parseClawHubPluginSpec("clawhub:@scope/pkg@1.2.3")).toEqual({
+      name: "@scope/pkg",
+      version: "1.2.3",
+    });
+    expect(parseClawHubPluginSpec("clawhub:demo@")).toBeNull();
+    expect(parseClawHubPluginSpec("clawhub:@scope/pkg@")).toBeNull();
     expect(parseClawHubPluginSpec("@scope/pkg")).toBeNull();
   });
 
@@ -85,6 +94,26 @@ describe("clawhub helpers", () => {
     expect(satisfiesPluginApiRange("2026.3.22", ">=2026.3.22")).toBe(true);
     expect(satisfiesPluginApiRange("2026.3.21", ">=2026.3.22")).toBe(false);
     expect(satisfiesPluginApiRange("invalid", "^1.2.0")).toBe(false);
+  });
+
+  it.each(["*", "x", "X", "=*", "=x", ">=*", ">=x", "<=*", "^*", "~*"] as const)(
+    "accepts plugin api wildcard range %s for valid runtime versions",
+    (range) => {
+      expect(satisfiesPluginApiRange("2026.3.24", range)).toBe(true);
+      expect(satisfiesPluginApiRange("1.0.0", range)).toBe(true);
+    },
+  );
+
+  it("keeps wildcard plugin api ranges intersected with concrete comparators", () => {
+    expect(satisfiesPluginApiRange("2026.3.24", "* >=2026.3.22")).toBe(true);
+    expect(satisfiesPluginApiRange("2026.3.21", "* >=2026.3.22")).toBe(false);
+    expect(satisfiesPluginApiRange("2026.3.24", "x <2026.3.24")).toBe(false);
+  });
+
+  it("rejects invalid runtime versions and impossible wildcard comparators", () => {
+    expect(satisfiesPluginApiRange("invalid", "*")).toBe(false);
+    expect(satisfiesPluginApiRange("2026.3.24", ">*")).toBe(false);
+    expect(satisfiesPluginApiRange("2026.3.24", "<*")).toBe(false);
   });
 
   it("checks min gateway versions with loose host labels", () => {

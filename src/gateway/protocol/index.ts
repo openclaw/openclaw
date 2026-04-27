@@ -52,6 +52,16 @@ import {
   TalkConfigParamsSchema,
   type TalkConfigResult,
   TalkConfigResultSchema,
+  type TalkRealtimeRelayAudioParams,
+  TalkRealtimeRelayAudioParamsSchema,
+  type TalkRealtimeRelayMarkParams,
+  TalkRealtimeRelayMarkParamsSchema,
+  type TalkRealtimeRelayOkResult,
+  TalkRealtimeRelayOkResultSchema,
+  type TalkRealtimeRelayStopParams,
+  TalkRealtimeRelayStopParamsSchema,
+  type TalkRealtimeRelayToolResultParams,
+  TalkRealtimeRelayToolResultParamsSchema,
   type TalkRealtimeSessionParams,
   TalkRealtimeSessionParamsSchema,
   type TalkRealtimeSessionResult,
@@ -93,6 +103,8 @@ import {
   ConfigSchemaResponseSchema,
   type ConfigSetParams,
   ConfigSetParamsSchema,
+  type UpdateStatusParams,
+  UpdateStatusParamsSchema,
   type ConnectParams,
   ConnectParamsSchema,
   type CronAddParams,
@@ -185,6 +197,8 @@ import {
   NodePairListParamsSchema,
   type NodePairRejectParams,
   NodePairRejectParamsSchema,
+  type NodePairRemoveParams,
+  NodePairRemoveParamsSchema,
   type NodePairRequestParams,
   NodePairRequestParamsSchema,
   type NodePairVerifyParams,
@@ -353,6 +367,9 @@ export const validateNodePairApproveParams = ajv.compile<NodePairApproveParams>(
 export const validateNodePairRejectParams = ajv.compile<NodePairRejectParams>(
   NodePairRejectParamsSchema,
 );
+export const validateNodePairRemoveParams = ajv.compile<NodePairRemoveParams>(
+  NodePairRemoveParamsSchema,
+);
 export const validateNodePairVerifyParams = ajv.compile<NodePairVerifyParams>(
   NodePairVerifyParamsSchema,
 );
@@ -456,6 +473,17 @@ export const validateTalkRealtimeSessionParams = ajv.compile<TalkRealtimeSession
 export const validateTalkRealtimeSessionResult = ajv.compile<TalkRealtimeSessionResult>(
   TalkRealtimeSessionResultSchema,
 );
+export const validateTalkRealtimeRelayAudioParams = ajv.compile<TalkRealtimeRelayAudioParams>(
+  TalkRealtimeRelayAudioParamsSchema,
+);
+export const validateTalkRealtimeRelayMarkParams = ajv.compile<TalkRealtimeRelayMarkParams>(
+  TalkRealtimeRelayMarkParamsSchema,
+);
+export const validateTalkRealtimeRelayStopParams = ajv.compile<TalkRealtimeRelayStopParams>(
+  TalkRealtimeRelayStopParamsSchema,
+);
+export const validateTalkRealtimeRelayToolResultParams =
+  ajv.compile<TalkRealtimeRelayToolResultParams>(TalkRealtimeRelayToolResultParamsSchema);
 export const validateTalkSpeakParams = ajv.compile<TalkSpeakParams>(TalkSpeakParamsSchema);
 export const validateTalkSpeakResult = ajv.compile<TalkSpeakResult>(TalkSpeakResultSchema);
 export const validateChannelsStatusParams = ajv.compile<ChannelsStatusParams>(
@@ -536,6 +564,7 @@ export const validateChatSendParams = ajv.compile(ChatSendParamsSchema);
 export const validateChatAbortParams = ajv.compile<ChatAbortParams>(ChatAbortParamsSchema);
 export const validateChatInjectParams = ajv.compile<ChatInjectParams>(ChatInjectParamsSchema);
 export const validateChatEvent = ajv.compile(ChatEventSchema);
+export const validateUpdateStatusParams = ajv.compile<UpdateStatusParams>(UpdateStatusParamsSchema);
 export const validateUpdateRunParams = ajv.compile<UpdateRunParams>(UpdateRunParamsSchema);
 export const validateWebLoginStartParams =
   ajv.compile<WebLoginStartParams>(WebLoginStartParamsSchema);
@@ -607,6 +636,7 @@ export {
   NodePairListParamsSchema,
   NodePairApproveParamsSchema,
   NodePairRejectParamsSchema,
+  NodePairRemoveParamsSchema,
   NodePairVerifyParamsSchema,
   NodeListParamsSchema,
   NodePendingAckParamsSchema,
@@ -638,6 +668,7 @@ export {
   ConfigSchemaLookupParamsSchema,
   ConfigSchemaResponseSchema,
   ConfigSchemaLookupResultSchema,
+  UpdateStatusParamsSchema,
   WizardStartParamsSchema,
   WizardNextParamsSchema,
   WizardCancelParamsSchema,
@@ -650,6 +681,11 @@ export {
   TalkConfigResultSchema,
   TalkRealtimeSessionParamsSchema,
   TalkRealtimeSessionResultSchema,
+  TalkRealtimeRelayAudioParamsSchema,
+  TalkRealtimeRelayMarkParamsSchema,
+  TalkRealtimeRelayStopParamsSchema,
+  TalkRealtimeRelayToolResultParamsSchema,
+  TalkRealtimeRelayOkResultSchema,
   TalkSpeakParamsSchema,
   TalkSpeakResultSchema,
   ChannelsStatusParamsSchema,
@@ -756,6 +792,11 @@ export type {
   TalkConfigResult,
   TalkRealtimeSessionParams,
   TalkRealtimeSessionResult,
+  TalkRealtimeRelayAudioParams,
+  TalkRealtimeRelayMarkParams,
+  TalkRealtimeRelayStopParams,
+  TalkRealtimeRelayToolResultParams,
+  TalkRealtimeRelayOkResult,
   TalkSpeakParams,
   TalkSpeakResult,
   TalkModeParams,
@@ -798,6 +839,7 @@ export type {
   SkillsInstallParams,
   SkillsUpdateParams,
   NodePairRejectParams,
+  NodePairRemoveParams,
   NodePairVerifyParams,
   NodeListParams,
   NodeInvokeParams,
@@ -838,6 +880,7 @@ export type {
   WebPushSubscribeParams,
   WebPushUnsubscribeParams,
   WebPushTestParams,
+  UpdateStatusParams,
   UpdateRunParams,
   ChatInjectParams,
 };
