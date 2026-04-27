@@ -89,28 +89,6 @@ describe("debug proxy runtime", () => {
     expect(events.some((event) => event.kind === "response")).toBe(true);
   });
 
-  it("reinstalls ambient global fetch capture when fetch changes after initialization", async () => {
-    globalThis.fetch = vi.fn(async () => ({ status: 200 }) as Response) as typeof fetch;
-
-    initializeDebugProxyCapture("test");
-    const replacementFetch = vi.fn(async () => ({ status: 204 }) as Response) as typeof fetch;
-    globalThis.fetch = replacementFetch;
-    initializeDebugProxyCapture("test");
-
-    await globalThis.fetch("https://api.minimax.io/anthropic/messages", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: '{"input":"hello"}',
-    });
-    finalizeDebugProxyCapture();
-
-    expect(replacementFetch).toHaveBeenCalledTimes(1);
-    const events = storeState.events.filter((event) => event.sessionId === "runtime-test-session");
-    expect(events.some((event) => event.host === "api.minimax.io")).toBe(true);
-    expect(events.some((event) => event.kind === "request")).toBe(true);
-    expect(events.some((event) => event.kind === "response" && event.status === 204)).toBe(true);
-  });
-
   it("redacts sensitive request and response headers before persistence", async () => {
     initializeDebugProxyCapture("test");
     captureHttpExchange({

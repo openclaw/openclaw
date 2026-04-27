@@ -41,7 +41,6 @@ const SENSITIVE_CAPTURE_HEADER_NAME_FRAGMENTS = [
 
 type GlobalFetchPatchedState = {
   originalFetch: typeof globalThis.fetch;
-  patchedFetch: typeof globalThis.fetch;
 };
 
 type GlobalFetchPatchTarget = typeof globalThis & {
@@ -135,16 +134,15 @@ function installDebugProxyGlobalFetchPatch(settings: DebugProxySettings): void {
     return;
   }
   const patched = globalThis as GlobalFetchPatchTarget;
-  const existing = patched[DEBUG_PROXY_FETCH_PATCH_KEY];
-  if (existing && globalThis.fetch === existing.patchedFetch) {
+  if (patched[DEBUG_PROXY_FETCH_PATCH_KEY]) {
     return;
   }
-  const originalFetch = globalThis.fetch;
-  const callOriginalFetch = originalFetch.bind(globalThis);
-  const patchedFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  const originalFetch = globalThis.fetch.bind(globalThis);
+  patched[DEBUG_PROXY_FETCH_PATCH_KEY] = { originalFetch };
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = resolveUrlString(input);
     try {
-      const response = await callOriginalFetch(input, init);
+      const response = await originalFetch(input, init);
       if (url && /^https?:/i.test(url)) {
         captureHttpExchange({
           url,
@@ -201,8 +199,6 @@ function installDebugProxyGlobalFetchPatch(settings: DebugProxySettings): void {
       throw error;
     }
   }) as typeof globalThis.fetch;
-  patched[DEBUG_PROXY_FETCH_PATCH_KEY] = { originalFetch, patchedFetch };
-  globalThis.fetch = patchedFetch;
 }
 
 function uninstallDebugProxyGlobalFetchPatch(): void {
@@ -211,15 +207,12 @@ function uninstallDebugProxyGlobalFetchPatch(): void {
   if (!state) {
     return;
   }
-  if (globalThis.fetch === state.patchedFetch) {
-    globalThis.fetch = state.originalFetch;
-  }
+  globalThis.fetch = state.originalFetch;
   delete patched[DEBUG_PROXY_FETCH_PATCH_KEY];
 }
 
 export function isDebugProxyGlobalFetchPatchInstalled(): boolean {
-  const state = (globalThis as GlobalFetchPatchTarget)[DEBUG_PROXY_FETCH_PATCH_KEY];
-  return Boolean(state && globalThis.fetch === state.patchedFetch);
+  return Boolean((globalThis as GlobalFetchPatchTarget)[DEBUG_PROXY_FETCH_PATCH_KEY]);
 }
 
 export function initializeDebugProxyCapture(mode: string, resolved?: DebugProxySettings): void {
