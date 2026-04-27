@@ -177,7 +177,8 @@ jobs:
           for file in "${files[@]}"; do
             jq '
               def in_dependency_build:
-                ((.locations[0].physicalLocation.artifactLocation.uri? // "") | test("^apps/macos/\\.build/"));
+                ((.locations // []) | length > 0)
+                and all(.locations[]; (.physicalLocation.artifactLocation.uri? // "") | test("^apps/macos/\\.build/"));
 
               .runs |= map(.results = ((.results // []) | map(select(in_dependency_build | not))))
             ' "$file" > "sarif-results-filtered/$(basename "$file")"
