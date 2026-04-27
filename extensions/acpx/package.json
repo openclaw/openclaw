@@ -7,6 +7,7 @@
     "acpx": "0.6.1"
   },
   "devDependencies": {
+    "@agentclientprotocol/claude-agent-acp": "0.31.0",
     "@openclaw/plugin-sdk": "workspace:*"
   },
   "openclaw": {

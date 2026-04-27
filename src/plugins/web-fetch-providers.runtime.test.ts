@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createEmptyPluginRegistry } from "./registry.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
 
 type LoaderModule = typeof import("./loader.js");
 type ManifestRegistryModule = typeof import("./manifest-registry.js");

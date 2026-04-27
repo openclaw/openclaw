@@ -1,5 +1,5 @@
 import { rm } from "node:fs/promises";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   clearPluginInteractiveHandlers,
   registerPluginInteractiveHandler,

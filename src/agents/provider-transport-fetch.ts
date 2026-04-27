@@ -150,11 +150,10 @@ function resolveModelRequestPolicy(model: Model<Api>) {
     capability: "llm",
     transport: "stream",
     request,
-    allowPrivateNetwork: request?.allowPrivateNetwork === true,
   });
 }
 
-function resolveModelRequestTimeoutMs(
+export function resolveModelRequestTimeoutMs(
   model: Model<Api>,
   timeoutMs: number | undefined,
 ): number | undefined {

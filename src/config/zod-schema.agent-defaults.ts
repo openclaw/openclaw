@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { DEFAULT_LLM_IDLE_TIMEOUT_SECONDS } from "./agent-timeout-defaults.js";
 import { isValidNonNegativeByteSizeString } from "./byte-size.js";
 import {
   HeartbeatSchema,
@@ -159,19 +158,6 @@ export const AgentDefaultsSchema = z
           })
           .strict()
           .optional(),
-      })
-      .strict()
-      .optional(),
-    llm: z
-      .object({
-        idleTimeoutSeconds: z
-          .number()
-          .int()
-          .nonnegative()
-          .optional()
-          .describe(
-            `Idle timeout for LLM streaming responses in seconds. If no token is received within this time, the request is aborted. Set to 0 to disable. Default: ${DEFAULT_LLM_IDLE_TIMEOUT_SECONDS} seconds.`,
-          ),
       })
       .strict()
       .optional(),

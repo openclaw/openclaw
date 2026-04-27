@@ -4,6 +4,7 @@ import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/ids.js";
 import { withBundledPluginAllowlistCompat } from "../plugins/bundled-compat.js";
 import {
   normalizePluginsConfig,
+  normalizePluginId,
   resolveEffectivePluginActivationState,
   resolveMemorySlotDecision,
 } from "../plugins/config-state.js";
@@ -12,6 +13,7 @@ import {
   collectRelevantDoctorPluginIdsForTouchedPaths,
   listPluginDoctorLegacyConfigRules,
 } from "../plugins/doctor-contract-registry.js";
+import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-reader.js";
 import { resolveManifestCommandAliasOwnerInRegistry } from "../plugins/manifest-command-aliases.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
@@ -926,6 +928,54 @@ function validateConfigObjectWithPluginsBase(
   let channelsCloned = false;
   let pluginsCloned = false;
   let pluginEntriesCloned = false;
+  let installedPluginRecordIds: Set<string> | undefined;
+
+  const ensureInstalledPluginRecordIds = (): Set<string> => {
+    if (installedPluginRecordIds) {
+      return installedPluginRecordIds;
+    }
+    try {
+      installedPluginRecordIds = new Set(
+        Object.keys(loadInstalledPluginIndexInstallRecordsSync({ env: opts.env })).map(
+          normalizePluginId,
+        ),
+      );
+    } catch {
+      installedPluginRecordIds = new Set();
+    }
+    return installedPluginRecordIds;
+  };
+
+  const hasStalePluginEvidenceForUnknownChannel = (channelId: string): boolean => {
+    const normalizedChannelId = normalizePluginId(channelId);
+    if (!normalizedChannelId || ensureKnownIds().has(normalizedChannelId)) {
+      return false;
+    }
+    const pluginConfig = config.plugins;
+    if (
+      Array.isArray(pluginConfig?.allow) &&
+      pluginConfig.allow.some((pluginId) => normalizePluginId(pluginId) === normalizedChannelId)
+    ) {
+      return true;
+    }
+    if (
+      isRecord(pluginConfig?.entries) &&
+      Object.keys(pluginConfig.entries).some(
+        (pluginId) => normalizePluginId(pluginId) === normalizedChannelId,
+      )
+    ) {
+      return true;
+    }
+    if (
+      isRecord(pluginConfig?.installs) &&
+      Object.keys(pluginConfig.installs).some(
+        (pluginId) => normalizePluginId(pluginId) === normalizedChannelId,
+      )
+    ) {
+      return true;
+    }
+    return ensureInstalledPluginRecordIds().has(normalizedChannelId);
+  };
 
   const replaceChannelConfig = (channelId: string, nextValue: unknown) => {
     if (!channelsCloned) {
@@ -983,10 +1033,18 @@ function validateConfigObjectWithPluginsBase(
         }
       }
       if (!allowedChannels.has(trimmed)) {
-        issues.push({
+        const issue = {
           path: `channels.${trimmed}`,
           message: `unknown channel id: ${trimmed}`,
-        });
+        };
+        if (hasStalePluginEvidenceForUnknownChannel(trimmed)) {
+          warnings.push({
+            ...issue,
+            message: `${issue.message} (stale channel plugin config ignored; run openclaw doctor --fix to remove stale config, or install the plugin)`,
+          });
+        } else {
+          issues.push(issue);
+        }
         continue;
       }
 

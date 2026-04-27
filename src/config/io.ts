@@ -83,17 +83,21 @@ import {
 import { applyConfigOverrides } from "./runtime-overrides.js";
 import {
   clearRuntimeConfigSnapshot as clearRuntimeConfigSnapshotState,
+  createRuntimeConfigWriteNotification,
   finalizeRuntimeSnapshotWrite,
+  getRuntimeConfigSnapshotMetadata as getRuntimeConfigSnapshotMetadataState,
   getRuntimeConfigSnapshot as getRuntimeConfigSnapshotState,
   getRuntimeConfigSourceSnapshot as getRuntimeConfigSourceSnapshotState,
   loadPinnedRuntimeConfig,
   notifyRuntimeConfigWriteListeners,
   registerRuntimeConfigWriteListener,
   resetConfigRuntimeState as resetConfigRuntimeStateState,
+  resolveRuntimeConfigCacheKey,
   selectApplicableRuntimeConfig,
   setRuntimeConfigSnapshot as setRuntimeConfigSnapshotState,
   getRuntimeConfigSnapshotRefreshHandler as getRuntimeConfigSnapshotRefreshHandlerState,
   setRuntimeConfigSnapshotRefreshHandler as setRuntimeConfigSnapshotRefreshHandlerState,
+  type ConfigWriteAfterWrite,
   type RuntimeConfigWriteNotification,
 } from "./runtime-snapshot.js";
 import { resolveShellEnvExpectedKeys } from "./shell-env-expected-keys.js";
@@ -106,9 +110,11 @@ import { shouldWarnOnTouchedVersion } from "./version.js";
 
 export {
   clearRuntimeConfigSnapshotState as clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshotMetadataState as getRuntimeConfigSnapshotMetadata,
   getRuntimeConfigSnapshotState as getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshotState as getRuntimeConfigSourceSnapshot,
   resetConfigRuntimeStateState as resetConfigRuntimeState,
+  resolveRuntimeConfigCacheKey,
   selectApplicableRuntimeConfig,
   setRuntimeConfigSnapshotState as setRuntimeConfigSnapshot,
   setRuntimeConfigSnapshotRefreshHandlerState as setRuntimeConfigSnapshotRefreshHandler,
@@ -208,6 +214,11 @@ export type ConfigWriteOptions = {
    * Useful when the caller wants machine-readable output only (--json mode).
    */
   skipOutputLogs?: boolean;
+  /**
+   * Runtime reload intent for observers that react to committed config writes.
+   * Omitted means the observer should use its normal reload plan.
+   */
+  afterWrite?: ConfigWriteAfterWrite;
 };
 
 export type ReadConfigFileSnapshotForWriteResult = {
@@ -2365,13 +2376,15 @@ export async function writeConfigFile(
     if (!currentRuntimeConfig) {
       return;
     }
-    notifyRuntimeConfigWriteListeners({
-      configPath: io.configPath,
-      sourceConfig: nextCfg,
-      runtimeConfig: currentRuntimeConfig,
-      persistedHash: writeResult.persistedHash,
-      writtenAtMs: Date.now(),
-    });
+    notifyRuntimeConfigWriteListeners(
+      createRuntimeConfigWriteNotification({
+        configPath: io.configPath,
+        sourceConfig: nextCfg,
+        runtimeConfig: currentRuntimeConfig,
+        persistedHash: writeResult.persistedHash,
+        afterWrite: options.afterWrite,
+      }),
+    );
   };
   // Keep the last-known-good runtime snapshot active until the specialized refresh path
   // succeeds, so concurrent readers do not observe unresolved SecretRefs mid-refresh.

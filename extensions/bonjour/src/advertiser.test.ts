@@ -1,6 +1,13 @@
+import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const nodeRequire = createRequire(import.meta.url);
+const childProcessModule = nodeRequire("node:child_process") as {
+  exec: typeof import("node:child_process").exec;
+};
 
 const mocks = vi.hoisted(() => ({
   createService: vi.fn(),
@@ -238,6 +245,42 @@ describe("gateway bonjour advertiser", () => {
     expect(createService).toHaveBeenCalledTimes(1);
 
     await started.stop();
+  });
+
+  it("hides ciao Windows ARP probe shell while advertiser is active", async () => {
+    enableAdvertiserUnitMode();
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const originalExec = childProcessModule.exec;
+    const execMock = vi.fn((command: string, options?: unknown, callback?: unknown) => {
+      const cb = typeof options === "function" ? options : callback;
+      if (typeof cb === "function") {
+        cb(null, "", "");
+      }
+      return { kill: vi.fn() } as unknown as ChildProcess;
+    });
+    childProcessModule.exec = execMock as unknown as typeof childProcessModule.exec;
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy });
+
+    try {
+      const started = await startAdvertiser({ gatewayPort: 18789 });
+      childProcessModule.exec('arp -a | findstr /C:"---"', () => {});
+
+      expect(execMock).toHaveBeenCalledWith(
+        'arp -a | findstr /C:"---"',
+        { windowsHide: true },
+        expect.any(Function),
+      );
+
+      await started.stop();
+      childProcessModule.exec('arp -a | findstr /C:"---"', () => {});
+      const afterStopOptions = execMock.mock.calls.at(-1)?.[1];
+      expect(afterStopOptions).toEqual(expect.any(Function));
+    } finally {
+      childProcessModule.exec = originalExec;
+    }
   });
 
   it("attaches conflict listeners for services", async () => {
@@ -661,10 +704,56 @@ describe("gateway bonjour advertiser", () => {
     });
 
     const [gatewayCall] = createService.mock.calls as Array<[ServiceCall]>;
-    expect(gatewayCall?.[0]?.name).toBe("openclaw (OpenClaw)");
+    expect(gatewayCall?.[0]?.name).toBe("Mac (OpenClaw)");
     expect(gatewayCall?.[0]?.domain).toBe("local");
+    expect(gatewayCall?.[0]?.hostname).toBe("Mac");
+    expect((gatewayCall?.[0]?.txt as Record<string, string>)?.lanHost).toBe("Mac.local");
+
+    await started.stop();
+  });
+
+  it("falls back to openclaw when system hostname is invalid for DNS", async () => {
+    // Allow advertiser to run in unit tests.
+    delete process.env.VITEST;
+    process.env.NODE_ENV = "development";
+    delete process.env.OPENCLAW_MDNS_HOSTNAME;
+    vi.spyOn(os, "hostname").mockReturnValue("My_Lobster Host");
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy });
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    const [gatewayCall] = createService.mock.calls as Array<[ServiceCall]>;
     expect(gatewayCall?.[0]?.hostname).toBe("openclaw");
     expect((gatewayCall?.[0]?.txt as Record<string, string>)?.lanHost).toBe("openclaw.local");
+
+    await started.stop();
+  });
+
+  it("uses system hostname when OPENCLAW_MDNS_HOSTNAME is unset", async () => {
+    // Allow advertiser to run in unit tests.
+    delete process.env.VITEST;
+    process.env.NODE_ENV = "development";
+    delete process.env.OPENCLAW_MDNS_HOSTNAME;
+    vi.spyOn(os, "hostname").mockReturnValue("Lobster");
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy });
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    const [gatewayCall] = createService.mock.calls as Array<[ServiceCall]>;
+    expect(gatewayCall?.[0]?.hostname).toBe("Lobster");
+    expect((gatewayCall?.[0]?.txt as Record<string, string>)?.lanHost).toBe("Lobster.local");
 
     await started.stop();
   });

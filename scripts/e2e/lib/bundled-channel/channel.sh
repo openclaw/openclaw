@@ -238,7 +238,7 @@ start_gateway() {
 
   # Cold bundled dependency staging can exceed 60s under 10-way Docker aggregate load.
   for _ in $(seq 1 1200); do
-    if grep -Eq "listening on ws://|\\[gateway\\] ready \\(" "$log_file"; then
+    if grep -Eq "listening on ws://|\\[gateway\\] http server listening|\\[gateway\\] ready( \\(|$)" "$log_file"; then
       return 0
     fi
     if ! kill -0 "$gateway_pid" 2>/dev/null; then
@@ -271,33 +271,9 @@ wait_for_gateway_health() {
   return 1
 }
 
-assert_channel_status() {
-  local channel="$1"
-  if [ "$channel" = "memory-lancedb" ]; then
-    echo "memory-lancedb plugin activation verified by dependency sentinel"
-    return 0
-  fi
-  local out="/tmp/openclaw-channel-status-$channel.json"
-  local err="/tmp/openclaw-channel-status-$channel.err"
-  for _ in $(seq 1 12); do
-    if openclaw gateway call channels.status \
-      --url "ws://127.0.0.1:$PORT" \
-      --token "$TOKEN" \
-      --timeout 10000 \
-      --json \
-      --params '{"probe":false}' >"$out" 2>"$err"; then
-      break
-    fi
-    sleep 2
-  done
-  if [ ! -s "$out" ]; then
-    if grep -Eq "\\[gateway\\] ready \\(.*\\b$channel\\b" /tmp/openclaw-"$channel"-*.log 2>/dev/null; then
-      echo "$channel channel plugin visible in gateway ready log"
-      return 0
-    fi
-    cat "$err" >&2 || true
-    return 1
-  fi
+parse_channel_status_json() {
+  local out="$1"
+  local channel="$2"
   node - <<'NODE' "$out" "$channel"
 const fs = require("node:fs");
 const raw = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
@@ -319,6 +295,44 @@ if (!Array.isArray(accounts) || accounts.length === 0) {
 }
 console.log(`${channel} channel plugin visible`);
 NODE
+}
+
+assert_channel_status() {
+  local channel="$1"
+  if [ "$channel" = "memory-lancedb" ]; then
+    echo "memory-lancedb plugin activation verified by dependency sentinel"
+    return 0
+  fi
+  local out="/tmp/openclaw-channel-status-$channel.json"
+  local err="/tmp/openclaw-channel-status-$channel.err"
+  local parse_err="/tmp/openclaw-channel-status-$channel.parse.err"
+  local parse_out="/tmp/openclaw-channel-status-$channel.parse.out"
+  for _ in $(seq 1 30); do
+    if openclaw gateway call channels.status \
+      --url "ws://127.0.0.1:$PORT" \
+      --token "$TOKEN" \
+      --timeout 10000 \
+      --json \
+      --params '{"probe":false}' >"$out" 2>"$err"; then
+      if parse_channel_status_json "$out" "$channel" >"$parse_out" 2>"$parse_err"; then
+        cat "$parse_out"
+        return 0
+      fi
+    fi
+    if grep -Eq "\\[gateway\\] ready \\(.*\\b$channel\\b" /tmp/openclaw-"$channel"-*.log 2>/dev/null; then
+      echo "$channel channel plugin visible in gateway ready log"
+      return 0
+    fi
+    sleep 2
+  done
+  if [ ! -s "$out" ]; then
+    cat "$err" >&2 || true
+  else
+    cat "$parse_err" >&2 || true
+    cat "$out" >&2 || true
+  fi
+  cat /tmp/openclaw-"$channel"-*.log >&2 2>/dev/null || true
+  return 1
 }
 
 assert_installed_once() {

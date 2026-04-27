@@ -3,7 +3,7 @@ import { importFreshModule } from "../../test/helpers/import-fresh.js";
 
 const loadConfigMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../config/config.js", () => ({ loadConfig: loadConfigMock }));
+vi.mock("../config/config.js", () => ({ getRuntimeConfig: loadConfigMock }));
 
 describe("agents/context eager warmup", () => {
   const originalArgv = process.argv.slice();

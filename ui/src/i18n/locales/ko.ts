@@ -108,6 +108,14 @@ export const ko: TranslationMap = {
       lightningHelp: "팁을 받기 위한 Lightning 주소(LUD-16)",
     },
   },
+  lazyView: {
+    loadingTitle: "패널 로드 중",
+    errorTitle: "패널을 로드하지 못했습니다",
+    errorSubtitle:
+      "최신 Control UI 번들을 로드하려면 페이지를 새로고침하거나, 네트워크 요청이 실패한 경우 다시 시도하세요.",
+    retry: "다시 시도",
+    unknownError: "알 수 없는 모듈 로드 오류입니다.",
+  },
   nodes: {
     binding: {
       loadConfigHint: "바인딩을 편집하려면 구성을 로드하세요.",
@@ -348,6 +356,15 @@ export const ko: TranslationMap = {
       refreshing: "새로 고치는 중…",
       on: "드리밍 켜짐",
       off: "드리밍 꺼짐",
+    },
+    restartConfirmation: {
+      title: "Restart Gateway to Apply Change",
+      subtitle: "Changing Dreaming mode restarts the gateway.",
+      warning:
+        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      confirm: "Confirm Restart",
+      restarting: "Restarting…",
+      failed: "Could not apply change. Check your connection and try again.",
     },
     status: {
       active: "드리밍 활성",

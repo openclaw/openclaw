@@ -1,5 +1,5 @@
 import { getExecApprovalReplyMetadata } from "openclaw/plugin-sdk/approval-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 // Register the PlatformAdapter before any core/ module is used.
 import "./bridge/bootstrap.js";
@@ -164,10 +164,10 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
               clientSecret: backup.clientSecret,
             });
             const runtime = getQQBotRuntime();
-            const configApi = runtime.config as {
-              writeConfigFile: (cfg: OpenClawConfig) => Promise<void>;
-            };
-            await configApi.writeConfigFile(nextCfg);
+            await runtime.config.replaceConfigFile({
+              nextConfig: nextCfg,
+              afterWrite: { mode: "auto" },
+            });
             cfg = nextCfg;
             account = resolveQQBotAccount(nextCfg, account.accountId);
             log?.info(
@@ -239,10 +239,10 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
 
       if (changed) {
         const runtime = getQQBotRuntime();
-        const configApi = runtime.config as {
-          writeConfigFile: (cfg: OpenClawConfig) => Promise<void>;
-        };
-        await configApi.writeConfigFile(nextCfg as OpenClawConfig);
+        await runtime.config.replaceConfigFile({
+          nextConfig: nextCfg as OpenClawConfig,
+          afterWrite: { mode: "auto" },
+        });
       }
 
       const resolved = resolveQQBotAccount((changed ? nextCfg : cfg) as OpenClawConfig, accountId);
