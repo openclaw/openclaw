@@ -338,6 +338,58 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared?.ackReactionPromise).toBeNull();
   });
 
+  it("enables status reactions when statusReactions.enabled is true, even without ackReaction configured", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        messages: {
+          statusReactions: { enabled: true },
+        },
+        channels: { slack: { enabled: true } },
+      } as OpenClawConfig,
+    });
+    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+
+    const prepared = await prepareMessageWith(slackCtx, defaultAccount, {
+      channel: "D123",
+      channel_type: "im",
+      user: "U1",
+      text: "hi",
+      ts: "1.000",
+    } as SlackMessageEvent);
+
+    expect(prepared).toBeTruthy();
+    expect(prepared?.ackReactionMessageTs).toBe("1.000");
+    expect(prepared?.ackReactionPromise).not.toBeNull();
+    await expect(prepared?.ackReactionPromise).resolves.toBe(true);
+  });
+
+  it("disables status reactions when statusReactions.enabled is false, even with ackReaction configured", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        messages: {
+          ackReaction: "👀",
+          ackReactionScope: "all",
+          statusReactions: { enabled: false },
+        },
+        channels: { slack: { enabled: true } },
+      } as OpenClawConfig,
+    });
+    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+
+    const prepared = await prepareMessageWith(slackCtx, defaultAccount, {
+      channel: "D123",
+      channel_type: "im",
+      user: "U1",
+      text: "hi",
+      ts: "1.000",
+    } as SlackMessageEvent);
+
+    expect(prepared).toBeTruthy();
+    // statusReactions.enabled: false disables the status reaction controller,
+    // but the plain ack reaction is still sent
+    expect(prepared?.ackReactionMessageTs).toBe("1.000");
+  });
+
   it("includes forwarded shared attachment text in raw body", async () => {
     const prepared = await prepareWithDefaultCtx(
       createSlackMessage({

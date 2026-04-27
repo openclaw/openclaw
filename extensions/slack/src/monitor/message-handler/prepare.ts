@@ -547,10 +547,14 @@ export async function prepareSlackMessage(params: {
     );
 
   const ackReactionMessageTs = message.ts;
+  // statusReactions.enabled === true activates lifecycle reactions (👀→🤔→🔥→👍)
+  // independently of ackReaction so users can opt in without also configuring
+  // an ack reaction emoji.
+  const statusReactionsExplicitlyEnabled = cfg.messages?.statusReactions?.enabled === true;
   const statusReactionsWillHandle =
     Boolean(ackReactionMessageTs) &&
     cfg.messages?.statusReactions?.enabled !== false &&
-    shouldAckReaction();
+    (statusReactionsExplicitlyEnabled || shouldAckReaction());
   const ackReactionPromise =
     !statusReactionsWillHandle && shouldAckReaction() && ackReactionMessageTs && ackReactionValue
       ? reactSlackMessage(message.channel, ackReactionMessageTs, ackReactionValue, {
