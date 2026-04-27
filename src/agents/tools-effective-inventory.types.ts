@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-export type EffectiveToolSource = "core" | "plugin" | "channel";
+export type EffectiveToolSource = "core" | "plugin" | "channel" | "mcp";
 
 export type EffectiveToolInventoryEntry = {
   id: string;

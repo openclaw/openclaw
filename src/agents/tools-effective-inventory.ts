@@ -68,6 +68,8 @@ function groupLabel(source: EffectiveToolSource): string {
       return "Connected tools";
     case "channel":
       return "Channel tools";
+    case "mcp":
+      return "MCP servers";
     default:
       return "Built-in tools";
   }

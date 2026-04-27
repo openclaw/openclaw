@@ -325,7 +325,7 @@ describe("installPackageDir", () => {
 
     expect(result).toEqual({ ok: true });
     expect(vi.mocked(runCommandWithTimeout)).toHaveBeenCalledWith(
-      ["npm", "install", "--omit=dev", "--silent", "--ignore-scripts"],
+      ["npm", "install", "--omit=dev", "--omit=peer", "--silent", "--ignore-scripts"],
       expect.objectContaining({
         cwd: expect.stringContaining(".openclaw-install-stage-"),
       }),

@@ -61,6 +61,24 @@ async function sanitizeManifestForNpmInstall(targetDir: string): Promise<void> {
   } else {
     manifest.devDependencies = Object.fromEntries(filteredEntries);
   }
+
+  // Strip the host openclaw from peerDependencies to prevent npm 7+ from
+  // installing a nested copy (~800 MB bloat). The host already satisfies
+  // this peer at runtime via its own resolve path. We target only this
+  // specific peer rather than using --omit=peer (which would drop *all*
+  // peers and cause MODULE_NOT_FOUND for legitimate runtime peer imports).
+  const peerDeps = manifest.peerDependencies;
+  if (isObjectRecord(peerDeps)) {
+    const filteredPeers = Object.entries(peerDeps).filter(
+      ([name]) => name !== "openclaw",
+    );
+    if (filteredPeers.length === 0) {
+      delete manifest.peerDependencies;
+    } else if (filteredPeers.length < Object.keys(peerDeps).length) {
+      manifest.peerDependencies = Object.fromEntries(filteredPeers);
+    }
+  }
+
   await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf-8");
 }
 
@@ -244,8 +262,11 @@ export async function installPackageDir(params: {
       const npmRes = await (async () => {
         try {
           return await runCommandWithTimeout(
-            // Plugins install into isolated directories, so omitting peer deps can strip
-            // runtime requirements that npm would otherwise materialize for the package.
+            // Plugins install into isolated directories. The openclaw peer dep is
+            // stripped from the manifest by sanitizeManifestForNpmInstall() to
+            // prevent npm 7+ from installing a nested copy (~800 MB bloat).
+            // Other peer dependencies are preserved so that runtime peer imports
+            // (e.g. native bindings, framework peers) resolve correctly.
             ["npm", "install", "--omit=dev", "--silent", "--ignore-scripts"],
             {
               timeoutMs: Math.max(params.timeoutMs, 300_000),
