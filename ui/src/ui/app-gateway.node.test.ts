@@ -9,7 +9,6 @@ const loadChatHistoryMock = vi.hoisted(() => vi.fn(async () => undefined));
 const loadControlUiBootstrapConfigMock = vi.hoisted(() => vi.fn(async () => undefined));
 
 type GatewayClientMock = {
-  request: ReturnType<typeof vi.fn>;
   start: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
   request: ReturnType<typeof vi.fn>;
@@ -41,10 +40,12 @@ vi.mock("./gateway.ts", async (importOriginal) => {
   }
 
   class GatewayBrowserClient {
-    readonly request = vi.fn(async () => ({ sentinel: null }));
     readonly start = vi.fn();
     readonly stop = vi.fn();
     readonly request = vi.fn(async (method: string) => {
+      if (method === "update.status") {
+        return { sentinel: null };
+      }
       if (method === "models.authStatus") {
         return { ts: 0, providers: [] };
       }
@@ -65,7 +66,6 @@ vi.mock("./gateway.ts", async (importOriginal) => {
       },
     ) {
       gatewayClientInstances.push({
-        request: this.request,
         start: this.start,
         stop: this.stop,
         request: this.request,
