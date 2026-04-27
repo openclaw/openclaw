@@ -203,6 +203,11 @@ Browser settings live in `~/.openclaw/openclaw.json`.
   Raise these on Raspberry Pi, low-end VPS, or older hardware where Chromium
   starts slowly. Values must be positive integers up to `120000` ms; invalid
   config values are rejected.
+- Repeated managed Chrome launch/readiness failures are circuit-broken per
+  profile. After several consecutive failures, OpenClaw pauses new launch
+  attempts briefly instead of spawning Chromium on every browser tool call. Fix
+  the startup problem, disable the browser if it is not needed, or restart the
+  Gateway after repair.
 - `actionTimeoutMs` is the default budget for browser `act` requests when the caller does not pass `timeoutMs`. The client transport adds a small slack window so long waits can finish instead of timing out at the HTTP boundary.
 - `tabCleanup` is best-effort cleanup for tabs opened by primary-agent browser sessions. Subagent, cron, and ACP lifecycle cleanup still closes their explicit tracked tabs at session end; primary sessions keep active tabs reusable, then close idle or excess tracked tabs in the background.
 

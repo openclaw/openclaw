@@ -154,7 +154,7 @@ function resolveModelRequestPolicy(model: Model<Api>) {
   });
 }
 
-function resolveModelRequestTimeoutMs(
+export function resolveModelRequestTimeoutMs(
   model: Model<Api>,
   timeoutMs: number | undefined,
 ): number | undefined {

@@ -895,16 +895,25 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
     let nextMessages = replayInputsChanged
       ? sanitizeToolUseResultPairing(sanitized.messages)
       : sanitized.messages;
+    let strippedTrailingAssistantPrefill = false;
     if (transcriptPolicy?.validateAnthropicTurns) {
       nextMessages = sanitizeAnthropicReplayToolResults(nextMessages, {
         disallowEmbeddedUserToolResultsForSignedThinkingReplay: allowProviderOwnedThinkingReplay,
       });
+    }
+    if (transcriptPolicy?.validateAnthropicTurns || transcriptPolicy?.validateGeminiTurns) {
+      const beforeStrip = nextMessages;
       nextMessages = stripTrailingAssistantPrefillTurns(nextMessages);
+      strippedTrailingAssistantPrefill ||= nextMessages !== beforeStrip;
     }
     if (nextMessages === messages) {
       return baseFn(model, context, options);
     }
-    if (sanitized.droppedAssistantMessages > 0 || transcriptPolicy?.validateAnthropicTurns) {
+    if (
+      sanitized.droppedAssistantMessages > 0 ||
+      transcriptPolicy?.validateAnthropicTurns ||
+      strippedTrailingAssistantPrefill
+    ) {
       if (transcriptPolicy?.validateGeminiTurns) {
         nextMessages = validateGeminiTurns(nextMessages);
       }

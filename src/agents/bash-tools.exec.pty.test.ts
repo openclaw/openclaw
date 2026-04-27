@@ -83,28 +83,20 @@ async function waitForSessionCompletion(params: {
     .toBe(true);
 }
 
-test("exec supports pty output", async () => {
+test("exec supports pty output and OPENCLAW_SHELL", async () => {
   const result = await runPtyCommand(
-    currentNodeEvalCommand("process.stdout.write(String.fromCharCode(111,107))"),
+    currentNodeEvalCommand('process.stdout.write(`ok:${process.env.OPENCLAW_SHELL || ""}`)'),
   );
 
   expect(result.status).toBe("completed");
   expect(result.aggregated).toContain("ok");
-});
-
-test("exec sets OPENCLAW_SHELL in pty mode", async () => {
-  const result = await runPtyCommand(
-    currentNodeEvalCommand('process.stdout.write(process.env.OPENCLAW_SHELL || "")'),
-  );
-
-  expect(result.status).toBe("completed");
   expect(result.aggregated).toContain("exec");
 });
 
-test("process send-keys encodes Enter for pty sessions", async () => {
+test("process send-keys and submit send Enter for pty sessions", async () => {
   const { processTool, sessionId } = await startPtySession(
     currentNodeEvalCommand(
-      "const dataEvent=String.fromCharCode(100,97,116,97);process.stdin.on(dataEvent,d=>{process.stdout.write(d);if(d.includes(10)||d.includes(13))process.exit(0);});",
+      "const dataEvent=String.fromCharCode(100,97,116,97);const submitted=String.fromCharCode(115,117,98,109,105,116,116,101,100);let first=false;process.stdin.on(dataEvent,d=>{process.stdout.write(d);if(d.includes(10)||d.includes(13)){if(first){process.stdout.write(submitted);process.exit(0);}first=true;}});",
     ),
   );
 
@@ -113,16 +105,6 @@ test("process send-keys encodes Enter for pty sessions", async () => {
     sessionId,
     keys: ["h", "i", "Enter"],
   });
-
-  await waitForSessionCompletion({ processTool, sessionId, expectedText: "hi" });
-});
-
-test("process submit sends Enter for pty sessions", async () => {
-  const { processTool, sessionId } = await startPtySession(
-    currentNodeEvalCommand(
-      "const dataEvent=String.fromCharCode(100,97,116,97);const submitted=String.fromCharCode(115,117,98,109,105,116,116,101,100);process.stdin.on(dataEvent,d=>{if(d.includes(10)||d.includes(13)){process.stdout.write(submitted);process.exit(0);}});",
-    ),
-  );
 
   await processTool.execute("toolcall", {
     action: "submit",
