@@ -116,10 +116,7 @@ function mergeTimeoutPollOutput(params: {
   if (!params.drainedOutput) {
     return timeoutOutput;
   }
-  if (timeoutOutput.includes(params.drainedOutput)) {
-    return timeoutOutput;
-  }
-  if (params.drainedOutput.includes(timeoutOutput)) {
+  if (params.drainedOutput.trim() === timeoutOutput) {
     return params.drainedOutput;
   }
   return `${params.drainedOutput}\n\n${timeoutOutput}`;

@@ -149,6 +149,27 @@ describe("handleBashChatCommand timeout handling", () => {
     expect(result.text).not.toContain("Exit: 0");
   });
 
+  it("preserves timeout guidance when foreground chat bash also captured output", async () => {
+    executeMock.mockResolvedValueOnce({
+      content: [{ type: "text", text: "started\n\nCommand timed out after 1 seconds." }],
+      details: {
+        status: "failed",
+        exitCode: null,
+        durationMs: 1000,
+        aggregated: "started",
+        timedOut: true,
+      },
+    });
+
+    const result = await handleBashChatCommand(
+      buildParams("/bash --timeout 1 sh -c 'echo started; sleep 2'"),
+    );
+
+    expect(result.text).toContain("Exit: timeout");
+    expect(result.text).toContain("started");
+    expect(result.text).toContain("Command timed out after 1 seconds.");
+  });
+
   it("shows timeout exit reasons when polling finished chat bash jobs", async () => {
     getSessionMock.mockReturnValue(undefined);
     getFinishedSessionMock.mockReturnValue({

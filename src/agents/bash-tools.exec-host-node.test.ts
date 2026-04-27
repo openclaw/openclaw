@@ -386,6 +386,34 @@ describe("executeNodeHostCommand", () => {
     );
   });
 
+  it("omits zero command timeout for node system.run while keeping the default invoke wait", async () => {
+    await executeNodeHostCommand({
+      command: "bun ./script.ts",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "off",
+      timeoutSec: 0,
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+      notifyOnExit: false,
+    });
+
+    expect(callGatewayToolMock).toHaveBeenCalledWith(
+      "node.invoke",
+      expect.objectContaining({ timeoutMs: 35_000 }),
+      expect.objectContaining({
+        command: "system.run",
+        params: expect.not.objectContaining({
+          timeoutMs: expect.anything(),
+        }),
+      }),
+    );
+  });
+
   it("denies timed-out inline-eval requests instead of invoking the node", async () => {
     detectInterpreterInlineEvalArgvMock.mockReturnValue(INLINE_EVAL_HIT);
     resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(null);

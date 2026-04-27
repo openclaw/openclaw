@@ -123,18 +123,17 @@ export async function resolveNodeExecutionTarget(
       "exec host=node requires a node that supports system.run (companion app or node host).",
     );
   }
+  const invokeTimeoutSec =
+    typeof params.timeoutSec === "number" && params.timeoutSec > 0
+      ? params.timeoutSec
+      : params.defaultTimeoutSec;
 
   return {
     nodeId,
     platform: nodeInfo?.platform,
     argv: buildNodeShellCommand(params.command, nodeInfo?.platform),
     env: params.requestedEnv ? { ...params.requestedEnv } : undefined,
-    invokeTimeoutMs: Math.max(
-      10_000,
-      (typeof params.timeoutSec === "number" ? params.timeoutSec : params.defaultTimeoutSec) *
-        1000 +
-        5_000,
-    ),
+    invokeTimeoutMs: Math.max(10_000, invokeTimeoutSec * 1000 + 5_000),
     supportsSystemRunPrepare: declaredCommands.includes("system.run.prepare"),
   };
 }
@@ -163,7 +162,10 @@ export function buildNodeSystemRunInvoke(params: {
       ...(params.systemRunPlan ? { systemRunPlan: params.systemRunPlan } : {}),
       ...(params.cwd != null ? { cwd: params.cwd } : {}),
       env: params.target.env,
-      timeoutMs: typeof params.timeoutSec === "number" ? params.timeoutSec * 1000 : undefined,
+      timeoutMs:
+        typeof params.timeoutSec === "number" && params.timeoutSec > 0
+          ? params.timeoutSec * 1000
+          : undefined,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       approved: params.approved,

@@ -194,6 +194,23 @@ test("process poll includes timeout guidance when a waited poll observes exit", 
   }
 });
 
+test("process poll preserves short output that appears in timeout guidance", async () => {
+  const sessionId = "sess-timeout-short-output";
+  const { processTool, session } = createProcessSessionHarness(sessionId);
+  const timeoutText =
+    "Command timed out after 30 seconds. If this command is expected to take longer, re-run with a higher timeout. Use timeout=0 only for local/sandbox/gateway execs.";
+
+  appendOutput(session, "stdout", "0");
+  session.failureReason = timeoutText;
+  markExited(session, null, "SIGKILL", "failed", "overall-timeout");
+
+  const poll = await pollSession(processTool, "toolcall-timeout-short-output", sessionId);
+  const text = poll.content[0]?.type === "text" ? poll.content[0].text : "";
+
+  expect(text).toContain("0\n\nCommand timed out");
+  expect(text).toContain("timeout=0");
+});
+
 test("process log includes timeout guidance for silent finished sessions", async () => {
   const sessionId = "sess-timeout-log";
   const { processTool, session } = createProcessSessionHarness(sessionId);
