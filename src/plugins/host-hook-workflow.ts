@@ -170,7 +170,15 @@ function resolveSchedule(params: PluginSessionTurnScheduleParams) {
     if (!Number.isFinite(params.delayMs)) {
       return undefined;
     }
-    return { kind: "at", at: new Date(Date.now() + Math.max(1, params.delayMs)).toISOString() };
+    const timestamp = Date.now() + Math.max(1, params.delayMs);
+    if (!Number.isFinite(timestamp)) {
+      return undefined;
+    }
+    const at = new Date(timestamp);
+    if (!Number.isFinite(at.getTime())) {
+      return undefined;
+    }
+    return { kind: "at", at: at.toISOString() };
   }
   const at = params.at instanceof Date ? params.at : new Date(params.at);
   if (!Number.isFinite(at.getTime())) {
