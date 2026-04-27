@@ -26,6 +26,7 @@ export type GatewayServerMutableState = {
   heartbeatUnsub: (() => void) | null;
   transcriptUnsub: (() => void) | null;
   lifecycleUnsub: (() => void) | null;
+  configWriteUnsub: (() => void) | null;
 };
 
 export function createGatewayServerMutableState(): GatewayServerMutableState {
@@ -57,5 +58,6 @@ export function createGatewayServerMutableState(): GatewayServerMutableState {
     heartbeatUnsub: null as (() => void) | null,
     transcriptUnsub: null as (() => void) | null,
     lifecycleUnsub: null as (() => void) | null,
+    configWriteUnsub: null as (() => void) | null,
   };
 }
