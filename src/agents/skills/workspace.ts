@@ -461,7 +461,10 @@ function loadSkillEntries(
 
     const loadedSkills: LoadedSkillRecord[] = [];
 
-    // Only consider immediate subfolders that look like skills (have SKILL.md) and are under size cap.
+    // Consider immediate subfolders that look like skills (have SKILL.md) and are under size cap.
+    // When an immediate subfolder does NOT have a SKILL.md, check one level deeper for grouped
+    // skill directories (e.g. ~/.openclaw/skills/coze/koze-retrieval/SKILL.md).
+    const candidateDirs: Array<{ skillDir: string; name: string }> = [];
     for (const name of limitedChildren) {
       const skillDir = path.join(baseDir, name);
       const skillDirRealPath = resolveContainedSkillPath({
@@ -474,7 +477,36 @@ function loadSkillEntries(
         continue;
       }
       const skillMd = path.join(skillDir, "SKILL.md");
-      if (!fs.existsSync(skillMd)) {
+      if (fs.existsSync(skillMd)) {
+        candidateDirs.push({ skillDir, name });
+      } else {
+        // No SKILL.md here — check one level deeper for grouped skill directories.
+        const nestedChildren = listChildDirectories(skillDir);
+        for (const nestedName of nestedChildren.toSorted()) {
+          const nestedDir = path.join(skillDir, nestedName);
+          const nestedSkillMd = path.join(nestedDir, "SKILL.md");
+          if (fs.existsSync(nestedSkillMd)) {
+            candidateDirs.push({ skillDir: nestedDir, name: `${name}/${nestedName}` });
+          }
+          if (candidateDirs.length >= limits.maxSkillsLoadedPerSource) {
+            break;
+          }
+        }
+      }
+      if (candidateDirs.length >= limits.maxSkillsLoadedPerSource) {
+        break;
+      }
+    }
+
+    for (const { skillDir, name } of candidateDirs) {
+      const skillMd = path.join(skillDir, "SKILL.md");
+      const skillDirRealPath = resolveContainedSkillPath({
+        source: params.source,
+        rootDir,
+        rootRealPath: baseDirRealPath,
+        candidatePath: skillDir,
+      });
+      if (!skillDirRealPath) {
         continue;
       }
       const skillMdRealPath = resolveContainedSkillPath({
