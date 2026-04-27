@@ -222,7 +222,11 @@ export function createMemorySearchTool(options: {
           const searchStartedAt = Date.now();
           let rawResults: MemorySearchResult[] = [];
           let surfacedMemoryResults: Array<
-            Record<string, unknown> & { corpus: "memory"; score: number; path: string }
+            Record<string, unknown> & {
+              corpus: "memory" | "sessions";
+              score: number;
+              path: string;
+            }
           > = [];
           let provider: string | undefined;
           let model: string | undefined;
@@ -278,9 +282,13 @@ export function createMemorySearchTool(options: {
               status.backend === "qmd"
                 ? clampResultsByInjectedChars(decorated, resolved.qmd?.limits.maxInjectedChars)
                 : decorated;
+            // Carry the underlying hit `source` through as the surfaced
+            // `corpus`. Hardcoding `"memory"` here flattened session
+            // transcript hits and made provenance indistinguishable from
+            // durable memory-file hits in the tool response (#72885).
             surfacedMemoryResults = memoryResults.map((result) => ({
               ...result,
-              corpus: "memory" as const,
+              corpus: result.source === "sessions" ? ("sessions" as const) : ("memory" as const),
             }));
             const sleepTimezone = resolveMemoryDeepDreamingConfig({
               pluginConfig: resolveMemoryCorePluginConfig(cfg),

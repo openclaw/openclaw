@@ -32,6 +32,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Memory/memory_search: surface session-transcript hits with `corpus: "sessions"` instead of flattening them to `corpus: "memory"`, so downstream consumers can distinguish durable memory-file hits from session-backed hits. The hit's underlying `source` now drives the surfaced `corpus` (`source: "sessions"` → `corpus: "sessions"`; otherwise `corpus: "memory"`). Fixes #72885.
 - Gateway/device tokens: stop echoing rotated bearer tokens from shared/admin `device.token.rotate` responses while preserving the same-device token handoff needed by token-only clients before reconnect. (#66773) Thanks @MoerAI.
 - Control UI/Talk: keep Google Live browser sessions on the WebSocket transport instead of falling back to WebRTC, validate browser Google Live WebSocket endpoints, cap Gateway relay sessions per browser connection, and remove stale browser-native voice buttons that did not use the configured Talk/TTS provider. Thanks @BunsDev.
 - Gateway/startup: reuse config snapshot plugin manifests for startup auto-enable before plugin bootstrap plans plugin loading. Thanks @shakkernerd.

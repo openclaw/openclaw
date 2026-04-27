@@ -1,10 +1,18 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getMemorySearchManagerMockConfigs,
   resetMemoryToolMockState,
   setMemoryBackend,
   setMemorySearchImpl,
 } from "./memory-tool-manager-mock.js";
+
+// Bypass session visibility filtering so corpus-surfacing tests can exercise
+// the source -> corpus mapping even without a real session guard. Visibility
+// is covered separately by session-search-visibility tests. (#72885)
+vi.mock("./session-search-visibility.js", () => ({
+  filterMemorySearchHitsBySessionVisibility: async (params: { hits: unknown }) => params.hits,
+}));
+
 import { createMemorySearchTool } from "./tools.js";
 import {
   asOpenClawConfig,
@@ -149,5 +157,80 @@ describe("memory_search unavailable payloads", () => {
     await tool.execute("patched-config", { query: "provider switch" });
 
     expect(getMemorySearchManagerMockConfigs()).toEqual([patchedConfig]);
+  });
+});
+
+describe("memory_search corpus surfacing (#72885)", () => {
+  beforeEach(() => {
+    resetMemoryToolMockState({ searchImpl: async () => [] });
+  });
+
+  it("surfaces session-transcript hits with corpus=sessions, not corpus=memory", async () => {
+    setMemorySearchImpl(async () => [
+      {
+        path: "agents/main/sessions/abc-123.jsonl",
+        startLine: 1,
+        endLine: 4,
+        score: 0.91,
+        snippet: "transcript hit",
+        source: "sessions" as const,
+      },
+    ]);
+
+    const tool = createMemorySearchToolOrThrow();
+    const result = await tool.execute("call_session_corpus", { query: "transcript" });
+    const details = result.details as { results: Array<{ corpus: string; source: string }> };
+    expect(details.results).toHaveLength(1);
+    expect(details.results[0]?.source).toBe("sessions");
+    expect(details.results[0]?.corpus).toBe("sessions");
+  });
+
+  it("surfaces durable memory-file hits with corpus=memory", async () => {
+    setMemorySearchImpl(async () => [
+      {
+        path: "MEMORY.md",
+        startLine: 1,
+        endLine: 4,
+        score: 0.95,
+        snippet: "memory hit",
+        source: "memory" as const,
+      },
+    ]);
+
+    const tool = createMemorySearchToolOrThrow();
+    const result = await tool.execute("call_memory_corpus", { query: "memory" });
+    const details = result.details as { results: Array<{ corpus: string; source: string }> };
+    expect(details.results).toHaveLength(1);
+    expect(details.results[0]?.source).toBe("memory");
+    expect(details.results[0]?.corpus).toBe("memory");
+  });
+
+  it("preserves source/corpus alignment across mixed-source result sets", async () => {
+    setMemorySearchImpl(async () => [
+      {
+        path: "MEMORY.md",
+        startLine: 1,
+        endLine: 2,
+        score: 0.95,
+        snippet: "memory",
+        source: "memory" as const,
+      },
+      {
+        path: "agents/main/sessions/abc-123.jsonl",
+        startLine: 1,
+        endLine: 2,
+        score: 0.92,
+        snippet: "transcript",
+        source: "sessions" as const,
+      },
+    ]);
+
+    const tool = createMemorySearchToolOrThrow();
+    const result = await tool.execute("call_mixed", { query: "anything" });
+    const details = result.details as { results: Array<{ corpus: string; source: string }> };
+    expect(details.results).toHaveLength(2);
+    for (const hit of details.results) {
+      expect(hit.corpus).toBe(hit.source);
+    }
   });
 });
