@@ -9,7 +9,7 @@ import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
-import { type OpenClawConfig, loadConfig } from "../../config/config.js";
+import { type OpenClawConfig, getRuntimeConfig } from "../../config/config.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
@@ -161,7 +161,7 @@ export async function getReplyFromConfig(
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const isFastTestEnv = process.env.OPENCLAW_TEST_FAST === "1";
   const cfg = resolveGetReplyConfig({
-    loadConfig,
+    getRuntimeConfig,
     isFastTestEnv,
     configOverride,
   });
@@ -328,7 +328,7 @@ export async function getReplyFromConfig(
         groupChannel:
           sessionEntry.groupChannel ?? sessionCtx.GroupChannel ?? finalized.GroupChannel,
         groupSubject: sessionEntry.subject ?? sessionCtx.GroupSubject ?? finalized.GroupSubject,
-        parentSessionKey: sessionCtx.ParentSessionKey,
+        parentSessionKey: sessionCtx.ModelParentSessionKey ?? sessionCtx.ParentSessionKey,
       })
     : null;
   const hasSessionModelOverride = Boolean(
@@ -339,7 +339,10 @@ export async function getReplyFromConfig(
     sessionEntry,
     sessionStore,
     sessionKey,
-    parentSessionKey: sessionEntry.parentSessionKey ?? sessionCtx.ParentSessionKey,
+    parentSessionKey:
+      sessionEntry.parentSessionKey ??
+      sessionCtx.ModelParentSessionKey ??
+      sessionCtx.ParentSessionKey,
     defaultProvider,
   });
   if (storedModelOverride?.model && !hasResolvedHeartbeatModelOverride) {

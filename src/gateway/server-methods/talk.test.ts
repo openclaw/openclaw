@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { talkHandlers } from "./talk.js";
 
 const mocks = vi.hoisted(() => ({
-  loadConfig: vi.fn<() => OpenClawConfig>(),
+  getRuntimeConfig: vi.fn<() => OpenClawConfig>(),
   readConfigFileSnapshot: vi.fn(),
   canonicalizeSpeechProviderId: vi.fn((providerId: string | undefined) => providerId),
   getSpeechProvider: vi.fn(),
@@ -11,7 +11,6 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../config/config.js", () => ({
-  loadConfig: mocks.loadConfig,
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
 }));
 
@@ -51,7 +50,7 @@ describe("talk.speak handler", () => {
       id: "ACME_SPEECH_API_KEY",
     });
 
-    mocks.loadConfig.mockReturnValue(runtimeConfig);
+    mocks.getRuntimeConfig.mockReturnValue(runtimeConfig);
     mocks.readConfigFileSnapshot.mockResolvedValue({
       path: "/tmp/openclaw.json",
       hash: "test-hash",
@@ -89,10 +88,10 @@ describe("talk.speak handler", () => {
       client: null,
       isWebchatConnect: () => false,
       respond: respond as never,
-      context: {} as never,
+      context: { getRuntimeConfig: () => runtimeConfig } as never,
     });
 
-    expect(mocks.loadConfig).toHaveBeenCalledTimes(1);
+    expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
     expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
     expect(mocks.synthesizeSpeech).toHaveBeenCalledWith(
       expect.objectContaining({

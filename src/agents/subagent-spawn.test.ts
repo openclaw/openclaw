@@ -41,7 +41,7 @@ describe("spawnSubagentDirect seam flow", () => {
   beforeAll(async () => {
     ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
       callGatewayMock: hoisted.callGatewayMock,
-      loadConfig: () => hoisted.configOverride,
+      getRuntimeConfig: () => hoisted.configOverride,
       updateSessionStoreMock: hoisted.updateSessionStoreMock,
       pruneLegacyStoreKeysMock: hoisted.pruneLegacyStoreKeysMock,
       registerSubagentRunMock: hoisted.registerSubagentRunMock,

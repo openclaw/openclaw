@@ -1,5 +1,5 @@
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
-import { loadConfig, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
+import { getRuntimeConfig, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
 import { loadSessionStore } from "openclaw/plugin-sdk/config-runtime";
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
@@ -16,7 +16,7 @@ import { editMessageTelegram } from "./send.js";
 import { wasSentByBot } from "./sent-message-cache.js";
 
 export type TelegramBotDeps = {
-  loadConfig: typeof loadConfig;
+  getRuntimeConfig: typeof getRuntimeConfig;
   resolveStorePath: typeof resolveStorePath;
   loadSessionStore?: typeof loadSessionStore;
   readChannelAllowFromStore: typeof readChannelAllowFromStore;
@@ -37,8 +37,8 @@ export type TelegramBotDeps = {
 };
 
 export const defaultTelegramBotDeps: TelegramBotDeps = {
-  get loadConfig() {
-    return loadConfig;
+  get getRuntimeConfig() {
+    return getRuntimeConfig;
   },
   get resolveStorePath() {
     return resolveStorePath;

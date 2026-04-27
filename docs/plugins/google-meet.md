@@ -336,7 +336,7 @@ Common failure checks:
 The Chrome realtime default uses two external tools:
 
 - `sox`: command-line audio utility. The plugin uses its `rec` and `play`
-  commands for the default 8 kHz G.711 mu-law audio bridge.
+  commands for the default 24 kHz PCM16 audio bridge.
 - `blackhole-2ch`: macOS virtual audio driver. It creates the `BlackHole 2ch`
   audio device that Chrome/Meet can route through.
 
@@ -887,10 +887,13 @@ Defaults:
   opening duplicates
 - `chrome.waitForInCallMs: 20000`: wait for the Meet tab to report in-call
   before the realtime intro is triggered
-- `chrome.audioInputCommand`: SoX `rec` command writing 8 kHz G.711 mu-law
-  audio to stdout
-- `chrome.audioOutputCommand`: SoX `play` command reading 8 kHz G.711 mu-law
-  audio from stdin
+- `chrome.audioFormat: "pcm16-24khz"`: command-pair audio format. Use
+  `"g711-ulaw-8khz"` only for legacy/custom command pairs that still emit
+  telephony audio.
+- `chrome.audioInputCommand`: SoX `rec` command writing audio in
+  `chrome.audioFormat`
+- `chrome.audioOutputCommand`: SoX `play` command reading audio in
+  `chrome.audioFormat`
 - `realtime.provider: "openai"`
 - `realtime.toolPolicy: "safe-read-only"`
 - `realtime.instructions`: brief spoken replies, with
@@ -1313,8 +1316,9 @@ phone dial-in participation.
 Chrome realtime mode needs either:
 
 - `chrome.audioInputCommand` plus `chrome.audioOutputCommand`: OpenClaw owns the
-  realtime model bridge and pipes 8 kHz G.711 mu-law audio between those
-  commands and the selected realtime voice provider.
+  realtime model bridge and pipes audio in `chrome.audioFormat` between those
+  commands and the selected realtime voice provider. The default Chrome path is
+  24 kHz PCM16; 8 kHz G.711 mu-law remains available for legacy command pairs.
 - `chrome.audioBridgeCommand`: an external bridge command owns the whole local
   audio path and must exit after starting or validating its daemon.
 

@@ -1,5 +1,4 @@
 import { isRestartEnabled } from "../../config/commands.flags.js";
-import { loadConfig } from "../../config/config.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageVersion } from "../../infra/package-json.js";
@@ -55,7 +54,7 @@ export const updateHandlers: GatewayRequestHandlers = {
 
     let result: Awaited<ReturnType<typeof runGatewayUpdate>>;
     try {
-      const config = loadConfig();
+      const config = context.getRuntimeConfig();
       const configChannel = normalizeUpdateChannel(config.update?.channel);
       const root =
         (await resolveOpenClawPackageRoot({

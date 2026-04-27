@@ -1364,6 +1364,25 @@ jobs:
       - name: Hydrate live auth/profile inputs
         run: bash scripts/ci-hydrate-live-auth.sh
 
+      - name: Install live media dependencies
+        if: matrix.suite_id == 'live-all'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v ffmpeg >/dev/null 2>&1; then
+            for attempt in 1 2 3; do
+              if sudo apt-get update -o Acquire::Retries=3; then
+                break
+              fi
+              if [[ "${attempt}" == "3" ]]; then
+                exit 1
+              fi
+              sleep $((attempt * 5))
+            done
+            sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ffmpeg
+          fi
+          ffmpeg -version | head -1
+
       - name: Configure suite-specific env
         shell: bash
         run: |

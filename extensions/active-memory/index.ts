@@ -1932,7 +1932,9 @@ export default definePluginEntry({
     warnDeprecatedModelFallbackPolicy(api.pluginConfig);
     const refreshLiveConfigFromRuntime = () => {
       const livePluginConfig = resolveLivePluginConfigObject(
-        api.runtime.config?.loadConfig,
+        api.runtime.config?.current
+          ? () => api.runtime.config.current() as OpenClawConfig
+          : undefined,
         "active-memory",
         api.pluginConfig as Record<string, unknown>,
       );
@@ -1953,7 +1955,7 @@ export default definePluginEntry({
           return { text: formatActiveMemoryCommandHelp() };
         }
         if (isGlobal) {
-          const currentConfig = api.runtime.config.loadConfig();
+          const currentConfig = api.runtime.config.current() as OpenClawConfig;
           if (action === "status") {
             return {
               text: `Active Memory: ${isActiveMemoryGloballyEnabled(currentConfig) ? "on" : "off"} globally.`,
@@ -1961,13 +1963,19 @@ export default definePluginEntry({
           }
           if (action === "on" || action === "enable" || action === "enabled") {
             const nextConfig = updateActiveMemoryGlobalEnabledInConfig(currentConfig, true);
-            await api.runtime.config.writeConfigFile(nextConfig);
+            await api.runtime.config.replaceConfigFile({
+              nextConfig,
+              afterWrite: { mode: "auto" },
+            });
             refreshLiveConfigFromRuntime();
             return { text: "Active Memory: on globally." };
           }
           if (action === "off" || action === "disable" || action === "disabled") {
             const nextConfig = updateActiveMemoryGlobalEnabledInConfig(currentConfig, false);
-            await api.runtime.config.writeConfigFile(nextConfig);
+            await api.runtime.config.replaceConfigFile({
+              nextConfig,
+              afterWrite: { mode: "auto" },
+            });
             refreshLiveConfigFromRuntime();
             return { text: "Active Memory: off globally." };
           }

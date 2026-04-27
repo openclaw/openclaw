@@ -24,7 +24,7 @@ import {
   type CommandArgValues,
   type CommandArgs,
 } from "openclaw/plugin-sdk/command-auth";
-import type { OpenClawConfig, loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -64,7 +64,7 @@ type DiscordNativeChoiceInteraction =
 const DISCORD_COMMAND_ARG_CUSTOM_ID_KEY = "cmdarg";
 
 export type DiscordCommandArgContext = {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   discordConfig: DiscordConfig;
   accountId: string;
   sessionPrefix: string;
@@ -79,7 +79,7 @@ export type DispatchDiscordCommandInteractionParams = {
   prompt: string;
   command: ChatCommandDefinition;
   commandArgs?: CommandArgs;
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   discordConfig: DiscordConfig;
   accountId: string;
   sessionPrefix: string;
@@ -242,7 +242,7 @@ async function resolveDiscordModelPickerRouteState(params: {
     | ButtonInteraction
     | StringSelectMenuInteraction
     | AutocompleteInteraction;
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   accountId: string;
   threadBindings: ThreadBindingManager;
   enforceConfiguredBindingReadiness?: boolean;
@@ -283,7 +283,7 @@ async function resolveDiscordModelPickerRoute(params: {
     | ButtonInteraction
     | StringSelectMenuInteraction
     | AutocompleteInteraction;
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   accountId: string;
   threadBindings: ThreadBindingManager;
 }) {
@@ -293,7 +293,7 @@ async function resolveDiscordModelPickerRoute(params: {
 
 export async function resolveDiscordNativeChoiceContext(params: {
   interaction: DiscordNativeChoiceInteraction;
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   accountId: string;
   threadBindings: ThreadBindingManager;
 }): Promise<{ provider?: string; model?: string } | null> {
@@ -340,7 +340,7 @@ export async function resolveDiscordNativeChoiceContext(params: {
 }
 
 function resolveDiscordModelPickerCurrentModel(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   route: ResolvedAgentRoute;
   data: Awaited<ReturnType<typeof loadDiscordModelPickerData>>;
 }): string {
@@ -374,7 +374,7 @@ function resolveDiscordModelPickerCurrentModel(params: {
 }
 
 function resolveDiscordModelPickerCurrentRuntime(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   route: ResolvedAgentRoute;
 }): string {
   try {
@@ -405,7 +405,7 @@ function resolveDiscordModelPickerCurrentRuntime(params: {
 
 export async function replyWithDiscordModelPickerProviders(params: {
   interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   command: DiscordModelPickerCommandContext;
   userId: string;
   accountId: string;

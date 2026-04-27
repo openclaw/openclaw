@@ -23,7 +23,7 @@ import {
   createBoundDeliveryRouter,
   getGlobalHookRunner,
   isEmbeddedPiRunActive,
-  loadConfig,
+  getRuntimeConfig,
   loadSessionStore,
   queueEmbeddedPiMessage,
   resolveActiveEmbeddedRunSessionId,
@@ -51,7 +51,7 @@ const MAX_TIMER_SAFE_TIMEOUT_MS = 2_147_000_000;
 
 type SubagentAnnounceDeliveryDeps = {
   callGateway: typeof callGateway;
-  loadConfig: typeof loadConfig;
+  getRuntimeConfig: typeof getRuntimeConfig;
   getRequesterSessionActivity: (requesterSessionKey: string) => {
     sessionId?: string;
     isActive: boolean;
@@ -62,7 +62,7 @@ type SubagentAnnounceDeliveryDeps = {
 
 const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
   callGateway,
-  loadConfig,
+  getRuntimeConfig,
   getRequesterSessionActivity: (requesterSessionKey: string) => {
     const sessionId =
       resolveActiveEmbeddedRunSessionId(requesterSessionKey) ??
@@ -357,7 +357,7 @@ export async function resolveSubagentCompletionOrigin(params: {
 }
 
 async function sendAnnounce(item: AnnounceQueueItem) {
-  const cfg = subagentAnnounceDeliveryDeps.loadConfig();
+  const cfg = subagentAnnounceDeliveryDeps.getRuntimeConfig();
   const announceTimeoutMs = resolveSubagentAnnounceTimeoutMs(cfg);
   const requesterIsSubagent = isInternalAnnounceRequesterSession(item.sessionKey);
   const origin = item.origin;
@@ -402,7 +402,7 @@ async function sendAnnounce(item: AnnounceQueueItem) {
 }
 
 export function loadRequesterSessionEntry(requesterSessionKey: string) {
-  const cfg = subagentAnnounceDeliveryDeps.loadConfig();
+  const cfg = subagentAnnounceDeliveryDeps.getRuntimeConfig();
   const canonicalKey = resolveRequesterStoreKey(cfg, requesterSessionKey);
   const agentId = resolveAgentIdFromSessionKey(canonicalKey);
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
@@ -412,7 +412,7 @@ export function loadRequesterSessionEntry(requesterSessionKey: string) {
 }
 
 export function loadSessionEntryByKey(sessionKey: string) {
-  const cfg = subagentAnnounceDeliveryDeps.loadConfig();
+  const cfg = subagentAnnounceDeliveryDeps.getRuntimeConfig();
   const agentId = resolveAgentIdFromSessionKey(sessionKey);
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   const store = loadSessionStore(storePath);
@@ -646,7 +646,7 @@ async function sendSubagentAnnounceDirectly(params: {
       path: "none",
     };
   }
-  const cfg = subagentAnnounceDeliveryDeps.loadConfig();
+  const cfg = subagentAnnounceDeliveryDeps.getRuntimeConfig();
   const announceTimeoutMs = resolveSubagentAnnounceTimeoutMs(cfg);
   const canonicalRequesterSessionKey = resolveRequesterStoreKey(
     cfg,

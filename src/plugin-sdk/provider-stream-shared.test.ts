@@ -3,9 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   buildCopilotDynamicHeaders,
   createHtmlEntityToolCallArgumentDecodingWrapper,
+  createPayloadPatchStreamWrapper,
   defaultToolStreamExtraParams,
   decodeHtmlEntitiesInObject,
   hasCopilotVisionInput,
+  isOpenAICompatibleThinkingEnabled,
 } from "./provider-stream-shared.js";
 
 type FakeWrappedStream = {
@@ -60,6 +62,43 @@ describe("defaultToolStreamExtraParams", () => {
 
     expect(defaultToolStreamExtraParams(enabled)).toBe(enabled);
     expect(defaultToolStreamExtraParams(disabled)).toBe(disabled);
+  });
+});
+
+describe("isOpenAICompatibleThinkingEnabled", () => {
+  it("uses explicit request reasoning before session thinking level", () => {
+    expect(
+      isOpenAICompatibleThinkingEnabled({
+        thinkingLevel: "high",
+        options: { reasoning: "none" } as never,
+      }),
+    ).toBe(false);
+    expect(
+      isOpenAICompatibleThinkingEnabled({
+        thinkingLevel: "off",
+        options: { reasoningEffort: "medium" } as never,
+      }),
+    ).toBe(true);
+  });
+
+  it("treats off and none as disabled", () => {
+    expect(isOpenAICompatibleThinkingEnabled({ thinkingLevel: "off", options: {} })).toBe(false);
+    expect(
+      isOpenAICompatibleThinkingEnabled({
+        thinkingLevel: "high",
+        options: { reasoning: "none" } as never,
+      }),
+    ).toBe(false);
+  });
+
+  it("defaults to enabled for missing or non-string values", () => {
+    expect(isOpenAICompatibleThinkingEnabled({ thinkingLevel: undefined, options: {} })).toBe(true);
+    expect(
+      isOpenAICompatibleThinkingEnabled({
+        thinkingLevel: "off",
+        options: { reasoning: { effort: "off" } } as never,
+      }),
+    ).toBe(true);
   });
 });
 
@@ -180,5 +219,49 @@ describe("createHtmlEntityToolCallArgumentDecodingWrapper", () => {
         },
       },
     });
+  });
+});
+
+describe("createPayloadPatchStreamWrapper", () => {
+  it("passes stream call options to payload patches", () => {
+    let captured: Record<string, unknown> = {};
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {};
+      options?.onPayload?.(payload, _model);
+      captured = payload;
+      return {} as ReturnType<StreamFn>;
+    };
+
+    const wrapped = createPayloadPatchStreamWrapper(baseStreamFn, ({ payload, options }) => {
+      payload.reasoning = (options as { reasoning?: unknown } | undefined)?.reasoning;
+    });
+    void wrapped(
+      { id: "model" } as never,
+      { messages: [] } as never,
+      {
+        reasoning: "medium",
+      } as never,
+    );
+
+    expect(captured).toEqual({ reasoning: "medium" });
+  });
+
+  it("calls the underlying stream directly when shouldPatch rejects the model", () => {
+    let onPayloadWasInstalled = false;
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      onPayloadWasInstalled = typeof options?.onPayload === "function";
+      return {} as ReturnType<StreamFn>;
+    };
+
+    const wrapped = createPayloadPatchStreamWrapper(
+      baseStreamFn,
+      ({ payload }) => {
+        payload.unexpected = true;
+      },
+      { shouldPatch: () => false },
+    );
+    void wrapped({ id: "model" } as never, { messages: [] } as never, {});
+
+    expect(onPayloadWasInstalled).toBe(false);
   });
 });

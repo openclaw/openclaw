@@ -517,9 +517,11 @@ export async function runPreparedReply(
     : [inboundUserContext, "[User sent media without caption]"].filter(Boolean).join("\n\n");
   const transcriptBodyBase = isHeartbeat
     ? HEARTBEAT_TRANSCRIPT_PROMPT
-    : hasUserBody
-      ? baseBodyFinal
-      : "[User sent media without caption]";
+    : isBareSessionReset
+      ? softResetTail
+      : hasUserBody
+        ? baseBodyFinal
+        : "[User sent media without caption]";
   let prefixedBodyBase = await applySessionHints({
     baseBody: effectiveBaseBody,
     abortedLastRun,

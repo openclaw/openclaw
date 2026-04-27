@@ -3105,14 +3105,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                 type: "string",
                                 const: "zai",
                               },
-                              {
-                                type: "string",
-                                const: "qwen",
-                              },
-                              {
-                                type: "string",
-                                const: "qwen-chat-template",
-                              },
                             ],
                           },
                           requiresToolResultName: {
@@ -4414,6 +4406,27 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     title: "Memory Search Model",
                     description:
                       "Embedding model override used by the selected memory provider when a non-default model is required. Set this only when you need explicit recall quality/cost tuning beyond provider defaults.",
+                  },
+                  inputType: {
+                    type: "string",
+                    minLength: 1,
+                    title: "Memory Search Input Type",
+                    description:
+                      "Use this optional provider-specific `input_type` value only when the same label should apply to both query and document embedding requests. For asymmetric providers, prefer queryInputType and documentInputType.",
+                  },
+                  queryInputType: {
+                    type: "string",
+                    minLength: 1,
+                    title: "Memory Search Query Input Type",
+                    description:
+                      "Optional provider-specific `input_type` value for query-time memory embeddings. Use this with OpenAI-compatible asymmetric embedding endpoints that require a query label.",
+                  },
+                  documentInputType: {
+                    type: "string",
+                    minLength: 1,
+                    title: "Memory Search Document Input Type",
+                    description:
+                      "Optional provider-specific `input_type` value for document and indexing memory embeddings. Use this with OpenAI-compatible asymmetric embedding endpoints that require a passage or document label.",
                   },
                   outputDimensionality: {
                     type: "integer",
@@ -6362,6 +6375,18 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     },
                     model: {
                       type: "string",
+                    },
+                    inputType: {
+                      type: "string",
+                      minLength: 1,
+                    },
+                    queryInputType: {
+                      type: "string",
+                      minLength: 1,
+                    },
+                    documentInputType: {
+                      type: "string",
+                      minLength: 1,
                     },
                     outputDimensionality: {
                       type: "integer",
@@ -18711,7 +18736,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 },
                 title: "Audio Transcription Command",
                 description:
-                  'Executable + args used to transcribe audio (first token must be a safe binary/path), for example `["whisper-cli", "--model", "small", "{input}"]`. Prefer a pinned command so runtime environments behave consistently.',
+                  'Executable + args used to transcribe audio (first token must be a safe binary/path), for example `["whisper-cli", "--model", "small", "{{MediaPath}}"]`. Deprecated `{input}` placeholders are migrated to `{{MediaPath}}` by `openclaw doctor --fix`.',
               },
               timeoutSeconds: {
                 type: "integer",
@@ -23291,6 +23316,18 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   type: "string",
                   format: "uri",
                 },
+                transport: {
+                  anyOf: [
+                    {
+                      type: "string",
+                      const: "sse",
+                    },
+                    {
+                      type: "string",
+                      const: "streamable-http",
+                    },
+                  ],
+                },
                 headers: {
                   type: "object",
                   propertyNames: {
@@ -25702,7 +25739,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "audio.transcription.command": {
       label: "Audio Transcription Command",
-      help: 'Executable + args used to transcribe audio (first token must be a safe binary/path), for example `["whisper-cli", "--model", "small", "{input}"]`. Prefer a pinned command so runtime environments behave consistently.',
+      help: 'Executable + args used to transcribe audio (first token must be a safe binary/path), for example `["whisper-cli", "--model", "small", "{{MediaPath}}"]`. Deprecated `{input}` placeholders are migrated to `{{MediaPath}}` by `openclaw doctor --fix`.',
       tags: ["media"],
     },
     "audio.transcription.timeoutSeconds": {
@@ -26055,6 +26092,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Memory Search Model",
       help: "Embedding model override used by the selected memory provider when a non-default model is required. Set this only when you need explicit recall quality/cost tuning beyond provider defaults.",
       tags: ["models"],
+    },
+    "agents.defaults.memorySearch.inputType": {
+      label: "Memory Search Input Type",
+      help: "Use this optional provider-specific `input_type` value only when the same label should apply to both query and document embedding requests. For asymmetric providers, prefer queryInputType and documentInputType.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.memorySearch.queryInputType": {
+      label: "Memory Search Query Input Type",
+      help: "Optional provider-specific `input_type` value for query-time memory embeddings. Use this with OpenAI-compatible asymmetric embedding endpoints that require a query label.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.memorySearch.documentInputType": {
+      label: "Memory Search Document Input Type",
+      help: "Optional provider-specific `input_type` value for document and indexing memory embeddings. Use this with OpenAI-compatible asymmetric embedding endpoints that require a passage or document label.",
+      tags: ["advanced"],
     },
     "agents.defaults.memorySearch.outputDimensionality": {
       label: "Memory Search Output Dimensionality",

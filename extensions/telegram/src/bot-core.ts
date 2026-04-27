@@ -137,7 +137,7 @@ export function createTelegramBotCore(
   const botRuntime = telegramBotRuntimeForTest ?? DEFAULT_TELEGRAM_BOT_RUNTIME;
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
   const telegramDeps = opts.telegramDeps;
-  const cfg = opts.config ?? telegramDeps.loadConfig();
+  const cfg = opts.config ?? telegramDeps.getRuntimeConfig();
   const account = resolveTelegramAccount({
     cfg,
     accountId: opts.accountId,
@@ -505,7 +505,7 @@ export function createTelegramBotCore(
   const loadFreshTelegramAccountConfig = () => {
     try {
       return resolveTelegramAccount({
-        cfg: telegramDeps.loadConfig(),
+        cfg: telegramDeps.getRuntimeConfig(),
         accountId: account.accountId,
       }).config;
     } catch (error) {
@@ -567,7 +567,7 @@ export function createTelegramBotCore(
     resolveGroupActivation,
     resolveGroupRequireMention,
     resolveTelegramGroupConfig,
-    loadFreshConfig: () => telegramDeps.loadConfig(),
+    loadFreshConfig: () => telegramDeps.getRuntimeConfig(),
     sendChatActionHandler,
     runtime,
     replyToMode,

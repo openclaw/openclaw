@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { loadConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   isSameMemoryDreamingDay,
@@ -783,7 +782,7 @@ async function readDreamDiary(
 
 export const doctorHandlers: GatewayRequestHandlers = {
   "doctor.memory.status": async ({ respond, context }) => {
-    const cfg = loadConfig();
+    const cfg = context.getRuntimeConfig();
     const agentId = resolveDefaultAgentId(cfg);
     const { manager, error } = await getActiveMemorySearchManager({
       cfg,
@@ -875,8 +874,8 @@ export const doctorHandlers: GatewayRequestHandlers = {
       await manager.close?.().catch(() => {});
     }
   },
-  "doctor.memory.dreamDiary": async ({ respond }) => {
-    const cfg = loadConfig();
+  "doctor.memory.dreamDiary": async ({ respond, context }) => {
+    const cfg = context.getRuntimeConfig();
     const agentId = resolveDefaultAgentId(cfg);
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
     const dreamDiary = await readDreamDiary(workspaceDir);
@@ -886,8 +885,8 @@ export const doctorHandlers: GatewayRequestHandlers = {
     };
     respond(true, payload, undefined);
   },
-  "doctor.memory.backfillDreamDiary": async ({ respond }) => {
-    const cfg = loadConfig();
+  "doctor.memory.backfillDreamDiary": async ({ respond, context }) => {
+    const cfg = context.getRuntimeConfig();
     const agentId = resolveDefaultAgentId(cfg);
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
     const memoryDir = path.join(workspaceDir, "memory");
@@ -944,8 +943,8 @@ export const doctorHandlers: GatewayRequestHandlers = {
     };
     respond(true, payload, undefined);
   },
-  "doctor.memory.resetDreamDiary": async ({ respond }) => {
-    const cfg = loadConfig();
+  "doctor.memory.resetDreamDiary": async ({ respond, context }) => {
+    const cfg = context.getRuntimeConfig();
     const agentId = resolveDefaultAgentId(cfg);
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
     const removed = await removeBackfillDiaryEntries({ workspaceDir });
@@ -959,8 +958,8 @@ export const doctorHandlers: GatewayRequestHandlers = {
     };
     respond(true, payload, undefined);
   },
-  "doctor.memory.resetGroundedShortTerm": async ({ respond }) => {
-    const cfg = loadConfig();
+  "doctor.memory.resetGroundedShortTerm": async ({ respond, context }) => {
+    const cfg = context.getRuntimeConfig();
     const agentId = resolveDefaultAgentId(cfg);
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
     const removed = await removeGroundedShortTermCandidates({ workspaceDir });
@@ -971,8 +970,8 @@ export const doctorHandlers: GatewayRequestHandlers = {
     };
     respond(true, payload, undefined);
   },
-  "doctor.memory.repairDreamingArtifacts": async ({ respond }) => {
-    const cfg = loadConfig();
+  "doctor.memory.repairDreamingArtifacts": async ({ respond, context }) => {
+    const cfg = context.getRuntimeConfig();
     const agentId = resolveDefaultAgentId(cfg);
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
     const repair = await repairDreamingArtifacts({ workspaceDir });
@@ -988,8 +987,8 @@ export const doctorHandlers: GatewayRequestHandlers = {
     };
     respond(true, payload, undefined);
   },
-  "doctor.memory.dedupeDreamDiary": async ({ respond }) => {
-    const cfg = loadConfig();
+  "doctor.memory.dedupeDreamDiary": async ({ respond, context }) => {
+    const cfg = context.getRuntimeConfig();
     const agentId = resolveDefaultAgentId(cfg);
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
     const dedupe = await dedupeDreamDiaryEntries({ workspaceDir });

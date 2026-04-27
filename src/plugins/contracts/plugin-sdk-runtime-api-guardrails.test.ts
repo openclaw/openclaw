@@ -81,6 +81,36 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export { createWebhookInFlightLimiter, readJsonWebhookBodyOrReject, type WebhookInFlightLimiter } from "openclaw/plugin-sdk/webhook-request-guards";',
     'export { setGoogleChatRuntime } from "./src/runtime.js";',
   ],
+  [bundledPluginFile({ rootDir: ROOT_DIR, pluginId: "msteams", relativePath: "runtime-api.ts" })]: [
+    'export { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";',
+    'export type { AllowlistMatch } from "openclaw/plugin-sdk/allow-from";',
+    'export { mergeAllowlist, resolveAllowlistMatchSimple, summarizeMapping } from "openclaw/plugin-sdk/allow-from";',
+    'export type { BaseProbeResult, ChannelDirectoryEntry, ChannelGroupContext, ChannelMessageActionName, ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-contract";',
+    'export type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";',
+    'export { logTypingFailure } from "openclaw/plugin-sdk/channel-logging";',
+    'export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";',
+    'export { evaluateSenderGroupAccessForPolicy, readStoreAllowFromForDmPolicy, resolveDmGroupAccessWithLists, resolveEffectiveAllowFromLists, resolveSenderScopedGroupPolicy, resolveToolsBySender } from "openclaw/plugin-sdk/channel-policy";',
+    'export { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";',
+    'export { PAIRING_APPROVED_MESSAGE, buildProbeChannelStatusSummary, createDefaultChannelRuntimeState } from "openclaw/plugin-sdk/channel-status";',
+    'export { buildChannelKeyCandidates, normalizeChannelSlug, resolveChannelEntryMatchWithFallback, resolveNestedAllowlistDecision } from "openclaw/plugin-sdk/channel-targets";',
+    'export type { GroupPolicy, GroupToolPolicyConfig, MSTeamsChannelConfig, MSTeamsConfig, MSTeamsReplyStyle, MSTeamsTeamConfig, MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";',
+    'export { isDangerousNameMatchingEnabled, resolveDefaultGroupPolicy } from "openclaw/plugin-sdk/config-runtime";',
+    'export { withFileLock } from "openclaw/plugin-sdk/file-lock";',
+    'export { keepHttpServerTaskAlive } from "openclaw/plugin-sdk/channel-lifecycle";',
+    'export { detectMime, extensionForMime, extractOriginalFilename, getFileExtension, resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/media-runtime";',
+    'export { dispatchReplyFromConfigWithSettledDispatcher } from "openclaw/plugin-sdk/inbound-reply-dispatch";',
+    'export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";',
+    'export { buildMediaPayload } from "openclaw/plugin-sdk/reply-payload";',
+    'export type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";',
+    'export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";',
+    'export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";',
+    'export type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";',
+    'export { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";',
+    'export { normalizeStringEntries } from "openclaw/plugin-sdk/string-normalization-runtime";',
+    'export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";',
+    'export { DEFAULT_WEBHOOK_MAX_BODY_BYTES } from "openclaw/plugin-sdk/webhook-ingress";',
+    'export { setMSTeamsRuntime } from "./src/runtime.js";',
+  ],
   [bundledPluginFile({ rootDir: ROOT_DIR, pluginId: "irc", relativePath: "runtime-api.ts" })]: [
     'export { setIrcRuntime } from "./src/runtime.js";',
   ],
@@ -104,8 +134,26 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     pluginId: "nextcloud-talk",
     relativePath: "runtime-api.ts",
   })]: [
-    'export * from "openclaw/plugin-sdk/nextcloud-talk";',
+    'export type { AllowlistMatch } from "openclaw/plugin-sdk/allow-from";',
+    'export type { ChannelGroupContext } from "openclaw/plugin-sdk/channel-contract";',
+    'export { logInboundDrop } from "openclaw/plugin-sdk/channel-logging";',
+    'export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";',
+    'export { readStoreAllowFromForDmPolicy, resolveDmGroupAccessWithCommandGate } from "openclaw/plugin-sdk/channel-policy";',
+    'export type { BlockStreamingCoalesceConfig, DmConfig, DmPolicy, GroupPolicy, GroupToolPolicyConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";',
+    'export { GROUP_POLICY_BLOCKED_LABEL, resolveAllowlistProviderRuntimeGroupPolicy, resolveDefaultGroupPolicy, warnMissingProviderGroupPolicyFallbackOnce } from "openclaw/plugin-sdk/config-runtime";',
+    'export { dispatchInboundReplyWithBase } from "openclaw/plugin-sdk/inbound-reply-dispatch";',
+    'export type { OutboundReplyPayload } from "openclaw/plugin-sdk/reply-payload";',
+    'export { deliverFormattedTextWithAttachments } from "openclaw/plugin-sdk/reply-payload";',
+    'export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";',
+    'export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";',
+    'export type { SecretInput } from "openclaw/plugin-sdk/secret-input";',
+    'export { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";',
     'export { setNextcloudTalkRuntime } from "./src/runtime.js";',
+  ],
+  [bundledPluginFile({ rootDir: ROOT_DIR, pluginId: "nostr", relativePath: "runtime-api.ts" })]: [
+    'export type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";',
+    'export { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";',
+    'export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";',
   ],
   [bundledPluginFile({ rootDir: ROOT_DIR, pluginId: "signal", relativePath: "runtime-api.ts" })]: [
     'export * from "./src/runtime-api.js";',
@@ -156,6 +204,28 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
       'export { parseTelegramTopicConversation } from "./src/topic-conversation.js";',
       'export { resolveTelegramPollVisibility } from "./src/poll-visibility.js";',
     ],
+  [bundledPluginFile({ rootDir: ROOT_DIR, pluginId: "twitch", relativePath: "runtime-api.ts" })]: [
+    'export type { ChannelAccountSnapshot, ChannelCapabilities, ChannelGatewayContext, ChannelLogSink, ChannelMessageActionAdapter, ChannelMessageActionContext, ChannelMeta, ChannelOutboundAdapter, ChannelOutboundContext, ChannelResolveKind, ChannelResolveResult, ChannelStatusAdapter } from "openclaw/plugin-sdk/channel-contract";',
+    'export type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";',
+    'export type { OutboundDeliveryResult } from "openclaw/plugin-sdk/channel-send-result";',
+    'export type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";',
+    'export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";',
+    'export type { WizardPrompter } from "openclaw/plugin-sdk/setup";',
+  ],
+  [bundledPluginFile({
+    rootDir: ROOT_DIR,
+    pluginId: "voice-call",
+    relativePath: "runtime-api.ts",
+  })]: [
+    'export { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";',
+    'export type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";',
+    'export type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";',
+    'export { isRequestBodyLimitError, readRequestBodyWithLimit, requestBodyErrorToText } from "openclaw/plugin-sdk/webhook-request-guards";',
+    'export { fetchWithSsrFGuard, isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";',
+    'export type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";',
+    'export { TtsAutoSchema, TtsConfigSchema, TtsModeSchema, TtsProviderSchema } from "openclaw/plugin-sdk/tts-runtime";',
+    'export { sleep } from "openclaw/plugin-sdk/runtime-env";',
+  ],
   [bundledPluginFile({ rootDir: ROOT_DIR, pluginId: "whatsapp", relativePath: "runtime-api.ts" })]:
     [
       'export * from "./src/active-listener.js";',
@@ -236,6 +306,24 @@ describe("runtime api guardrails", () => {
       expect(readExportStatements(file), `${file} runtime api exports changed`).toEqual(
         RUNTIME_API_EXPORT_GUARDS[file],
       );
+    }
+  });
+
+  it("keeps bundled runtime api barrels off their own branded sdk facades", () => {
+    for (const [pluginId, rootDir] of getBundledPluginRoots().entries()) {
+      const path = resolve(rootDir, "runtime-api.ts");
+      if (!existsSync(path)) {
+        continue;
+      }
+      const source = readFileSync(path, "utf8");
+      expect(
+        source,
+        `${pluginId} runtime api should use generic sdk subpaths or local exports`,
+      ).not.toContain(`"openclaw/plugin-sdk/${pluginId}"`);
+      expect(
+        source,
+        `${pluginId} runtime api should use generic sdk subpaths or local exports`,
+      ).not.toContain(`'openclaw/plugin-sdk/${pluginId}'`);
     }
   });
 

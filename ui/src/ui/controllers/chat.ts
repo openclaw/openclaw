@@ -348,6 +348,7 @@ export type ChatState = {
   chatStream: string | null;
   chatStreamStartedAt: number | null;
   lastError: string | null;
+  resetChatInputHistoryNavigation?: () => void;
 };
 
 export type ChatEventPayload = {
@@ -378,6 +379,8 @@ export async function loadChatHistory(state: ChatState) {
   const requestVersion = beginChatHistoryRequest(state);
   const startedAt = Date.now();
   const previousMessages = state.chatMessages;
+  // Any pending input-history snapshot becomes invalid once we start reloading transcript state.
+  state.resetChatInputHistoryNavigation?.();
   state.chatLoading = true;
   state.lastError = null;
   try {

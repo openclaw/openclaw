@@ -92,7 +92,8 @@ describe("docker build helper", () => {
     const scenarios = readFileSync(DOCKER_E2E_SCENARIOS_PATH, "utf8");
 
     expect(scenarios).toContain('"plugins-offline"');
-    expect(scenarios).toContain('"bundled-plugin-install-uninstall"');
+    expect(scenarios).toContain("`bundled-plugin-install-uninstall-${index}`");
+    expect(scenarios).toContain("pnpm test:docker:bundled-plugin-install-uninstall");
     expect(scenarios).toContain("OPENCLAW_PLUGINS_E2E_CLAWHUB=0");
     expect(scenarios).toContain('"bundled-channel-deps-compat"');
     expect(scenarios).toContain("test:docker:bundled-channel-deps:fast");

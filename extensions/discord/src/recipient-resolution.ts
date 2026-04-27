@@ -26,18 +26,13 @@ export async function parseAndResolveRecipient(
   }
   const resolvedCfg = requireRuntimeConfig(cfg, "Discord recipient resolution");
   const accountInfo = resolveDiscordAccount({ cfg: resolvedCfg, accountId });
-  const trimmed = raw.trim();
-  const resolvedParseOptions = {
-    ...parseOptions,
-    ambiguousMessage: `Ambiguous Discord recipient "${trimmed}". Use "user:${trimmed}" for DMs or "channel:${trimmed}" for channel messages.`,
-  };
   const resolved = await parseAndResolveDiscordTarget(
     raw,
     {
       cfg: resolvedCfg,
       accountId: accountInfo.accountId,
     },
-    resolvedParseOptions,
+    parseOptions,
   );
   return { kind: resolved.kind, id: resolved.id };
 }

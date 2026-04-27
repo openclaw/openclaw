@@ -71,7 +71,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     throw new Error("Matrix provider requires Node (bun runtime not supported)");
   }
   const core = getMatrixRuntime();
-  let cfg = core.config.loadConfig() as CoreConfig;
+  let cfg = core.config.current() as CoreConfig;
   if (cfg.channels?.["matrix"]?.enabled === false) {
     return;
   }
@@ -436,8 +436,13 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       accountConfig,
       logger,
       logVerboseMessage,
-      loadConfig: () => core.config.loadConfig() as CoreConfig,
-      writeConfigFile: async (nextCfg) => await core.config.writeConfigFile(nextCfg),
+      getRuntimeConfig: () => core.config.current() as CoreConfig,
+      replaceConfigFile: async (nextCfg) => {
+        await core.config.replaceConfigFile({
+          nextConfig: nextCfg,
+          afterWrite: { mode: "auto" },
+        });
+      },
       loadWebMedia: async (url, maxBytes) => await core.media.loadWebMedia(url, maxBytes),
       env: process.env,
       abortSignal: opts.abortSignal,

@@ -5,7 +5,7 @@ import {
   collectChannelSchemaMetadata,
   collectPluginSchemaMetadata,
 } from "./channel-config-metadata.js";
-import { loadConfig, readConfigFileSnapshot } from "./config.js";
+import { getRuntimeConfig, readConfigFileSnapshot } from "./config.js";
 import type { OpenClawConfig } from "./config.js";
 import { buildConfigSchema, type ConfigSchemaResponse } from "./schema.js";
 
@@ -22,7 +22,7 @@ function loadManifestRegistry(config: OpenClawConfig, env?: NodeJS.ProcessEnv) {
 }
 
 export function loadGatewayRuntimeConfigSchema(): ConfigSchemaResponse {
-  const config = loadConfig();
+  const config = getRuntimeConfig();
   const registry = loadManifestRegistry(config);
   return buildConfigSchema({
     plugins: collectPluginSchemaMetadata(registry),

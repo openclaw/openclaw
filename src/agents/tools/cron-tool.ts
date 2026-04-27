@@ -1,5 +1,5 @@
 import { Type, type TSchema } from "typebox";
-import { loadConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import type { CronDelivery, CronMessageChannel } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
@@ -354,7 +354,7 @@ async function buildReminderContextLines(params: {
   if (!sessionKey) {
     return [];
   }
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const { mainKey, alias } = resolveMainSessionAlias(cfg);
   const resolvedKey = resolveInternalSessionKey({ key: sessionKey, alias, mainKey });
   try {
@@ -638,7 +638,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               sessionContext: { sessionKey: opts?.agentSessionKey },
             }) ?? params.job;
           if (job && typeof job === "object") {
-            const cfg = loadConfig();
+            const cfg = getRuntimeConfig();
             const { mainKey, alias } = resolveMainSessionAlias(cfg);
             const resolvedSessionKey = opts?.agentSessionKey
               ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias, mainKey })

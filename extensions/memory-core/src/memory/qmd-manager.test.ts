@@ -171,7 +171,10 @@ describe("QmdMemoryManager", () => {
     return manager;
   }
 
-  async function createManager(params?: { mode?: "full" | "status"; cfg?: OpenClawConfig }) {
+  async function createManager(params?: {
+    mode?: "full" | "status" | "cli";
+    cfg?: OpenClawConfig;
+  }) {
     const cfgToUse = params?.cfg ?? cfg;
     const resolved = resolveMemoryBackendConfig({ cfg: cfgToUse, agentId });
     const manager = trackManager(
@@ -483,6 +486,30 @@ describe("QmdMemoryManager", () => {
 
     const { manager } = await createManager({ mode: "status" });
     expect(spawnMock).not.toHaveBeenCalled();
+    await manager?.close();
+  });
+
+  it("initializes one-shot CLI mode without watchers or background updates", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "5m", debounceMs: 60_000, onBoot: true },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const { manager } = await createManager({ mode: "cli" });
+
+    expect(watchMock).not.toHaveBeenCalled();
+    const updateCalls = spawnMock.mock.calls
+      .map((call: unknown[]) => call[1] as string[])
+      .filter((args: string[]) => args[0] === "update" || args[0] === "embed");
+    expect(updateCalls).toEqual([]);
+
     await manager?.close();
   });
 

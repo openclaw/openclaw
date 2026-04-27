@@ -263,7 +263,6 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
     },
     applyConfigOverrides: (cfg: OpenClawConfig) =>
       composeTestConfig(cfg as Record<string, unknown>),
-    loadConfig: loadRuntimeAwareTestConfig,
     getRuntimeConfig: loadRuntimeAwareTestConfig,
     parseConfigJson5: (raw: string) => {
       try {

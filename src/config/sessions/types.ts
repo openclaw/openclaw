@@ -145,6 +145,8 @@ export type SessionEntry = {
   subagentRole?: "orchestrator" | "leaf";
   /** Explicit control scope assigned at spawn time for subagent control decisions. */
   subagentControlScope?: "children" | "none";
+  /** Plugin id that created this session through api.runtime.subagent. */
+  pluginOwnerId?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
   /** Timestamp (ms) when the current sessionId first became active. */

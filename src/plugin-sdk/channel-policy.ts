@@ -43,11 +43,13 @@ export {
 export {
   DM_GROUP_ACCESS_REASON,
   readStoreAllowFromForDmPolicy,
+  resolveDmGroupAccessWithCommandGate,
   resolveDmGroupAccessWithLists,
   resolveEffectiveAllowFromLists,
 } from "../security/dm-policy-shared.js";
 export {
   evaluateGroupRouteAccessForPolicy,
+  evaluateSenderGroupAccessForPolicy,
   resolveSenderScopedGroupPolicy,
 } from "./group-access.js";
 export { createAllowlistProviderRestrictSendersWarningCollector };

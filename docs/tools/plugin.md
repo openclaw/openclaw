@@ -61,6 +61,17 @@ If config is invalid, install normally fails closed and points you at
 `openclaw doctor --fix`. The only recovery exception is a narrow bundled-plugin
 reinstall path for plugins that opt into
 `openclaw.install.allowInvalidConfigRecovery`.
+During Gateway startup, invalid config for one plugin is isolated to that plugin:
+startup logs the `plugins.entries.<id>.config` issue, skips that plugin during
+load, and keeps other plugins and channels online. Run `openclaw doctor --fix`
+to quarantine the bad plugin config by disabling that plugin entry and removing
+its invalid config payload; the normal config backup keeps the previous values.
+When a channel config references a plugin that is no longer discoverable but the
+same stale plugin id remains in plugin config or install records, Gateway startup
+logs warnings and skips that channel instead of blocking every other channel.
+Run `openclaw doctor --fix` to remove the stale channel/plugin entries; unknown
+channel keys without stale-plugin evidence still fail validation so typos stay
+visible.
 
 Packaged OpenClaw installs do not eagerly install every bundled plugin's
 runtime dependency tree. When a bundled OpenClaw-owned plugin is active from
@@ -197,7 +208,7 @@ or use `openclaw gateway restart` against the running Gateway.
 <Accordion title="Plugin states: disabled vs missing vs invalid">
   - **Disabled**: plugin exists but enablement rules turned it off. Config is preserved.
   - **Missing**: config references a plugin id that discovery did not find.
-  - **Invalid**: plugin exists but its config does not match the declared schema.
+  - **Invalid**: plugin exists but its config does not match the declared schema. Gateway startup skips only that plugin; `openclaw doctor --fix` can quarantine the invalid entry by disabling it and removing its config payload.
 </Accordion>
 
 ## Discovery and precedence

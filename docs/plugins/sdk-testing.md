@@ -94,6 +94,14 @@ plugin calls a capability API it does not own. For example,
 `api.registerMemoryCapability(...)` requires the plugin manifest or exported
 entry to declare `kind: "memory"`.
 
+### Testing runtime config access
+
+Prefer the shared plugin runtime mock from the repo test helpers when testing
+bundled plugins. Its deprecated `runtime.config.loadConfig()` and
+`runtime.config.writeConfigFile(...)` mocks throw by default so tests catch new
+usage of compatibility APIs. Override those mocks only when the test is
+explicitly covering legacy compatibility behavior.
+
 ### Unit testing a channel plugin
 
 ```typescript
@@ -178,8 +186,9 @@ const mockRuntime = {
     // ... other mocks
   },
   config: {
-    loadConfig: vi.fn(),
-    writeConfigFile: vi.fn(),
+    current: vi.fn(() => ({}) as const),
+    mutateConfigFile: vi.fn(),
+    replaceConfigFile: vi.fn(),
   },
   // ... other namespaces
 } as unknown as PluginRuntime;

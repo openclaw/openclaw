@@ -189,7 +189,7 @@ Use the LM Studio host's reachable address, keep `/v1`, and make sure LM Studio 
 }
 ```
 
-Unlike generic OpenAI-compatible providers, `lmstudio` automatically trusts its configured local/private endpoint for guarded model requests. If you use a custom provider id instead of `lmstudio`, set `models.providers.<id>.request.allowPrivateNetwork: true` explicitly.
+Unlike generic OpenAI-compatible providers, `lmstudio` automatically trusts its configured local/private endpoint for guarded model requests. Custom loopback provider IDs such as `localhost` or `127.0.0.1` are also trusted automatically; for LAN, tailnet, or private DNS custom provider IDs, set `models.providers.<id>.request.allowPrivateNetwork: true` explicitly.
 
 ## Related
 

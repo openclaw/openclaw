@@ -10,6 +10,8 @@ export type CliRoutedCommandId =
   | "config-unset"
   | "models-list"
   | "models-status"
+  | "tasks-list"
+  | "tasks-audit"
   | "channels-list"
   | "channels-status";
 
@@ -130,6 +132,23 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     exact: true,
     policy: { ensureCliPath: false, routeConfigGuard: "always" },
     route: { id: "models-status" },
+  },
+  {
+    commandPath: ["tasks", "list"],
+    exact: true,
+    policy: { ensureCliPath: false, routeConfigGuard: "when-suppressed", loadPlugins: "never" },
+    route: { id: "tasks-list" },
+  },
+  {
+    commandPath: ["tasks", "audit"],
+    exact: true,
+    policy: { ensureCliPath: false, routeConfigGuard: "when-suppressed", loadPlugins: "never" },
+    route: { id: "tasks-audit" },
+  },
+  {
+    commandPath: ["tasks"],
+    policy: { ensureCliPath: false, routeConfigGuard: "when-suppressed", loadPlugins: "never" },
+    route: { id: "tasks-list" },
   },
   { commandPath: ["backup"], policy: { bypassConfigGuard: true } },
   { commandPath: ["doctor"], policy: { bypassConfigGuard: true } },

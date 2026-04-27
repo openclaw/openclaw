@@ -33,7 +33,7 @@ const BUNDLED_EXTENSION_CONFIG_IMPORT_GUARDS = [
   },
   {
     path: "extensions/googlechat/src/config-schema.ts",
-    allowedSpecifier: "openclaw/plugin-sdk/googlechat",
+    allowedSpecifier: "../runtime-api.js",
   },
   // Teams keeps a package-local config barrel so production code does not
   // self-import via openclaw/plugin-sdk/msteams from inside the same extension.

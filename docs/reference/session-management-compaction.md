@@ -50,6 +50,9 @@ OpenClaw persists sessions in two layers:
    - Append-only transcript with tree structure (entries have `id` + `parentId`)
    - Stores the actual conversation + tool calls + compaction summaries
    - Used to rebuild the model context for future turns
+   - Large pre-compaction debug checkpoints are skipped once the active
+     transcript exceeds the checkpoint size cap, avoiding a second giant
+     `.checkpoint.*.jsonl` copy.
 
 ---
 

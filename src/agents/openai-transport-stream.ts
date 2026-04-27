@@ -87,8 +87,12 @@ type OpenAICompletionsOptions = BaseStreamOptions & {
   reasoningEffort?: OpenAIReasoningEffort;
 };
 
+type OpenAIModeCompatInput = Omit<ModelCompatConfig, "thinkingFormat"> & {
+  thinkingFormat?: string;
+};
+
 type OpenAIModeModel = Omit<Model<Api>, "compat"> & {
-  compat?: ModelCompatConfig;
+  compat?: OpenAIModeCompatInput | null;
 };
 
 type MutableAssistantOutput = {
@@ -1592,7 +1596,7 @@ function getCompat(model: OpenAIModeModel): {
     requiresAssistantAfterToolResult:
       compat.requiresAssistantAfterToolResult ?? detected.requiresAssistantAfterToolResult,
     requiresThinkingAsText: compat.requiresThinkingAsText ?? detected.requiresThinkingAsText,
-    thinkingFormat: (compat.thinkingFormat as string | undefined) ?? detected.thinkingFormat,
+    thinkingFormat: compat.thinkingFormat ?? detected.thinkingFormat,
     openRouterRouting: (compat.openRouterRouting as Record<string, unknown> | undefined) ?? {},
     vercelGatewayRouting:
       (compat.vercelGatewayRouting as Record<string, unknown> | undefined) ??

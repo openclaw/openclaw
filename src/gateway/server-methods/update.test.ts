@@ -20,7 +20,7 @@ const detectRespawnSupervisorMock = vi.fn(() => null);
 const scheduleGatewaySigusr1RestartMock = vi.fn(() => ({ scheduled: true }));
 
 vi.mock("../../config/config.js", () => ({
-  loadConfig: () => ({ update: {} }),
+  getRuntimeConfig: () => ({ update: {} }),
 }));
 
 vi.mock("../../config/commands.flags.js", () => ({
@@ -147,6 +147,7 @@ async function invokeUpdateRun(
   await updateHandlers["update.run"]({
     params,
     respond: onRespond as never,
+    context: { getRuntimeConfig: () => ({ update: {} }) },
   } as never);
 }
 

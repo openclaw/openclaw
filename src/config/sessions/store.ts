@@ -237,7 +237,7 @@ async function saveSessionStoreUnlocked(
   normalizeSessionStore(store);
 
   if (!opts?.skipMaintenance) {
-    // Resolve maintenance config once (avoids repeated loadConfig() calls).
+    // Resolve maintenance config once (avoids repeated getRuntimeConfig() calls).
     const maintenance = opts?.maintenanceConfig
       ? { ...opts.maintenanceConfig, ...opts?.maintenanceOverride }
       : { ...resolveMaintenanceConfig(), ...opts?.maintenanceOverride };
