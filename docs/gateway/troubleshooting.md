@@ -27,6 +27,33 @@ Expected healthy signals:
 - `openclaw doctor` reports no blocking config/service issues.
 - `openclaw channels status --probe` shows live per-account transport status and, where supported, probe/audit results such as `works` or `audit ok`.
 
+## Gateway service Node runtime checks
+
+Use this when the gateway behaves differently as a daemon than it does from your
+interactive shell, or after changing Node with `nvm`, `fnm`, `mise`, `asdf`, Homebrew,
+or a system package manager.
+
+```bash
+node -v
+npm -v
+which node
+which openclaw
+openclaw gateway status
+```
+
+On Linux/systemd, also inspect the actual user service:
+
+```bash
+systemctl --user cat openclaw-gateway.service
+```
+
+The shell Node and service Node can point at different binaries. Restart the gateway
+after Node upgrades or PATH changes:
+
+```bash
+openclaw gateway restart
+```
+
 ## Split brain installs and newer config guard
 
 Use this when a gateway service unexpectedly stops after an update, or logs show that one `openclaw` binary is older than the version that last wrote `openclaw.json`.

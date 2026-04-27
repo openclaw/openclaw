@@ -17,6 +17,35 @@ node -v
 
 If this prints `v24.x.x` or higher, you're on the recommended default. If it prints `v22.14.x` or higher, you're on the supported Node 22 LTS path, but we still recommend upgrading to Node 24 when convenient. If Node isn't installed or the version is too old, pick an install method below.
 
+## Verify the gateway service runtime
+
+The Node version in your interactive shell can differ from the Node binary used by a
+daemon or service. This is common after upgrades, or when Node is managed by `nvm`,
+`fnm`, `mise`, `asdf`, or `n`.
+
+Check both the shell and gateway/service view:
+
+```bash
+node -v
+npm -v
+which node
+which openclaw
+openclaw gateway status
+```
+
+On Linux/systemd, inspect the user service after installing the daemon:
+
+```bash
+systemctl --user cat openclaw-gateway.service
+```
+
+If you change Node versions or global install paths, restart the gateway so the service
+uses the intended runtime:
+
+```bash
+openclaw gateway restart
+```
+
 ## Install Node
 
 <Tabs>
