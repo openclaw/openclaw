@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
+import type { MessagingToolSend } from "../../pi-embedded-messaging.types.js";
 import {
   buildEmbeddedRunExecutionTrace,
   buildEmbeddedRunTerminalResult,
@@ -81,7 +82,13 @@ describe("terminal-result helpers", () => {
         didSendViaMessagingTool: true,
         finalPromptText: "final prompt",
         messagingToolSentMediaUrls: ["https://example.test/image.png"],
-        messagingToolSentTargets: [{ provider: "telegram", to: "chat-1" } as never],
+        messagingToolSentTargets: [
+          {
+            tool: "messaging.send",
+            provider: "telegram",
+            to: "chat-1",
+          } satisfies MessagingToolSend,
+        ],
         messagingToolSentTexts: ["sent"],
         successfulCronAdds: 1,
         systemPromptReport: undefined,
