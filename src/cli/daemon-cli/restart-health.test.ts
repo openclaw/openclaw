@@ -262,7 +262,13 @@ describe("inspectGatewayRestart", () => {
     },
   );
 
-  it.each(["", " ", "repair required"])(
+  it.each([
+    "",
+    " ",
+    "repair required",
+    "connect challenge missing nonce",
+    "connect challenge timeout",
+  ])(
     "does not treat ambiguous 1008 close reason %s as healthy gateway reachability",
     async (reason) => {
       const snapshot = await inspectAmbiguousOwnershipWithProbe({
