@@ -72,6 +72,10 @@ export function registerCronAddCommand(cron: Command) {
       .alias("create")
       .description("Add a cron job")
       .requiredOption("--name <name>", "Job name")
+      .option(
+        "--id <id>",
+        "Optional stable job id (1-128 chars: a-z A-Z 0-9 _ -); invalid ids fall back to UUIDs",
+      )
       .option("--description <text>", "Optional description")
       .option("--disabled", "Create job disabled", false)
       .option("--delete-after-run", "Delete one-shot job after it succeeds", false)
@@ -231,6 +235,7 @@ export function registerCronAddCommand(cron: Command) {
           const description = normalizeOptionalString(opts.description);
 
           const sessionKey = normalizeOptionalString(opts.sessionKey);
+          const jobId = normalizeOptionalString(opts.id);
 
           if (payload.kind === "agentTurn" && !agentId) {
             defaultRuntime.error(
@@ -242,6 +247,7 @@ export function registerCronAddCommand(cron: Command) {
           }
 
           const params = {
+            ...(jobId ? { id: jobId } : {}),
             name,
             description,
             enabled: !opts.disabled,

@@ -646,6 +646,49 @@ describe("cron stagger defaults", () => {
   });
 });
 
+describe("createJob custom id", () => {
+  const now = Date.parse("2026-02-28T12:00:00.000Z");
+
+  const baseInput = () => ({
+    name: "id-test",
+    enabled: true,
+    schedule: { kind: "every" as const, everyMs: 60_000 },
+    sessionTarget: "main" as const,
+    wakeMode: "now" as const,
+    payload: { kind: "systemEvent" as const, text: "tick" },
+  });
+
+  it("uses provided id when valid", () => {
+    const state = createMockState(now, { defaultAgentId: "main" });
+    const job = createJob(state, { ...baseInput(), id: "my-job_nightly_1" });
+    expect(job.id).toBe("my-job_nightly_1");
+  });
+
+  it("trims id and uses it when valid", () => {
+    const state = createMockState(now, { defaultAgentId: "main" });
+    const job = createJob(state, { ...baseInput(), id: "  trimmed-id  " });
+    expect(job.id).toBe("trimmed-id");
+  });
+
+  it("falls back to UUID when id is omitted", () => {
+    const state = createMockState(now, { defaultAgentId: "main" });
+    const job = createJob(state, baseInput());
+    expect(job.id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
+  });
+
+  it("falls back to UUID when id is invalid", () => {
+    const state = createMockState(now, { defaultAgentId: "main" });
+    for (const badId of ["", "  ", "bad space", "bad.dots", "has:colon", "x".repeat(129)]) {
+      const job = createJob(state, { ...baseInput(), id: badId });
+      expect(job.id).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+      );
+    }
+  });
+});
+
 describe("createJob delivery defaults", () => {
   const now = Date.parse("2026-02-28T12:00:00.000Z");
 
