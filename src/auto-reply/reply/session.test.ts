@@ -1389,7 +1389,8 @@ describe("initSessionState reset policy", () => {
     await writeSessionStoreFast(storePath, {
       [sessionKey]: {
         sessionId: existingSessionId,
-        updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+        updatedAt: new Date(2026, 0, 18, 4, 30, 0).getTime(),
+        sessionStartedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
       },
     });
     enqueueSystemEvent("stale daily rollover event", { sessionKey });
@@ -1479,12 +1480,14 @@ describe("initSessionState reset policy", () => {
     const existingSessionId = "auto-idle-rollover-session-id";
 
     // updatedAt sits after today's 4am daily boundary (so NOT stale by daily)
-    // but is 45 minutes old against a 30-minute idle window (so stale by idle).
+    // but lastInteractionAt is 45 minutes old against a 30-minute idle window (so stale by idle).
     // resolveStaleSessionEndReason checks idle before daily, so reason="idle".
     await writeSessionStoreFast(storePath, {
       [sessionKey]: {
         sessionId: existingSessionId,
-        updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
+        updatedAt: new Date(2026, 0, 18, 5, 20, 0).getTime(),
+        sessionStartedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
+        lastInteractionAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
       },
     });
 

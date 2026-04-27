@@ -131,17 +131,13 @@ function resolveStaleSessionEndReason(params: {
   freshness?: SessionFreshness;
   now: number;
 }): PluginHookSessionEndReason | undefined {
-  if (!params.entry || !params.freshness) {
+  if (!params.entry || !params.freshness || params.freshness.fresh) {
     return undefined;
   }
-  const staleDaily =
-    params.freshness.dailyResetAt != null && params.entry.updatedAt < params.freshness.dailyResetAt;
-  const staleIdle =
-    params.freshness.idleExpiresAt != null && params.now > params.freshness.idleExpiresAt;
-  if (staleIdle) {
+  if (params.freshness.idleExpiresAt != null && params.now > params.freshness.idleExpiresAt) {
     return "idle";
   }
-  if (staleDaily) {
+  if (params.freshness.dailyResetAt != null) {
     return "daily";
   }
   return undefined;
