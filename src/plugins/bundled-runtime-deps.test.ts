@@ -5,6 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  __testing as bundledRuntimeDepsActivityTesting,
+  getActiveBundledRuntimeDepsInstallCount,
+  waitForBundledRuntimeDepsInstallIdle,
+} from "./bundled-runtime-deps-activity.js";
+import {
   __testing as bundledRuntimeDepsTesting,
   createBundledRuntimeDependencyAliasMap,
   createBundledRuntimeDepsInstallArgs,
@@ -12,6 +17,7 @@ import {
   ensureBundledPluginRuntimeDeps,
   installBundledRuntimeDeps,
   isWritableDirectory,
+  repairBundledRuntimeDepsInstallRootAsync,
   resolveBundledRuntimeDependencyInstallRoot,
   resolveBundledRuntimeDepsNpmRunner,
   scanBundledPluginRuntimeDeps,
@@ -85,6 +91,7 @@ function statfsFixture(params: {
 afterEach(() => {
   vi.restoreAllMocks();
   spawnSyncMock.mockReset();
+  bundledRuntimeDepsActivityTesting.resetBundledRuntimeDepsInstallActivity();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -773,6 +780,22 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
     ]);
   });
 
+  it("trusts preselected startup plugin ids without reapplying config policy", () => {
+    const result = scanBundledPluginRuntimeDeps({
+      packageRoot: setupPolicyPackageRoot(),
+      selectedPluginIds: ["telegram"],
+      config: {
+        plugins: { allow: ["browser"] },
+        channels: { telegram: { botToken: "123:abc" } },
+      },
+    });
+
+    expect(result.deps.map((dep) => `${dep.name}@${dep.version}`)).toEqual([
+      "telegram-runtime@2.0.0",
+    ]);
+    expect(result.conflicts).toEqual([]);
+  });
+
   it("reads each bundled plugin manifest once per runtime-deps scan", () => {
     const packageRoot = makeTempDir();
     const pluginRoot = writeBundledPluginPackage({
@@ -1215,6 +1238,67 @@ describe("ensureBundledPluginRuntimeDeps", () => {
         installSpecs: ["alpha-runtime@1.0.0", "beta-runtime@2.0.0"],
       },
     ]);
+  });
+
+  it("tracks active runtime-deps installs until the installer returns", async () => {
+    const packageRoot = makeTempDir();
+    const pluginRoot = path.join(packageRoot, "dist", "extensions", "browser");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({ dependencies: { "browser-runtime": "1.0.0" } }),
+    );
+
+    let idleWait: Promise<{ drained: boolean; active: number }> | null = null;
+    expect(getActiveBundledRuntimeDepsInstallCount()).toBe(0);
+    const result = ensureBundledPluginRuntimeDeps({
+      env: {},
+      installDeps: (params) => {
+        expect(getActiveBundledRuntimeDepsInstallCount()).toBe(1);
+        idleWait = waitForBundledRuntimeDepsInstallIdle();
+        writeInstalledPackage(params.installRoot, "browser-runtime", "1.0.0");
+      },
+      pluginId: "browser",
+      pluginRoot,
+    });
+
+    expect(result).toEqual({
+      installedSpecs: ["browser-runtime@1.0.0"],
+      retainSpecs: ["browser-runtime@1.0.0"],
+    });
+    expect(getActiveBundledRuntimeDepsInstallCount()).toBe(0);
+    await expect(idleWait).resolves.toEqual({ drained: true, active: 0 });
+  });
+
+  it("keeps async repair locks and activity active until npm staging settles", async () => {
+    const installRoot = makeTempDir();
+    const lockDir = path.join(installRoot, ".openclaw-runtime-deps.lock");
+    let releaseInstall!: () => void;
+    const repair = repairBundledRuntimeDepsInstallRootAsync({
+      installRoot,
+      missingSpecs: ["browser-runtime@1.0.0"],
+      installSpecs: ["browser-runtime@1.0.0"],
+      env: {},
+      installDeps: async (params) => {
+        expect(fs.existsSync(lockDir)).toBe(true);
+        expect(getActiveBundledRuntimeDepsInstallCount()).toBe(1);
+        await new Promise<void>((resolve) => {
+          releaseInstall = () => {
+            writeInstalledPackage(params.installRoot, "browser-runtime", "1.0.0");
+            resolve();
+          };
+        });
+      },
+    });
+
+    await Promise.resolve();
+    expect(fs.existsSync(lockDir)).toBe(true);
+    expect(getActiveBundledRuntimeDepsInstallCount()).toBe(1);
+
+    releaseInstall();
+    await expect(repair).resolves.toEqual({ installSpecs: ["browser-runtime@1.0.0"] });
+    expect(fs.existsSync(lockDir)).toBe(false);
+    expect(getActiveBundledRuntimeDepsInstallCount()).toBe(0);
   });
 
   it("does not expire active runtime-deps install locks by age alone", () => {

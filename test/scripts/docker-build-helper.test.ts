@@ -6,6 +6,8 @@ const DOCKER_ALL_SCHEDULER_PATH = "scripts/test-docker-all.mjs";
 const DOCKER_E2E_SCENARIOS_PATH = "scripts/lib/docker-e2e-scenarios.mjs";
 const INSTALL_E2E_RUNNER_PATH = "scripts/docker/install-sh-e2e/run.sh";
 const OPENAI_WEB_SEARCH_MINIMAL_E2E_PATH = "scripts/e2e/openai-web-search-minimal-docker.sh";
+const PLUGINS_DOCKER_E2E_PATH = "scripts/e2e/plugins-docker.sh";
+const PLUGIN_UPDATE_DOCKER_E2E_PATH = "scripts/e2e/plugin-update-unchanged-docker.sh";
 const CENTRALIZED_BUILD_SCRIPTS = [
   "scripts/docker/setup.sh",
   "scripts/e2e/browser-cdp-snapshot-docker.sh",
@@ -59,6 +61,24 @@ describe("docker build helper", () => {
     );
   });
 
+  it("keeps package acceptance plugin coverage offline-capable", () => {
+    const scenarios = readFileSync(DOCKER_E2E_SCENARIOS_PATH, "utf8");
+
+    expect(scenarios).toContain('"plugins-offline"');
+    expect(scenarios).toContain("OPENCLAW_PLUGINS_E2E_CLAWHUB=0");
+    expect(scenarios).toContain('"bundled-channel-deps-compat"');
+    expect(scenarios).toContain("test:docker:bundled-channel-deps:fast");
+  });
+
+  it("allows plugin update smoke to tolerate config metadata migrations", () => {
+    const runner = readFileSync(PLUGIN_UPDATE_DOCKER_E2E_PATH, "utf8");
+
+    expect(runner).toContain("plugin install record changed unexpectedly");
+    expect(runner).toContain("index.installRecords ?? index.records ?? config.plugins?.installs");
+    expect(runner).not.toContain("Config changed unexpectedly");
+    expect(runner).not.toContain("before_hash");
+  });
+
   it("passes installer tag env to bash, not curl", () => {
     const runner = readFileSync(INSTALL_E2E_RUNNER_PATH, "utf8");
 
@@ -91,8 +111,17 @@ describe("docker build helper", () => {
   it("keeps OpenAI web search smoke on one gateway agent connection", () => {
     const runner = readFileSync(OPENAI_WEB_SEARCH_MINIMAL_E2E_PATH, "utf8");
 
-    expect(runner).toContain('new URL("dist/gateway/call.js"');
-    expect(runner).toContain("expectFinal: true");
+    expect(runner).toContain('"--expect-final"');
+    expect(runner).toContain('[...gatewayArgs, "agent", "--params"');
     expect(runner).not.toContain('"agent.wait"');
+  });
+
+  it("keeps ClawHub plugin Docker smoke hermetic by default", () => {
+    const runner = readFileSync(PLUGINS_DOCKER_E2E_PATH, "utf8");
+
+    expect(runner).toContain("start_clawhub_fixture_server()");
+    expect(runner).toContain('OPENCLAW_CLAWHUB_URL="http://127.0.0.1:');
+    expect(runner).toContain("live ClawHub can rate-limit CI");
+    expect(runner).toContain('[[ -z "${OPENCLAW_CLAWHUB_URL:-}" && -z "${CLAWHUB_URL:-}" ]]');
   });
 });

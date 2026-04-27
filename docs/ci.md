@@ -23,17 +23,138 @@ published npm spec, a trusted `package_ref` built with the selected
 from another GitHub Actions run, uploads it as `package-under-test`, then reuses
 the Docker release/E2E scheduler with that tarball instead of repacking the
 workflow checkout. Profiles cover smoke, package, product, full, and custom
-Docker lane selections. The optional Telegram lane is published-npm only and
-reuses the `NPM Telegram Beta E2E` workflow.
+Docker lane selections. The `package` profile uses offline plugin coverage so
+published-package validation is not gated on live ClawHub availability. The
+optional Telegram lane reuses the
+`package-under-test` artifact in the `NPM Telegram Beta E2E` workflow, with the
+published npm spec path kept for standalone dispatches.
+
+## Package Acceptance
+
+Use `Package Acceptance` when the question is "does this installable OpenClaw
+package work as a product?" It is different from normal CI: normal CI validates
+the source tree, while package acceptance validates a single tarball through the
+same Docker E2E harness users exercise after install or update.
+
+The workflow has four jobs:
+
+1. `resolve_package` checks out `workflow_ref`, resolves one package candidate,
+   writes `.artifacts/docker-e2e-package/openclaw-current.tgz`, writes
+   `.artifacts/docker-e2e-package/package-candidate.json`, uploads both as the
+   `package-under-test` artifact, and prints the source, workflow ref, package
+   ref, version, SHA-256, and profile in the GitHub step summary.
+2. `docker_acceptance` calls
+   `openclaw-live-and-e2e-checks-reusable.yml` with `ref=workflow_ref` and
+   `package_artifact_name=package-under-test`. The reusable workflow downloads
+   that artifact, validates the tarball inventory, prepares package-digest
+   Docker images when needed, and runs the selected Docker lanes against that
+   package instead of packing the workflow checkout.
+3. `package_telegram` optionally calls `NPM Telegram Beta E2E`. It runs when
+   `telegram_mode` is not `none` and installs the same `package-under-test`
+   artifact when Package Acceptance resolved one; standalone Telegram dispatch
+   can still install a published npm spec.
+4. `summary` fails the workflow if package resolution, Docker acceptance, or
+   the optional Telegram lane failed.
+
+Candidate sources:
+
+- `source=npm`: accepts only `openclaw@beta`, `openclaw@latest`, or an exact
+  OpenClaw release version such as `openclaw@2026.4.27-beta.2`. Use this for
+  published beta/stable acceptance.
+- `source=ref`: packs a trusted `package_ref` branch, tag, or full commit SHA.
+  The resolver fetches OpenClaw branches/tags, verifies the selected commit is
+  reachable from repository branch history or a release tag, installs deps in a
+  detached worktree, and packs it with `scripts/package-openclaw-for-docker.mjs`.
+- `source=url`: downloads an HTTPS `.tgz`; `package_sha256` is required.
+- `source=artifact`: downloads one `.tgz` from `artifact_run_id` and
+  `artifact_name`; `package_sha256` is optional but should be supplied for
+  externally shared artifacts.
+
+Keep `workflow_ref` and `package_ref` separate. `workflow_ref` is the trusted
+workflow/harness code that runs the test. `package_ref` is the source commit
+that gets packed when `source=ref`. This lets the current test harness validate
+older trusted source commits without running old workflow logic.
+
+Profiles map to Docker coverage:
+
+- `smoke`: `npm-onboard-channel-agent`, `gateway-network`, `config-reload`
+- `package`: `npm-onboard-channel-agent`, `doctor-switch`,
+  `update-channel-switch`, `bundled-channel-deps-compat`, `plugins-offline`,
+  `plugin-update`
+- `product`: `package` plus `mcp-channels`, `cron-mcp-cleanup`,
+  `openai-web-search-minimal`, `openwebui`
+- `full`: full Docker release-path chunks with OpenWebUI
+- `custom`: exact `docker_lanes`; required when `suite_profile=custom`
+
+Release checks call Package Acceptance with `source=ref`,
+`package_ref=<release-ref>`, `workflow_ref=<release workflow ref>`,
+`suite_profile=package`, and `telegram_mode=mock-openai`. That profile is the
+GitHub-native replacement for most Parallels package/update validation, with
+Telegram proving the same package artifact through the QA live transport.
+Cross-OS release checks still cover OS-specific onboarding, installer, and
+platform behavior; package/update product validation should start with Package
+Acceptance.
+
+Examples:
+
+```bash
+# Validate the current beta package with product-level coverage.
+gh workflow run package-acceptance.yml \
+  --ref main \
+  -f workflow_ref=main \
+  -f source=npm \
+  -f package_spec=openclaw@beta \
+  -f suite_profile=product \
+  -f telegram_mode=mock-openai
+
+# Pack and validate a release branch with the current harness.
+gh workflow run package-acceptance.yml \
+  --ref main \
+  -f workflow_ref=main \
+  -f source=ref \
+  -f package_ref=release/YYYY.M.D \
+  -f suite_profile=package \
+  -f telegram_mode=mock-openai
+
+# Validate a tarball URL. SHA-256 is mandatory for source=url.
+gh workflow run package-acceptance.yml \
+  --ref main \
+  -f workflow_ref=main \
+  -f source=url \
+  -f package_url=https://example.com/openclaw-current.tgz \
+  -f package_sha256=<64-char-sha256> \
+  -f suite_profile=smoke
+
+# Reuse a tarball uploaded by another Actions run.
+gh workflow run package-acceptance.yml \
+  --ref main \
+  -f workflow_ref=main \
+  -f source=artifact \
+  -f artifact_run_id=<run-id> \
+  -f artifact_name=package-under-test \
+  -f suite_profile=custom \
+  -f docker_lanes='install-e2e plugin-update'
+```
+
+When debugging a failed package acceptance run, start at the `resolve_package`
+summary to confirm the package source, version, and SHA-256. Then inspect the
+`docker_acceptance` child run and its Docker artifacts:
+`.artifacts/docker-tests/**/summary.json`, `failures.json`, lane logs, phase
+timings, and rerun commands. Prefer rerunning the failed package profile or
+exact Docker lanes instead of rerunning full release validation.
 
 QA Lab has dedicated CI lanes outside the main smart-scoped workflow. The
 `Parity gate` workflow runs on matching PR changes and manual dispatch; it
 builds the private QA runtime and compares the mock GPT-5.5 and Opus 4.6
 agentic packs. The `QA-Lab - All Lanes` workflow runs nightly on `main` and on
 manual dispatch; it fans out the mock parity gate, live Matrix lane, and live
-Telegram lane as parallel jobs. The live jobs use the `qa-live-shared`
-environment, and the Telegram lane uses Convex leases. `OpenClaw Release
-Checks` also runs the same QA Lab lanes before release approval.
+Telegram and Discord lanes as parallel jobs. The live jobs use the
+`qa-live-shared` environment, and Telegram/Discord use Convex leases. Matrix
+uses `--profile fast --fail-fast` for scheduled and release gates while the CLI
+default and manual workflow input remain `all`; manual `matrix_profile=all`
+dispatch always shards full Matrix coverage into `transport`, `media`,
+`e2ee-smoke`, `e2ee-deep`, and `e2ee-cli` jobs. `OpenClaw Release Checks` also
+runs the release-critical QA Lab lanes before release approval.
 
 The `Duplicate PRs After Merge` workflow is a manual maintainer workflow for
 post-land duplicate cleanup. It defaults to dry-run and only closes explicitly
@@ -127,7 +248,7 @@ act as if every scoped area changed.
 CI workflow edits validate the Node CI graph plus workflow linting, but do not force Windows, Android, or macOS native builds by themselves; those platform lanes stay scoped to platform source changes.
 CI routing-only edits, selected cheap core-test fixture edits, and narrow plugin contract helper/test-routing edits use a fast Node-only manifest path: preflight, security, and a single `checks-fast-core` task. That path avoids build artifacts, Node 22 compatibility, channel contracts, full core shards, bundled-plugin shards, and additional guard matrices when the changed files are limited to the routing or helper surfaces that the fast task exercises directly.
 Windows Node checks are scoped to Windows-specific process/path wrappers, npm/pnpm/UI runner helpers, package manager config, and the CI workflow surfaces that execute that lane; unrelated source, plugin, install-smoke, and test-only changes stay on the Linux Node lanes so they do not reserve a 16-vCPU Windows worker for coverage that is already exercised by the normal test shards.
-The separate `install-smoke` workflow reuses the same scope script through its own `preflight` job. It splits smoke coverage into `run_fast_install_smoke` and `run_full_install_smoke`. Pull requests run the fast path for Docker/package surfaces, bundled plugin package/manifest changes, and core plugin/channel/gateway/Plugin SDK surfaces that the Docker smoke jobs exercise. Source-only bundled plugin changes, test-only edits, and docs-only edits do not reserve Docker workers. The fast path builds the root Dockerfile image once, checks the CLI, runs the agents delete shared-workspace CLI smoke, runs the container gateway-network e2e, verifies a bundled extension build arg, and runs the bounded bundled-plugin Docker profile under a 240-second aggregate command timeout with each scenario's Docker run capped separately. The full path keeps QR package install and installer Docker/update coverage for nightly scheduled runs, manual dispatches, workflow-call release checks, and pull requests that truly touch installer/package/Docker surfaces. `main` pushes, including merge commits, do not force the full path; when changed-scope logic would request full coverage on a push, the workflow keeps the fast Docker smoke and leaves the full install smoke to nightly or release validation. The slow Bun global install image-provider smoke is separately gated by `run_bun_global_install_smoke`; it runs on the nightly schedule and from the release checks workflow, and manual `install-smoke` dispatches can opt into it, but pull requests and `main` pushes do not run it. QR and installer Docker tests keep their own install-focused Dockerfiles. Local `test:docker:all` prebuilds one shared live-test image, packs OpenClaw once as an npm tarball, and builds two shared `scripts/e2e/Dockerfile` images: a bare Node/Git runner for installer/update/plugin-dependency lanes and a functional image that installs the same tarball into `/app` for normal functionality lanes. Docker lane definitions live in `scripts/lib/docker-e2e-scenarios.mjs`, planner logic lives in `scripts/lib/docker-e2e-plan.mjs`, and the runner only executes the selected plan. The scheduler selects the image per lane with `OPENCLAW_DOCKER_E2E_BARE_IMAGE` and `OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE`, then runs lanes with `OPENCLAW_SKIP_DOCKER_BUILD=1`; tune the default main-pool slot count of 10 with `OPENCLAW_DOCKER_ALL_PARALLELISM` and the provider-sensitive tail-pool slot count of 10 with `OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM`. Heavy lane caps default to `OPENCLAW_DOCKER_ALL_LIVE_LIMIT=9`, `OPENCLAW_DOCKER_ALL_NPM_LIMIT=10`, and `OPENCLAW_DOCKER_ALL_SERVICE_LIMIT=7` so npm install and multi-service lanes do not overcommit Docker while lighter lanes still fill available slots. Lane starts are staggered by 2 seconds by default to avoid local Docker daemon create storms; override with `OPENCLAW_DOCKER_ALL_START_STAGGER_MS=0` or another millisecond value. The local aggregate preflights Docker, removes stale OpenClaw E2E containers, emits active-lane status, persists lane timings for longest-first ordering, and supports `OPENCLAW_DOCKER_ALL_DRY_RUN=1` for scheduler inspection. It stops scheduling new pooled lanes after the first failure by default, and each lane has a 120-minute fallback timeout overrideable with `OPENCLAW_DOCKER_ALL_LANE_TIMEOUT_MS`; selected live/tail lanes use tighter per-lane caps. `OPENCLAW_DOCKER_ALL_LANES=<lane[,lane]>` runs exact scheduler lanes, including release-only lanes such as `install-e2e` and split bundled update lanes such as `bundled-channel-update-acpx`, while skipping the cleanup smoke so agents can reproduce one failed lane. The reusable live/E2E workflow asks `scripts/test-docker-all.mjs --plan-json` which package, image kind, live image, lane, and credential coverage is required, then `scripts/docker-e2e.mjs` converts that plan into GitHub outputs and summaries. It either packs OpenClaw through `scripts/package-openclaw-for-docker.mjs` or downloads a caller-provided package artifact, validates the tarball inventory, builds and pushes package-digest-tagged bare/functional GHCR Docker E2E images when the plan needs package-installed lanes, and reuses those images when the same package digest has already been prepared. The `Package Acceptance` workflow is the high-level package gate: it resolves a candidate from npm, a trusted `package_ref`, an HTTPS tarball plus SHA-256, or a prior workflow artifact, then passes that single `package-under-test` artifact into the reusable Docker E2E workflow. It keeps `workflow_ref` separate from `package_ref` so current harness logic can validate older trusted source commits without checking out old workflow code. Release checks run the `package` acceptance profile for the target ref; that profile covers package/update/plugin contracts and is the default GitHub-native replacement for most Parallels package/update coverage. The release-path Docker suite runs as at most three chunked jobs with `OPENCLAW_SKIP_DOCKER_BUILD=1` so each chunk pulls only the image kind it needs and executes multiple lanes through the same weighted scheduler (`OPENCLAW_DOCKER_ALL_PROFILE=release-path`, `OPENCLAW_DOCKER_ALL_CHUNK=core|package-update|plugins-integrations`). Each chunk uploads `.artifacts/docker-tests/` with lane logs, timings, `summary.json`, `failures.json`, phase timings, scheduler plan JSON, and per-lane rerun commands. The workflow `docker_lanes` input runs selected lanes against the prepared images instead of the three chunk jobs, which keeps failed-lane debugging bounded to one targeted Docker job and prepares or downloads the package artifact for that run; if a selected lane is a live Docker lane, the targeted job builds the live-test image locally for that rerun. Use `pnpm test:docker:rerun <run-id>` to download Docker artifacts from a GitHub run and print combined/per-lane targeted rerun commands; use `pnpm test:docker:timings <summary.json>` for slow-lane and phase critical-path summaries. When Open WebUI is requested with the release-path suite, it runs inside the plugins/integrations chunk instead of reserving a fourth Docker worker; Open WebUI keeps a standalone job only for openwebui-only dispatches. The scheduled live/E2E workflow runs the full release-path Docker suite daily. The bundled update matrix is split by update target so repeated npm update and doctor repair passes can shard with other bundled checks.
+The separate `install-smoke` workflow reuses the same scope script through its own `preflight` job. It splits smoke coverage into `run_fast_install_smoke` and `run_full_install_smoke`. Pull requests run the fast path for Docker/package surfaces, bundled plugin package/manifest changes, and core plugin/channel/gateway/Plugin SDK surfaces that the Docker smoke jobs exercise. Source-only bundled plugin changes, test-only edits, and docs-only edits do not reserve Docker workers. The fast path builds the root Dockerfile image once, checks the CLI, runs the agents delete shared-workspace CLI smoke, runs the container gateway-network e2e, verifies a bundled extension build arg, and runs the bounded bundled-plugin Docker profile under a 240-second aggregate command timeout with each scenario's Docker run capped separately. The full path keeps QR package install and installer Docker/update coverage for nightly scheduled runs, manual dispatches, workflow-call release checks, and pull requests that truly touch installer/package/Docker surfaces. `main` pushes, including merge commits, do not force the full path; when changed-scope logic would request full coverage on a push, the workflow keeps the fast Docker smoke and leaves the full install smoke to nightly or release validation. The slow Bun global install image-provider smoke is separately gated by `run_bun_global_install_smoke`; it runs on the nightly schedule and from the release checks workflow, and manual `install-smoke` dispatches can opt into it, but pull requests and `main` pushes do not run it. QR and installer Docker tests keep their own install-focused Dockerfiles. Local `test:docker:all` prebuilds one shared live-test image, packs OpenClaw once as an npm tarball, and builds two shared `scripts/e2e/Dockerfile` images: a bare Node/Git runner for installer/update/plugin-dependency lanes and a functional image that installs the same tarball into `/app` for normal functionality lanes. Docker lane definitions live in `scripts/lib/docker-e2e-scenarios.mjs`, planner logic lives in `scripts/lib/docker-e2e-plan.mjs`, and the runner only executes the selected plan. The scheduler selects the image per lane with `OPENCLAW_DOCKER_E2E_BARE_IMAGE` and `OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE`, then runs lanes with `OPENCLAW_SKIP_DOCKER_BUILD=1`; tune the default main-pool slot count of 10 with `OPENCLAW_DOCKER_ALL_PARALLELISM` and the provider-sensitive tail-pool slot count of 10 with `OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM`. Heavy lane caps default to `OPENCLAW_DOCKER_ALL_LIVE_LIMIT=9`, `OPENCLAW_DOCKER_ALL_NPM_LIMIT=10`, and `OPENCLAW_DOCKER_ALL_SERVICE_LIMIT=7` so npm install and multi-service lanes do not overcommit Docker while lighter lanes still fill available slots. A single lane heavier than the effective caps can still start from an empty pool, then runs alone until it releases capacity. Lane starts are staggered by 2 seconds by default to avoid local Docker daemon create storms; override with `OPENCLAW_DOCKER_ALL_START_STAGGER_MS=0` or another millisecond value. The local aggregate preflights Docker, removes stale OpenClaw E2E containers, emits active-lane status, persists lane timings for longest-first ordering, and supports `OPENCLAW_DOCKER_ALL_DRY_RUN=1` for scheduler inspection. It stops scheduling new pooled lanes after the first failure by default, and each lane has a 120-minute fallback timeout overrideable with `OPENCLAW_DOCKER_ALL_LANE_TIMEOUT_MS`; selected live/tail lanes use tighter per-lane caps. `OPENCLAW_DOCKER_ALL_LANES=<lane[,lane]>` runs exact scheduler lanes, including release-only lanes such as `install-e2e` and split bundled update lanes such as `bundled-channel-update-acpx`, while skipping the cleanup smoke so agents can reproduce one failed lane. The reusable live/E2E workflow asks `scripts/test-docker-all.mjs --plan-json` which package, image kind, live image, lane, and credential coverage is required, then `scripts/docker-e2e.mjs` converts that plan into GitHub outputs and summaries. It either packs OpenClaw through `scripts/package-openclaw-for-docker.mjs`, downloads a current-run package artifact, or downloads a package artifact from `package_artifact_run_id`; validates the tarball inventory; builds and pushes package-digest-tagged bare/functional GHCR Docker E2E images through Blacksmith's Docker layer cache when the plan needs package-installed lanes; and reuses provided `docker_e2e_bare_image`/`docker_e2e_functional_image` inputs or existing package-digest images instead of rebuilding. The `Package Acceptance` workflow is the high-level package gate: it resolves a candidate from npm, a trusted `package_ref`, an HTTPS tarball plus SHA-256, or a prior workflow artifact, then passes that single `package-under-test` artifact into the reusable Docker E2E workflow. It keeps `workflow_ref` separate from `package_ref` so current acceptance logic can validate older trusted commits without checking out old workflow code. Release checks run the `package` acceptance profile for the target ref; that profile covers package/update/plugin contracts and is the default GitHub-native replacement for most Parallels package/update coverage. The release-path Docker suite runs at most three chunked jobs with `OPENCLAW_SKIP_DOCKER_BUILD=1` so each chunk pulls only the image kind it needs and executes multiple lanes through the same weighted scheduler (`OPENCLAW_DOCKER_ALL_PROFILE=release-path`, `OPENCLAW_DOCKER_ALL_CHUNK=core|package-update|plugins-integrations`). OpenWebUI is folded into `plugins-integrations` when full release-path coverage requests it, and keeps a standalone `openwebui` chunk only for OpenWebUI-only dispatches. Each chunk uploads `.artifacts/docker-tests/` with lane logs, timings, `summary.json`, `failures.json`, phase timings, scheduler plan JSON, slow-lane tables, and per-lane rerun commands. The workflow `docker_lanes` input runs selected lanes against the prepared images instead of the chunk jobs, which keeps failed-lane debugging bounded to one targeted Docker job and prepares, downloads, or reuses the package artifact for that run; if a selected lane is a live Docker lane, the targeted job builds the live-test image locally for that rerun. Generated per-lane GitHub rerun commands include `package_artifact_run_id`, `package_artifact_name`, and prepared image inputs when those values exist, so a failed lane can reuse the exact package and images from the failed run. Use `pnpm test:docker:rerun <run-id>` to download Docker artifacts from a GitHub run and print combined/per-lane targeted rerun commands; use `pnpm test:docker:timings <summary.json>` for slow-lane and phase critical-path summaries. The scheduled live/E2E workflow runs the full release-path Docker suite daily. The bundled update matrix is split by update target so repeated npm update and doctor repair passes can shard with other bundled checks.
 
 Local changed-lane logic lives in `scripts/changed-lanes.mjs` and is executed by `scripts/check-changed.mjs`. That local check gate is stricter about architecture boundaries than the broad CI platform scope: core production changes run core prod and core test typecheck plus core lint/guards, core test-only changes run only core test typecheck plus core lint, extension production changes run extension prod and extension test typecheck plus extension lint, and extension test-only changes run extension test typecheck plus extension lint. Public Plugin SDK or plugin-contract changes expand to extension typecheck because extensions depend on those core contracts, but Vitest extension sweeps are explicit test work. Release metadata-only version bumps run targeted version/config/root-dependency checks. Unknown root/config changes fail safe to all check lanes.
 

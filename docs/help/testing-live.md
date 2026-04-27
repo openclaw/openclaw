@@ -127,12 +127,15 @@ Live tests are split into two layers so we can isolate failures:
     - Embedded agent forwards a multimodal user message to the model
     - Assertion: reply contains `cat` + the code (OCR tolerance: minor mistakes allowed)
 
-Tip: to see what you can test on your machine (and the exact `provider/model` ids), run:
+<Tip>
+To see what you can test on your machine (and the exact `provider/model` ids), run:
 
 ```bash
 openclaw models list
 openclaw models list --json
 ```
+
+</Tip>
 
 ## Live: CLI backend smoke (Claude, Codex, Gemini, or other local CLIs)
 
@@ -413,7 +416,9 @@ More providers you can include in the live matrix (if you have creds/config):
 - Built-in: `openai`, `openai-codex`, `anthropic`, `google`, `google-vertex`, `google-antigravity`, `google-gemini-cli`, `zai`, `openrouter`, `opencode`, `opencode-go`, `xai`, `groq`, `cerebras`, `mistral`, `github-copilot`
 - Via `models.providers` (custom endpoints): `minimax` (cloud/API), plus any OpenAI/Anthropic-compatible proxy (LM Studio, vLLM, LiteLLM, etc.)
 
-Tip: don’t try to hardcode “all models” in docs. The authoritative list is whatever `discoverModels(...)` returns on your machine + whatever keys are available.
+<Tip>
+Do not hardcode "all models" in docs. The authoritative list is whatever `discoverModels(...)` returns on your machine plus whatever keys are available.
+</Tip>
 
 ## Credentials (never commit)
 

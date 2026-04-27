@@ -110,7 +110,7 @@ dispatches:
 
 - manual `CI` for the full normal CI graph
 - `OpenClaw Release Checks` for install smoke, cross-OS release checks, live and
-  E2E checks, Docker release-path suites, OpenWebUI, QA Lab, Matrix, and
+  E2E checks, Docker release-path suites, OpenWebUI, QA Lab, fast Matrix, and
   Telegram release lanes
 - optional post-publish Telegram E2E when a package spec is supplied
 
@@ -131,12 +131,48 @@ If a full run is already active on a newer `origin/main`, prefer watching that
 run over dispatching a duplicate. If you accidentally dispatch a stale duplicate,
 cancel it and monitor the current run.
 
+### Release Evidence
+
+After release-candidate validation or before a release decision, record the
+important run ids in the private `openclaw/releases-private` evidence ledger.
+Use the manual `OpenClaw Release Evidence`
+(`openclaw-release-evidence.yml`) workflow there. It writes durable summaries
+under `evidence/<release-id>/` and commits:
+
+- `release-evidence.md`
+- `release-evidence.json`
+- `index.json`
+- `runs/<label>.json`
+
+Use one run per line:
+
+```text
+full-release-validation openclaw/openclaw <run-id> blocking
+package-acceptance openclaw/openclaw <run-id> blocking
+release-checks openclaw/openclaw <run-id> blocking
+```
+
+Store summaries, run URLs, artifact metadata, timings, pass/fail state, and
+short release-manager notes there. Do not store raw logs, provider
+prompts/responses, channel transcripts, signing material, or secret-bearing
+config in git; raw logs stay in Actions artifacts.
+
+When `Full Release Validation` completes and
+`OPENCLAW_RELEASES_PRIVATE_DISPATCH_TOKEN` is configured in the public repo, it
+requests the private `OpenClaw Release Evidence From Full Validation` workflow.
+That private workflow reads the parent full-validation run, extracts the child
+CI/release-checks/Telegram run ids from the parent logs, and opens the evidence
+PR automatically. If the token is absent or the run predates this wiring, trigger
+that private workflow manually with the full-validation run id.
+
 ### Release Checks
 
 `OpenClaw Release Checks` (`openclaw-release-checks.yml`) is the release child
 workflow. It is broader than normal CI but narrower than the umbrella because it
-does not dispatch the separate full normal CI child. Use it when release-path
-validation is needed without rerunning the entire umbrella.
+does not dispatch the separate full normal CI child. It runs Package Acceptance
+with `telegram_mode=mock-openai`, so the release package tarball also goes
+through Telegram package QA. Use it when release-path validation is needed
+without rerunning the entire umbrella.
 
 ```bash
 gh workflow run openclaw-release-checks.yml \
@@ -146,6 +182,23 @@ gh workflow run openclaw-release-checks.yml \
   -f provider=openai \
   -f mode=both
 ```
+
+### QA Lab Matrix Profiles
+
+`pnpm openclaw qa matrix` defaults to `--profile all`. Do not assume the CLI
+default is the fast release path. Use explicit profiles:
+
+- `--profile fast --fail-fast`: release-critical Matrix transport contract
+- `--profile transport|media|e2ee-smoke|e2ee-deep|e2ee-cli`: sharded full
+  Matrix proof
+- `OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000`: CI-friendly no-reply quiet
+  window when paired with fast or sharded gates
+
+`QA-Lab - All Lanes` uses explicit fast Matrix on scheduled runs; manual
+dispatch keeps `matrix_profile=all` as the default and always shards that full
+Matrix selection. `OpenClaw Release Checks` uses explicit fast Matrix; run the
+all-lanes workflow when release investigation needs full Matrix media/E2EE
+inventory.
 
 ### Reusable Live/E2E Checks
 
@@ -217,10 +270,13 @@ Multiple lanes are allowed:
 docker_lanes: install-e2e bundled-channel-update-acpx
 ```
 
-That skips the three chunk matrix and runs one targeted Docker job against the
-prepared GHCR images and a fresh OpenClaw npm tarball for the selected ref.
-Reruns usually need that new tarball because the fix being tested changed the
-package contents even if the SHA-tagged GHCR Docker image can be reused.
+That skips the release chunk matrix and runs one targeted Docker job against the
+prepared GHCR images and the selected package artifact. Rerun commands
+generated inside GitHub artifacts include `package_artifact_run_id`,
+`package_artifact_name`, `docker_e2e_bare_image`, and
+`docker_e2e_functional_image` when available, so failed lanes can reuse the
+exact tarball and prepared images from the failed run. When the fix changes
+package contents, omit those reuse inputs so the workflow packs a new tarball.
 Live-only targeted reruns skip the E2E images and build only the live-test
 image. Release-path normal mode remains max three Docker chunk jobs:
 
@@ -228,11 +284,21 @@ image. Release-path normal mode remains max three Docker chunk jobs:
 - `package-update`
 - `plugins-integrations`
 
+OpenWebUI is folded into `plugins-integrations` for full release-path coverage
+and keeps a standalone `openwebui` chunk only for OpenWebUI-only dispatches.
+
 ## Package Acceptance
 
 Use the manual `Package Acceptance` workflow when the question is "does this
 installable package work as a product?" rather than "does this source diff pass
 Vitest?"
+
+In release validation, treat Package Acceptance as the package-candidate shard
+inside the larger release umbrella, not as a competing full-test path. Full
+Release Validation and private release gauntlets should call Package Acceptance
+for tarball resolution, Docker product/package proof, and optional Telegram QA
+against the same resolved `package-under-test` artifact; keep orchestration,
+secret policy, blocking/advisory status, and evidence rollup in the caller.
 
 Good defaults:
 
@@ -241,7 +307,8 @@ gh workflow run package-acceptance.yml --ref main \
   -f source=npm \
   -f workflow_ref=main \
   -f package_spec=openclaw@beta \
-  -f suite_profile=product
+  -f suite_profile=product \
+  -f telegram_mode=mock-openai
 ```
 
 Npm candidate selection:
@@ -279,7 +346,7 @@ Profiles:
   package/update coverage.
 - `product`: package profile plus broader product surfaces: MCP channels,
   cron/subagent cleanup, OpenAI web search, and OpenWebUI.
-- `full`: Docker release-path chunks with OpenWebUI.
+- `full`: split Docker release-path chunks with OpenWebUI.
 - `custom`: exact `docker_lanes` list for a focused rerun.
 
 Candidate sources:
@@ -308,12 +375,16 @@ gh workflow run package-acceptance.yml --ref main \
   -f source=ref \
   -f package_ref=<branch-or-sha> \
   -f suite_profile=package \
-  -f telegram_mode=none
+  -f telegram_mode=mock-openai
 ```
 
-Use `telegram_mode=mock-openai` or `telegram_mode=live-frontier` only with
-`source=npm`; that path reuses the published npm Telegram E2E workflow and the
-`qa-live-shared` environment.
+Use `telegram_mode=mock-openai` or `telegram_mode=live-frontier` when the same
+resolved `package-under-test` tarball should also run through the Telegram QA
+workflow in the `qa-live-shared` environment. The standalone Telegram workflow
+still accepts a published npm spec for post-publish checks, but Package
+Acceptance passes the resolved artifact for `source=npm`, `ref`, `url`, and
+`artifact`. Use `telegram_mode=none` only when intentionally skipping Telegram
+credentialed package proof for a focused rerun.
 
 Docker E2E images never copy repo sources as the app under test: the bare image
 is a Node/Git runner, and the functional image installs the same prebuilt npm

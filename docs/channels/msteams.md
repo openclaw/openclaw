@@ -39,7 +39,9 @@ teams login
 teams status   # verify you're logged in and see your tenant info
 ```
 
-> **Note:** The Teams CLI is currently in preview. Commands and flags may change between releases.
+<Note>
+The Teams CLI is currently in preview. Commands and flags may change between releases.
+</Note>
 
 **2. Start a tunnel** (Teams can't reach localhost)
 
@@ -55,7 +57,9 @@ devtunnel host my-openclaw-bot
 # Your endpoint: https://<tunnel-id>.devtunnels.ms/api/messages
 ```
 
-> **Note:** `--allow-anonymous` is required because Teams can't authenticate with devtunnels. Each incoming bot request is still validated by the Teams SDK automatically.
+<Note>
+`--allow-anonymous` is required because Teams cannot authenticate with devtunnels. Each incoming bot request is still validated by the Teams SDK automatically.
+</Note>
 
 Alternatives: `ngrok http 3978` or `tailscale funnel 3978` (but these may change URLs each session).
 
@@ -112,7 +116,9 @@ This runs diagnostics across bot registration, AAD app config, manifest validity
 
 For production deployments, consider using [federated authentication](#federated-authentication-certificate--managed-identity) (certificate or managed identity) instead of client secrets.
 
-Note: group chats are blocked by default (`channels.msteams.groupPolicy: "allowlist"`). To allow group replies, set `channels.msteams.groupAllowFrom` (or use `groupPolicy: "open"` to allow any member, mention-gated).
+<Note>
+Group chats are blocked by default (`channels.msteams.groupPolicy: "allowlist"`). To allow group replies, set `channels.msteams.groupAllowFrom`, or use `groupPolicy: "open"` to allow any member (mention-gated).
+</Note>
 
 ## Goals
 
@@ -217,7 +223,9 @@ If you can't use the Teams CLI, you can set up the bot manually through the Azur
    | **Type of App**    | **Single Tenant** (recommended - see note below)         |
    | **Creation type**  | **Create new Microsoft App ID**                          |
 
-> **Deprecation notice:** Creation of new multi-tenant bots was deprecated after 2025-07-31. Use **Single Tenant** for new bots.
+<Warning>
+Creation of new multi-tenant bots was deprecated after 2025-07-31. Use **Single Tenant** for new bots.
+</Warning>
 
 3. Click **Review + create** → **Create** (wait ~1-2 minutes)
 
@@ -914,7 +922,9 @@ openclaw message send --channel msteams --target "conversation:19:abc...@thread.
 }
 ```
 
-Note: Without the `user:` prefix, names default to group/team resolution. Always use `user:` when targeting people by display name.
+<Note>
+Without the `user:` prefix, names default to group or team resolution. Always use `user:` when targeting people by display name.
+</Note>
 
 ## Proactive messaging
 

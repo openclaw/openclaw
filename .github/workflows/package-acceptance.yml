@@ -65,7 +65,7 @@ on:
         default: ""
         type: string
       telegram_mode:
-        description: Optional published-npm Telegram QA lane
+        description: Optional Telegram QA lane for the resolved package candidate
         required: true
         default: none
         type: choice
@@ -125,7 +125,7 @@ on:
         default: ""
         type: string
       telegram_mode:
-        description: Optional published-npm Telegram QA lane
+        description: Optional Telegram QA lane for the resolved package candidate
         required: false
         default: none
         type: string
@@ -338,10 +338,10 @@ jobs:
               docker_lanes="npm-onboard-channel-agent gateway-network config-reload"
               ;;
             package)
-              docker_lanes="install-e2e npm-onboard-channel-agent doctor-switch update-channel-switch bundled-channel-deps plugins plugin-update"
+              docker_lanes="npm-onboard-channel-agent doctor-switch update-channel-switch bundled-channel-deps-compat plugins-offline plugin-update"
               ;;
             product)
-              docker_lanes="install-e2e npm-onboard-channel-agent doctor-switch update-channel-switch bundled-channel-deps plugins plugin-update mcp-channels cron-mcp-cleanup openai-web-search-minimal openwebui"
+              docker_lanes="npm-onboard-channel-agent doctor-switch update-channel-switch bundled-channel-deps-compat plugins plugin-update mcp-channels cron-mcp-cleanup openai-web-search-minimal openwebui"
               include_openwebui=true
               ;;
             full)
@@ -366,10 +366,6 @@ jobs:
 
           telegram_enabled=false
           if [[ "$TELEGRAM_MODE" != "none" ]]; then
-            if [[ "$SOURCE" != "npm" ]]; then
-              echo "telegram_mode requires source=npm because the Telegram workflow installs a published package spec." >&2
-              exit 1
-            fi
             telegram_enabled=true
           fi
 
@@ -475,13 +471,15 @@ jobs:
       OPENCLAW_GEMINI_SETTINGS_JSON: ${{ secrets.OPENCLAW_GEMINI_SETTINGS_JSON }}
       FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
 
-  npm_telegram:
-    name: Published npm Telegram acceptance
+  package_telegram:
+    name: Telegram package acceptance
     needs: resolve_package
     if: needs.resolve_package.outputs.telegram_enabled == 'true'
     uses: ./.github/workflows/npm-telegram-beta-e2e.yml
     with:
       package_spec: ${{ inputs.package_spec }}
+      package_artifact_name: ${{ needs.resolve_package.outputs.package_artifact_name }}
+      package_label: openclaw@${{ needs.resolve_package.outputs.package_version }}
       provider_mode: ${{ needs.resolve_package.outputs.telegram_mode }}
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -490,7 +488,7 @@ jobs:
 
   summary:
     name: Verify package acceptance
-    needs: [resolve_package, docker_acceptance, npm_telegram]
+    needs: [resolve_package, docker_acceptance, package_telegram]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -498,7 +496,7 @@ jobs:
       - name: Verify package acceptance results
         env:
           DOCKER_RESULT: ${{ needs.docker_acceptance.result }}
-          NPM_TELEGRAM_RESULT: ${{ needs.npm_telegram.result }}
+          PACKAGE_TELEGRAM_RESULT: ${{ needs.package_telegram.result }}
           RESOLVE_RESULT: ${{ needs.resolve_package.result }}
         shell: bash
         run: |
@@ -507,7 +505,7 @@ jobs:
           for item in \
             "resolve_package=${RESOLVE_RESULT}" \
             "docker_acceptance=${DOCKER_RESULT}" \
-            "npm_telegram=${NPM_TELEGRAM_RESULT}"
+            "package_telegram=${PACKAGE_TELEGRAM_RESULT}"
           do
             name="${item%%=*}"
             result="${item#*=}"

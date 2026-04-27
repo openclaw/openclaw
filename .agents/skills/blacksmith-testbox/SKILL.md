@@ -10,12 +10,24 @@ description: Run Blacksmith Testbox for CI-parity checks, secrets, hosted servic
 Use Testbox when you need remote CI parity, injected secrets, hosted services,
 or an OS/runtime image that your local machine cannot provide cheaply.
 
-Do not default to Testbox for every local test/build loop unless the repo or
-the user's personal maintainer rules explicitly say Testbox-first. If the repo
-has documented local commands for normal iteration, use those first so you keep
+Do not default to Testbox for every local test/build loop. If the repo has
+documented local commands for normal iteration, use those first so you keep
 warm caches, local build state, and fast feedback.
 
 Testbox is the expensive path. Reach for it deliberately.
+
+OpenClaw maintainers can opt into Testbox-first validation by setting
+`OPENCLAW_TESTBOX=1` in their environment or standing agent rules. This mode is
+maintainers-only and requires Blacksmith access.
+
+When `OPENCLAW_TESTBOX=1` is set in OpenClaw:
+
+- Pre-warm a Testbox early for longer, wider, or uncertain work.
+- Prefer Testbox for `pnpm` gates, e2e, package-like proof, and broad suites.
+- Reuse the same Testbox ID for every run command in the same task/session.
+- Use local commands only when the task explicitly sets
+  `OPENCLAW_LOCAL_CHECK_MODE=throttled|full`, or when the user asks for local
+  proof.
 
 ## Install the CLI
 
@@ -82,8 +94,8 @@ Prefer Testbox when:
 - you are reproducing CI-only failures
 - you need the exact workflow image/job environment from GitHub Actions
 
-For OpenClaw specifically, contributor and routine local iteration should stay
-local:
+For OpenClaw specifically, normal local iteration stays local unless maintainer
+Testbox mode is enabled with `OPENCLAW_TESTBOX=1`:
 
 - `pnpm check:changed`
 - `pnpm test:changed`
@@ -91,11 +103,9 @@ local:
 - `pnpm test:serial`
 - `pnpm build`
 
-OpenClaw maintainer mode is different. If the user has Blacksmith access and
-sets `OPENCLAW_TESTBOX=1`, or their personal agent rules say Testbox-first,
-route broad, slow, Docker, live, E2E, full-suite, and CI-parity validation
-through Testbox by default. `OPENCLAW_LOCAL_CHECK_MODE=throttled` remains the
-escape hatch for laptop-friendly local proof.
+If `OPENCLAW_TESTBOX=1` is enabled, run those same repo commands inside the
+warm Testbox. If the user wants laptop-friendly local proof for one command, use
+the explicit escape hatch `OPENCLAW_LOCAL_CHECK_MODE=throttled`.
 
 For installable-package product proof, prefer the GitHub `Package Acceptance`
 workflow over an ad hoc Testbox command. It resolves one package candidate
@@ -107,43 +117,35 @@ an older trusted branch, tag, or SHA.
 
 ## Setup: Warmup before coding
 
-If you decided Testbox is actually warranted, warm one up early. This returns
-an ID instantly and boots the CI environment in the background while you work:
+If you decided Testbox is warranted, warm one up early. This returns an ID
+instantly and boots the CI environment in the background while you work:
 
     blacksmith testbox warmup ci-check-testbox.yml
     # → tbx_01jkz5b3t9...
 
 Save this ID. You need it for every `run` command.
 
-For long-ish OpenClaw maintainer tasks in Testbox mode, pre-warm at the start
-with a longer idle timeout:
+For OpenClaw maintainer Testbox mode, pre-warm at the start of longer or wider
+tasks:
 
-    blacksmith testbox warmup ci-check-testbox.yml --idle-timeout 90
-    # → tbx_01jkz5b3t9...
+    blacksmith testbox warmup ci-check-testbox.yml --ref main --idle-timeout 90
 
-The CLI and current docs expose `--idle-timeout <minutes>` and document the
-default as 30 minutes, but do not publish a universal maximum. OpenClaw policy:
-use `90` for normal long-ish tasks, `240` for multi-hour work, `720` for
-all-day work, and `1440` for overnight work. Anything above `1440` minutes
-requires explicit user intent and an end-of-task cleanup check.
+Use the build-artifact warmup when e2e/package/build proof benefits from seeded
+`dist/`, `dist-runtime/`, and build-all caches:
 
-Observed on 2026-04-27: Blacksmith accepted `90`, `240`, `720`, `1440`,
-`4320`, `10080`, `43200`, and even `525600` minutes, with every probe box
-stopped immediately. Treat that as "no sane visible cap", not permission to
-leave giant-idle boxes around.
-
-Choose the warmup ref deliberately. `--ref <branch|tag|sha>` can point at a
-branch, tag, or SHA. For cache seeding, prefer exact current branch/SHA for
-correctness; use the latest `beta` or `latest` release SHA only as a warm cache
-seed, then still run the build/check that proves local synced changes.
+    blacksmith testbox warmup ci-build-artifacts-testbox.yml --ref main --idle-timeout 90
 
 Warmup dispatches a GitHub Actions workflow that provisions a VM with the
 full CI environment: dependencies installed, services started, secrets
 injected, and a clean checkout of the repo at the default branch.
 
+In OpenClaw, raw commit SHAs are not reliable dispatch refs for `warmup --ref`;
+use a branch or tag. The build-artifact workflow resolves `openclaw@beta` and
+`openclaw@latest` to SHA cache keys internally.
+
 Options:
 
-    --ref <branch|tag|sha> Git ref to dispatch against (default: repo's default branch)
+    --ref <branch|tag>     Git ref to dispatch against (default: repo's default branch)
     --job <name>           Specific job within the workflow (if it has multiple)
     --idle-timeout <min>   Idle timeout in minutes (default: 30)
 
@@ -260,6 +262,11 @@ services, CI-only runners, or reproducibility against the workflow image.
 
 If the repo says local tests/builds are the normal path, follow the repo.
 
+OpenClaw maintainer exception: if `OPENCLAW_TESTBOX=1` is set by the user or
+agent environment, treat Testbox as the normal validation path for this repo.
+Use `OPENCLAW_LOCAL_CHECK_MODE=throttled|full` as the explicit local escape
+hatch.
+
 ## When to use
 
 Use Testbox when:
@@ -276,27 +283,19 @@ checks that need parity or remote state.
 
 ## Workflow
 
-1. Decide whether the repo's local loop or maintainer Testbox mode is the right
-   default.
-2. Only if Testbox is warranted, warm up early:
-   `blacksmith testbox warmup ci-check-testbox.yml --idle-timeout 90` → save the ID.
-   Use `--idle-timeout 240`, `720`, or `1440` only when the task duration
-   justifies it.
+1. Decide whether the repo's local loop is the right default. For OpenClaw,
+   `OPENCLAW_TESTBOX=1` makes Testbox the maintainer default.
+2. If Testbox is warranted, warm up early:
+   `blacksmith testbox warmup ci-check-testbox.yml --ref main --idle-timeout 90` → save the ID
 3. Write code while the testbox boots in the background.
 4. Run the remote command when needed:
-   `blacksmith testbox run --id <ID> "npm test"`
-5. If tests fail, fix code and re-run against the same warm box. Reuse this
-   same `tbx_...` for every run/download in the task unless it expires, the
-   workflow/ref/env must change, or the user asks for a fresh box.
+   `blacksmith testbox run --id <ID> "pnpm check:changed"`
+5. If tests fail, fix code and re-run against the same warm box.
 6. If you changed dependency manifests (package.json, etc.), prepend
    the install command: `blacksmith testbox run --id <ID> "npm install && npm test"`
 7. If you need artifacts (coverage reports, build outputs, etc.), download them:
    `blacksmith testbox download --id <ID> coverage/ ./coverage/`
 8. Once green, commit and push.
-9. If you used a long timeout or created probe boxes, clean up with
-   `blacksmith testbox list` and `blacksmith testbox stop --id <ID>`. Stop only
-   boxes from the current task unless the user asks you to clean up other active
-   boxes.
 
 ## OpenClaw full test suite
 
@@ -311,9 +310,9 @@ Observed full-suite time on Blacksmith Testbox is about 3-4 minutes:
 - 173-180s on a warmed box
 - 219s on a fresh 32-vCPU box
 
-When validating before commit/push, run `pnpm check:changed` first when
-appropriate, then the full suite with the profile above if broad confidence is
-needed.
+When validating before commit/push in maintainer Testbox mode, run
+`pnpm check:changed` inside the warmed box first when appropriate, then the full
+suite with the profile above if broad confidence is needed.
 
 ## Examples
 
@@ -367,26 +366,14 @@ timeout is reached). Default timeout is 5m; use `--wait-timeout` for longer
     blacksmith testbox stop --id <ID>
 
 Testboxes automatically shut down after being idle (default: 30 minutes).
-If you need a longer session, increase the timeout at warmup time:
+If you need a longer session, increase the timeout at warmup time. For OpenClaw
+maintainer work, use 90 minutes for long-running sessions:
 
     blacksmith testbox warmup ci-check-testbox.yml --idle-timeout 90
-
-For OpenClaw maintainer work, use coarse timeout bins instead of probing many
-small values:
-
-- `90` minutes: default long-ish task
-- `240` minutes: multi-hour task
-- `720` minutes: all-day task
-- `1440` minutes: overnight task; max without explicit user intent
-
-Because the service currently accepts much larger values, cleanup is part of
-the workflow, not a nice-to-have:
-
-    blacksmith testbox list
-    blacksmith testbox stop --id <ID>
+    blacksmith testbox warmup ci-build-artifacts-testbox.yml --idle-timeout 90
 
 ## With options
 
     blacksmith testbox warmup ci-check-testbox.yml --ref main
-    blacksmith testbox warmup ci-check-testbox.yml --idle-timeout 240
+    blacksmith testbox warmup ci-check-testbox.yml --idle-timeout 90
     blacksmith testbox run --id <ID> "go test ./..."
