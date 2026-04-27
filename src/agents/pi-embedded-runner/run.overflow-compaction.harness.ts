@@ -146,6 +146,8 @@ export const mockedDescribeFailoverError = vi.fn<MockDescribeFailoverError>(
   }),
 );
 export const mockedResolveFailoverStatus = vi.fn<MockResolveFailoverStatus>();
+let realHandleAssistantFailover: ((params: unknown) => Promise<unknown>) | undefined;
+export const mockedHandleAssistantFailover = vi.fn<(params: unknown) => Promise<unknown>>();
 
 export const mockedLog: {
   debug: Mock<(...args: unknown[]) => void>;
@@ -387,6 +389,10 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   );
   mockedMarkAuthProfileFailure.mockReset();
   mockedMarkAuthProfileFailure.mockResolvedValue(undefined);
+  mockedHandleAssistantFailover.mockReset();
+  if (realHandleAssistantFailover) {
+    mockedHandleAssistantFailover.mockImplementation(realHandleAssistantFailover);
+  }
   mockedResolveAuthProfileOrder.mockReset();
   mockedResolveAuthProfileOrder.mockReturnValue([]);
   mockedShouldPreferExplicitConfigApiKeyAuth.mockReset();
@@ -544,6 +550,20 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     describeFailoverError: mockedDescribeFailoverError,
     resolveFailoverStatus: mockedResolveFailoverStatus,
   }));
+
+  vi.doMock("./run/assistant-failover.js", async () => {
+    const actual = await vi.importActual<typeof import("./run/assistant-failover.js")>(
+      "./run/assistant-failover.js",
+    );
+    realHandleAssistantFailover = actual.handleAssistantFailover as unknown as (
+      params: unknown,
+    ) => Promise<unknown>;
+    mockedHandleAssistantFailover.mockImplementation(realHandleAssistantFailover);
+    return {
+      ...actual,
+      handleAssistantFailover: mockedHandleAssistantFailover,
+    };
+  });
 
   vi.doMock("./lanes.js", () => ({
     resolveSessionLane: vi.fn(() => "session-lane"),

@@ -5,6 +5,7 @@ import {
   loadRunOverflowCompactionHarness,
   mockedClassifyFailoverReason,
   mockedGlobalHookRunner,
+  mockedHandleAssistantFailover,
   mockedLog,
   mockedMarkAuthProfileFailure,
   mockedResolveAuthProfileOrder,
@@ -832,8 +833,12 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     );
   });
 
-  it("persists incomplete-turn cooldowns with the active model id on every write", async () => {
+  it("persists generic incomplete-turn cooldowns with the active model id", async () => {
     mockedClassifyFailoverReason.mockReturnValue("rate_limit");
+    mockedHandleAssistantFailover.mockResolvedValue({
+      action: "continue_normal",
+      overloadProfileRotations: 0,
+    });
     mockedResolveAuthProfileOrder.mockReturnValue(["openai:p1"]);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
@@ -859,15 +864,14 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     });
 
     expect(result.payloads?.[0]?.isError).toBe(true);
-    expect(mockedMarkAuthProfileFailure).toHaveBeenCalledTimes(2);
-    expect(mockedMarkAuthProfileFailure.mock.calls.map((call) => call[0]?.modelId)).toEqual([
-      "gpt-5.4",
-      "gpt-5.4",
-    ]);
-    expect(mockedMarkAuthProfileFailure.mock.calls.map((call) => call[0]?.profileId)).toEqual([
-      "openai:p1",
-      "openai:p1",
-    ]);
+    expect(mockedMarkAuthProfileFailure).toHaveBeenCalledTimes(1);
+    expect(mockedMarkAuthProfileFailure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileId: "openai:p1",
+        reason: "rate_limit",
+        modelId: "gpt-5.4",
+      }),
+    );
   });
 
   it("detects structured bullet-only plans with intent cues as planning-only GPT turns", () => {
