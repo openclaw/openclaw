@@ -184,6 +184,10 @@ export class TelegramPollingSession {
         config: this.opts.config,
         accountId: this.opts.accountId,
         fetchAbortSignal: fetchAbortController.signal,
+        // Polling-cycle restarts use this controller to break a wedged long-poll.
+        // Keep it scoped to getUpdates so an overlapping user reply/sendMessage is
+        // not aborted during transport recovery.
+        fetchAbortMethods: ["getupdates"],
         updateOffset: {
           lastUpdateId: this.opts.getLastUpdateId(),
           onUpdateId: this.opts.persistUpdateId,

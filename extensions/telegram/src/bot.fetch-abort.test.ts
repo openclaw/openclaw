@@ -14,13 +14,17 @@ const createTelegramBot = (opts: import("./bot.types.js").TelegramBotOptions) =>
     telegramDeps: telegramBotDepsForTest,
   });
 
-function createWrappedTelegramClientFetch(proxyFetch: typeof fetch) {
+function createWrappedTelegramClientFetch(
+  proxyFetch: typeof fetch,
+  opts?: Pick<import("./bot.types.js").TelegramBotOptions, "fetchAbortMethods">,
+) {
   const shutdown = new AbortController();
   botCtorSpy.mockClear();
   createTelegramBot({
     token: "tok",
     fetchAbortSignal: shutdown.signal,
     proxyFetch,
+    ...opts,
   });
   const clientFetch = (botCtorSpy.mock.calls.at(-1)?.[1] as { client?: { fetch?: unknown } })
     ?.client?.fetch as (input: RequestInfo | URL, init?: RequestInit) => Promise<unknown>;
@@ -47,6 +51,34 @@ describe("createTelegramBot fetch abort", () => {
 
     expect(observedSignal).toBeInstanceOf(AbortSignal);
     expect(observedSignal.aborted).toBe(true);
+  });
+
+  it("can scope fetchAbortSignal to getUpdates without aborting overlapping sends", async () => {
+    vi.useFakeTimers();
+    const fetchSpy = vi.fn(
+      (_input: RequestInfo | URL, init?: RequestInit) =>
+        new Promise<string | AbortSignal>((resolve) => {
+          const signal = init?.signal as AbortSignal;
+          signal.addEventListener("abort", () => resolve(signal), { once: true });
+          setTimeout(() => resolve("completed"), 1_000);
+        }),
+    );
+    const { clientFetch, shutdown } = createWrappedTelegramClientFetch(
+      fetchSpy as unknown as typeof fetch,
+      { fetchAbortMethods: ["getupdates"] },
+    );
+
+    const getUpdatesPromise = clientFetch("https://api.telegram.org/bot123456:ABC/getUpdates");
+    const sendMessagePromise = clientFetch("https://api.telegram.org/bot123456:ABC/sendMessage");
+    shutdown.abort(new Error("polling restart"));
+
+    const getUpdatesSignal = (await getUpdatesPromise) as AbortSignal;
+    expect(getUpdatesSignal).toBeInstanceOf(AbortSignal);
+    expect(getUpdatesSignal.aborted).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(sendMessagePromise).resolves.toBe("completed");
+    vi.useRealTimers();
   });
 
   it("tags wrapped Telegram fetch failures with the Bot API method", async () => {
