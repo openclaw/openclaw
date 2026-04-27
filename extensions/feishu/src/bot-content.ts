@@ -272,15 +272,27 @@ export function normalizeMentions(
   }
   const escaped = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const escapeName = (value: string) => value.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  // Strip ONLY the bot's own mention when it appears as the leading
+  // addressing prefix (optional whitespace before it, whitespace or end after).
+  // This preserves the #35994 slash-command UX (`@Bot /help` → `/help`)
+  // while keeping the bot's own <at> tag visible to the LLM whenever the
+  // mention appears mid-sentence — fixing the multi-bot NO_REPLY regression
+  // in #72504 where `Hey @BotA @BotB` would have BotA's own tag stripped,
+  // causing it to conclude it was not addressed.
   let result = text;
+  if (botStripId) {
+    const selfLeading = mentions.find(
+      (m) => m.id.open_id === botStripId && new RegExp(`^\\s*${escaped(m.key)}(\\s|$)`).test(text),
+    );
+    if (selfLeading) {
+      result = result.replace(new RegExp(`^\\s*${escaped(selfLeading.key)}\\s*`), "");
+    }
+  }
   for (const mention of mentions) {
     const mentionId = mention.id.open_id;
-    const replacement =
-      botStripId && mentionId === botStripId
-        ? ""
-        : mentionId
-          ? `<at user_id="${mentionId}">${escapeName(mention.name)}</at>`
-          : `@${mention.name}`;
+    const replacement = mentionId
+      ? `<at user_id="${mentionId}">${escapeName(mention.name)}</at>`
+      : `@${mention.name}`;
     result = result.replace(new RegExp(escaped(mention.key), "g"), () => replacement).trim();
   }
   return result;
