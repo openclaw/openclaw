@@ -293,7 +293,12 @@ link_installed_package_dependency() {
 
 # QA Lab is intentionally mounted as harness source, so its package-local
 # runtime imports must resolve from the installed package dependency tree.
-link_installed_package_dependency zod
+for dependency in \
+  @modelcontextprotocol/sdk \
+  yaml \
+  zod; do
+  link_installed_package_dependency "$dependency"
+done
 
 echo "Running installed-package onboarding recovery hot path..."
 OPENAI_API_KEY="${OPENAI_API_KEY:-sk-openclaw-npm-telegram-hotpath}" openclaw onboard --non-interactive --accept-risk \
