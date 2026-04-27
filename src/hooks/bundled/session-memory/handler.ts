@@ -5,6 +5,7 @@
  * Creates a new dated memory file with LLM-generated slug
  */
 
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -422,18 +423,27 @@ const saveSessionToMemory: HookHandler = async (event) => {
     // redirected writes use the caller-supplied path directly.
     let filename = "";
     if (!isRedirected) {
-      // If no slug, use mainline's localTimestamp.timeSlug helper plus a
-      // random suffix to avoid collisions. Second-resolution alone can
-      // collide when automated or multi-channel setups emit rapid /new or
-      // /reset commands within the same second — both writes target the
-      // same filename and the later one silently overwrites the earlier
-      // memory entry.
+      // If no slug, use mainline's localTimestamp.timeSlug helper. Slug
+      // uniqueness is then enforced by the random suffix appended to the
+      // filename below — second-resolution alone can collide when
+      // automated or multi-channel setups emit rapid /new or /reset
+      // commands within the same second.
       if (!slug) {
-        const rand = Math.random().toString(36).slice(2, 6); // 4-char alphanumeric
-        slug = `${localTimestamp.timeSlug}-${rand}`;
+        slug = localTimestamp.timeSlug;
         log.debug("Using fallback timestamp slug", { slug });
       }
-      filename = `${dateStr}-${slug}.md`;
+      // Append a short random suffix to guarantee filename uniqueness on
+      // ALL paths (LLM-generated slug AND timestamp fallback). LLM slugs
+      // are descriptive but not unique — two similar sessions on the same
+      // day can produce identical slugs, causing the second write to
+      // silently overwrite the first. crypto.randomUUID is used (rather
+      // than Math.random) because Math.random can emit "" at the exact
+      // value 0 (vanishingly rare but a real correctness gap), producing
+      // a trailing-dash filename. 16 bits of entropy from a CSPRNG makes
+      // collisions vanishingly unlikely even under rapid automated /new
+      // or multi-channel workloads.
+      const uniqueSuffix = crypto.randomUUID().replace(/-/g, "").slice(0, 4);
+      filename = `${dateStr}-${slug}-${uniqueSuffix}.md`;
     }
 
     // Determine write target. Redirect paths are validated by writeFileWithinRoot

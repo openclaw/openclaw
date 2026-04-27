@@ -538,6 +538,62 @@ describe("hooks", () => {
       await triggerInternalHook(event);
       expect(ran).toBe(true);
     });
+
+    it("prevents self-appending action loops by snapshotting before draining (CWE-834 guard)", async () => {
+      // A buggy or malicious post-hook action could push another action
+      // back onto event.postHookActions during drain. Without a snapshot,
+      // a JS for..of iterator over a live array would re-read length on
+      // each iteration and yield the newly appended element — unbounded.
+      // The drainer protects by snapshotting + clearing before iterating.
+      const event = createInternalHookEvent("command", "new", "test-session");
+      let runs = 0;
+      const SAFETY_CAP = 1000;
+      event.postHookActions!.push(function selfAppender() {
+        runs += 1;
+        if (runs >= SAFETY_CAP) {
+          // We must never reach this in a working drainer. If we do,
+          // the snapshot guard is broken and the test fails the assertion
+          // below (rather than hanging the test runner indefinitely).
+          return;
+        }
+        event.postHookActions!.push(selfAppender);
+      });
+      await triggerInternalHook(event);
+      // Only the originally-pushed action runs in this drain cycle;
+      // the re-pushed action sits in event.postHookActions for a
+      // future cycle but does NOT extend this one. That's the DoS
+      // boundary — the for..of loop iterates a snapshot, not the live
+      // array, so it terminates regardless of pushes during drain.
+      expect(runs).toBe(1);
+      // The append-during-drain entry remains queued (would drain on
+      // a subsequent triggerInternalHook). What matters is that runs==1,
+      // proving this drain cycle did not loop unboundedly.
+      expect(event.postHookActions!.length).toBe(1);
+    });
+
+    it("snapshots actions registered after the drain begins (multi-handler stacking)", async () => {
+      // Sanity: handlers can push actions. All actions registered BEFORE
+      // the drain begins must run, in push order; actions registered by
+      // a later action are NOT extended into the same drain (snapshot
+      // semantics).
+      const order: string[] = [];
+      registerInternalHook("command:new", () => {
+        order.push("handler");
+      });
+      const event = createInternalHookEvent("command", "new", "test-session");
+      event.postHookActions!.push(() => {
+        order.push("first");
+        // This push happens DURING drain — dropped by the snapshot guard.
+        event.postHookActions!.push(() => {
+          order.push("appended-during-drain");
+        });
+      });
+      event.postHookActions!.push(() => {
+        order.push("second");
+      });
+      await triggerInternalHook(event);
+      expect(order).toEqual(["handler", "first", "second"]);
+    });
   });
 
   describe("getRegisteredEventKeys", () => {
