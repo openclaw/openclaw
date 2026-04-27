@@ -528,7 +528,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       expect.objectContaining({
         provider: "claude-cli",
         model: "claude-sonnet-4-6",
-        authProfileId: "anthropic:work",
+        authProfileId: undefined,
         agentAccountId: "ops",
         abortSignal: expect.any(AbortSignal),
         senderIsOwner: false,

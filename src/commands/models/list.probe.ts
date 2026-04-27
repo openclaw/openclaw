@@ -23,6 +23,7 @@ import {
   normalizeProviderId,
   parseModelRef,
 } from "../../agents/model-selection.js";
+import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import {
   resolveSessionTranscriptPath,
@@ -310,7 +311,7 @@ export async function buildProbeTargets(params: {
         }) ?? model.provider)
       : cliExecutionProviderForProvider;
     const runtimeProfileProviderKey = isCliProvider(cliExecutionProvider, cfg)
-      ? normalizeProviderId(cliExecutionProvider)
+      ? resolveProviderIdForAuth(cliExecutionProvider, { config: cfg })
       : providerKey;
     const canonicalProfileIds = listProfilesForProvider(store, providerKey);
     const runtimeProfileIds =

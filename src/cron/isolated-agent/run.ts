@@ -179,8 +179,8 @@ function normalizeCronTraceTarget(
 }
 
 type MessagingToolTargetMatcher = (
-  target: { provider?: string; to?: string; accountId?: string },
-  delivery: { channel?: string; to?: string; accountId?: string },
+  target: { provider?: string; to?: string; accountId?: string; threadId?: string },
+  delivery: { channel?: string; to?: string; accountId?: string; threadId?: string | number },
 ) => boolean;
 
 function normalizeMessagingToolTarget(
@@ -199,6 +199,7 @@ function normalizeMessagingToolTarget(
       channel: resolvedDelivery.channel,
       to: resolvedDelivery.to,
       accountId: resolvedDelivery.accountId,
+      threadId: resolvedDelivery.threadId,
     })
       ? resolvedDelivery.channel
       : channel;
@@ -939,6 +940,7 @@ async function finalizeCronRun(params: {
         channel: prepared.resolvedDelivery.channel,
         to: prepared.resolvedDelivery.to,
         accountId: prepared.resolvedDelivery.accountId,
+        threadId: prepared.resolvedDelivery.threadId,
       }),
     );
   const deliveryResult = await dispatchCronDelivery({

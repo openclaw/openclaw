@@ -158,7 +158,7 @@ export function createCronPromptExecutor(params: {
           const authProfileId =
             cliExecutionProvider === providerOverride
               ? params.liveSelection.authProfileId
-              : ((await resolveSessionAuthProfileOverride({
+              : await resolveSessionAuthProfileOverride({
                   cfg: params.cfgWithAgentDefaults,
                   provider: cliExecutionProvider,
                   agentDir: params.agentDir,
@@ -166,7 +166,7 @@ export function createCronPromptExecutor(params: {
                   sessionStore: params.cronSession.store,
                   sessionKey: params.agentSessionKey,
                   isNewSession: params.cronSession.isNewSession,
-                })) ?? params.liveSelection.authProfileId);
+                });
           const cliParams: Parameters<typeof runCliAgent>[0] = {
             sessionId: params.cronSession.sessionEntry.sessionId,
             sessionKey: params.runSessionKey,

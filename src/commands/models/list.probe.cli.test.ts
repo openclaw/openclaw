@@ -8,6 +8,16 @@ const runCliAgentMock = vi.fn();
 const runEmbeddedPiAgentMock = vi.fn();
 const loadModelCatalogMock = vi.fn(async () => []);
 
+function normalizeAuthProviderForTest(provider: string): string {
+  if (provider === "claude-cli") {
+    return "anthropic";
+  }
+  if (provider === "codex-cli") {
+    return "openai-codex";
+  }
+  return provider;
+}
+
 let mockStore: AuthProfileStore = {
   version: 1,
   profiles: {},
@@ -21,7 +31,11 @@ vi.mock("../../agents/auth-profiles.js", async (importOriginal) => {
     ensureAuthProfileStore: () => mockStore,
     listProfilesForProvider: (_store: AuthProfileStore, provider: string) =>
       Object.entries(mockStore.profiles)
-        .filter(([, profile]) => profile.provider === provider)
+        .filter(
+          ([, profile]) =>
+            normalizeAuthProviderForTest(profile.provider) ===
+            normalizeAuthProviderForTest(provider),
+        )
         .map(([profileId]) => profileId),
     resolveAuthProfileDisplayLabel: ({ profileId }: { profileId: string }) => profileId,
     resolveAuthProfileEligibility: () => ({ eligible: true }),
@@ -236,6 +250,63 @@ describe("runAuthProbes CLI backend dispatch", () => {
         provider: "claude-cli",
         model: "opus",
         authProfileId: "claude-cli:default",
+        cleanupCliLiveSessionOnRunEnd: true,
+      }),
+    );
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("uses Codex CLI auth profiles through the OpenAI Codex auth provider", async () => {
+    mockStore = {
+      version: 1,
+      profiles: {
+        "openai-codex:default": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "codex-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+        },
+      },
+      order: {},
+    };
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "OK" }],
+      meta: {
+        agentMeta: {
+          sessionId: "cli-session",
+          provider: "codex-cli",
+          model: "gpt-5.4",
+        },
+      },
+    });
+
+    await runAuthProbes({
+      cfg: {
+        agents: {
+          defaults: {
+            agentRuntime: { id: "codex-cli" },
+            cliBackends: {
+              "codex-cli": { command: "codex" },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      providers: ["openai"],
+      modelCandidates: ["codex-cli/gpt-5.4"],
+      options: {
+        timeoutMs: 5_000,
+        concurrency: 1,
+        maxTokens: 16,
+      },
+    });
+
+    expect(runCliAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: expect.stringMatching(/^agent:main:probe-openai-/),
+        provider: "codex-cli",
+        model: "gpt-5.4",
+        authProfileId: "openai-codex:default",
         cleanupCliLiveSessionOnRunEnd: true,
       }),
     );

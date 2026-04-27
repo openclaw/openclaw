@@ -55,6 +55,30 @@ describe("matchesMessagingToolDeliveryTarget", () => {
     ).toBe(true);
   });
 
+  it("requires matching thread ids when both sides carry a thread", () => {
+    expect(
+      matchesMessagingToolDeliveryTarget(
+        { provider: "slack", to: "C123", threadId: "1737500000.123456" },
+        { channel: "slack", to: "C123", threadId: "1737500000.123456" },
+      ),
+    ).toBe(true);
+    expect(
+      matchesMessagingToolDeliveryTarget(
+        { provider: "slack", to: "C123", threadId: "1737500000.999999" },
+        { channel: "slack", to: "C123", threadId: "1737500000.123456" },
+      ),
+    ).toBe(false);
+  });
+
+  it("does not treat a base-room send as delivery to a threaded target", () => {
+    expect(
+      matchesMessagingToolDeliveryTarget(
+        { provider: "topicchat", to: "room" },
+        { channel: "topicchat", to: "room#42", threadId: 42 },
+      ),
+    ).toBe(false);
+  });
+
   it("matches when provider is 'message' (generic)", () => {
     expect(
       matchesMessagingToolDeliveryTarget(
