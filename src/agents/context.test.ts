@@ -4,6 +4,7 @@ import {
   applyConfiguredContextWindows,
   applyDiscoveredContextWindows,
   resolveContextTokensForModel,
+  shouldEagerWarmContextWindowCache,
 } from "./context.js";
 import { createSessionManagerRuntimeRegistry } from "./pi-hooks/session-manager-runtime-registry.js";
 
@@ -452,5 +453,48 @@ describe("resolveContextTokensForModel", () => {
     });
 
     expect(result).toBe(160_000);
+  });
+});
+
+describe("shouldEagerWarmContextWindowCache", () => {
+  it("warms the cache for the long-running gateway daemon (node dist/index.js gateway)", () => {
+    expect(
+      shouldEagerWarmContextWindowCache([
+        "/usr/bin/node",
+        "/home/u/.npm-global/lib/node_modules/openclaw/dist/index.js",
+        "gateway",
+        "--port",
+        "18789",
+      ]),
+    ).toBe(true);
+  });
+
+  it("warms the cache for the openclaw CLI gateway invocation", () => {
+    // Short-lived `openclaw gateway status` and friends. The warmup is async
+    // and best-effort, so it does not block CLI exit; we just need the cache
+    // populated for any synchronous lookups that follow.
+    expect(
+      shouldEagerWarmContextWindowCache([
+        "/usr/bin/node",
+        "/usr/bin/openclaw",
+        "gateway",
+        "status",
+      ]),
+    ).toBe(true);
+  });
+
+  it("still skips warmup for help/version invocations", () => {
+    expect(
+      shouldEagerWarmContextWindowCache(["/usr/bin/node", "/usr/bin/openclaw", "--version"]),
+    ).toBe(false);
+    expect(
+      shouldEagerWarmContextWindowCache(["/usr/bin/node", "/usr/bin/openclaw", "--help"]),
+    ).toBe(false);
+  });
+
+  it("does not warm when imported from a generic Node script (plugin-sdk surface)", () => {
+    expect(
+      shouldEagerWarmContextWindowCache(["/usr/bin/node", "/some/random/script.js", "gateway"]),
+    ).toBe(false);
   });
 });
