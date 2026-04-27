@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  applyExclusiveSlotSelection,
   enablePluginInConfig,
   refreshPluginRegistry,
   resetPluginsCliTestState,
@@ -133,6 +134,7 @@ describe("persistPluginInstall", () => {
 
     expect(next).toEqual(baseConfig);
     expect(enablePluginInConfig).not.toHaveBeenCalled();
+    expect(applyExclusiveSlotSelection).not.toHaveBeenCalled();
     expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({
       "memory-lancedb": expect.objectContaining({
         source: "path",

@@ -80,7 +80,10 @@ export async function persistPluginInstall(params: {
     pluginId: params.pluginId,
     ...params.install,
   });
-  const slotResult = applySlotSelectionForPlugin(next, params.pluginId);
+  const slotResult =
+    params.enable === false
+      ? { config: next, warnings: [] }
+      : applySlotSelectionForPlugin(next, params.pluginId);
   next = withoutPluginInstallRecords(slotResult.config);
   await commitPluginInstallRecordsWithConfig({
     previousInstallRecords: installRecords,
