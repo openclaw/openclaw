@@ -120,14 +120,18 @@ export async function sendPluginSessionAttachment(
   if (!deliveryContext?.channel || !deliveryContext.to) {
     return { ok: false, error: `session has no active delivery route: ${sessionKey}` };
   }
+  const text = normalizeOptionalString(params.text) ?? "";
+  const explicitThreadId = normalizeOptionalString(params.threadId);
+  const deliveryThreadId = normalizeOptionalString(deliveryContext.threadId);
+  const fallbackThreadId = normalizeOptionalString(threadId);
   let result: Awaited<ReturnType<typeof sendMessage>>;
   try {
     result = await sendMessage({
       to: deliveryContext.to,
-      content: params.text ?? "",
+      content: text,
       channel: deliveryContext.channel,
       accountId: deliveryContext.accountId,
-      threadId: params.threadId ?? deliveryContext.threadId ?? threadId,
+      threadId: explicitThreadId ?? deliveryThreadId ?? fallbackThreadId,
       requesterSessionKey: sessionKey,
       mediaUrls: validated,
       forceDocument: params.forceDocument,

@@ -98,6 +98,17 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
         },
       });
       if (result && "ok" in result && result.ok === false) {
+        if (result.details !== undefined && !isPluginJsonValue(result.details)) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "plugin session action error details must be JSON-compatible",
+            ),
+          );
+          return;
+        }
         respond(
           false,
           undefined,
