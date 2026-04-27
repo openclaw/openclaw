@@ -154,7 +154,7 @@ function listCandidateSkillDirs(dir: string): string[] {
   };
 
   walk(dir);
-  return skillDirs.sort((left, right) => left.localeCompare(right));
+  return skillDirs.toSorted((left, right) => left.localeCompare(right));
 }
 
 export function loadSkillsFromDirSafe(params: { dir: string; source: string; maxBytes?: number }): {
