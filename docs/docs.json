@@ -1331,6 +1331,7 @@
                   "providers/cloudflare-ai-gateway",
                   "providers/comfy",
                   "providers/deepgram",
+                  "providers/deepinfra",
                   "providers/deepseek",
                   "providers/elevenlabs",
                   "providers/fal",
