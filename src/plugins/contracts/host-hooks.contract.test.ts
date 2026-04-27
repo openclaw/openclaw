@@ -15,7 +15,7 @@ import { buildGatewaySessionRow } from "../../gateway/session-utils.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
-import { executePluginCommand } from "../commands.js";
+import { executePluginCommand, validatePluginCommandDefinition } from "../commands.js";
 import { createHookRunner } from "../hooks.js";
 import {
   cleanupReplacedPluginHostRegistry,
@@ -499,6 +499,11 @@ describe("host-hook fixture plugin contract", () => {
           streams: ["tool"],
           handle: "not-a-function" as never,
         });
+        api.registerAgentEventSubscription({
+          id: "bad-streams",
+          streams: { length: 1, 0: "tool" } as never,
+          handle: () => undefined,
+        });
         api.registerSessionSchedulerJob({
           id: "bad-scheduler-cleanup",
           sessionKey: "agent:main:main",
@@ -527,6 +532,10 @@ describe("host-hook fixture plugin contract", () => {
         expect.objectContaining({
           pluginId: "duplicate-host-hook-fixture",
           message: "agent event subscription registration requires id and handle",
+        }),
+        expect.objectContaining({
+          pluginId: "duplicate-host-hook-fixture",
+          message: "agent event subscription streams must be an array of strings: bad-streams",
         }),
         expect.objectContaining({
           pluginId: "duplicate-host-hook-fixture",
@@ -1156,6 +1165,22 @@ describe("host-hook fixture plugin contract", () => {
       pluginName: registration.pluginName,
       pluginRoot: registration.rootDir,
     };
+    expect(
+      validatePluginCommandDefinition({
+        name: "invalid-scopes-fixture",
+        description: "Invalid scopes.",
+        requiredScopes: "operator.approvals" as never,
+        handler: () => ({ text: "unused" }),
+      }),
+    ).toBe("Command requiredScopes must be an array of operator scopes");
+    expect(
+      validatePluginCommandDefinition({
+        name: "unknown-scopes-fixture",
+        description: "Unknown scopes.",
+        requiredScopes: ["operator.unknown" as never],
+        handler: () => ({ text: "unused" }),
+      }),
+    ).toBe("Command requiredScopes contains unknown operator scope: operator.unknown");
 
     await expect(
       executePluginCommand({

@@ -7,7 +7,7 @@
 
 import { resolveConversationBindingContext } from "../channels/conversation-binding-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { ADMIN_SCOPE } from "../gateway/operator-scopes.js";
+import { ADMIN_SCOPE, isOperatorScope } from "../gateway/operator-scopes.js";
 import { logVerbose } from "../globals.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
@@ -198,7 +198,16 @@ export async function executePluginCommand(params: {
     );
     return { text: "⚠️ This command requires authorization." };
   }
+  if (command.requiredScopes !== undefined && !Array.isArray(command.requiredScopes)) {
+    logVerbose(`Plugin command /${command.name} blocked: invalid requiredScopes configuration`);
+    return { text: "⚠️ This command has invalid gateway scope configuration." };
+  }
   const requiredScopes = command.requiredScopes ?? [];
+  const unknownScope = requiredScopes.find((scope) => !isOperatorScope(scope));
+  if (unknownScope) {
+    logVerbose(`Plugin command /${command.name} blocked: unknown gateway scope ${unknownScope}`);
+    return { text: "⚠️ This command has invalid gateway scope configuration." };
+  }
   if (requiredScopes.length > 0 && params.gatewayClientScopes) {
     const scopes = new Set(params.gatewayClientScopes ?? []);
     const hasAdmin = scopes.has(ADMIN_SCOPE);

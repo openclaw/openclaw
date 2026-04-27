@@ -1,3 +1,4 @@
+import { isOperatorScope } from "../gateway/operator-scopes.js";
 import { logVerbose } from "../globals.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -125,6 +126,17 @@ export function validatePluginCommandDefinition(
       return `Agent prompt guidance ${index + 1} cannot be empty`;
     }
   }
+  if (command.requiredScopes !== undefined) {
+    if (!Array.isArray(command.requiredScopes)) {
+      return "Command requiredScopes must be an array of operator scopes";
+    }
+    const unknownScope = (command.requiredScopes as readonly unknown[]).find(
+      (scope) => !isOperatorScope(scope),
+    );
+    if (unknownScope) {
+      return "Command requiredScopes contains unknown operator scope";
+    }
+  }
   const nameError = validateCommandName(command.name.trim(), opts);
   if (nameError) {
     return nameError;
@@ -133,7 +145,7 @@ export function validatePluginCommandDefinition(
     if (typeof alias !== "string") {
       continue;
     }
-    const aliasError = validateCommandName(alias.trim());
+    const aliasError = validateCommandName(alias.trim(), opts);
     if (aliasError) {
       return `Native command alias "${label}" invalid: ${aliasError}`;
     }
