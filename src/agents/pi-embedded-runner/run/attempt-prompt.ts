@@ -148,11 +148,8 @@ export async function prepareAttemptBootstrapPromptContext(params: {
   }
 
   return {
-    bootstrapMode,
-    shouldStripBootstrapFromContext,
     hookAdjustedBootstrapFiles,
     contextFiles,
-    bootstrapFilesForInjectionStats,
     bootstrapMaxChars,
     bootstrapTotalMaxChars,
     bootstrapAnalysis,
