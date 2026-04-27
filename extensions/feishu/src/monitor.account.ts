@@ -28,7 +28,7 @@ import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu } from "./send.js";
 import { getFeishuSequentialKey } from "./sequential-key.js";
 import { createFeishuThreadBindingManager } from "./thread-bindings.js";
-import type { FeishuChatType, ResolvedFeishuAccount } from "./types.js";
+import type { FeishuChatType, FeishuConfig, ResolvedFeishuAccount } from "./types.js";
 
 const FEISHU_REACTION_VERIFY_TIMEOUT_MS = 1_500;
 
@@ -164,6 +164,7 @@ function normalizeFeishuChatType(value: unknown): FeishuChatType | undefined {
 type RegisterEventHandlersContext = {
   cfg: ClawdbotConfig;
   accountId: string;
+  feishuCfg?: FeishuConfig;
   runtime?: RuntimeEnv;
   chatHistories: Map<string, HistoryEntry[]>;
   fireAndForget?: boolean;
@@ -242,7 +243,7 @@ function registerEventHandlers(
   eventDispatcher: Lark.EventDispatcher,
   context: RegisterEventHandlersContext,
 ): void {
-  const { cfg, accountId, runtime, chatHistories, fireAndForget } = context;
+  const { cfg, accountId, feishuCfg, runtime, chatHistories, fireAndForget } = context;
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
   const runFeishuHandler = async (params: { task: () => Promise<void>; errorMessage: string }) => {
@@ -274,7 +275,7 @@ function registerEventHandlers(
       recordProcessedMessage: recordProcessedFeishuMessage,
       getBotOpenId: (id) => botOpenIds.get(id),
       getBotName: (id) => botNames.get(id),
-      resolveSequentialKey: getFeishuSequentialKey,
+      resolveSequentialKey: (params) => getFeishuSequentialKey({ ...params, feishuCfg }),
     }),
     "im.message.message_read_v1": async () => {
       // Ignore read receipts
@@ -453,6 +454,7 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
     registerEventHandlers(eventDispatcher, {
       cfg,
       accountId,
+      feishuCfg: account.config,
       runtime,
       chatHistories,
       fireAndForget: params.fireAndForget ?? true,
