@@ -257,6 +257,63 @@ describe("resolveAgentAvatar", () => {
     await expectLocalAvatarPath(cfg, workspace, "ui-avatar.png", { includeUiOverride: true });
   });
 
+  it("non-default agents prefer their own avatar over ui.assistant.avatar with includeUiOverride", async () => {
+    const root = await createTempAvatarRoot();
+    const mainWorkspace = path.join(root, "main");
+    const lotteryWorkspace = path.join(root, "lottery");
+    const uiAvatarPath = path.join(mainWorkspace, "ui-avatar.png");
+    const lotteryAvatarPath = path.join(lotteryWorkspace, "lottery-avatar.png");
+    await writeFile(uiAvatarPath);
+    await writeFile(lotteryAvatarPath);
+
+    const cfg: OpenClawConfig = {
+      ui: { assistant: { avatar: "ui-avatar.png" } },
+      agents: {
+        list: [
+          { id: "main", default: true, workspace: mainWorkspace },
+          {
+            id: "lottery",
+            workspace: lotteryWorkspace,
+            identity: { avatar: "lottery-avatar.png" },
+          },
+        ],
+      },
+    };
+
+    const workspaceReal = await fs.realpath(lotteryWorkspace);
+    const resolved = resolveAgentAvatar(cfg, "lottery", { includeUiOverride: true });
+    expect(resolved.kind).toBe("local");
+    if (resolved.kind === "local") {
+      const resolvedReal = await fs.realpath(resolved.filePath);
+      expect(path.relative(workspaceReal, resolvedReal)).toBe("lottery-avatar.png");
+    }
+  });
+
+  it("non-default agents fall back to ui.assistant.avatar when they have no avatar", async () => {
+    const root = await createTempAvatarRoot();
+    const workspace = path.join(root, "work");
+    const uiAvatarPath = path.join(workspace, "ui-avatar.png");
+    await writeFile(uiAvatarPath);
+
+    const cfg: OpenClawConfig = {
+      ui: { assistant: { avatar: "ui-avatar.png" } },
+      agents: {
+        list: [
+          { id: "main", default: true },
+          { id: "lottery", workspace },
+        ],
+      },
+    };
+
+    const workspaceReal = await fs.realpath(workspace);
+    const resolved = resolveAgentAvatar(cfg, "lottery", { includeUiOverride: true });
+    expect(resolved.kind).toBe("local");
+    if (resolved.kind === "local") {
+      const resolvedReal = await fs.realpath(resolved.filePath);
+      expect(path.relative(workspaceReal, resolvedReal)).toBe("ui-avatar.png");
+    }
+  });
+
   it("ui.assistant.avatar takes priority over IDENTITY.md avatar with includeUiOverride", async () => {
     const root = await createTempAvatarRoot();
     const workspace = path.join(root, "work");

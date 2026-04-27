@@ -145,6 +145,44 @@ describe("loadControlUiBootstrapConfig", () => {
     vi.unstubAllGlobals();
   });
 
+  it("does not treat explicit main session as default when bootstrap identity is another agent", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        basePath: "",
+        assistantName: "Ops",
+        assistantAvatar: "O",
+        assistantAgentId: "ops",
+        serverVersion: "2026.4.27",
+        localMediaPreviewRoots: [],
+        embedSandbox: "scripts",
+        allowExternalEmbedUrls: false,
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const state = {
+      basePath: "",
+      sessionKey: "agent:main:main",
+      assistantName: "Main",
+      assistantAvatar: "M",
+      assistantAgentId: "main",
+      localMediaPreviewRoots: [],
+      embedSandboxMode: "scripts" as const,
+      allowExternalEmbedUrls: false,
+      serverVersion: null,
+    };
+
+    await loadControlUiBootstrapConfig(state);
+
+    expect(state.assistantName).toBe("Main");
+    expect(state.assistantAvatar).toBe("M");
+    expect(state.assistantAgentId).toBe("main");
+    expect(state.serverVersion).toBe("2026.4.27");
+
+    vi.unstubAllGlobals();
+  });
+
   it("ignores failures", async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: false });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);

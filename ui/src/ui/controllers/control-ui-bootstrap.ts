@@ -6,7 +6,7 @@ import {
 import { normalizeAssistantIdentity } from "../assistant-identity.ts";
 import { resolveControlUiAuthCandidates } from "../control-ui-auth.ts";
 import { normalizeBasePath } from "../navigation.ts";
-import { DEFAULT_AGENT_ID, normalizeAgentId, parseAgentSessionKey } from "../session-key.ts";
+import { normalizeAgentId, parseAgentSessionKey } from "../session-key.ts";
 import { loadLocalAssistantIdentity } from "../storage.ts";
 
 export type ControlUiBootstrapState = {
@@ -79,9 +79,7 @@ export async function loadControlUiBootstrapConfig(state: ControlUiBootstrapStat
     const activeAgentId = parseAgentSessionKey(state.sessionKey)?.agentId;
     const bootstrapAgentId = normalizeAgentId(normalized.agentId);
     const shouldApplyIdentity =
-      !activeAgentId ||
-      activeAgentId === DEFAULT_AGENT_ID ||
-      normalizeAgentId(activeAgentId) === bootstrapAgentId;
+      !activeAgentId || normalizeAgentId(activeAgentId) === bootstrapAgentId;
     if (shouldApplyIdentity) {
       state.assistantName = normalized.name;
       state.assistantAvatar = normalized.avatar;

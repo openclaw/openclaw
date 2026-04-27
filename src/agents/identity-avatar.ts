@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import {
   AVATAR_MAX_BYTES,
   hasAvatarUriScheme,
@@ -12,7 +13,7 @@ import {
 } from "../shared/avatar-policy.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveAgentWorkspaceDir } from "./agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
 import { loadAgentIdentityFromWorkspace } from "./identity-file.js";
 import { resolveAgentIdentity } from "./identity.js";
 
@@ -35,20 +36,19 @@ function resolveAvatarSource(
   agentId: string,
   opts?: { includeUiOverride?: boolean },
 ): string | null {
-  if (opts?.includeUiOverride) {
-    const fromUiConfig = normalizeOptionalString(cfg.ui?.assistant?.avatar) ?? null;
-    if (fromUiConfig) {
-      return fromUiConfig;
-    }
-  }
   const fromConfig = normalizeOptionalString(resolveAgentIdentity(cfg, agentId)?.avatar) ?? null;
-  if (fromConfig) {
-    return fromConfig;
-  }
   const workspace = resolveAgentWorkspaceDir(cfg, agentId);
   const fromIdentity =
     normalizeOptionalString(loadAgentIdentityFromWorkspace(workspace)?.avatar) ?? null;
-  return fromIdentity;
+  const fromUiConfig =
+    opts?.includeUiOverride === true
+      ? (normalizeOptionalString(cfg.ui?.assistant?.avatar) ?? null)
+      : null;
+  const isDefaultAgent = normalizeAgentId(agentId) === normalizeAgentId(resolveDefaultAgentId(cfg));
+  if (isDefaultAgent) {
+    return fromUiConfig ?? fromConfig ?? fromIdentity;
+  }
+  return fromConfig ?? fromIdentity ?? fromUiConfig;
 }
 
 function resolveExistingPath(value: string): string {
