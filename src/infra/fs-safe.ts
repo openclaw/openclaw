@@ -27,7 +27,8 @@ export type SafeOpenErrorCode =
   | "symlink"
   | "not-file"
   | "path-mismatch"
-  | "too-large";
+  | "too-large"
+  | "missing-dependency";
 
 export class SafeOpenError extends Error {
   code: SafeOpenErrorCode;
@@ -992,7 +993,7 @@ function normalizePinnedWriteError(error: unknown): Error {
   // at a python interpreter.
   if (isMissingPythonSpawnError(error)) {
     return new SafeOpenError(
-      "invalid-path",
+      "missing-dependency",
       "pinned write failed: python3 is not installed. " +
         "Install python3 (e.g. `apt-get install python3`) or use a base image that includes it.",
       { cause: error instanceof Error ? error : undefined },

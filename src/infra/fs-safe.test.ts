@@ -759,9 +759,7 @@ describe("tilde expansion in file tools", () => {
     "normalizePinnedWriteError python3-missing surface",
     () => {
       function makeMissingPythonSpawnError(): NodeJS.ErrnoException {
-        const err = new Error(
-          "spawn python3 ENOENT",
-        ) as NodeJS.ErrnoException;
+        const err = new Error("spawn python3 ENOENT") as NodeJS.ErrnoException;
         err.code = "ENOENT";
         err.syscall = "spawn python3";
         (err as NodeJS.ErrnoException & { path?: string }).path = "python3";
@@ -781,7 +779,7 @@ describe("tilde expansion in file tools", () => {
             data: "hi",
           }),
         ).rejects.toMatchObject({
-          code: "invalid-path",
+          code: "missing-dependency",
           message: expect.stringMatching(/python3 is not installed/i),
         });
       });
@@ -799,7 +797,7 @@ describe("tilde expansion in file tools", () => {
             data: "hi",
           }),
         ).rejects.toMatchObject({
-          code: "invalid-path",
+          code: "missing-dependency",
           message: expect.stringMatching(/python3 is not installed/i),
         });
       });
