@@ -1,5 +1,5 @@
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { withEnv } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it, vi } from "vitest";
 

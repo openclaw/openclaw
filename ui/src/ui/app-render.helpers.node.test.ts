@@ -529,6 +529,7 @@ describe("switchChatSession", () => {
       loadAssistantIdentity: vi.fn(),
       resetToolStream: vi.fn(),
       resetChatScroll: vi.fn(),
+      resetChatInputHistoryNavigation: vi.fn(),
     } as unknown as AppViewState;
 
     refreshChatAvatarMock.mockResolvedValue(undefined);
@@ -541,6 +542,10 @@ describe("switchChatSession", () => {
 
     expect(state.chatSideResult).toBeNull();
     expect(state.chatSideResultTerminalRuns.size).toBe(0);
+    expect(
+      (state as unknown as { resetChatInputHistoryNavigation: ReturnType<typeof vi.fn> })
+        .resetChatInputHistoryNavigation,
+    ).toHaveBeenCalled();
     expect(refreshChatAvatarMock).toHaveBeenCalledWith(state);
     expect(refreshSlashCommandsMock).toHaveBeenCalledWith({
       client: undefined,
@@ -582,6 +587,7 @@ describe("switchChatSession", () => {
       loadAssistantIdentity: vi.fn(),
       resetToolStream: vi.fn(),
       resetChatScroll: vi.fn(),
+      resetChatInputHistoryNavigation: vi.fn(),
       client: { request: vi.fn() },
     } as unknown as AppViewState;
 

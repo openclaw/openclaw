@@ -3075,6 +3075,24 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                               minLength: 1,
                             },
                           },
+                          supportedReasoningEfforts: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                              minLength: 1,
+                            },
+                          },
+                          reasoningEffortMap: {
+                            type: "object",
+                            propertyNames: {
+                              type: "string",
+                              minLength: 1,
+                            },
+                            additionalProperties: {
+                              type: "string",
+                              minLength: 1,
+                            },
+                          },
                           maxTokensField: {
                             anyOf: [
                               {
@@ -3104,14 +3122,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                               {
                                 type: "string",
                                 const: "zai",
-                              },
-                              {
-                                type: "string",
-                                const: "qwen",
-                              },
-                              {
-                                type: "string",
-                                const: "qwen-chat-template",
                               },
                             ],
                           },
@@ -4415,6 +4425,27 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     description:
                       "Embedding model override used by the selected memory provider when a non-default model is required. Set this only when you need explicit recall quality/cost tuning beyond provider defaults.",
                   },
+                  inputType: {
+                    type: "string",
+                    minLength: 1,
+                    title: "Memory Search Input Type",
+                    description:
+                      "Use this optional provider-specific `input_type` value only when the same label should apply to both query and document embedding requests. For asymmetric providers, prefer queryInputType and documentInputType.",
+                  },
+                  queryInputType: {
+                    type: "string",
+                    minLength: 1,
+                    title: "Memory Search Query Input Type",
+                    description:
+                      "Optional provider-specific `input_type` value for query-time memory embeddings. Use this with OpenAI-compatible asymmetric embedding endpoints that require a query label.",
+                  },
+                  documentInputType: {
+                    type: "string",
+                    minLength: 1,
+                    title: "Memory Search Document Input Type",
+                    description:
+                      "Optional provider-specific `input_type` value for document and indexing memory embeddings. Use this with OpenAI-compatible asymmetric embedding endpoints that require a passage or document label.",
+                  },
                   outputDimensionality: {
                     type: "integer",
                     exclusiveMinimum: 0,
@@ -4813,19 +4844,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       },
                     },
                     additionalProperties: false,
-                  },
-                },
-                additionalProperties: false,
-              },
-              llm: {
-                type: "object",
-                properties: {
-                  idleTimeoutSeconds: {
-                    description:
-                      "Idle timeout for LLM streaming responses in seconds. If no token is received within this time, the request is aborted. Set to 0 to disable. Default: 120 seconds.",
-                    type: "integer",
-                    minimum: 0,
-                    maximum: 9007199254740991,
                   },
                 },
                 additionalProperties: false,
@@ -6375,6 +6393,18 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     },
                     model: {
                       type: "string",
+                    },
+                    inputType: {
+                      type: "string",
+                      minLength: 1,
+                    },
+                    queryInputType: {
+                      type: "string",
+                      minLength: 1,
+                    },
+                    documentInputType: {
+                      type: "string",
+                      minLength: 1,
                     },
                     outputDimensionality: {
                       type: "integer",
@@ -18724,7 +18754,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 },
                 title: "Audio Transcription Command",
                 description:
-                  'Executable + args used to transcribe audio (first token must be a safe binary/path), for example `["whisper-cli", "--model", "small", "{input}"]`. Prefer a pinned command so runtime environments behave consistently.',
+                  'Executable + args used to transcribe audio (first token must be a safe binary/path), for example `["whisper-cli", "--model", "small", "{{MediaPath}}"]`. Deprecated `{input}` placeholders are migrated to `{{MediaPath}}` by `openclaw doctor --fix`.',
               },
               timeoutSeconds: {
                 type: "integer",
@@ -20719,7 +20749,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             maximum: 9007199254740991,
             title: "Cron Max Concurrent Runs",
             description:
-              "Limits how many cron jobs can execute at the same time when multiple schedules fire together. Use lower values to protect CPU/memory under heavy automation load, or raise carefully for higher throughput.",
+              "Limits how many cron jobs can execute at the same time when multiple schedules fire together, including isolated agent-turn LLM execution on the dedicated cron-nested lane. Use lower values to protect CPU/memory under heavy automation load, or raise carefully for higher throughput.",
           },
           retry: {
             type: "object",
@@ -20897,6 +20927,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 type: "integer",
                 minimum: 0,
                 maximum: 9007199254740991,
+              },
+              includeSkipped: {
+                type: "boolean",
               },
               mode: {
                 type: "string",
@@ -23300,6 +23333,18 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 url: {
                   type: "string",
                   format: "uri",
+                },
+                transport: {
+                  anyOf: [
+                    {
+                      type: "string",
+                      const: "sse",
+                    },
+                    {
+                      type: "string",
+                      const: "streamable-http",
+                    },
+                  ],
                 },
                 headers: {
                   type: "object",
@@ -25712,7 +25757,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "audio.transcription.command": {
       label: "Audio Transcription Command",
-      help: 'Executable + args used to transcribe audio (first token must be a safe binary/path), for example `["whisper-cli", "--model", "small", "{input}"]`. Prefer a pinned command so runtime environments behave consistently.',
+      help: 'Executable + args used to transcribe audio (first token must be a safe binary/path), for example `["whisper-cli", "--model", "small", "{{MediaPath}}"]`. Deprecated `{input}` placeholders are migrated to `{{MediaPath}}` by `openclaw doctor --fix`.',
       tags: ["media"],
     },
     "audio.transcription.timeoutSeconds": {
@@ -26065,6 +26110,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Memory Search Model",
       help: "Embedding model override used by the selected memory provider when a non-default model is required. Set this only when you need explicit recall quality/cost tuning beyond provider defaults.",
       tags: ["models"],
+    },
+    "agents.defaults.memorySearch.inputType": {
+      label: "Memory Search Input Type",
+      help: "Use this optional provider-specific `input_type` value only when the same label should apply to both query and document embedding requests. For asymmetric providers, prefer queryInputType and documentInputType.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.memorySearch.queryInputType": {
+      label: "Memory Search Query Input Type",
+      help: "Optional provider-specific `input_type` value for query-time memory embeddings. Use this with OpenAI-compatible asymmetric embedding endpoints that require a query label.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.memorySearch.documentInputType": {
+      label: "Memory Search Document Input Type",
+      help: "Optional provider-specific `input_type` value for document and indexing memory embeddings. Use this with OpenAI-compatible asymmetric embedding endpoints that require a passage or document label.",
+      tags: ["advanced"],
     },
     "agents.defaults.memorySearch.outputDimensionality": {
       label: "Memory Search Output Dimensionality",
@@ -27463,7 +27523,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "cron.maxConcurrentRuns": {
       label: "Cron Max Concurrent Runs",
-      help: "Limits how many cron jobs can execute at the same time when multiple schedules fire together. Use lower values to protect CPU/memory under heavy automation load, or raise carefully for higher throughput.",
+      help: "Limits how many cron jobs can execute at the same time when multiple schedules fire together, including isolated agent-turn LLM execution on the dedicated cron-nested lane. Use lower values to protect CPU/memory under heavy automation load, or raise carefully for higher throughput.",
       tags: ["performance", "automation"],
     },
     "cron.retry": {

@@ -10,6 +10,7 @@ import { resolveConfiguredProviderFallback } from "./configured-provider-fallbac
 import { DEFAULT_PROVIDER } from "./defaults.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
+import { normalizeStaticProviderModelId } from "./model-ref-shared.js";
 import {
   type ModelRef,
   findNormalizedProviderValue,
@@ -225,10 +226,46 @@ export function parseModelRefWithCompatAlias(params: {
 }): ModelRef | null {
   return (
     resolveConfiguredOpenRouterCompatAlias(params) ??
+    resolveExactConfiguredProviderRef(params) ??
     parseModelRef(params.raw, params.defaultProvider, {
       allowPluginNormalization: params.allowPluginNormalization,
     })
   );
+}
+
+function resolveExactConfiguredProviderRef(params: {
+  cfg?: OpenClawConfig;
+  raw: string;
+  allowPluginNormalization?: boolean;
+}): ModelRef | null {
+  const slash = params.raw.indexOf("/");
+  if (slash <= 0 || !params.cfg?.models?.providers) {
+    return null;
+  }
+  const providerRaw = params.raw.slice(0, slash).trim();
+  const modelRaw = params.raw.slice(slash + 1).trim();
+  if (!providerRaw || !modelRaw) {
+    return null;
+  }
+  const providerKey = normalizeLowercaseStringOrEmpty(providerRaw);
+  const exactConfigured = Object.entries(params.cfg.models.providers).find(
+    ([key]) => normalizeLowercaseStringOrEmpty(key) === providerKey,
+  );
+  if (!exactConfigured) {
+    return null;
+  }
+  const [configuredProvider, providerConfig] = exactConfigured;
+  const normalizedConfiguredProvider = normalizeProviderId(configuredProvider);
+  const apiOwner =
+    typeof providerConfig?.api === "string" ? normalizeProviderId(providerConfig.api) : "";
+  if (!apiOwner || apiOwner === normalizedConfiguredProvider) {
+    return null;
+  }
+  const provider = normalizeLowercaseStringOrEmpty(configuredProvider);
+  return {
+    provider,
+    model: normalizeStaticProviderModelId(provider, modelRaw.trim()),
+  };
 }
 
 export function resolveAllowlistModelKey(params: {

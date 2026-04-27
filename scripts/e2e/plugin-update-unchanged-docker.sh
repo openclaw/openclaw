@@ -27,6 +27,9 @@ package_tgz=\"\${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_
 npm install -g --prefix /tmp/npm-prefix \"\$package_tgz\" --no-fund --no-audit >/tmp/openclaw-install.log 2>&1
 entry=\"/tmp/npm-prefix/lib/node_modules/openclaw/dist/index.mjs\"
 [ -f \"\$entry\" ] || entry=/tmp/npm-prefix/lib/node_modules/openclaw/dist/index.js
+package_version=\$(node -p \"require('/tmp/npm-prefix/lib/node_modules/openclaw/package.json').version\")
+OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT=\$(PACKAGE_VERSION=\"\$package_version\" node -e 'const version = process.env.PACKAGE_VERSION || \"\"; const match = new RegExp(\"^(\\\\d{4})\\\\.(\\\\d{1,2})\\\\.(\\\\d{1,2})(?:[-+].*)?\").exec(version); if (!match) { console.log(\"0\"); process.exit(0); } const value = [Number(match[1]), Number(match[2]), Number(match[3])]; const max = [2026, 4, 25]; for (let i = 0; i < value.length; i += 1) { if (value[i] < max[i]) { console.log(\"1\"); process.exit(0); } if (value[i] > max[i]) { console.log(\"0\"); process.exit(0); } } console.log(\"1\");')
+export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
 export NPM_CONFIG_REGISTRY=http://127.0.0.1:4873
 export PATH=\"/tmp/npm-prefix/bin:\$PATH\"
 
@@ -37,24 +40,19 @@ cat > \"\$HOME/.openclaw/extensions/lossless-claw/package.json\" <<'JSON'
   \"version\": \"0.9.0\"
 }
 JSON
-cat > \"\$HOME/.openclaw/openclaw.json\" <<'JSON'
+if [ \"\$OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT\" = \"1\" ]; then
+  cat > \"\$HOME/.openclaw/openclaw.json\" <<'JSON'
 {
-  \"plugins\": {
-    \"installs\": {
-      \"lossless-claw\": {
-        \"source\": \"npm\",
-        \"spec\": \"@example/lossless-claw@0.9.0\",
-        \"installPath\": \"~/.openclaw/extensions/lossless-claw\",
-        \"resolvedName\": \"@example/lossless-claw\",
-        \"resolvedVersion\": \"0.9.0\",
-        \"resolvedSpec\": \"@example/lossless-claw@0.9.0\",
-        \"integrity\": \"sha512-same\",
-        \"shasum\": \"same\"
-      }
-    }
-  }
+  \"plugins\": {}
 }
 JSON
+else
+  cat > \"\$HOME/.openclaw/openclaw.json\" <<'JSON'
+{
+  \"plugins\": {}
+}
+JSON
+fi
 mkdir -p \"\$HOME/.openclaw/plugins\"
 cat > \"\$HOME/.openclaw/plugins/installs.json\" <<'JSON'
 {
@@ -141,6 +139,11 @@ if [ \"\$registry_ready\" -ne 1 ]; then
   exit 1
 fi
 
+before_config_hash=\"\"
+if [ \"\$OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT\" != \"1\" ]; then
+  before_config_hash=\$(sha256sum \"\$HOME/.openclaw/openclaw.json\" | awk '{print \$1}')
+fi
+
 node --input-type=module > /tmp/plugin-update-before.json <<'NODE'
   import fs from \"node:fs\";
   import os from \"node:os\";
@@ -174,6 +177,15 @@ node --input-type=module > /tmp/plugin-update-before.json <<'NODE'
 NODE
 
 node \"\$entry\" plugins update @example/lossless-claw > /tmp/plugin-update-output.log 2>&1
+
+if [ -n \"\$before_config_hash\" ]; then
+  after_config_hash=\$(sha256sum \"\$HOME/.openclaw/openclaw.json\" | awk '{print \$1}')
+  if [ \"\$before_config_hash\" != \"\$after_config_hash\" ]; then
+    echo \"Config changed unexpectedly for modern package \$package_version\"
+    cat /tmp/plugin-update-output.log
+    exit 1
+  fi
+fi
 
 node --input-type=module <<'NODE'
   import fs from \"node:fs\";

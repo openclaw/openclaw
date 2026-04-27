@@ -231,10 +231,9 @@ jobs:
       selected_sha: ${{ steps.validate.outputs.selected_sha }}
       trusted_reason: ${{ steps.validate.outputs.trusted_reason }}
     steps:
-      - name: Checkout selected ref
+      - name: Checkout workflow repository
         uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.ref }}
           fetch-depth: 0
 
       - name: Validate selected ref
@@ -244,11 +243,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          selected_sha="$(git rev-parse HEAD)"
           trusted_reason=""
 
           git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
           git fetch --tags origin '+refs/tags/*:refs/tags/*'
+
+          # Resolve here instead of in actions/checkout so short SHAs work too.
+          if ! selected_sha="$(git rev-parse --verify "${INPUT_REF}^{commit}")"; then
+            echo "Ref '${INPUT_REF}' could not be resolved to a commit." >&2
+            exit 1
+          fi
 
           if git merge-base --is-ancestor "$selected_sha" refs/remotes/origin/main; then
             trusted_reason="main-ancestor"
@@ -431,8 +435,11 @@ jobs:
           - chunk_id: package-update
             label: package/update
             timeout_minutes: 180
-          - chunk_id: plugins-integrations
-            label: plugins/integrations
+          - chunk_id: plugins-runtime
+            label: plugins/runtime
+            timeout_minutes: 180
+          - chunk_id: bundled-channels
+            label: bundled channels
             timeout_minutes: 180
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -483,6 +490,7 @@ jobs:
       OPENCLAW_DOCKER_E2E_BARE_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.bare_image }}
       OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.functional_image }}
       OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
+      OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       OPENCLAW_CURRENT_PACKAGE_TGZ: .artifacts/docker-e2e-package/openclaw-current.tgz
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
       INCLUDE_OPENWEBUI: ${{ inputs.include_openwebui }}
@@ -511,14 +519,67 @@ jobs:
       - name: Hydrate live auth/profile inputs
         run: bash scripts/ci-hydrate-live-auth.sh
 
-      - name: Plan and hydrate Docker E2E chunk
+      - name: Plan Docker E2E chunk
         id: plan
-        uses: ./.github/actions/docker-e2e-plan
+        shell: bash
+        env:
+          CHUNK: ${{ matrix.chunk_id }}
+          INCLUDE_OPENWEBUI: ${{ inputs.include_openwebui }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$CHUNK" ]]; then
+            echo "chunk input is required for Docker E2E chunk planning." >&2
+            exit 1
+          fi
+
+          mkdir -p .artifacts/docker-tests
+          export OPENCLAW_DOCKER_ALL_PROFILE=release-path
+          export OPENCLAW_DOCKER_ALL_CHUNK="$CHUNK"
+          export OPENCLAW_DOCKER_ALL_INCLUDE_OPENWEBUI="$INCLUDE_OPENWEBUI"
+
+          plan_path=".artifacts/docker-tests/release-${CHUNK}-plan.json"
+          node scripts/test-docker-all.mjs --plan-json > "$plan_path"
+          node scripts/docker-e2e.mjs github-outputs "$plan_path" >> "$GITHUB_OUTPUT"
+          echo "plan_json=$plan_path" >> "$GITHUB_OUTPUT"
+
+      - name: Download OpenClaw Docker E2E package
+        if: steps.plan.outputs.needs_package == '1'
+        uses: actions/download-artifact@v8
         with:
-          mode: chunk
-          chunk: ${{ matrix.chunk_id }}
-          include-openwebui: ${{ inputs.include_openwebui }}
-          package-artifact-name: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
+          name: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
+          path: .artifacts/docker-e2e-package
+
+      - name: Pull shared bare Docker E2E image
+        if: steps.plan.outputs.needs_bare_image == '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull "${OPENCLAW_DOCKER_E2E_BARE_IMAGE}"
+
+      - name: Pull shared functional Docker E2E image
+        if: steps.plan.outputs.needs_functional_image == '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull "${OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE}"
+
+      - name: Validate Docker E2E credentials
+        shell: bash
+        env:
+          CREDENTIALS: ${{ steps.plan.outputs.credentials }}
+        run: |
+          set -euo pipefail
+          credentials=",$CREDENTIALS,"
+          if [[ "$credentials" == *",openai,"* ]]; then
+            [[ -n "${OPENAI_API_KEY:-}" ]] || {
+              echo "OPENAI_API_KEY is required for selected Docker E2E lanes." >&2
+              exit 1
+            }
+          fi
+          if [[ "$credentials" == *",anthropic,"* && -z "${ANTHROPIC_API_TOKEN:-}" && -z "${ANTHROPIC_API_KEY:-}" ]]; then
+            echo "ANTHROPIC_API_TOKEN or ANTHROPIC_API_KEY is required for selected Docker E2E lanes." >&2
+            exit 1
+          fi
 
       - name: Run Docker E2E chunk
         shell: bash
@@ -611,6 +672,7 @@ jobs:
       OPENCLAW_DOCKER_E2E_BARE_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.bare_image }}
       OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.functional_image }}
       OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
+      OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       OPENCLAW_CURRENT_PACKAGE_TGZ: .artifacts/docker-e2e-package/openclaw-current.tgz
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
       INCLUDE_OPENWEBUI: ${{ inputs.include_openwebui }}
@@ -639,14 +701,66 @@ jobs:
       - name: Hydrate live auth/profile inputs
         run: bash scripts/ci-hydrate-live-auth.sh
 
-      - name: Plan and hydrate targeted Docker E2E lanes
+      - name: Plan targeted Docker E2E lanes
         id: plan
-        uses: ./.github/actions/docker-e2e-plan
+        shell: bash
+        env:
+          LANES: ${{ inputs.docker_lanes }}
+          INCLUDE_OPENWEBUI: ${{ inputs.include_openwebui }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$LANES" ]]; then
+            echo "lanes input is required for Docker E2E targeted planning." >&2
+            exit 1
+          fi
+
+          mkdir -p .artifacts/docker-tests
+          export OPENCLAW_DOCKER_ALL_LANES="$LANES"
+          export OPENCLAW_DOCKER_ALL_INCLUDE_OPENWEBUI="$INCLUDE_OPENWEBUI"
+
+          plan_path=".artifacts/docker-tests/targeted-plan.json"
+          node scripts/test-docker-all.mjs --plan-json > "$plan_path"
+          node scripts/docker-e2e.mjs github-outputs "$plan_path" >> "$GITHUB_OUTPUT"
+          echo "plan_json=$plan_path" >> "$GITHUB_OUTPUT"
+
+      - name: Download OpenClaw Docker E2E package
+        if: steps.plan.outputs.needs_package == '1'
+        uses: actions/download-artifact@v8
         with:
-          mode: targeted
-          lanes: ${{ inputs.docker_lanes }}
-          include-openwebui: ${{ inputs.include_openwebui }}
-          package-artifact-name: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
+          name: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
+          path: .artifacts/docker-e2e-package
+
+      - name: Pull shared bare Docker E2E image
+        if: steps.plan.outputs.needs_bare_image == '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull "${OPENCLAW_DOCKER_E2E_BARE_IMAGE}"
+
+      - name: Pull shared functional Docker E2E image
+        if: steps.plan.outputs.needs_functional_image == '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull "${OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE}"
+
+      - name: Validate Docker E2E credentials
+        shell: bash
+        env:
+          CREDENTIALS: ${{ steps.plan.outputs.credentials }}
+        run: |
+          set -euo pipefail
+          credentials=",$CREDENTIALS,"
+          if [[ "$credentials" == *",openai,"* ]]; then
+            [[ -n "${OPENAI_API_KEY:-}" ]] || {
+              echo "OPENAI_API_KEY is required for selected Docker E2E lanes." >&2
+              exit 1
+            }
+          fi
+          if [[ "$credentials" == *",anthropic,"* && -z "${ANTHROPIC_API_TOKEN:-}" && -z "${ANTHROPIC_API_KEY:-}" ]]; then
+            echo "ANTHROPIC_API_TOKEN or ANTHROPIC_API_KEY is required for selected Docker E2E lanes." >&2
+            exit 1
+          fi
 
       - name: Run targeted Docker E2E lanes
         shell: bash
@@ -698,6 +812,7 @@ jobs:
       OPENCLAW_DOCKER_E2E_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.image }}
       OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.functional_image }}
       OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
+      OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       OPENCLAW_CURRENT_PACKAGE_TGZ: .artifacts/docker-e2e-package/openclaw-current.tgz
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
     steps:
@@ -730,14 +845,41 @@ jobs:
             exit 1
           }
 
-      - name: Plan and hydrate Open WebUI Docker E2E chunk
+      - name: Plan Open WebUI Docker E2E chunk
         id: plan
-        uses: ./.github/actions/docker-e2e-plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .artifacts/docker-tests
+          export OPENCLAW_DOCKER_ALL_PROFILE=release-path
+          export OPENCLAW_DOCKER_ALL_CHUNK=openwebui
+          export OPENCLAW_DOCKER_ALL_INCLUDE_OPENWEBUI=true
+
+          plan_path=".artifacts/docker-tests/release-openwebui-plan.json"
+          node scripts/test-docker-all.mjs --plan-json > "$plan_path"
+          node scripts/docker-e2e.mjs github-outputs "$plan_path" >> "$GITHUB_OUTPUT"
+          echo "plan_json=$plan_path" >> "$GITHUB_OUTPUT"
+
+      - name: Download OpenClaw Docker E2E package
+        if: steps.plan.outputs.needs_package == '1'
+        uses: actions/download-artifact@v8
         with:
-          mode: chunk
-          chunk: openwebui
-          include-openwebui: "true"
-          package-artifact-name: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
+          name: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
+          path: .artifacts/docker-e2e-package
+
+      - name: Pull shared bare Docker E2E image
+        if: steps.plan.outputs.needs_bare_image == '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull "${OPENCLAW_DOCKER_E2E_BARE_IMAGE}"
+
+      - name: Pull shared functional Docker E2E image
+        if: steps.plan.outputs.needs_functional_image == '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull "${OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE}"
 
       - name: Run Open WebUI Docker E2E chunk
         shell: bash
@@ -805,13 +947,29 @@ jobs:
 
       - name: Plan Docker E2E images
         id: plan
-        uses: ./.github/actions/docker-e2e-plan
-        with:
-          mode: prepare
-          lanes: ${{ inputs.docker_lanes }}
-          include-release-path-suites: ${{ inputs.include_release_path_suites }}
-          include-openwebui: ${{ inputs.include_openwebui }}
-          hydrate-artifacts: "false"
+        shell: bash
+        env:
+          LANES: ${{ inputs.docker_lanes }}
+          INCLUDE_RELEASE_PATH_SUITES: ${{ inputs.include_release_path_suites }}
+          INCLUDE_OPENWEBUI: ${{ inputs.include_openwebui }}
+        run: |
+          set -euo pipefail
+          mkdir -p .artifacts/docker-tests
+
+          if [[ "$INCLUDE_RELEASE_PATH_SUITES" == "true" ]]; then
+            export OPENCLAW_DOCKER_ALL_PROFILE=release-path
+            export OPENCLAW_DOCKER_ALL_PLAN_RELEASE_ALL=1
+          elif [[ -n "$LANES" ]]; then
+            export OPENCLAW_DOCKER_ALL_LANES="$LANES"
+          elif [[ "$INCLUDE_OPENWEBUI" == "true" ]]; then
+            export OPENCLAW_DOCKER_ALL_LANES=openwebui
+          fi
+          export OPENCLAW_DOCKER_ALL_INCLUDE_OPENWEBUI="$INCLUDE_OPENWEBUI"
+
+          plan_path=".artifacts/docker-tests/plan.json"
+          node scripts/test-docker-all.mjs --plan-json > "$plan_path"
+          node scripts/docker-e2e.mjs github-outputs "$plan_path" >> "$GITHUB_OUTPUT"
+          echo "plan_json=$plan_path" >> "$GITHUB_OUTPUT"
 
       - name: Setup Node environment
         if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_name == '' && inputs.package_artifact_run_id == ''
@@ -1267,30 +1425,59 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - suite_id: live-all
-            label: pnpm test:live
-            command: pnpm test:live
-            timeout_minutes: 180
+          - suite_id: native-live-src-agents
+            label: Native live agents
+            command: node scripts/test-live-shard.mjs native-live-src-agents
+            timeout_minutes: 90
+            needs_ffmpeg: false
+            profile_env_only: false
+          - suite_id: native-live-src-gateway
+            label: Native live gateway
+            command: node scripts/test-live-shard.mjs native-live-src-gateway
+            timeout_minutes: 90
+            needs_ffmpeg: false
+            profile_env_only: false
+          - suite_id: native-live-test
+            label: Native live test harnesses
+            command: node scripts/test-live-shard.mjs native-live-test
+            timeout_minutes: 90
+            needs_ffmpeg: false
+            profile_env_only: false
+          - suite_id: native-live-extensions-a-k
+            label: Native live plugins A-K
+            command: node scripts/test-live-shard.mjs native-live-extensions-a-k
+            timeout_minutes: 90
+            needs_ffmpeg: true
+            profile_env_only: false
+          - suite_id: native-live-extensions-l-z
+            label: Native live plugins L-Z
+            command: node scripts/test-live-shard.mjs native-live-extensions-l-z
+            timeout_minutes: 90
+            needs_ffmpeg: true
             profile_env_only: false
           - suite_id: live-gateway-docker
             label: Docker live gateway
             command: pnpm test:docker:live-gateway
             timeout_minutes: 120
+            needs_ffmpeg: false
             profile_env_only: false
           - suite_id: live-cli-backend-docker
             label: Docker live CLI backend
             command: pnpm test:docker:live-cli-backend
             timeout_minutes: 120
+            needs_ffmpeg: false
             profile_env_only: false
           - suite_id: live-acp-bind-docker
             label: Docker live ACP bind
             command: pnpm test:docker:live-acp-bind
             timeout_minutes: 120
+            needs_ffmpeg: false
             profile_env_only: false
           - suite_id: live-codex-harness-docker
             label: Docker live Codex harness
             command: pnpm test:docker:live-codex-harness
             timeout_minutes: 120
+            needs_ffmpeg: false
             profile_env_only: false
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -1356,6 +1543,25 @@ jobs:
 
       - name: Hydrate live auth/profile inputs
         run: bash scripts/ci-hydrate-live-auth.sh
+
+      - name: Install live media dependencies
+        if: matrix.needs_ffmpeg
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v ffmpeg >/dev/null 2>&1; then
+            for attempt in 1 2 3; do
+              if sudo apt-get update -o Acquire::Retries=3; then
+                break
+              fi
+              if [[ "${attempt}" == "3" ]]; then
+                exit 1
+              fi
+              sleep $((attempt * 5))
+            done
+            sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ffmpeg
+          fi
+          ffmpeg -version | head -1
 
       - name: Configure suite-specific env
         shell: bash

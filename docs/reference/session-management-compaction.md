@@ -50,6 +50,9 @@ OpenClaw persists sessions in two layers:
    - Append-only transcript with tree structure (entries have `id` + `parentId`)
    - Stores the actual conversation + tool calls + compaction summaries
    - Used to rebuild the model context for future turns
+   - Large pre-compaction debug checkpoints are skipped once the active
+     transcript exceeds the checkpoint size cap, avoiding a second giant
+     `.checkpoint.*.jsonl` copy.
 
 ---
 
@@ -76,6 +79,8 @@ Session persistence has automatic maintenance controls (`session.maintenance`) f
 - `resetArchiveRetention`: retention for `*.reset.<timestamp>` transcript archives (default: same as `pruneAfter`; `false` disables cleanup)
 - `maxDiskBytes`: optional sessions-directory budget
 - `highWaterBytes`: optional target after cleanup (default `80%` of `maxDiskBytes`)
+
+Normal Gateway writes batch `maxEntries` cleanup for production-sized caps, so a store may briefly exceed the configured cap before the next high-water cleanup rewrites it back down. `openclaw sessions cleanup --enforce` still applies the configured cap immediately.
 
 Enforcement order for disk budget cleanup (`mode: "enforce"`):
 

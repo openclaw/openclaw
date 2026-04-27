@@ -23,7 +23,7 @@ The Android app has not been publicly released yet. The source code is available
 
 System control (launchd/systemd) lives on the Gateway host. See [Gateway](/gateway).
 
-## Connection Runbook
+## Connection runbook
 
 Android node app ⇄ (mDNS/NSD + WebSocket) ⇄ **Gateway**
 

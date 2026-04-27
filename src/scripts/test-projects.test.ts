@@ -441,11 +441,11 @@ describe("test-projects args", () => {
   });
 
   it("routes acp targets to the acp config", () => {
-    expect(buildVitestRunPlans(["src/acp/control-plane/manager.test.ts"])).toEqual([
+    expect(buildVitestRunPlans(["src/acp/control-plane/runtime-cache.test.ts"])).toEqual([
       {
         config: "test/vitest/vitest.acp.config.ts",
         forwardedArgs: [],
-        includePatterns: ["src/acp/control-plane/manager.test.ts"],
+        includePatterns: ["src/acp/control-plane/runtime-cache.test.ts"],
         watchMode: false,
       },
     ]);

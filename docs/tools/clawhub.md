@@ -70,6 +70,13 @@ Site: [clawhub.ai](https://clawhub.ai)
     openclaw plugins install openclaw-codex-app-server
     ```
 
+    Use `npm:<package>` when you want npm-only resolution without a
+    ClawHub lookup:
+
+    ```bash
+    openclaw plugins install npm:openclaw-codex-app-server
+    ```
+
     Plugin installs validate advertised `pluginApi` and
     `minGatewayVersion` compatibility before archive install runs, so
     incompatible hosts fail closed early instead of partially installing

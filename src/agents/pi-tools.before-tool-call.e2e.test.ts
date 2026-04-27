@@ -245,6 +245,32 @@ describe("before_tool_call loop detection behavior", () => {
     ).rejects.toThrow("global circuit breaker");
   });
 
+  it("does not carry loop history across run ids", async () => {
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "same output" }],
+      details: { ok: true },
+    });
+    const params = { path: "/tmp/file" };
+    const firstRunTool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      ...enabledLoopDetectionContext,
+      runId: "heartbeat-1",
+    });
+    const secondRunTool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      ...enabledLoopDetectionContext,
+      runId: "heartbeat-2",
+    });
+
+    for (let i = 0; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
+      await expect(
+        firstRunTool.execute(`old-run-${i}`, params, undefined, undefined),
+      ).resolves.toBeDefined();
+    }
+
+    await expect(
+      secondRunTool.execute("new-run-0", params, undefined, undefined),
+    ).resolves.toBeDefined();
+  });
+
   it("coalesces repeated generic warning events into threshold buckets", async () => {
     await withToolLoopEvents(
       async (emitted) => {

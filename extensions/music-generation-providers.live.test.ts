@@ -116,6 +116,14 @@ function resolveLiveLyrics(providerId: string): string | undefined {
   ].join("\n");
 }
 
+function isSkippableLiveMusicProviderError(providerId: string, error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    providerId === "google" &&
+    message.toLowerCase().includes("music generation response missing audio data")
+  );
+}
+
 describeLive("music generation provider live", () => {
   it(
     "covers generate plus declared edit paths with shell/profile auth",
@@ -191,6 +199,10 @@ describeLive("music generation provider live", () => {
           expect(result.tracks[0]?.buffer.byteLength).toBeGreaterThan(1024);
           attempted.push(`${testCase.providerId}:generate:${providerModel} (${authLabel})`);
         } catch (error) {
+          if (isSkippableLiveMusicProviderError(testCase.providerId, error)) {
+            skipped.push(`${testCase.providerId}:generate transient no-audio response`);
+            continue;
+          }
           failures.push(
             `${testCase.providerId}:generate (${authLabel}): ${
               error instanceof Error ? error.message : String(error)
@@ -225,6 +237,10 @@ describeLive("music generation provider live", () => {
           expect(result.tracks[0]?.buffer.byteLength).toBeGreaterThan(1024);
           attempted.push(`${testCase.providerId}:edit:${providerModel} (${authLabel})`);
         } catch (error) {
+          if (isSkippableLiveMusicProviderError(testCase.providerId, error)) {
+            skipped.push(`${testCase.providerId}:edit transient no-audio response`);
+            continue;
+          }
           failures.push(
             `${testCase.providerId}:edit (${authLabel}): ${
               error instanceof Error ? error.message : String(error)

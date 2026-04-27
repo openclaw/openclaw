@@ -39,6 +39,7 @@ openclaw nodes pending
 openclaw nodes approve <requestId>
 openclaw nodes reject <requestId>
 openclaw nodes status
+openclaw nodes remove --node <id|name|ip>
 openclaw nodes rename --node <id|name|ip> --name "Living Room iPad"
 ```
 
@@ -57,6 +58,7 @@ Methods:
 - `node.pair.list` — list pending + paired nodes (`operator.pairing`).
 - `node.pair.approve` — approve a pending request (issues token).
 - `node.pair.reject` — reject a pending request.
+- `node.pair.remove` — remove a stale paired node entry.
 - `node.pair.verify` — verify `{ nodeId, token }`.
 
 Notes:

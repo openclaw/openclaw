@@ -109,6 +109,14 @@ export const pl: TranslationMap = {
       lightningHelp: "Adres Lightning do napiwków (LUD-16)",
     },
   },
+  lazyView: {
+    loadingTitle: "Ładowanie panelu",
+    errorTitle: "Nie udało się załadować panelu",
+    errorSubtitle:
+      "Odśwież stronę, aby załadować najnowszy pakiet Control UI, lub spróbuj ponownie, jeśli żądanie sieciowe się nie powiodło.",
+    retry: "Spróbuj ponownie",
+    unknownError: "Nieznany błąd ładowania modułu.",
+  },
   nodes: {
     binding: {
       loadConfigHint: "Wczytaj konfigurację, aby edytować powiązania.",
@@ -351,6 +359,15 @@ export const pl: TranslationMap = {
       refreshing: "Odświeżanie…",
       on: "Dreaming włączone",
       off: "Dreaming wyłączone",
+    },
+    restartConfirmation: {
+      title: "Restart Gateway to Apply Change",
+      subtitle: "Changing Dreaming mode restarts the gateway.",
+      warning:
+        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      confirm: "Confirm Restart",
+      restarting: "Restarting…",
+      failed: "Could not apply change. Check your connection and try again.",
     },
     status: {
       active: "Dreaming aktywne",

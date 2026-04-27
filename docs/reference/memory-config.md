@@ -150,6 +150,37 @@ For custom OpenAI-compatible endpoints or overriding provider defaults:
     </Warning>
 
   </Accordion>
+  <Accordion title="OpenAI-compatible input types">
+    OpenAI-compatible embedding endpoints can opt into provider-specific `input_type` request fields. This is useful for asymmetric embedding models that require different labels for query and document embeddings.
+
+    | Key                 | Type     | Default | Description                                             |
+    | ------------------- | -------- | ------- | ------------------------------------------------------- |
+    | `inputType`         | `string` | unset   | Shared `input_type` for query and document embeddings   |
+    | `queryInputType`    | `string` | unset   | Query-time `input_type`; overrides `inputType`          |
+    | `documentInputType` | `string` | unset   | Index/document `input_type`; overrides `inputType`      |
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            remote: {
+              baseUrl: "https://embeddings.example/v1",
+              apiKey: "env:EMBEDDINGS_API_KEY",
+            },
+            model: "asymmetric-embedder",
+            queryInputType: "query",
+            documentInputType: "passage",
+          },
+        },
+      },
+    }
+    ```
+
+    Changing these values affects embedding cache identity for provider batch indexing and should be followed by a memory reindex when the upstream model treats the labels differently.
+
+  </Accordion>
   <Accordion title="Bedrock">
     Bedrock uses the AWS SDK default credential chain — no API keys needed. If OpenClaw runs on EC2 with a Bedrock-enabled instance role, just set the provider and model:
 
@@ -408,17 +439,19 @@ When sqlite-vec is unavailable, OpenClaw falls back to in-process cosine similar
 
 Set `memory.backend = "qmd"` to enable. All QMD settings live under `memory.qmd`:
 
-| Key                      | Type      | Default  | Description                                  |
-| ------------------------ | --------- | -------- | -------------------------------------------- |
-| `command`                | `string`  | `qmd`    | QMD executable path                          |
-| `searchMode`             | `string`  | `search` | Search command: `search`, `vsearch`, `query` |
-| `includeDefaultMemory`   | `boolean` | `true`   | Auto-index `MEMORY.md` + `memory/**/*.md`    |
-| `paths[]`                | `array`   | --       | Extra paths: `{ name, path, pattern? }`      |
-| `sessions.enabled`       | `boolean` | `false`  | Index session transcripts                    |
-| `sessions.retentionDays` | `number`  | --       | Transcript retention                         |
-| `sessions.exportDir`     | `string`  | --       | Export directory                             |
+| Key                      | Type      | Default  | Description                                                                           |
+| ------------------------ | --------- | -------- | ------------------------------------------------------------------------------------- |
+| `command`                | `string`  | `qmd`    | QMD executable path; set an absolute path when service `PATH` differs from your shell |
+| `searchMode`             | `string`  | `search` | Search command: `search`, `vsearch`, `query`                                          |
+| `includeDefaultMemory`   | `boolean` | `true`   | Auto-index `MEMORY.md` + `memory/**/*.md`                                             |
+| `paths[]`                | `array`   | --       | Extra paths: `{ name, path, pattern? }`                                               |
+| `sessions.enabled`       | `boolean` | `false`  | Index session transcripts                                                             |
+| `sessions.retentionDays` | `number`  | --       | Transcript retention                                                                  |
+| `sessions.exportDir`     | `string`  | --       | Export directory                                                                      |
 
-OpenClaw prefers the current QMD collection and MCP query shapes, but keeps older QMD releases working by falling back to legacy `--mask` collection flags and older MCP tool names when needed.
+`searchMode: "search"` is lexical/BM25-only. OpenClaw does not run semantic vector readiness probes or QMD embedding maintenance for that mode, including during `memory status --deep`; `vsearch` and `query` continue to require QMD vector readiness and embeddings.
+
+OpenClaw prefers current QMD collection and MCP query shapes, but keeps older QMD releases working by trying compatible collection pattern flags and older MCP tool names when needed. When QMD advertises support for multiple collection filters, same-source collections are searched with one QMD process; older QMD builds keep the per-collection compatibility path. Same-source means durable memory collections are grouped together, while session transcript collections remain a separate group so source diversification still has both inputs.
 
 <Note>
 QMD model overrides stay on the QMD side, not OpenClaw config. If you need to override QMD's models globally, set environment variables such as `QMD_EMBED_MODEL`, `QMD_RERANK_MODEL`, and `QMD_GENERATE_MODEL` in the gateway runtime environment.
@@ -511,10 +544,11 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
 
 ### User settings
 
-| Key         | Type      | Default     | Description                                       |
-| ----------- | --------- | ----------- | ------------------------------------------------- |
-| `enabled`   | `boolean` | `false`     | Enable or disable dreaming entirely               |
-| `frequency` | `string`  | `0 3 * * *` | Optional cron cadence for the full dreaming sweep |
+| Key         | Type      | Default       | Description                                       |
+| ----------- | --------- | ------------- | ------------------------------------------------- |
+| `enabled`   | `boolean` | `false`       | Enable or disable dreaming entirely               |
+| `frequency` | `string`  | `0 3 * * *`   | Optional cron cadence for the full dreaming sweep |
+| `model`     | `string`  | default model | Optional Dream Diary subagent model override      |
 
 ### Example
 
@@ -523,10 +557,15 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
   plugins: {
     entries: {
       "memory-core": {
+        subagent: {
+          allowModelOverride: true,
+          allowedModels: ["anthropic/claude-sonnet-4-6"],
+        },
         config: {
           dreaming: {
             enabled: true,
             frequency: "0 3 * * *",
+            model: "anthropic/claude-sonnet-4-6",
           },
         },
       },
@@ -538,6 +577,7 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
 <Note>
 - Dreaming writes machine state to `memory/.dreams/`.
 - Dreaming writes human-readable narrative output to `DREAMS.md` (or existing `dreams.md`).
+- `dreaming.model` uses the existing plugin subagent trust gate; set `plugins.entries.memory-core.subagent.allowModelOverride: true` before enabling it.
 - The light/deep/REM phase policy and thresholds are internal behavior, not user-facing config.
 </Note>
 

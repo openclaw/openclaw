@@ -1662,6 +1662,39 @@ describe("provider-runtime", () => {
     );
   });
 
+  it("does not match alias hooks when an exact custom provider declares a foreign api owner", () => {
+    const qwenPlugin: ProviderPlugin = {
+      id: "qwen",
+      label: "Qwen",
+      aliases: ["modelstudio"],
+      auth: [],
+      createStreamFn: vi.fn(() => vi.fn()),
+    };
+    resolvePluginProvidersMock.mockReturnValue([qwenPlugin]);
+
+    const plugin = resolveProviderRuntimePlugin({
+      provider: "modelstudio",
+      config: {
+        models: {
+          providers: {
+            modelstudio: {
+              api: "openai-completions",
+              baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
+              models: [],
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(plugin).toBeUndefined();
+    expect(resolvePluginProvidersMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerRefs: ["modelstudio", "openai-completions"],
+      }),
+    );
+  });
+
   it("merges compat contributions from owner and foreign provider plugins", () => {
     resolvePluginProvidersMock.mockImplementation((params) => {
       const onlyPluginIds = params.onlyPluginIds ?? [];

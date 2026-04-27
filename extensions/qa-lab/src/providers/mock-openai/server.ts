@@ -795,7 +795,9 @@ function buildAssistantText(
     return "FORKED-CONTEXT-ALPHA";
   }
   const fanoutCompleteReply = "subagent-1: ok\nsubagent-2: ok";
-  if (scenarioState.subagentFanoutPhase === 2 && prompt) {
+  const isFanoutCompletionTurn =
+    /subagent fanout synthesis check/i.test(allInputText) || /^continue\.?$/i.test(prompt.trim());
+  if (scenarioState.subagentFanoutPhase === 2 && prompt && isFanoutCompletionTurn) {
     scenarioState.subagentFanoutPhase = 3;
     return fanoutCompleteReply;
   }
@@ -1190,6 +1192,12 @@ async function buildResponsesPayload(
   }
   if (isHeartbeatPrompt(prompt)) {
     return buildAssistantEvents("HEARTBEAT_OK");
+  }
+  if (/fanout worker alpha/i.test(prompt)) {
+    return buildAssistantEvents("ALPHA-OK");
+  }
+  if (/fanout worker beta/i.test(prompt)) {
+    return buildAssistantEvents("BETA-OK");
   }
   if (QA_REASONING_ONLY_RECOVERY_PROMPT_RE.test(allInputText)) {
     if (!toolOutput) {

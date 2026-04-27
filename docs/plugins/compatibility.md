@@ -105,7 +105,8 @@ Current compatibility records include:
 - legacy provider plugin hooks and type aliases while providers move to
   explicit catalog, auth, thinking, replay, and transport hooks
 - legacy runtime aliases such as `api.runtime.taskFlow`,
-  `api.runtime.subagent.getSession`, and `api.runtime.stt`
+  `api.runtime.subagent.getSession`, `api.runtime.stt`, and deprecated
+  `api.runtime.config.loadConfig()` / `api.runtime.config.writeConfigFile(...)`
 - legacy memory-plugin split registration while memory plugins move to
   `registerMemoryCapability`
 - legacy channel SDK helpers for native message schemas, mention gating,

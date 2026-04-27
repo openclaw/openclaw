@@ -87,6 +87,7 @@ export function createCronPromptExecutor(params: {
   cronSession: MutableCronSession;
   abortSignal?: AbortSignal;
   abortReason: () => string;
+  onExecutionStarted?: () => void;
 }) {
   const sessionFile =
     params.cronSession.sessionEntry.sessionFile?.trim() ||
@@ -145,6 +146,7 @@ export function createCronPromptExecutor(params: {
             skillsSnapshot: params.skillsSnapshot,
             messageChannel: params.messageChannel,
             abortSignal: params.abortSignal,
+            onExecutionStarted: params.onExecutionStarted,
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature,
             senderIsOwner: true,
@@ -154,7 +156,7 @@ export function createCronPromptExecutor(params: {
           );
           return result;
         }
-        const { resolveFastModeState, resolveNestedAgentLane, runEmbeddedPiAgent } =
+        const { resolveCronAgentLane, resolveFastModeState, runEmbeddedPiAgent } =
           await loadCronEmbeddedRuntime();
         const currentChannelId = await resolveCurrentChannelTarget({
           channel: params.messageChannel,
@@ -181,7 +183,7 @@ export function createCronPromptExecutor(params: {
           config: params.cfgWithAgentDefaults,
           skillsSnapshot: params.skillsSnapshot,
           prompt: promptText,
-          lane: resolveNestedAgentLane(params.lane),
+          lane: resolveCronAgentLane(params.lane),
           provider: providerOverride,
           model: modelOverride,
           authProfileId: params.liveSelection.authProfileId,
@@ -213,6 +215,7 @@ export function createCronPromptExecutor(params: {
           forceMessageTool: params.toolPolicy.forceMessageTool,
           allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
           abortSignal: params.abortSignal,
+          onExecutionStarted: params.onExecutionStarted,
           bootstrapPromptWarningSignaturesSeen,
           bootstrapPromptWarningSignature,
         });
@@ -273,6 +276,7 @@ export async function executeCronRun(params: {
   abortSignal?: AbortSignal;
   abortReason: () => string;
   isAborted: () => boolean;
+  onExecutionStarted?: () => void;
   thinkLevel: ThinkLevel | undefined;
   timeoutMs: number;
   suppressExecNotifyOnExit: boolean;
@@ -309,6 +313,7 @@ export async function executeCronRun(params: {
     cronSession: params.cronSession,
     abortSignal: params.abortSignal,
     abortReason: params.abortReason,
+    onExecutionStarted: params.onExecutionStarted,
   });
 
   const runStartedAt = params.runStartedAt ?? Date.now();

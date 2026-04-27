@@ -88,20 +88,30 @@ export const EXPECTED_CODEX_STATUS_COMMAND_TEXT = [
 export function isExpectedCodexStatusCommandText(text: string): boolean {
   const normalized = text.toLowerCase();
   const mentionsOpenClawStatus =
-    normalized.includes("openclaw is running on") || normalized.includes("openclaw status:");
+    normalized.includes("openclaw is running on") ||
+    normalized.includes("openclaw status:") ||
+    normalized.includes("status: running on");
   const mentionsHarnessSession =
     normalized.includes("session: `agent:dev:live-codex-harness`") ||
     normalized.includes("session: agent:dev:live-codex-harness") ||
     normalized.includes("session `agent:dev:live-codex-harness`") ||
     normalized.includes("current session is `agent:dev:live-codex-harness`") ||
-    normalized.includes("current session is agent:dev:live-codex-harness");
+    normalized.includes("current session is agent:dev:live-codex-harness") ||
+    ((normalized.includes("session context") || normalized.includes("context is at")) &&
+      normalized.includes("active task: `/codex status`"));
   const mentionsModel =
     normalized.includes("`openai/") ||
     normalized.includes(" openai/") ||
     normalized.includes("`codex/") ||
     normalized.includes(" codex/");
+  const isCurrentSessionStatus =
+    normalized.includes("current session status:") &&
+    normalized.includes("runtime: `openai codex`") &&
+    mentionsModel;
 
-  return mentionsOpenClawStatus && mentionsHarnessSession && mentionsModel;
+  return (
+    isCurrentSessionStatus || (mentionsOpenClawStatus && mentionsHarnessSession && mentionsModel)
+  );
 }
 
 export function isExpectedCodexModelsCommandText(text: string): boolean {

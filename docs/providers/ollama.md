@@ -59,7 +59,7 @@ Choose your preferred setup method and mode.
         - **Local only** — local models only
       </Step>
       <Step title="Select a model">
-        `Cloud only` prompts for `OLLAMA_API_KEY` and suggests hosted cloud defaults. `Cloud + Local` and `Local only` ask for an Ollama base URL, discover available models, and auto-pull the selected local model if it is not available yet. `Cloud + Local` also checks whether that Ollama host is signed in for cloud access.
+        `Cloud only` prompts for `OLLAMA_API_KEY` and suggests hosted cloud defaults. `Cloud + Local` and `Local only` ask for an Ollama base URL, discover available models, and auto-pull the selected local model if it is not available yet. When Ollama reports an installed `:latest` tag such as `gemma4:latest`, setup shows that installed model once instead of showing both `gemma4` and `gemma4:latest` or pulling the bare alias again. `Cloud + Local` also checks whether that Ollama host is signed in for cloud access.
       </Step>
       <Step title="Verify the model is available">
         ```bash
@@ -241,6 +241,44 @@ To make Ollama the default image-understanding model for inbound media, configur
 }
 ```
 
+Slow local vision models can need a longer image-understanding timeout than cloud models. They can also crash or stop when Ollama tries to allocate the full advertised vision context on constrained hardware. Set a capability timeout, and cap `num_ctx` on the model entry when you only need a normal image-description turn:
+
+```json5
+{
+  models: {
+    providers: {
+      ollama: {
+        models: [
+          {
+            id: "qwen2.5vl:7b",
+            name: "qwen2.5vl:7b",
+            input: ["text", "image"],
+            params: { num_ctx: 2048, keep_alive: "1m" },
+          },
+        ],
+      },
+    },
+  },
+  tools: {
+    media: {
+      image: {
+        timeoutSeconds: 180,
+        models: [{ provider: "ollama", model: "qwen2.5vl:7b", timeoutSeconds: 300 }],
+      },
+    },
+  },
+}
+```
+
+This timeout applies to inbound image understanding and to the explicit `image` tool the agent can call during a turn. Provider-level `models.providers.ollama.timeoutSeconds` still controls the underlying Ollama HTTP request guard for normal model calls.
+
+Live-verify the explicit image tool against local Ollama with:
+
+```bash
+OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_OLLAMA_IMAGE=1 \
+  pnpm test:live -- src/agents/tools/image-tool.ollama.live.test.ts
+```
+
 If you define `models.providers.ollama.models` manually, mark vision models with image input support:
 
 ```json5
@@ -377,6 +415,7 @@ Use these as starting points and replace model IDs with the exact names from `ol
                 input: ["text"],
                 params: {
                   num_ctx: 32768,
+                  thinking: false,
                   keep_alive: "15m",
                 },
               },
@@ -547,6 +586,7 @@ Use these as starting points and replace model IDs with the exact names from `ol
     ```
 
     Use `compat.supportsTools: false` only when the model or server reliably fails on tool schemas. It trades agent capability for stability.
+    `localModelLean` removes the browser, cron, and message tools from the agent surface, but it does not change Ollama's runtime context or thinking mode. Pair it with explicit `params.num_ctx` and `params.thinking: false` for small Qwen-style thinking models that loop or spend their response budget on hidden reasoning.
 
   </Accordion>
 </AccordionGroup>
@@ -720,7 +760,7 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
   <Accordion title="Context windows">
     For auto-discovered models, OpenClaw uses the context window reported by Ollama when available, including larger `PARAMETER num_ctx` values from custom Modelfiles. Otherwise it falls back to the default Ollama context window used by OpenClaw.
 
-    You can set provider-level `contextWindow`, `contextTokens`, and `maxTokens` defaults for every model under that Ollama provider, then override them per model when needed. To cap Ollama's per-request runtime context without rebuilding a Modelfile, set `params.num_ctx`; OpenClaw sends it as `options.num_ctx` for both native Ollama and the OpenAI-compatible Ollama adapter. Invalid, zero, negative, and non-finite values are ignored and fall back to `contextWindow`.
+    You can set provider-level `contextWindow`, `contextTokens`, and `maxTokens` defaults for every model under that Ollama provider, then override them per model when needed. `contextWindow` is OpenClaw's prompt and compaction budget. Native Ollama requests leave `options.num_ctx` unset unless you explicitly configure `params.num_ctx`, so Ollama can apply its own model, `OLLAMA_CONTEXT_LENGTH`, or VRAM-based default. To cap or force Ollama's per-request runtime context without rebuilding a Modelfile, set `params.num_ctx`; invalid, zero, negative, and non-finite values are ignored. The OpenAI-compatible Ollama adapter still injects `options.num_ctx` by default from the configured `params.num_ctx` or `contextWindow`; disable that with `injectNumCtxForOpenAICompat: false` if your upstream rejects `options`.
 
     Native Ollama model entries also accept the common Ollama runtime options under `params`, including `temperature`, `top_p`, `top_k`, `min_p`, `num_predict`, `stop`, `repeat_penalty`, `num_batch`, `num_thread`, and `use_mmap`. OpenClaw forwards only Ollama request keys, so OpenClaw runtime params such as `streaming` are not leaked to Ollama. Use `params.think` or `params.thinking` to send top-level Ollama `think`; `false` disables API-level thinking for Qwen-style thinking models.
 
@@ -807,6 +847,8 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
     | Default model | `nomic-embed-text`  |
     | Auto-pull     | Yes — the embedding model is pulled automatically if not present locally |
 
+    Query-time embeddings use retrieval prefixes for models that require or recommend them, including `nomic-embed-text`, `qwen3-embedding`, and `mxbai-embed-large`. Memory document batches stay raw so existing indexes do not need a format migration.
+
     To select Ollama as the memory search embedding provider:
 
     ```json5
@@ -855,6 +897,41 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
 ## Troubleshooting
 
 <AccordionGroup>
+  <Accordion title="WSL2 crash loop (repeated reboots)">
+    On WSL2 with NVIDIA/CUDA, the official Ollama Linux installer creates an `ollama.service` systemd unit with `Restart=always`. If that service autostarts and loads a GPU-backed model during WSL2 boot, Ollama can pin host memory while the model loads. Hyper-V memory reclaim cannot always reclaim those pinned pages, so Windows can terminate the WSL2 VM, systemd starts Ollama again, and the loop repeats.
+
+    Common evidence:
+
+    - repeated WSL2 reboots or terminations from the Windows side
+    - high CPU in `app.slice` or `ollama.service` shortly after WSL2 startup
+    - SIGTERM from systemd rather than a Linux OOM-killer event
+
+    OpenClaw logs a startup warning when it detects WSL2, `ollama.service` enabled with `Restart=always`, and visible CUDA markers.
+
+    Mitigation:
+
+    ```bash
+    sudo systemctl disable ollama
+    ```
+
+    Add this to `%USERPROFILE%\.wslconfig` on the Windows side, then run `wsl --shutdown`:
+
+    ```ini
+    [experimental]
+    autoMemoryReclaim=disabled
+    ```
+
+    Set a shorter keep-alive in the Ollama service environment, or start Ollama manually only when you need it:
+
+    ```bash
+    export OLLAMA_KEEP_ALIVE=5m
+    ollama serve
+    ```
+
+    See [ollama/ollama#11317](https://github.com/ollama/ollama/issues/11317).
+
+  </Accordion>
+
   <Accordion title="Ollama not detected">
     Make sure Ollama is running and that you set `OLLAMA_API_KEY` (or an auth profile), and that you did **not** define an explicit `models.providers.ollama` entry:
 
@@ -961,7 +1038,7 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
   </Accordion>
 
   <Accordion title="Large-context model is too slow or runs out of memory">
-    Many Ollama models advertise contexts that are larger than your hardware can run comfortably. Cap both OpenClaw's budget and Ollama's request context:
+    Many Ollama models advertise contexts that are larger than your hardware can run comfortably. Native Ollama uses Ollama's own runtime context default unless you set `params.num_ctx`. Cap both OpenClaw's budget and Ollama's request context when you want predictable first-token latency:
 
     ```json5
     {
@@ -974,7 +1051,7 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
               {
                 id: "qwen3.5:9b",
                 name: "qwen3.5:9b",
-                params: { num_ctx: 32768 },
+                params: { num_ctx: 32768, thinking: false },
               },
             ],
           },
@@ -983,7 +1060,7 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
     }
     ```
 
-    Lower `contextWindow` first if the prompt ingestion phase is slow. Lower `maxTokens` if generation runs too long.
+    Lower `contextWindow` first if OpenClaw is sending too much prompt. Lower `params.num_ctx` if Ollama is loading a runtime context that is too large for the machine. Lower `maxTokens` if generation runs too long.
 
   </Accordion>
 </AccordionGroup>

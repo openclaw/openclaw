@@ -158,6 +158,7 @@ jobs:
   live_and_e2e_release_checks:
     needs: [resolve_target]
     permissions:
+      actions: read
       contents: read
       packages: write
       pull-requests: read
@@ -227,7 +228,8 @@ jobs:
       workflow_ref: ${{ github.ref_name }}
       source: ref
       package_ref: ${{ needs.resolve_target.outputs.ref }}
-      suite_profile: package
+      suite_profile: custom
+      docker_lanes: bundled-channel-deps-compat plugins-offline
       telegram_mode: mock-openai
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -405,15 +407,20 @@ jobs:
           output_dir=".artifacts/qa-e2e/matrix-live-release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
 
-          pnpm openclaw qa matrix \
+          matrix_args=(
             --repo-root . \
             --output-dir "${output_dir}" \
             --provider-mode live-frontier \
             --model "${OPENCLAW_CI_OPENAI_MODEL}" \
             --alt-model "${OPENCLAW_CI_OPENAI_MODEL}" \
             --profile fast \
-            --fast \
-            --fail-fast
+            --fast
+          )
+          if pnpm openclaw qa matrix --help 2>/dev/null | grep -F -q -- "--fail-fast"; then
+            matrix_args+=(--fail-fast)
+          fi
+
+          pnpm openclaw qa matrix "${matrix_args[@]}"
 
       - name: Upload Matrix QA artifacts
         if: always()

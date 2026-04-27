@@ -232,7 +232,6 @@ branch, tag, or full commit SHA as `ref`:
 gh workflow run full-release-validation.yml \
   --ref main \
   -f ref=release/YYYY.M.D \
-  -f workflow_ref=main \
   -f provider=openai \
   -f mode=both
 ```
@@ -246,6 +245,10 @@ Package Acceptance with Telegram package QA, QA Lab parity, live Matrix, and
 live Telegram. A full run is only acceptable when the `Full Release Validation`
 summary shows `normal_ci` and `release_checks` as successful, and any optional
 `npm_telegram` child is either successful or intentionally skipped.
+Child workflows are dispatched from the trusted ref that runs `Full Release
+Validation`, normally `--ref main`, even when the target `ref` points at an
+older release branch or tag. There is no separate Full Release Validation
+workflow-ref input; choose the trusted harness by choosing the workflow run ref.
 
 Use these variants depending on release stage:
 
@@ -254,7 +257,6 @@ Use these variants depending on release stage:
 gh workflow run full-release-validation.yml \
   --ref main \
   -f ref=release/YYYY.M.D \
-  -f workflow_ref=main \
   -f provider=openai \
   -f mode=both
 
@@ -262,7 +264,6 @@ gh workflow run full-release-validation.yml \
 gh workflow run full-release-validation.yml \
   --ref main \
   -f ref=<40-char-sha> \
-  -f workflow_ref=main \
   -f provider=openai \
   -f mode=both
 
@@ -270,7 +271,6 @@ gh workflow run full-release-validation.yml \
 gh workflow run full-release-validation.yml \
   --ref main \
   -f ref=release/YYYY.M.D \
-  -f workflow_ref=main \
   -f provider=openai \
   -f mode=both \
   -f npm_telegram_package_spec=openclaw@YYYY.M.D-beta.N \
@@ -281,7 +281,9 @@ Do not use the full umbrella as the first rerun after a focused fix. If one box
 fails, use the failed child workflow, job, Docker lane, package profile, model
 provider, or QA lane for the next proof. Run the full umbrella again only when
 the fix changed shared release orchestration or made earlier all-box evidence
-stale.
+stale. The umbrella's final verifier re-checks the recorded child workflow run
+ids, so after a child workflow is rerun successfully, rerun only the failed
+`Verify full validation` parent job.
 
 ### Vitest
 
@@ -318,9 +320,14 @@ Release Docker coverage includes:
 
 - full install smoke with the slow Bun global install smoke enabled
 - repository E2E lanes
-- release-path Docker chunks: `core`, `package-update`, and
-  `plugins-integrations`
-- OpenWebUI coverage inside the `plugins-integrations` chunk when requested
+- release-path Docker chunks: `core`, `package-update`, `plugins-runtime`, and
+  `bundled-channels`
+- OpenWebUI coverage inside the `plugins-runtime` chunk when requested
+- split bundled-channel dependency lanes in their own `bundled-channels` chunk
+  instead of the serial all-in-one bundled-channel lane
+- split bundled plugin install/uninstall lanes
+  `bundled-plugin-install-uninstall-0` through
+  `bundled-plugin-install-uninstall-7`
 - live/E2E provider suites and Docker live model coverage when release checks
   include live suites
 
@@ -370,14 +377,25 @@ Supported candidate sources:
 - `source=artifact`: reuse a `.tgz` uploaded by another GitHub Actions run
 
 `OpenClaw Release Checks` runs Package Acceptance with `source=ref`,
-`package_ref=<release-ref>`, `suite_profile=package`, and
-`telegram_mode=mock-openai`. That profile covers install, update, plugin
-package contracts through offline plugin fixtures, and Telegram package QA
-against the same resolved tarball. It is the GitHub-native replacement for most
-of the package/update coverage that previously required Parallels. Cross-OS
-release checks still matter for OS-specific onboarding, installer, and platform
-behavior, but package/update product validation should prefer Package
-Acceptance.
+`package_ref=<release-ref>`, `suite_profile=custom`,
+`docker_lanes=bundled-channel-deps-compat plugins-offline`, and
+`telegram_mode=mock-openai`. The release-path Docker chunks cover the
+overlapping install, update, and plugin-update lanes; Package Acceptance keeps
+artifact-native bundled-channel compat, offline plugin fixtures, and Telegram
+package QA against the same resolved tarball. It is the GitHub-native
+replacement for most of the package/update coverage that previously required
+Parallels. Cross-OS release checks still matter for OS-specific onboarding,
+installer, and platform behavior, but package/update product validation should
+prefer Package Acceptance.
+
+Legacy package-acceptance leniency is intentionally time boxed. Packages through
+`2026.4.25` may use the compatibility path for metadata gaps already published
+to npm: private QA inventory entries missing from the tarball, missing
+`gateway install --wrapper`, missing patch files in the tarball-derived git
+fixture, missing persisted `update.channel`, legacy plugin install-record
+locations, missing marketplace install-record persistence, and config metadata
+migration during `plugins update`. Packages after `2026.4.25` must satisfy the
+modern package contracts; those same gaps fail release validation.
 
 Use broader Package Acceptance profiles when the release question is about an
 actual installable package:

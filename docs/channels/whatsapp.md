@@ -526,6 +526,13 @@ Behavior notes:
 
   </Accordion>
 
+  <Accordion title="QR login times out behind a proxy">
+    Symptom: `openclaw channels login --channel whatsapp` fails before showing a usable QR code with `status=408 Request Time-out` or a TLS socket disconnect.
+
+    WhatsApp Web login uses the gateway host's standard proxy environment (`HTTPS_PROXY`, `HTTP_PROXY`, lowercase variants, and `NO_PROXY`). Verify the gateway process inherits the proxy env and that `NO_PROXY` does not match `mmg.whatsapp.net`.
+
+  </Accordion>
+
   <Accordion title="No active listener when sending">
     Outbound sends fail fast when no active gateway listener exists for the target account.
 

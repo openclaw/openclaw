@@ -247,12 +247,18 @@ function resolveOllamaModelOptions(model: ProviderRuntimeModel): Record<string, 
   const params = model.params;
   if (params && typeof params === "object" && !Array.isArray(params)) {
     for (const [key, value] of Object.entries(params)) {
+      if (key === "num_ctx") {
+        continue;
+      }
       if (value !== undefined && OLLAMA_OPTION_PARAM_KEYS.has(key)) {
         options[key] = value;
       }
     }
   }
-  options.num_ctx = resolveOllamaNumCtx(model);
+  const numCtx = resolveOllamaConfiguredNumCtx(model);
+  if (numCtx !== undefined) {
+    options.num_ctx = numCtx;
+  }
   return options;
 }
 

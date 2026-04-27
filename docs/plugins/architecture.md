@@ -145,6 +145,26 @@ The important design boundary:
 
 That split lets OpenClaw validate config, explain missing/disabled plugins, and build UI/schema hints before the full runtime is active.
 
+### Plugin metadata snapshot and lookup table
+
+Gateway startup builds one `PluginMetadataSnapshot` for the current config snapshot. The snapshot is metadata-only: it stores the installed plugin index, manifest registry, manifest diagnostics, owner maps, a plugin id normalizer, and manifest records. It does not hold loaded plugin modules, provider SDKs, package contents, or runtime exports.
+
+Plugin-aware config validation, startup auto-enable, and Gateway plugin bootstrap consume that snapshot instead of rebuilding manifest/index metadata independently. `PluginLookUpTable` is derived from the same snapshot and adds the startup plugin plan for the current runtime config.
+
+The snapshot and lookup table keep repeated startup decisions on the fast path:
+
+- channel ownership
+- deferred channel startup
+- startup plugin ids
+- provider and CLI backend ownership
+- setup provider, command alias, model catalog provider, and manifest contract ownership
+- plugin config schema and channel config schema validation
+- startup auto-enable decisions
+
+The safety boundary is snapshot replacement, not mutation. Rebuild the snapshot when config, plugin inventory, install records, or persisted index policy changes. Do not treat it as a broad mutable global registry, and do not keep unbounded historical snapshots. Runtime plugin loading remains separate from metadata snapshots so stale runtime state cannot be hidden behind a metadata cache.
+
+Some cold-path callers still reconstruct manifest registries directly from the persisted installed plugin index instead of receiving a Gateway `PluginLookUpTable`. That fallback path keeps a small bounded in-memory cache keyed by the installed index, request shape, config policy, runtime roots, and manifest/package file signatures. It is a fallback safety net for repeated index reconstruction, not the preferred Gateway hot path. Prefer passing the current lookup table or an explicit manifest registry through runtime flows when a caller already has one.
+
 ### Activation planning
 
 Activation planning is part of the control plane. Callers can ask which plugins are relevant to a concrete command, provider, channel, route, agent harness, or capability before loading broader runtime registries.
@@ -193,6 +213,8 @@ This is why embedded-runner routing changes are still plugin work: the runner is
 For channel-owned execution helpers, bundled plugins should keep the execution runtime inside their own extension modules. Core no longer owns the Discord, Slack, Telegram, or WhatsApp message-action runtimes under `src/agents/tools`. We do not publish separate `plugin-sdk/*-action-runtime` subpaths, and bundled plugins should import their own local runtime code directly from their extension-owned modules.
 
 The same boundary applies to provider-named SDK seams in general: core should not import channel-specific convenience barrels for Slack, Discord, Signal, WhatsApp, or similar extensions. If core needs a behavior, either consume the bundled plugin's own `api.ts` / `runtime-api.ts` barrel or promote the need into a narrow generic capability in the shared SDK.
+
+Bundled plugins follow the same rule. A bundled plugin's `runtime-api.ts` should not re-export its own branded `openclaw/plugin-sdk/<plugin-id>` facade. Those branded facades remain compatibility shims for external plugins and older consumers, but bundled plugins should use local exports plus narrow generic SDK subpaths such as `openclaw/plugin-sdk/channel-policy`, `openclaw/plugin-sdk/runtime-store`, or `openclaw/plugin-sdk/webhook-ingress`. New code should not add plugin-id-specific SDK facades unless the compatibility boundary for an existing external ecosystem requires it.
 
 For polls specifically, there are two execution paths:
 
@@ -449,7 +471,7 @@ Keep capability registration public. Trim non-contract helper exports:
 - vendor-specific convenience helpers
 - setup/onboarding helpers that are implementation details
 
-Some bundled-plugin helper subpaths still remain in the generated SDK export map for compatibility and bundled-plugin maintenance. Current examples include `plugin-sdk/feishu`, `plugin-sdk/feishu-setup`, `plugin-sdk/zalo`, `plugin-sdk/zalo-setup`, and several `plugin-sdk/matrix*` seams. Treat those as reserved implementation-detail exports, not as the recommended SDK pattern for new third-party plugins.
+Some bundled-plugin helper subpaths still remain in the generated SDK export map for compatibility and bundled-plugin maintenance. Current examples include `plugin-sdk/feishu`, `plugin-sdk/feishu-setup`, `plugin-sdk/zalo`, `plugin-sdk/zalo-setup`, `plugin-sdk/channel-config-schema-legacy`, and several `plugin-sdk/matrix*` seams. Treat those as deprecated reserved exports, not as the recommended SDK pattern for new third-party plugins.
 
 ## Internals and reference
 

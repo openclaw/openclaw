@@ -85,11 +85,16 @@ install method aligned:
 The Gateway core auto-updater (when enabled via config) reuses this same update path.
 
 For package-manager installs, `openclaw update` resolves the target package
-version before invoking the package manager. Even when the installed version
+version before invoking the package manager. npm global installs use a staged
+install: OpenClaw installs the new package into a temporary npm prefix, verifies
+the packaged `dist` inventory there, then swaps that clean package tree into the
+real global prefix. If verification fails, post-update doctor, plugin sync, and
+restart work do not run from the suspect tree. Even when the installed version
 already matches the target, the command refreshes the global package install,
-then runs plugin sync, completion refresh, and restart work. This keeps packaged
-sidecars and channel-owned plugin records aligned with the installed OpenClaw
-build.
+then runs plugin sync, a core-command completion refresh, and restart work. This
+keeps packaged sidecars and channel-owned plugin records aligned with the
+installed OpenClaw build while leaving full plugin-command completion rebuilds to
+explicit `openclaw completion --write-state` runs.
 
 ## Git checkout flow
 
