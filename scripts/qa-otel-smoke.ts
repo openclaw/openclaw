@@ -93,10 +93,34 @@ const DISALLOWED_ATTRIBUTE_KEYS = new Set([
   "openclaw.toolCallId",
 ]);
 
-const require = createRequire(import.meta.url);
-const otlpRoot = require("@opentelemetry/otlp-transformer/build/src/generated/root.js") as OtlpRoot;
-const traceRequestDecoder =
-  otlpRoot.opentelemetry.proto.collector.trace.v1.ExportTraceServiceRequest;
+let traceRequestDecoder:
+  | OtlpRoot["opentelemetry"]["proto"]["collector"]["trace"]["v1"]["ExportTraceServiceRequest"]
+  | undefined;
+
+function requireOtlpRoot(): OtlpRoot {
+  const candidates = [
+    path.join(process.cwd(), "dist", "extensions", "diagnostics-otel", "package.json"),
+    path.join(process.cwd(), "extensions", "diagnostics-otel", "package.json"),
+    import.meta.url,
+  ];
+  const failures: string[] = [];
+  for (const candidate of candidates) {
+    try {
+      return createRequire(candidate)(
+        "@opentelemetry/otlp-transformer/build/src/generated/root.js",
+      ) as OtlpRoot;
+    } catch (error) {
+      failures.push(`${candidate}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  throw new Error(`failed to load OTLP transformer decoder:\n${failures.join("\n")}`);
+}
+
+function getTraceRequestDecoder() {
+  traceRequestDecoder ??=
+    requireOtlpRoot().opentelemetry.proto.collector.trace.v1.ExportTraceServiceRequest;
+  return traceRequestDecoder;
+}
 
 function usage(): string {
   return `Usage: pnpm qa:otel:smoke [--output-dir <path>] [--provider-mode <mode>] [--scenario <id>] [--model <ref>] [--alt-model <ref>]
@@ -197,7 +221,7 @@ function spanAttributes(span: OtlpSpan): Record<string, string | number | boolea
 }
 
 function decodeTraceRequest(body: Buffer): CapturedSpan[] {
-  const decoded = traceRequestDecoder.decode(body);
+  const decoded = getTraceRequestDecoder().decode(body);
   const spans: CapturedSpan[] = [];
   for (const resourceSpans of decoded.resourceSpans ?? []) {
     for (const scopeSpans of resourceSpans.scopeSpans ?? []) {

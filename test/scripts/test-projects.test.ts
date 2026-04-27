@@ -1,4 +1,5 @@
 import path from "node:path";
+import fg from "fast-glob";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS,
@@ -14,6 +15,87 @@ import {
   resolveParallelFullSuiteConcurrency,
   shouldRetryVitestNoOutputTimeout,
 } from "../../scripts/test-projects.test-support.mjs";
+import { fullSuiteVitestShards } from "../vitest/vitest.test-shards.mjs";
+
+const normalizeRepoPath = (value: string) => value.replaceAll("\\", "/");
+
+type VitestTestConfig = {
+  dir?: string;
+  exclude?: string[];
+  include?: string[];
+};
+
+type VitestConfig = {
+  test?: VitestTestConfig;
+};
+
+type VitestConfigFactory = (env?: Record<string, string | undefined>) => VitestConfig;
+
+function isVitestConfigFactory(value: unknown): value is VitestConfigFactory {
+  return typeof value === "function";
+}
+
+function findVitestConfigFactory(mod: Record<string, unknown>): VitestConfigFactory | null {
+  for (const [name, value] of Object.entries(mod)) {
+    if (
+      name !== "default" &&
+      /^create.*VitestConfig$/u.test(name) &&
+      isVitestConfigFactory(value)
+    ) {
+      return value;
+    }
+  }
+  return null;
+}
+
+async function loadRawVitestConfig(configPath: string): Promise<VitestConfig> {
+  const previousArgv = process.argv;
+  const previousIncludeFile = process.env.OPENCLAW_VITEST_INCLUDE_FILE;
+  process.argv = [previousArgv[0] ?? "node", previousArgv[1] ?? "vitest"];
+  delete process.env.OPENCLAW_VITEST_INCLUDE_FILE;
+  try {
+    const mod = (await import(path.resolve(process.cwd(), configPath))) as Record<string, unknown>;
+    return findVitestConfigFactory(mod)?.(process.env) ?? ((mod.default ?? {}) as VitestConfig);
+  } finally {
+    process.argv = previousArgv;
+    if (previousIncludeFile === undefined) {
+      delete process.env.OPENCLAW_VITEST_INCLUDE_FILE;
+    } else {
+      process.env.OPENCLAW_VITEST_INCLUDE_FILE = previousIncludeFile;
+    }
+  }
+}
+
+async function listMatchedTestFilesForConfig(configPath: string): Promise<string[]> {
+  const testConfig = (await loadRawVitestConfig(configPath)).test ?? {};
+  const dir = testConfig.dir ? path.resolve(process.cwd(), testConfig.dir) : process.cwd();
+  const include = testConfig.include ?? [];
+  const exclude = (testConfig.exclude ?? []).map((pattern) =>
+    path.isAbsolute(pattern)
+      ? normalizeRepoPath(path.relative(dir, pattern))
+      : normalizeRepoPath(pattern),
+  );
+  return fg
+    .sync(include, {
+      absolute: false,
+      cwd: dir,
+      dot: false,
+      ignore: exclude,
+    })
+    .map((file) => normalizeRepoPath(path.relative(process.cwd(), path.resolve(dir, file))))
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+async function listFullSuiteTestFileMatches(): Promise<Map<string, string[]>> {
+  const configs = [...new Set(fullSuiteVitestShards.flatMap((shard) => shard.projects))];
+  const matches = new Map<string, string[]>();
+  for (const config of configs) {
+    for (const file of await listMatchedTestFilesForConfig(config)) {
+      matches.set(file, [...(matches.get(file) ?? []), config]);
+    }
+  }
+  return matches;
+}
 
 describe("scripts/test-projects changed-target routing", () => {
   it("maps changed source files into scoped lane targets", () => {
@@ -707,6 +789,39 @@ describe("scripts/test-projects local heavy-check lock", () => {
 });
 
 describe("scripts/test-projects full-suite sharding", () => {
+  it("covers each normal full-suite test file exactly once", async () => {
+    const matches = await listFullSuiteTestFileMatches();
+    const e2eNamedIntegrationTests = new Set([
+      "src/gateway/gateway.test.ts",
+      "src/gateway/server.startup-matrix-migration.integration.test.ts",
+      "src/gateway/sessions-history-http.test.ts",
+    ]);
+    const normalTestFiles = fg
+      .sync(["**/*.{test,spec}.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"], {
+        cwd: process.cwd(),
+        dot: false,
+        ignore: ["**/.*/**", "**/dist/**", "**/node_modules/**", "**/vendor/**"],
+      })
+      .map(normalizeRepoPath)
+      .filter(
+        (file) =>
+          !file.includes(".live.test.") &&
+          !file.includes(".e2e.test.") &&
+          !file.startsWith("test/fixtures/") &&
+          !e2eNamedIntegrationTests.has(file),
+      )
+      .toSorted((left, right) => left.localeCompare(right));
+
+    const missing = normalTestFiles.filter((file) => !matches.has(file));
+    const duplicated = [...matches.entries()]
+      .filter(([, configs]) => configs.length > 1)
+      .map(([file, configs]) => `${file}: ${configs.join(", ")}`)
+      .toSorted((left, right) => left.localeCompare(right));
+
+    expect(missing).toEqual([]);
+    expect(duplicated).toEqual([]);
+  });
+
   it("uses the large host-aware local profile on roomy local hosts", () => {
     expect(
       resolveParallelFullSuiteConcurrency(
@@ -965,6 +1080,7 @@ describe("scripts/test-projects full-suite sharding", () => {
       "test/vitest/vitest.extension-browser.config.ts",
       "test/vitest/vitest.extension-qa.config.ts",
       "test/vitest/vitest.extension-media.config.ts",
+      "test/vitest/vitest.extensions.config.ts",
       "test/vitest/vitest.extension-misc.config.ts",
     ]);
     expect(plans).toEqual(

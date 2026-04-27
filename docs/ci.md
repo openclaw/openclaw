@@ -6,7 +6,7 @@ read_when:
   - You are debugging failing GitHub Actions checks
 ---
 
-The CI runs on every push to `main` and every pull request. It uses smart scoping to skip expensive jobs when only unrelated areas changed.
+The CI runs on every push to `main` and every pull request. It uses smart scoping to skip expensive jobs when only unrelated areas changed. Manual `workflow_dispatch` runs intentionally bypass smart scoping and fan out the full CI graph for release candidates or broad validation.
 
 QA Lab has dedicated CI lanes outside the main smart-scoped workflow. The
 `Parity gate` workflow runs on matching PR changes and manual dispatch; it
@@ -79,6 +79,19 @@ gh workflow run duplicate-after-merge.yml \
 | `android`                        | Android unit tests for both flavors plus one debug APK build                                 | Android-relevant changes             |
 | `test-performance-agent`         | Daily Codex slow-test optimization after trusted activity                                    | Main CI success or manual dispatch   |
 
+Manual CI dispatches run the same job graph as normal CI but force every
+scoped lane on: Linux Node shards, bundled-plugin shards, channel contracts,
+`check`, `check-additional`, build smoke, docs checks, Python skills, Windows,
+macOS, Android, and Control UI i18n. They do not run the PR-only
+`extension-fast` lane because the full bundled-plugin shard matrix already
+covers bundled-plugin tests. Manual runs use a unique concurrency group so a
+release-candidate full suite is not cancelled by another push or PR run on the
+same ref.
+
+```bash
+gh workflow run ci.yml --ref release/YYYY.M.D
+```
+
 ## Fail-fast order
 
 Jobs are ordered so cheap checks fail before expensive ones run:
@@ -89,6 +102,8 @@ Jobs are ordered so cheap checks fail before expensive ones run:
 4. Heavier platform and runtime lanes fan out after that: `checks-fast-core`, `checks-fast-contracts-channels`, `checks-node-extensions`, `checks-node-core-test`, PR-only `extension-fast`, `checks`, `checks-windows`, `macos-node`, `macos-swift`, and `android`.
 
 Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests in `src/scripts/ci-changed-scope.test.ts`.
+Manual dispatch skips changed-scope detection and makes the preflight manifest
+act as if every scoped area changed.
 CI workflow edits validate the Node CI graph plus workflow linting, but do not force Windows, Android, or macOS native builds by themselves; those platform lanes stay scoped to platform source changes.
 CI routing-only edits, selected cheap core-test fixture edits, and narrow plugin contract helper/test-routing edits use a fast Node-only manifest path: preflight, security, and a single `checks-fast-core` task. That path avoids build artifacts, Node 22 compatibility, channel contracts, full core shards, bundled-plugin shards, and additional guard matrices when the changed files are limited to the routing or helper surfaces that the fast task exercises directly.
 Windows Node checks are scoped to Windows-specific process/path wrappers, npm/pnpm/UI runner helpers, package manager config, and the CI workflow surfaces that execute that lane; unrelated source, plugin, install-smoke, and test-only changes stay on the Linux Node lanes so they do not reserve a 16-vCPU Windows worker for coverage that is already exercised by the normal test shards.
@@ -103,7 +118,7 @@ Android CI runs both `testPlayDebugUnitTest` and `testThirdPartyDebugUnitTest`, 
 `extension-fast` is PR-only because push runs already execute the full bundled plugin shards. That keeps changed-plugin feedback for reviews without reserving an extra Blacksmith worker on `main` for coverage already present in `checks-node-extensions`.
 
 GitHub may mark superseded jobs as `cancelled` when a newer push lands on the same PR or `main` ref. Treat that as CI noise unless the newest run for the same ref is also failing. Aggregate shard checks use `!cancelled() && always()` so they still report normal shard failures but do not queue after the whole workflow has already been superseded.
-The CI concurrency key is versioned (`CI-v7-*`) so a GitHub-side zombie in an old queue group cannot indefinitely block newer main runs.
+The automatic CI concurrency key is versioned (`CI-v7-*`) so a GitHub-side zombie in an old queue group cannot indefinitely block newer main runs. Manual full-suite runs use `CI-manual-v1-*` and do not cancel in-progress runs.
 
 ## Runners
 

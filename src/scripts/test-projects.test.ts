@@ -904,7 +904,7 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it("routes extension-facing core contract changes and supports broad extension opt-in", () => {
+  it("keeps extension-facing core contract changes focused by default and supports broad opt-in", () => {
     const changedPaths = ["src/plugin-sdk/core.ts"];
     const plans = buildVitestRunPlans(["--changed=origin/main"], process.cwd(), () => changedPaths);
     const targetArgs = resolveChangedTargetArgs(
@@ -925,12 +925,7 @@ describe("test-projects args", () => {
       includePatterns: ["src/plugin-sdk/core.test.ts"],
       watchMode: false,
     });
-    expect(plans.map((plan) => plan.config)).not.toContain(
-      "test/vitest/vitest.extension-discord.config.ts",
-    );
-    expect(plans.map((plan) => plan.config)).not.toContain(
-      "test/vitest/vitest.extension-providers.config.ts",
-    );
+    expect(plans).toHaveLength(1);
   });
 
   it("keeps extension production changes on the owning extension lane", () => {

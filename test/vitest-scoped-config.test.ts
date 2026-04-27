@@ -731,11 +731,10 @@ describe("scoped vitest configs", () => {
 
   it("keeps tooling tests in their own lane", () => {
     expect(defaultToolingConfig.test?.include).toEqual(
-      expect.arrayContaining([
-        "test/**/*.test.ts",
-        "src/scripts/**/*.test.ts",
-        "src/config/doc-baseline.integration.test.ts",
-      ]),
+      expect.arrayContaining(["test/**/*.test.ts", "src/scripts/**/*.test.ts"]),
+    );
+    expect(defaultToolingConfig.test?.include).not.toContain(
+      "src/config/doc-baseline.integration.test.ts",
     );
   });
 
@@ -771,8 +770,9 @@ describe("scoped vitest configs", () => {
   });
 
   it("normalizes ui include patterns relative to the scoped dir", () => {
-    expect(defaultUiConfig.test?.dir).toBe(path.join(process.cwd(), "ui", "src", "ui"));
-    expect(defaultUiConfig.test?.include).toEqual(["**/*.test.ts"]);
+    expect(defaultUiConfig.test?.dir).toBe(process.cwd());
+    expect(defaultUiConfig.test?.include).toEqual(["ui/src/**/*.test.ts"]);
+    expect(defaultUiConfig.test?.exclude).toContain("ui/src/ui/app-chat.test.ts");
   });
 
   it("normalizes utils include patterns relative to the scoped dir", () => {

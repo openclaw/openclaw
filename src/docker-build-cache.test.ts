@@ -88,18 +88,17 @@ describe("docker build cache layout", () => {
     }
   });
 
-  it("installs the prepared package tarball in the e2e functional image", async () => {
+  it("keeps the shared e2e image on the packaged tarball install path", async () => {
     const dockerfile = await readRepoFile("scripts/e2e/Dockerfile");
 
     expect(dockerfile).not.toContain("pnpm install --frozen-lockfile");
+    expect(dockerfile).not.toContain("COPY . .");
     expect(dockerfile).toMatch(
       /^COPY --from=openclaw_package --chown=appuser:appuser openclaw-current\.tgz \/tmp\/openclaw-current\.tgz$/m,
     );
-    expect(dockerfile).toMatch(
-      /^RUN npm install -g --prefix \/tmp\/openclaw-prefix \/tmp\/openclaw-current\.tgz --no-fund --no-audit \\$/m,
+    expect(dockerfile).toContain(
+      "npm install -g --prefix /tmp/openclaw-prefix /tmp/openclaw-current.tgz --no-fund --no-audit",
     );
-    expect(dockerfile).toContain("cp -a /tmp/openclaw-prefix/lib/node_modules/openclaw/. /app/");
-    expect(dockerfile).toContain('ln -sf /app/openclaw.mjs "$HOME/.local/bin/openclaw"');
   });
 
   it("copies manifests before install in the qr-import image", async () => {

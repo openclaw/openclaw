@@ -49,6 +49,12 @@ OpenClaw has three public release lanes:
 - Run `pnpm build && pnpm ui:build` before `pnpm release:check` so the expected
   `dist/*` release artifacts and Control UI bundle exist for the pack
   validation step
+- Run the manual `CI` workflow before release approval when you need full normal
+  CI coverage for the release candidate. Manual CI dispatches bypass changed
+  scoping and force the Linux Node shards, bundled-plugin shards, channel
+  contracts, `check`, `check-additional`, build smoke, docs checks, Python
+  skills, Windows, macOS, Android, and Control UI i18n lanes.
+  Example: `gh workflow run ci.yml --ref release/YYYY.M.D`
 - Run `pnpm qa:otel:smoke` when validating release telemetry. It exercises
   QA-lab through a local OTLP/HTTP receiver and verifies the exported trace
   span names, bounded attributes, and content/identifier redaction without
@@ -182,18 +188,20 @@ When cutting a stable npm release:
      SHA for a validation-only dry run of the preflight workflow
 2. Choose `npm_dist_tag=beta` for the normal beta-first flow, or `latest` only
    when you intentionally want a direct stable publish
-3. Run `OpenClaw Release Checks` separately with the same tag or the
+3. Run the manual `CI` workflow on the release ref when you want full normal CI
+   coverage instead of smart-scoped merge coverage
+4. Run `OpenClaw Release Checks` separately with the same tag or the
    full current workflow-branch commit SHA when you want live prompt cache,
    QA Lab parity, Matrix, and Telegram coverage
    - This is separate on purpose so live coverage stays available without
      recoupling long-running or flaky checks to the publish workflow
-4. Save the successful `preflight_run_id`
-5. Run `OpenClaw NPM Release` again with `preflight_only=false`, the same
+5. Save the successful `preflight_run_id`
+6. Run `OpenClaw NPM Release` again with `preflight_only=false`, the same
    `tag`, the same `npm_dist_tag`, and the saved `preflight_run_id`
-6. If the release landed on `beta`, use the private
+7. If the release landed on `beta`, use the private
    `openclaw/releases-private/.github/workflows/openclaw-npm-dist-tags.yml`
    workflow to promote that stable version from `beta` to `latest`
-7. If the release intentionally published directly to `latest` and `beta`
+8. If the release intentionally published directly to `latest` and `beta`
    should follow the same stable build immediately, use that same private
    workflow to point both dist-tags at the stable version, or let its scheduled
    self-healing sync move `beta` later
