@@ -43,6 +43,7 @@ export {
   defaultToolStreamExtraParams,
   hasCopilotVisionInput,
   isAnthropicBedrockModel,
+  isOpenAICompatibleThinkingEnabled,
   type ProviderStreamWrapperFactory,
   resolveAnthropicPayloadPolicy,
   resolveMoonshotThinkingType,

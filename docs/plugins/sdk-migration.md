@@ -90,6 +90,44 @@ releases.
 ## How to migrate
 
 <Steps>
+  <Step title="Migrate runtime config load/write helpers">
+    Bundled plugins should stop calling
+    `api.runtime.config.loadConfig()` and
+    `api.runtime.config.writeConfigFile(...)` directly. Prefer config that was
+    already passed into the active call path. Long-lived handlers that need the
+    current process snapshot can use `api.runtime.config.current()`. Long-lived
+    agent tools should use the tool context's `ctx.getRuntimeConfig()` inside
+    `execute` so a tool created before a config write still sees the refreshed
+    runtime config.
+
+    Config writes must go through the transactional helpers and choose an
+    after-write policy:
+
+    ```typescript
+    await api.runtime.config.mutateConfigFile({
+      afterWrite: { mode: "auto" },
+      mutate(draft) {
+        draft.plugins ??= {};
+      },
+    });
+    ```
+
+    Use `afterWrite: { mode: "restart", reason: "..." }` when the caller knows
+    the change requires a clean gateway restart, and
+    `afterWrite: { mode: "none", reason: "..." }` only when the caller owns the
+    follow-up and deliberately wants to suppress the reload planner.
+    Mutation results include a typed `followUp` summary for tests and logging;
+    the gateway remains responsible for applying or scheduling the restart.
+    `loadConfig` and `writeConfigFile` remain as deprecated compatibility
+    helpers for external plugins during the migration window and warn once when
+    called. Bundled plugins and repo runtime code are protected by scanner
+    guardrails in `pnpm check:deprecated-internal-config-api`: new production
+    plugin usage fails outright, direct config writes fail, gateway server
+    methods must use the request runtime snapshot, and long-lived runtime
+    modules have zero allowed ambient `loadConfig()` calls.
+
+  </Step>
+
   <Step title="Migrate Pi tool-result extensions to middleware">
     Bundled plugins must replace Pi-only
     `api.registerEmbeddedExtensionFactory(...)` tool-result handlers with

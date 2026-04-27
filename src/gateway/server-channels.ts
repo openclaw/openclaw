@@ -118,7 +118,7 @@ function applyDescribedAccountFields(
 }
 
 type ChannelManagerOptions = {
-  loadConfig: () => OpenClawConfig;
+  getRuntimeConfig: () => OpenClawConfig;
   channelLogs: Record<ChannelId, SubsystemLogger>;
   channelRuntimeEnvs: Record<ChannelId, RuntimeEnv>;
   /**
@@ -141,7 +141,7 @@ type ChannelManagerOptions = {
    * import { createPluginRuntime } from "../plugins/runtime/index.js";
    *
    * const channelManager = createChannelManager({
-   *   loadConfig,
+   *   getRuntimeConfig,
    *   channelLogs,
    *   channelRuntimeEnvs,
    *   channelRuntime: createPluginRuntime().channel,
@@ -181,8 +181,13 @@ export type ChannelManager = {
 
 // Channel docking: lifecycle hooks (`plugin.gateway`) flow through this manager.
 export function createChannelManager(opts: ChannelManagerOptions): ChannelManager {
-  const { loadConfig, channelLogs, channelRuntimeEnvs, channelRuntime, resolveChannelRuntime } =
-    opts;
+  const {
+    getRuntimeConfig,
+    channelLogs,
+    channelRuntimeEnvs,
+    channelRuntime,
+    resolveChannelRuntime,
+  } = opts;
 
   const channelStores = new Map<ChannelId, ChannelRuntimeStore>();
   // Tracks restart attempts per channel:account. Reset on successful start.
@@ -220,7 +225,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   };
 
   const isHealthMonitorEnabled = (channelId: ChannelId, accountId: string): boolean => {
-    const cfg = loadConfig();
+    const cfg = getRuntimeConfig();
     const channelConfig = cfg.channels?.[channelId] as ChannelHealthMonitorConfig | undefined;
     const accountOverride = resolveAccountHealthMonitorOverride(channelConfig, accountId);
     const channelOverride = channelConfig?.healthMonitor?.enabled;
@@ -314,7 +319,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       return;
     }
     const { preserveRestartAttempts = false, preserveManualStop = false } = opts;
-    const cfg = loadConfig();
+    const cfg = getRuntimeConfig();
     resetDirectoryCache({ channel: channelId, accountId });
     const store = getStore(channelId);
     const accountIds = accountId ? [accountId] : plugin.config.listAccountIds(cfg);
@@ -557,7 +562,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     if (!plugin?.gateway?.stopAccount && store.aborts.size === 0 && store.tasks.size === 0) {
       return;
     }
-    const cfg = loadConfig();
+    const cfg = getRuntimeConfig();
     const knownIds = new Set<string>([
       ...store.aborts.keys(),
       ...store.starting.keys(),
@@ -647,7 +652,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     if (!plugin) {
       return;
     }
-    const cfg = loadConfig();
+    const cfg = getRuntimeConfig();
     const resolvedId =
       accountId ??
       resolveChannelDefaultAccountId({
@@ -668,7 +673,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   };
 
   const getRuntimeSnapshot = (): ChannelRuntimeSnapshot => {
-    const cfg = loadConfig();
+    const cfg = getRuntimeConfig();
     const channels: ChannelRuntimeSnapshot["channels"] = {};
     const channelAccounts: ChannelRuntimeSnapshot["channelAccounts"] = {};
     for (const plugin of listChannelPlugins()) {

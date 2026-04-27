@@ -1,6 +1,7 @@
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import type {
   RealtimeVoiceBridge,
+  RealtimeVoiceAudioFormat,
   RealtimeVoiceCloseReason,
   RealtimeVoiceProviderConfig,
   RealtimeVoiceRole,
@@ -11,7 +12,7 @@ import type {
 
 export type RealtimeVoiceAudioSink = {
   isOpen?: () => boolean;
-  sendAudio: (muLaw: Buffer) => void;
+  sendAudio: (audio: Buffer) => void;
   clearAudio?: () => void;
   sendMark?: (markName: string) => void;
 };
@@ -33,6 +34,7 @@ export type RealtimeVoiceBridgeSession = {
 export type RealtimeVoiceBridgeSessionParams = {
   provider: RealtimeVoiceProviderPlugin;
   providerConfig: RealtimeVoiceProviderConfig;
+  audioFormat?: RealtimeVoiceAudioFormat;
   audioSink: RealtimeVoiceAudioSink;
   instructions?: string;
   initialGreetingInstructions?: string;
@@ -73,11 +75,12 @@ export function createRealtimeVoiceBridgeSession(
   const canSendAudio = () => params.audioSink.isOpen?.() ?? true;
   bridge = params.provider.createBridge({
     providerConfig: params.providerConfig,
+    audioFormat: params.audioFormat,
     instructions: params.instructions,
     tools: params.tools,
-    onAudio: (muLaw) => {
+    onAudio: (audio) => {
       if (canSendAudio()) {
-        params.audioSink.sendAudio(muLaw);
+        params.audioSink.sendAudio(audio);
       }
     },
     onClearAudio: () => {

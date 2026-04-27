@@ -49,7 +49,7 @@ import {
   emitSessionLifecycleEvent,
   forkSessionFromParent,
   getGlobalHookRunner,
-  loadConfig,
+  getRuntimeConfig,
   mergeSessionEntry,
   mergeDeliveryContext,
   normalizeDeliveryContext,
@@ -91,7 +91,7 @@ type SubagentSpawnDeps = {
   callGateway: typeof callGateway;
   forkSessionFromParent: typeof forkSessionFromParent;
   getGlobalHookRunner: () => SubagentLifecycleHookRunner | null;
-  loadConfig: typeof loadConfig;
+  getRuntimeConfig: typeof getRuntimeConfig;
   resolveContextEngine: typeof resolveContextEngine;
   resolveParentForkMaxTokens: typeof resolveParentForkMaxTokens;
   updateSessionStore: typeof updateSessionStore;
@@ -101,7 +101,7 @@ const defaultSubagentSpawnDeps: SubagentSpawnDeps = {
   callGateway,
   forkSessionFromParent,
   getGlobalHookRunner,
-  loadConfig,
+  getRuntimeConfig,
   resolveContextEngine,
   resolveParentForkMaxTokens,
   updateSessionStore,
@@ -251,7 +251,7 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
 }
 
 function loadSubagentConfig() {
-  return subagentSpawnDeps.loadConfig();
+  return subagentSpawnDeps.getRuntimeConfig();
 }
 
 async function persistInitialChildSessionRuntimeModel(params: {

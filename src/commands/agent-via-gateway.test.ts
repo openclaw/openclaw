@@ -78,7 +78,7 @@ function mockLocalAgentReply(text = "local") {
   });
 }
 
-vi.mock("../config/config.js", () => ({ loadConfig }));
+vi.mock("../config/config.js", () => ({ getRuntimeConfig: loadConfig, loadConfig }));
 vi.mock("../gateway/call.js", () => ({
   callGateway,
   randomIdempotencyKey: () => "idem-1",
@@ -124,6 +124,21 @@ describe("agentCliCommand", () => {
       });
       expect(agentCommand).not.toHaveBeenCalled();
       expect(runtime.log).toHaveBeenCalledWith("hello");
+    });
+  });
+
+  it("passes model overrides through gateway requests", async () => {
+    await withTempStore(async () => {
+      mockGatewaySuccessReply();
+
+      await agentCliCommand({ message: "hi", to: "+1555", model: "ollama/qwen3.5:9b" }, runtime);
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(callGateway.mock.calls[0]?.[0]).toMatchObject({
+        params: {
+          model: "ollama/qwen3.5:9b",
+        },
+      });
     });
   });
 

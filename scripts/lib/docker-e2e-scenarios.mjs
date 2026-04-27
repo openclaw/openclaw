@@ -8,6 +8,7 @@ const LIVE_ACP_TIMEOUT_MS = 20 * 60 * 1000;
 const LIVE_CLI_TIMEOUT_MS = 20 * 60 * 1000;
 const LIVE_PROFILE_TIMEOUT_MS = 20 * 60 * 1000;
 const OPENWEBUI_TIMEOUT_MS = 20 * 60 * 1000;
+export const BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS = 8;
 
 export const LIVE_RETRY_PATTERNS = [
   /529\b/i,
@@ -138,6 +139,19 @@ const bundledScenarioLanes = [
   ),
 ];
 
+const bundledPluginInstallUninstallLanes = Array.from(
+  { length: BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS },
+  (_, index) =>
+    lane(
+      `bundled-plugin-install-uninstall-${index}`,
+      `OPENCLAW_BUNDLED_PLUGIN_SWEEP_TOTAL=${BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS} OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX=${index} OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:bundled-plugin-install-uninstall`,
+      {
+        resources: ["npm"],
+        weight: 2,
+      },
+    ),
+);
+
 export const mainLanes = [
   liveLane("live-models", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-models", {
     providers: ["claude-cli", "codex-cli", "google-gemini-cli"],
@@ -215,14 +229,7 @@ export const mainLanes = [
     resources: ["npm", "service"],
     weight: 6,
   }),
-  lane(
-    "bundled-plugin-install-uninstall",
-    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:bundled-plugin-install-uninstall",
-    {
-      resources: ["npm"],
-      weight: 4,
-    },
-  ),
+  ...bundledPluginInstallUninstallLanes,
   lane(
     "plugins-offline",
     "OPENCLAW_PLUGINS_E2E_CLAWHUB=0 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugins",
@@ -395,14 +402,7 @@ const releasePathChunks = {
       resources: ["npm", "service"],
       weight: 6,
     }),
-    lane(
-      "bundled-plugin-install-uninstall",
-      "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:bundled-plugin-install-uninstall",
-      {
-        resources: ["npm"],
-        weight: 4,
-      },
-    ),
+    ...bundledPluginInstallUninstallLanes,
     npmLane("plugin-update", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugin-update"),
     ...bundledScenarioLanes,
     serviceLane(

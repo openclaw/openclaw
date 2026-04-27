@@ -124,7 +124,7 @@ async function createConfigModuleMock() {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
-    loadConfig: () => mockConfig,
+    getRuntimeConfig: () => mockConfig,
   };
 }
 

@@ -125,7 +125,7 @@ vi.mock("../cli/deps.js", () => ({
 }));
 
 vi.mock("../config/io.js", () => ({
-  loadConfig: () => ({
+  getRuntimeConfig: () => ({
     agents: {
       defaults: {
         models: {

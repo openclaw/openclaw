@@ -16,9 +16,14 @@ import {
 } from "./app-channels.ts";
 import {
   handleAbortChat as handleAbortChatInternal,
+  handleChatDraftChange as handleChatDraftChangeInternal,
+  handleChatInputHistoryKey as handleChatInputHistoryKeyInternal,
   handleSendChat as handleSendChatInternal,
   removeQueuedMessage as removeQueuedMessageInternal,
+  resetChatInputHistoryNavigation as resetChatInputHistoryNavigationInternal,
   steerQueuedChatMessage as steerQueuedChatMessageInternal,
+  type ChatInputHistoryKeyInput,
+  type ChatInputHistoryKeyResult,
 } from "./app-chat.ts";
 import { DEFAULT_CRON_FORM, DEFAULT_LOG_LEVEL_FILTERS } from "./app-defaults.ts";
 import type { EventLogEntry } from "./app-events.ts";
@@ -216,6 +221,11 @@ export class OpenClawApp extends LitElement {
   @state() navDrawerOpen = false;
 
   onSlashAction?: (action: string) => void;
+  chatLocalInputHistoryBySession: Record<string, Array<{ text: string; ts: number }>> = {};
+  chatInputHistorySessionKey: string | null = null;
+  chatInputHistoryItems: string[] | null = null;
+  @state() chatInputHistoryIndex = -1;
+  chatDraftBeforeHistory: string | null = null;
 
   // Sidebar state for tool output viewing
   @state() sidebarOpen = false;
@@ -776,6 +786,26 @@ export class OpenClawApp extends LitElement {
 
   async handleAbortChat() {
     await handleAbortChatInternal(this as unknown as Parameters<typeof handleAbortChatInternal>[0]);
+  }
+
+  handleChatDraftChange(next: string) {
+    handleChatDraftChangeInternal(
+      this as unknown as Parameters<typeof handleChatDraftChangeInternal>[0],
+      next,
+    );
+  }
+
+  handleChatInputHistoryKey(input: ChatInputHistoryKeyInput): ChatInputHistoryKeyResult {
+    return handleChatInputHistoryKeyInternal(
+      this as unknown as Parameters<typeof handleChatInputHistoryKeyInternal>[0],
+      input,
+    );
+  }
+
+  resetChatInputHistoryNavigation() {
+    resetChatInputHistoryNavigationInternal(
+      this as unknown as Parameters<typeof resetChatInputHistoryNavigationInternal>[0],
+    );
   }
 
   removeQueuedMessage(id: string) {

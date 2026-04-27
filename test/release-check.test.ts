@@ -63,6 +63,8 @@ describe("packed CLI smoke", () => {
   it("keeps the expected packaged CLI smoke command list", () => {
     expect(PACKED_CLI_SMOKE_COMMANDS).toEqual([
       ["--help"],
+      ["onboard", "--help"],
+      ["doctor", "--help"],
       ["status", "--json", "--timeout", "1"],
       ["config", "schema"],
       ["models", "list", "--provider", "amazon-bedrock"],

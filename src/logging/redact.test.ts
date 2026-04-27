@@ -79,6 +79,15 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("cdp=https://browserless.example.com/?token=***");
   });
 
+  it("masks standalone lowercase token assignments in diagnostic output", () => {
+    const input = "matrix access_token=abcdef1234567890ghij next";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe("matrix access_token=abcdef…ghij next");
+  });
+
   it("masks JSON fields", () => {
     const input = '{"token":"abcdef1234567890ghij"}';
     const output = redactSensitiveText(input, {
@@ -95,6 +104,15 @@ describe("redactSensitiveText", () => {
       patterns: defaults,
     });
     expect(output).toBe("Authorization: Bearer abcdef…ghij");
+  });
+
+  it("masks URL query tokens", () => {
+    const input = "GET /_matrix/client/v3/sync?access_token=abcdef1234567890ghij";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe("GET /_matrix/client/v3/sync?access_token=abcdef…ghij");
   });
 
   it("masks bot-style tokens", () => {

@@ -150,6 +150,37 @@ For custom OpenAI-compatible endpoints or overriding provider defaults:
     </Warning>
 
   </Accordion>
+  <Accordion title="OpenAI-compatible input types">
+    OpenAI-compatible embedding endpoints can opt into provider-specific `input_type` request fields. This is useful for asymmetric embedding models that require different labels for query and document embeddings.
+
+    | Key                 | Type     | Default | Description                                             |
+    | ------------------- | -------- | ------- | ------------------------------------------------------- |
+    | `inputType`         | `string` | unset   | Shared `input_type` for query and document embeddings   |
+    | `queryInputType`    | `string` | unset   | Query-time `input_type`; overrides `inputType`          |
+    | `documentInputType` | `string` | unset   | Index/document `input_type`; overrides `inputType`      |
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            remote: {
+              baseUrl: "https://embeddings.example/v1",
+              apiKey: "env:EMBEDDINGS_API_KEY",
+            },
+            model: "asymmetric-embedder",
+            queryInputType: "query",
+            documentInputType: "passage",
+          },
+        },
+      },
+    }
+    ```
+
+    Changing these values affects embedding cache identity for provider batch indexing and should be followed by a memory reindex when the upstream model treats the labels differently.
+
+  </Accordion>
   <Accordion title="Bedrock">
     Bedrock uses the AWS SDK default credential chain — no API keys needed. If OpenClaw runs on EC2 with a Bedrock-enabled instance role, just set the provider and model:
 

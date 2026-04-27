@@ -77,7 +77,7 @@ vi.mock("../../config/config.js", async () => {
     await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
   return {
     ...actual,
-    loadConfig: () => mocks.loadConfigReturn,
+    getRuntimeConfig: () => mocks.loadConfigReturn,
   };
 });
 
@@ -154,6 +154,7 @@ const makeContext = (): GatewayRequestContext =>
     logGateway: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     broadcastToConnIds: vi.fn(),
     getSessionEventSubscriberConnIds: () => new Set(),
+    getRuntimeConfig: () => mocks.loadConfigReturn,
   }) as unknown as GatewayRequestContext;
 
 type AgentHandlerArgs = Parameters<typeof agentHandlers.agent>[0];
@@ -673,6 +674,7 @@ describe("gateway agent handler", () => {
           logGateway: { info: vi.fn(), error: vi.fn() },
           broadcastToConnIds,
           getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+          getRuntimeConfig: () => mocks.loadConfigReturn,
         } as unknown as GatewayRequestContext,
       },
     );
@@ -754,6 +756,7 @@ describe("gateway agent handler", () => {
           logGateway: { info: vi.fn(), error: vi.fn() },
           broadcastToConnIds,
           getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+          getRuntimeConfig: () => mocks.loadConfigReturn,
         } as unknown as GatewayRequestContext,
       },
     );
@@ -895,6 +898,7 @@ describe("gateway agent handler", () => {
           logGateway: { info: logInfo, error: vi.fn() },
           broadcastToConnIds: vi.fn(),
           getSessionEventSubscriberConnIds: () => new Set(),
+          getRuntimeConfig: () => mocks.loadConfigReturn,
         } as unknown as GatewayRequestContext,
       },
     );

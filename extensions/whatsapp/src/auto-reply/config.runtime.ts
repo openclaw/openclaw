@@ -1,7 +1,7 @@
 export {
   evaluateSessionFreshness,
+  getRuntimeConfig,
   getRuntimeConfigSourceSnapshot,
-  loadConfig,
   loadSessionStore,
   recordSessionMetaFromInbound,
   resolveChannelContextVisibilityMode,

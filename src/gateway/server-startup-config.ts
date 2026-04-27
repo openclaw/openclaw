@@ -9,9 +9,9 @@ import {
   readConfigFileSnapshot,
   recoverConfigFromLastKnownGood,
   recoverConfigFromJsonRootSuffix,
+  replaceConfigFile,
   shouldAttemptLastKnownGoodRecovery,
   validateConfigObjectWithPlugins,
-  writeConfigFile,
 } from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { asResolvedSourceConfig, materializeRuntimeConfig } from "../config/materialize.js";
@@ -226,7 +226,10 @@ export async function loadGatewayStartupConfigSnapshot(params: {
   }
 
   try {
-    await writeConfigFile(autoEnable.config);
+    await replaceConfigFile({
+      nextConfig: autoEnable.config,
+      afterWrite: { mode: "auto" },
+    });
     wroteConfig = true;
     configSnapshot = await readConfigFileSnapshot();
     assertValidGatewayStartupConfigSnapshot(configSnapshot);

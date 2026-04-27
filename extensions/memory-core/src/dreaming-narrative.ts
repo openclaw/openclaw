@@ -3,7 +3,7 @@ import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
-  loadConfig,
+  getRuntimeConfig,
   loadSessionStore,
   resolveStorePath,
   updateSessionStore,
@@ -717,7 +717,7 @@ async function normalizeSessionEntryPathForComparison(params: {
 }
 
 async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const agentsDir = path.join(resolveStateDir(), "agents");
   let agentEntries: Dirent[] = [];
   try {

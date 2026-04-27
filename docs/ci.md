@@ -14,7 +14,10 @@ manual `CI` workflow with that target, and dispatches `OpenClaw Release Checks`
 for install smoke, package acceptance, Docker release-path suites, live/E2E,
 OpenWebUI, QA Lab parity, Matrix, and Telegram lanes. It can also run the
 post-publish `NPM Telegram Beta E2E` workflow when a published package spec is
-provided.
+provided. The umbrella records the dispatched child run ids, and the final
+`Verify full validation` job re-checks the current child run conclusions. If a
+child workflow is rerun and turns green, rerun only the parent verifier job to
+refresh the umbrella result.
 
 `Package Acceptance` is the side-run workflow for validating a package artifact
 without blocking the release workflow. It resolves one candidate from a

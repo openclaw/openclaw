@@ -61,6 +61,12 @@ If config is invalid, install normally fails closed and points you at
 `openclaw doctor --fix`. The only recovery exception is a narrow bundled-plugin
 reinstall path for plugins that opt into
 `openclaw.install.allowInvalidConfigRecovery`.
+When a channel config references a plugin that is no longer discoverable but the
+same stale plugin id remains in plugin config or install records, Gateway startup
+logs warnings and skips that channel instead of blocking every other channel.
+Run `openclaw doctor --fix` to remove the stale channel/plugin entries; unknown
+channel keys without stale-plugin evidence still fail validation so typos stay
+visible.
 
 Packaged OpenClaw installs do not eagerly install every bundled plugin's
 runtime dependency tree. When a bundled OpenClaw-owned plugin is active from

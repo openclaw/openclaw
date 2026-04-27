@@ -26,6 +26,7 @@ Related:
 - `-t, --to <dest>`: recipient used to derive the session key
 - `--session-id <id>`: explicit session id
 - `--agent <id>`: agent id; overrides routing bindings
+- `--model <id>`: model override for this run (`provider/model` or model id)
 - `--thinking <level>`: agent thinking level (`off`, `minimal`, `low`, `medium`, `high`, plus provider-supported custom levels such as `xhigh`, `adaptive`, or `max`)
 - `--verbose <on|off>`: persist verbose level for the session
 - `--channel <channel>`: delivery channel; omit to use the main session channel
@@ -42,6 +43,7 @@ Related:
 ```bash
 openclaw agent --to +15555550123 --message "status update" --deliver
 openclaw agent --agent ops --message "Summarize logs"
+openclaw agent --agent ops --model openai/gpt-5.4 --message "Summarize logs"
 openclaw agent --session-id 1234 --message "Summarize inbox" --thinking medium
 openclaw agent --to +15555550123 --message "Trace logs" --verbose on --json
 openclaw agent --agent ops --message "Generate report" --deliver --reply-channel slack --reply-to "#reports"

@@ -27,7 +27,7 @@ const mocks = vi.hoisted(() => ({
   readCommand: vi.fn(),
   stage: vi.fn(),
   install: vi.fn(),
-  writeConfigFile: vi.fn().mockResolvedValue(undefined),
+  replaceConfigFile: vi.fn().mockResolvedValue(undefined),
   auditGatewayServiceConfig: vi.fn(),
   buildGatewayInstallPlan: vi.fn(),
   resolveGatewayAuthTokenForService: vi.fn(),
@@ -48,7 +48,7 @@ vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
-    writeConfigFile: mocks.writeConfigFile,
+    replaceConfigFile: mocks.replaceConfigFile,
   };
 });
 
@@ -280,7 +280,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
         }),
       }),
     );
-    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
     expect(mocks.stage).not.toHaveBeenCalled();
     expect(mocks.install).toHaveBeenCalledTimes(1);
   });
@@ -386,13 +386,16 @@ describe("maybeRepairGatewayServiceConfig", () => {
           }),
         }),
       );
-      expect(mocks.writeConfigFile).toHaveBeenCalledWith(
+      expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
         expect.objectContaining({
-          gateway: expect.objectContaining({
-            auth: expect.objectContaining({
-              token: "env-token",
+          nextConfig: expect.objectContaining({
+            gateway: expect.objectContaining({
+              auth: expect.objectContaining({
+                token: "env-token",
+              }),
             }),
           }),
+          afterWrite: { mode: "auto" },
         }),
       );
       expect(mocks.stage).not.toHaveBeenCalled();
@@ -609,13 +612,16 @@ describe("maybeRepairGatewayServiceConfig", () => {
             expectedGatewayToken: undefined,
           }),
         );
-        expect(mocks.writeConfigFile).toHaveBeenCalledWith(
+        expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
           expect.objectContaining({
-            gateway: expect.objectContaining({
-              auth: expect.objectContaining({
-                token: "stale-token",
+            nextConfig: expect.objectContaining({
+              gateway: expect.objectContaining({
+                auth: expect.objectContaining({
+                  token: "stale-token",
+                }),
               }),
             }),
+            afterWrite: { mode: "auto" },
           }),
         );
         expect(mocks.buildGatewayInstallPlan).toHaveBeenCalledWith(
@@ -666,7 +672,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
           }),
         );
 
-        expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+        expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
         expect(mocks.stage).toHaveBeenCalledTimes(1);
         expect(mocks.install).not.toHaveBeenCalled();
       },
@@ -705,7 +711,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
 
         await runRepair(cfg);
 
-        expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+        expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
         expect(mocks.buildGatewayInstallPlan).toHaveBeenCalledWith(
           expect.objectContaining({
             config: cfg,
@@ -735,7 +741,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
         EXTERNAL_SERVICE_REPAIR_NOTE,
         "Gateway service config",
       );
-      expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
       expect(mocks.stage).not.toHaveBeenCalled();
       expect(mocks.install).not.toHaveBeenCalled();
     });

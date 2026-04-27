@@ -10,13 +10,19 @@ export async function main(argv = process.argv.slice(2)) {
   const tailChecks = [
     { name: "webhook body guard", args: ["lint:webhook:no-low-level-body-read"] },
     { name: "runtime action config guard", args: ["check:no-runtime-action-load-config"] },
+    !includeArchitecture
+      ? {
+          name: "deprecated internal config API guard",
+          args: ["check:deprecated-internal-config-api"],
+        }
+      : null,
     { name: "temp path guard", args: ["check:temp-path-guardrails"] },
     { name: "pairing store guard", args: ["lint:auth:no-pairing-store-group"] },
     { name: "pairing account guard", args: ["lint:auth:pairing-account-scope"] },
     includeArchitecture
       ? { name: "architecture import cycles", args: ["check:architecture"] }
       : { name: "runtime import cycles", args: ["check:import-cycles"] },
-  ];
+  ].filter(Boolean);
 
   const stages = [
     {

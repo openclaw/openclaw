@@ -11,8 +11,12 @@ let loadedConfig: unknown = {
 vi.mock("../../config/config.js", () => {
   return {
     loadConfig: () => loadedConfig,
+    getRuntimeConfig: () => loadedConfig,
     writeConfigFile: async (cfg: unknown) => {
       writtenConfig = cfg;
+    },
+    replaceConfigFile: async ({ nextConfig }: { nextConfig: unknown }) => {
+      writtenConfig = nextConfig;
     },
   };
 });
@@ -38,7 +42,7 @@ describe("skills.update", () => {
       req: {} as never,
       client: null as never,
       isWebchatConnect: () => false,
-      context: {} as never,
+      context: { getRuntimeConfig: () => ({ skills: { entries: {} } }) } as never,
       respond: (success, _result, err) => {
         ok = success;
         error = err;
@@ -79,7 +83,7 @@ describe("skills.update", () => {
       req: {} as never,
       client: null as never,
       isWebchatConnect: () => false,
-      context: {} as never,
+      context: { getRuntimeConfig: () => loadedConfig } as never,
       respond: (_success, result, _err) => {
         responseResult = result;
       },
@@ -137,7 +141,7 @@ describe("skills.update", () => {
       req: {} as never,
       client: null as never,
       isWebchatConnect: () => false,
-      context: {} as never,
+      context: { getRuntimeConfig: () => loadedConfig } as never,
       respond: () => {},
     });
 

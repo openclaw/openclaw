@@ -163,6 +163,7 @@ Note: Binary detection is best-effort across macOS/Linux/Windows; ensure the CLI
 - `tools.media.audio.echoTranscript` is off by default; enable it to send transcript confirmation back to the originating chat before agent processing.
 - `tools.media.audio.echoFormat` customizes the echo text (placeholder: `{transcript}`).
 - CLI stdout is capped (5MB); keep CLI output concise.
+- CLI `args` should use `{{MediaPath}}` for the local audio file path. Run `openclaw doctor --fix` to migrate deprecated `{input}` placeholders from older `audio.transcription.command` configs.
 
 ### Proxy environment support
 

@@ -5,6 +5,8 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   createRealtimeVoiceBridgeSession,
+  REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
+  REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   resolveConfiguredRealtimeVoiceProvider,
   type RealtimeVoiceBridgeSession,
   type RealtimeVoiceProviderConfig,
@@ -59,6 +61,12 @@ function splitCommand(argv: string[]): { command: string; args: string[] } {
     throw new Error("audio bridge command must not be empty");
   }
   return { command, args };
+}
+
+export function resolveGoogleMeetRealtimeAudioFormat(config: GoogleMeetConfig) {
+  return config.chrome.audioFormat === "g711-ulaw-8khz"
+    ? REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ
+    : REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ;
 }
 
 export function resolveGoogleMeetRealtimeProvider(params: {
@@ -187,6 +195,7 @@ export async function startCommandRealtimeAudioBridge(params: {
   bridge = createRealtimeVoiceBridgeSession({
     provider: resolved.provider,
     providerConfig: resolved.providerConfig,
+    audioFormat: resolveGoogleMeetRealtimeAudioFormat(params.config),
     instructions: params.config.realtime.instructions,
     initialGreetingInstructions: params.config.realtime.introMessage,
     triggerGreetingOnReady: false,
@@ -194,10 +203,10 @@ export async function startCommandRealtimeAudioBridge(params: {
     tools: resolveGoogleMeetRealtimeTools(params.config.realtime.toolPolicy),
     audioSink: {
       isOpen: () => !stopped,
-      sendAudio: (muLaw) => {
+      sendAudio: (audio) => {
         lastOutputAt = new Date().toISOString();
-        lastOutputBytes += muLaw.byteLength;
-        outputProcess.stdin?.write(muLaw);
+        lastOutputBytes += audio.byteLength;
+        outputProcess.stdin?.write(audio);
       },
       clearAudio: clearOutputPlayback,
     },

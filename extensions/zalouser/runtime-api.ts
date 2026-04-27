@@ -58,4 +58,4 @@ export {
   sendPayloadWithChunkedTextAndMedia,
   type OutboundReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
-export { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/browser-security-runtime";
+export { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";

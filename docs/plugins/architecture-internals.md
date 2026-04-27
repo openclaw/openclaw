@@ -93,10 +93,20 @@ OpenClaw keeps short in-process caches for:
 These caches reduce bursty startup and repeated command overhead. They are safe
 to think of as short-lived performance caches, not persistence.
 
+Gateway hot paths should prefer the current `PluginLookUpTable` or an explicit
+manifest registry passed through the call chain. For callers that still rebuild
+manifest metadata from the persisted installed plugin index, OpenClaw also keeps
+a small bounded fallback cache keyed by the installed index, request shape,
+config policy, runtime roots, and manifest/package file signatures. That cache is
+only a fallback for repeated installed-index reconstruction; it is not a mutable
+runtime plugin registry.
+
 Performance note:
 
 - Set `OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE=1` or
   `OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE=1` to disable these caches.
+- Set `OPENCLAW_DISABLE_INSTALLED_PLUGIN_MANIFEST_REGISTRY_CACHE=1` to disable
+  only the installed-index manifest-registry fallback cache.
 - Tune cache windows with `OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS` and
   `OPENCLAW_PLUGIN_MANIFEST_CACHE_MS`.
 

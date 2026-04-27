@@ -129,10 +129,31 @@ Use explicit config when:
 
   </Accordion>
 
+  <Accordion title="Qwen thinking controls">
+    For Qwen models served through vLLM, set
+    `params.qwenThinkingFormat: "chat-template"` on the model entry when the
+    server expects Qwen chat-template kwargs. OpenClaw maps `/think off` to:
+
+    ```json
+    {
+      "chat_template_kwargs": {
+        "enable_thinking": false,
+        "preserve_thinking": true
+      }
+    }
+    ```
+
+    Non-`off` thinking levels send `enable_thinking: true`. If your endpoint
+    expects DashScope-style top-level flags instead, use
+    `params.qwenThinkingFormat: "top-level"` to send `enable_thinking` at the
+    request root. Snake-case `params.qwen_thinking_format` is also accepted.
+
+  </Accordion>
+
   <Accordion title="Nemotron 3 thinking controls">
     vLLM/Nemotron 3 can use chat-template kwargs to control whether reasoning is
     returned as hidden reasoning or visible answer text. When an OpenClaw session
-    uses `vllm/nemotron-3-*` with thinking off, OpenClaw sends:
+    uses `vllm/nemotron-3-*` with thinking off, the bundled vLLM plugin sends:
 
     ```json
     {

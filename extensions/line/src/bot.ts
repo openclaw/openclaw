@@ -1,7 +1,7 @@
 import type { webhook } from "@line/bot-sdk";
 import type { NextFunction, Request, Response } from "express";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/config-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import {
   createNonExitingRuntime,
@@ -32,7 +32,7 @@ export interface LineBot {
 export function createLineBot(opts: LineBotOptions): LineBot {
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
 
-  const cfg = opts.config ?? loadConfig();
+  const cfg = opts.config ?? getRuntimeConfig();
   const account = resolveLineAccount({
     cfg,
     accountId: opts.accountId,

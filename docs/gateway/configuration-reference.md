@@ -88,6 +88,9 @@ target server during config edits.
 
 - `mcp.servers`: named stdio or remote MCP server definitions for runtimes that
   expose configured MCP tools.
+  Remote entries use `transport: "streamable-http"` or `transport: "sse"`;
+  `type: "http"` is a CLI-native alias that `openclaw mcp set` and
+  `openclaw doctor --fix` normalize into the canonical `transport` field.
 - `mcp.sessionIdleTtlMs`: idle TTL for session-scoped bundled MCP runtimes.
   One-shot embedded runs request run-end cleanup; this TTL is the backstop for
   long-lived sessions and future callers.
@@ -649,7 +652,7 @@ Validation and safety notes:
 
 - `minimal` (default): omit `cliPath` + `sshPort` from TXT records.
 - `full`: include `cliPath` + `sshPort`.
-- Hostname defaults to `openclaw`. Override with `OPENCLAW_MDNS_HOSTNAME`.
+- Hostname defaults to the system hostname when it is a valid DNS label, falling back to `openclaw`. Override with `OPENCLAW_MDNS_HOSTNAME`.
 
 ### Wide-area (DNS-SD)
 

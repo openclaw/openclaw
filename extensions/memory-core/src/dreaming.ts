@@ -681,7 +681,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
   let lastRuntimeCronRef: CronServiceLike | null = null;
 
   const resolveCurrentConfig = (): OpenClawConfig =>
-    api.runtime.config?.loadConfig?.() ?? api.config;
+    (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
 
   const runtimeConfigKey = (config: ShortTermPromotionDreamingConfig): string =>
     [

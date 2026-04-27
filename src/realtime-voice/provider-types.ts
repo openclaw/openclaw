@@ -6,6 +6,30 @@ export type RealtimeVoiceRole = "user" | "assistant";
 
 export type RealtimeVoiceCloseReason = "completed" | "error";
 
+export type RealtimeVoiceAudioFormat =
+  | {
+      encoding: "g711_ulaw";
+      sampleRateHz: 8000;
+      channels: 1;
+    }
+  | {
+      encoding: "pcm16";
+      sampleRateHz: 24000;
+      channels: 1;
+    };
+
+export const REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ: RealtimeVoiceAudioFormat = {
+  encoding: "g711_ulaw",
+  sampleRateHz: 8000,
+  channels: 1,
+};
+
+export const REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ: RealtimeVoiceAudioFormat = {
+  encoding: "pcm16",
+  sampleRateHz: 24000,
+  channels: 1,
+};
+
 export type RealtimeVoiceTool = {
   type: "function";
   name: string;
@@ -29,7 +53,7 @@ export type RealtimeVoiceToolResultOptions = {
 };
 
 export type RealtimeVoiceBridgeCallbacks = {
-  onAudio: (muLaw: Buffer) => void;
+  onAudio: (audio: Buffer) => void;
   onClearAudio: () => void;
   onMark?: (markName: string) => void;
   onTranscript?: (role: RealtimeVoiceRole, text: string, isFinal: boolean) => void;
@@ -53,6 +77,7 @@ export type RealtimeVoiceProviderConfiguredContext = {
 
 export type RealtimeVoiceBridgeCreateRequest = RealtimeVoiceBridgeCallbacks & {
   providerConfig: RealtimeVoiceProviderConfig;
+  audioFormat?: RealtimeVoiceAudioFormat;
   instructions?: string;
   tools?: RealtimeVoiceTool[];
 };

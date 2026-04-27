@@ -68,6 +68,7 @@
   "agent-runtime",
   "simple-completion-runtime",
   "speech-core",
+  "tts-runtime",
   "plugin-runtime",
   "skills-runtime",
   "channel-secret-basic-runtime",

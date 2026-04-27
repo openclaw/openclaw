@@ -1334,7 +1334,7 @@ describe("gateway startup reconciliation", () => {
     const logger = createLogger();
     const harness = createCronHarness();
     const onMock = vi.fn();
-    const runtimeLoadConfig = vi.fn(
+    const runtimeCurrentConfig = vi.fn(
       () =>
         ({
           plugins: {
@@ -1370,7 +1370,7 @@ describe("gateway startup reconciliation", () => {
       logger,
       runtime: {
         config: {
-          loadConfig: runtimeLoadConfig,
+          current: runtimeCurrentConfig,
         },
       },
       on: onMock,
@@ -1395,7 +1395,7 @@ describe("gateway startup reconciliation", () => {
         { trigger: "heartbeat", workspaceDir: ".", sessionKey },
       );
 
-      expect(runtimeLoadConfig).toHaveBeenCalled();
+      expect(runtimeCurrentConfig).toHaveBeenCalled();
       expect(result).toEqual({
         handled: true,
         reason: "memory-core: short-term dreaming disabled",
@@ -1411,7 +1411,7 @@ describe("gateway startup reconciliation", () => {
     const harness = createCronHarness();
     const onMock = vi.fn();
     const workspaceDir = await createTempWorkspace("memory-dreaming-live-config-workspace-");
-    const runtimeLoadConfig = vi.fn(
+    const runtimeCurrentConfig = vi.fn(
       () =>
         ({
           agents: {
@@ -1454,7 +1454,7 @@ describe("gateway startup reconciliation", () => {
       logger,
       runtime: {
         config: {
-          loadConfig: runtimeLoadConfig,
+          current: runtimeCurrentConfig,
         },
       },
       on: onMock,
@@ -1483,7 +1483,7 @@ describe("gateway startup reconciliation", () => {
         handled: true,
         reason: "memory-core: short-term dreaming processed",
       });
-      expect(runtimeLoadConfig).toHaveBeenCalled();
+      expect(runtimeCurrentConfig).toHaveBeenCalled();
       expect(logger.warn).not.toHaveBeenCalledWith(
         "memory-core: dreaming promotion skipped because no memory workspace is available.",
       );
@@ -1497,7 +1497,7 @@ describe("gateway startup reconciliation", () => {
     const logger = createLogger();
     const harness = createCronHarness();
     const onMock = vi.fn();
-    const runtimeLoadConfig = vi.fn(
+    const runtimeCurrentConfig = vi.fn(
       () =>
         ({
           agents: {
@@ -1525,7 +1525,7 @@ describe("gateway startup reconciliation", () => {
       logger,
       runtime: {
         config: {
-          loadConfig: runtimeLoadConfig,
+          current: runtimeCurrentConfig,
         },
       },
       on: onMock,
@@ -1550,7 +1550,7 @@ describe("gateway startup reconciliation", () => {
         { trigger: "heartbeat", workspaceDir: ".", sessionKey },
       );
 
-      expect(runtimeLoadConfig).toHaveBeenCalled();
+      expect(runtimeCurrentConfig).toHaveBeenCalled();
       expect(result).toEqual({
         handled: true,
         reason: "memory-core: short-term dreaming disabled",

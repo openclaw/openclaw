@@ -30,7 +30,7 @@ function createTelegramPollExtraToolSchemas() {
 
 const mocks = vi.hoisted(() => ({
   runMessageAction: vi.fn(),
-  loadConfig: vi.fn(() => ({})),
+  getRuntimeConfig: vi.fn(() => ({})),
   resolveCommandSecretRefsViaGateway: vi.fn(async ({ config }: { config: unknown }) => ({
     resolvedConfig: config,
     diagnostics: [],
@@ -116,7 +116,7 @@ vi.mock("../../config/config.js", async () => {
     await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
   return {
     ...actual,
-    loadConfig: mocks.loadConfig,
+    getRuntimeConfig: mocks.getRuntimeConfig,
   };
 });
 
@@ -159,7 +159,7 @@ beforeAll(async () => {
 beforeEach(() => {
   resetPluginRuntimeStateForTest();
   mocks.runMessageAction.mockReset();
-  mocks.loadConfig.mockReset().mockReturnValue({});
+  mocks.getRuntimeConfig.mockReset().mockReturnValue({});
   mocks.resolveCommandSecretRefsViaGateway.mockReset().mockImplementation(async ({ config }) => ({
     resolvedConfig: config,
     diagnostics: [],
@@ -238,7 +238,7 @@ async function executeSend(params: {
 describe("message tool secret scoping", () => {
   it("scopes command-time secret resolution to the selected channel/account", async () => {
     mockSendResult({ channel: "discord", to: "discord:123" });
-    mocks.loadConfig.mockReturnValue({
+    mocks.getRuntimeConfig.mockReturnValue({
       channels: {
         discord: {
           token: { source: "env", provider: "default", id: "DISCORD_TOKEN" },
@@ -256,7 +256,7 @@ describe("message tool secret scoping", () => {
     const tool = createMessageTool({
       currentChannelProvider: "discord",
       agentAccountId: "ops",
-      loadConfig: mocks.loadConfig as never,
+      getRuntimeConfig: mocks.getRuntimeConfig as never,
       getScopedChannelsCommandSecretTargets: mocks.getScopedChannelsCommandSecretTargets as never,
       resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway as never,
       runMessageAction: mocks.runMessageAction as never,

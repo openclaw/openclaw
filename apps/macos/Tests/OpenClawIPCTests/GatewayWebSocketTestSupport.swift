@@ -45,6 +45,7 @@ enum GatewayWebSocketTestSupport {
               "stateVersion": { "presence": 0, "health": 0 },
               "uptimeMs": 0
             },
+            "auth": { "role": "operator", "scopes": [] },
             "policy": { "maxPayload": 1, "maxBufferedBytes": 1, "tickIntervalMs": 30000 }
           }
         }

@@ -1,3 +1,4 @@
+import { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } from "openclaw/plugin-sdk/realtime-voice";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildGoogleRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
@@ -281,6 +282,31 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     expect(session.sendRealtimeInput).toHaveBeenCalledWith({ audioStreamEnd: true });
   });
 
+  it("accepts PCM16 24 kHz audio without the telephony mu-law hop", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    await bridge.connect();
+    lastConnectParams().callbacks.onopen();
+    lastConnectParams().callbacks.onmessage({ setupComplete: { sessionId: "session-1" } });
+
+    bridge.sendAudio(Buffer.alloc(480));
+
+    expect(session.sendRealtimeInput).toHaveBeenCalledWith({
+      audio: {
+        data: expect.any(String),
+        mimeType: "audio/pcm;rate=16000",
+      },
+    });
+    const sent = Buffer.from(session.sendRealtimeInput.mock.calls[0]?.[0].audio.data, "base64");
+    expect(sent).toHaveLength(320);
+  });
+
   it("can disable automatic VAD for manual activity signaling experiments", async () => {
     const provider = buildGoogleRealtimeVoiceProvider();
     const bridge = provider.createBridge({
@@ -353,6 +379,38 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     expect(onAudio).toHaveBeenCalledTimes(1);
     expect(onAudio.mock.calls[0]?.[0]).toBeInstanceOf(Buffer);
     expect(onAudio.mock.calls[0]?.[0]).toHaveLength(80);
+  });
+
+  it("can keep Google PCM output as PCM16 24 kHz audio", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onAudio = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+      onAudio,
+      onClearAudio: vi.fn(),
+    });
+    const pcm24k = Buffer.alloc(480);
+
+    await bridge.connect();
+    lastConnectParams().callbacks.onmessage({
+      setupComplete: { sessionId: "session-1" },
+      serverContent: {
+        modelTurn: {
+          parts: [
+            {
+              inlineData: {
+                mimeType: "audio/L16;codec=pcm;rate=24000",
+                data: pcm24k.toString("base64"),
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(onAudio).toHaveBeenCalledTimes(1);
+    expect(onAudio.mock.calls[0]?.[0]).toEqual(pcm24k);
   });
 
   it("does not forward Google thought text as assistant transcript", async () => {

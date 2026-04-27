@@ -257,19 +257,21 @@ describe("google-meet plugin", () => {
         reuseExistingTab: true,
         autoJoin: true,
         waitForInCallMs: 20000,
+        audioFormat: "pcm16-24khz",
         audioInputCommand: [
           "rec",
           "-q",
           "-t",
           "raw",
           "-r",
-          "8000",
+          "24000",
           "-c",
           "1",
           "-e",
-          "mu-law",
+          "signed-integer",
           "-b",
-          "8",
+          "16",
+          "-L",
           "-",
         ],
         audioOutputCommand: [
@@ -278,13 +280,14 @@ describe("google-meet plugin", () => {
           "-t",
           "raw",
           "-r",
-          "8000",
+          "24000",
           "-c",
           "1",
           "-e",
-          "mu-law",
+          "signed-integer",
           "-b",
-          "8",
+          "16",
+          "-L",
           "-",
         ],
       },
@@ -308,6 +311,21 @@ describe("google-meet plugin", () => {
         },
       }).realtime.agentId,
     ).toBe("jay");
+  });
+
+  it("keeps legacy command-pair audio format when custom commands omit a format", () => {
+    expect(
+      resolveGoogleMeetConfig({
+        chrome: {
+          audioInputCommand: ["capture-legacy"],
+          audioOutputCommand: ["play-legacy"],
+        },
+      }).chrome,
+    ).toMatchObject({
+      audioFormat: "g711-ulaw-8khz",
+      audioInputCommand: ["capture-legacy"],
+      audioOutputCommand: ["play-legacy"],
+    });
   });
 
   it("uses env fallbacks for OAuth, preview, and default meeting values", () => {
@@ -2085,6 +2103,11 @@ describe("google-meet plugin", () => {
       clearCount: 1,
     });
     expect(callbacks).toMatchObject({
+      audioFormat: {
+        encoding: "pcm16",
+        sampleRateHz: 24000,
+        channels: 1,
+      },
       tools: [
         expect.objectContaining({
           name: "openclaw_agent_consult",
@@ -2263,6 +2286,11 @@ describe("google-meet plugin", () => {
     handle.speak("Say exactly: hello from the node.");
     expect(bridge.triggerGreeting).toHaveBeenLastCalledWith("Say exactly: hello from the node.");
     expect(callbacks).toMatchObject({
+      audioFormat: {
+        encoding: "pcm16",
+        sampleRateHz: 24000,
+        channels: 1,
+      },
       tools: [
         expect.objectContaining({
           name: "openclaw_agent_consult",

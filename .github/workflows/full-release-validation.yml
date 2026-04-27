@@ -109,8 +109,13 @@ jobs:
     needs: [resolve_target]
     runs-on: ubuntu-24.04
     timeout-minutes: 240
+    outputs:
+      run_id: ${{ steps.dispatch.outputs.run_id }}
+      url: ${{ steps.dispatch.outputs.url }}
+      conclusion: ${{ steps.dispatch.outputs.conclusion }}
     steps:
       - name: Dispatch and monitor CI
+        id: dispatch
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_REF: ${{ inputs.ref }}
@@ -146,6 +151,7 @@ jobs:
             fi
 
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+            echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
 
             while true; do
               status="$(gh run view "$run_id" --json status --jq '.status')"
@@ -158,9 +164,10 @@ jobs:
             conclusion="$(gh run view "$run_id" --json conclusion --jq '.conclusion')"
             url="$(gh run view "$run_id" --json url --jq '.url')"
             echo "${workflow} finished with ${conclusion}: ${url}"
+            echo "url=${url}" >> "$GITHUB_OUTPUT"
+            echo "conclusion=${conclusion}" >> "$GITHUB_OUTPUT"
             if [[ "$conclusion" != "success" ]]; then
-              gh run view "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url}'
-              exit 1
+              gh run view "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url}' || true
             fi
           }
 
@@ -178,8 +185,13 @@ jobs:
     needs: [resolve_target]
     runs-on: ubuntu-24.04
     timeout-minutes: 720
+    outputs:
+      run_id: ${{ steps.dispatch.outputs.run_id }}
+      url: ${{ steps.dispatch.outputs.url }}
+      conclusion: ${{ steps.dispatch.outputs.conclusion }}
     steps:
       - name: Dispatch and monitor release checks
+        id: dispatch
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_REF: ${{ inputs.ref }}
@@ -217,6 +229,7 @@ jobs:
             fi
 
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+            echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
 
             while true; do
               status="$(gh run view "$run_id" --json status --jq '.status')"
@@ -229,9 +242,10 @@ jobs:
             conclusion="$(gh run view "$run_id" --json conclusion --jq '.conclusion')"
             url="$(gh run view "$run_id" --json url --jq '.url')"
             echo "${workflow} finished with ${conclusion}: ${url}"
+            echo "url=${url}" >> "$GITHUB_OUTPUT"
+            echo "conclusion=${conclusion}" >> "$GITHUB_OUTPUT"
             if [[ "$conclusion" != "success" ]]; then
-              gh run view "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url}'
-              exit 1
+              gh run view "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url}' || true
             fi
           }
 
@@ -255,8 +269,13 @@ jobs:
     if: inputs.npm_telegram_package_spec != ''
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    outputs:
+      run_id: ${{ steps.dispatch.outputs.run_id }}
+      url: ${{ steps.dispatch.outputs.url }}
+      conclusion: ${{ steps.dispatch.outputs.conclusion }}
     steps:
       - name: Dispatch and monitor npm Telegram E2E
+        id: dispatch
         env:
           GH_TOKEN: ${{ github.token }}
           WORKFLOW_REF: ${{ inputs.workflow_ref }}
@@ -293,6 +312,7 @@ jobs:
           fi
 
           echo "Dispatched npm-telegram-beta-e2e.yml: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+          echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
 
           while true; do
             status="$(gh run view "$run_id" --json status --jq '.status')"
@@ -305,9 +325,10 @@ jobs:
           conclusion="$(gh run view "$run_id" --json conclusion --jq '.conclusion')"
           url="$(gh run view "$run_id" --json url --jq '.url')"
           echo "npm-telegram-beta-e2e.yml finished with ${conclusion}: ${url}"
+          echo "url=${url}" >> "$GITHUB_OUTPUT"
+          echo "conclusion=${conclusion}" >> "$GITHUB_OUTPUT"
           if [[ "$conclusion" != "success" ]]; then
-            gh run view "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url}'
-            exit 1
+            gh run view "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url}' || true
           fi
 
   summary:
@@ -347,7 +368,7 @@ jobs:
               --arg release_id "$release_id" \
               --arg release_ref "$TARGET_REF" \
               --arg package_spec "$PACKAGE_SPEC" \
-              --arg notes "Automatically requested by Full Release Validation ${GITHUB_RUN_ID_VALUE} after child workflows completed." \
+              --arg notes "Automatically requested by Full Release Validation ${GITHUB_RUN_ID_VALUE} after child workflows completed; the parent summary re-checks current child run conclusions." \
               '{
                 event_type: "openclaw_full_release_validation_completed",
                 client_payload: {
@@ -370,22 +391,51 @@ jobs:
 
       - name: Verify child workflow results
         env:
-          NORMAL_CI_RESULT: ${{ needs.normal_ci.result }}
-          RELEASE_CHECKS_RESULT: ${{ needs.release_checks.result }}
+          GH_TOKEN: ${{ github.token }}
+          NORMAL_CI_RUN_ID: ${{ needs.normal_ci.outputs.run_id }}
+          RELEASE_CHECKS_RUN_ID: ${{ needs.release_checks.outputs.run_id }}
+          NPM_TELEGRAM_RUN_ID: ${{ needs.npm_telegram.outputs.run_id }}
           NPM_TELEGRAM_RESULT: ${{ needs.npm_telegram.result }}
         run: |
           set -euo pipefail
-          failed=0
-          for item in \
-            "normal_ci=${NORMAL_CI_RESULT}" \
-            "release_checks=${RELEASE_CHECKS_RESULT}" \
-            "npm_telegram=${NPM_TELEGRAM_RESULT}"
-          do
-            name="${item%%=*}"
-            result="${item#*=}"
-            if [[ "$result" != "success" && "$result" != "skipped" ]]; then
-              echo "::error::${name} ended with ${result}"
-              failed=1
+
+          check_child() {
+            local label="$1"
+            local run_id="$2"
+            local required="$3"
+
+            if [[ -z "${run_id// }" ]]; then
+              if [[ "$required" == "0" ]]; then
+                echo "${label}: skipped"
+                return 0
+              fi
+              echo "::error::${label} did not record a child run id."
+              return 1
             fi
-          done
+
+            local status conclusion url attempt
+            status="$(gh run view "$run_id" --json status --jq '.status')"
+            conclusion="$(gh run view "$run_id" --json conclusion --jq '.conclusion')"
+            url="$(gh run view "$run_id" --json url --jq '.url')"
+            attempt="$(gh run view "$run_id" --json attempt --jq '.attempt')"
+            echo "${label}: ${status}/${conclusion} attempt ${attempt}: ${url}"
+
+            if [[ "$status" != "completed" || "$conclusion" != "success" ]]; then
+              echo "::error::${label} child run ended with ${status}/${conclusion}: ${url}"
+              gh run view "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, status, conclusion, url}' || true
+              return 1
+            fi
+          }
+
+          failed=0
+
+          check_child "normal_ci" "$NORMAL_CI_RUN_ID" 1 || failed=1
+          check_child "release_checks" "$RELEASE_CHECKS_RUN_ID" 1 || failed=1
+
+          if [[ "$NPM_TELEGRAM_RESULT" == "skipped" && -z "${NPM_TELEGRAM_RUN_ID// }" ]]; then
+            check_child "npm_telegram" "" 0 || failed=1
+          else
+            check_child "npm_telegram" "$NPM_TELEGRAM_RUN_ID" 1 || failed=1
+          fi
+
           exit "$failed"

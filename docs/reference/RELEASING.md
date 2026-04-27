@@ -281,7 +281,9 @@ Do not use the full umbrella as the first rerun after a focused fix. If one box
 fails, use the failed child workflow, job, Docker lane, package profile, model
 provider, or QA lane for the next proof. Run the full umbrella again only when
 the fix changed shared release orchestration or made earlier all-box evidence
-stale.
+stale. The umbrella's final verifier re-checks the recorded child workflow run
+ids, so after a child workflow is rerun successfully, rerun only the failed
+`Verify full validation` parent job.
 
 ### Vitest
 
@@ -323,6 +325,9 @@ Release Docker coverage includes:
 - OpenWebUI coverage inside the `plugins-integrations` chunk when requested
 - split bundled-channel dependency lanes inside `plugins-integrations` instead
   of the serial all-in-one bundled-channel lane
+- split bundled plugin install/uninstall lanes
+  `bundled-plugin-install-uninstall-0` through
+  `bundled-plugin-install-uninstall-7`
 - live/E2E provider suites and Docker live model coverage when release checks
   include live suites
 

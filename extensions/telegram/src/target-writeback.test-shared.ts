@@ -6,6 +6,10 @@ type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
 
 export const readConfigFileSnapshotForWrite: AsyncUnknownMock = vi.fn();
 export const writeConfigFile: AsyncUnknownMock = vi.fn();
+export const replaceConfigFile: AsyncUnknownMock = vi.fn(async (params: unknown) => {
+  const record = params as { nextConfig?: unknown; writeOptions?: unknown };
+  await writeConfigFile(record.nextConfig, record.writeOptions);
+});
 export const loadCronStore: AsyncUnknownMock = vi.fn();
 export const resolveCronStorePath: UnknownMock = vi.fn();
 export const saveCronStore: AsyncUnknownMock = vi.fn();
@@ -17,6 +21,7 @@ vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
   return {
     ...actual,
     readConfigFileSnapshotForWrite,
+    replaceConfigFile,
     writeConfigFile,
     loadCronStore,
     resolveCronStorePath,
@@ -36,6 +41,7 @@ export function installMaybePersistResolvedTelegramTargetTests(params?: {
 
     beforeEach(() => {
       readConfigFileSnapshotForWrite.mockReset();
+      replaceConfigFile.mockClear();
       writeConfigFile.mockReset();
       loadCronStore.mockReset();
       resolveCronStorePath.mockReset();

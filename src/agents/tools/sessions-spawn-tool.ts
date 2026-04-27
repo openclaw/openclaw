@@ -1,6 +1,6 @@
 import { Type } from "typebox";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
-import { loadConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
@@ -309,7 +309,7 @@ export function createSessionsSpawnTool(
           Boolean(childRunId) &&
           streamTo !== "parent";
         if (shouldTrackViaRegistry && childSessionKey && childRunId) {
-          const cfg = loadConfig();
+          const cfg = getRuntimeConfig();
           const trackedSpawnMode = resolveTrackedSpawnMode({
             requestedMode: result.mode,
             threadRequested: thread,

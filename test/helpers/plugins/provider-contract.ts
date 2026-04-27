@@ -19,7 +19,6 @@ function providerMatchesManifestId(provider: ProviderPlugin, providerId: string)
     (provider.hookAliases ?? []).includes(providerId)
   );
 }
-
 function resolveProviderContractProvidersFromPublicArtifact(
   pluginId: string,
 ): ProviderContractEntry[] | null {

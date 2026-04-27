@@ -53,6 +53,12 @@ describe("stripThinkingTags", () => {
     expect(stripThinkingTags("Hello\n</think>")).toBe("Hello\n");
   });
 
+  it("drops malformed reasoning before orphan close tags when final text follows", () => {
+    expect(stripThinkingTags("private chain of thought </think> Visible answer")).toBe(
+      "Visible answer",
+    );
+  });
+
   it("returns original text when no tags exist", () => {
     expect(stripThinkingTags("Hello")).toBe("Hello");
   });

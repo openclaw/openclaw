@@ -389,6 +389,7 @@ export type DiscordAutoThreadContext = {
   To: string;
   OriginatingTo: string;
   SessionKey: string;
+  ModelParentSessionKey?: string;
   ParentSessionKey?: string;
 };
 
@@ -413,14 +414,11 @@ export function resolveDiscordAutoThreadContext(params: {
     channel: params.channel,
     peer: { kind: "channel", id: createdThreadId },
   });
-  const parentSessionKey =
-    params.parentInheritanceEnabled === true
-      ? buildAgentSessionKey({
-          agentId: params.agentId,
-          channel: params.channel,
-          peer: { kind: "channel", id: messageChannelId },
-        })
-      : undefined;
+  const parentSessionKey = buildAgentSessionKey({
+    agentId: params.agentId,
+    channel: params.channel,
+    peer: { kind: "channel", id: messageChannelId },
+  });
 
   return {
     createdThreadId,
@@ -428,7 +426,8 @@ export function resolveDiscordAutoThreadContext(params: {
     To: `channel:${createdThreadId}`,
     OriginatingTo: `channel:${createdThreadId}`,
     SessionKey: threadSessionKey,
-    ...(parentSessionKey ? { ParentSessionKey: parentSessionKey } : {}),
+    ModelParentSessionKey: parentSessionKey,
+    ...(params.parentInheritanceEnabled === true ? { ParentSessionKey: parentSessionKey } : {}),
   };
 }
 

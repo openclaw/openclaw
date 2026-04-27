@@ -20,9 +20,9 @@ function createSetupDeps(home: string) {
     ),
     mkdir: vi.fn(async () => {}),
     resolveSessionTranscriptsDir: vi.fn(() => path.join(home, ".openclaw", "sessions")),
-    writeConfigFile: vi.fn(async (config: unknown) => {
+    replaceConfigFile: vi.fn(async ({ nextConfig }: { nextConfig: unknown }) => {
       await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(configPath, JSON.stringify(config, null, 2));
+      await fs.writeFile(configPath, JSON.stringify(nextConfig, null, 2));
     }),
   };
 }

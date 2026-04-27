@@ -11,7 +11,7 @@ import {
   resolveCommandAuthorizedFromAuthorizers,
 } from "openclaw/plugin-sdk/command-auth-native";
 import { buildCommandsMessagePaginated } from "openclaw/plugin-sdk/command-status";
-import { writeConfigFile } from "openclaw/plugin-sdk/config-runtime";
+import { replaceConfigFile } from "openclaw/plugin-sdk/config-runtime";
 import {
   loadSessionStore,
   resolveSessionStoreEntry,
@@ -311,7 +311,7 @@ export const registerTelegramHandlers = ({
     sessionKey: string;
     model?: string;
   } => {
-    const runtimeCfg = telegramDeps.loadConfig();
+    const runtimeCfg = telegramDeps.getRuntimeConfig();
     const resolvedThreadId =
       params.resolvedThreadId ??
       resolveTelegramForumThreadId({
@@ -966,7 +966,7 @@ export const registerTelegramHandlers = ({
       const parentPeer = buildTelegramParentPeer({ isGroup, resolvedThreadId, chatId });
       // Fresh config for bindings lookup; other routing inputs are payload-derived.
       const route = resolveAgentRoute({
-        cfg: telegramDeps.loadConfig(),
+        cfg: telegramDeps.getRuntimeConfig(),
         channel: "telegram",
         accountId,
         peer: { kind: isGroup ? "group" : "direct", id: peerId },
@@ -1428,7 +1428,7 @@ export const registerTelegramHandlers = ({
         return;
       }
 
-      const runtimeCfg = telegramDeps.loadConfig();
+      const runtimeCfg = telegramDeps.getRuntimeConfig();
       if (approvalCallback) {
         const isPluginApproval = approvalCallback.approvalId.startsWith("plugin:");
         const pluginApprovalAuthorizedSender = isTelegramExecApprovalApprover({
@@ -1807,7 +1807,7 @@ export const registerTelegramHandlers = ({
       }
 
       // Check if old chat ID has config and migrate it
-      const currentConfig = telegramDeps.loadConfig();
+      const currentConfig = telegramDeps.getRuntimeConfig();
       const migration = migrateTelegramGroupConfig({
         cfg: currentConfig,
         accountId,
@@ -1818,7 +1818,10 @@ export const registerTelegramHandlers = ({
       if (migration.migrated) {
         runtime.log?.(warn(`[telegram] Migrating group config from ${oldChatId} to ${newChatId}`));
         migrateTelegramGroupConfig({ cfg, accountId, oldChatId, newChatId });
-        await writeConfigFile(currentConfig);
+        await replaceConfigFile({
+          nextConfig: currentConfig,
+          afterWrite: { mode: "auto" },
+        });
         runtime.log?.(warn(`[telegram] Group config migrated and saved successfully`));
       } else if (migration.skippedExisting) {
         runtime.log?.(

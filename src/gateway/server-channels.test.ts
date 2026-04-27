@@ -117,7 +117,7 @@ function installTestRegistry(...plugins: ChannelPlugin<TestAccount>[]) {
 function createManager(options?: {
   channelRuntime?: PluginRuntime["channel"];
   resolveChannelRuntime?: () => PluginRuntime["channel"] | Promise<PluginRuntime["channel"]>;
-  loadConfig?: () => Record<string, unknown>;
+  getRuntimeConfig?: () => Record<string, unknown>;
   channelIds?: ChannelId[];
 }) {
   const log = createSubsystemLogger("gateway/server-channels-test");
@@ -130,7 +130,7 @@ function createManager(options?: {
     channelRuntimeEnvs[channelId] ??= runtime;
   }
   return createChannelManager({
-    loadConfig: () => options?.loadConfig?.() ?? {},
+    getRuntimeConfig: () => options?.getRuntimeConfig?.() ?? {},
     channelLogs,
     channelRuntimeEnvs,
     ...(options?.channelRuntime ? { channelRuntime: options.channelRuntime } : {}),
@@ -518,7 +518,7 @@ describe("server-channels auto restart", () => {
     );
 
     const manager = createManager({
-      loadConfig: () => ({
+      getRuntimeConfig: () => ({
         channels: {
           discord: {
             accounts: {
@@ -547,7 +547,7 @@ describe("server-channels auto restart", () => {
     );
 
     const manager = createManager({
-      loadConfig: () => ({
+      getRuntimeConfig: () => ({
         channels: {
           discord: {
             healthMonitor: { enabled: false },
@@ -570,7 +570,7 @@ describe("server-channels auto restart", () => {
     );
 
     const manager = createManager({
-      loadConfig: () => ({
+      getRuntimeConfig: () => ({
         channels: {
           discord: {
             accounts: {
@@ -611,7 +611,7 @@ describe("server-channels auto restart", () => {
     );
 
     const manager = createManager({
-      loadConfig: () => ({
+      getRuntimeConfig: () => ({
         channels: {
           discord: {
             accounts: {

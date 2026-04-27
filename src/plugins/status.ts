@@ -1,5 +1,5 @@
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOpenClawVersionBase } from "../config/version.js";
 import { listImportedBundledPluginFacadeIds } from "../plugin-sdk/facade-runtime.js";
@@ -210,7 +210,7 @@ function buildPluginRecordFromInstalledIndex(
 export function buildPluginRegistrySnapshotReport(
   params?: PluginReportParams,
 ): PluginRegistryStatusReport {
-  const config = params?.config ?? loadConfig();
+  const config = params?.config ?? getRuntimeConfig();
   const result = loadPluginRegistrySnapshotWithMetadata({
     config,
     env: params?.env,
@@ -241,7 +241,7 @@ function buildPluginReport(
   loadModules: boolean,
 ): PluginStatusReport {
   const baseContext = resolvePluginRuntimeLoadContext({
-    config: params?.config ?? loadConfig(),
+    config: params?.config ?? getRuntimeConfig(),
     env: params?.env,
     logger: params?.logger,
     workspaceDir: params?.workspaceDir,
@@ -345,7 +345,7 @@ export function buildPluginInspectReport(params: {
   logger?: PluginLogger;
   report?: PluginStatusReport;
 }): PluginInspectReport | null {
-  const rawConfig = params.config ?? loadConfig();
+  const rawConfig = params.config ?? getRuntimeConfig();
   const config = resolvePluginRuntimeLoadContext({
     config: rawConfig,
     env: params.env,
@@ -475,7 +475,7 @@ export function buildAllPluginInspectReports(params?: {
   logger?: PluginLogger;
   report?: PluginStatusReport;
 }): PluginInspectReport[] {
-  const rawConfig = params?.config ?? loadConfig();
+  const rawConfig = params?.config ?? getRuntimeConfig();
   const report =
     params?.report ??
     buildPluginDiagnosticsReport({

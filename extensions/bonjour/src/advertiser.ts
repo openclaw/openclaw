@@ -1,6 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
+import os from "node:os";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import { classifyCiaoProcessError, type CiaoProcessErrorClassification } from "./ciao.js";
@@ -158,6 +159,28 @@ function isDisabledByEnv() {
     return true;
   }
   return false;
+}
+
+function resolveSystemMdnsHostname(): string | null {
+  let raw: string;
+  try {
+    raw = os.hostname();
+  } catch {
+    return null;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const firstLabel =
+    trimmed
+      .replace(/\.local$/i, "")
+      .split(".")[0]
+      ?.trim() ?? "";
+  if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/.test(firstLabel)) {
+    return null;
+  }
+  return firstLabel;
 }
 
 function safeServiceName(name: string) {
@@ -328,7 +351,8 @@ export async function startGatewayBonjourAdvertiser(
     cleanupUnhandledRejection = deps.registerUnhandledRejectionHandler?.(handleCiaoProcessError);
     cleanupUncaughtException = deps.registerUncaughtExceptionHandler?.(handleCiaoProcessError);
 
-    const hostnameRaw = process.env.OPENCLAW_MDNS_HOSTNAME?.trim() || "openclaw";
+    const hostnameRaw =
+      process.env.OPENCLAW_MDNS_HOSTNAME?.trim() || resolveSystemMdnsHostname() || "openclaw";
     const hostname =
       hostnameRaw
         .replace(/\.local$/i, "")

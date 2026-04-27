@@ -383,6 +383,7 @@ async function directSessionReq<TPayload = unknown>(
   },
 ): Promise<{ ok: boolean; payload?: TPayload; error?: { code?: string; message?: string } }> {
   const sessionsHandlers = await getSessionsHandlers();
+  const { getRuntimeConfig } = await getGatewayConfigModule();
   let result:
     | { ok: boolean; payload?: TPayload; error?: { code?: string; message?: string } }
     | undefined;
@@ -405,6 +406,7 @@ async function directSessionReq<TPayload = unknown>(
       broadcastToConnIds: vi.fn(),
       getSessionEventSubscriberConnIds: () => new Set<string>(),
       loadGatewayModelCatalog: async () => piSdkMock.models,
+      getRuntimeConfig: getRuntimeConfig,
       ...opts?.context,
     } as never,
     client: opts?.client ?? null,
@@ -815,6 +817,7 @@ describe("gateway server sessions", () => {
     const broadcastToConnIds = vi.fn();
     const respond = vi.fn();
     const sessionsHandlers = await getSessionsHandlers();
+    const { getRuntimeConfig } = await getGatewayConfigModule();
     await sessionsHandlers["sessions.patch"]({
       req: {} as never,
       params: {
@@ -826,6 +829,7 @@ describe("gateway server sessions", () => {
         broadcastToConnIds,
         getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
         loadGatewayModelCatalog: async () => ({ providers: [] }),
+        getRuntimeConfig: getRuntimeConfig,
       } as never,
       client: null,
       isWebchatConnect: () => false,
@@ -874,6 +878,7 @@ describe("gateway server sessions", () => {
     const broadcastToConnIds = vi.fn();
     const respond = vi.fn();
     const sessionsHandlers = await getSessionsHandlers();
+    const { getRuntimeConfig } = await getGatewayConfigModule();
     await sessionsHandlers["sessions.patch"]({
       req: {} as never,
       params: {
@@ -885,6 +890,7 @@ describe("gateway server sessions", () => {
         broadcastToConnIds,
         getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
         loadGatewayModelCatalog: async () => ({ providers: [] }),
+        getRuntimeConfig: getRuntimeConfig,
       } as never,
       client: null,
       isWebchatConnect: () => false,
@@ -928,6 +934,7 @@ describe("gateway server sessions", () => {
     const broadcastToConnIds = vi.fn();
     const respond = vi.fn();
     const sessionsHandlers = await getSessionsHandlers();
+    const { getRuntimeConfig } = await getGatewayConfigModule();
     await sessionsHandlers["sessions.patch"]({
       req: {} as never,
       params: {
@@ -939,6 +946,7 @@ describe("gateway server sessions", () => {
         broadcastToConnIds,
         getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
         loadGatewayModelCatalog: async () => ({ providers: [] }),
+        getRuntimeConfig: getRuntimeConfig,
       } as never,
       client: null,
       isWebchatConnect: () => false,
@@ -981,6 +989,7 @@ describe("gateway server sessions", () => {
     const broadcastToConnIds = vi.fn();
     const respond = vi.fn();
     const sessionsHandlers = await getSessionsHandlers();
+    const { getRuntimeConfig } = await getGatewayConfigModule();
     await sessionsHandlers["sessions.patch"]({
       req: {} as never,
       params: {
@@ -992,6 +1001,7 @@ describe("gateway server sessions", () => {
         broadcastToConnIds,
         getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
         loadGatewayModelCatalog: async () => ({ providers: [] }),
+        getRuntimeConfig: getRuntimeConfig,
       } as never,
       client: null,
       isWebchatConnect: () => false,
@@ -1083,10 +1093,12 @@ describe("gateway server sessions", () => {
       ]),
     );
     const sessionsHandlers = await getSessionsHandlers();
+    const { getRuntimeConfig } = await getGatewayConfigModule();
     const directContext = {
       broadcastToConnIds: vi.fn(),
       getSessionEventSubscriberConnIds: () => new Set<string>(),
       loadGatewayModelCatalog: async () => piSdkMock.models,
+      getRuntimeConfig: getRuntimeConfig,
     } as never;
     async function directSessionReq<TPayload = unknown>(
       method: keyof typeof sessionsHandlers,
@@ -3268,14 +3280,17 @@ describe("gateway server sessions", () => {
     });
 
     beforeResetHookState.hasBeforeResetHook = true;
-    const [{ loadConfig }, { resolveGatewaySessionStoreTarget }, { withSessionStoreLockForTest }] =
-      await Promise.all([
-        import("../config/config.js"),
-        import("./session-utils.js"),
-        import("../config/sessions/store.js"),
-      ]);
+    const [
+      { getRuntimeConfig },
+      { resolveGatewaySessionStoreTarget },
+      { withSessionStoreLockForTest },
+    ] = await Promise.all([
+      import("../config/config.js"),
+      import("./session-utils.js"),
+      import("../config/sessions/store.js"),
+    ]);
     const gatewayStorePath = resolveGatewaySessionStoreTarget({
-      cfg: loadConfig(),
+      cfg: getRuntimeConfig(),
       key: "main",
     }).storePath;
 

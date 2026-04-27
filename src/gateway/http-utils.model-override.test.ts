@@ -6,7 +6,7 @@ const loadConfigMock = vi.fn();
 const loadGatewayModelCatalogMock = vi.fn();
 
 vi.mock("../config/config.js", () => ({
-  loadConfig: () => loadConfigMock(),
+  getRuntimeConfig: () => loadConfigMock(),
 }));
 
 vi.mock("./server-model-catalog.js", () => ({

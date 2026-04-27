@@ -913,6 +913,9 @@ export type ProviderCreateEmbeddingProviderContext = {
     headers?: Record<string, string>;
   };
   providerApiKey?: string;
+  inputType?: string;
+  queryInputType?: string;
+  documentInputType?: string;
   outputDimensionality?: number;
   taskType?: string;
 };

@@ -434,7 +434,7 @@ function buildMattermostWsUrl(baseUrl: string): string {
 export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}): Promise<void> {
   const core = getMattermostRuntime();
   const runtime = resolveRuntime(opts);
-  const cfg = opts.config ?? core.config.loadConfig();
+  const cfg = (opts.config ?? core.config.current()) as OpenClawConfig;
   const account = resolveMattermostAccount({
     cfg,
     accountId: opts.accountId,

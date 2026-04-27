@@ -99,6 +99,7 @@ import {
 import { resolveSystemPromptOverride } from "../system-prompt-override.js";
 import { classifyCompactionReason, resolveCompactionFailureReason } from "./compact-reasons.js";
 import type { CompactEmbeddedPiSessionParams, CompactionMessageMetrics } from "./compact.types.js";
+import { dedupeDuplicateUserMessagesForCompaction } from "./compaction-duplicate-user-messages.js";
 import {
   asCompactionHookRunner,
   buildBeforeCompactionHookMetrics,
@@ -972,9 +973,10 @@ export async function compactEmbeddedPiSessionDirect(
             sessionId: params.sessionId,
             policy: transcriptPolicy,
           });
+          const dedupedValidated = dedupeDuplicateUserMessagesForCompaction(validated);
           // Apply validated transcript to the live session even when no history limit is configured,
           // so compaction and hook metrics are based on the same message set.
-          session.agent.state.messages = validated;
+          session.agent.state.messages = dedupedValidated;
           // "Original" compaction metrics should describe the validated transcript that enters
           // limiting/compaction, not the raw on-disk session snapshot.
           const originalMessages = session.messages.slice();

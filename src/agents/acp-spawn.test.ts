@@ -126,7 +126,7 @@ vi.mock("../config/sessions.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
-  loadConfig: () => hoisted.state.cfg,
+  getRuntimeConfig: () => hoisted.state.cfg,
 }));
 
 vi.mock("../config/sessions/transcript.js", () => ({

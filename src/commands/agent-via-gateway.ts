@@ -3,7 +3,7 @@ import { listAgentIds } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { withProgress } from "../cli/progress.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
@@ -36,6 +36,7 @@ const NO_GATEWAY_TIMEOUT_MS = 2_147_000_000;
 export type AgentCliOpts = {
   message: string;
   agent?: string;
+  model?: string;
   to?: string;
   sessionId?: string;
   thinking?: string;
@@ -101,7 +102,7 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
     throw new Error("Pass --to <E.164>, --session-id, or --agent to choose a session");
   }
 
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const agentIdRaw = opts.agent?.trim();
   const agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : undefined;
   if (agentId) {
@@ -140,6 +141,7 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
         params: {
           message: body,
           agentId,
+          model: opts.model,
           to: opts.to,
           replyTo: opts.replyTo,
           sessionId: opts.sessionId,

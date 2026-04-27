@@ -1,5 +1,6 @@
 export type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 export type {
+  RealtimeVoiceAudioFormat,
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCallbacks,
   RealtimeVoiceBrowserSession,
@@ -14,6 +15,10 @@ export type {
   RealtimeVoiceTool,
   RealtimeVoiceToolCallEvent,
   RealtimeVoiceToolResultOptions,
+} from "../realtime-voice/provider-types.js";
+export {
+  REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
+  REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
 } from "../realtime-voice/provider-types.js";
 export {
   buildRealtimeVoiceAgentConsultChatMessage,

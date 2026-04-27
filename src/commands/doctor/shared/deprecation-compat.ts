@@ -112,6 +112,18 @@ export const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
   }),
   deprecatedCompatRecord({
+    code: "doctor-mcp-server-type-alias",
+    owner: "config",
+    introduced: "2026-04-27",
+    source: "mcp.servers.*.type",
+    migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.mcp.ts",
+    replacement: "mcp.servers.*.transport",
+    docsPath: "/cli/mcp",
+    tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
+    notes:
+      "OpenClaw stores transport names; CLI backends receive their own type fields through runtime adapters.",
+  }),
+  deprecatedCompatRecord({
     code: "doctor-gateway-bind-host-aliases",
     owner: "gateway",
     introduced: "2026-04-26",
