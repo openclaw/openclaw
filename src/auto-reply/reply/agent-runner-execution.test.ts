@@ -18,6 +18,7 @@ const state = vi.hoisted(() => ({
   isCompactionFailureErrorMock: vi.fn((_: string | undefined) => false),
   isContextOverflowErrorMock: vi.fn((_: string | undefined) => false),
   isLikelyContextOverflowErrorMock: vi.fn((_: string | undefined) => false),
+  updateSessionStoreMock: vi.fn(),
 }));
 
 vi.mock("../../agents/pi-embedded.js", () => ({
@@ -65,7 +66,7 @@ vi.mock("../../agents/pi-embedded-helpers.js", () => ({
 vi.mock("../../config/sessions.js", () => ({
   resolveGroupSessionKey: vi.fn(() => null),
   resolveSessionTranscriptPath: vi.fn(),
-  updateSessionStore: vi.fn(),
+  updateSessionStore: state.updateSessionStoreMock,
 }));
 
 vi.mock("../../globals.js", () => ({
@@ -215,10 +216,13 @@ function createFollowupRun(): FollowupRun {
 function createMockReplyOperation(): {
   replyOperation: ReplyOperation;
   failMock: ReturnType<typeof vi.fn>;
+  updateSessionIdMock: ReturnType<typeof vi.fn>;
 } {
   const failMock = vi.fn();
+  const updateSessionIdMock = vi.fn();
   return {
     failMock,
+    updateSessionIdMock,
     replyOperation: {
       key: "main",
       sessionId: "session",
@@ -227,7 +231,7 @@ function createMockReplyOperation(): {
       phase: "running",
       result: null,
       setPhase: vi.fn(),
-      updateSessionId: vi.fn(),
+      updateSessionId: updateSessionIdMock,
       attachBackend: vi.fn(),
       detachBackend: vi.fn(),
       complete: vi.fn(),
@@ -253,6 +257,7 @@ describe("runAgentTurnWithFallback", () => {
     state.isContextOverflowErrorMock.mockReturnValue(false);
     state.isLikelyContextOverflowErrorMock.mockReset();
     state.isLikelyContextOverflowErrorMock.mockReturnValue(false);
+    state.updateSessionStoreMock.mockReset();
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => ({
       result: await params.run("anthropic", "claude"),
       provider: "anthropic",
@@ -1534,7 +1539,9 @@ describe("runAgentTurnWithFallback", () => {
       },
     });
 
-    const { replyOperation, failMock } = createMockReplyOperation();
+    const activeSessionEntry = { sessionId: "session", updatedAt: 1 } as SessionEntry;
+    const activeSessionStore = { "agent:main:main": activeSessionEntry };
+    const { replyOperation, failMock, updateSessionIdMock } = createMockReplyOperation();
     const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
     const result = await runAgentTurnWithFallback({
       commandBody: "hello",
@@ -1556,7 +1563,9 @@ describe("runAgentTurnWithFallback", () => {
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "agent:main:main",
-      getActiveSessionEntry: () => undefined,
+      getActiveSessionEntry: () => activeSessionEntry,
+      activeSessionStore,
+      storePath: "/tmp/sessions.json",
       resolvedVerboseLevel: "off",
     });
 
@@ -1572,6 +1581,9 @@ describe("runAgentTurnWithFallback", () => {
         message: "400 The prompt is too long: 203557, model maximum context length: 196607",
       }),
     );
+    expect(activeSessionStore["agent:main:main"]?.sessionId).toBe("session");
+    expect(updateSessionIdMock).not.toHaveBeenCalled();
+    expect(state.updateSessionStoreMock).not.toHaveBeenCalled();
   });
 
   it("preserves the active session when compaction failure is thrown before reply", async () => {
@@ -1580,7 +1592,9 @@ describe("runAgentTurnWithFallback", () => {
       new Error("Auto-compaction failed: nothing to compact"),
     );
 
-    const { replyOperation, failMock } = createMockReplyOperation();
+    const activeSessionEntry = { sessionId: "session", updatedAt: 1 } as SessionEntry;
+    const activeSessionStore = { "agent:main:main": activeSessionEntry };
+    const { replyOperation, failMock, updateSessionIdMock } = createMockReplyOperation();
     const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
     const result = await runAgentTurnWithFallback({
       commandBody: "hello",
@@ -1602,7 +1616,9 @@ describe("runAgentTurnWithFallback", () => {
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "agent:main:main",
-      getActiveSessionEntry: () => undefined,
+      getActiveSessionEntry: () => activeSessionEntry,
+      activeSessionStore,
+      storePath: "/tmp/sessions.json",
       resolvedVerboseLevel: "off",
     });
 
@@ -1616,6 +1632,9 @@ describe("runAgentTurnWithFallback", () => {
       "run_failed",
       expect.objectContaining({ message: "Auto-compaction failed: nothing to compact" }),
     );
+    expect(activeSessionStore["agent:main:main"]?.sessionId).toBe("session");
+    expect(updateSessionIdMock).not.toHaveBeenCalled();
+    expect(state.updateSessionStoreMock).not.toHaveBeenCalled();
   });
 
   it("falls back to a generic reauth command when the provider in the OAuth error is unsafe", async () => {
