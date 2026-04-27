@@ -347,7 +347,7 @@ describe("slash-http cfg threading", () => {
     expect(mockState.sendMessageMattermost).not.toHaveBeenCalled();
   });
 
-  it("rate limits unknown-token validation lookups before calling Mattermost", async () => {
+  it("throttles repeated unknown-token validation lookups before calling Mattermost", async () => {
     mockState.getMattermostCommand.mockImplementation(async () => ({
       id: "cmd-1",
       token: "valid-token",
@@ -375,7 +375,7 @@ describe("slash-http cfg threading", () => {
         commandTokens: new Set(["valid-token"]),
         registeredCommands: [
           {
-            id: `cmd-${index}`,
+            id: "cmd-1",
             teamId: "team-1",
             trigger: "oc_models",
             token: "valid-token",
@@ -391,7 +391,7 @@ describe("slash-http cfg threading", () => {
       expect(response.res.statusCode).toBe(401);
     }
 
-    expect(mockState.getMattermostCommand).toHaveBeenCalledTimes(5);
+    expect(mockState.getMattermostCommand).toHaveBeenCalledTimes(1);
     expect(mockState.fetchMattermostChannel).not.toHaveBeenCalled();
     expect(mockState.sendMessageMattermost).not.toHaveBeenCalled();
   });

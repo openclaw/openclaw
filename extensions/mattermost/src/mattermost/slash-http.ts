@@ -71,14 +71,14 @@ const BODY_READ_TIMEOUT_MS = 5_000;
 const COMMAND_LOOKUP_TIMEOUT_MS = 1_000;
 const COMMAND_LOOKUP_CACHE_SUCCESS_MS = 5_000;
 const COMMAND_LOOKUP_CACHE_FAILURE_MS = 5_000;
-const UNKNOWN_TOKEN_VALIDATION_WINDOW_MS = 60_000;
-const UNKNOWN_TOKEN_VALIDATION_MAX = 5;
+const UNKNOWN_TOKEN_VALIDATION_THROTTLE_MS = 1_000;
+const UNKNOWN_TOKEN_VALIDATION_MAX_KEYS = 10_000;
 const commandLookupInflight = new Map<string, Promise<MattermostCommandResponse | null>>();
 const commandLookupCache = new Map<
   string,
   { command: MattermostCommandResponse | null; expiresAt: number }
 >();
-const unknownTokenValidationAttempts = new Map<string, { count: number; resetAt: number }>();
+const unknownTokenValidationNextAllowed = new Map<string, number>();
 
 /**
  * Read the full request body as a string.
@@ -161,27 +161,29 @@ function commandLookupKey(
 export function resetMattermostSlashCommandValidationCacheForTests(): void {
   commandLookupInflight.clear();
   commandLookupCache.clear();
-  unknownTokenValidationAttempts.clear();
+  unknownTokenValidationNextAllowed.clear();
 }
 
 function consumeUnknownTokenValidationBudget(params: {
-  remoteAddress: string;
+  accountId: string;
   registered: MattermostRegisteredCommand;
 }): boolean {
-  const key = `${params.remoteAddress}:${params.registered.teamId}:${params.registered.trigger}`;
+  const key = `${params.accountId}:${params.registered.teamId}:${params.registered.id}`;
   const now = Date.now();
-  const existing = unknownTokenValidationAttempts.get(key);
-  if (!existing || existing.resetAt <= now) {
-    unknownTokenValidationAttempts.set(key, {
-      count: 1,
-      resetAt: now + UNKNOWN_TOKEN_VALIDATION_WINDOW_MS,
-    });
-    return true;
-  }
-  if (existing.count >= UNKNOWN_TOKEN_VALIDATION_MAX) {
+  const nextAllowed = unknownTokenValidationNextAllowed.get(key) ?? 0;
+  if (nextAllowed > now) {
     return false;
   }
-  existing.count += 1;
+  if (
+    !unknownTokenValidationNextAllowed.has(key) &&
+    unknownTokenValidationNextAllowed.size >= UNKNOWN_TOKEN_VALIDATION_MAX_KEYS
+  ) {
+    const oldestKey = unknownTokenValidationNextAllowed.keys().next().value;
+    if (oldestKey) {
+      unknownTokenValidationNextAllowed.delete(oldestKey);
+    }
+  }
+  unknownTokenValidationNextAllowed.set(key, now + UNKNOWN_TOKEN_VALIDATION_THROTTLE_MS);
   return true;
 }
 
@@ -475,7 +477,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
     if (
       !startupTokenMatches &&
       !consumeUnknownTokenValidationBudget({
-        remoteAddress: req.socket?.remoteAddress ?? "unknown",
+        accountId: account.accountId,
         registered: registeredCommand,
       })
     ) {
