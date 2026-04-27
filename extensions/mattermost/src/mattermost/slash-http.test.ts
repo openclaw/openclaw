@@ -592,6 +592,49 @@ describe("slash-http", () => {
     expect(client.requests).toEqual(["/commands/cmd-1", "/commands?team_id=t1&custom_only=true"]);
   });
 
+  it("logs sanitized command lookup failures when falling back to the team command list", async () => {
+    const registeredCommand = createRegisteredCommand({ trigger: "oc_status\r\nspoofed" });
+    const command = {
+      id: "cmd-1",
+      token: "valid-token",
+      team_id: "t1",
+      trigger: "oc_status\r\nspoofed",
+      method: MATTERMOST_SLASH_POST_METHOD,
+      url: "https://gateway.example.com/slash",
+      auto_complete: true,
+      delete_at: 0,
+    };
+    const client = createCommandLookupClient({
+      commandLookupError: new Error("primary\ntoken=secret-token"),
+      listCommands: [command],
+    });
+    const log = vi.fn();
+
+    await expect(
+      validateMattermostSlashCommandToken({
+        accountId: "default",
+        client,
+        registeredCommand,
+        payload: {
+          token: "valid-token",
+          team_id: "t1",
+          channel_id: "c1",
+          user_id: "u1",
+          command: "/oc_status",
+          text: "",
+        },
+        log,
+      }),
+    ).resolves.toBe(true);
+
+    expect(log).toHaveBeenCalledTimes(1);
+    const message = log.mock.calls[0]?.[0] ?? "";
+    expect(message).not.toMatch(/[\r\n\t]/u);
+    expect(message).toContain("/oc_status  spoofed");
+    expect(message).toContain("primary token=[redacted]");
+    expect(message).not.toContain("secret-token");
+  });
+
   it("sanitizes upstream lookup errors before logging fallback failures", async () => {
     const registeredCommand = createRegisteredCommand();
     const client = createCommandLookupClient({

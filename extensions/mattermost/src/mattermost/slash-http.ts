@@ -217,13 +217,18 @@ async function fetchCurrentMattermostCommandUncached(params: {
     const currentCommands = await withCommandLookupTimeout((signal) =>
       listMattermostCommands(params.client, params.registered.teamId, { signal }),
     );
+    if (commandLookupError) {
+      params.log?.(
+        `mattermost: slash command lookup by id failed for /${sanitizeMattermostLogValue(params.registered.trigger)}; using team list fallback: ${sanitizeCommandLookupError(commandLookupError)}`,
+      );
+    }
     return currentCommands.find((cmd) => cmd.id === params.registered.id) ?? commandLookupResult;
   } catch (err) {
     const primaryDetail = commandLookupError
       ? `; command lookup: ${sanitizeCommandLookupError(commandLookupError)}`
       : "";
     params.log?.(
-      `mattermost: slash command registration check failed for /${params.registered.trigger}: ${sanitizeCommandLookupError(err)}${primaryDetail}`,
+      `mattermost: slash command registration check failed for /${sanitizeMattermostLogValue(params.registered.trigger)}: ${sanitizeCommandLookupError(err)}${primaryDetail}`,
     );
     return null;
   }
@@ -330,7 +335,9 @@ async function authorizeSlashInvocation(params: {
   try {
     channelInfo = await fetchMattermostChannel(client, channelId);
   } catch (err) {
-    log?.(`mattermost: slash channel lookup failed for ${channelId}: ${String(err)}`);
+    log?.(
+      `mattermost: slash channel lookup failed for ${sanitizeMattermostLogValue(channelId)}: ${sanitizeCommandLookupError(err)}`,
+    );
   }
 
   if (!channelInfo) {
@@ -565,7 +572,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
         log,
       });
     } catch (err) {
-      log?.(`mattermost: slash command handler error: ${String(err)}`);
+      log?.(`mattermost: slash command handler error: ${sanitizeCommandLookupError(err)}`);
       try {
         const to = `channel:${channelId}`;
         await sendMessageMattermost(to, "Sorry, something went wrong processing that command.", {
@@ -759,7 +766,9 @@ async function handleSlashCommandAsync(params: {
         runtime.log?.(`delivered slash reply to ${to}`);
       },
       onError: (err, info) => {
-        runtime.error?.(`mattermost slash ${info.kind} reply failed: ${String(err)}`);
+        runtime.error?.(
+          `mattermost slash ${info.kind} reply failed: ${sanitizeCommandLookupError(err)}`,
+        );
       },
       onReplyStart: typingCallbacks?.onReplyStart,
     });
