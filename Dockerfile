@@ -240,7 +240,11 @@ RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
 # Bundle the Claude Code CLI as a supported provider backend. OpenClaw
 # spawns `claude -p ...` per turn whenever agents.defaults.model.primary
 # is set to claude-cli/<model> (see extensions/anthropic/cli-backend.ts).
-RUN npm install -g @anthropic-ai/claude-code \
+# Pin the version so rebuilds of the same git SHA stay deterministic;
+# bump intentionally and re-validate against extensions/anthropic
+# stream-json output expectations.
+ARG CLAUDE_CODE_VERSION=2.1.119
+RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
  && which claude \
  && claude --version
 
@@ -251,7 +255,11 @@ RUN npm install -g @anthropic-ai/claude-code \
 # ~/.claude through a symlink whose target lives on the emptyDir mount.
 # Symlink lives in the runtime container's rootfs (recreated from this
 # image on every pod start); target dir is created/restored by setup-init.
-RUN ln -sfn /home/node/.openclaw/.claude /home/node/.claude \
+# `rm -rf` first because `ln -sfn` does not replace an existing real
+# directory — it would create a nested link inside it (only `-n` swap
+# behavior applies when the destination is itself a symlink).
+RUN rm -rf /home/node/.claude \
+ && ln -sfn /home/node/.openclaw/.claude /home/node/.claude \
  && chown -h node:node /home/node/.claude
 
 ENV NODE_ENV=production
