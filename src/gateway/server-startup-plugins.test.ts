@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const applyPluginAutoEnable = vi.hoisted(() =>
   vi.fn((params: { config: unknown }) => ({
@@ -190,6 +191,145 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
     );
     expect(loadGatewayStartupPlugins.mock.calls[0]?.[0]).not.toHaveProperty(
       "bundledRuntimeDepsInstaller",
+    );
+  });
+
+  it("derives startup activation from source config instead of runtime plugin defaults", async () => {
+    const sourceConfig = {
+      channels: {
+        telegram: {
+          botToken: "token",
+        },
+      },
+      plugins: {
+        allow: ["bench-plugin"],
+      },
+    } as OpenClawConfig;
+    const activationConfig = {
+      channels: {
+        telegram: {
+          botToken: "token",
+          enabled: true,
+        },
+      },
+      plugins: {
+        allow: ["bench-plugin"],
+        entries: {
+          "bench-plugin": {
+            enabled: true,
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const runtimeConfig = {
+      channels: {
+        telegram: {
+          botToken: "token",
+          dmPolicy: "pairing",
+          groupPolicy: "allowlist",
+        },
+      },
+      plugins: {
+        allow: ["bench-plugin", "memory-core"],
+        entries: {
+          "bench-plugin": {
+            config: {
+              runtimeDefault: true,
+            },
+          },
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: false,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    applyPluginAutoEnable.mockReturnValueOnce({
+      config: activationConfig,
+      changes: [],
+      autoEnabledReasons: {},
+    });
+    const log = createLog();
+    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
+
+    await prepareGatewayPluginBootstrap({
+      cfgAtStart: runtimeConfig,
+      activationSourceConfig: sourceConfig,
+      startupRuntimeConfig: runtimeConfig,
+      minimalTestGateway: false,
+      log,
+    });
+
+    expect(applyPluginAutoEnable).toHaveBeenCalledWith({
+      config: sourceConfig,
+      env: process.env,
+    });
+    expect(loadPluginLookUpTable).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activationSourceConfig: sourceConfig,
+        config: expect.objectContaining({
+          channels: expect.objectContaining({
+            telegram: expect.objectContaining({
+              enabled: true,
+              dmPolicy: "pairing",
+              groupPolicy: "allowlist",
+            }),
+          }),
+          plugins: expect.objectContaining({
+            allow: ["bench-plugin"],
+            entries: expect.objectContaining({
+              "bench-plugin": expect.objectContaining({
+                enabled: true,
+                config: {
+                  runtimeDefault: true,
+                },
+              }),
+              "memory-core": {
+                config: {
+                  dreaming: {
+                    enabled: false,
+                  },
+                },
+              },
+            }),
+          }),
+        }),
+      }),
+    );
+    expect(loadGatewayStartupPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activationSourceConfig: sourceConfig,
+        cfg: expect.objectContaining({
+          channels: expect.objectContaining({
+            telegram: expect.objectContaining({
+              enabled: true,
+              dmPolicy: "pairing",
+              groupPolicy: "allowlist",
+            }),
+          }),
+          plugins: expect.objectContaining({
+            allow: ["bench-plugin"],
+            entries: expect.objectContaining({
+              "bench-plugin": expect.objectContaining({
+                enabled: true,
+                config: {
+                  runtimeDefault: true,
+                },
+              }),
+              "memory-core": {
+                config: {
+                  dreaming: {
+                    enabled: false,
+                  },
+                },
+              },
+            }),
+          }),
+        }),
+      }),
     );
   });
 

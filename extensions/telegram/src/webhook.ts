@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 import type { IncomingMessage } from "node:http";
 import net from "node:net";
 import * as grammy from "grammy";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { isDiagnosticsEnabled } from "openclaw/plugin-sdk/diagnostic-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";

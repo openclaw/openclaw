@@ -488,6 +488,42 @@ describe("resolveGatewayStartupPluginIds", () => {
     });
   });
 
+  it("does not let runtime-default plugin entries bypass the authored startup allowlist", () => {
+    const activationSourceConfig = {
+      channels: {},
+      plugins: {
+        allow: ["bench-plugin"],
+        entries: {
+          browser: {
+            enabled: false,
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const runtimeConfig = {
+      ...activationSourceConfig,
+      plugins: {
+        ...activationSourceConfig.plugins,
+        entries: {
+          ...activationSourceConfig.plugins?.entries,
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: false,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expectStartupPluginIdsCase({
+      config: runtimeConfig,
+      activationSourceConfig,
+      expected: [],
+    });
+  });
+
   it("starts bundled sidecars selected by root config activation paths", () => {
     const rawConfig = {
       browser: {

@@ -985,6 +985,62 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.to).toBe("channel:thread-bound-1");
   });
 
+  it("does not use a child bound destination when completion requester conversation is missing", async () => {
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-bound-missing-requester",
+      },
+      "agent:main:main": {
+        sessionId: "requester-session-bound-missing-requester",
+      },
+    };
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "bound answer: 2" }] }],
+    });
+    registerSessionBindingAdapter({
+      channel: "discord",
+      accountId: "acct-1",
+      listBySession: (targetSessionKey: string) =>
+        targetSessionKey === "agent:main:subagent:test"
+          ? [
+              {
+                bindingId: "discord:acct-1:thread-bound-1",
+                targetSessionKey,
+                targetKind: "subagent",
+                conversation: {
+                  channel: "discord",
+                  accountId: "acct-1",
+                  conversationId: "thread-bound-1",
+                  parentConversationId: "parent-main",
+                },
+                status: "active",
+                boundAt: Date.now(),
+              },
+            ]
+          : [],
+      resolveByConversation: () => null,
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-session-bound-missing-requester",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "discord", accountId: "acct-1" },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      spawnMode: "session",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.deliver).toBe(false);
+    expect(call?.params?.to).toBeUndefined();
+    expect(call?.params?.threadId).toBeUndefined();
+  });
+
   it("does not duplicate to main channel when two active bound sessions complete from the same requester channel", async () => {
     sessionStore = {
       "agent:main:subagent:child-a": {

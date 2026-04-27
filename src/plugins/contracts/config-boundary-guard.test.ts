@@ -75,4 +75,56 @@ describe("config boundary guard", () => {
       "extensions/telegram/src/send.ts:1: export async function send() { return loadConfig(); }",
     ]);
   });
+
+  it("flags broad config-runtime barrel imports in production code", () => {
+    const repoRoot = makeRepoFixture();
+    writeFixture(
+      repoRoot,
+      "extensions/telegram/src/index.ts",
+      [
+        'import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";',
+        'import { requireRuntimeConfig } from "openclaw/plugin-sdk/config-runtime";',
+        'type Loader = typeof import("openclaw/plugin-sdk/config-runtime").getRuntimeConfig;',
+        "export type Config = OpenClawConfig;",
+        "export const load: Loader = requireRuntimeConfig;",
+      ].join("\n"),
+    );
+
+    expect(collectDeprecatedInternalConfigApiViolations({ repoRoot })).toEqual(
+      expect.arrayContaining([
+        "extensions/telegram/src/index.ts:1 use narrow plugin-sdk config subpaths instead of openclaw/plugin-sdk/config-runtime",
+        "extensions/telegram/src/index.ts:2 use narrow plugin-sdk config subpaths instead of openclaw/plugin-sdk/config-runtime",
+        "extensions/telegram/src/index.ts:3 use narrow plugin-sdk config subpaths instead of openclaw/plugin-sdk/config-runtime",
+      ]),
+    );
+  });
+
+  it("flags broad config-runtime test mocks outside compat guard fixtures", () => {
+    const repoRoot = makeRepoFixture();
+    writeFixture(
+      repoRoot,
+      "extensions/telegram/src/index.test.ts",
+      'vi.mock("openclaw/plugin-sdk/config-runtime", () => ({}));',
+    );
+
+    expect(collectDeprecatedInternalConfigApiViolations({ repoRoot })).toEqual([
+      "extensions/telegram/src/index.test.ts:1 use narrow plugin-sdk config subpaths instead of openclaw/plugin-sdk/config-runtime",
+    ]);
+  });
+
+  it("allows narrow config SDK subpaths in production code", () => {
+    const repoRoot = makeRepoFixture();
+    writeFixture(
+      repoRoot,
+      "extensions/telegram/src/index.ts",
+      [
+        'import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";',
+        'import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";',
+        'type Loader = typeof import("openclaw/plugin-sdk/runtime-config-snapshot").getRuntimeConfig;',
+        'export const load = (cfg: OpenClawConfig) => requireRuntimeConfig(cfg, "telegram");',
+      ].join("\n"),
+    );
+
+    expect(collectDeprecatedInternalConfigApiViolations({ repoRoot })).toEqual([]);
+  });
 });

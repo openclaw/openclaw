@@ -263,7 +263,7 @@ async function monitorWithAutoAbort(opts: Omit<MonitorTelegramOpts, "abortSignal
   });
 }
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
   return {
     getRuntimeConfig: getRuntimeConfigMock,
     resolveAgentMaxConcurrent: (cfg: { agents?: { defaults?: { maxConcurrent?: number } } }) =>

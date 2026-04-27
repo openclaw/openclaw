@@ -119,6 +119,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     pendingAssistantUsage: undefined,
     assistantUsageCommitted: false,
     compactionInFlight: false,
+    lastCompactionTokensAfter: undefined,
     pendingCompactionRetry: 0,
     compactionRetryResolve: undefined,
     compactionRetryReject: undefined,
@@ -443,6 +444,12 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   };
   const incrementCompactionCount = () => {
     compactionCount += 1;
+  };
+  const noteCompactionTokensAfter = (value: unknown) => {
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+      return;
+    }
+    state.lastCompactionTokensAfter = Math.floor(value);
   };
 
   const blockChunking = params.blockReplyChunking;
@@ -826,8 +833,10 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     recordAssistantUsage,
     commitAssistantUsage,
     incrementCompactionCount,
+    noteCompactionTokensAfter,
     getUsageTotals,
     getCompactionCount: () => compactionCount,
+    getLastCompactionTokensAfter: () => state.lastCompactionTokensAfter,
   };
 
   const sessionUnsubscribe = params.session.subscribe(createEmbeddedPiSessionEventHandler(ctx));
@@ -896,6 +905,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     getLastToolError: () => (state.lastToolError ? { ...state.lastToolError } : undefined),
     getUsageTotals,
     getCompactionCount: () => compactionCount,
+    getLastCompactionTokensAfter: () => state.lastCompactionTokensAfter,
     getItemLifecycle: () => ({
       startedCount: state.itemStartedCount,
       completedCount: state.itemCompletedCount,

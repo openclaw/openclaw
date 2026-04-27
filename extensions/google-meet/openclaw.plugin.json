@@ -245,8 +245,11 @@
           "audioInputCommand": {
             "type": "array",
             "default": [
-              "rec",
+              "sox",
               "-q",
+              "-t",
+              "coreaudio",
+              "BlackHole 2ch",
               "-t",
               "raw",
               "-r",
@@ -267,7 +270,7 @@
           "audioOutputCommand": {
             "type": "array",
             "default": [
-              "play",
+              "sox",
               "-q",
               "-t",
               "raw",
@@ -280,7 +283,10 @@
               "-b",
               "16",
               "-L",
-              "-"
+              "-",
+              "-t",
+              "coreaudio",
+              "BlackHole 2ch"
             ],
             "items": {
               "type": "string"

@@ -318,6 +318,7 @@ export async function maybeRepairGatewayServiceConfig(
     command,
     expectedGatewayToken,
     expectedManagedServiceEnvKeys,
+    expectedPort: port,
   });
   const serviceToken = readEmbeddedGatewayToken(command);
   if (tokenRefConfigured && serviceToken) {

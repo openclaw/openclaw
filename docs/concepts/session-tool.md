@@ -22,6 +22,27 @@ orchestrate sub-agents.
 | `subagents`        | List, steer, or kill spawned sub-agents for this session                    |
 | `session_status`   | Show a `/status`-style card and optionally set a per-session model override |
 
+These tools are still subject to the active tool profile and allow/deny
+policy. `tools.profile: "coding"` includes the full session orchestration
+set, including `sessions_spawn`, `sessions_yield`, and `subagents`.
+`tools.profile: "messaging"` includes cross-session messaging tools
+(`sessions_list`, `sessions_history`, `sessions_send`, `session_status`) but
+does not include sub-agent spawning. To keep a messaging profile and still
+allow native delegation, add:
+
+```json5
+{
+  tools: {
+    profile: "messaging",
+    alsoAllow: ["sessions_spawn", "sessions_yield", "subagents"],
+  },
+}
+```
+
+Group, provider, sandbox, and per-agent policies can still remove those tools
+after the profile stage. Use `/tools` from the affected session to inspect the
+effective tool list.
+
 ## Listing and reading sessions
 
 `sessions_list` returns sessions with their key, agentId, kind, channel, model,

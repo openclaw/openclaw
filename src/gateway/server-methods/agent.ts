@@ -428,6 +428,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       promptMode?: "full" | "minimal" | "none";
       bootstrapContextMode?: "full" | "lightweight";
       bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
+      acpTurnSource?: "manual_spawn";
       internalEvents?: AgentInternalEvent[];
       idempotencyKey: string;
       timeout?: number;
@@ -1181,6 +1182,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           extraSystemPrompt: request.extraSystemPrompt,
           bootstrapContextMode: request.bootstrapContextMode,
           bootstrapContextRunKind: request.bootstrapContextRunKind,
+          acpTurnSource: request.acpTurnSource,
           internalEvents: request.internalEvents,
           inputProvenance,
           abortSignal: activeRunAbort.controller.signal,

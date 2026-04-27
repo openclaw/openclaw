@@ -1092,7 +1092,9 @@ describe("update-cli", () => {
     );
 
     expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Package updates cannot run from inside the gateway service process."),
+      expect.stringContaining(
+        "Package updates cannot run from inside the gateway service process.",
+      ),
     );
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
     expect(runGatewayUpdate).not.toHaveBeenCalled();

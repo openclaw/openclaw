@@ -36,9 +36,11 @@ export {
 } from "../channels/plugins/group-policy-warnings.js";
 export { buildAccountScopedDmSecurityPolicy } from "../channels/plugins/helpers.js";
 export {
+  resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
   resolveChannelGroupToolsPolicy,
   resolveToolsBySender,
+  type ChannelGroupPolicy,
 } from "../config/group-policy.js";
 export {
   DM_GROUP_ACCESS_REASON,

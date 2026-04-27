@@ -2093,6 +2093,7 @@ export async function runEmbeddedAttempt(
         setTerminalLifecycleMeta,
         getUsageTotals,
         getCompactionCount,
+        getLastCompactionTokensAfter,
       } = subscription;
 
       const queueHandle: EmbeddedPiQueueHandle & {
@@ -3195,6 +3196,7 @@ export async function runEmbeddedAttempt(
         attemptUsage,
         promptCache,
         compactionCount: getCompactionCount(),
+        compactionTokensAfter: getLastCompactionTokensAfter(),
         // Client tool call detected (OpenResponses hosted tools)
         clientToolCall: clientToolCallDetected ?? undefined,
         yieldDetected: yieldDetected || undefined,

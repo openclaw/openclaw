@@ -69,6 +69,7 @@ vi.mock("../daemon/service-audit.js", () => ({
   SERVICE_AUDIT_CODES: {
     gatewayEntrypointMismatch: testServiceAuditCodes.gatewayEntrypointMismatch,
     gatewayManagedEnvEmbedded: testServiceAuditCodes.gatewayManagedEnvEmbedded,
+    gatewayPortMismatch: testServiceAuditCodes.gatewayPortMismatch,
     gatewayProxyEnvEmbedded: testServiceAuditCodes.gatewayProxyEnvEmbedded,
     gatewayTokenMismatch: testServiceAuditCodes.gatewayTokenMismatch,
   },
@@ -230,6 +231,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     fsMocks.realpath.mockImplementation(async (value: string) => value);
+    mocks.resolveGatewayPort.mockReturnValue(18789);
     mocks.resolveGatewayAuthTokenForService.mockImplementation(async (cfg: OpenClawConfig, env) => {
       const configToken =
         typeof cfg.gateway?.auth?.token === "string" ? cfg.gateway.auth.token.trim() : undefined;
@@ -320,6 +322,44 @@ describe("maybeRepairGatewayServiceConfig", () => {
       }),
     );
     expect(mocks.install).toHaveBeenCalledTimes(1);
+  });
+
+  it("repairs gateway services whose pinned port differs from current config", async () => {
+    mocks.resolveGatewayPort.mockReturnValue(18888);
+    mocks.readCommand.mockResolvedValue({
+      programArguments: gatewayProgramArguments,
+      environment: {},
+    });
+    mocks.buildGatewayInstallPlan.mockResolvedValue({
+      programArguments: ["/usr/bin/node", "/usr/local/bin/openclaw", "gateway", "--port", "18888"],
+      workingDirectory: "/tmp",
+      environment: {},
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: false,
+      issues: [
+        {
+          code: "gateway-port-mismatch",
+          message: "Gateway service port does not match current gateway config.",
+          detail: "18789 -> 18888",
+          level: "recommended",
+        },
+      ],
+    });
+    mocks.install.mockResolvedValue(undefined);
+
+    await runRepair({ gateway: { port: 18888 } });
+
+    expect(mocks.auditGatewayServiceConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedPort: 18888,
+      }),
+    );
+    expect(mocks.install).toHaveBeenCalledWith(
+      expect.objectContaining({
+        programArguments: expect.arrayContaining(["18888"]),
+      }),
+    );
   });
 
   it("repairs gateway services with embedded proxy environment values", async () => {

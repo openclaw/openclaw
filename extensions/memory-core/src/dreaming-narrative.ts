@@ -3,12 +3,6 @@ import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
-  getRuntimeConfig,
-  loadSessionStore,
-  resolveStorePath,
-  updateSessionStore,
-} from "openclaw/plugin-sdk/config-runtime";
-import {
   extractErrorCode,
   formatErrorMessage,
   RequestScopedSubagentRuntimeError,
@@ -18,6 +12,12 @@ import {
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import { createAsyncLock } from "openclaw/plugin-sdk/infra-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
+  loadSessionStore,
+  resolveStorePath,
+  updateSessionStore,
+} from "openclaw/plugin-sdk/session-store-runtime";
 
 // ── Types ──────────────────────────────────────────────────────────────
 

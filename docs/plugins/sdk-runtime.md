@@ -41,7 +41,14 @@ Persist changes with `api.runtime.config.mutateConfigFile(...)` or `api.runtime.
 
 The mutation helpers return `afterWrite` plus a typed `followUp` summary so callers can log or test whether they requested a restart. The gateway still owns when that restart actually happens.
 
-`api.runtime.config.loadConfig()` and `api.runtime.config.writeConfigFile(...)` are deprecated compatibility helpers under `runtime-config-load-write`. They warn once at runtime, and bundled plugins must not use them; the config boundary guards fail if production plugin code calls them or imports those helpers from plugin SDK subpaths.
+`api.runtime.config.loadConfig()` and `api.runtime.config.writeConfigFile(...)` are deprecated compatibility helpers under `runtime-config-load-write`. They warn once at runtime, and remain available for old external plugins during the migration window. Bundled plugins must not use them; the config boundary guards fail if plugin code calls them or imports those helpers from plugin SDK subpaths.
+
+For direct SDK imports, use the focused config subpaths instead of the broad
+`openclaw/plugin-sdk/config-runtime` compatibility barrel: `config-types` for
+types, `plugin-config-runtime` for already-loaded config assertions and plugin
+entry lookup, `runtime-config-snapshot` for current process snapshots, and
+`config-mutation` for writes. Bundled plugin tests should mock these focused
+subpaths directly instead of mocking the broad compatibility barrel.
 
 Internal OpenClaw runtime code has the same direction: load config once at the CLI, gateway, or process boundary, then pass that value through. Successful mutation writes refresh the process runtime snapshot and advance its internal revision; long-lived caches should key off the runtime-owned cache key instead of serializing config locally. Long-lived runtime modules have a zero-tolerance scanner for ambient `loadConfig()` calls; use a passed `cfg`, a request `context.getRuntimeConfig()`, or `getRuntimeConfig()` at an explicit process boundary.
 

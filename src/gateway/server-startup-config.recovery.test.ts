@@ -14,6 +14,7 @@ vi.mock("../config/config.js", () => ({
     }
     return snapshot.issues.every((issue) => issue.path.startsWith("plugins.entries."));
   }),
+  replaceConfigFile: vi.fn(),
   shouldAttemptLastKnownGoodRecovery: vi.fn((snapshot: ConfigFileSnapshot) => {
     if (snapshot.valid) {
       return false;
@@ -73,6 +74,67 @@ describe("gateway startup config recovery", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("runs startup plugin auto-enable against source config without persisting runtime defaults", async () => {
+    const sourceConfig = {
+      browser: { enabled: false },
+      gateway: { mode: "local" },
+      plugins: {
+        allow: ["bench-plugin"],
+        entries: {
+          browser: { enabled: false },
+        },
+      },
+    } as OpenClawConfig;
+    const runtimeConfig = {
+      ...sourceConfig,
+      plugins: {
+        ...sourceConfig.plugins,
+        entries: {
+          ...sourceConfig.plugins?.entries,
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: false,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const snapshot = {
+      ...buildTestConfigSnapshot({
+        path: configPath,
+        exists: true,
+        raw: `${JSON.stringify(sourceConfig)}\n`,
+        parsed: sourceConfig,
+        valid: true,
+        config: runtimeConfig,
+        issues: [],
+        legacyIssues: [],
+      }),
+      sourceConfig,
+      resolved: sourceConfig,
+      runtimeConfig,
+      config: runtimeConfig,
+    } satisfies ConfigFileSnapshot;
+    vi.mocked(configIo.readConfigFileSnapshot).mockResolvedValueOnce(snapshot);
+    const log = { info: vi.fn(), warn: vi.fn() };
+
+    await expect(
+      loadGatewayStartupConfigSnapshot({
+        minimalTestGateway: false,
+        log,
+      }),
+    ).resolves.toEqual({
+      snapshot,
+      wroteConfig: false,
+    });
+
+    expect(configIo.readConfigFileSnapshot).toHaveBeenCalledTimes(1);
+    expect(configIo.replaceConfigFile).not.toHaveBeenCalled();
+    expect(log.info).not.toHaveBeenCalled();
   });
 
   it("restores last-known-good config before startup validation", async () => {

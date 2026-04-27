@@ -16,7 +16,7 @@ export type {
   OpenClawConfig,
   GroupToolPolicyConfig,
   MarkdownTableMode,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/config-types";
 export type {
   PluginRuntime,
   AnyAgentTool,
@@ -30,12 +30,12 @@ export {
   normalizeAccountId,
 } from "openclaw/plugin-sdk/core";
 export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
+export { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 export {
-  isDangerousNameMatchingEnabled,
   resolveDefaultGroupPolicy,
   resolveOpenProviderRuntimeGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/runtime-group-policy";
 export {
   mergeAllowlist,
   summarizeMapping,

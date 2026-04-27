@@ -412,6 +412,10 @@ marketplace installs persist marketplace source metadata instead of an npm spec.
 positives from the built-in dangerous-code scanner. It allows plugin installs
 and plugin updates to continue past built-in `critical` findings, but it still
 does not bypass plugin `before_install` policy blocks or scan-failure blocking.
+Install scans ignore common test files and directories such as `tests/`,
+`__tests__/`, `*.test.*`, and `*.spec.*` to avoid blocking packaged test mocks;
+declared plugin runtime entrypoints are still scanned even if they use one of
+those names.
 
 This CLI flag applies to plugin install/update flows only. Gateway-backed skill
 dependency installs use the matching `dangerouslyForceUnsafeInstall` request

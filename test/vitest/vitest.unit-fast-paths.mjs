@@ -53,9 +53,11 @@ const unitFastCandidateGlobs = [
   "test/**/*.test.ts",
 ];
 export const forcedUnitFastTestFiles = [
-  "packages/memory-host-sdk/src/host/post-json.test.ts",
   "packages/memory-host-sdk/src/host/batch-http.test.ts",
+  "packages/memory-host-sdk/src/host/backend-config.test.ts",
   "packages/memory-host-sdk/src/host/embeddings-remote-fetch.test.ts",
+  "packages/memory-host-sdk/src/host/post-json.test.ts",
+  "packages/memory-host-sdk/src/host/qmd-process.test.ts",
   "src/acp/client.test.ts",
   "src/acp/control-plane/manager.test.ts",
   "src/acp/persistent-bindings.test.ts",
@@ -67,11 +69,13 @@ export const forcedUnitFastTestFiles = [
   "src/crestodian/rescue-message.test.ts",
   "src/flows/channel-setup.test.ts",
   "src/context-engine/context-engine.test.ts",
+  "src/docker-image-digests.test.ts",
   "src/i18n/registry.test.ts",
   "src/install-sh-version.test.ts",
   "src/logger.test.ts",
   "src/memory-host-sdk/host/internal.test.ts",
   "src/memory-host-sdk/host/batch-http.test.ts",
+  "src/memory-host-sdk/host/backend-config.test.ts",
   "src/memory-host-sdk/host/embeddings-remote-fetch.test.ts",
   "src/memory-host-sdk/host/post-json.test.ts",
   "src/memory-host-sdk/host/session-files.test.ts",
@@ -90,6 +94,7 @@ export const forcedUnitFastTestFiles = [
   "src/realtime-transcription/websocket-session.test.ts",
   "src/trajectory/export.test.ts",
   "src/tts/provider-registry.test.ts",
+  "src/tts/status-config.test.ts",
   "src/version.test.ts",
 ];
 const forcedUnitFastTestFileSet = new Set(forcedUnitFastTestFiles);

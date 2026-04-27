@@ -465,5 +465,12 @@ export async function waitForChatFinalEvent(params: {
     }
     await sleep(20);
   }
-  throw new Error(`timeout waiting for final chat event (runId=${params.runId})`);
+  const observed = params.events
+    .filter((evt) => evt.runId === params.runId || evt.sessionKey === params.sessionKey)
+    .map((evt) => `${evt.runId ?? "no-run"}:${evt.sessionKey ?? "no-session"}:${evt.state}`)
+    .slice(-10)
+    .join(", ");
+  throw new Error(
+    `timeout waiting for final chat event (runId=${params.runId}, sessionKey=${params.sessionKey}, observed=${observed || "none"})`,
+  );
 }

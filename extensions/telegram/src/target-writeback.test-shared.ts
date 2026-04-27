@@ -14,15 +14,23 @@ export const loadCronStore: AsyncUnknownMock = vi.fn();
 export const resolveCronStorePath: UnknownMock = vi.fn();
 export const saveCronStore: AsyncUnknownMock = vi.fn();
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
-    "openclaw/plugin-sdk/config-runtime",
+vi.mock("openclaw/plugin-sdk/config-mutation", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-mutation")>(
+    "openclaw/plugin-sdk/config-mutation",
   );
   return {
     ...actual,
     readConfigFileSnapshotForWrite,
     replaceConfigFile,
-    writeConfigFile,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/cron-store-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/cron-store-runtime")>(
+    "openclaw/plugin-sdk/cron-store-runtime",
+  );
+  return {
+    ...actual,
     loadCronStore,
     resolveCronStorePath,
     saveCronStore,

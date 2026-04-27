@@ -8,6 +8,7 @@ import { parseClawHubPluginSpec } from "../infra/clawhub.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type BundledPluginSource, findBundledPluginSource } from "../plugins/bundled-sources.js";
 import { installPluginFromClawHub } from "../plugins/clawhub.js";
+import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
 import type { InstallSafetyOverrides } from "../plugins/install-security-scan.js";
 import {
   PLUGIN_INSTALL_ERROR_CODE,
@@ -271,11 +272,13 @@ async function tryInstallPluginOrHookPackFromNpmSpec(params: {
   pin?: boolean;
   safetyOverrides: InstallSafetyOverrides;
   allowBundledFallback: boolean;
+  extensionsDir: string;
 }): Promise<{ ok: true } | { ok: false }> {
   const result = await installPluginFromNpmSpec({
     ...params.safetyOverrides,
     mode: params.installMode,
     spec: params.spec,
+    extensionsDir: params.extensionsDir,
     logger: createPluginInstallLogger(),
   });
   if (!result.ok) {
@@ -468,6 +471,7 @@ export async function runPluginInstallCommand(params: {
   const cfg = snapshot.config;
   const installMode = resolveInstallMode(opts.force);
   const safetyOverrides = resolveInstallSafetyOverrides(opts);
+  const extensionsDir = resolveDefaultPluginExtensionsDir();
 
   if (opts.marketplace) {
     const result = await installPluginFromMarketplace({
@@ -475,6 +479,7 @@ export async function runPluginInstallCommand(params: {
       marketplace: opts.marketplace,
       mode: installMode,
       plugin: raw,
+      extensionsDir,
       logger: createPluginInstallLogger(),
     });
     if (!result.ok) {
@@ -508,6 +513,7 @@ export async function runPluginInstallCommand(params: {
         mode: installMode,
         path: resolved,
         dryRun: true,
+        extensionsDir,
         logger: createPluginInstallLogger(),
       });
       if (!probe.ok) {
@@ -561,6 +567,7 @@ export async function runPluginInstallCommand(params: {
       ...safetyOverrides,
       mode: installMode,
       path: resolved,
+      extensionsDir,
       logger: createPluginInstallLogger(),
     });
     if (!result.ok) {
@@ -616,6 +623,7 @@ export async function runPluginInstallCommand(params: {
       pin: opts.pin,
       safetyOverrides,
       allowBundledFallback: false,
+      extensionsDir,
     });
     if (!npmPrefixResult.ok) {
       return defaultRuntime.exit(1);
@@ -659,6 +667,7 @@ export async function runPluginInstallCommand(params: {
       ...safetyOverrides,
       mode: installMode,
       spec: raw,
+      extensionsDir,
       logger: createPluginInstallLogger(),
     });
     if (!result.ok) {
@@ -692,6 +701,7 @@ export async function runPluginInstallCommand(params: {
       ...safetyOverrides,
       mode: installMode,
       spec: preferredClawHubSpec,
+      extensionsDir,
       logger: createPluginInstallLogger(),
     });
     if (clawhubResult.ok) {
@@ -727,6 +737,7 @@ export async function runPluginInstallCommand(params: {
     pin: opts.pin,
     safetyOverrides,
     allowBundledFallback: true,
+    extensionsDir,
   });
   if (!npmResult.ok) {
     return defaultRuntime.exit(1);

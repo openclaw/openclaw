@@ -1,12 +1,13 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import * as configRuntimeModule from "openclaw/plugin-sdk/config-runtime";
 import {
   RequestScopedSubagentRuntimeError,
   SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE,
 } from "openclaw/plugin-sdk/error-runtime";
 import * as memoryCoreHostRuntimeCoreModule from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import * as runtimeConfigSnapshotModule from "openclaw/plugin-sdk/runtime-config-snapshot";
+import * as sessionStoreRuntimeModule from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveGlobalMap } from "../../../src/shared/global-singleton.js";
 import {
@@ -827,14 +828,16 @@ describe("generateAndAppendDreamNarrative", () => {
     await fs.utimes(orphanPath, oldDate, oldDate);
     await fs.utimes(livePath, oldDate, oldDate);
 
-    vi.spyOn(configRuntimeModule, "loadConfig").mockReturnValue({ session: {} } as never);
-    vi.spyOn(configRuntimeModule, "resolveStorePath").mockImplementation(((
+    vi.spyOn(runtimeConfigSnapshotModule, "getRuntimeConfig").mockReturnValue({
+      session: {},
+    } as never);
+    vi.spyOn(sessionStoreRuntimeModule, "resolveStorePath").mockImplementation(((
       _store: string | undefined,
       { agentId }: { agentId: string },
     ) => {
       expect(agentId).toBe("main");
       return storePath;
-    }) as typeof configRuntimeModule.resolveStorePath);
+    }) as typeof sessionStoreRuntimeModule.resolveStorePath);
     vi.spyOn(memoryCoreHostRuntimeCoreModule, "resolveStateDir").mockReturnValue(stateDir);
 
     const subagent = createMockSubagent("The repository whispered of forgotten endpoints.");

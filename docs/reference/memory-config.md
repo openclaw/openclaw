@@ -439,19 +439,19 @@ When sqlite-vec is unavailable, OpenClaw falls back to in-process cosine similar
 
 Set `memory.backend = "qmd"` to enable. All QMD settings live under `memory.qmd`:
 
-| Key                      | Type      | Default  | Description                                  |
-| ------------------------ | --------- | -------- | -------------------------------------------- |
-| `command`                | `string`  | `qmd`    | QMD executable path                          |
-| `searchMode`             | `string`  | `search` | Search command: `search`, `vsearch`, `query` |
-| `includeDefaultMemory`   | `boolean` | `true`   | Auto-index `MEMORY.md` + `memory/**/*.md`    |
-| `paths[]`                | `array`   | --       | Extra paths: `{ name, path, pattern? }`      |
-| `sessions.enabled`       | `boolean` | `false`  | Index session transcripts                    |
-| `sessions.retentionDays` | `number`  | --       | Transcript retention                         |
-| `sessions.exportDir`     | `string`  | --       | Export directory                             |
+| Key                      | Type      | Default  | Description                                                                           |
+| ------------------------ | --------- | -------- | ------------------------------------------------------------------------------------- |
+| `command`                | `string`  | `qmd`    | QMD executable path; set an absolute path when service `PATH` differs from your shell |
+| `searchMode`             | `string`  | `search` | Search command: `search`, `vsearch`, `query`                                          |
+| `includeDefaultMemory`   | `boolean` | `true`   | Auto-index `MEMORY.md` + `memory/**/*.md`                                             |
+| `paths[]`                | `array`   | --       | Extra paths: `{ name, path, pattern? }`                                               |
+| `sessions.enabled`       | `boolean` | `false`  | Index session transcripts                                                             |
+| `sessions.retentionDays` | `number`  | --       | Transcript retention                                                                  |
+| `sessions.exportDir`     | `string`  | --       | Export directory                                                                      |
 
 `searchMode: "search"` is lexical/BM25-only. OpenClaw does not run semantic vector readiness probes or QMD embedding maintenance for that mode, including during `memory status --deep`; `vsearch` and `query` continue to require QMD vector readiness and embeddings.
 
-OpenClaw prefers the current QMD collection and MCP query shapes, but keeps older QMD releases working by falling back to legacy `--mask` collection flags and older MCP tool names when needed.
+OpenClaw prefers current QMD collection and MCP query shapes, but keeps older QMD releases working by trying compatible collection pattern flags and older MCP tool names when needed. When QMD advertises support for multiple collection filters, same-source collections are searched with one QMD process; older QMD builds keep the per-collection compatibility path. Same-source means durable memory collections are grouped together, while session transcript collections remain a separate group so source diversification still has both inputs.
 
 <Note>
 QMD model overrides stay on the QMD side, not OpenClaw config. If you need to override QMD's models globally, set environment variables such as `QMD_EMBED_MODEL`, `QMD_RERANK_MODEL`, and `QMD_GENERATE_MODEL` in the gateway runtime environment.

@@ -525,6 +525,29 @@ describe("gateway agent handler", () => {
     );
   });
 
+  it("forwards explicit ACP turn source markers", async () => {
+    primeMainAgentRun();
+
+    await invokeAgent(
+      {
+        message: "bootstrap ACP child",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        acpTurnSource: "manual_spawn",
+        idempotencyKey: "test-acp-turn-source",
+      },
+      { reqId: "test-acp-turn-source" },
+    );
+
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const lastCall = mocks.agentCommand.mock.calls.at(-1);
+    expect(lastCall?.[0]).toEqual(
+      expect.objectContaining({
+        acpTurnSource: "manual_spawn",
+      }),
+    );
+  });
+
   it("rejects provider and model overrides for write-scoped callers", async () => {
     primeMainAgentRun();
     mocks.agentCommand.mockClear();
