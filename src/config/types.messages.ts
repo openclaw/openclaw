@@ -27,6 +27,8 @@ export type InboundDebounceConfig = {
   byChannel?: InboundDebounceByProvider;
 };
 
+export type InboundMetadataMode = "full" | "compact-direct";
+
 export type BroadcastStrategy = "parallel" | "sequential";
 
 export type BroadcastConfig = {
@@ -110,6 +112,8 @@ export type MessagesConfig = {
   queue?: QueueConfig;
   /** Debounce rapid inbound messages per sender (global + per-channel overrides). */
   inbound?: InboundDebounceConfig;
+  /** Model-visible inbound metadata format. Default: "full". */
+  inboundMetadataMode?: InboundMetadataMode;
   /** Emoji reaction used to acknowledge inbound messages (empty disables). */
   ackReaction?: string;
   /** When to send ack reactions. Default: "group-mentions". */

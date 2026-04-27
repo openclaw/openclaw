@@ -821,6 +821,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "messages.queue.cap": "Queue Capacity",
   "messages.queue.drop": "Queue Drop Strategy",
   "messages.inbound": "Inbound Debounce",
+  "messages.inboundMetadataMode": "Inbound Metadata Mode",
   "messages.suppressToolErrors": "Suppress Tool Error Warnings",
   "messages.ackReaction": "Ack Reaction Emoji",
   "messages.ackReactionScope": "Ack Reaction Scope",

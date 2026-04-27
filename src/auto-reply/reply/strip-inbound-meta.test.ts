@@ -64,6 +64,11 @@ describe("stripInboundMetadata", () => {
     expect(stripInboundMetadata(input)).toBe("Can you help me?");
   });
 
+  it("strips compact direct metadata lines", () => {
+    const input = `Direct message context (untrusted metadata): channel="telegram" chat_id="telegram:123" message_id="777" sender_id="999"\n\nCan you help me?`;
+    expect(stripInboundMetadata(input)).toBe("Can you help me?");
+  });
+
   it("strips Replied message block leaving user message intact", () => {
     const input = `${REPLY_BLOCK}\n\nGot it, thanks!`;
     expect(stripInboundMetadata(input)).toBe("Got it, thanks!");
@@ -138,6 +143,11 @@ What should I grab on the way?`;
     expect(stripLeadingInboundMetadata(input)).toBe("What should I grab on the way?");
   });
 
+  it("strips compact direct metadata from leading-only history views", () => {
+    const input = `Direct message context (untrusted metadata): channel="telegram" chat_id="telegram:123" message_id="777" sender_id="999"\n\nWhat should I grab on the way?`;
+    expect(stripLeadingInboundMetadata(input)).toBe("What should I grab on the way?");
+  });
+
   it("strips an active-memory prompt prefix block from leading-only history views even when earlier text precedes it", () => {
     const input = `Queued earlier user turn\n\n${ACTIVE_MEMORY_PREFIX_BLOCK}\n\nWhat should I grab on the way?`;
     expect(stripLeadingInboundMetadata(input)).toBe(
@@ -151,6 +161,11 @@ What should I grab on the way?`;
 {"x": 1}
 \`\`\`
 Real user content`;
+    expect(stripInboundMetadata(input)).toBe(input);
+  });
+
+  it("does not strip user text that only resembles compact direct metadata", () => {
+    const input = "Direct message context (untrusted metadata): what does this mean?";
     expect(stripInboundMetadata(input)).toBe(input);
   });
 

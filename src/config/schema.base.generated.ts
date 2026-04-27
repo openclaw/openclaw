@@ -19251,6 +19251,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Direct inbound debounce settings used before queue/turn processing starts. Configure this for provider-specific rapid message bursts from the same sender.",
           },
+          inboundMetadataMode: {
+            type: "string",
+            enum: ["full", "compact-direct"],
+            title: "Inbound Metadata Mode",
+            description:
+              'Model-visible inbound metadata format: "full" keeps existing fenced metadata blocks, while "compact-direct" uses a terse direct-chat line and keeps full metadata for groups and richer context.',
+          },
           ackReaction: {
             type: "string",
             title: "Ack Reaction Emoji",
@@ -27973,6 +27980,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "messages.inbound": {
       label: "Inbound Debounce",
       help: "Direct inbound debounce settings used before queue/turn processing starts. Configure this for provider-specific rapid message bursts from the same sender.",
+      tags: ["advanced"],
+    },
+    "messages.inboundMetadataMode": {
+      label: "Inbound Metadata Mode",
+      help: 'Model-visible inbound metadata format: "full" keeps existing fenced metadata blocks, while "compact-direct" uses a terse direct-chat line and keeps full metadata for groups and richer context.',
       tags: ["advanced"],
     },
     "messages.suppressToolErrors": {

@@ -3,6 +3,7 @@ import { getLoadedChannelPluginById } from "../../channels/plugins/registry-load
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { resolveSenderLabel } from "../../channels/sender-label.js";
+import type { InboundMetadataMode } from "../../config/types.messages.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import type { EnvelopeFormatOptions } from "../envelope.js";
@@ -11,6 +12,12 @@ import type { TemplateContext } from "../templating.js";
 
 const MAX_UNTRUSTED_JSON_STRING_CHARS = 2_000;
 const MAX_UNTRUSTED_HISTORY_ENTRIES = 20;
+
+export type InboundUserContextMetadataMode = InboundMetadataMode;
+
+export type InboundUserContextPrefixOptions = {
+  metadataMode?: InboundUserContextMetadataMode;
+};
 
 function stripNullBytes(value: string): string {
   return value.replaceAll("\u0000", "");
@@ -73,6 +80,20 @@ function formatUntrustedJsonBlock(label: string, payload: unknown): string {
     JSON.stringify(sanitizeUntrustedJsonValue(payload), null, 2),
     "```",
   ].join("\n");
+}
+
+function formatCompactScalar(value: string): string {
+  return JSON.stringify(neutralizeMarkdownFences(truncateUntrustedJsonString(value)));
+}
+
+function formatCompactMetadataLine(
+  label: string,
+  entries: Array<[string, string | undefined]>,
+): string | undefined {
+  const fields = entries
+    .filter((entry): entry is [string, string] => entry[1] !== undefined)
+    .map(([key, value]) => `${key}=${formatCompactScalar(value)}`);
+  return fields.length > 0 ? `${label}: ${fields.join(" ")}` : undefined;
 }
 
 function buildLocationContextPayload(ctx: TemplateContext): Record<string, unknown> | undefined {
@@ -178,6 +199,7 @@ export function buildInboundMetaSystemPrompt(
 export function buildInboundUserContextPrefix(
   ctx: TemplateContext,
   envelope?: EnvelopeFormatOptions,
+  options?: InboundUserContextPrefixOptions,
 ): string {
   const blocks: string[] = [];
   const chatType = normalizeChatType(ctx.ChatType);
@@ -194,6 +216,8 @@ export function buildInboundUserContextPrefix(
   const timestampStr = formatConversationTimestamp(ctx.Timestamp, envelope);
   const inboundHistory = Array.isArray(ctx.InboundHistory) ? ctx.InboundHistory : [];
   const boundedHistory = inboundHistory.slice(-MAX_UNTRUSTED_HISTORY_ENTRIES);
+  const useCompactDirectMetadata =
+    options?.metadataMode === "compact-direct" && isDirect && shouldIncludeConversationInfo;
 
   // Keep volatile conversation/message identifiers in the user-role block so the system
   // prompt stays byte-stable across task-scoped sessions and reply turns.
@@ -233,7 +257,18 @@ export function buildInboundUserContextPrefix(
     history_count: boundedHistory.length > 0 ? boundedHistory.length : undefined,
     history_truncated: inboundHistory.length > MAX_UNTRUSTED_HISTORY_ENTRIES ? true : undefined,
   };
-  if (Object.values(conversationInfo).some((v) => v !== undefined)) {
+  if (useCompactDirectMetadata) {
+    const compactLine = formatCompactMetadataLine("Direct message context (untrusted metadata)", [
+      ["channel", directChannelValue],
+      ["chat_id", normalizeOptionalString(ctx.OriginatingTo)],
+      ["message_id", resolvedMessageId],
+      ["sender_id", normalizePromptMetadataString(ctx.SenderId)],
+      ["timestamp", timestampStr],
+    ]);
+    if (compactLine) {
+      blocks.push(compactLine);
+    }
+  } else if (Object.values(conversationInfo).some((v) => v !== undefined)) {
     blocks.push(
       formatUntrustedJsonBlock("Conversation info (untrusted metadata):", conversationInfo),
     );
@@ -253,7 +288,7 @@ export function buildInboundUserContextPrefix(
     tag: normalizePromptMetadataString(ctx.SenderTag),
     e164: normalizePromptMetadataString(ctx.SenderE164),
   };
-  if (senderInfo?.label) {
+  if (!useCompactDirectMetadata && senderInfo?.label) {
     blocks.push(formatUntrustedJsonBlock("Sender (untrusted metadata):", senderInfo));
   }
 
