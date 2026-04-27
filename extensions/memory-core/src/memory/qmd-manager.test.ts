@@ -5183,6 +5183,7 @@ describe("QmdMemoryManager", () => {
   });
 
   it("uses the configured qmd timeout for status probes", async () => {
+    vi.useFakeTimers();
     cfg = {
       ...cfg,
       memory: {
@@ -5190,27 +5191,36 @@ describe("QmdMemoryManager", () => {
         qmd: {
           includeDefaultMemory: false,
           searchMode: "query",
-          limits: { timeoutMs: 25 },
+          limits: { timeoutMs: 6000 },
           update: { interval: "0s", debounceMs: 60_000, onBoot: false },
           paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
         },
       },
     } as OpenClawConfig;
 
+    let statusKill: Mock | null = null;
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "status") {
-        return createMockChild({ autoClose: false });
+        const child = createMockChild({ autoClose: false });
+        statusKill = vi.fn();
+        child.kill = statusKill;
+        return child;
       }
       return createMockChild();
     });
 
     const { manager } = await createManager();
 
-    await expect(manager.probeVectorAvailability()).resolves.toBe(false);
+    const probe = manager.probeVectorAvailability();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(statusKill).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1000);
+    await expect(probe).resolves.toBe(false);
     expect(manager.status().vector).toEqual({
       enabled: true,
       available: false,
-      loadError: expect.stringContaining("timed out after 25ms"),
+      semanticAvailable: false,
+      loadError: expect.stringContaining("timed out after 6000ms"),
     });
     await manager.close();
   });
@@ -5244,12 +5254,19 @@ describe("QmdMemoryManager", () => {
       path.join(sessionsDir, "team.checkpoint.notes.jsonl"),
       `${JSON.stringify({ type: "message", message: { role: "user", content: "notes" } })}\n`,
     );
+    await fs.writeFile(
+      path.join(sessionsDir, "live-session.checkpoint.11111111-1111-4111-8111-111111111111.jsonl"),
+      `${JSON.stringify({ type: "message", message: { role: "user", content: "checkpoint" } })}\n`,
+    );
 
     const { manager } = await createManager({ mode: "full" });
     const sessionExportDir = path.join(stateDir, "agents", agentId, "qmd", "sessions");
     const exported = (await fs.readdir(sessionExportDir)).toSorted();
 
     expect(exported).toEqual(["live-session.md", "team.checkpoint.notes.md"]);
+    await expect(
+      fs.readFile(path.join(sessionExportDir, "team.checkpoint.notes.md"), "utf-8"),
+    ).resolves.toContain("notes");
     await manager.close();
   });
 
