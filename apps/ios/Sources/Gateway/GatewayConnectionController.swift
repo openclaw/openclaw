@@ -44,6 +44,12 @@ final class GatewayConnectionController {
     private var didAutoConnect = false
     private var autoConnectGeneration: Int = 0
     private var refreshRegistrationGeneration: Int = 0
+    /// Tracks how many `startAutoConnect` Tasks are currently between their
+    /// synchronous setup and their post-await commit. While this is non-zero,
+    /// `attemptAutoReconnectIfNeeded` must stand down so a scene-phase event
+    /// cannot start a competing connect that bumps `autoConnectGeneration` and
+    /// drops the original explicit/user-initiated connect.
+    private var connectInFlightCount: Int = 0
     private var pendingServiceResolvers: [String: GatewayServiceResolver] = [:]
     private var pendingTrustConnect: (url: URL, stableID: String, isManual: Bool)?
 
@@ -243,14 +249,7 @@ final class GatewayConnectionController {
 
         Task { [weak self, weak appModel] in
             guard let self, let appModel else { return }
-            let refreshedConfig = GatewayConnectConfig(
-                url: cfg.url,
-                stableID: cfg.stableID,
-                tls: cfg.tls,
-                token: cfg.token,
-                bootstrapToken: cfg.bootstrapToken,
-                password: cfg.password,
-                nodeOptions: await self.makeConnectOptions(stableID: cfg.stableID))
+            let connectOptions = await self.makeConnectOptions(stableID: cfg.stableID)
 
             guard generation == self.refreshRegistrationGeneration,
                   appModel.gatewayAutoReconnectEnabled,
@@ -259,6 +258,19 @@ final class GatewayConnectionController {
                   latestConfig.url == cfg.url,
                   Self.sameTLSParams(latestConfig.tls, cfg.tls)
             else { return }
+
+            // Build the refreshed config from `latestConfig` so any auth credentials
+            // (token/bootstrapToken/password) written by a parallel reconnect during
+            // the await are preserved; the only thing we are refreshing here is
+            // nodeOptions.
+            let refreshedConfig = GatewayConnectConfig(
+                url: latestConfig.url,
+                stableID: latestConfig.stableID,
+                tls: latestConfig.tls,
+                token: latestConfig.token,
+                bootstrapToken: latestConfig.bootstrapToken,
+                password: latestConfig.password,
+                nodeOptions: connectOptions)
 
             appModel.applyGatewayConnectConfig(refreshedConfig)
         }
@@ -470,6 +482,11 @@ final class GatewayConnectionController {
     private func attemptAutoReconnectIfNeeded() {
         guard let appModel = self.appModel else { return }
         guard appModel.gatewayAutoReconnectEnabled else { return }
+        // Stand down while a `startAutoConnect` Task is between its synchronous
+        // setup and its post-await commit. Otherwise a scene-phase event during
+        // that window would start a competing connect, bump
+        // `autoConnectGeneration`, and drop the original explicit connect.
+        guard self.connectInFlightCount == 0 else { return }
         // Avoid starting duplicate connect loops while a prior config is active.
         guard appModel.activeGatewayConnectConfig == nil else { return }
         guard UserDefaults.standard.bool(forKey: "gateway.autoconnect") else { return }
@@ -509,9 +526,16 @@ final class GatewayConnectionController {
         // a later user Disconnect without blocking a brand-new connect that starts from a
         // disconnected state.
         appModel.gatewayAutoReconnectEnabled = true
+        // Track that a connect is in flight so scene-phase events do not race
+        // attemptAutoReconnectIfNeeded against this Task during the await.
+        self.connectInFlightCount += 1
 
         Task { [weak self, weak appModel] in
-            guard let self, let appModel else { return }
+            guard let self, let appModel else {
+                self?.connectInFlightCount -= 1
+                return
+            }
+            defer { self.connectInFlightCount -= 1 }
             let connectOptions = await self.makeConnectOptions(stableID: gatewayStableID)
 
             guard generation == self.autoConnectGeneration,
@@ -1090,6 +1114,42 @@ extension GatewayConnectionController {
             {
                 return
             }
+            await Task.yield()
+        }
+    }
+
+    func _test_startAutoConnectWithoutWaiting(
+        url: URL,
+        gatewayStableID: String,
+        tls: GatewayTLSParams? = nil,
+        token: String? = nil,
+        bootstrapToken: String? = nil,
+        password: String? = nil)
+    {
+        self.startAutoConnect(
+            url: url,
+            gatewayStableID: gatewayStableID,
+            tls: tls,
+            token: token,
+            bootstrapToken: bootstrapToken,
+            password: password)
+    }
+
+    func _test_attemptAutoReconnectIfNeeded() {
+        self.attemptAutoReconnectIfNeeded()
+    }
+
+    func _test_refreshActiveGatewayRegistrationFromSettings() {
+        self.refreshActiveGatewayRegistrationFromSettings()
+    }
+
+    var _test_autoConnectGeneration: Int { self.autoConnectGeneration }
+
+    var _test_connectInFlightCount: Int { self.connectInFlightCount }
+
+    func _test_waitForConnectInFlightToDrain() async {
+        for _ in 0..<200 {
+            if self.connectInFlightCount == 0 { return }
             await Task.yield()
         }
     }
