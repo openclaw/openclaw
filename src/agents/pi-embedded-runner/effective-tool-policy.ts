@@ -2,9 +2,9 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginToolMeta } from "../../plugins/tools.js";
 import {
   resolveEffectiveToolPolicy,
-  resolveGroupContextFromSessionKey,
   resolveGroupToolPolicy,
   resolveSubagentToolPolicyForSession,
+  resolveTrustedGroupId,
 } from "../pi-tools.policy.js";
 import {
   isSubagentEnvelopeSession,
@@ -58,32 +58,6 @@ type FinalEffectiveToolPolicyParams = {
   senderIsOwner?: boolean;
   warn: (message: string) => void;
 };
-
-function resolveTrustedGroupId(params: FinalEffectiveToolPolicyParams): {
-  groupId: string | null | undefined;
-  dropped: boolean;
-} {
-  const callerGroupId = (params.groupId ?? "").trim();
-  if (!callerGroupId) {
-    return { groupId: params.groupId, dropped: false };
-  }
-  const sessionGroupIds = resolveGroupContextFromSessionKey(params.sessionKey).groupIds ?? [];
-  const spawnedGroupIds = resolveGroupContextFromSessionKey(params.spawnedBy).groupIds ?? [];
-  const trusted = [...sessionGroupIds, ...spawnedGroupIds];
-  // Fail-closed: if the session/spawnedBy keys do not encode a group context,
-  // we have no server-verified ground truth to compare the caller value
-  // against. A non-group session (direct, subagent, cron) should not consult
-  // a group-scoped tool policy at all, and accepting the caller's groupId
-  // here would let an attacker widen bundled-tool availability by sending
-  // an arbitrary group id.
-  if (trusted.length === 0) {
-    return { groupId: null, dropped: true };
-  }
-  if (trusted.includes(callerGroupId)) {
-    return { groupId: params.groupId, dropped: false };
-  }
-  return { groupId: null, dropped: true };
-}
 
 export function applyFinalEffectiveToolPolicy(
   params: FinalEffectiveToolPolicyParams,

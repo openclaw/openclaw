@@ -236,6 +236,33 @@ export function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
   };
 }
 
+export function resolveTrustedGroupId(params: {
+  sessionKey?: string | null;
+  spawnedBy?: string | null;
+  groupId?: string | null;
+}): {
+  groupId: string | null | undefined;
+  dropped: boolean;
+} {
+  const callerGroupId = (params.groupId ?? "").trim();
+  if (!callerGroupId) {
+    return { groupId: params.groupId, dropped: false };
+  }
+  const sessionGroupIds = resolveGroupContextFromSessionKey(params.sessionKey).groupIds ?? [];
+  const spawnedGroupIds = resolveGroupContextFromSessionKey(params.spawnedBy).groupIds ?? [];
+  const trusted = [...sessionGroupIds, ...spawnedGroupIds];
+  // Fail closed when no session/spawnedBy group context exists: a
+  // caller-supplied groupId is only trusted if server-controlled session
+  // routing can corroborate it.
+  if (trusted.length === 0) {
+    return { groupId: null, dropped: true };
+  }
+  if (trusted.includes(callerGroupId)) {
+    return { groupId: params.groupId, dropped: false };
+  }
+  return { groupId: null, dropped: true };
+}
+
 function resolveProviderToolPolicy(params: {
   byProvider?: Record<string, ToolPolicyConfig>;
   modelProvider?: string;
@@ -383,15 +410,19 @@ export function resolveGroupToolPolicy(params: {
   }
   const sessionContext = resolveGroupContextFromSessionKey(params.sessionKey);
   const spawnedContext = resolveGroupContextFromSessionKey(params.spawnedBy);
+  const trustedGroup = resolveTrustedGroupId({
+    sessionKey: params.sessionKey,
+    spawnedBy: params.spawnedBy,
+    groupId: params.groupId,
+  });
   const groupIds = collectUniqueStrings([
-    ...buildScopedGroupIdCandidates(params.groupId),
     ...(sessionContext.groupIds ?? []),
     ...(spawnedContext.groupIds ?? []),
   ]);
   if (groupIds.length === 0) {
     return undefined;
   }
-  const channelRaw = params.messageProvider ?? sessionContext.channel ?? spawnedContext.channel;
+  const channelRaw = sessionContext.channel ?? spawnedContext.channel ?? params.messageProvider;
   const channel = normalizeMessageChannel(channelRaw);
   if (!channel) {
     return undefined;
@@ -406,8 +437,8 @@ export function resolveGroupToolPolicy(params: {
     const toolsConfig = plugin?.groups?.resolveToolPolicy?.({
       cfg: params.config,
       groupId,
-      groupChannel: params.groupChannel,
-      groupSpace: params.groupSpace,
+      groupChannel: trustedGroup.dropped ? null : params.groupChannel,
+      groupSpace: trustedGroup.dropped ? null : params.groupSpace,
       accountId: params.accountId,
       senderId: params.senderId,
       senderName: params.senderName,

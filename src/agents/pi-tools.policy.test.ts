@@ -7,6 +7,7 @@ import {
   filterToolsByPolicy,
   isToolAllowedByPolicyName,
   resolveEffectiveToolPolicy,
+  resolveGroupToolPolicy,
   resolveSubagentToolPolicy,
   resolveSubagentToolPolicyForSession,
 } from "./pi-tools.policy.js";
@@ -36,6 +37,105 @@ describe("pi-tools.policy", () => {
 
   it("blocks apply_patch when write is denylisted", () => {
     expect(isToolAllowedByPolicyName("apply_patch", { deny: ["write"] })).toBe(false);
+  });
+});
+
+describe("resolveGroupToolPolicy", () => {
+  const cfg = {
+    channels: {
+      slack: {
+        groups: {
+          "trusted-group": {
+            tools: { allow: ["exec", "read", "write", "edit"] },
+          },
+          "limited-group": {
+            tools: { allow: ["read"] },
+          },
+          "topic-parent": {
+            tools: { allow: ["exec", "read", "write", "edit"] },
+          },
+          "topic-parent:topic:alerts": {
+            tools: { allow: ["read"] },
+          },
+        },
+      },
+      discord: {
+        groups: {
+          "limited-group": {
+            tools: { allow: ["exec", "read", "write", "edit"] },
+          },
+        },
+      },
+    },
+    tools: { allow: ["read"] },
+  } satisfies OpenClawConfig;
+
+  it("rejects caller-provided groupId when the session has no group context", () => {
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:main",
+        messageProvider: "slack",
+        groupId: "trusted-group",
+        groupChannel: "slack",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("uses session-derived group context without caller-provided groupId", () => {
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:slack:group:trusted-group",
+      }),
+    ).toEqual({ allow: ["exec", "read", "write", "edit"] });
+  });
+
+  it("ignores caller-provided groupId when it disagrees with the session group", () => {
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:slack:group:limited-group",
+        messageProvider: "slack",
+        groupId: "trusted-group",
+        groupChannel: "slack",
+      }),
+    ).toEqual({ allow: ["read"] });
+  });
+
+  it("prefers the session-derived channel when resolving group policy", () => {
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:slack:group:limited-group",
+        messageProvider: "discord",
+        groupId: "limited-group",
+      }),
+    ).toEqual({ allow: ["read"] });
+  });
+
+  it("does not let caller-provided parent groupId outrank scoped session group policy", () => {
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:slack:group:topic-parent:topic:alerts",
+        messageProvider: "slack",
+        groupId: "topic-parent",
+      }),
+    ).toEqual({ allow: ["read"] });
+  });
+
+  it("trusts caller-provided groupId when it matches spawnedBy group context", () => {
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:main",
+        spawnedBy: "agent:main:slack:group:trusted-group",
+        messageProvider: "slack",
+        groupId: "trusted-group",
+        groupChannel: "slack",
+      }),
+    ).toEqual({ allow: ["exec", "read", "write", "edit"] });
   });
 });
 
