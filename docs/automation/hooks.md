@@ -177,7 +177,40 @@ openclaw hooks enable <hook-name>
 
 ### session-memory details
 
-Extracts the last 15 user/assistant messages, generates a descriptive filename slug via LLM, and saves to `<workspace>/memory/YYYY-MM-DD-slug.md` using the host local date. Requires `workspace.dir` to be configured.
+Extracts the last 15 user/assistant messages, generates a descriptive filename slug via LLM, and saves to `<workspace>/memory/YYYY-MM-DD-slug-xxxxxxxx.md` using the host local date. The trailing `xxxxxxxx` is an 8-hex-char random suffix that guarantees filename uniqueness across concurrent or rapid-fire saves; it eliminates a previous silent-overwrite data-loss path when two sessions produced the same slug on the same day. Requires `workspace.dir` to be configured.
+
+#### Controlling session-memory writes from other hooks
+
+Upstream and downstream hooks can suppress or replace what session-memory writes by setting two fields on `event.context`:
+
+| Field                | Type      | Effect                                                                                                       |
+| -------------------- | --------- | ------------------------------------------------------------------------------------------------------------ |
+| `blockSessionSave`   | `boolean` | When `true`, no memory file is created (or the inline file is retracted via post-hook if blocked late).      |
+| `sessionSaveContent` | `string`  | Replaces the file body with custom content. The filename slug is still derived from the original transcript. |
+
+Precedence: `blockSessionSave` always wins over `sessionSaveContent`. When both are set, the file is suppressed entirely.
+
+**Pre-set vs. late-set semantics**
+
+- **Pre-set** (a hook registered _before_ `session-memory` sets the fields): transcript loading and LLM slug generation are skipped entirely — nothing sensitive is read or sent to a model. This is the recommended path for privacy-critical suppression.
+- **Late-set** (a hook registered _after_ `session-memory` sets the fields, or sets them via `postHookActions`): `session-memory` has already written the file inline (fail-safe); the post-hook callback then retracts (`blockSessionSave`) or rewrites the body (`sessionSaveContent`). Note: with late-set `sessionSaveContent`, the filename slug derived from the original transcript remains on disk — use `blockSessionSave` instead if the topic itself is sensitive.
+
+**`postHookActions` for ordering-independent behavior**
+
+Hook handlers can append callbacks to `event.postHookActions` (an optional `Array<() => void | Promise<void>>` on `InternalHookEvent`). Every action queued by any handler is drained after all FIFO-ordered handlers have run, so a late-registered hook can make decisions that affect work the bundled handlers performed earlier. The drain is snapshot-before-execute (CWE-834 guard — actions added during drain do not re-trigger), each action is invoked in its own `try/catch`, and errors are routed to `onError` without aborting subsequent actions.
+
+Example (a managed hook that blocks save when the session involved a `secret:` channel):
+
+```ts
+export const handler = async (event) => {
+  event.postHookActions ??= [];
+  event.postHookActions.push(() => {
+    if (event.context?.sessionEntry?.channelId?.startsWith("secret:")) {
+      event.context.blockSessionSave = true;
+    }
+  });
+};
+```
 
 <a id="bootstrap-extra-files"></a>
 
