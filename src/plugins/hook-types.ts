@@ -86,7 +86,8 @@ export type PluginHookName =
   | "gateway_stop"
   | "before_dispatch"
   | "reply_dispatch"
-  | "before_install";
+  | "before_install"
+  | "resolve_exec_env";
 
 export const PLUGIN_HOOK_NAMES = [
   "before_model_resolve",
@@ -121,6 +122,7 @@ export const PLUGIN_HOOK_NAMES = [
   "before_dispatch",
   "reply_dispatch",
   "before_install",
+  "resolve_exec_env",
 ] as const satisfies readonly PluginHookName[];
 
 type MissingPluginHookNames = Exclude<PluginHookName, (typeof PLUGIN_HOOK_NAMES)[number]>;
@@ -712,6 +714,12 @@ export type PluginHookBeforeInstallResult = {
   blockReason?: string;
 };
 
+export type PluginHookResolveExecEnvEvent = {
+  sessionKey?: string;
+  toolName?: string;
+  host?: "gateway" | "sandbox" | "node";
+};
+
 export type PluginHookHandlerMap = {
   before_model_resolve: (
     event: PluginHookBeforeModelResolveEvent,
@@ -844,6 +852,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforeInstallEvent,
     ctx: PluginHookBeforeInstallContext,
   ) => Promise<PluginHookBeforeInstallResult | void> | PluginHookBeforeInstallResult | void;
+  resolve_exec_env: (
+    event: PluginHookResolveExecEnvEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<Record<string, string>> | Record<string, string>;
 };
 
 export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = {

@@ -16,6 +16,7 @@ import {
   resolveShellEnvFallbackTimeoutMs,
 } from "../infra/shell-env.js";
 import { logInfo } from "../logger.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -1603,6 +1604,27 @@ export function createExecTool(
         );
       } else {
         applyPathPrepend(env, defaultPathPrepend);
+      }
+
+      // Let plugins contribute channel-specific env vars. Plugins are responsible
+      // for the values they inject — do not return secrets, tokens, or credentials
+      // unless the exec context explicitly requires them.
+      const hookRunner = getGlobalHookRunner();
+      if (hookRunner?.hasHooks("resolve_exec_env")) {
+        const pluginEnv = await hookRunner.runResolveExecEnv(
+          {
+            sessionKey: defaults?.sessionKey,
+            toolName: "exec",
+            host,
+          },
+          {
+            agentId,
+            sessionKey: defaults?.sessionKey,
+            messageProvider: defaults?.messageProvider,
+            channelId: defaults?.currentChannelId,
+          },
+        );
+        Object.assign(env, pluginEnv);
       }
 
       if (host === "node") {
