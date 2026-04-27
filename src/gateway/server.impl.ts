@@ -296,6 +296,7 @@ export async function startGatewayServer(
       authOverride: opts.auth,
       tailscaleOverride: opts.tailscale,
       activateRuntimeSecrets,
+      persistStartupAuth: startupConfigLoad.degradedProviderApi !== true,
     }),
   );
   cfgAtStart = authBootstrap.cfg;
