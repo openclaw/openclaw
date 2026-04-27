@@ -548,6 +548,37 @@ describe("config plugin validation", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts voice-call realtime consult overrides", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: true,
+        load: { paths: [voiceCallSchemaPluginDir] },
+        entries: {
+          "voice-call-schema-fixture": {
+            config: {
+              realtime: {
+                enabled: true,
+                provider: "google",
+                toolPolicy: "owner",
+                consultThinkingLevel: "medium",
+                consultFastMode: true,
+                providers: {
+                  google: {
+                    model: "gemini-3.1-flash-live-preview",
+                    voice: "Algieba",
+                    apiVersion: "v1beta",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
   it("accepts voice-call OpenAI TTS speed, instructions, and baseUrl config fields", async () => {
     const res = validateInSuite({
       agents: { list: [{ id: "pi" }] },

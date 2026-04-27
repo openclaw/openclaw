@@ -217,6 +217,11 @@ Current runtime behaviour:
 | `owner`          | Expose the consult tool and let the regular agent use the normal agent tool policy.                                                      |
 | `none`           | Do not expose the consult tool. Custom `realtime.tools` are still passed through to the realtime provider.                               |
 
+`realtime.consultThinkingLevel` and `realtime.consultFastMode` optionally
+override the thinking and fast-mode settings for `openclaw_agent_consult` runs.
+If unset, consult runs inherit the selected response model's normal thinking
+default and fast mode remains unset.
+
 ### Realtime provider examples
 
 <Tabs>

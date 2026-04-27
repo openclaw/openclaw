@@ -214,6 +214,19 @@ export type VoiceCallRealtimeProvidersConfig = z.infer<
 
 export const VoiceCallRealtimeToolPolicySchema = z.enum(REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES);
 export type VoiceCallRealtimeToolPolicy = RealtimeVoiceAgentConsultToolPolicy;
+export const VoiceCallRealtimeConsultThinkingLevelSchema = z.enum([
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "adaptive",
+  "max",
+]);
+export type VoiceCallRealtimeConsultThinkingLevel = z.infer<
+  typeof VoiceCallRealtimeConsultThinkingLevelSchema
+>;
 
 export const VoiceCallStreamingProvidersConfigSchema = z
   .record(z.string(), z.record(z.string(), z.unknown()))
@@ -234,6 +247,10 @@ export const VoiceCallRealtimeConfigSchema = z
     instructions: z.string().default(DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS),
     /** Tool policy for the shared OpenClaw agent consult tool. */
     toolPolicy: VoiceCallRealtimeToolPolicySchema.default("safe-read-only"),
+    /** Optional thinking level override for shared OpenClaw agent consult runs. */
+    consultThinkingLevel: VoiceCallRealtimeConsultThinkingLevelSchema.optional(),
+    /** Optional fast-mode override for shared OpenClaw agent consult runs. */
+    consultFastMode: z.boolean().optional(),
     /** Tool definitions exposed to the realtime provider. */
     tools: z.array(RealtimeToolSchema).default([]),
     /** Provider-owned raw config blobs keyed by provider id. */

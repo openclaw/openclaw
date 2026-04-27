@@ -356,6 +356,7 @@ export async function createVoiceCallRuntime(params: {
             provider: agentProvider,
             model,
           });
+          const consultThinkingLevel = config.realtime.consultThinkingLevel ?? thinkLevel;
           return await consultRealtimeVoiceAgent({
             cfg,
             agentRuntime,
@@ -373,7 +374,8 @@ export async function createVoiceCallRuntime(params: {
             questionSourceLabel: "caller",
             provider: agentProvider,
             model,
-            thinkLevel,
+            thinkLevel: consultThinkingLevel,
+            fastMode: config.realtime.consultFastMode,
             timeoutMs: config.responseTimeoutMs,
             toolsAllow: resolveRealtimeVoiceAgentConsultToolsAllow(config.realtime.toolPolicy),
             extraSystemPrompt: REALTIME_VOICE_CONSULT_SYSTEM_PROMPT,

@@ -87,6 +87,16 @@ const voiceCallConfigSchema = {
       help: "Controls the shared openclaw_agent_consult tool.",
       advanced: true,
     },
+    "realtime.consultThinkingLevel": {
+      label: "Realtime Consult Thinking",
+      help: "Optional thinking level override for openclaw_agent_consult runs.",
+      advanced: true,
+    },
+    "realtime.consultFastMode": {
+      label: "Realtime Consult Fast Mode",
+      help: "Optional fast-mode override for openclaw_agent_consult runs.",
+      advanced: true,
+    },
     "realtime.providers": { label: "Realtime Provider Config", advanced: true },
     "tts.provider": {
       label: "TTS Provider Override",

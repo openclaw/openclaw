@@ -130,6 +130,16 @@
       "label": "Realtime Instructions",
       "advanced": true
     },
+    "realtime.consultThinkingLevel": {
+      "label": "Realtime Consult Thinking",
+      "help": "Optional thinking level override for openclaw_agent_consult runs.",
+      "advanced": true
+    },
+    "realtime.consultFastMode": {
+      "label": "Realtime Consult Fast Mode",
+      "help": "Optional fast-mode override for openclaw_agent_consult runs.",
+      "advanced": true
+    },
     "realtime.providers": {
       "label": "Realtime Provider Config",
       "advanced": true
@@ -405,6 +415,13 @@
           "toolPolicy": {
             "type": "string",
             "enum": ["safe-read-only", "owner", "none"]
+          },
+          "consultThinkingLevel": {
+            "type": "string",
+            "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"]
+          },
+          "consultFastMode": {
+            "type": "boolean"
           },
           "tools": {
             "type": "array",

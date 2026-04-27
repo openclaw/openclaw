@@ -258,6 +258,8 @@ describe("createVoiceCallRuntime lifecycle", () => {
     const config = createBaseConfig();
     config.inboundPolicy = "allowlist";
     config.realtime.enabled = true;
+    config.realtime.consultThinkingLevel = "medium";
+    config.realtime.consultFastMode = true;
     config.realtime.tools = [
       {
         type: "function",
@@ -325,6 +327,8 @@ describe("createVoiceCallRuntime lifecycle", () => {
         lane: "voice",
         provider: "openai",
         model: "gpt-5.4",
+        thinkLevel: "medium",
+        fastMode: true,
         toolsAllow: ["read", "web_search", "web_fetch", "x_search", "memory_search", "memory_get"],
         extraSystemPrompt: expect.stringContaining("one or two bounded read-only queries"),
         prompt: expect.stringContaining("Caller: Can you check shipment status?"),
