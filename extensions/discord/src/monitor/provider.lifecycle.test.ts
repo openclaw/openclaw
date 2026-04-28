@@ -550,9 +550,6 @@ describe("runDiscordGatewayLifecycle", () => {
       "reconnect-exhausted",
       "Max reconnect attempts (0) reached after code 1005",
     );
-    gateway.disconnect.mockImplementation(() => {
-      lifecycleHandler?.(reconnectExhaustedEvent);
-    });
     waitForDiscordGatewayStopMock.mockImplementationOnce((params) => {
       return new Promise<void>((resolve, reject) => {
         let settled = false;
@@ -578,7 +575,7 @@ describe("runDiscordGatewayLifecycle", () => {
 
         lifecycleHandler = (event) => {
           if ((params.onGatewayEvent?.(event) ?? "stop") === "stop") {
-            finishReject(event.err);
+            finishReject(new Error("unexpected lifecycle stop for abort-time reconnect"));
           }
         };
         params.gatewaySupervisor?.attachLifecycle(lifecycleHandler);
@@ -588,7 +585,14 @@ describe("runDiscordGatewayLifecycle", () => {
           onAbort();
           return;
         }
-        params.abortSignal?.addEventListener("abort", onAbort, { once: true });
+        params.abortSignal?.addEventListener(
+          "abort",
+          () => {
+            lifecycleHandler?.(reconnectExhaustedEvent);
+            onAbort();
+          },
+          { once: true },
+        );
       });
     });
 

@@ -431,7 +431,7 @@ export async function runDiscordGatewayLifecycle(params: {
       params.runtime.log?.(
         `discord: ignoring expected reconnect-exhausted during shutdown: ${event.message}`,
       );
-      return "stop";
+      return "continue";
     }
     if (event.shouldStopLifecycle) {
       lifecycleStopping = true;
