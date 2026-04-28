@@ -1,14 +1,4 @@
 export {
-  CHARS_PER_TOKEN_ESTIMATE,
-  HEARTBEAT_PROMPT,
-  HEARTBEAT_TOKEN,
-  SILENT_REPLY_TOKEN,
-  getMemoryHostServices,
-  setMemoryHostServices,
-  withMemoryHostServices,
-  type MemoryHostServices,
-} from "../../packages/memory-host-sdk/src/engine-foundation.js";
-export {
   resolveAgentContextLimits,
   resolveAgentDir,
   resolveAgentWorkspaceDir,

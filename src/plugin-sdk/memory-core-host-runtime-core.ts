@@ -1,10 +1,4 @@
-export {
-  SILENT_REPLY_TOKEN,
-  getMemoryHostServices,
-  setMemoryHostServices,
-  withMemoryHostServices,
-  type MemoryHostServices,
-} from "../../packages/memory-host-sdk/src/runtime-core.js";
+export { SILENT_REPLY_TOKEN } from "../../packages/memory-host-sdk/src/runtime-core.js";
 export { DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR } from "../agents/pi-settings.js";
 export {
   asToolParamsRecord,
