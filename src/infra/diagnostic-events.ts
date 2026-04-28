@@ -164,6 +164,17 @@ export type DiagnosticSessionStuckEvent = DiagnosticSessionAttentionBaseEvent & 
   classification: "stale_session_state";
 };
 
+export type DiagnosticSessionAbortedEvent = DiagnosticBaseEvent & {
+  type: "session.aborted";
+  sessionKey?: string;
+  sessionId?: string;
+  state: DiagnosticSessionState;
+  ageMs: number;
+  queueDepth?: number;
+  reason: "stuck-timeout";
+  recovered: boolean;
+};
+
 export type DiagnosticLaneEnqueueEvent = DiagnosticBaseEvent & {
   type: "queue.lane.enqueue";
   lane: string;
@@ -520,6 +531,7 @@ export type DiagnosticEventPayload =
   | DiagnosticSessionLongRunningEvent
   | DiagnosticSessionStalledEvent
   | DiagnosticSessionStuckEvent
+  | DiagnosticSessionAbortedEvent
   | DiagnosticLaneEnqueueEvent
   | DiagnosticLaneDequeueEvent
   | DiagnosticRunAttemptEvent

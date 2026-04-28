@@ -442,7 +442,7 @@ describe("stuck session diagnostics threshold", () => {
       sessionKey: "main",
       ageMs: expect.any(Number),
       queueDepth: 0,
-      allowActiveAbort: true,
+      reason: "stuck-timeout",
     });
   });
 
@@ -562,6 +562,137 @@ describe("stuck session diagnostics threshold", () => {
       queueDepth: 1,
     });
     expect(recoverStuckSession).not.toHaveBeenCalled();
+  });
+
+  it("aborts stuck sessions after diagnostics.stuckSessionAbortMs", async () => {
+    const events: Array<{ type: string; recovered?: boolean }> = [];
+    const recoverStuckSession = vi.fn(() => true);
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push({
+        type: event.type,
+        recovered: "recovered" in event ? event.recovered : undefined,
+      });
+    });
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+            stuckSessionWarnMs: 30_000,
+            stuckSessionAbortMs: 60_000,
+          },
+        },
+        { recoverStuckSession },
+      );
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      vi.advanceTimersByTime(91_000);
+      vi.runAllTicks();
+      await Promise.resolve();
+    } finally {
+      unsubscribe();
+    }
+
+    expect(recoverStuckSession).toHaveBeenCalledTimes(2);
+    expect(recoverStuckSession).toHaveBeenLastCalledWith({
+      sessionId: "s1",
+      sessionKey: "main",
+      ageMs: 90_000,
+      queueDepth: 0,
+      reason: "stuck-timeout",
+    });
+    expect(events.filter((event) => event.type === "session.stuck")).toHaveLength(1);
+    expect(events).toContainEqual({ type: "session.aborted", recovered: true });
+    expect(diagnosticSessionStates.get("main")?.state).toBe("idle");
+  });
+
+  it("retries stuck session recovery after a recovery failure", async () => {
+    const recoverStuckSession = vi.fn((params: { reason?: string }) => {
+      if (params.reason !== "stuck-timeout") {
+        return false;
+      }
+      const callIndex = (recoverStuckSession.mock.calls ?? []).filter(
+        ([call]) => (call as { reason?: string } | undefined)?.reason === "stuck-timeout",
+      ).length;
+      if (callIndex === 1) {
+        return Promise.reject(new Error("temporary failure"));
+      }
+      return true;
+    });
+
+    startDiagnosticHeartbeat(
+      {
+        diagnostics: {
+          enabled: true,
+          stuckSessionWarnMs: 30_000,
+          stuckSessionAbortMs: 60_000,
+        },
+      },
+      { recoverStuckSession },
+    );
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+
+    vi.advanceTimersByTime(91_000);
+    vi.runAllTicks();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(diagnosticSessionStates.get("main")?.stuckAbortRequestedAt).toBeUndefined();
+    const abortCallsAfterFirstFailure = recoverStuckSession.mock.calls.filter(
+      ([call]) => (call as { reason?: string } | undefined)?.reason === "stuck-timeout",
+    ).length;
+    expect(abortCallsAfterFirstFailure).toBe(1);
+
+    vi.advanceTimersByTime(30_000);
+    vi.runAllTicks();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const abortCallsAfterRetry = recoverStuckSession.mock.calls.filter(
+      ([call]) => (call as { reason?: string } | undefined)?.reason === "stuck-timeout",
+    ).length;
+    expect(abortCallsAfterRetry).toBe(2);
+    expect(diagnosticSessionStates.get("main")?.state).toBe("idle");
+  });
+
+  it("does not let late stuck recovery clobber naturally recovered new work", async () => {
+    let resolveRecovery: ((recovered: boolean) => void) | undefined;
+    const recoverStuckSession = vi.fn((params: { reason?: string }) => {
+      if (params.reason !== "stuck-timeout") {
+        return false;
+      }
+      return new Promise<boolean>((resolve) => {
+        resolveRecovery = resolve;
+      });
+    });
+
+    startDiagnosticHeartbeat(
+      {
+        diagnostics: {
+          enabled: true,
+          stuckSessionWarnMs: 30_000,
+          stuckSessionAbortMs: 60_000,
+        },
+      },
+      { recoverStuckSession },
+    );
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+
+    vi.advanceTimersByTime(91_000);
+    vi.runAllTicks();
+    await Promise.resolve();
+
+    expect(recoverStuckSession).toHaveBeenCalledTimes(2);
+
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "idle" });
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+
+    resolveRecovery?.(true);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const state = diagnosticSessionStates.get("main");
+    expect(state?.state).toBe("processing");
+    expect(state?.stuckAbortRequestedAt).toBeUndefined();
   });
 
   it("starts and stops the stability recorder with the heartbeat lifecycle", () => {

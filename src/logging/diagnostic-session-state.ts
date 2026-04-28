@@ -8,6 +8,8 @@ export type SessionState = {
   lastLongRunningWarnAgeMs?: number;
   state: SessionStateValue;
   queueDepth: number;
+  stuckLoggedAt?: number;
+  stuckAbortRequestedAt?: number;
   toolCallHistory?: ToolCallRecord[];
   toolLoopWarningBuckets?: Map<string, number>;
   commandPollCounts?: Map<string, { count: number; lastPollAt: number }>;

@@ -40,6 +40,7 @@ export type DiagnosticStabilityEventRecord = {
   commandLength?: number;
   exitCode?: number;
   timedOut?: boolean;
+  recovered?: boolean;
   costUsd?: number;
   count?: number;
   bytes?: number;
@@ -249,6 +250,13 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       if (event.activeToolName) {
         record.toolName = event.activeToolName;
       }
+      break;
+    case "session.aborted":
+      record.outcome = event.state;
+      record.ageMs = event.ageMs;
+      record.queueDepth = event.queueDepth;
+      record.recovered = event.recovered;
+      assignReasonCode(record, event.reason);
       break;
     case "queue.lane.enqueue":
       record.source = event.lane;

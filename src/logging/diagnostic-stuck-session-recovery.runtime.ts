@@ -55,10 +55,10 @@ function formatRecoveryContext(
 
 export async function recoverStuckDiagnosticSession(
   params: StuckSessionRecoveryParams,
-): Promise<void> {
+): Promise<boolean> {
   const key = recoveryKey(params);
   if (!key || recoveriesInFlight.has(key)) {
-    return;
+    return false;
   }
 
   recoveriesInFlight.add(key);
@@ -86,7 +86,7 @@ export async function recoverStuckDiagnosticSession(
             { activeSessionId },
           )}`,
         );
-        return;
+        return false;
       }
       const result = await abortAndDrainEmbeddedPiRun({
         sessionId: activeSessionId,
@@ -106,7 +106,7 @@ export async function recoverStuckDiagnosticSession(
           { activeSessionId: activeWorkSessionId },
         )}`,
       );
-      return;
+      return false;
     }
 
     if (!activeSessionId && sessionLane) {
@@ -122,7 +122,7 @@ export async function recoverStuckDiagnosticSession(
             },
           )}`,
         );
-        return;
+        return false;
       }
     }
 
@@ -151,12 +151,14 @@ export async function recoverStuckDiagnosticSession(
         )}`,
       );
     }
+    return aborted || released > 0;
   } catch (err) {
     diag.warn(
       `stuck session recovery failed: sessionId=${params.sessionId ?? "unknown"} sessionKey=${
         params.sessionKey ?? "unknown"
       } err=${String(err)}`,
     );
+    return false;
   } finally {
     recoveriesInFlight.delete(key);
   }

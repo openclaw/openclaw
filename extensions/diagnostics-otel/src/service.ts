@@ -819,6 +819,14 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         unit: "ms",
         description: "Age of stuck sessions",
       });
+      const sessionAbortedCounter = meter.createCounter("openclaw.session.aborted", {
+        unit: "1",
+        description: "Stuck sessions aborted by diagnostics",
+      });
+      const sessionAbortedAgeHistogram = meter.createHistogram("openclaw.session.aborted_age_ms", {
+        unit: "ms",
+        description: "Age of sessions aborted by diagnostics",
+      });
       const runAttemptCounter = meter.createCounter("openclaw.run.attempt", {
         unit: "1",
         description: "Run attempts",
@@ -1465,6 +1473,30 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         spanAttrs["openclaw.ageMs"] = evt.ageMs;
         const span = tracer.startSpan("openclaw.session.stuck", { attributes: spanAttrs });
         span.setStatus({ code: SpanStatusCode.ERROR, message: "session stuck" });
+        span.end();
+      };
+
+      const recordSessionAborted = (
+        evt: Extract<DiagnosticEventPayload, { type: "session.aborted" }>,
+      ) => {
+        const attrs: Record<string, string> = {
+          "openclaw.state": evt.state,
+          "openclaw.reason": evt.reason,
+          "openclaw.recovered": String(evt.recovered),
+        };
+        sessionAbortedCounter.add(1, attrs);
+        if (typeof evt.ageMs === "number") {
+          sessionAbortedAgeHistogram.record(evt.ageMs, attrs);
+        }
+        if (!tracesEnabled) {
+          return;
+        }
+        const spanAttrs: Record<string, string | number | boolean> = { ...attrs };
+        spanAttrs["openclaw.queueDepth"] = evt.queueDepth ?? 0;
+        spanAttrs["openclaw.ageMs"] = evt.ageMs;
+        spanAttrs["openclaw.recovered"] = evt.recovered;
+        const span = tracer.startSpan("openclaw.session.aborted", { attributes: spanAttrs });
+        span.setStatus({ code: SpanStatusCode.ERROR, message: "session aborted" });
         span.end();
       };
 
@@ -2239,6 +2271,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "session.stuck":
               recordSessionStuck(evt);
+              return;
+            case "session.aborted":
+              recordSessionAborted(evt);
               return;
             case "run.attempt":
               recordRunAttempt(evt);

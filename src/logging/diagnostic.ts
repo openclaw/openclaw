@@ -67,6 +67,7 @@ const MAX_STUCK_SESSION_WARN_MS = 24 * 60 * 60 * 1000;
 const MIN_STALLED_EMBEDDED_RUN_ABORT_MS = 10 * 60_000;
 const STALLED_EMBEDDED_RUN_ABORT_WARN_MULTIPLIER = 5;
 const RECENT_DIAGNOSTIC_ACTIVITY_MS = 120_000;
+const DEFAULT_STUCK_SESSION_ABORT_MS = 15 * 60 * 1000;
 const DEFAULT_LIVENESS_EVENT_LOOP_DELAY_WARN_MS = 1_000;
 const DEFAULT_LIVENESS_EVENT_LOOP_UTILIZATION_WARN = 0.95;
 const DEFAULT_LIVENESS_CPU_CORE_RATIO_WARN = 0.9;
@@ -92,14 +93,6 @@ type DiagnosticWorkSnapshot = {
   queuedLabels: string[];
 };
 
-type RecoverStuckSession = (params: {
-  sessionId?: string;
-  sessionKey?: string;
-  ageMs: number;
-  queueDepth?: number;
-  allowActiveAbort?: boolean;
-}) => void | Promise<void>;
-
 type DiagnosticLivenessSample = {
   reasons: DiagnosticLivenessWarningReason[];
   intervalMs: number;
@@ -117,11 +110,23 @@ type SampleDiagnosticLiveness = (
   work: DiagnosticWorkSnapshot,
 ) => DiagnosticLivenessSample | null;
 
+type StuckSessionRecoveryParams = SessionRef & {
+  ageMs: number;
+  queueDepth: number;
+  reason?: "stuck-timeout";
+};
+type StuckSessionAbortParams = StuckSessionRecoveryParams & {
+  reason: "stuck-timeout";
+};
+type StuckSessionRecovery = (
+  params: StuckSessionRecoveryParams,
+) => boolean | void | Promise<boolean | void>;
+
 type StartDiagnosticHeartbeatOptions = {
   getConfig?: () => OpenClawConfig;
   emitMemorySample?: EmitDiagnosticMemorySample;
   sampleLiveness?: SampleDiagnosticLiveness;
-  recoverStuckSession?: RecoverStuckSession;
+  recoverStuckSession?: StuckSessionRecovery;
 };
 
 let diagnosticLivenessMonitor: EventLoopDelayMonitor | null = null;
@@ -136,19 +141,18 @@ function loadCommandPollBackoffRuntime() {
   return commandPollBackoffRuntimePromise;
 }
 
-function recoverStuckSession(params: {
-  sessionId?: string;
-  sessionKey?: string;
-  ageMs: number;
-  queueDepth?: number;
-  allowActiveAbort?: boolean;
-}) {
+async function recoverStuckSession(params: StuckSessionRecoveryParams): Promise<boolean> {
   stuckSessionRecoveryRuntimePromise ??= import("./diagnostic-stuck-session-recovery.runtime.js");
-  void stuckSessionRecoveryRuntimePromise
-    .then(({ recoverStuckDiagnosticSession }) => recoverStuckDiagnosticSession(params))
-    .catch((err) => {
-      diag.warn(`stuck session recovery unavailable: ${String(err)}`);
+  try {
+    const { recoverStuckDiagnosticSession } = await stuckSessionRecoveryRuntimePromise;
+    return await recoverStuckDiagnosticSession({
+      ...params,
+      allowActiveAbort: params.reason === "stuck-timeout",
     });
+  } catch (err) {
+    diag.warn(`stuck session recovery unavailable: ${String(err)}`);
+    return false;
+  }
 }
 
 function formatDiagnosticWorkLabel(
@@ -445,6 +449,40 @@ function isStalledEmbeddedRunRecoveryEligible(params: {
   );
 }
 
+export function resolveStuckSessionAbortMs(config?: OpenClawConfig): number | undefined {
+  const warnMs = resolveStuckSessionWarnMs(config);
+  const raw = config?.diagnostics?.stuckSessionAbortMs;
+  const candidate =
+    typeof raw === "number" && Number.isFinite(raw)
+      ? Math.floor(raw)
+      : DEFAULT_STUCK_SESSION_ABORT_MS;
+  if (candidate <= warnMs || candidate > MAX_STUCK_SESSION_WARN_MS) {
+    return undefined;
+  }
+  return candidate;
+}
+
+function logSessionAbortRequested(params: StuckSessionAbortParams & { recovered: boolean }) {
+  diag.error(
+    `aborted stuck session: sessionId=${params.sessionId ?? "unknown"} sessionKey=${
+      params.sessionKey ?? "unknown"
+    } age=${Math.round(params.ageMs / 1000)}s queueDepth=${params.queueDepth} recovered=${
+      params.recovered
+    }`,
+  );
+  emitDiagnosticEvent({
+    type: "session.aborted",
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    state: "processing",
+    ageMs: params.ageMs,
+    queueDepth: params.queueDepth,
+    reason: params.reason,
+    recovered: params.recovered,
+  });
+  markActivity();
+}
+
 export function logWebhookReceived(params: {
   channel: string;
   updateType?: string;
@@ -619,6 +657,8 @@ export function logSessionStateChange(
   state.lastActivity = Date.now();
   state.lastStuckWarnAgeMs = undefined;
   state.lastLongRunningWarnAgeMs = undefined;
+  state.stuckLoggedAt = undefined;
+  state.stuckAbortRequestedAt = undefined;
   if (params.state === "idle") {
     state.queueDepth = Math.max(0, state.queueDepth - 1);
   }
@@ -924,6 +964,7 @@ export function startDiagnosticHeartbeat(
       }
     }
     const stuckSessionWarnMs = resolveStuckSessionWarnMs(heartbeatConfig);
+    const stuckSessionAbortMs = resolveStuckSessionAbortMs(heartbeatConfig);
     const now = Date.now();
     pruneDiagnosticSessionStates(now, true);
     const work = getDiagnosticWorkSnapshot(now);
@@ -983,11 +1024,19 @@ export function startDiagnosticHeartbeat(
           thresholdMs: stuckSessionWarnMs,
         });
         if (classification?.recoveryEligible) {
-          void (opts?.recoverStuckSession ?? recoverStuckSession)({
-            sessionId: state.sessionId,
-            sessionKey: state.sessionKey,
-            ageMs,
-            queueDepth: state.queueDepth,
+          void Promise.resolve(
+            (opts?.recoverStuckSession ?? recoverStuckSession)({
+              sessionId: state.sessionId,
+              sessionKey: state.sessionKey,
+              ageMs,
+              queueDepth: state.queueDepth,
+            }),
+          ).catch((err) => {
+            diag.warn(
+              `stuck session recovery failed: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
+                state.sessionKey ?? "unknown"
+              } err=${String(err)}`,
+            );
           });
         } else if (
           isStalledEmbeddedRunRecoveryEligible({
@@ -996,14 +1045,66 @@ export function startDiagnosticHeartbeat(
             stuckSessionWarnMs,
           })
         ) {
-          void (opts?.recoverStuckSession ?? recoverStuckSession)({
-            sessionId: state.sessionId,
-            sessionKey: state.sessionKey,
-            ageMs,
-            queueDepth: state.queueDepth,
-            allowActiveAbort: true,
+          void Promise.resolve(
+            (opts?.recoverStuckSession ?? recoverStuckSession)({
+              sessionId: state.sessionId,
+              sessionKey: state.sessionKey,
+              ageMs,
+              queueDepth: state.queueDepth,
+              reason: "stuck-timeout",
+            }),
+          ).catch((err) => {
+            diag.warn(
+              `stuck session recovery failed: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
+                state.sessionKey ?? "unknown"
+              } err=${String(err)}`,
+            );
           });
         }
+      }
+      if (
+        state.state === "processing" &&
+        stuckSessionAbortMs !== undefined &&
+        ageMs > stuckSessionAbortMs &&
+        !state.stuckAbortRequestedAt
+      ) {
+        const abortRequestedAt = now;
+        state.stuckAbortRequestedAt = abortRequestedAt;
+        const recoveryParams: StuckSessionAbortParams = {
+          sessionId: state.sessionId,
+          sessionKey: state.sessionKey,
+          ageMs,
+          queueDepth: state.queueDepth,
+          reason: "stuck-timeout",
+        };
+        void Promise.resolve((opts?.recoverStuckSession ?? recoverStuckSession)(recoveryParams))
+          .then((recovered) => {
+            logSessionAbortRequested({ ...recoveryParams, recovered: recovered === true });
+            const latestState = getDiagnosticSessionState(recoveryParams);
+            if (
+              latestState !== state ||
+              latestState.state !== "processing" ||
+              latestState.stuckAbortRequestedAt !== abortRequestedAt
+            ) {
+              return;
+            }
+            latestState.state = "idle";
+            latestState.queueDepth = 0;
+            latestState.lastActivity = Date.now();
+            latestState.stuckLoggedAt = undefined;
+            latestState.stuckAbortRequestedAt = undefined;
+          })
+          .catch((err) => {
+            const latestState = getDiagnosticSessionState(recoveryParams);
+            if (latestState === state && latestState.stuckAbortRequestedAt === abortRequestedAt) {
+              latestState.stuckAbortRequestedAt = undefined;
+            }
+            diag.error(
+              `stuck session recovery failed: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
+                state.sessionKey ?? "unknown"
+              } err=${String(err)}`,
+            );
+          });
       }
     }
   }, 30_000);
