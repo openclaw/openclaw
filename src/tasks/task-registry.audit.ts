@@ -17,6 +17,7 @@ export type TaskAuditOptions = {
 
 const DEFAULT_STALE_QUEUED_MS = 10 * 60_000;
 const DEFAULT_STALE_RUNNING_MS = 30 * 60_000;
+const TIMESTAMP_ORDERING_RACE_TOLERANCE_MS = 1_000;
 export { createEmptyTaskAuditSummary };
 export type { TaskAuditCode, TaskAuditFinding, TaskAuditSeverity, TaskAuditSummary };
 
@@ -47,7 +48,7 @@ function taskReferenceAt(task: TaskRecord): number {
 }
 
 function findTimestampInconsistency(task: TaskRecord): TaskAuditFinding | null {
-  if (task.startedAt && task.startedAt < task.createdAt) {
+  if (task.startedAt && task.startedAt + TIMESTAMP_ORDERING_RACE_TOLERANCE_MS < task.createdAt) {
     return createFinding({
       severity: "warn",
       code: "inconsistent_timestamps",
@@ -128,14 +129,14 @@ export function listTaskAuditFindings(options: TaskAuditOptions = {}): TaskAudit
       const retainedUntilCleanup = typeof task.cleanupAfter === "number" && task.cleanupAfter > now;
       findings.push(
         createFinding({
-          severity: retainedUntilCleanup ? "warn" : "error",
+          severity: "warn",
           code: "lost",
           task,
           ageMs,
           detail: retainedUntilCleanup
             ? task.error?.trim() ||
               "task lost its backing session and is retained until cleanupAfter"
-            : task.error?.trim() || "task lost its backing session",
+            : task.error?.trim() || "terminal task lost its backing session",
         }),
       );
     }
