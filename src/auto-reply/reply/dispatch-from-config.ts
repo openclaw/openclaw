@@ -723,8 +723,9 @@ export async function dispatchReplyFromConfig(
   }
 
   // Bridge to internal hooks (HOOK.md discovery system) - refs #8807
-  if (sessionKey) {
-    const hookEvent = createInternalHookEvent("message", "received", sessionKey, {
+  const internalHookSessionKey = acpDispatchSessionKey;
+  if (internalHookSessionKey) {
+    const hookEvent = createInternalHookEvent("message", "received", internalHookSessionKey, {
       ...toInternalMessageReceivedContext(hookContext),
       timestamp,
     });
@@ -733,9 +734,9 @@ export async function dispatchReplyFromConfig(
         await triggerInternalHook(hookEvent);
         const hookReplyText = hookEvent.messages.join("\n\n").trim();
         const hookReplyChannel = normalizeMessageChannel(
-          ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider,
+          replyRoute.channel ?? ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider,
         );
-        const hookReplyTo = ctx.OriginatingTo ?? ctx.From ?? ctx.To;
+        const hookReplyTo = replyRoute.to ?? ctx.OriginatingTo ?? ctx.From ?? ctx.To;
         const hookReplyRuntime = routeReplyRuntime ?? (await loadRouteReplyRuntime());
         if (
           !hookReplyText ||
@@ -749,18 +750,18 @@ export async function dispatchReplyFromConfig(
           payload: { text: hookReplyText },
           channel: hookReplyChannel,
           to: hookReplyTo,
-          sessionKey: ctx.SessionKey,
+          sessionKey: internalHookSessionKey,
           policySessionKey:
             ctx.CommandSource === "native"
-              ? (ctx.CommandTargetSessionKey ?? ctx.SessionKey)
-              : ctx.SessionKey,
+              ? (ctx.CommandTargetSessionKey ?? internalHookSessionKey)
+              : internalHookSessionKey,
           policyConversationType: resolveRoutedPolicyConversationType(ctx),
-          accountId: ctx.AccountId,
+          accountId: replyRoute.accountId ?? ctx.AccountId,
           requesterSenderId: ctx.SenderId,
           requesterSenderName: ctx.SenderName,
           requesterSenderUsername: ctx.SenderUsername,
           requesterSenderE164: ctx.SenderE164,
-          threadId: ctx.MessageThreadId,
+          threadId: routeThreadId,
           cfg,
           mirror: false,
           isGroup,

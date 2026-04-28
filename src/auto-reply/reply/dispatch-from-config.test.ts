@@ -63,7 +63,7 @@ const hookMocks = vi.hoisted(() => ({
 }));
 const internalHookMocks = vi.hoisted(() => ({
   createInternalHookEvent: vi.fn(),
-  triggerInternalHook: vi.fn(async () => {}),
+  triggerInternalHook: vi.fn<(event: unknown) => Promise<void>>(async () => {}),
 }));
 const acpMocks = vi.hoisted(() => ({
   listAcpSessionEntries: vi.fn(async () => []),
@@ -2819,11 +2819,10 @@ describe("dispatchReplyFromConfig", () => {
       SessionKey: "agent:main:main",
       CommandBody: "/help",
     });
-    internalHookMocks.triggerInternalHook.mockImplementationOnce(
-      async (event: { messages: string[] }) => {
-        event.messages.push("Hook echo");
-      },
-    );
+    internalHookMocks.triggerInternalHook.mockImplementationOnce(async (event: unknown) => {
+      const hookEvent = event as { messages: string[] };
+      hookEvent.messages.push("Hook echo");
+    });
 
     const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
@@ -2835,6 +2834,62 @@ describe("dispatchReplyFromConfig", () => {
         to: "feishu:ou_123",
         accountId: "acc-1",
         mirror: false,
+        skipMessageHooks: true,
+      }),
+    );
+  });
+
+  it("uses bound ACP session context for internal message:received hook replies", async () => {
+    setNoAbort();
+    const boundSessionKey = "agent:opencode:acp:bound-session";
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "binding-acp-hook",
+      targetSessionKey: boundSessionKey,
+      targetKind: "session",
+      conversation: {
+        channel: "slack",
+        accountId: "default",
+        conversationId: "C123",
+      },
+      status: "active",
+      boundAt: Date.now(),
+    } satisfies SessionBindingRecord);
+    internalHookMocks.triggerInternalHook.mockImplementationOnce(async (event: unknown) => {
+      const hookEvent = event as { messages: string[] };
+      hookEvent.messages.push("Bound hook echo");
+    });
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      OriginatingChannel: "slack",
+      OriginatingTo: "slack:C123",
+      To: "slack:C123",
+      AccountId: "default",
+      SessionKey: "agent:main:slack:C123",
+      CommandBody: "/help",
+      MessageThreadId: "thread-1",
+    });
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledWith(
+      "message",
+      "received",
+      boundSessionKey,
+      expect.any(Object),
+    );
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: { text: "Bound hook echo" },
+        channel: "slack",
+        to: "slack:C123",
+        sessionKey: boundSessionKey,
+        policySessionKey: boundSessionKey,
+        accountId: "default",
+        threadId: "thread-1",
         skipMessageHooks: true,
       }),
     );

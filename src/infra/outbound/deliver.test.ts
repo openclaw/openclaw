@@ -35,7 +35,7 @@ const hookMocks = vi.hoisted(() => ({
 }));
 const internalHookMocks = vi.hoisted(() => ({
   createInternalHookEvent: vi.fn(),
-  triggerInternalHook: vi.fn(async () => {}),
+  triggerInternalHook: vi.fn<(event: unknown) => Promise<void>>(async () => {}),
 }));
 const queueMocks = vi.hoisted(() => ({
   enqueueDelivery: vi.fn(async () => "mock-queue-id"),
@@ -1353,11 +1353,10 @@ describe("deliverOutboundPayloads", () => {
       .fn()
       .mockResolvedValueOnce({ messageId: "m1", roomId: "!room:example" })
       .mockResolvedValueOnce({ messageId: "m2", roomId: "!room:example" });
-    internalHookMocks.triggerInternalHook.mockImplementationOnce(
-      async (event: { messages: string[] }) => {
-        event.messages.push("Hook echo");
-      },
-    );
+    internalHookMocks.triggerInternalHook.mockImplementationOnce(async (event: unknown) => {
+      const hookEvent = event as { messages: string[] };
+      hookEvent.messages.push("Hook echo");
+    });
 
     await deliverOutboundPayloads({
       cfg: matrixChunkConfig,
@@ -1370,6 +1369,15 @@ describe("deliverOutboundPayloads", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(sendMatrix).toHaveBeenCalledTimes(2);
+    expect(queueMocks.enqueueDelivery).toHaveBeenCalledTimes(2);
+    expect(queueMocks.enqueueDelivery).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        payloads: [{ text: "Hook echo" }],
+        session: { key: "agent:main:main" },
+        skipMessageHooks: true,
+      }),
+    );
     expect(sendMatrix).toHaveBeenNthCalledWith(
       2,
       "!room:example",

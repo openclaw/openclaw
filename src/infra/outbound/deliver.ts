@@ -702,7 +702,6 @@ function createMessageSentEmitter(params: {
           session: params.session,
           silent: params.silent,
           gatewayClientScopes: params.gatewayClientScopes,
-          skipQueue: true,
           skipMessageHooks: true,
         });
       })(),
