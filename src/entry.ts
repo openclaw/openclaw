@@ -7,7 +7,7 @@ import { isRootHelpInvocation } from "./cli/argv.js";
 import { parseCliContainerArgs, resolveCliContainerTarget } from "./cli/container-target.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
-import { buildCliRespawnPlan } from "./entry.respawn.js";
+import { buildCliRespawnPlan, formatRespawnedChildExitDiagnostic } from "./entry.respawn.js";
 import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
 import { isTruthyEnvValue, normalizeEnv } from "./infra/env.js";
 import { isMainModule } from "./infra/is-main.js";
@@ -78,8 +78,14 @@ if (
     attachChildProcessBridge(child);
 
     child.once("exit", (code, signal) => {
+      const diagnostic = formatRespawnedChildExitDiagnostic({ code, signal });
+      if (diagnostic) {
+        process.stderr.write(diagnostic);
+      }
       if (signal) {
-        process.exitCode = 1;
+        // Always exit explicitly so the parent does not hang waiting on a
+        // drained event loop after the child was killed (e.g. OOM SIGKILL).
+        process.exit(1);
         return;
       }
       process.exit(code ?? 1);

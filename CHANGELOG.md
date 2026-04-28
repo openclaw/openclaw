@@ -19,6 +19,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI/respawn: surface the underlying signal or non-zero exit code when the CLI respawn shim's child process dies (for example when killed by OOM on low-memory hosts), and always exit the parent on signal so the launcher no longer hangs silently with no output. Includes an `OPENCLAW_NO_RESPAWN=1` hint in the diagnostic so users can bypass the shim. Fixes #72720. Thanks @sign-2025.
 - Channels/setup: treat bundled channel plugins as already bundled during `channels add` and onboarding, enabling them without writing redundant `plugins.load.paths` entries or path install records. Fixes #72740. Thanks @iCodePoet.
 - Agents/OpenAI-compatible: retry replay-safe empty `stop` turns once for `openai-completions` endpoints, so transient empty local backend responses no longer surface as “Agent couldn't generate a response” when a continuation succeeds. Fixes #72751. Thanks @moooV252.
 - Git hooks: skip ignored staged paths when formatting and restaging pre-commit files, so merge commits no longer abort when `.gitignore` newly ignores staged merged content. Fixes #72744. Thanks @100yenadmin.

@@ -108,3 +108,37 @@ export function buildCliRespawnPlan(
     env: childEnv,
   };
 }
+
+/**
+ * Build a stderr diagnostic line for a respawned-child abnormal exit, or
+ * `null` when the child exited cleanly.
+ *
+ * Surfaces the underlying signal/code and points users at
+ * `OPENCLAW_NO_RESPAWN=1` so they can bypass the respawn shim if startup
+ * fails silently (for example when the child is OOM-killed on a low-RAM
+ * host or fails very early in module loading before producing output).
+ *
+ * Reported in https://github.com/openclaw/openclaw/issues/72720.
+ */
+export function formatRespawnedChildExitDiagnostic(params: {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+}): string | null {
+  const { code, signal } = params;
+  if (signal) {
+    return (
+      `[openclaw] respawned CLI process was terminated by signal ${signal}.\n` +
+      "If this happens repeatedly (for example on low-memory hosts), set " +
+      "OPENCLAW_NO_RESPAWN=1 to bypass the respawn shim and run the CLI " +
+      "directly.\n"
+    );
+  }
+  if (code != null && code !== 0) {
+    return (
+      `[openclaw] respawned CLI process exited with code ${code}.\n` +
+      "If this happens with no other output, set OPENCLAW_NO_RESPAWN=1 to " +
+      "bypass the respawn shim so the underlying error is visible.\n"
+    );
+  }
+  return null;
+}

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildCliRespawnPlan,
   EXPERIMENTAL_WARNING_FLAG,
+  formatRespawnedChildExitDiagnostic,
   OPENCLAW_NODE_EXTRA_CA_CERTS_READY,
   OPENCLAW_NODE_OPTIONS_READY,
   resolveCliRespawnCommand,
@@ -120,5 +121,35 @@ describe("resolveCliRespawnCommand", () => {
         platform: "linux",
       }),
     ).toBe("node");
+  });
+});
+
+describe("formatRespawnedChildExitDiagnostic", () => {
+  it("returns null on clean exit (code 0, no signal)", () => {
+    expect(formatRespawnedChildExitDiagnostic({ code: 0, signal: null })).toBeNull();
+  });
+
+  it("returns null when both code and signal are missing", () => {
+    expect(formatRespawnedChildExitDiagnostic({ code: null, signal: null })).toBeNull();
+  });
+
+  it("describes the signal and points at OPENCLAW_NO_RESPAWN when killed", () => {
+    const message = formatRespawnedChildExitDiagnostic({ code: null, signal: "SIGKILL" });
+    expect(message).not.toBeNull();
+    expect(message).toContain("SIGKILL");
+    expect(message).toContain("OPENCLAW_NO_RESPAWN=1");
+  });
+
+  it("describes the exit code and points at OPENCLAW_NO_RESPAWN when non-zero", () => {
+    const message = formatRespawnedChildExitDiagnostic({ code: 1, signal: null });
+    expect(message).not.toBeNull();
+    expect(message).toContain("code 1");
+    expect(message).toContain("OPENCLAW_NO_RESPAWN=1");
+  });
+
+  it("prefers the signal description when both code and signal are present", () => {
+    const message = formatRespawnedChildExitDiagnostic({ code: 137, signal: "SIGKILL" });
+    expect(message).toContain("SIGKILL");
+    expect(message).not.toContain("code 137");
   });
 });
