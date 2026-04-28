@@ -442,17 +442,25 @@ export default definePluginEntry({
       id: "review-concierge.tool-fail-watcher",
       streams: ["tool"],
       handle: async (event) => {
-        if (event.kind !== "tool_call_failed") return;
-        if (event.toolName !== "run_tests") return;
+        const toolName = String(event.data.name ?? "");
+        if (
+          event.stream !== "tool" ||
+          event.data.phase !== "result" ||
+          event.data.isError !== true
+        ) {
+          return;
+        }
+        if (toolName !== "run_tests") return;
         const sessionKey = event.sessionKey;
         if (!sessionKey) return;
 
-        const summary = formatTestFailure(event); // your own helper
+        const summary = formatTestFailure(event.data.result); // your own helper
+        const toolCallId = String(event.data.toolCallId ?? "unknown");
         await api.enqueueNextTurnInjection({
           sessionKey,
           text: `Previous test run failed:\n\n${summary}\n\nThe model should diagnose and propose a focused fix.`,
           placement: "prepend_context",
-          idempotencyKey: `tool-fail-${event.runId}-${event.toolCallId}`,
+          idempotencyKey: `tool-fail-${event.runId}-${toolCallId}`,
           ttlMs: 10 * 60_000,
           metadata: { source: "review-concierge", kind: "tool-fail-summary" },
         });
@@ -650,12 +658,15 @@ export default definePluginEntry({
 
     api.registerAgentEventSubscription({
       id: "sla-watcher.run-tracker",
-      streams: ["run"],
+      streams: ["lifecycle"],
       handle: (event, ctx) => {
-        if (event.kind === "run_started" && event.runId && event.sessionKey) {
+        if (event.data.phase === "start" && event.sessionKey) {
           startedAt.set(event.sessionKey, Date.now());
           ctx.setRunContext("sla", { startedAt: Date.now() });
-        } else if ((event.kind === "run_ended" || event.kind === "run_error") && event.sessionKey) {
+        } else if (
+          (event.data.phase === "end" || event.data.phase === "error") &&
+          event.sessionKey
+        ) {
           startedAt.delete(event.sessionKey);
         }
       },
@@ -1299,12 +1310,12 @@ namespace, ...})` if you need to write context outside an event handler.
 api.registerAgentEventSubscription({
   id: "incident-watcher.run-watcher",
   description: "Open an incident timeline on run start",
-  streams: ["run"],
+  streams: ["lifecycle"],
   handle: (event, ctx) => {
-    if (event.kind === "run_started" && event.runId) {
+    if (event.data.phase === "start") {
       ctx.setRunContext("incident", { startedAt: Date.now() });
     }
-    if (event.kind === "run_failed" || event.kind === "run_terminal") {
+    if (event.data.phase === "error" || event.data.phase === "end") {
       const incident = ctx.getRunContext<{ startedAt: number }>("incident");
       if (incident) {
         api.logger.info(`incident closed after ${Date.now() - incident.startedAt}ms`);
@@ -1348,19 +1359,24 @@ export default definePluginEntry({
     api.registerAgentEventSubscription({
       id: "pager-bridge.failures",
       description: "Run lifecycle failures forwarded to PagerDuty",
-      streams: ["run", "tool"],
+      streams: ["lifecycle", "tool"],
       handle: async (event) => {
-        if (event.kind === "run_failed") {
+        if (event.stream === "lifecycle" && event.data.phase === "error") {
           await pagerClient.trigger({
             severity: "critical",
-            summary: `Run ${event.runId} failed: ${event.errorClass ?? "unknown"}`,
+            summary: `Run ${event.runId} failed: ${String(event.data.error ?? "unknown")}`,
           });
           return;
         }
-        if (event.kind === "tool_call_failed" && event.severity === "high") {
+        if (
+          event.stream === "tool" &&
+          event.data.phase === "result" &&
+          event.data.isError === true
+        ) {
+          const toolName = String(event.data.name ?? "unknown");
           await pagerClient.trigger({
             severity: "warning",
-            summary: `Tool ${event.toolName} failed`,
+            summary: `Tool ${toolName} failed`,
           });
         }
       },
@@ -1429,17 +1445,17 @@ garbage-collected).
 ```typescript
 api.registerAgentEventSubscription({
   id: "billing.tagger",
-  streams: ["run", "tool"],
+  streams: ["lifecycle", "tool"],
   handle: (event, ctx) => {
-    if (event.kind === "run_started" && event.runId) {
+    if (event.stream === "lifecycle" && event.data.phase === "start") {
       const tenantId = inferTenantFromSession(event.sessionKey); // your helper
       ctx.setRunContext("billing", { tenantId });
       return;
     }
-    if (event.kind === "tool_call_ended" && event.toolName) {
+    if (event.stream === "tool" && event.data.phase === "result" && event.data.name) {
       const billing = ctx.getRunContext<{ tenantId: string }>("billing");
       if (!billing) return;
-      emitBillingRow({ tenantId: billing.tenantId, tool: event.toolName });
+      emitBillingRow({ tenantId: billing.tenantId, tool: String(event.data.name) });
     }
   },
 });
@@ -1468,17 +1484,17 @@ sequenceDiagram
   participant Ctx as Run Context
   participant Sink
 
-  Runner->>Plugin: handle(run_started, ctx)
+  Runner->>Plugin: handle({stream:"lifecycle", data:{phase:"start"}}, ctx)
   Plugin->>Ctx: ctx.setRunContext("billing", {tenantId})
 
   loop tool events during run
-    Runner-->>Plugin: handle(tool_call_*, ctx)
+    Runner-->>Plugin: handle({stream:"tool", data:{phase:"result"}}, ctx)
     Plugin->>Ctx: ctx.getRunContext("billing")
     Ctx-->>Plugin: {tenantId}
     Plugin->>Sink: emit row(tenantId, tool, cost)
   end
 
-  Runner->>Plugin: handle(run_terminal, ctx)
+  Runner->>Plugin: handle({stream:"lifecycle", data:{phase:"end"}}, ctx)
   Plugin->>Ctx: (host) clears all namespaces for runId
 ```
 
@@ -1584,7 +1600,9 @@ export default definePluginEntry({
       id: "quiet-hours.session-watcher",
       streams: ["session"],
       handle: (event) => {
-        if (event.kind !== "session_start" || !event.sessionKey) return;
+        if (event.stream !== "session" || event.data.kind !== "start" || !event.sessionKey) {
+          return;
+        }
 
         // Schedule a "resume nudges" job for the next non-quiet hour.
         const resumeAt = computeNextResumeTime(api.pluginConfig.quietWindow);
@@ -1974,7 +1992,7 @@ contribution + UI descriptor + runtime lifecycle.
 
 ```mermaid
 flowchart TD
-  RunStart[run_started] --> Sub[Event Subscription]
+  RunStart["lifecycle:start"] --> Sub[Event Subscription]
   Sub --> Ctx[Run Context]
   Sub --> Sched[Session Scheduler Job]
   Sub --> UI[Control UI: incident timeline]
@@ -1985,7 +2003,7 @@ flowchart TD
   Contrib --> Ctx
   Contrib --> Prompt[Heartbeat prompt context]
 
-  RunEnd[run_terminal] --> Cleanup[Host cleanup]
+  RunEnd["lifecycle:end"] --> Cleanup[Host cleanup]
   Disable[Operator disable] --> RTL[Runtime lifecycle: close webhook]
 ```
 
@@ -2003,7 +2021,7 @@ sequenceDiagram
   participant UI as Control UI
   participant Op as Operator
 
-  Run-->>Ev: run_started, runId=42
+  Run-->>Ev: stream=lifecycle, data.phase=start, runId=42
   Ev->>IC: handle(event, ctx)
   IC->>Ctx: ctx.setRunContext("incident", {startedAt, sla:15m})
   IC->>Sched: registerSessionSchedulerJob
@@ -2018,11 +2036,11 @@ sequenceDiagram
   Sched->>IC: tick fired
   IC->>UI: descriptor update: "tick at 8m"
 
-  Run-->>Ev: tool_call_failed
+  Run-->>Ev: stream=tool, data.phase=result, data.isError=true
   Ev->>IC: handle
   IC->>UI: descriptor update: red marker
 
-  Run-->>Ev: run_terminal
+  Run-->>Ev: stream=lifecycle, data.phase=end
   Ev->>IC: handle
   IC->>Sched: (host) cleanup
   IC->>Ctx: (host) clearRunContext
@@ -2058,10 +2076,11 @@ export default definePluginEntry({
 
     api.registerAgentEventSubscription({
       id: "incident-commander.run-watcher",
-      streams: ["run", "tool"],
+      streams: ["lifecycle", "tool"],
       handle: async (event, ctx) => {
-        if (event.kind === "run_started" && event.runId) {
-          const sla = SLA_BY_AGENT[event.agentId ?? ""] ?? SLA_BY_AGENT.default;
+        if (event.stream === "lifecycle" && event.data.phase === "start") {
+          const agentId = String(event.data.agentId ?? "");
+          const sla = SLA_BY_AGENT[agentId] ?? SLA_BY_AGENT.default;
           ctx.setRunContext("incident", { startedAt: Date.now(), slaMs: sla });
           if (event.sessionKey) {
             api.registerSessionSchedulerJob({
@@ -2071,12 +2090,15 @@ export default definePluginEntry({
             });
           }
         }
-        if (event.kind === "tool_call_failed") {
-          api.logger.warn(
-            `incident-commander tool fail in run=${event.runId} tool=${event.toolName}`,
-          );
+        if (
+          event.stream === "tool" &&
+          event.data.phase === "result" &&
+          event.data.isError === true
+        ) {
+          const toolName = String(event.data.name ?? "unknown");
+          api.logger.warn(`incident-commander tool fail in run=${event.runId} tool=${toolName}`);
         }
-        if (event.kind === "run_terminal") {
+        if (event.stream === "lifecycle" && event.data.phase === "end") {
           ctx.clearRunContext("incident");
         }
       },
@@ -2228,16 +2250,24 @@ export default definePluginEntry({
       id: "review-assistant.failure-watcher",
       streams: ["tool"],
       handle: async (event) => {
-        if (event.kind !== "tool_call_failed") return;
-        if (!event.sessionKey || !event.toolName) return;
-        if (!REVIEW_TOOLS.includes(event.toolName)) return;
+        if (
+          event.stream !== "tool" ||
+          event.data.phase !== "result" ||
+          event.data.isError !== true
+        ) {
+          return;
+        }
+        const toolName = String(event.data.name ?? "");
+        if (!event.sessionKey || !toolName) return;
+        if (!REVIEW_TOOLS.includes(toolName)) return;
 
-        const summary = await summarizeFailure(event); // your helper
+        const summary = await summarizeFailure(event.data.result); // your helper
+        const toolCallId = String(event.data.toolCallId ?? "unknown");
         await api.enqueueNextTurnInjection({
           sessionKey: event.sessionKey,
-          text: `Review notes for ${event.toolName} failure:\n\n${summary}`,
+          text: `Review notes for ${toolName} failure:\n\n${summary}`,
           placement: "prepend_context",
-          idempotencyKey: `review-fail-${event.runId}-${event.toolCallId}`,
+          idempotencyKey: `review-fail-${event.runId}-${toolCallId}`,
           ttlMs: 10 * 60_000,
         });
       },
@@ -2432,17 +2462,17 @@ describe("my-plugin host hooks", () => {
     const seen: string[] = [];
     harness.api.registerAgentEventSubscription({
       id: "test.recorder",
-      streams: ["run"],
+      streams: ["lifecycle"],
       handle: (event) => {
-        seen.push(event.kind);
+        seen.push(`${event.stream}:${String(event.data.phase ?? "")}`);
       },
     });
 
-    await harness.emitAgentEvent({ kind: "run_started", runId: "r1" });
+    await harness.emitAgentEvent({ runId: "r1", stream: "lifecycle", data: { phase: "start" } });
     await harness.disablePlugin("my-plugin");
-    await harness.emitAgentEvent({ kind: "run_terminal", runId: "r1" });
+    await harness.emitAgentEvent({ runId: "r1", stream: "lifecycle", data: { phase: "end" } });
 
-    expect(seen).toEqual(["run_started"]);
+    expect(seen).toEqual(["lifecycle:start"]);
   });
 });
 ```
