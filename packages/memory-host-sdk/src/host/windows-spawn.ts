@@ -87,6 +87,10 @@ function resolveWindowsExecutablePath(command: string, env: NodeJS.ProcessEnv): 
   return command;
 }
 
+function isAbsoluteEntrypointPath(candidate: string): boolean {
+  return path.isAbsolute(candidate) || /^[A-Za-z]:[\\/]/.test(candidate) || candidate.startsWith("\\\\");
+}
+
 function resolveEntrypointFromCmdShim(wrapperPath: string): string | null {
   if (!isFilePath(wrapperPath)) {
     return null;
@@ -99,12 +103,15 @@ function resolveEntrypointFromCmdShim(wrapperPath: string): string | null {
       const token = match[1] ?? "";
       const relMatch = token.match(/%~?dp0%?\s*[\\/]*(.*)$/i);
       const relative = relMatch?.[1]?.trim();
-      if (!relative) {
-        continue;
-      }
-      const normalizedRelative = relative.replace(/[\\/]+/g, path.sep).replace(/^[\\/]+/, "");
-      const candidate = path.resolve(path.dirname(wrapperPath), normalizedRelative);
-      if (isFilePath(candidate)) {
+      const candidate = relative
+        ? path.resolve(
+            path.dirname(wrapperPath),
+            relative.replace(/[\\/]+/g, path.sep).replace(/^[\\/]+/, ""),
+          )
+        : isAbsoluteEntrypointPath(token)
+          ? token
+          : null;
+      if (candidate && isFilePath(candidate)) {
         candidates.push(candidate);
       }
     }
