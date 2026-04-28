@@ -126,12 +126,9 @@ function recordMcpMessagingToolSend(params: {
     return;
   }
   if (params.toolName === "sessions_send") {
-    recordCliMessagingToolSend({
-      sessionKey: params.requestContext.sessionKey,
-      runId: params.requestContext.runId,
-      target: { tool: params.toolName, provider: "sessions" },
-      text: resolveMessageToolSentText(params.args),
-    });
+    return;
+  }
+  if (params.args.dryRun === true) {
     return;
   }
   const action = readStringField(params.args, "action") ?? "send";

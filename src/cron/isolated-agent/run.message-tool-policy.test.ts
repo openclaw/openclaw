@@ -727,36 +727,6 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     });
   });
 
-  it("does not skip cron fallback delivery for sessions_send helper messages", async () => {
-    mockRunCronFallbackPassthrough();
-    resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
-    runEmbeddedPiAgentMock.mockResolvedValue(
-      makeMessageToolRunResult([{ tool: "sessions_send", provider: "sessions" }]),
-    );
-
-    const result = await runCronIsolatedAgentTurn({
-      ...makeParams(),
-      job: makeAnnounceMessageToolJob({
-        id: "sessions-send-helper-message",
-        name: "Sessions Send Helper Message",
-      }),
-    });
-
-    expect(dispatchCronDeliveryMock).toHaveBeenCalledTimes(1);
-    expect(dispatchCronDeliveryMock.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({
-        deliveryRequested: true,
-        skipMessagingToolDelivery: false,
-      }),
-    );
-    expect(result.delivery).toEqual(
-      expect.objectContaining({
-        fallbackUsed: true,
-      }),
-    );
-    expect(result.delivery).not.toHaveProperty("messageToolSentTo");
-  });
-
   it("rewrites generic message provider to resolved channel in delivery trace", async () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());

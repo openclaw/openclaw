@@ -188,9 +188,6 @@ function normalizeMessagingToolTarget(
   resolvedDelivery: ResolvedCronDeliveryTarget,
   matchesMessagingToolDeliveryTarget: MessagingToolTargetMatcher,
 ): CronDeliveryTraceMessageTarget | undefined {
-  if (target.tool === "sessions_send") {
-    return undefined;
-  }
   const channel = target.provider?.trim();
   if (!channel) {
     return undefined;

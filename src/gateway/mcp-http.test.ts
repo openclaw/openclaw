@@ -667,8 +667,60 @@ describe("mcp loopback server", () => {
 
     expect(response.status).toBe(200);
     expect(drainCliMessagingToolSends("agent:main:telegram:chat123", "run-sessions-send")).toEqual({
-      targets: [{ tool: "sessions_send", provider: "sessions" }],
-      texts: ["sent to helper"],
+      targets: [],
+      texts: [],
+      mediaUrls: [],
+    });
+  });
+
+  it("does not record message dry runs as delivered sends", async () => {
+    resolveGatewayScopedToolsMock.mockReturnValue({
+      agentId: "main",
+      tools: [
+        {
+          name: "message",
+          description: "send a message",
+          parameters: { type: "object", properties: {} },
+          execute: vi.fn(async () => ({
+            content: [{ type: "text", text: "dry run" }],
+          })),
+        },
+      ],
+    });
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime ? resolveMcpLoopbackBearerToken(runtime, false) : undefined,
+      headers: {
+        "content-type": "application/json",
+        "x-session-key": "agent:main:telegram:chat123",
+        "x-openclaw-run-id": "run-message-dry-run",
+        "x-openclaw-message-channel": "telegram",
+        "x-openclaw-message-to": "chat123",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "message",
+          arguments: {
+            action: "send",
+            dryRun: true,
+            message: "not actually sent",
+          },
+        },
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(
+      drainCliMessagingToolSends("agent:main:telegram:chat123", "run-message-dry-run"),
+    ).toEqual({
+      targets: [],
+      texts: [],
       mediaUrls: [],
     });
   });
