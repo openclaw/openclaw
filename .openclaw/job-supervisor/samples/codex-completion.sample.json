@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "completion-event-v1",
+  "source": "codex",
+  "jobId": "codex-20260402-0319-notifier",
+  "sequence": 7,
+  "eventKind": "completion",
+  "status": "succeeded",
+  "observedAtUtc": "2026-04-02T00:22:10Z",
+  "completedAtUtc": "2026-04-02T00:22:08Z",
+  "summary": "Job completion supervisor tasarimi ve ilk Python iskeleti eklendi.",
+  "modifiedFiles": [
+    ".openclaw/job-supervisor/README.md",
+    ".openclaw/job-supervisor/scripts/supervise_job_events.py"
+  ],
+  "metrics": {
+    "durationSeconds": 83
+  },
+  "rawResultPath": ".openclaw/codex-queue/outbound/codex-20260402-0319-notifier.result.json"
+}

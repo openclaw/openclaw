@@ -1,0 +1,7 @@
+name: quadrotor_base
+mass_kg: 1.5
+max_speed_mps: 8.0
+max_altitude_m: 25.0
+home_position: [0.0, 0.0, 0.0]
+takeoff_altitude_m: 3.0
+safety_radius_m: 1.5

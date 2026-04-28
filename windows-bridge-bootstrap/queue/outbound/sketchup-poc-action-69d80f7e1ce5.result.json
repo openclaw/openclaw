@@ -1,0 +1,13 @@
+{
+  "requestId": "sketchup-poc-action-69d80f7e1ce5",
+  "kind": "sketchup-poc-action",
+  "status": "failed",
+  "startedAtUtc": "2026-04-09T22:00:06.4221618Z",
+  "finishedAtUtc": "2026-04-09T22:00:06.8936203Z",
+  "host": "KOLTIGINMASAUST",
+  "output": null,
+  "error": {
+    "message": "Extractor request failed. See response JSON at C:\\OpenClaw\\SketchUpPoC\\extract-model-response.json",
+    "type": "Microsoft.PowerShell.Commands.WriteErrorException"
+  }
+}

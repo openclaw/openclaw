@@ -1,0 +1,281 @@
+:root {
+  --bg: #09101f;
+  --panel: #121a33;
+  --panel-2: #172242;
+  --text: #eff3ff;
+  --muted: #bac5e5;
+  --line: rgba(255, 255, 255, 0.08);
+  --accent: #8b5cf6;
+  --accent-2: #22c55e;
+  --chip: rgba(139, 92, 246, 0.14);
+  --shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: radial-gradient(circle at top, #15204f 0%, var(--bg) 45%);
+  color: var(--text);
+  line-height: 1.6;
+}
+
+.page-shell {
+  width: min(1120px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 32px 0 96px;
+}
+
+.section {
+  padding: 56px 0;
+  border-top: 1px solid var(--line);
+}
+
+.section:first-child {
+  border-top: 0;
+}
+
+.hero {
+  display: grid;
+  grid-template-columns: 1.12fr 0.88fr;
+  gap: 32px;
+  align-items: start;
+}
+
+.hero-copy,
+.hero-aside,
+.stack {
+  display: grid;
+  gap: 20px;
+}
+
+.eyebrow,
+.card-kicker,
+.device-label {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: var(--chip);
+  color: #dacbff;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.card-kicker,
+.device-label {
+  padding: 6px 10px;
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(42px, 7vw, 74px);
+  line-height: 0.98;
+  letter-spacing: -0.045em;
+}
+
+h2 {
+  margin: 0;
+  font-size: clamp(28px, 4vw, 42px);
+  line-height: 1.06;
+  letter-spacing: -0.03em;
+}
+
+h3 {
+  margin: 0 0 8px;
+  font-size: 22px;
+  line-height: 1.15;
+}
+
+p,
+li {
+  color: var(--muted);
+  font-size: 17px;
+  margin: 0;
+}
+
+.hero-lede {
+  color: #dce5ff;
+  font-size: 20px;
+  max-width: 720px;
+}
+
+.bullet-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.bullet-list li {
+  position: relative;
+  padding-left: 24px;
+}
+
+.bullet-list li::before {
+  content: "•";
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: var(--accent-2);
+  font-size: 22px;
+  line-height: 1;
+}
+
+.compact {
+  gap: 10px;
+}
+
+.cta-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.cta-row.center {
+  justify-content: center;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px 18px;
+  border-radius: 14px;
+  font-size: 15px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.btn-primary {
+  color: white;
+  background: linear-gradient(135deg, var(--accent), #6d28d9);
+}
+
+.btn-secondary {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--line);
+}
+
+.full-width {
+  width: 100%;
+}
+
+.hero-aside,
+.grid {
+  align-content: start;
+}
+
+.grid {
+  display: grid;
+  gap: 20px;
+}
+
+.grid-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.grid-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.panel-card,
+.device-card,
+.pricing-card {
+  padding: 24px;
+  border-radius: 24px;
+  border: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.01));
+  box-shadow: var(--shadow);
+}
+
+.device-card {
+  background: var(--panel);
+}
+
+.pricing-card {
+  background: linear-gradient(180deg, rgba(139, 92, 246, 0.16), rgba(23, 34, 66, 0.95));
+}
+
+.plan-name {
+  margin-top: 8px;
+  font-size: 30px;
+  font-weight: 800;
+}
+
+.price {
+  margin: 6px 0 8px;
+  font-size: 46px;
+  line-height: 1;
+  font-weight: 900;
+}
+
+.price span {
+  font-size: 18px;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.section-header {
+  margin-bottom: 22px;
+  display: grid;
+  gap: 12px;
+}
+
+.section-header.centered {
+  text-align: center;
+}
+
+.copy-stack {
+  max-width: 800px;
+}
+
+.emphasis-line {
+  margin-top: 22px;
+  padding: 18px 20px;
+  border-left: 3px solid var(--accent);
+  border-radius: 0 16px 16px 0;
+  background: rgba(255, 255, 255, 0.04);
+  color: #dde5ff;
+}
+
+.section-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  align-items: start;
+}
+
+.section-cta {
+  padding-bottom: 24px;
+}
+
+@media (max-width: 920px) {
+  .hero,
+  .grid-2,
+  .grid-3,
+  .section-split {
+    grid-template-columns: 1fr;
+  }
+
+  h1 {
+    font-size: 46px;
+  }
+
+  .page-shell {
+    width: min(1120px, calc(100% - 24px));
+    padding-top: 24px;
+  }
+}

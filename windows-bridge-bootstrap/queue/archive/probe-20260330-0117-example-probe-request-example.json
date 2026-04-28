@@ -1,0 +1,8 @@
+{
+  "requestId": "probe-20260330-0117-example",
+  "kind": "capability-probe",
+  "script": "win-capability-probe.ps1",
+  "outputPath": "C:\\Users\\mertb\\Desktop\\windows-bridge-capability-probe-from-queue.json",
+  "createdAtUtc": "2026-03-29T22:17:00Z",
+  "status": "pending"
+}

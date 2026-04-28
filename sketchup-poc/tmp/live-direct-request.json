@@ -1,0 +1,43 @@
+{
+  "kind": "sketchup-live-extractor-request",
+  "contractVersion": "1.0.0",
+  "requestId": "live-direct-9cd2f631",
+  "requestedAtUtc": "2026-04-06T00:10:01Z",
+  "action": "extract-model-snapshot",
+  "readOnly": true,
+  "sourceKind": "bridge-live-handoff",
+  "target": {
+    "sketchupExecutablePathHint": "C:\\Program Files\\SketchUp\\SketchUp 2026\\SketchUp\\SketchUp.exe",
+    "sketchupVersionHint": "2026",
+    "sketchupProcessId": null,
+    "documentDetected": true,
+    "documentNameHint": "office-demo.skp",
+    "documentPathHint": "C:\\Projects\\office-demo.skp",
+    "documentSource": "process-command-line"
+  },
+  "artifacts": {
+    "responseArtifactPath": "C:\\OpenClaw\\SketchUpPoC\\live-direct-response.json",
+    "outputArtifactPath": "C:\\OpenClaw\\SketchUpPoC\\live-direct-output.json",
+    "snapshotOutputPath": "C:\\OpenClaw\\SketchUpPoC\\live-direct-snapshot.json"
+  },
+  "strategy": {
+    "key": "ruby-startup-open-document",
+    "attachMode": "launch-or-reuse",
+    "startupMode": "ruby-startup",
+    "notes": [
+      "Prefer launching SketchUp with a controlled RubyStartup/bootstrap entrypoint.",
+      "If SketchUp is already running, reuse is allowed only when the bootstrap hook is safely available.",
+      "The extractor must remain read-only and emit schema-shaped JSON."
+    ]
+  },
+  "options": {
+    "documentPath": "C:\\Projects\\office-demo.skp",
+    "documentName": "office-demo.skp",
+    "sketchupExePath": "C:\\Program Files\\SketchUp\\SketchUp 2026\\SketchUp\\SketchUp.exe"
+  },
+  "probeContext": {
+    "probeSource": "windows-host-real",
+    "probeStatus": "process-running-document-detected",
+    "metadataResultKind": "real-minimal-metadata"
+  }
+}

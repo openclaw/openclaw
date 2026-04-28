@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "WatchCommandRequest",
+  "description": "Payload sent from the Apple Watch (via iPhone proxy) to the OpenClaw backend to execute an audio command.",
+  "type": "object",
+  "properties": {
+    "audio_data": {
+      "type": "string",
+      "description": "Base64 encoded audio recorded from the Apple Watch."
+    },
+    "format": {
+      "type": "string",
+      "enum": ["m4a", "aac"],
+      "description": "The format of the audio data. Preferred is m4a or aac for bandwidth efficiency between Watch and iPhone."
+    },
+    "client_timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp of when the recording was completed on the client."
+    }
+  },
+  "required": ["audio_data", "format"]
+}

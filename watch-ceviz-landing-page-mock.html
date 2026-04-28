@@ -1,0 +1,439 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Watch Ceviz, Landing Page Mock</title>
+    <style>
+      :root {
+        --bg: #0b1020;
+        --panel: #121933;
+        --panel-2: #171f3f;
+        --text: #eef2ff;
+        --muted: #b3bdd9;
+        --line: rgba(255, 255, 255, 0.08);
+        --accent: #8b5cf6;
+        --accent-2: #22c55e;
+        --chip: rgba(139, 92, 246, 0.15);
+        --shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: radial-gradient(circle at top, #16204d 0%, var(--bg) 45%);
+        color: var(--text);
+        line-height: 1.55;
+      }
+
+      a {
+        color: inherit;
+        text-decoration: none;
+      }
+
+      .page {
+        width: min(1120px, calc(100% - 32px));
+        margin: 0 auto;
+        padding: 32px 0 80px;
+      }
+
+      .section {
+        padding: 56px 0;
+        border-top: 1px solid var(--line);
+      }
+
+      .section:first-of-type {
+        border-top: 0;
+      }
+
+      .eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        border-radius: 999px;
+        background: var(--chip);
+        color: #d8c8ff;
+        font-size: 13px;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: 1.15fr 0.85fr;
+        gap: 32px;
+        align-items: stretch;
+      }
+
+      h1 {
+        font-size: clamp(40px, 7vw, 72px);
+        line-height: 0.98;
+        margin: 16px 0 18px;
+        letter-spacing: -0.04em;
+      }
+
+      h2 {
+        font-size: clamp(28px, 4vw, 40px);
+        line-height: 1.05;
+        margin: 0 0 16px;
+        letter-spacing: -0.03em;
+      }
+
+      h3 {
+        font-size: 20px;
+        margin: 0 0 12px;
+      }
+
+      p,
+      li {
+        color: var(--muted);
+        font-size: 17px;
+      }
+
+      .lede {
+        max-width: 720px;
+        font-size: 20px;
+        color: #d9e1ff;
+      }
+
+      .bullets {
+        margin: 24px 0 28px;
+        padding: 0;
+        list-style: none;
+        display: grid;
+        gap: 12px;
+      }
+
+      .bullets li {
+        position: relative;
+        padding-left: 26px;
+      }
+
+      .bullets li::before {
+        content: "•";
+        position: absolute;
+        left: 0;
+        top: 0;
+        color: var(--accent-2);
+        font-size: 22px;
+        line-height: 1;
+      }
+
+      .hero-card,
+      .panel,
+      .pricing-card,
+      .scenario-card,
+      .faq-item {
+        background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01));
+        border: 1px solid var(--line);
+        border-radius: 24px;
+        box-shadow: var(--shadow);
+      }
+
+      .hero-card {
+        padding: 24px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+      }
+
+      .hero-stack {
+        display: grid;
+        gap: 16px;
+      }
+
+      .mock-device {
+        padding: 16px;
+        border-radius: 18px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+      }
+
+      .mock-label {
+        font-size: 12px;
+        font-weight: 700;
+        color: #d1b7ff;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-bottom: 10px;
+      }
+
+      .cta-row {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin-top: 12px;
+      }
+
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 14px 18px;
+        border-radius: 14px;
+        font-weight: 700;
+        font-size: 15px;
+      }
+
+      .btn-primary {
+        background: linear-gradient(135deg, var(--accent), #6d28d9);
+        color: white;
+      }
+
+      .btn-secondary {
+        background: rgba(255,255,255,0.04);
+        border: 1px solid var(--line);
+        color: var(--text);
+      }
+
+      .grid-3,
+      .grid-2 {
+        display: grid;
+        gap: 20px;
+      }
+
+      .grid-3 {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .grid-2 {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .panel,
+      .scenario-card,
+      .faq-item,
+      .pricing-card {
+        padding: 24px;
+      }
+
+      .kicker {
+        font-size: 13px;
+        font-weight: 700;
+        color: #d1b7ff;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-bottom: 10px;
+      }
+
+      .pricing-card .price {
+        font-size: 42px;
+        line-height: 1;
+        font-weight: 800;
+        margin: 8px 0 6px;
+      }
+
+      .pricing-card .plan {
+        font-size: 28px;
+        font-weight: 800;
+      }
+
+      .quote {
+        padding: 18px 20px;
+        border-left: 3px solid var(--accent);
+        background: rgba(255,255,255,0.03);
+        border-radius: 0 16px 16px 0;
+        color: #dfe6ff;
+      }
+
+      .footer-cta {
+        text-align: center;
+        padding: 32px;
+      }
+
+      @media (max-width: 920px) {
+        .hero,
+        .grid-3,
+        .grid-2 {
+          grid-template-columns: 1fr;
+        }
+
+        h1 {
+          font-size: 46px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <section class="section hero">
+        <div>
+          <div class="eyebrow">For founder-operators</div>
+          <h1>Your agent workflows, one glance away.</h1>
+          <p class="lede">
+            Trigger work, get a short trustworthy summary, and move to the phone only when approval or deeper context is needed.
+          </p>
+          <ul class="bullets">
+            <li>Check active jobs from your watch</li>
+            <li>See PR, deploy, and incident summaries fast</li>
+            <li>Open rich context on your phone when needed</li>
+            <li>Stay aware without reaching for the laptop first</li>
+          </ul>
+          <div class="cta-row">
+            <a class="btn btn-primary" href="#pricing">Get early access</a>
+            <a class="btn btn-secondary" href="#workflows">See how it works</a>
+          </div>
+        </div>
+        <aside class="hero-card">
+          <div class="hero-stack">
+            <div class="mock-device">
+              <div class="mock-label">Watch</div>
+              <strong>Latest deploy status</strong>
+              <p>Production deploy succeeded. One warning, no rollback needed.</p>
+            </div>
+            <div class="mock-device">
+              <div class="mock-label">Phone</div>
+              <strong>Structured report</strong>
+              <p>Risk summary, affected service, next action, and detail view ready.</p>
+            </div>
+          </div>
+          <div class="pricing-card" id="pricing">
+            <div class="kicker">Public launch plan</div>
+            <div class="plan">Personal</div>
+            <div class="price">$29<span style="font-size:18px; color: var(--muted)">/mo</span></div>
+            <p>For founder-operators and solo technical builders.</p>
+            <div class="cta-row">
+              <a class="btn btn-primary" href="#cta">Get early access</a>
+            </div>
+          </div>
+        </aside>
+      </section>
+
+      <section class="section">
+        <h2>What it is</h2>
+        <p>
+          Watch Ceviz is not a chatbot on the wrist. It is a fast access layer to your most important personal agent workflows.
+        </p>
+        <p>
+          It helps you check what matters quickly, then move to the phone only when the situation needs more context, approval, or recovery.
+        </p>
+      </section>
+
+      <section class="section">
+        <h2>How it works</h2>
+        <div class="grid-3">
+          <div class="panel">
+            <div class="kicker">Step 1</div>
+            <h3>Watch</h3>
+            <p>The watch is for trigger and glance. You ask for the status, get the signal, and understand whether something needs your attention.</p>
+          </div>
+          <div class="panel">
+            <div class="kicker">Step 2</div>
+            <h3>iPhone</h3>
+            <p>The phone is for depth, approval, and recovery. When things get heavier, the handoff opens the right screen with structured context.</p>
+          </div>
+          <div class="panel">
+            <div class="kicker">Step 3</div>
+            <h3>OpenClaw</h3>
+            <p>OpenClaw does the real work in the background, runs the workflow, gathers context, and prepares the report.</p>
+          </div>
+        </div>
+        <p class="quote">The watch gives you the signal. The phone gives you the context. OpenClaw does the work.</p>
+      </section>
+
+      <section class="section">
+        <h2>Why this matters</h2>
+        <p>
+          If you are both building the product and carrying operational responsibility, you do not need more noise. You need faster clarity.
+        </p>
+        <ul class="bullets">
+          <li>Check deploy risk before opening the laptop</li>
+          <li>See whether an alert actually matters</li>
+          <li>Get a PR snapshot without digging through tabs</li>
+          <li>Know whether a job is moving, blocked, or needs escalation</li>
+        </ul>
+      </section>
+
+      <section class="section">
+        <h2>What Personal includes</h2>
+        <div class="grid-2">
+          <div class="panel">
+            <div class="kicker">Included</div>
+            <ul class="bullets">
+              <li>Watch access to key workflows</li>
+              <li>Active and recent jobs</li>
+              <li>PR risk summary</li>
+              <li>Deploy status snapshot</li>
+              <li>Incident severity snapshot</li>
+              <li>Open-on-phone handoff</li>
+              <li>Structured phone report reading</li>
+              <li>Cancel / stop current job</li>
+            </ul>
+          </div>
+          <div class="panel">
+            <div class="kicker">Framing</div>
+            <p>Personal is built for fast awareness, not deep operator control.</p>
+            <p>If you need approvals, retries, or deeper recovery flows, that is the upgrade path, not the launch story.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="workflows">
+        <h2>Example workflows</h2>
+        <div class="grid-3">
+          <div class="scenario-card">
+            <h3>Deploy check</h3>
+            <p>Ask from the watch. Get a short summary of the latest deploy. Open the phone only if something looks risky.</p>
+          </div>
+          <div class="scenario-card">
+            <h3>PR snapshot</h3>
+            <p>Ask for an active PR summary. Get a one-line risk read from the watch. Open the phone for files, notes, and next steps.</p>
+          </div>
+          <div class="scenario-card">
+            <h3>Incident triage</h3>
+            <p>Receive or request a short incident summary. See severity fast. Move to the phone when the incident needs real diagnosis.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Why the phone handoff exists</h2>
+        <p>
+          The phone handoff is not a fallback. It is the design.
+        </p>
+        <p>
+          The watch stays useful by staying small. The phone becomes valuable because it carries the depth.
+        </p>
+        <p class="quote">The watch is for awareness. The phone is for depth.</p>
+      </section>
+
+      <section class="section footer-cta" id="cta">
+        <h2>Get early access</h2>
+        <p>
+          If you want faster awareness of deploys, PRs, incidents, and active jobs without opening the laptop first, join early access.
+        </p>
+        <div class="cta-row" style="justify-content:center; margin-top:20px;">
+          <a class="btn btn-primary" href="#">Get early access</a>
+          <a class="btn btn-secondary" href="#faq">Read the FAQ</a>
+        </div>
+      </section>
+
+      <section class="section" id="faq">
+        <h2>FAQ</h2>
+        <div class="grid-2">
+          <div class="faq-item">
+            <h3>Why not just use the phone?</h3>
+            <p>Because the watch is better for immediate awareness. It lets you check what matters without unlocking the phone first.</p>
+          </div>
+          <div class="faq-item">
+            <h3>Is this a full assistant on the watch?</h3>
+            <p>No. Watch Ceviz is intentionally focused on trigger, glance, and handoff rather than long-form assistant use on a tiny screen.</p>
+          </div>
+          <div class="faq-item">
+            <h3>Why is phone handoff part of the product?</h3>
+            <p>Because serious workflows often need structured context, approvals, or recovery options. The watch gives speed. The phone gives depth.</p>
+          </div>
+          <div class="faq-item">
+            <h3>Who is this for first?</h3>
+            <p>Founder-operators, solo technical builders, and people who both ship product and carry technical responsibility.</p>
+          </div>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

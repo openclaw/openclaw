@@ -1,0 +1,137 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "WatchCommandResponse",
+  "description": "Response from the OpenClaw backend back to the Apple Watch, formatted for low-bandwidth and quick audio/text output.",
+  "$defs": {
+    "reportMeta": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Structured report metadata that mirrors the watch/phone handoff fields so clients can avoid parsing the freeform report text.",
+      "properties": {
+        "title": { "type": "string" },
+        "status": { "type": "string" },
+        "severity": { "type": "string" },
+        "category": { "type": "string" },
+        "watch_summary": { "type": "string" },
+        "requires_phone_handoff": { "type": "boolean" },
+        "handoff_reason": { "type": ["string", "null"] },
+        "phone_report": { "type": "string" },
+        "next_action": { "type": ["string", "null"] },
+        "retry_count": { "type": "integer" },
+        "failure_code": { "type": ["string", "null"] },
+        "failure_message": { "type": ["string", "null"] }
+      },
+      "required": [
+        "title",
+        "status",
+        "severity",
+        "category",
+        "watch_summary",
+        "requires_phone_handoff",
+        "handoff_reason",
+        "phone_report",
+        "next_action",
+        "retry_count",
+        "failure_code",
+        "failure_message"
+      ]
+    },
+    "nextActionItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "label": { "type": "string" },
+        "kind": { "type": "string" },
+        "target": { "type": ["string", "null"] }
+      },
+      "required": ["id", "label", "kind", "target"]
+    },
+    "previewSection": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "enum": [
+            "category",
+            "watch-summary",
+            "expanded-analysis",
+            "suggested-next-action",
+            "capture"
+          ]
+        },
+        "title": { "type": "string" },
+        "eyebrow": { "type": "string" },
+        "icon": { "type": "string" },
+        "content": { "type": "string" }
+      },
+      "required": ["id", "title", "eyebrow", "icon", "content"]
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["success", "error", "processing"],
+      "description": "The processing status of the command."
+    },
+    "transcript": {
+      "type": "string",
+      "description": "The backend-transcribed text of the user's audio."
+    },
+    "summary_text": {
+      "type": "string",
+      "maxLength": 200,
+      "description": "A short, Watch-optimized summary (< 200 chars) of the action taken or the job's current state. Suitable for Watch screen."
+    },
+    "tts_audio_data": {
+      "type": "string",
+      "description": "Base64 encoded Text-to-Speech audio of the summary_text. Allows the Watch to play audio immediately."
+    },
+    "tts_format": {
+      "type": "string",
+      "enum": ["mp3", "aac"],
+      "description": "The format of the TTS audio data."
+    },
+    "requires_phone_handoff": {
+      "type": "boolean",
+      "description": "True if the backend determined the agent's output is too complex for the Watch (e.g., contains code, long lists, large diffs)."
+    },
+    "handoff_url": {
+      "type": "string",
+      "description": "A deep-link URL (e.g., ceviz://job/123) for the companion iPhone app to open the full detailed view. Only required if requires_phone_handoff is true."
+    },
+    "deep_link": {
+      "type": "string",
+      "description": "Canonical deep-link URL for the companion iPhone app. Prefer this over handoff_url in new clients."
+    },
+    "handoff_reason": {
+      "type": ["string", "null"],
+      "description": "Machine-friendly explanation for why the phone handoff is needed."
+    },
+    "job_id": {
+      "type": "string",
+      "description": "The OpenClaw job ID associated with this command, if a job was created or interacted with."
+    },
+    "phone_report": {
+      "type": "string",
+      "description": "A longer phone-oriented status/report string. May be a lightweight initial report while the async OpenClaw job is still running."
+    },
+    "report_meta": {
+      "$ref": "#/$defs/reportMeta"
+    },
+    "preview_sections": {
+      "type": "array",
+      "description": "Thin structured preview sections for watch/iPhone continuation cards, aligned with report section semantics.",
+      "items": { "$ref": "#/$defs/previewSection" }
+    },
+    "next_actions": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/nextActionItem" },
+      "description": "Structured next-action affordances for phone continuation surfaces."
+    }
+  },
+  "required": ["status", "transcript", "summary_text", "requires_phone_handoff"]
+}

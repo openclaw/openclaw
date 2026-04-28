@@ -1,0 +1,9 @@
+bridge-consumer action=extract-model-snapshot result=succeeded-live-model-access contractValidated=True
+diagnostic: Requested document appears to match the observed model. Ruby-side access to Sketchup.active_model is evidenced. Bootstrap was acknowledged, but no snapshot was emitted.
+document: evidence=live-model-header requestedMatched=True observedName=office-demo
+liveAccess: status=proved-active-model-access proofKind=sketchup-active-model-access
+snapshot: available=False kind=none
+safeQueryConsumer: available kind=model-bounds-summary source=bootstrap-live-safe-query
+safeQueryConsumer.value: width=12840.0 height=3048.0 depth=9120.0 diagonal=16032.45
+note: Bu bridge consumer slice yalnizca diagnosticSummary + safeQueryProof yuzeyini tuketir.
+note: Traversal veya full snapshot kaniti uretmez.

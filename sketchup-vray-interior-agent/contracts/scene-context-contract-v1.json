@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ceviz.local/contracts/scene-context-contract-v1.json",
+  "title": "SceneContextContractV1",
+  "type": "object",
+  "required": [
+    "scene",
+    "selection",
+    "organization",
+    "materials",
+    "cameras",
+    "render",
+    "diagnostics"
+  ],
+  "properties": {
+    "scene": {
+      "type": "object",
+      "required": ["name", "path", "units", "pageCount", "activePage", "modelStats"],
+      "properties": {
+        "name": { "type": "string" },
+        "path": { "type": "string" },
+        "units": { "type": "string" },
+        "pageCount": { "type": "integer", "minimum": 0 },
+        "activePage": { "type": ["string", "null"] },
+        "modelStats": {
+          "type": "object",
+          "required": ["componentInstanceCount", "groupCount", "tagCount"],
+          "properties": {
+            "componentInstanceCount": { "type": "integer", "minimum": 0 },
+            "groupCount": { "type": "integer", "minimum": 0 },
+            "tagCount": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "selection": {
+      "type": "object",
+      "required": ["exists"],
+      "properties": {
+        "exists": { "type": "boolean" },
+        "entityType": { "type": ["string", "null"] },
+        "name": { "type": ["string", "null"] },
+        "tag": { "type": ["string", "null"] },
+        "material": { "type": ["string", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "organization": {
+      "type": "object",
+      "required": ["tags", "untaggedEntityCount", "unnamedEntityCount", "roomCoverage"],
+      "properties": {
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "untaggedEntityCount": { "type": "integer", "minimum": 0 },
+        "unnamedEntityCount": { "type": "integer", "minimum": 0 },
+        "roomCoverage": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["room", "hasCamera"],
+            "properties": {
+              "room": { "type": "string" },
+              "hasCamera": { "type": "boolean" }
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "materials": {
+      "type": "object",
+      "required": [
+        "materialCount",
+        "defaultMaterialEntityCount",
+        "placeholderMaterials",
+        "duplicates"
+      ],
+      "properties": {
+        "materialCount": { "type": "integer", "minimum": 0 },
+        "defaultMaterialEntityCount": { "type": "integer", "minimum": 0 },
+        "placeholderMaterials": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "duplicates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["a", "b", "reason"],
+            "properties": {
+              "a": { "type": "string" },
+              "b": { "type": "string" },
+              "reason": { "type": "string" }
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "cameras": {
+      "type": "object",
+      "required": ["pages", "missingRooms"],
+      "properties": {
+        "pages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "room", "cameraType"],
+            "properties": {
+              "name": { "type": "string" },
+              "room": { "type": ["string", "null"] },
+              "cameraType": { "type": "string" }
+            },
+            "additionalProperties": true
+          }
+        },
+        "missingRooms": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "render": {
+      "type": "object",
+      "required": ["source", "available", "qualityPreset", "resolution", "warnings"],
+      "properties": {
+        "source": {
+          "type": "string",
+          "enum": ["vray", "sketchup-only", "seeded"]
+        },
+        "available": { "type": "boolean" },
+        "qualityPreset": { "type": ["string", "null"] },
+        "resolution": { "type": ["string", "null"] },
+        "warnings": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "diagnostics": {
+      "type": "object",
+      "required": ["partialRead", "warnings", "unsupportedFields"],
+      "properties": {
+        "partialRead": { "type": "boolean" },
+        "warnings": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "unsupportedFields": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

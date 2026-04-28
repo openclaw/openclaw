@@ -1,0 +1,189 @@
+{
+  "kind": "sketchup-live-extractor-response",
+  "contractVersion": "1.0.0",
+  "requestId": "local-smoke",
+  "action": "extract-model-snapshot",
+  "ok": false,
+  "executionState": "failed-live",
+  "sourceKind": "live-extractor",
+  "readOnly": true,
+  "generatedAtUtc": "2026-04-09T21:51:50.0133976Z",
+  "durations": {
+    "startupMs": null,
+    "totalMs": 493,
+    "snapshotWriteMs": null,
+    "documentOpenMs": null
+  },
+  "artifacts": {
+    "outputArtifactPath": "/home/mertb/.openclaw/workspace/sketchup-poc/tmp/live-extractor-response.output.json",
+    "snapshotOutputPath": "/home/mertb/.openclaw/workspace/sketchup-poc/tmp/live-model-snapshot.json",
+    "responseArtifactPath": "/home/mertb/.openclaw/workspace/sketchup-poc/tmp/live-extractor-response.json"
+  },
+  "preflight": {
+    "status": "ready",
+    "bootstrapActionable": true,
+    "trueLiveExtractionReady": false,
+    "selectedStrategyKey": "ruby-startup-open-document",
+    "summary": {
+      "passed": 6,
+      "warned": 0,
+      "failed": 0
+    },
+    "checks": [
+      {
+        "key": "request-completeness",
+        "category": "request",
+        "status": "pass",
+        "ok": true,
+        "code": "request-complete",
+        "message": "Request contains the required contract fields for bootstrap preflight.",
+        "details": {
+          "sourceKind": "bridge-live-handoff",
+          "readOnly": true
+        }
+      },
+      {
+        "key": "action-support",
+        "category": "request",
+        "status": "pass",
+        "ok": true,
+        "code": "action-supported",
+        "message": "Requested action is supported by the current bootstrap preflight layer.",
+        "details": {
+          "action": "extract-model-snapshot"
+        }
+      },
+      {
+        "key": "strategy-support",
+        "category": "strategy",
+        "status": "pass",
+        "ok": true,
+        "code": "strategy-supported",
+        "message": "Strategy is a supported bootstrap candidate for the next live extractor phase.",
+        "details": {
+          "key": "ruby-startup-open-document",
+          "attachMode": "launch-or-reuse",
+          "startupMode": "ruby-startup"
+        }
+      },
+      {
+        "key": "artifact-path-readiness",
+        "category": "artifacts",
+        "status": "pass",
+        "ok": true,
+        "code": "artifact-paths-ready",
+        "message": "Artifact paths are present, absolute, and already rooted in existing parent directories.",
+        "details": {
+          "paths": [
+            {
+              "name": "responseArtifactPath",
+              "path": "/home/mertb/.openclaw/workspace/sketchup-poc/tmp/live-extractor-response.json",
+              "present": true,
+              "isAbsolute": true,
+              "parentDirectory": "\\home\\mertb\\.openclaw\\workspace\\sketchup-poc\\tmp",
+              "parentExists": true
+            },
+            {
+              "name": "outputArtifactPath",
+              "path": "/home/mertb/.openclaw/workspace/sketchup-poc/tmp/live-extractor-response.output.json",
+              "present": true,
+              "isAbsolute": true,
+              "parentDirectory": "\\home\\mertb\\.openclaw\\workspace\\sketchup-poc\\tmp",
+              "parentExists": true
+            },
+            {
+              "name": "snapshotOutputPath",
+              "path": "/home/mertb/.openclaw/workspace/sketchup-poc/tmp/live-model-snapshot.json",
+              "present": true,
+              "isAbsolute": true,
+              "parentDirectory": "\\home\\mertb\\.openclaw\\workspace\\sketchup-poc\\tmp",
+              "parentExists": true
+            }
+          ]
+        }
+      },
+      {
+        "key": "environment-readiness",
+        "category": "environment",
+        "status": "pass",
+        "ok": true,
+        "code": "environment-ready",
+        "message": "Host and probe-derived target hints are sufficient for a bootstrap attempt.",
+        "details": {
+          "runningOnWindows": true,
+          "sketchupExecutableHint": "/bin/echo",
+          "documentDetected": true,
+          "documentPathCandidate": "/tmp/office-demo.skp"
+        }
+      },
+      {
+        "key": "bootstrap-path",
+        "category": "bootstrap",
+        "status": "pass",
+        "ok": true,
+        "code": "bootstrap-path-ready",
+        "message": "Bootstrap prerequisites and implementation are available.",
+        "details": {
+          "bootstrapAckImplemented": true,
+          "fullLiveExtractionImplemented": false
+        }
+      }
+    ],
+    "blockerCodes": [],
+    "unsupportedReasons": []
+  },
+  "result": {
+    "artifactKind": "sketchup-live-extraction-output",
+    "artifactPath": "/home/mertb/.openclaw/workspace/sketchup-poc/tmp/live-extractor-response.output.json",
+    "snapshotPath": null,
+    "snapshotKind": null,
+    "snapshotSourceKind": null,
+    "bootstrapAck": null,
+    "liveModelHeader": null,
+    "liveModelAccess": null,
+    "safeQueryProof": null,
+    "bootstrap": {
+      "strategyKey": "ruby-startup-open-document",
+      "ready": true,
+      "invocation": {
+        "executablePath": "/bin/echo",
+        "attachMode": "launch-or-reuse",
+        "startupMode": "ruby-startup",
+        "launchArguments": [
+          "-RubyStartup",
+          "\\home\\mertb\\.openclaw\\workspace\\sketchup-poc\\tmp\\bootstrap\\local-smoke.bootstrap.rb",
+          "/tmp/office-demo.skp"
+        ],
+        "commandPreview": "/bin/echo -RubyStartup \\home\\mertb\\.openclaw\\workspace\\sketchup-poc\\tmp\\bootstrap\\local-smoke.bootstrap.rb /tmp/office-demo.skp"
+      },
+      "artifacts": {
+        "bootstrapDirectory": "\\home\\mertb\\.openclaw\\workspace\\sketchup-poc\\tmp\\bootstrap",
+        "manifestPath": "\\home\\mertb\\.openclaw\\workspace\\sketchup-poc\\tmp\\bootstrap\\local-smoke.bootstrap-plan.json",
+        "rubyScriptPath": "\\home\\mertb\\.openclaw\\workspace\\sketchup-poc\\tmp\\bootstrap\\local-smoke.bootstrap.rb",
+        "contextPath": "\\home\\mertb\\.openclaw\\workspace\\sketchup-poc\\tmp\\bootstrap\\local-smoke.bootstrap-context.json",
+        "bootstrapStatusPath": "\\home\\mertb\\.openclaw\\workspace\\sketchup-poc\\tmp\\bootstrap\\local-smoke.bootstrap-status.json"
+      }
+    },
+    "schemaValidation": {
+      "valid": null,
+      "attempted": false,
+      "schemaPath": "contracts/model-snapshot.schema.json"
+    },
+    "stats": null
+  },
+  "warnings": [
+    "The live extractor still does not emit a validated recursive live snapshot in this phase.",
+    "No live snapshot was written because this phase stopped before snapshot completion.",
+    "An execution manifest artifact is being written so downstream tooling can inspect state without pretending a snapshot exists.",
+    "Bootstrap artifacts were materialized for the SketchUp-side path, but no acknowledgment was observed."
+  ],
+  "errors": [
+    {
+      "code": "sketchup-launch-failed",
+      "message": "Failed to launch SketchUp for bootstrap ack: This command cannot be run due to the error: An error occurred trying to start process '/bin/echo' with working directory '\\\\wsl.localhost\\Ubuntu\\home\\mertb\\.openclaw\\workspace\\sketchup-poc'. Sistem belirtilen dosyayı bulamıyor.",
+      "stage": "startup",
+      "retryable": true,
+      "details": null
+    }
+  ]
+}

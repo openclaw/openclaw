@@ -1,0 +1,22 @@
+# 2026-04-24 - Watch Ceviz install debug
+
+- `watch-ceviz` için Apple Watch companion kurulmama problemi üzerinde çalışıldı.
+- `watch-ceviz/project.yml` içinde companion metadata sıkılaştırıldı: iOS/watch bundle id hizası, shared version/build (`1.1` / `2`), `WKCompanionAppBundleIdentifier`, `WKRunsIndependently: NO`, explicit `CFBundleDisplayName`, `CFBundleName`, `CFBundleShortVersionString`, `CFBundleVersion` alanları eklendi.
+- Push edilen ilgili commitler:
+  - `b4b4ff6 fix(watch): align companion install metadata`
+  - `b5bd19a fix(xcodegen): remove invalid supported destinations`
+  - `fd26b35 fix(watch): add explicit bundle display metadata`
+- Yeni iPhone logları incelendi (`/mnt/c/Users/mertb/Downloads/24042026_154214_064_iPhone.log`).
+- Log analizi sonucu: `com.openclaw.ceviz.watchkitapp` sistem tarafından görülüyor (`wcd` enumerate ediyor), yani watch companion tamamen yok değil.
+- Buna rağmen loglarda net bir başarılı watch install transaction görünmüyor; sorun runtime/app açık-kapalı farkından çok signing/export/sideload zincirine işaret ediyor.
+- Kritik bulgu: repo root'taki GitHub Actions workflow (`.github/workflows/ci.yml`) gerçek signed/exported IPA üretmiyor. Şu an `xcodebuild build` sonrası `CODE_SIGNING_ALLOWED=NO` ve `CODE_SIGNING_REQUIRED=NO` ile oluşan `.app` klasörü elle `Payload/` içine ziplenerek `.ipa` yapılıyor.
+- Bu yüzden en güçlü kök neden hipotezi: mevcut artifact watch-installable gerçek export değil; metadata düzeltmeleri doğru olsa da watch kurulumunu çözmeye yetmiyor.
+- Bu hipotezi doğrulamak için CI workflow'a build inspection adımı eklendi. Yeni commit:
+  - `f83755e ci(watch): inspect embedded watch companion output`
+- Bu step sonraki run'da şunları loglayacak:
+  - `build/` ve `build/CevizBridge.app/` tree
+  - embedded watch bundle var mı
+  - iPhone/watch Info.plist summary değerleri
+  - `_CodeSignature` ve `embedded.mobileprovision` artefact var mı
+- Sonraki dönüşte bakılacak ilk şey: GitHub Actions `Inspect Build Output` adımının logu.
+- Hedef: watch companion gerçekten embed ediliyor mu, yoksa asıl kırılma export/signing aşamasında mı bunu kesinleştirmek.

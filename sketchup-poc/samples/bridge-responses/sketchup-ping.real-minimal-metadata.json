@@ -1,0 +1,106 @@
+{
+  "requestId": "sketchup-poc-action-demo123",
+  "kind": "sketchup-poc-action",
+  "status": "succeeded",
+  "startedAtUtc": "2026-04-05T19:30:00Z",
+  "finishedAtUtc": "2026-04-05T19:30:01Z",
+  "host": "WINDOWS-HOST",
+  "output": {
+    "action": "sketchup-ping",
+    "readOnly": true,
+    "liveMetadata": {
+      "kind": "real-minimal-metadata",
+      "source": "windows-host-real",
+      "extractionKind": "process-metadata-only",
+      "obtainedAtUtc": "2026-04-05T19:30:01Z",
+      "signals": [
+        "app-executable-path-hint",
+        "app-version-hint",
+        "process-running-detected",
+        "document-name-hint",
+        "document-path-hint"
+      ],
+      "app": {
+        "detected": true,
+        "executablePathHint": "C:\\Program Files\\SketchUp\\SketchUp 2025\\SketchUp.exe",
+        "versionHint": "2025",
+        "processRunning": true,
+        "processId": 19440,
+        "mainWindowTitleHint": "office-demo.skp - SketchUp Pro 2025"
+      },
+      "document": {
+        "detected": true,
+        "source": "process-command-line",
+        "nameHint": "office-demo.skp",
+        "pathHint": "C:\\Projects\\office-demo.skp"
+      },
+      "model": {
+        "activeDocumentDetected": true,
+        "activeModelDetected": true
+      },
+      "limitations": [
+        "Derived from Windows process/install metadata only.",
+        "Does not attach to a SketchUp session or read model entities.",
+        "Document hints may come from process command line or window title and can be incomplete."
+      ]
+    },
+    "liveProbe": {
+      "attempted": true,
+      "source": "windows-host-real",
+      "status": "process-running-document-detected",
+      "available": true,
+      "launchable": true,
+      "processRunning": true,
+      "documentDetected": true,
+      "automationImplemented": false,
+      "reasonCode": null,
+      "reason": null,
+      "details": {
+        "probeKind": "real",
+        "candidateExecutablePaths": [
+          "C:\\Program Files\\SketchUp\\SketchUp 2025\\SketchUp.exe",
+          "C:\\Program Files\\SketchUp\\SketchUp 2024\\SketchUp.exe"
+        ],
+        "installedExecutablePath": "C:\\Program Files\\SketchUp\\SketchUp 2025\\SketchUp.exe",
+        "installedVersionHint": "2025",
+        "runningProcessDetected": true,
+        "runningProcessId": 19440,
+        "runningExecutablePath": "C:\\Program Files\\SketchUp\\SketchUp 2025\\SketchUp.exe",
+        "runningMainWindowTitle": "office-demo.skp - SketchUp Pro 2025",
+        "runningCommandLine": "\"C:\\Program Files\\SketchUp\\SketchUp 2025\\SketchUp.exe\" \"C:\\Projects\\office-demo.skp\"",
+        "detectedDocument": {
+          "detected": true,
+          "source": "process-command-line",
+          "name": "office-demo.skp",
+          "path": "C:\\Projects\\office-demo.skp"
+        },
+        "note": "This phase only probes installation and process metadata. It does not attach to, inspect, or drive a live SketchUp session."
+      }
+    },
+    "execution": {
+      "mode": "probe-only",
+      "usedFallback": false,
+      "fallbackReason": null,
+      "probeResultKind": "real",
+      "metadataResultKind": "real-minimal-metadata",
+      "snapshotResultKind": "none",
+      "resultKind": "real-minimal-metadata"
+    },
+    "result": {
+      "bridgeReachable": true,
+      "extractorAvailable": true,
+      "sketchupAutomationImplemented": false,
+      "liveExtractionImplemented": false,
+      "metadataAvailable": true,
+      "metadataSource": "windows-host-real",
+      "liveMetadata": {
+        "kind": "real-minimal-metadata",
+        "source": "windows-host-real",
+        "extractionKind": "process-metadata-only"
+      },
+      "message": "Bridge request reached the SketchUp PoC handler. Minimal live metadata hints were derived from real Windows host inspection; no SketchUp automation session is driven."
+    },
+    "warnings": []
+  },
+  "error": null
+}

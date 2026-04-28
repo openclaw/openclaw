@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ceviz.local/contracts/sketchup-bridge-result-envelope-v1.json",
+  "title": "SketchUpBridgeResultEnvelopeV1",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "requestId",
+    "kind",
+    "status",
+    "startedAtUtc",
+    "finishedAtUtc",
+    "host",
+    "handler",
+    "output",
+    "error"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "sketchup-bridge-result-envelope-v1"
+    },
+    "requestId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["ping", "capabilities", "extract-presentation-context"]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["succeeded", "failed"]
+    },
+    "startedAtUtc": {
+      "type": "string"
+    },
+    "finishedAtUtc": {
+      "type": "string"
+    },
+    "host": {
+      "type": "string"
+    },
+    "handler": {
+      "type": "string"
+    },
+    "output": {
+      "type": ["object", "null"]
+    },
+    "error": {
+      "type": ["object", "null"]
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,101 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Job Summary Response",
+  "$defs": {
+    "reportMeta": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "title": { "type": "string" },
+        "status": { "type": "string" },
+        "severity": { "type": "string" },
+        "category": { "type": "string" },
+        "watch_summary": { "type": "string" },
+        "requires_phone_handoff": { "type": "boolean" },
+        "handoff_reason": { "type": ["string", "null"] },
+        "phone_report": { "type": "string" },
+        "next_action": { "type": ["string", "null"] },
+        "retry_count": { "type": "integer" },
+        "failure_code": { "type": ["string", "null"] },
+        "failure_message": { "type": ["string", "null"] }
+      },
+      "required": [
+        "title",
+        "status",
+        "severity",
+        "category",
+        "watch_summary",
+        "requires_phone_handoff",
+        "handoff_reason",
+        "phone_report",
+        "next_action",
+        "retry_count",
+        "failure_code",
+        "failure_message"
+      ]
+    },
+    "previewSection": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "enum": [
+            "category",
+            "watch-summary",
+            "expanded-analysis",
+            "suggested-next-action",
+            "capture"
+          ]
+        },
+        "title": { "type": "string" },
+        "eyebrow": { "type": "string" },
+        "icon": { "type": "string" },
+        "content": { "type": "string" }
+      },
+      "required": ["id", "title", "eyebrow", "icon", "content"]
+    },
+    "nextActionItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "label": { "type": "string" },
+        "kind": { "type": "string" },
+        "target": { "type": ["string", "null"] }
+      },
+      "required": ["id", "label", "kind", "target"]
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "summary": { "type": "string" },
+    "requires_phone_handoff": { "type": "boolean" },
+    "status": { "type": "string" },
+    "transcript": { "type": "string" },
+    "phone_report": { "type": "string" },
+    "handoff_url": { "type": ["string", "null"] },
+    "deep_link": { "type": ["string", "null"] },
+    "handoff_reason": { "type": ["string", "null"] },
+    "report_meta": { "$ref": "#/$defs/reportMeta" },
+    "preview_sections": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/previewSection" }
+    },
+    "next_actions": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/nextActionItem" }
+    }
+  },
+  "required": [
+    "summary",
+    "requires_phone_handoff",
+    "status",
+    "transcript",
+    "phone_report",
+    "report_meta",
+    "preview_sections",
+    "next_actions"
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "requestId": "dotnet-info-20260330-2222-example",
+  "kind": "dotnet-info",
+  "status": "succeeded",
+  "startedAtUtc": "2026-03-30T19:27:01.7594858Z",
+  "finishedAtUtc": "2026-03-30T19:27:02.0829721Z",
+  "host": "KOLTIGINMASAUST",
+  "output": {
+    "dotnetVersion": "10.0.103",
+    "outputPath": "C:\\Users\\mertb\\Desktop\\windows-bridge-dotnet-info-from-queue.json"
+  },
+  "error": null
+}

@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "solidworks-bridge-request-envelope-v1",
+  "requestId": "verify-extract-poc-context",
+  "kind": "extract-poc-context",
+  "createdAtUtc": "2026-03-31T21:21:36Z",
+  "status": "pending",
+  "payload": {}
+}

@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "solidworks-bridge-result-envelope-v1",
+  "requestId": "example-get-active-document-live-only-no-active-document",
+  "kind": "get-active-document",
+  "status": "failed",
+  "startedAtUtc": "2026-04-01T00:00:00Z",
+  "finishedAtUtc": "2026-04-01T00:00:00Z",
+  "host": "windows-helper-example",
+  "handler": "get-active-document.ps1",
+  "output": null,
+  "error": {
+    "message": "SolidWorks is running, but there is no active document.",
+    "type": "System.Exception",
+    "code": "solidworks-no-active-document",
+    "details": {
+      "extractor": "get-active-document-live",
+      "progId": "SldWorks.Application"
+    }
+  }
+}

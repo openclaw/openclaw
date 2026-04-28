@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SketchUp Live Extractor Request",
+  "type": "object",
+  "required": [
+    "kind",
+    "contractVersion",
+    "requestId",
+    "requestedAtUtc",
+    "action",
+    "readOnly",
+    "sourceKind",
+    "target",
+    "artifacts",
+    "strategy"
+  ],
+  "properties": {
+    "kind": { "type": "string", "const": "sketchup-live-extractor-request" },
+    "contractVersion": { "type": "string", "const": "1.0.0" },
+    "requestId": { "type": "string", "minLength": 1 },
+    "requestedAtUtc": { "type": "string", "format": "date-time" },
+    "action": {
+      "type": "string",
+      "enum": ["extract-model-snapshot", "extract-selection-snapshot"]
+    },
+    "readOnly": { "type": "boolean", "const": true },
+    "sourceKind": {
+      "type": "string",
+      "enum": ["bridge-live-handoff", "manual-sample"]
+    },
+    "target": {
+      "type": "object",
+      "required": ["documentDetected"],
+      "properties": {
+        "sketchupExecutablePathHint": { "type": ["string", "null"] },
+        "sketchupVersionHint": { "type": ["string", "null"] },
+        "sketchupProcessId": { "type": ["integer", "null"] },
+        "documentDetected": { "type": "boolean" },
+        "documentNameHint": { "type": ["string", "null"] },
+        "documentPathHint": { "type": ["string", "null"] },
+        "documentSource": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "artifacts": {
+      "type": "object",
+      "required": ["responseArtifactPath", "outputArtifactPath", "snapshotOutputPath"],
+      "properties": {
+        "responseArtifactPath": { "type": "string" },
+        "outputArtifactPath": { "type": "string" },
+        "snapshotOutputPath": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "strategy": {
+      "type": "object",
+      "required": ["key", "attachMode", "startupMode"],
+      "properties": {
+        "key": {
+          "type": "string",
+          "enum": ["ruby-startup-open-document", "ruby-attach-open-document"]
+        },
+        "attachMode": {
+          "type": "string",
+          "enum": ["launch-or-reuse", "reuse-running-only"]
+        },
+        "startupMode": {
+          "type": "string",
+          "enum": ["ruby-startup", "ruby-console-bootstrap"]
+        },
+        "notes": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "options": {
+      "type": "object",
+      "properties": {
+        "documentName": { "type": ["string", "null"] },
+        "documentPath": { "type": ["string", "null"] },
+        "sketchupExePath": { "type": ["string", "null"] },
+        "selectionEntityIds": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "probeContext": {
+      "type": "object",
+      "properties": {
+        "probeSource": { "type": "string", "const": "windows-host-real" },
+        "probeStatus": { "type": "string" },
+        "metadataResultKind": {
+          "type": "string",
+          "enum": ["real-minimal-metadata", "real-probe-no-metadata", "none"]
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

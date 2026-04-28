@@ -1,0 +1,15 @@
+name: dev_lab
+world_size_m: [40.0, 40.0, 15.0]
+waypoints:
+  - [0.0, 0.0, 3.0]
+  - [5.0, 0.0, 3.0]
+  - [5.0, 5.0, 3.0]
+  - [0.0, 5.0, 3.0]
+obstacles:
+  - type: box
+    position: [2.5, 1.5, 1.0]
+    size: [1.0, 1.0, 2.0]
+anomalies:
+  - id: anomaly_1
+    type: red_box
+    position: [4.0, 4.0, 0.5]

@@ -1,0 +1,45 @@
+{
+  "capabilitiesVersion": "1.0.0",
+  "source": "windows-extractor",
+  "commands": [
+    {
+      "name": "ping-sketchup",
+      "description": "SketchUp process/automation erişimi doğrular"
+    },
+    {
+      "name": "get-extraction-capabilities",
+      "description": "Extractor'un desteklediği command ve alanları listeler"
+    },
+    {
+      "name": "extract-model-snapshot",
+      "description": "Aktif model için read-only tam snapshot üretir"
+    },
+    {
+      "name": "extract-selection-snapshot",
+      "description": "Seçili entity'ler için read-only snapshot üretir"
+    }
+  ],
+  "supportedModes": ["manual"],
+  "readOnly": true,
+  "supports": {
+    "modelMetadata": true,
+    "scenes": true,
+    "tags": true,
+    "materials": true,
+    "entityTraversal": true,
+    "selection": true,
+    "attributeDictionaries": true,
+    "geometryMeshExport": false,
+    "modelMutation": false,
+    "cameraMutation": false,
+    "selectionMutation": false
+  },
+  "limits": {
+    "recommendedMaxEntities": 5000,
+    "notes": [
+      "İlk PoC mesh/vertex/face export hedeflemez.",
+      "İlk PoC event-driven live sync hedeflemez.",
+      "Büyük modellerde entity traversal süresi artabilir."
+    ]
+  }
+}

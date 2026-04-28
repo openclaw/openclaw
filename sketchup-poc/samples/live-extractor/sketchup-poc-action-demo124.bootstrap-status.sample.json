@@ -1,0 +1,89 @@
+{
+  "kind": "sketchup-live-bootstrap-status",
+  "contractVersion": "1.0.0",
+  "requestId": "sketchup-poc-action-demo124",
+  "action": "extract-model-snapshot",
+  "generatedAtUtc": "2026-04-06T00:10:04Z",
+  "sourceKind": "bootstrap-live",
+  "readOnly": true,
+  "bootstrap": {
+    "stage": "startup",
+    "status": "acknowledged",
+    "message": "Ruby bootstrap stub loaded context, acknowledged the boundary, and read Sketchup.active_model.",
+    "contextPath": "C:\\OpenClaw\\SketchUpPoC\\bootstrap\\sketchup-poc-action-demo124.bootstrap-context.json",
+    "rubyScriptPath": "C:\\OpenClaw\\SketchUpPoC\\bootstrap\\sketchup-poc-action-demo124.bootstrap.rb",
+    "snapshotOutputPath": "C:\\OpenClaw\\SketchUpPoC\\live-model-snapshot.json",
+    "responseArtifactPath": "C:\\OpenClaw\\SketchUpPoC\\live-extractor-response.json",
+    "documentPath": "C:\\Projects\\office-demo.skp",
+    "documentName": "office-demo.skp"
+  },
+  "liveModelHeader": {
+    "modelTitle": "office-demo",
+    "modelPath": "C:\\Projects\\office-demo.skp",
+    "modelGuid": "c0ffee00-demo-4bad-beef-000000000124",
+    "requestedDocumentMatched": true,
+    "sourceKind": "bootstrap-live-model-access",
+    "stats": {
+      "entityCount": 418,
+      "sceneCount": 4,
+      "selectionCount": 2
+    }
+  },
+  "liveModelAccess": {
+    "proofKind": "sketchup-active-model-access",
+    "activeModelAccessible": true,
+    "rubyProcessId": 13244,
+    "rubyVersion": "3.2.2",
+    "modelTitle": "office-demo",
+    "modelPath": "C:\\Projects\\office-demo.skp",
+    "modelGuid": "c0ffee00-demo-4bad-beef-000000000124",
+    "requestedDocumentPath": "C:\\Projects\\office-demo.skp",
+    "requestedDocumentMatched": true,
+    "rootEntitiesAccessible": true,
+    "rootEntityCount": 418,
+    "selectionAccessible": true,
+    "selectionCount": 2,
+    "scenesAccessible": true,
+    "sceneCount": 4,
+    "safeQueryProof": {
+      "queryKind": "model-bounds-summary",
+      "sourceKind": "bootstrap-live-safe-query",
+      "readOnly": true,
+      "available": true,
+      "status": "available",
+      "value": {
+        "width": 12840.0,
+        "height": 3048.0,
+        "depth": 9120.0,
+        "diagonal": 16032.45
+      },
+      "unavailableReason": null
+    }
+  },
+  "safeQueryProof": {
+    "queryKind": "model-bounds-summary",
+    "sourceKind": "bootstrap-live-safe-query",
+    "readOnly": true,
+    "available": true,
+    "status": "available",
+    "value": {
+      "width": 12840.0,
+      "height": 3048.0,
+      "depth": 9120.0,
+      "diagonal": 16032.45
+    },
+    "unavailableReason": null
+  },
+  "liveVsMock": {
+    "acknowledgedByRuby": true,
+    "sketchupLaunchExecuted": true,
+    "documentOpened": true,
+    "snapshotEmitted": false,
+    "traversalImplemented": false
+  },
+  "warnings": [
+    "This bootstrap status artifact is emitted by the PoC Ruby stub.",
+    "It proves Ruby-side access to Sketchup.active_model but does not prove live SketchUp traversal.",
+    "Only lightweight model handle fields and collection counts are reported in this phase."
+  ]
+}

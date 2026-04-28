@@ -1,0 +1,13 @@
+{
+  "schemaVersion": "completion-event-v1",
+  "source": "gemini",
+  "jobId": "gemini-queue-sample-001",
+  "sequence": 2,
+  "eventKind": "progress",
+  "status": "running",
+  "observedAtUtc": "2026-04-02T00:20:11Z",
+  "summary": "Dosyalar analiz ediliyor.",
+  "progressPercent": 45,
+  "modifiedFiles": [],
+  "rawResultPath": ".openclaw/gemini-queue/outbound/gemini-queue-sample-001.progress.json"
+}

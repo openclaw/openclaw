@@ -1,0 +1,8 @@
+bridge-consumer action=get-minimal-live-metadata result=real-probe-no-metadata contractValidated=True
+diagnostic: No document identity could be confirmed from the current surface. No live SketchUp access evidence is present. No snapshot artifact is present.
+document: evidence=none requestedMatched=None observedName=-
+liveAccess: status=no-live-evidence proofKind=-
+snapshot: available=False kind=-
+safeQueryConsumer: unavailable reason=no-live-model-proof kind=model-bounds-summary
+note: Bu bridge consumer slice yalnizca diagnosticSummary + safeQueryProof yuzeyini tuketir.
+note: Traversal veya full snapshot kaniti uretmez.

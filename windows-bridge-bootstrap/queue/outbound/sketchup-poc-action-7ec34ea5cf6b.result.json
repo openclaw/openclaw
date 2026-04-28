@@ -1,0 +1,13 @@
+{
+  "requestId": "sketchup-poc-action-7ec34ea5cf6b",
+  "kind": "sketchup-poc-action",
+  "status": "failed",
+  "startedAtUtc": "2026-04-09T21:58:48.5826559Z",
+  "finishedAtUtc": "2026-04-09T21:58:48.8615592Z",
+  "host": "KOLTIGINMASAUST",
+  "output": null,
+  "error": {
+    "message": "Method invocation failed because [System.Collections.Specialized.OrderedDictionary] does not contain a method named 'ContainsKey'.",
+    "type": "System.Management.Automation.RuntimeException"
+  }
+}

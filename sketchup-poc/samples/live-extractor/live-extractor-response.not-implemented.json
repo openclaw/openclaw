@@ -1,0 +1,197 @@
+{
+  "kind": "sketchup-live-extractor-response",
+  "contractVersion": "1.0.0",
+  "requestId": "sketchup-poc-action-demo124",
+  "action": "extract-model-snapshot",
+  "ok": false,
+  "executionState": "failed-not-implemented",
+  "sourceKind": "mock-extractor-stub",
+  "readOnly": true,
+  "generatedAtUtc": "2026-04-06T00:10:03Z",
+  "durations": {
+    "totalMs": 4,
+    "startupMs": null,
+    "documentOpenMs": null,
+    "snapshotWriteMs": null
+  },
+  "artifacts": {
+    "responseArtifactPath": "C:\\OpenClaw\\SketchUpPoC\\live-extractor-response.json",
+    "outputArtifactPath": "C:\\OpenClaw\\SketchUpPoC\\live-extractor-response.output.json",
+    "snapshotOutputPath": "C:\\OpenClaw\\SketchUpPoC\\live-model-snapshot.json"
+  },
+  "preflight": {
+    "status": "blocked",
+    "bootstrapActionable": true,
+    "trueLiveExtractionReady": false,
+    "selectedStrategyKey": "ruby-startup-open-document",
+    "summary": {
+      "passed": 4,
+      "warned": 0,
+      "failed": 1
+    },
+    "checks": [
+      {
+        "key": "request-completeness",
+        "category": "request",
+        "status": "pass",
+        "ok": true,
+        "code": "request-complete",
+        "message": "Request contains the required contract fields for bootstrap preflight.",
+        "details": {
+          "sourceKind": "bridge-live-handoff",
+          "readOnly": true
+        }
+      },
+      {
+        "key": "action-support",
+        "category": "request",
+        "status": "pass",
+        "ok": true,
+        "code": "action-supported",
+        "message": "Requested action is supported by the current bootstrap preflight layer.",
+        "details": {
+          "action": "extract-model-snapshot"
+        }
+      },
+      {
+        "key": "strategy-support",
+        "category": "strategy",
+        "status": "pass",
+        "ok": true,
+        "code": "strategy-supported",
+        "message": "Strategy is a supported bootstrap candidate for the next live extractor phase.",
+        "details": {
+          "key": "ruby-startup-open-document",
+          "attachMode": "launch-or-reuse",
+          "startupMode": "ruby-startup"
+        }
+      },
+      {
+        "key": "artifact-path-readiness",
+        "category": "artifacts",
+        "status": "pass",
+        "ok": true,
+        "code": "artifact-paths-ready",
+        "message": "Artifact paths are present, absolute, and already rooted in existing parent directories.",
+        "details": {
+          "paths": [
+            {
+              "name": "responseArtifactPath",
+              "path": "C:\\OpenClaw\\SketchUpPoC\\live-extractor-response.json",
+              "present": true,
+              "isAbsolute": true,
+              "parentDirectory": "C:\\OpenClaw\\SketchUpPoC",
+              "parentExists": true
+            },
+            {
+              "name": "outputArtifactPath",
+              "path": "C:\\OpenClaw\\SketchUpPoC\\live-extractor-response.output.json",
+              "present": true,
+              "isAbsolute": true,
+              "parentDirectory": "C:\\OpenClaw\\SketchUpPoC",
+              "parentExists": true
+            },
+            {
+              "name": "snapshotOutputPath",
+              "path": "C:\\OpenClaw\\SketchUpPoC\\live-model-snapshot.json",
+              "present": true,
+              "isAbsolute": true,
+              "parentDirectory": "C:\\OpenClaw\\SketchUpPoC",
+              "parentExists": true
+            }
+          ]
+        }
+      },
+      {
+        "key": "environment-readiness",
+        "category": "environment",
+        "status": "pass",
+        "ok": true,
+        "code": "environment-ready",
+        "message": "Host and probe-derived target hints are sufficient for a bootstrap attempt.",
+        "details": {
+          "runningOnWindows": true,
+          "sketchupExecutableHint": "C:\\Program Files\\SketchUp\\SketchUp 2025\\SketchUp.exe",
+          "documentDetected": true,
+          "documentPathCandidate": "C:\\Projects\\office-demo.skp"
+        }
+      },
+      {
+        "key": "bootstrap-path",
+        "category": "bootstrap",
+        "status": "fail",
+        "ok": false,
+        "code": "bootstrap-path-blocked",
+        "message": "Bootstrap prerequisites are present, but the SketchUp-side Ruby bootstrap and traversal entrypoint is still not implemented.",
+        "details": {
+          "implementationAvailable": false,
+          "blocker": "SketchUp-side Ruby bootstrap / traversal entrypoint is not implemented yet."
+        }
+      }
+    ],
+    "blockerCodes": ["bootstrap-path-blocked"],
+    "unsupportedReasons": []
+  },
+  "result": {
+    "artifactKind": "sketchup-live-extraction-output",
+    "artifactPath": "C:\\OpenClaw\\SketchUpPoC\\live-extractor-response.output.json",
+    "snapshotPath": null,
+    "snapshotKind": null,
+    "snapshotSourceKind": null,
+    "safeQueryProof": {
+      "queryKind": "model-bounds-summary",
+      "sourceKind": "bootstrap-live-safe-query",
+      "readOnly": true,
+      "available": false,
+      "status": "unavailable",
+      "value": null,
+      "unavailableReason": "no-live-model-proof"
+    },
+    "bootstrap": {
+      "strategyKey": "ruby-startup-open-document",
+      "ready": true,
+      "invocation": {
+        "executablePath": "C:\\Program Files\\SketchUp\\SketchUp 2025\\SketchUp.exe",
+        "attachMode": "launch-or-reuse",
+        "startupMode": "ruby-startup",
+        "launchArguments": [
+          "-RubyStartup",
+          "C:\\OpenClaw\\SketchUpPoC\\bootstrap\\sketchup-poc-action-demo124.bootstrap.rb",
+          "C:\\Projects\\office-demo.skp"
+        ],
+        "commandPreview": "C:\\Program Files\\SketchUp\\SketchUp 2025\\SketchUp.exe -RubyStartup C:\\OpenClaw\\SketchUpPoC\\bootstrap\\sketchup-poc-action-demo124.bootstrap.rb C:\\Projects\\office-demo.skp"
+      },
+      "artifacts": {
+        "bootstrapDirectory": "C:\\OpenClaw\\SketchUpPoC\\bootstrap",
+        "manifestPath": "C:\\OpenClaw\\SketchUpPoC\\bootstrap\\sketchup-poc-action-demo124.bootstrap-plan.json",
+        "rubyScriptPath": "C:\\OpenClaw\\SketchUpPoC\\bootstrap\\sketchup-poc-action-demo124.bootstrap.rb",
+        "contextPath": "C:\\OpenClaw\\SketchUpPoC\\bootstrap\\sketchup-poc-action-demo124.bootstrap-context.json",
+        "bootstrapStatusPath": "C:\\OpenClaw\\SketchUpPoC\\bootstrap\\sketchup-poc-action-demo124.bootstrap-status.json"
+      }
+    },
+    "schemaValidation": {
+      "attempted": false,
+      "schemaPath": "contracts/model-snapshot.schema.json",
+      "valid": null
+    },
+    "stats": null
+  },
+  "warnings": [
+    "The live extractor still does not open or inspect SketchUp; this step only performs bootstrap/readiness preflight.",
+    "No live snapshot was written because preflight did not reach a true live-ready state.",
+    "A preflight-only output artifact can still be written to preserve machine-readable execution state.",
+    "Bootstrap artifacts were materialized for the future SketchUp-side path, but they were not executed."
+  ],
+  "errors": [
+    {
+      "code": "live-extraction-not-implemented",
+      "message": "Bootstrap prerequisites are present, but the SketchUp-side Ruby bootstrap and traversal entrypoint is still not implemented.",
+      "stage": "preflight",
+      "retryable": false,
+      "details": {
+        "implementationAvailable": false,
+        "blocker": "SketchUp-side Ruby bootstrap / traversal entrypoint is not implemented yet."
+      }
+    }
+  ]
+}

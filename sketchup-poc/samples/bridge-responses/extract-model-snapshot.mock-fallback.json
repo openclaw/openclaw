@@ -1,0 +1,122 @@
+{
+  "requestId": "sketchup-poc-action-demo456",
+  "kind": "sketchup-poc-action",
+  "status": "succeeded",
+  "startedAtUtc": "2026-04-05T19:32:00Z",
+  "finishedAtUtc": "2026-04-05T19:32:02Z",
+  "host": "WINDOWS-HOST",
+  "output": {
+    "action": "extract-model-snapshot",
+    "readOnly": true,
+    "liveMetadata": {
+      "kind": "real-minimal-metadata",
+      "source": "windows-host-real",
+      "extractionKind": "process-metadata-only",
+      "obtainedAtUtc": "2026-04-05T19:32:01Z",
+      "signals": ["app-executable-path-hint", "app-version-hint"],
+      "app": {
+        "detected": true,
+        "executablePathHint": "C:\\Program Files\\SketchUp\\SketchUp 2025\\SketchUp.exe",
+        "versionHint": "2025",
+        "processRunning": false,
+        "processId": null,
+        "mainWindowTitleHint": null
+      },
+      "document": {
+        "detected": false,
+        "source": null,
+        "nameHint": null,
+        "pathHint": null
+      },
+      "model": {
+        "activeDocumentDetected": false,
+        "activeModelDetected": false
+      },
+      "limitations": [
+        "Derived from Windows process/install metadata only.",
+        "Does not attach to a SketchUp session or read model entities.",
+        "Document hints may come from process command line or window title and can be incomplete."
+      ]
+    },
+    "liveProbe": {
+      "attempted": true,
+      "source": "windows-host-real",
+      "status": "available-no-process",
+      "available": true,
+      "launchable": true,
+      "processRunning": false,
+      "documentDetected": false,
+      "automationImplemented": false,
+      "reasonCode": "process-not-running",
+      "reason": "SketchUp appears installed or launchable, but no running SketchUp process was found.",
+      "details": {
+        "probeKind": "real",
+        "candidateExecutablePaths": ["C:\\Program Files\\SketchUp\\SketchUp 2025\\SketchUp.exe"],
+        "installedExecutablePath": "C:\\Program Files\\SketchUp\\SketchUp 2025\\SketchUp.exe",
+        "installedVersionHint": "2025",
+        "runningProcessDetected": false,
+        "runningProcessId": null,
+        "runningExecutablePath": null,
+        "runningMainWindowTitle": null,
+        "runningCommandLine": null,
+        "detectedDocument": {
+          "detected": false,
+          "source": null,
+          "name": null,
+          "path": null
+        },
+        "note": "This phase only probes installation and process metadata. It does not attach to, inspect, or drive a live SketchUp session."
+      }
+    },
+    "execution": {
+      "mode": "mock-fallback",
+      "usedFallback": true,
+      "fallbackReason": "live-sketchup-unavailable",
+      "probeResultKind": "real",
+      "metadataResultKind": "real-minimal-metadata",
+      "snapshotResultKind": "mock-fallback",
+      "resultKind": "mock-fallback",
+      "extractorResponsePath": "C:\\OpenClaw\\SketchUpPoC\\extract-model-response.json"
+    },
+    "result": {
+      "liveMetadata": {
+        "kind": "real-minimal-metadata",
+        "source": "windows-host-real",
+        "extractionKind": "process-metadata-only"
+      },
+      "safeQueryProof": {
+        "queryKind": "model-bounds-summary",
+        "sourceKind": "bootstrap-live-safe-query",
+        "readOnly": true,
+        "available": false,
+        "status": "unavailable",
+        "value": null,
+        "unavailableReason": "process-metadata-only"
+      },
+      "liveMetadataAvailable": true,
+      "snapshotPath": "C:\\OpenClaw\\SketchUpPoC\\model-snapshot.json",
+      "snapshotKind": "model",
+      "resultSource": "mock-sample",
+      "mockExtractorResponse": {
+        "requestId": "sketchup-poc-action-demo456",
+        "command": "extract-model-snapshot",
+        "ok": true,
+        "mode": "mock",
+        "readOnly": true,
+        "generatedAt": "2026-04-05T19:32:02Z",
+        "warnings": [
+          "Snapshot content is seeded from the sample file; no live SketchUp session was read."
+        ],
+        "errors": [],
+        "result": {
+          "snapshotPath": "C:\\OpenClaw\\SketchUpPoC\\model-snapshot.json",
+          "snapshotKind": "model"
+        }
+      }
+    },
+    "warnings": [
+      "Returning mock/sample snapshot because live SketchUp automation is not implemented in this phase."
+    ]
+  },
+  "error": null
+}

@@ -1,0 +1,16 @@
+{
+  "requestId": "probe-20260330-0117-example",
+  "kind": "capability-probe",
+  "status": "succeeded",
+  "startedAtUtc": "2026-03-30T19:27:02.1456133Z",
+  "finishedAtUtc": "2026-03-30T19:27:02.4168300Z",
+  "host": "KOLTIGINMASAUST",
+  "output": [
+    "Wrote capability probe to: C:\\Users\\mertb\\Desktop\\windows-bridge-capability-probe-from-queue.json",
+    {
+      "outputPath": "C:\\Users\\mertb\\Desktop\\windows-bridge-capability-probe-from-queue.json",
+      "scriptPath": "\\\\wsl.localhost\\Ubuntu\\home\\mertb\\.openclaw\\workspace\\windows-bridge-bootstrap\\scripts\\win-capability-probe.ps1"
+    }
+  ],
+  "error": null
+}

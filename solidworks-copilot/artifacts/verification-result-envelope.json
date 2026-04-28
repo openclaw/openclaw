@@ -1,0 +1,84 @@
+{
+  "schemaVersion": "solidworks-bridge-result-envelope-v1",
+  "requestId": "verify-extract-poc-context",
+  "kind": "extract-poc-context",
+  "status": "succeeded",
+  "startedAtUtc": "2026-03-31T21:21:36Z",
+  "finishedAtUtc": "2026-03-31T21:21:36Z",
+  "host": "local-verifier",
+  "handler": "verify-contract-examples",
+  "output": {
+    "generatedAtUtc": "2026-03-31T21:21:36Z",
+    "mode": "seeded-probe",
+    "kind": "extract-poc-context",
+    "data": {
+      "document": {
+        "name": "MainAssembly.SLDASM",
+        "path": "C:/Projects/MainAssembly.SLDASM",
+        "type": "assembly",
+        "configuration": "Default",
+        "units": "mm",
+        "isDirty": false
+      },
+      "selection": {
+        "exists": true,
+        "count": 1,
+        "entityType": "component",
+        "name": "Bracket_A",
+        "properties": {
+          "ComponentType": "Bracket"
+        }
+      },
+      "metadata": {
+        "customProperties": {
+          "PartNumber": "ASM-001",
+          "Project": "PilotProject",
+          "Material": "Mixed"
+        },
+        "missingRequired": ["Description"],
+        "emptyFields": [],
+        "namingObservations": []
+      },
+      "assembly": {
+        "isAssembly": true,
+        "topLevelComponentCount": 3,
+        "topLevelComponents": [
+          {
+            "name": "Bracket_A",
+            "count": 2,
+            "state": "resolved"
+          },
+          {
+            "name": "Housing_1",
+            "count": 1,
+            "state": "resolved"
+          },
+          {
+            "name": "FastenerPack",
+            "count": 8,
+            "state": "lightweight"
+          }
+        ]
+      },
+      "diagnostics": {
+        "warnings": [
+          "SolidWorks live extraction not connected yet; returning seeded PoC data.",
+          "This probe confirms the contract and transport shape, not live CAD access."
+        ],
+        "partialRead": false,
+        "unsupportedFields": [],
+        "confidenceHints": ["Top-level assembly summary only"]
+      }
+    },
+    "diagnostics": {
+      "warnings": [
+        "SolidWorks live extraction not connected yet; returning seeded PoC data.",
+        "This probe confirms the contract and transport shape, not live CAD access."
+      ],
+      "partialRead": false,
+      "unsupportedFields": [],
+      "confidenceHints": ["Top-level assembly summary only"]
+    }
+  },
+  "error": null
+}

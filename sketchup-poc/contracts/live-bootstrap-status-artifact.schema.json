@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SketchUp Live Bootstrap Status Artifact",
+  "type": "object",
+  "required": [
+    "kind",
+    "contractVersion",
+    "requestId",
+    "action",
+    "generatedAtUtc",
+    "sourceKind",
+    "readOnly",
+    "bootstrap",
+    "liveVsMock"
+  ],
+  "properties": {
+    "kind": { "type": "string", "const": "sketchup-live-bootstrap-status" },
+    "contractVersion": { "type": "string", "const": "1.0.0" },
+    "requestId": { "type": "string", "minLength": 1 },
+    "action": {
+      "type": "string",
+      "enum": ["extract-model-snapshot", "extract-selection-snapshot"]
+    },
+    "generatedAtUtc": { "type": "string", "format": "date-time" },
+    "sourceKind": {
+      "type": "string",
+      "enum": ["bootstrap-stub", "bootstrap-live"]
+    },
+    "readOnly": { "type": "boolean", "const": true },
+    "bootstrap": {
+      "type": "object",
+      "required": [
+        "stage",
+        "status",
+        "contextPath",
+        "rubyScriptPath",
+        "snapshotOutputPath",
+        "responseArtifactPath"
+      ],
+      "properties": {
+        "stage": {
+          "type": "string",
+          "enum": ["startup", "document-open", "traversal", "snapshot-write", "completed"]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["acknowledged", "running", "blocked", "failed", "completed"]
+        },
+        "message": { "type": ["string", "null"] },
+        "contextPath": { "type": "string" },
+        "rubyScriptPath": { "type": "string" },
+        "snapshotOutputPath": { "type": ["string", "null"] },
+        "responseArtifactPath": { "type": ["string", "null"] },
+        "documentPath": { "type": ["string", "null"] },
+        "documentName": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "liveModelAccess": {
+      "type": ["object", "null"],
+      "properties": {
+        "proofKind": { "type": "string", "const": "sketchup-active-model-access" },
+        "activeModelAccessible": { "type": "boolean" },
+        "rubyProcessId": { "type": ["integer", "null"] },
+        "rubyVersion": { "type": ["string", "null"] },
+        "modelTitle": { "type": ["string", "null"] },
+        "modelPath": { "type": ["string", "null"] },
+        "modelGuid": { "type": ["string", "null"] },
+        "requestedDocumentPath": { "type": ["string", "null"] },
+        "requestedDocumentMatched": { "type": ["boolean", "null"] },
+        "rootEntitiesAccessible": { "type": "boolean" },
+        "rootEntityCount": { "type": ["integer", "null"] },
+        "selectionAccessible": { "type": "boolean" },
+        "selectionCount": { "type": ["integer", "null"] },
+        "scenesAccessible": { "type": "boolean" },
+        "sceneCount": { "type": ["integer", "null"] },
+        "safeQueryProof": {
+          "oneOf": [{ "$ref": "./safe-query-proof.schema.json" }, { "type": "null" }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "liveModelHeader": {
+      "type": ["object", "null"],
+      "properties": {
+        "modelTitle": { "type": ["string", "null"] },
+        "modelPath": { "type": ["string", "null"] },
+        "modelGuid": { "type": ["string", "null"] },
+        "requestedDocumentMatched": { "type": ["boolean", "null"] },
+        "sourceKind": { "type": ["string", "null"], "enum": ["bootstrap-live-model-access", null] },
+        "stats": {
+          "type": ["object", "null"],
+          "properties": {
+            "entityCount": { "type": ["integer", "null"] },
+            "sceneCount": { "type": ["integer", "null"] },
+            "selectionCount": { "type": ["integer", "null"] }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "safeQueryProof": {
+      "oneOf": [{ "$ref": "./safe-query-proof.schema.json" }, { "type": "null" }]
+    },
+    "liveVsMock": {
+      "type": "object",
+      "required": [
+        "acknowledgedByRuby",
+        "sketchupLaunchExecuted",
+        "documentOpened",
+        "snapshotEmitted",
+        "traversalImplemented"
+      ],
+      "properties": {
+        "acknowledgedByRuby": { "type": "boolean" },
+        "sketchupLaunchExecuted": { "type": "boolean" },
+        "documentOpened": { "type": "boolean" },
+        "snapshotEmitted": { "type": "boolean" },
+        "traversalImplemented": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "additionalProperties": false
+}

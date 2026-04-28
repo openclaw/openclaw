@@ -1,0 +1,44 @@
+{
+  "document": {
+    "name": "MainAssembly.SLDASM",
+    "path": "C:/Projects/MainAssembly.SLDASM",
+    "type": "assembly",
+    "configuration": "Default",
+    "units": "mm",
+    "isDirty": false
+  },
+  "selection": {
+    "exists": true,
+    "count": 1,
+    "entityType": "component",
+    "name": "Bracket_A",
+    "properties": {
+      "ComponentType": "Bracket"
+    }
+  },
+  "metadata": {
+    "customProperties": {
+      "PartNumber": "ASM-001",
+      "Project": "PilotProject",
+      "Material": "Mixed"
+    },
+    "missingRequired": ["Description"],
+    "emptyFields": [],
+    "namingObservations": []
+  },
+  "assembly": {
+    "isAssembly": true,
+    "topLevelComponentCount": 3,
+    "topLevelComponents": [
+      { "name": "Bracket_A", "count": 2, "state": "resolved" },
+      { "name": "Housing_1", "count": 1, "state": "resolved" },
+      { "name": "FastenerPack", "count": 8, "state": "lightweight" }
+    ]
+  },
+  "diagnostics": {
+    "warnings": ["Geometry detail not included in PoC context extraction"],
+    "partialRead": false,
+    "unsupportedFields": [],
+    "confidenceHints": ["Top-level assembly summary only"]
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "requestId": "outlook-job-signal-scan-9932f2030cd7",
+  "kind": "outlook-job-signal-scan",
+  "status": "failed",
+  "startedAtUtc": "2026-03-30T19:46:47.5148538Z",
+  "finishedAtUtc": "2026-03-30T19:46:47.6325819Z",
+  "host": "KOLTIGINMASAUST",
+  "output": null,
+  "error": {
+    "message": "Retrieving the COM class factory for component with CLSID {00000000-0000-0000-0000-000000000000} failed due to the following error: 80040154 Sınıf kaydedilmemiş (0x80040154 (REGDB_E_CLASSNOTREG)).",
+    "type": "System.Runtime.InteropServices.COMException"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "errors": [
+    "The property 'Count' cannot be found on this object. Verify that the property exists."
+  ],
+  "requestId": "req-model-001",
+  "command": "extract-model-snapshot",
+  "warnings": [],
+  "ok": false,
+  "readOnly": true,
+  "generatedAt": "2026-04-09T22:00:15.1600539Z",
+  "mode": "mock"
+}

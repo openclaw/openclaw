@@ -1,0 +1,19 @@
+{
+  "requestId": "sketchup-poc-action-69d80f7e1ce5",
+  "kind": "sketchup-poc-action",
+  "createdAtUtc": "2026-04-09T22:00:05Z",
+  "status": "pending",
+  "payload": {
+    "action": "extract-model-snapshot",
+    "probeMode": "probe-first",
+    "fallbackMode": "mock-sample",
+    "snapshotOutputPath": "C:\\OpenClaw\\SketchUpPoC\\model-snapshot.json",
+    "responseArtifactPath": "C:\\OpenClaw\\SketchUpPoC\\extract-model-response.json",
+    "options": {
+      "documentName": "office-demo.skp",
+      "documentPath": "C:\\Projects\\office-demo.skp",
+      "sketchupExePath": "C:\\Program Files\\SketchUp\\SketchUp 2025\\SketchUp.exe"
+    },
+    "liveExtractorMode": "execute-bootstrap-ack"
+  }
+}

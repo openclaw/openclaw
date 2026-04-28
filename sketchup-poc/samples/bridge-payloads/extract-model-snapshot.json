@@ -1,0 +1,12 @@
+{
+  "action": "extract-model-snapshot",
+  "probeMode": "probe-first",
+  "fallbackMode": "mock-sample",
+  "snapshotOutputPath": "C:\\OpenClaw\\SketchUpPoC\\model-snapshot.json",
+  "responseArtifactPath": "C:\\OpenClaw\\SketchUpPoC\\extract-model-response.json",
+  "options": {
+    "documentName": "office-demo.skp",
+    "documentPath": "C:\\Projects\\office-demo.skp",
+    "sketchupExePath": "C:\\Program Files\\SketchUp\\SketchUp 2025\\SketchUp.exe"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "action": "extract-model-snapshot",
+  "probeMode": "probe-first",
+  "fallbackMode": "live-only",
+  "liveExtractorMode": "execute-bootstrap-ack",
+  "snapshotOutputPath": "C:\\OpenClaw\\SketchUpPoC\\live-model-snapshot.json",
+  "responseArtifactPath": "C:\\OpenClaw\\SketchUpPoC\\live-extractor-response.json",
+  "options": {
+    "documentName": "office-demo.skp",
+    "documentPath": "C:\\Projects\\office-demo.skp",
+    "sketchupExePath": "C:\\Program Files\\SketchUp\\SketchUp 2025\\SketchUp.exe",
+    "bootstrapAckTimeoutSeconds": 120,
+    "keepSketchUpOpen": false
+  }
+}

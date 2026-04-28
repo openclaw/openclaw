@@ -1,0 +1,13 @@
+{
+  "schemaVersion": "sketchup-bridge-request-envelope-v1",
+  "requestId": "extract-presentation-context-live-001",
+  "kind": "extract-presentation-context",
+  "createdAtUtc": "2026-04-02T00:40:00Z",
+  "status": "pending",
+  "payload": {
+    "extractionMode": "live-only",
+    "modelPath": "C:\\Projects\\Daire\\daire-sunum-v03.skp",
+    "keepSketchUpOpen": false,
+    "timeoutSeconds": 120
+  }
+}

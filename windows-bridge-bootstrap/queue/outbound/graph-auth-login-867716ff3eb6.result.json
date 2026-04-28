@@ -1,0 +1,13 @@
+{
+  "requestId": "graph-auth-login-867716ff3eb6",
+  "kind": "graph-auth-login",
+  "status": "failed",
+  "startedAtUtc": "2026-03-30T20:02:40.0642136Z",
+  "finishedAtUtc": "2026-03-30T20:02:41.3628148Z",
+  "host": "KOLTIGINMASAUST",
+  "output": null,
+  "error": {
+    "message": "InteractiveBrowserCredential authentication failed: A window handle must be configured. See https://aka.ms/msal-net-wam#parent-window-handles",
+    "type": "Azure.Identity.AuthenticationFailedException"
+  }
+}

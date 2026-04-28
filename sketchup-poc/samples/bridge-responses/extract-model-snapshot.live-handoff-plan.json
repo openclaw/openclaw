@@ -1,0 +1,253 @@
+{
+  "requestId": "sketchup-poc-action-demo124",
+  "kind": "sketchup-poc-action",
+  "status": "succeeded",
+  "startedAtUtc": "2026-04-05T20:05:00Z",
+  "finishedAtUtc": "2026-04-05T20:05:01Z",
+  "host": "WINDOWS-HOST",
+  "output": {
+    "action": "extract-model-snapshot",
+    "readOnly": true,
+    "liveMetadata": {
+      "kind": "real-minimal-metadata",
+      "source": "windows-host-real",
+      "extractionKind": "process-metadata-only",
+      "obtainedAtUtc": "2026-04-05T20:05:01Z",
+      "signals": [
+        "app-executable-path-hint",
+        "app-version-hint",
+        "process-running-detected",
+        "document-name-hint",
+        "document-path-hint"
+      ],
+      "app": {
+        "detected": true,
+        "executablePathHint": "C:\\Program Files\\SketchUp\\SketchUp 2025\\SketchUp.exe",
+        "versionHint": "2025",
+        "processRunning": true,
+        "processId": 19440,
+        "mainWindowTitleHint": "office-demo.skp - SketchUp Pro 2025"
+      },
+      "document": {
+        "detected": true,
+        "source": "process-command-line",
+        "nameHint": "office-demo.skp",
+        "pathHint": "C:\\Projects\\office-demo.skp"
+      },
+      "model": {
+        "activeDocumentDetected": true,
+        "activeModelDetected": true
+      },
+      "limitations": [
+        "Derived from Windows process/install metadata only.",
+        "Does not attach to a SketchUp session or read model entities.",
+        "Document hints may come from process command line or window title and can be incomplete."
+      ]
+    },
+    "liveProbe": {
+      "attempted": true,
+      "source": "windows-host-real",
+      "status": "process-running-document-detected",
+      "available": true,
+      "launchable": true,
+      "processRunning": true,
+      "documentDetected": true,
+      "automationImplemented": false,
+      "reasonCode": null,
+      "reason": null,
+      "details": {
+        "probeKind": "real",
+        "candidateExecutablePaths": ["C:\\Program Files\\SketchUp\\SketchUp 2025\\SketchUp.exe"],
+        "installedExecutablePath": "C:\\Program Files\\SketchUp\\SketchUp 2025\\SketchUp.exe",
+        "installedVersionHint": "2025",
+        "runningProcessDetected": true,
+        "runningProcessId": 19440,
+        "runningExecutablePath": "C:\\Program Files\\SketchUp\\SketchUp 2025\\SketchUp.exe",
+        "runningMainWindowTitle": "office-demo.skp - SketchUp Pro 2025",
+        "runningCommandLine": "\"C:\\Program Files\\SketchUp\\SketchUp 2025\\SketchUp.exe\" \"C:\\Projects\\office-demo.skp\"",
+        "detectedDocument": {
+          "detected": true,
+          "source": "process-command-line",
+          "name": "office-demo.skp",
+          "path": "C:\\Projects\\office-demo.skp"
+        },
+        "note": "This phase only probes installation and process metadata. It does not attach to, inspect, or drive a live SketchUp session."
+      }
+    },
+    "execution": {
+      "mode": "live-handoff-plan",
+      "usedFallback": false,
+      "fallbackReason": null,
+      "extractorContractKind": "sketchup-live-extractor-request",
+      "probeResultKind": "real",
+      "metadataResultKind": "real-minimal-metadata",
+      "snapshotResultKind": "live-handoff-plan",
+      "resultKind": "live-handoff-plan"
+    },
+    "result": {
+      "liveMetadata": {
+        "kind": "real-minimal-metadata",
+        "source": "windows-host-real",
+        "extractionKind": "process-metadata-only"
+      },
+      "safeQueryProof": {
+        "queryKind": "model-bounds-summary",
+        "sourceKind": "bootstrap-live-safe-query",
+        "readOnly": true,
+        "available": false,
+        "status": "unavailable",
+        "value": null,
+        "unavailableReason": "process-metadata-only"
+      },
+      "liveMetadataAvailable": true,
+      "snapshotPath": null,
+      "snapshotKind": "none",
+      "resultSource": "live-handoff-plan",
+      "liveExtractionPlan": {
+        "kind": "live-extraction-handoff-plan",
+        "contractVersion": "1.0.0",
+        "source": "windows-host-real",
+        "generatedAtUtc": "2026-04-05T20:05:01Z",
+        "readOnly": true,
+        "automationImplemented": false,
+        "liveVsMock": {
+          "currentBridgeResult": "live-handoff-plan",
+          "extractorImplementationState": "not-implemented",
+          "snapshotResultIfExecutedNow": "none",
+          "mockFallbackAvailable": true
+        },
+        "target": {
+          "sketchupProcessRunning": true,
+          "sketchupProcessId": 19440,
+          "sketchupExecutablePathHint": "C:\\Program Files\\SketchUp\\SketchUp 2025\\SketchUp.exe",
+          "sketchupVersionHint": "2025",
+          "documentDetected": true,
+          "documentNameHint": "office-demo.skp",
+          "documentPathHint": "C:\\Projects\\office-demo.skp",
+          "documentSource": "process-command-line"
+        },
+        "proposedLiveCommand": {
+          "action": "extract-model-snapshot",
+          "strategy": "ruby-startup-open-document",
+          "readOnly": true,
+          "options": {
+            "documentPath": "C:\\Projects\\office-demo.skp",
+            "documentName": "office-demo.skp",
+            "sketchupExePath": "C:\\Program Files\\SketchUp\\SketchUp 2025\\SketchUp.exe"
+          }
+        },
+        "extractorContract": {
+          "requestSchema": "contracts/live-extractor-request.schema.json",
+          "responseSchema": "contracts/live-extractor-response.schema.json",
+          "outputArtifactSchema": "contracts/live-extraction-output-artifact.schema.json",
+          "snapshotSchema": "contracts/model-snapshot.schema.json"
+        },
+        "extractorRequest": {
+          "kind": "sketchup-live-extractor-request",
+          "contractVersion": "1.0.0",
+          "requestId": "sketchup-poc-action-demo124",
+          "requestedAtUtc": "2026-04-05T20:05:01Z",
+          "action": "extract-model-snapshot",
+          "readOnly": true,
+          "sourceKind": "bridge-live-handoff",
+          "target": {
+            "sketchupExecutablePathHint": "C:\\Program Files\\SketchUp\\SketchUp 2025\\SketchUp.exe",
+            "sketchupVersionHint": "2025",
+            "sketchupProcessId": 19440,
+            "documentDetected": true,
+            "documentNameHint": "office-demo.skp",
+            "documentPathHint": "C:\\Projects\\office-demo.skp",
+            "documentSource": "process-command-line"
+          },
+          "artifacts": {
+            "responseArtifactPath": "C:\\OpenClaw\\SketchUpPoC\\extract-model-response.json",
+            "outputArtifactPath": "C:\\OpenClaw\\SketchUpPoC\\extract-model-response.output.json",
+            "snapshotOutputPath": "C:\\OpenClaw\\SketchUpPoC\\model-snapshot.json"
+          },
+          "strategy": {
+            "key": "ruby-startup-open-document",
+            "attachMode": "launch-or-reuse",
+            "startupMode": "ruby-startup",
+            "notes": [
+              "Prefer launching SketchUp with a controlled RubyStartup/bootstrap entrypoint.",
+              "If a compatible SketchUp process is already running, reuse is allowed only if the bootstrap path can still be applied safely.",
+              "The extractor must stay read-only and emit schema-shaped JSON artifacts."
+            ]
+          },
+          "options": {
+            "documentPath": "C:\\Projects\\office-demo.skp",
+            "documentName": "office-demo.skp",
+            "sketchupExePath": "C:\\Program Files\\SketchUp\\SketchUp 2025\\SketchUp.exe"
+          },
+          "probeContext": {
+            "probeSource": "windows-host-real",
+            "probeStatus": "process-running-document-detected",
+            "metadataResultKind": "real-minimal-metadata"
+          }
+        },
+        "expectedArtifacts": {
+          "responseArtifactPath": "C:\\OpenClaw\\SketchUpPoC\\extract-model-response.json",
+          "outputArtifactPath": "C:\\OpenClaw\\SketchUpPoC\\extract-model-response.output.json",
+          "snapshotOutputPath": "C:\\OpenClaw\\SketchUpPoC\\model-snapshot.json",
+          "snapshotSourceKind": "live"
+        },
+        "readiness": {
+          "status": "ready-for-live-extractor",
+          "blockers": [],
+          "requirements": [
+            "Implement a real SketchUp-side extractor entrypoint.",
+            "Open the detected document through a controlled RubyStartup/bootstrap path.",
+            "Emit schema-shaped snapshot JSON from the live extractor instead of sample data."
+          ]
+        },
+        "failureModes": [
+          {
+            "code": "live-extraction-not-implemented",
+            "stage": "preflight",
+            "retryable": false,
+            "meaning": "The bridge can prepare a live request, but no true live extractor entrypoint exists yet."
+          },
+          {
+            "code": "sketchup-not-installed",
+            "stage": "preflight",
+            "retryable": false,
+            "meaning": "The target host cannot find a launchable SketchUp installation."
+          },
+          {
+            "code": "document-open-failed",
+            "stage": "document-open",
+            "retryable": true,
+            "meaning": "SketchUp started but the requested document could not be opened through the chosen bootstrap path."
+          },
+          {
+            "code": "ruby-bootstrap-timeout",
+            "stage": "ruby-bootstrap",
+            "retryable": true,
+            "meaning": "The SketchUp-side Ruby bootstrap did not acknowledge readiness within the expected timeout."
+          },
+          {
+            "code": "snapshot-schema-invalid",
+            "stage": "validation",
+            "retryable": false,
+            "meaning": "A snapshot was emitted, but it did not validate against contracts/model-snapshot.schema.json."
+          }
+        ],
+        "strategyNotes": [
+          "Likely honest live path: start SketchUp with a controlled RubyStartup/bootstrap hook, open the target .skp document, then have Ruby emit snapshot JSON to the requested artifact paths.",
+          "If SketchUp is already running, reuse is acceptable only if the bootstrap route can be injected or preconfigured without pretending attachment already works.",
+          "The bridge remains probe-first; live extraction should consume this handoff request instead of bypassing the bridge contract."
+        ],
+        "limitations": [
+          "This plan is derived from real Windows host probe data only.",
+          "No live SketchUp automation session is attached or driven in this phase.",
+          "No model entities, scenes, tags, or materials are read yet."
+        ]
+      },
+      "message": "Real probe data identified a candidate live SketchUp document. This phase returns a handoff plan for the future live extractor instead of a snapshot."
+    },
+    "warnings": [
+      "Returning a live extraction handoff plan from real probe data. No snapshot was extracted yet."
+    ]
+  },
+  "error": null
+}

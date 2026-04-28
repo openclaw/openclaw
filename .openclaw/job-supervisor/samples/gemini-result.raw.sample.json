@@ -1,0 +1,11 @@
+{
+  "task_id": "gemini-queue-sample-001",
+  "status": "success",
+  "completed_at": "2026-04-03T11:24:00Z",
+  "summary": "Gemini queue adapter script'i eklendi ve supervisor girdi sozlesmesine map edildi.",
+  "modified_files": [
+    ".openclaw/job-supervisor/scripts/adapt_gemini_result.py",
+    ".openclaw/job-supervisor/README.md"
+  ],
+  "error_details": null
+}

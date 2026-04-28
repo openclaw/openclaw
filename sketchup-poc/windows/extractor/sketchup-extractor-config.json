@@ -1,0 +1,11 @@
+{
+  "version": "1.0.0",
+  "readOnly": true,
+  "outputDirectory": "C:\\bridge\\out",
+  "defaultOptions": {
+    "includeEntities": true,
+    "includeMaterials": true,
+    "includeAttributes": true,
+    "maxEntities": 5000
+  }
+}

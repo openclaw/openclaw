@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SketchUp Bridge Response Envelope",
+  "type": "object",
+  "required": ["requestId", "kind", "status", "startedAtUtc", "finishedAtUtc", "host"],
+  "properties": {
+    "requestId": { "type": "string", "minLength": 1 },
+    "kind": { "type": "string", "const": "sketchup-poc-action" },
+    "status": { "type": "string", "enum": ["succeeded", "failed"] },
+    "startedAtUtc": { "type": "string", "format": "date-time" },
+    "finishedAtUtc": { "type": "string", "format": "date-time" },
+    "host": { "type": "string" },
+    "output": {
+      "type": ["object", "null"],
+      "properties": {
+        "action": { "type": "string" },
+        "readOnly": { "type": "boolean" },
+        "liveMetadata": {
+          "type": ["object", "null"],
+          "properties": {
+            "kind": { "type": "string", "const": "real-minimal-metadata" },
+            "source": { "type": "string", "const": "windows-host-real" },
+            "extractionKind": { "type": "string", "const": "process-metadata-only" },
+            "obtainedAtUtc": { "type": "string", "format": "date-time" },
+            "signals": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "app": { "type": "object" },
+            "document": { "type": "object" },
+            "model": { "type": "object" },
+            "limitations": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          },
+          "additionalProperties": true
+        },
+        "liveProbe": {
+          "type": "object",
+          "required": ["attempted", "available", "status"],
+          "properties": {
+            "attempted": { "type": "boolean" },
+            "source": { "type": "string", "enum": ["windows-host-real", "skipped"] },
+            "available": { "type": "boolean" },
+            "status": {
+              "type": "string",
+              "enum": [
+                "not-attempted",
+                "unavailable",
+                "available-no-process",
+                "process-running-no-document",
+                "process-running-document-detected"
+              ]
+            },
+            "launchable": { "type": "boolean" },
+            "processRunning": { "type": "boolean" },
+            "documentDetected": { "type": "boolean" },
+            "automationImplemented": { "type": "boolean" },
+            "reasonCode": { "type": ["string", "null"] },
+            "reason": { "type": ["string", "null"] },
+            "details": { "type": "object" }
+          },
+          "additionalProperties": true
+        },
+        "execution": {
+          "type": "object",
+          "required": ["mode", "usedFallback"],
+          "properties": {
+            "mode": { "type": "string" },
+            "usedFallback": { "type": "boolean" },
+            "fallbackReason": { "type": ["string", "null"] },
+            "extractorContractKind": {
+              "type": "string",
+              "enum": ["sketchup-live-extractor-request", "none"]
+            },
+            "probeResultKind": { "type": "string", "enum": ["real", "none"] },
+            "metadataResultKind": {
+              "type": "string",
+              "enum": ["real-minimal-metadata", "real-probe-no-metadata", "none"]
+            },
+            "snapshotResultKind": {
+              "type": "string",
+              "enum": ["live-handoff-plan", "mock-fallback", "none"]
+            },
+            "resultKind": {
+              "type": "string",
+              "enum": [
+                "real-minimal-metadata",
+                "real-probe-no-metadata",
+                "live-handoff-plan",
+                "mock-fallback",
+                "succeeded-live-model-access",
+                "succeeded-bootstrap-ack",
+                "failed-live",
+                "failed-preflight",
+                "failed-not-implemented",
+                "none"
+              ]
+            }
+          },
+          "additionalProperties": true
+        },
+        "result": {
+          "type": ["object", "null"],
+          "properties": {
+            "safeQueryProof": {
+              "oneOf": [{ "$ref": "./safe-query-proof.schema.json" }, { "type": "null" }]
+            }
+          },
+          "additionalProperties": true
+        },
+        "warnings": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "error": { "type": ["object", "null"] }
+  },
+  "additionalProperties": true
+}

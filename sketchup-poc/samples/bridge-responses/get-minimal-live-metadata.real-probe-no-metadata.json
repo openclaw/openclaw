@@ -1,0 +1,75 @@
+{
+  "requestId": "sketchup-poc-action-demo124",
+  "kind": "sketchup-poc-action",
+  "status": "succeeded",
+  "startedAtUtc": "2026-04-05T19:31:00Z",
+  "finishedAtUtc": "2026-04-05T19:31:01Z",
+  "host": "WINDOWS-HOST",
+  "output": {
+    "action": "get-minimal-live-metadata",
+    "readOnly": true,
+    "liveMetadata": null,
+    "liveProbe": {
+      "attempted": true,
+      "source": "windows-host-real",
+      "status": "unavailable",
+      "available": false,
+      "launchable": false,
+      "processRunning": false,
+      "documentDetected": false,
+      "automationImplemented": false,
+      "reasonCode": "sketchup-not-discoverable",
+      "reason": "SketchUp executable could not be discovered and no SketchUp process is running.",
+      "details": {
+        "probeKind": "real",
+        "candidateExecutablePaths": ["C:\\Program Files\\SketchUp\\SketchUp 2025\\SketchUp.exe"],
+        "installedExecutablePath": null,
+        "installedVersionHint": null,
+        "runningProcessDetected": false,
+        "runningProcessId": null,
+        "runningExecutablePath": null,
+        "runningMainWindowTitle": null,
+        "runningCommandLine": null,
+        "detectedDocument": {
+          "detected": false,
+          "source": null,
+          "name": null,
+          "path": null
+        },
+        "note": "This phase only probes installation and process metadata. It does not attach to, inspect, or drive a live SketchUp session."
+      }
+    },
+    "execution": {
+      "mode": "metadata-only",
+      "usedFallback": false,
+      "fallbackReason": null,
+      "probeResultKind": "real",
+      "metadataResultKind": "real-probe-no-metadata",
+      "snapshotResultKind": "none",
+      "resultKind": "real-probe-no-metadata"
+    },
+    "result": {
+      "bridgeReachable": true,
+      "extractorAvailable": true,
+      "sketchupAutomationImplemented": false,
+      "liveExtractionImplemented": false,
+      "safeQueryProof": {
+        "queryKind": "model-bounds-summary",
+        "sourceKind": "bootstrap-live-safe-query",
+        "readOnly": true,
+        "available": false,
+        "status": "unavailable",
+        "value": null,
+        "unavailableReason": "no-live-model-proof"
+      },
+      "metadataAvailable": false,
+      "metadataSource": null,
+      "liveMetadata": null,
+      "message": "Bridge request reached the SketchUp PoC handler. The result is limited to real Windows host availability probing; no live metadata hints were obtainable and no SketchUp automation session is driven."
+    },
+    "warnings": [
+      "Real SketchUp probe could not find an installed or running SketchUp instance. Probe details are included for transparency."
+    ]
+  },
+  "error": null
+}

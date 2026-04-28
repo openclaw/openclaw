@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SketchUp Bridge Request Envelope",
+  "type": "object",
+  "required": ["requestId", "kind", "createdAtUtc", "status", "payload"],
+  "properties": {
+    "requestId": { "type": "string", "minLength": 1 },
+    "kind": { "type": "string", "const": "sketchup-poc-action" },
+    "createdAtUtc": { "type": "string", "format": "date-time" },
+    "status": { "type": "string", "enum": ["pending"] },
+    "outputPath": { "type": "string" },
+    "payload": { "$ref": "./sketchup-action-payload.schema.json" }
+  },
+  "additionalProperties": true
+}

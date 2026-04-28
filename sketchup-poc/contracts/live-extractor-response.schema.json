@@ -1,0 +1,303 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SketchUp Live Extractor Response",
+  "type": "object",
+  "required": [
+    "kind",
+    "contractVersion",
+    "requestId",
+    "action",
+    "ok",
+    "executionState",
+    "sourceKind",
+    "readOnly",
+    "generatedAtUtc",
+    "preflight",
+    "warnings",
+    "errors"
+  ],
+  "properties": {
+    "kind": { "type": "string", "const": "sketchup-live-extractor-response" },
+    "contractVersion": { "type": "string", "const": "1.0.0" },
+    "requestId": { "type": "string", "minLength": 1 },
+    "action": {
+      "type": "string",
+      "enum": ["extract-model-snapshot", "extract-selection-snapshot"]
+    },
+    "ok": { "type": "boolean" },
+    "executionState": {
+      "type": "string",
+      "enum": [
+        "succeeded-live",
+        "succeeded-live-model-access",
+        "succeeded-bootstrap-ack",
+        "failed-live",
+        "failed-not-implemented",
+        "failed-preflight"
+      ]
+    },
+    "sourceKind": {
+      "type": "string",
+      "enum": ["live-extractor", "mock-extractor-stub"]
+    },
+    "readOnly": { "type": "boolean", "const": true },
+    "generatedAtUtc": { "type": "string", "format": "date-time" },
+    "durations": {
+      "type": "object",
+      "properties": {
+        "totalMs": { "type": ["integer", "null"] },
+        "startupMs": { "type": ["integer", "null"] },
+        "documentOpenMs": { "type": ["integer", "null"] },
+        "snapshotWriteMs": { "type": ["integer", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "artifacts": {
+      "type": ["object", "null"],
+      "properties": {
+        "responseArtifactPath": { "type": ["string", "null"] },
+        "outputArtifactPath": { "type": ["string", "null"] },
+        "snapshotOutputPath": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "preflight": {
+      "type": "object",
+      "required": [
+        "status",
+        "bootstrapActionable",
+        "trueLiveExtractionReady",
+        "selectedStrategyKey",
+        "summary",
+        "checks",
+        "blockerCodes",
+        "unsupportedReasons"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["ready", "blocked", "unsupported"]
+        },
+        "bootstrapActionable": { "type": "boolean" },
+        "trueLiveExtractionReady": { "type": "boolean" },
+        "selectedStrategyKey": { "type": ["string", "null"] },
+        "summary": {
+          "type": "object",
+          "required": ["passed", "warned", "failed"],
+          "properties": {
+            "passed": { "type": "integer", "minimum": 0 },
+            "warned": { "type": "integer", "minimum": 0 },
+            "failed": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["key", "category", "status", "ok", "code", "message"],
+            "properties": {
+              "key": { "type": "string", "minLength": 1 },
+              "category": {
+                "type": "string",
+                "enum": ["request", "strategy", "artifacts", "environment", "bootstrap"]
+              },
+              "status": {
+                "type": "string",
+                "enum": ["pass", "warn", "fail"]
+              },
+              "ok": { "type": "boolean" },
+              "code": { "type": "string", "minLength": 1 },
+              "message": { "type": "string", "minLength": 1 },
+              "details": { "type": ["object", "null"] }
+            },
+            "additionalProperties": false
+          }
+        },
+        "blockerCodes": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "unsupportedReasons": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "result": {
+      "type": ["object", "null"],
+      "properties": {
+        "artifactKind": { "type": "string", "const": "sketchup-live-extraction-output" },
+        "artifactPath": { "type": ["string", "null"] },
+        "snapshotPath": { "type": ["string", "null"] },
+        "snapshotKind": { "type": ["string", "null"], "enum": ["model", "selection", null] },
+        "snapshotSourceKind": { "type": ["string", "null"], "enum": ["live", "mock", null] },
+        "bootstrapAck": {
+          "type": ["object", "null"],
+          "properties": {
+            "path": { "type": ["string", "null"] },
+            "stage": { "type": ["string", "null"] },
+            "status": { "type": ["string", "null"] },
+            "artifact": { "type": ["object", "null"] }
+          },
+          "additionalProperties": false
+        },
+        "liveModelAccess": {
+          "type": ["object", "null"],
+          "properties": {
+            "proofKind": { "type": "string", "const": "sketchup-active-model-access" },
+            "activeModelAccessible": { "type": "boolean" },
+            "rubyProcessId": { "type": ["integer", "null"] },
+            "rubyVersion": { "type": ["string", "null"] },
+            "modelTitle": { "type": ["string", "null"] },
+            "modelPath": { "type": ["string", "null"] },
+            "modelGuid": { "type": ["string", "null"] },
+            "requestedDocumentPath": { "type": ["string", "null"] },
+            "requestedDocumentMatched": { "type": ["boolean", "null"] },
+            "rootEntitiesAccessible": { "type": "boolean" },
+            "rootEntityCount": { "type": ["integer", "null"] },
+            "selectionAccessible": { "type": "boolean" },
+            "selectionCount": { "type": ["integer", "null"] },
+            "scenesAccessible": { "type": "boolean" },
+            "sceneCount": { "type": ["integer", "null"] },
+            "safeQueryProof": {
+              "oneOf": [{ "$ref": "./safe-query-proof.schema.json" }, { "type": "null" }]
+            }
+          },
+          "additionalProperties": false
+        },
+        "liveModelHeader": {
+          "type": ["object", "null"],
+          "properties": {
+            "modelTitle": { "type": ["string", "null"] },
+            "modelPath": { "type": ["string", "null"] },
+            "modelGuid": { "type": ["string", "null"] },
+            "requestedDocumentMatched": { "type": ["boolean", "null"] },
+            "sourceKind": {
+              "type": ["string", "null"],
+              "enum": ["bootstrap-live-model-access", null]
+            },
+            "stats": {
+              "type": ["object", "null"],
+              "properties": {
+                "entityCount": { "type": ["integer", "null"] },
+                "sceneCount": { "type": ["integer", "null"] },
+                "selectionCount": { "type": ["integer", "null"] }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "safeQueryProof": {
+          "oneOf": [{ "$ref": "./safe-query-proof.schema.json" }, { "type": "null" }]
+        },
+        "bootstrap": {
+          "type": ["object", "null"],
+          "properties": {
+            "strategyKey": { "type": "string" },
+            "ready": { "type": "boolean" },
+            "invocation": {
+              "type": "object",
+              "properties": {
+                "executablePath": { "type": ["string", "null"] },
+                "attachMode": { "type": ["string", "null"] },
+                "startupMode": { "type": ["string", "null"] },
+                "launchArguments": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
+                "commandPreview": { "type": ["string", "null"] }
+              },
+              "additionalProperties": false
+            },
+            "artifacts": {
+              "type": "object",
+              "properties": {
+                "bootstrapDirectory": { "type": "string" },
+                "manifestPath": { "type": "string" },
+                "rubyScriptPath": { "type": "string" },
+                "contextPath": { "type": "string" },
+                "bootstrapStatusPath": { "type": "string" }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "schemaValidation": {
+          "type": ["object", "null"],
+          "properties": {
+            "attempted": { "type": "boolean" },
+            "schemaPath": { "type": ["string", "null"] },
+            "valid": { "type": ["boolean", "null"] }
+          },
+          "additionalProperties": false
+        },
+        "stats": {
+          "type": ["object", "null"],
+          "properties": {
+            "entityCount": { "type": ["integer", "null"] },
+            "sceneCount": { "type": ["integer", "null"] },
+            "selectionCount": { "type": ["integer", "null"] }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["code", "message", "stage", "retryable"],
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "request-incomplete",
+              "unsupported-action",
+              "unsupported-strategy",
+              "artifact-path-not-ready",
+              "environment-not-ready",
+              "bootstrap-path-blocked",
+              "live-extraction-not-implemented",
+              "sketchup-not-installed",
+              "sketchup-launch-failed",
+              "sketchup-process-not-found",
+              "document-open-failed",
+              "ruby-bootstrap-timeout",
+              "ruby-extraction-failed",
+              "snapshot-write-failed",
+              "snapshot-schema-invalid",
+              "bootstrap-status-invalid",
+              "unexpected-extractor-error"
+            ]
+          },
+          "message": { "type": "string" },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "preflight",
+              "startup",
+              "document-open",
+              "ruby-bootstrap",
+              "extraction",
+              "snapshot-write",
+              "validation"
+            ]
+          },
+          "retryable": { "type": "boolean" },
+          "details": { "type": ["object", "null"] }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

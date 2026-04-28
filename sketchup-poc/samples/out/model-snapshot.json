@@ -1,0 +1,152 @@
+{
+  "tags": [
+    {
+      "id": "tag-1",
+      "name": "Walls",
+      "visible": true
+    },
+    {
+      "id": "tag-2",
+      "name": "Furniture",
+      "visible": true
+    },
+    {
+      "id": "tag-3",
+      "name": "Facade",
+      "visible": true
+    }
+  ],
+  "model": {
+    "tagCount": 12,
+    "componentDefinitionCount": 16,
+    "sceneCount": 4,
+    "materialCount": 28,
+    "unitSystem": "metric",
+    "title": "Office Demo",
+    "componentInstanceCount": 143,
+    "entityCount": 418,
+    "groupCount": 32
+  },
+  "schemaVersion": "1.0.0",
+  "scenes": [
+    {
+      "id": "scene-1",
+      "index": 0,
+      "name": "Ground Floor"
+    },
+    {
+      "id": "scene-2",
+      "index": 1,
+      "name": "Open Office"
+    },
+    {
+      "id": "scene-3",
+      "index": 2,
+      "name": "Meeting Rooms"
+    },
+    {
+      "id": "scene-4",
+      "index": 3,
+      "name": "Facade"
+    }
+  ],
+  "selection": {
+    "entityIds": ["ent-1001", "ent-1002"],
+    "count": 2
+  },
+  "entities": [
+    {
+      "boundingBox": {
+        "min": [12.1, -0.2, 1.1],
+        "max": [13.0, 0.2, 2.4]
+      },
+      "tag": "Facade",
+      "definitionName": "WindowTypeA",
+      "transform": {
+        "scale": [1.0, 1.0, 1.0],
+        "translation": [12.4, 0.0, 1.2],
+        "rotation": [0.0, 0.0, 0.0]
+      },
+      "material": "Glass",
+      "name": "WindowTypeA",
+      "attributes": {
+        "classification": "Exterior",
+        "ifcType": "Window"
+      },
+      "kind": "component_instance",
+      "layerPath": ["Building", "Facade"],
+      "id": "ent-1001"
+    },
+    {
+      "boundingBox": {
+        "min": [4.0, 5.8, 0.0],
+        "max": [4.8, 6.5, 1.0]
+      },
+      "tag": "Furniture",
+      "definitionName": "ChairTypeB",
+      "transform": {
+        "scale": [1.0, 1.0, 1.0],
+        "translation": [4.2, 6.1, 0.0],
+        "rotation": [0.0, 0.0, 90.0]
+      },
+      "material": "Wood Oak",
+      "name": "ChairTypeB",
+      "attributes": {
+        "category": "Seating"
+      },
+      "kind": "component_instance",
+      "layerPath": ["Interiors", "Furniture"],
+      "id": "ent-1002"
+    }
+  ],
+  "materials": [
+    {
+      "id": "mat-1",
+      "name": "Concrete"
+    },
+    {
+      "id": "mat-2",
+      "name": "Glass"
+    },
+    {
+      "id": "mat-3",
+      "name": "Wood Oak"
+    }
+  ],
+  "source": {
+    "documentName": "office-demo.skp",
+    "appVersion": "mock-extractor",
+    "app": "SketchUp",
+    "documentPath": "C:\\Projects\\office-demo.skp",
+    "readOnly": true,
+    "capturedAt": "2026-04-09T22:02:07.9318686Z",
+    "captureMode": "manual"
+  },
+  "summaryHints": {
+    "topTags": [
+      {
+        "name": "Walls",
+        "count": 85
+      },
+      {
+        "name": "Furniture",
+        "count": 44
+      },
+      {
+        "name": "Facade",
+        "count": 26
+      }
+    ],
+    "warnings": null,
+    "topDefinitions": [
+      {
+        "name": "ChairTypeB",
+        "count": 24
+      },
+      {
+        "name": "WindowTypeA",
+        "count": 18
+      }
+    ]
+  }
+}

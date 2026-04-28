@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SketchUp Safe Query Proof",
+  "type": "object",
+  "required": ["queryKind", "sourceKind", "readOnly", "available", "status"],
+  "properties": {
+    "queryKind": {
+      "type": "string",
+      "enum": ["model-bounds-summary"]
+    },
+    "sourceKind": {
+      "type": "string",
+      "enum": ["bootstrap-live-safe-query"]
+    },
+    "readOnly": {
+      "type": "boolean",
+      "const": true
+    },
+    "available": {
+      "type": "boolean"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["available", "unavailable"]
+    },
+    "value": {
+      "type": ["object", "null"],
+      "required": ["width", "height", "depth", "diagonal"],
+      "properties": {
+        "width": { "type": "number" },
+        "height": { "type": "number" },
+        "depth": { "type": "number" },
+        "diagonal": { "type": "number" }
+      },
+      "additionalProperties": false
+    },
+    "unavailableReason": {
+      "type": ["string", "null"],
+      "enum": [
+        null,
+        "active-model-unavailable",
+        "model-bounds-unavailable",
+        "process-metadata-only",
+        "bootstrap-ack-without-live-query-proof",
+        "safe-query-surface-not-emitted",
+        "no-live-model-proof"
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "available": { "const": true }
+        },
+        "required": ["available"]
+      },
+      "then": {
+        "properties": {
+          "status": { "const": "available" },
+          "value": { "type": "object" },
+          "unavailableReason": { "type": "null" }
+        },
+        "required": ["value", "unavailableReason"]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "available": { "const": false }
+        },
+        "required": ["available"]
+      },
+      "then": {
+        "properties": {
+          "status": { "const": "unavailable" },
+          "value": { "type": "null" },
+          "unavailableReason": { "type": "string", "minLength": 1 }
+        },
+        "required": ["value", "unavailableReason"]
+      }
+    }
+  ],
+  "additionalProperties": false
+}

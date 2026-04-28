@@ -1,0 +1,55 @@
+{
+  "kind": "sketchup-live-extraction-output",
+  "contractVersion": "1.0.0",
+  "requestId": "local-smoke",
+  "action": "extract-model-snapshot",
+  "executionState": "failed-live",
+  "sourceKind": "preflight-only",
+  "readOnly": true,
+  "generatedAtUtc": "2026-04-09T21:51:50.0006459Z",
+  "preflight": {
+    "status": "ready",
+    "bootstrapActionable": true,
+    "trueLiveExtractionReady": false,
+    "blockerCodes": []
+  },
+  "bootstrap": {
+    "strategyKey": "ruby-startup-open-document",
+    "ready": true,
+    "invocation": {
+      "executablePath": "/bin/echo",
+      "attachMode": "launch-or-reuse",
+      "startupMode": "ruby-startup",
+      "launchArguments": [
+        "-RubyStartup",
+        "\\home\\mertb\\.openclaw\\workspace\\sketchup-poc\\tmp\\bootstrap\\local-smoke.bootstrap.rb",
+        "/tmp/office-demo.skp"
+      ],
+      "commandPreview": "/bin/echo -RubyStartup \\home\\mertb\\.openclaw\\workspace\\sketchup-poc\\tmp\\bootstrap\\local-smoke.bootstrap.rb /tmp/office-demo.skp"
+    },
+    "artifacts": {
+      "bootstrapDirectory": "\\home\\mertb\\.openclaw\\workspace\\sketchup-poc\\tmp\\bootstrap",
+      "manifestPath": "\\home\\mertb\\.openclaw\\workspace\\sketchup-poc\\tmp\\bootstrap\\local-smoke.bootstrap-plan.json",
+      "rubyScriptPath": "\\home\\mertb\\.openclaw\\workspace\\sketchup-poc\\tmp\\bootstrap\\local-smoke.bootstrap.rb",
+      "contextPath": "\\home\\mertb\\.openclaw\\workspace\\sketchup-poc\\tmp\\bootstrap\\local-smoke.bootstrap-context.json",
+      "bootstrapStatusPath": "\\home\\mertb\\.openclaw\\workspace\\sketchup-poc\\tmp\\bootstrap\\local-smoke.bootstrap-status.json"
+    }
+  },
+  "bootstrapAck": null,
+  "liveModelHeader": null,
+  "liveModelAccess": null,
+  "safeQueryProof": null,
+  "snapshot": null,
+  "validation": {
+    "attempted": false,
+    "valid": null,
+    "validator": null
+  },
+  "statsAvailable": false,
+  "stats": null,
+  "warnings": [
+    "This artifact records extractor execution/preflight state only.",
+    "No live SketchUp snapshot has been emitted yet.",
+    "Any stats in this artifact are lightweight top-level counts derived from Sketchup.active_model access, not traversal output."
+  ]
+}

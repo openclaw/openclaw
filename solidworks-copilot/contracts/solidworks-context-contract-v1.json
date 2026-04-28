@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ceviz.local/contracts/solidworks-context-contract-v1.json",
+  "title": "SolidWorksContextContractV1",
+  "type": "object",
+  "required": ["document", "selection", "metadata", "assembly", "diagnostics"],
+  "properties": {
+    "document": {
+      "type": "object",
+      "required": ["name", "path", "type"],
+      "properties": {
+        "name": { "type": "string" },
+        "path": { "type": "string" },
+        "type": { "type": "string", "enum": ["part", "assembly", "drawing", "unknown"] },
+        "configuration": { "type": ["string", "null"] },
+        "units": { "type": ["string", "null"] },
+        "isDirty": { "type": ["boolean", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "selection": {
+      "type": "object",
+      "required": ["exists", "count"],
+      "properties": {
+        "exists": { "type": "boolean" },
+        "count": { "type": "integer", "minimum": 0 },
+        "entityType": { "type": ["string", "null"] },
+        "name": { "type": ["string", "null"] },
+        "properties": { "type": ["object", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "metadata": {
+      "type": "object",
+      "required": ["customProperties", "missingRequired", "emptyFields"],
+      "properties": {
+        "customProperties": {
+          "type": "object",
+          "additionalProperties": { "type": ["string", "number", "boolean", "null"] }
+        },
+        "missingRequired": { "type": "array", "items": { "type": "string" } },
+        "emptyFields": { "type": "array", "items": { "type": "string" } },
+        "namingObservations": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": true
+    },
+    "assembly": {
+      "type": "object",
+      "required": ["isAssembly", "topLevelComponentCount", "topLevelComponents"],
+      "properties": {
+        "isAssembly": { "type": "boolean" },
+        "topLevelComponentCount": { "type": "integer", "minimum": 0 },
+        "topLevelComponents": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+              "name": { "type": "string" },
+              "count": { "type": ["integer", "null"] },
+              "state": { "type": ["string", "null"] }
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "diagnostics": {
+      "type": "object",
+      "required": ["warnings", "partialRead"],
+      "properties": {
+        "warnings": { "type": "array", "items": { "type": "string" } },
+        "partialRead": { "type": "boolean" },
+        "unsupportedFields": { "type": "array", "items": { "type": "string" } },
+        "confidenceHints": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

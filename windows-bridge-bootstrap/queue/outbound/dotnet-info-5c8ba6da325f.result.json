@@ -1,0 +1,13 @@
+{
+  "requestId": "dotnet-info-5c8ba6da325f",
+  "kind": "dotnet-info",
+  "status": "succeeded",
+  "startedAtUtc": "2026-04-03T21:39:11.4778198Z",
+  "finishedAtUtc": "2026-04-03T21:39:11.9214335Z",
+  "host": "KOLTIGINMASAUST",
+  "output": {
+    "dotnetVersion": "10.0.104",
+    "outputPath": null
+  },
+  "error": null
+}

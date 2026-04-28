@@ -1,0 +1,13 @@
+{
+  "requestId": "sketchup-poc-action-04b8e453fb5e",
+  "kind": "sketchup-poc-action",
+  "status": "failed",
+  "startedAtUtc": "2026-04-09T21:58:07.5803530Z",
+  "finishedAtUtc": "2026-04-09T21:58:07.7439274Z",
+  "host": "KOLTIGINMASAUST",
+  "output": null,
+  "error": {
+    "message": "The property 'Count' cannot be found on this object. Verify that the property exists.",
+    "type": "System.Management.Automation.PropertyNotFoundException"
+  }
+}

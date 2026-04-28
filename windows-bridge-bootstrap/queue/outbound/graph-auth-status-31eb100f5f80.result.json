@@ -1,0 +1,20 @@
+{
+  "requestId": "graph-auth-status-31eb100f5f80",
+  "kind": "graph-auth-status",
+  "status": "succeeded",
+  "startedAtUtc": "2026-04-03T21:39:12.0256755Z",
+  "finishedAtUtc": "2026-04-03T21:39:13.4673252Z",
+  "host": "KOLTIGINMASAUST",
+  "output": {
+    "generatedAtUtc": "2026-04-03T21:39:13.4616021Z",
+    "bridgeRoot": "C:\\Users\\mertb\\AppData\\Local\\OpenClaw\\WindowsBridge\\graph",
+    "cacheDirExists": false,
+    "statusFileExists": false,
+    "graphModuleInstalled": true,
+    "graphModuleVersion": "2.36.1",
+    "getMgContextAvailable": true,
+    "currentContext": null,
+    "recommendedScopes": ["Mail.Read", "offline_access", "User.Read"]
+  },
+  "error": null
+}

@@ -1,0 +1,30 @@
+{
+  "kind": "sketchup-live-extractor-request",
+  "contractVersion": "1.0.0",
+  "requestId": "repro-null-path",
+  "requestedAtUtc": "2026-04-10T00:00:00Z",
+  "action": "extract-model-snapshot",
+  "readOnly": true,
+  "sourceKind": "manual-sample",
+  "target": {
+    "sketchupExecutablePathHint": "C:\\Program Files\\SketchUp\\SketchUp 2026\\SketchUp\\SketchUp.exe",
+    "documentDetected": false,
+    "documentPathHint": null,
+    "documentSource": "diagnostic-documentless"
+  },
+  "artifacts": {
+    "responseArtifactPath": "repro-response.json",
+    "outputArtifactPath": "repro-output.json",
+    "snapshotOutputPath": "repro-snapshot.json"
+  },
+  "strategy": {
+    "key": "ruby-startup-empty-session",
+    "attachMode": "launch-new",
+    "startupMode": "ruby-startup"
+  },
+  "options": {
+    "documentPath": null,
+    "bootstrapAckTimeoutSeconds": 5,
+    "keepSketchUpOpen": false
+  }
+}

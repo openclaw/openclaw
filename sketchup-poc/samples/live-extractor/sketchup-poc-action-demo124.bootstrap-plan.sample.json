@@ -1,0 +1,37 @@
+{
+  "kind": "sketchup-live-bootstrap-plan",
+  "contractVersion": "1.0.0",
+  "generatedAtUtc": "2026-04-06T00:10:03Z",
+  "strategyKey": "ruby-startup-open-document",
+  "ready": true,
+  "invocation": {
+    "executablePath": "C:\\Program Files\\SketchUp\\SketchUp 2025\\SketchUp.exe",
+    "attachMode": "launch-or-reuse",
+    "startupMode": "ruby-startup",
+    "launchArguments": [
+      "-RubyStartup",
+      "C:\\OpenClaw\\SketchUpPoC\\bootstrap\\sketchup-poc-action-demo124.bootstrap.rb",
+      "C:\\Projects\\office-demo.skp"
+    ],
+    "commandPreview": "C:\\Program Files\\SketchUp\\SketchUp 2025\\SketchUp.exe -RubyStartup C:\\OpenClaw\\SketchUpPoC\\bootstrap\\sketchup-poc-action-demo124.bootstrap.rb C:\\Projects\\office-demo.skp"
+  },
+  "artifacts": {
+    "bootstrapDirectory": "C:\\OpenClaw\\SketchUpPoC\\bootstrap",
+    "manifestPath": "C:\\OpenClaw\\SketchUpPoC\\bootstrap\\sketchup-poc-action-demo124.bootstrap-plan.json",
+    "rubyScriptPath": "C:\\OpenClaw\\SketchUpPoC\\bootstrap\\sketchup-poc-action-demo124.bootstrap.rb",
+    "contextPath": "C:\\OpenClaw\\SketchUpPoC\\bootstrap\\sketchup-poc-action-demo124.bootstrap-context.json",
+    "bootstrapStatusPath": "C:\\OpenClaw\\SketchUpPoC\\bootstrap\\sketchup-poc-action-demo124.bootstrap-status.json"
+  },
+  "notes": [
+    "This plan materializes the Ruby/bootstrap boundary but does not execute it.",
+    "The generated Ruby script is a stub that only logs intended behavior.",
+    "A future implementation should replace the stub body with real model traversal and snapshot writing."
+  ],
+  "liveVsMock": {
+    "bootstrapArtifactsMaterialized": true,
+    "rubyScriptImplemented": false,
+    "rubyBootstrapStatusImplemented": true,
+    "sketchupLaunchExecuted": false,
+    "snapshotEmitted": false
+  }
+}

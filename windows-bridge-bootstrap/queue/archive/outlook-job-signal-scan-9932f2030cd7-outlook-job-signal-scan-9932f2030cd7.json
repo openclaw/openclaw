@@ -1,0 +1,9 @@
+{
+  "requestId": "outlook-job-signal-scan-9932f2030cd7",
+  "kind": "outlook-job-signal-scan",
+  "createdAtUtc": "2026-03-30T19:46:46Z",
+  "status": "pending",
+  "outputPath": "C:\\Users\\mertb\\Desktop\\windows-bridge-outlook-job-scan-phase6.json",
+  "daysBack": 30,
+  "maxResults": 10
+}

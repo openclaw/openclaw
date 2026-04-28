@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.local/contracts/notification-envelope-v1.json",
+  "title": "OpenClawNotificationEnvelopeV1",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "jobId",
+    "source",
+    "status",
+    "finalSummary",
+    "dedupeKey",
+    "createdAtUtc"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "notification-envelope-v1"
+    },
+    "jobId": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["succeeded", "failed", "cancelled", "timed_out"]
+    },
+    "finalSummary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "modifiedFiles": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "dedupeKey": {
+      "type": "string"
+    },
+    "createdAtUtc": {
+      "type": "string"
+    },
+    "rawResultPath": {
+      "type": ["string", "null"]
+    }
+  },
+  "additionalProperties": true
+}

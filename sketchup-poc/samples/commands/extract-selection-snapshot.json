@@ -1,0 +1,8 @@
+{
+  "command": "extract-selection-snapshot",
+  "requestId": "req-selection-001",
+  "outputPath": "samples/out/selection-snapshot.json",
+  "options": {
+    "selectionEntityIds": ["ent-1001"]
+  }
+}

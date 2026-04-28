@@ -1,0 +1,15 @@
+mission_name: default_patrol
+modes:
+  - Idle
+  - Takeoff
+  - Explore
+  - Avoid
+  - Investigate
+  - ReturnHome
+  - Land
+investigation:
+  hover_seconds: 5
+  stand_off_distance_m: 2.0
+safety:
+  return_home_on_high_risk: true
+  min_clearance_m: 1.0

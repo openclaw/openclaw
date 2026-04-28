@@ -1,0 +1,70 @@
+{
+  "scene": {
+    "name": "Daire-Sunum-v03",
+    "path": "C:\\Projects\\Daire\\daire-sunum-v03.skp",
+    "units": "millimeter",
+    "pageCount": 6,
+    "activePage": "Salon Genis Aci",
+    "modelStats": {
+      "componentInstanceCount": 184,
+      "groupCount": 52,
+      "tagCount": 18
+    }
+  },
+  "selection": {
+    "exists": true,
+    "entityType": "component_instance",
+    "name": "Salon_Koltuk_01",
+    "tag": "Salon",
+    "material": "Kumas_Bej"
+  },
+  "organization": {
+    "tags": ["Salon", "Mutfak", "YatakOdasi"],
+    "untaggedEntityCount": 7,
+    "unnamedEntityCount": 3,
+    "roomCoverage": [
+      {
+        "room": "Salon",
+        "hasCamera": true
+      },
+      {
+        "room": "Mutfak",
+        "hasCamera": false
+      }
+    ]
+  },
+  "materials": {
+    "materialCount": 24,
+    "defaultMaterialEntityCount": 5,
+    "placeholderMaterials": ["Color_001"],
+    "duplicates": [
+      {
+        "a": "Mermer_Beyaz",
+        "b": "Marble_White",
+        "reason": "similar-name"
+      }
+    ]
+  },
+  "cameras": {
+    "pages": [
+      {
+        "name": "Salon Genis Aci",
+        "room": "Salon",
+        "cameraType": "perspective"
+      }
+    ],
+    "missingRooms": ["Mutfak"]
+  },
+  "render": {
+    "source": "seeded",
+    "available": false,
+    "qualityPreset": null,
+    "resolution": null,
+    "warnings": ["vray-metadata-not-connected-yet"]
+  },
+  "diagnostics": {
+    "partialRead": false,
+    "warnings": ["Seeded sample data returned by scaffold handler."],
+    "unsupportedFields": ["render.qualityPreset", "render.resolution"]
+  }
+}

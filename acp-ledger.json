@@ -1,0 +1,10 @@
+{
+  "_comment": "Lightweight ledger for spawned ACP jobs to ensure the Assistant polls them to completion or tracks background jobs.",
+  "pending_jobs": [],
+  "jobs": {
+    "agent:codex:acp:7b0bd35d-7ae8-4585-9808-72a95ad26989": {
+      "status": "completed",
+      "updated_at": 1776466502.4028907
+    }
+  }
+}

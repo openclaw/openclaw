@@ -1,0 +1,212 @@
+{
+  "kind": "sketchup-live-extractor-response",
+  "contractVersion": "1.0.0",
+  "requestId": "repro-null-path",
+  "action": "extract-model-snapshot",
+  "ok": false,
+  "executionState": "failed-preflight",
+  "sourceKind": "mock-extractor-stub",
+  "readOnly": true,
+  "generatedAtUtc": "2026-04-09T22:27:47.3524062Z",
+  "durations": {
+    "totalMs": 203,
+    "documentOpenMs": null,
+    "snapshotWriteMs": null,
+    "startupMs": null
+  },
+  "artifacts": {
+    "outputArtifactPath": "repro-output.json",
+    "snapshotOutputPath": "repro-snapshot.json",
+    "responseArtifactPath": "repro-response.json"
+  },
+  "preflight": {
+    "status": "blocked",
+    "bootstrapActionable": false,
+    "trueLiveExtractionReady": false,
+    "selectedStrategyKey": "ruby-startup-empty-session",
+    "summary": {
+      "passed": 4,
+      "warned": 0,
+      "failed": 2
+    },
+    "checks": [
+      {
+        "key": "request-completeness",
+        "category": "request",
+        "status": "pass",
+        "ok": true,
+        "code": "request-complete",
+        "message": "Request contains the required contract fields for bootstrap preflight.",
+        "details": {
+          "sourceKind": "manual-sample",
+          "readOnly": true
+        }
+      },
+      {
+        "key": "action-support",
+        "category": "request",
+        "status": "pass",
+        "ok": true,
+        "code": "action-supported",
+        "message": "Requested action is supported by the current bootstrap preflight layer.",
+        "details": {
+          "action": "extract-model-snapshot"
+        }
+      },
+      {
+        "key": "strategy-support",
+        "category": "strategy",
+        "status": "pass",
+        "ok": true,
+        "code": "strategy-supported",
+        "message": "Strategy is a supported bootstrap candidate for the next live extractor phase.",
+        "details": {
+          "key": "ruby-startup-empty-session",
+          "attachMode": "launch-new",
+          "startupMode": "ruby-startup"
+        }
+      },
+      {
+        "key": "artifact-path-readiness",
+        "category": "artifacts",
+        "status": "fail",
+        "ok": false,
+        "code": "artifact-path-not-ready",
+        "message": "Artifact paths must be present and absolute before bootstrap execution can start.",
+        "details": {
+          "missingPaths": [],
+          "nonAbsolutePaths": ["responseArtifactPath", "outputArtifactPath", "snapshotOutputPath"],
+          "paths": [
+            {
+              "name": "responseArtifactPath",
+              "path": "repro-response.json",
+              "present": true,
+              "isAbsolute": false,
+              "parentDirectory": null,
+              "parentExists": false
+            },
+            {
+              "name": "outputArtifactPath",
+              "path": "repro-output.json",
+              "present": true,
+              "isAbsolute": false,
+              "parentDirectory": null,
+              "parentExists": false
+            },
+            {
+              "name": "snapshotOutputPath",
+              "path": "repro-snapshot.json",
+              "present": true,
+              "isAbsolute": false,
+              "parentDirectory": null,
+              "parentExists": false
+            }
+          ]
+        }
+      },
+      {
+        "key": "environment-readiness",
+        "category": "environment",
+        "status": "pass",
+        "ok": true,
+        "code": "environment-ready",
+        "message": "Host and probe-derived target hints are sufficient for a bootstrap attempt.",
+        "details": {
+          "runningOnWindows": true,
+          "documentRequired": false,
+          "sketchupExecutableHint": "C:\\Program Files\\SketchUp\\SketchUp 2026\\SketchUp\\SketchUp.exe",
+          "documentDetected": false,
+          "documentPathCandidate": null,
+          "documentPathExists": false
+        }
+      },
+      {
+        "key": "bootstrap-path",
+        "category": "bootstrap",
+        "status": "fail",
+        "ok": false,
+        "code": "bootstrap-path-blocked",
+        "message": "Bootstrap path remains blocked until the failing request, strategy, artifact, or environment checks are resolved.",
+        "details": {
+          "bootstrapAckImplemented": true,
+          "fullLiveExtractionImplemented": false,
+          "upstreamBlockers": ["artifact-path-not-ready"]
+        }
+      }
+    ],
+    "blockerCodes": ["artifact-path-not-ready", "bootstrap-path-blocked"],
+    "unsupportedReasons": []
+  },
+  "result": {
+    "artifactKind": "sketchup-live-extraction-output",
+    "artifactPath": "repro-output.json",
+    "snapshotPath": null,
+    "snapshotKind": null,
+    "snapshotSourceKind": null,
+    "bootstrapAck": null,
+    "liveModelHeader": null,
+    "liveModelAccess": null,
+    "safeQueryProof": null,
+    "bootstrap": null,
+    "schemaValidation": {
+      "schemaPath": "contracts/model-snapshot.schema.json",
+      "valid": null,
+      "attempted": false
+    },
+    "stats": null
+  },
+  "warnings": [
+    "The live extractor still does not emit a validated recursive live snapshot in this phase.",
+    "No live snapshot was written because this phase stopped before snapshot completion.",
+    "An execution manifest artifact is being written so downstream tooling can inspect state without pretending a snapshot exists."
+  ],
+  "errors": [
+    {
+      "code": "artifact-path-not-ready",
+      "message": "Artifact paths must be present and absolute before bootstrap execution can start.",
+      "stage": "preflight",
+      "retryable": true,
+      "details": {
+        "missingPaths": [],
+        "nonAbsolutePaths": ["responseArtifactPath", "outputArtifactPath", "snapshotOutputPath"],
+        "paths": [
+          {
+            "name": "responseArtifactPath",
+            "path": "repro-response.json",
+            "present": true,
+            "isAbsolute": false,
+            "parentDirectory": null,
+            "parentExists": false
+          },
+          {
+            "name": "outputArtifactPath",
+            "path": "repro-output.json",
+            "present": true,
+            "isAbsolute": false,
+            "parentDirectory": null,
+            "parentExists": false
+          },
+          {
+            "name": "snapshotOutputPath",
+            "path": "repro-snapshot.json",
+            "present": true,
+            "isAbsolute": false,
+            "parentDirectory": null,
+            "parentExists": false
+          }
+        ]
+      }
+    },
+    {
+      "code": "bootstrap-path-blocked",
+      "message": "Bootstrap path remains blocked until the failing request, strategy, artifact, or environment checks are resolved.",
+      "stage": "preflight",
+      "retryable": false,
+      "details": {
+        "bootstrapAckImplemented": true,
+        "fullLiveExtractionImplemented": false,
+        "upstreamBlockers": ["artifact-path-not-ready"]
+      }
+    }
+  ]
+}

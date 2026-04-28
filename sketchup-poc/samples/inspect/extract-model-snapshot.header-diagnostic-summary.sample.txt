@@ -1,0 +1,23 @@
+header-inspect action=extract-model-snapshot result=succeeded-live-model-access
+diagnostic: Requested document appears to match the observed model. Ruby-side access to Sketchup.active_model is evidenced. Bootstrap was acknowledged, but no snapshot was emitted.
+document: requestedMatched=True evidence=live-model-header observedName=office-demo
+documentPaths: requested=C:\Projects\office-demo.skp observed=C:\Projects\office-demo.skp
+liveAccess: status=proved-active-model-access proofKind=sketchup-active-model-access
+bootstrap: acknowledged=True stage=startup
+snapshot: available=False kind=none
+modelTitle: office-demo
+modelPath: C:\Projects\office-demo.skp
+modelGuid: c0ffee00-demo-4bad-beef-000000000124
+requestedDocumentMatched: True
+sourceKind: bootstrap-live-model-access
+stats: entityCount=418 sceneCount=4 selectionCount=2
+safeQuery: status=available kind=model-bounds-summary source=bootstrap-live-safe-query
+safeQuery.value: width=12840.0 height=3048.0 depth=9120.0 diagonal=16032.45
+metadata.kind: real-minimal-metadata
+metadata.source: windows-host-real
+metadata.extractionKind: process-metadata-only
+warning: Bootstrap acknowledgment does not imply traversal or snapshot output.
+warning: Live probe data was handed off into the live extractor for a real bootstrap acknowledgment attempt.
+warning: A real SketchUp-side bootstrap artifact proved Ruby-side access to Sketchup.active_model, but traversal and snapshot emission are still unimplemented.
+note: Bu inspect cikti yalnizca mevcut liveModelHeader/liveMetadata yuzeyini okunabilir kilar.
+note: Entity traversal veya full snapshot kaniti degildir.

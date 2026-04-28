@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.local/contracts/completion-event-v1.json",
+  "title": "OpenClawCompletionEventV1",
+  "type": "object",
+  "required": ["schemaVersion", "source", "jobId", "eventKind", "status", "observedAtUtc"],
+  "properties": {
+    "schemaVersion": {
+      "const": "completion-event-v1"
+    },
+    "source": {
+      "type": "string",
+      "enum": ["acp", "codex", "gemini", "custom"]
+    },
+    "jobId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sequence": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "eventKind": {
+      "type": "string",
+      "enum": ["progress", "completion", "heartbeat", "error"]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["queued", "running", "partial", "succeeded", "failed", "cancelled", "timed_out"]
+    },
+    "observedAtUtc": {
+      "type": "string"
+    },
+    "completedAtUtc": {
+      "type": ["string", "null"]
+    },
+    "summary": {
+      "type": ["string", "null"]
+    },
+    "progressPercent": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "maximum": 100
+    },
+    "modifiedFiles": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "metrics": {
+      "type": ["object", "null"]
+    },
+    "error": {
+      "type": ["object", "null"]
+    },
+    "rawResultPath": {
+      "type": ["string", "null"]
+    }
+  },
+  "additionalProperties": true
+}

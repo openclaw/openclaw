@@ -1,0 +1,13 @@
+{
+  "requestId": "graph-auth-login-79d05ad47b56",
+  "kind": "graph-auth-login",
+  "status": "failed",
+  "startedAtUtc": "2026-03-30T20:02:58.4036431Z",
+  "finishedAtUtc": "2026-03-30T20:04:59.1949522Z",
+  "host": "KOLTIGINMASAUST",
+  "output": null,
+  "error": {
+    "message": "Authentication timed out after 120 seconds due to inactivity. Please try again.",
+    "type": "System.Exception"
+  }
+}

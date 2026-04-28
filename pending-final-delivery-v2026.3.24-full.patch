@@ -1,0 +1,419 @@
+diff --git a/src/agents/subagent-registry.persistence.test.ts b/src/agents/subagent-registry.persistence.test.ts
+index ea9780462c..deab5ec6e6 100644
+--- a/src/agents/subagent-registry.persistence.test.ts
++++ b/src/agents/subagent-registry.persistence.test.ts
+@@ -425,6 +425,87 @@ describe("subagent registry persistence", () => {
+     expect(afterSecond.runs["run-3"].cleanupCompletedAt).toBeDefined();
+   });
+ 
++  it("reuses durable pending final delivery payload across restart cleanup", async () => {
++    const now = Date.now();
++    const registryPath = await writePersistedRegistry({
++      version: 2,
++      runs: {
++        "run-pending": {
++          runId: "run-pending",
++          childSessionKey: "agent:main:subagent:live-child",
++          requesterSessionKey: "agent:main:live-parent",
++          requesterDisplayKey: "live-parent",
++          task: "stale live task",
++          cleanup: "keep",
++          createdAt: now - 3_000,
++          startedAt: now - 2_000,
++          endedAt: now - 1_000,
++          cleanupHandled: false,
++          expectsCompletionMessage: true,
++          pendingFinalDelivery: true,
++          pendingFinalDeliveryCreatedAt: now - 1_000,
++          pendingFinalDeliveryLastAttemptAt: now - 500,
++          pendingFinalDeliveryAttemptCount: 1,
++          pendingFinalDeliveryLastError: "announce deferred or direct delivery failed",
++          pendingFinalDeliveryPayload: {
++            requesterSessionKey: "agent:main:restored-parent",
++            requesterOrigin: {
++              channel: "whatsapp",
++              to: "+905000000000",
++              accountId: "acct-restored",
++            },
++            requesterDisplayKey: "restored-parent",
++            childSessionKey: "agent:main:subagent:restored-child",
++            childRunId: "run-pending",
++            task: "restored durable task",
++            label: "restored durable label",
++            startedAt: now - 2_000,
++            endedAt: now - 1_000,
++            outcome: { status: "ok" },
++            expectsCompletionMessage: true,
++            spawnMode: "run",
++            frozenResultText: "durable frozen reply",
++            fallbackFrozenResultText: "durable fallback reply",
++          },
++        },
++      },
++    });
++
++    announceSpy.mockResolvedValueOnce(true);
++    await restartRegistryAndFlush();
++
++    expect(announceSpy).toHaveBeenCalledTimes(1);
++    expect(announceSpy).toHaveBeenNthCalledWith(
++      1,
++      expect.objectContaining({
++        childSessionKey: "agent:main:subagent:restored-child",
++        childRunId: "run-pending",
++        requesterSessionKey: "agent:main:restored-parent",
++        requesterOrigin: {
++          channel: "whatsapp",
++          to: "+905000000000",
++          accountId: "acct-restored",
++        },
++        requesterDisplayKey: "restored-parent",
++        task: "restored durable task",
++        label: "restored durable label",
++        roundOneReply: "durable frozen reply",
++        fallbackReply: "durable fallback reply",
++        outcome: { status: "ok" },
++        expectsCompletionMessage: true,
++      }),
++    );
++
++    const after = await readPersistedRun<{
++      cleanupCompletedAt?: number;
++      pendingFinalDelivery?: boolean;
++      pendingFinalDeliveryPayload?: unknown;
++    }>(registryPath, "run-pending");
++    expect(after?.cleanupCompletedAt).toBeDefined();
++    expect(after?.pendingFinalDelivery).toBeUndefined();
++    expect(after?.pendingFinalDeliveryPayload).toBeUndefined();
++  });
++
+   it("retries cleanup announce after announce flow rejects", async () => {
+     const persisted = createPersistedEndedRun({
+       runId: "run-reject",
+diff --git a/src/agents/subagent-registry.test.ts b/src/agents/subagent-registry.test.ts
+index 435714345e..b287f60484 100644
+--- a/src/agents/subagent-registry.test.ts
++++ b/src/agents/subagent-registry.test.ts
+@@ -224,11 +224,23 @@ describe("subagent registry seam flow", () => {
+ 
+     await vi.advanceTimersByTimeAsync(0);
+     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+-    expect(
+-      mod
+-        .listSubagentRunsForRequester("agent:main:main")
+-        .find((entry) => entry.runId === "run-delete-give-up"),
+-    ).toBeDefined();
++    const firstPendingEntry = mod
++      .listSubagentRunsForRequester("agent:main:main")
++      .find((entry) => entry.runId === "run-delete-give-up");
++    expect(firstPendingEntry).toBeDefined();
++    expect(firstPendingEntry).toMatchObject({
++      pendingFinalDelivery: true,
++      pendingFinalDeliveryLastError: "announce deferred or direct delivery failed",
++    });
++    expect(firstPendingEntry?.pendingFinalDeliveryPayload).toMatchObject({
++      requesterSessionKey: "agent:main:main",
++      requesterDisplayKey: "main",
++      childSessionKey: "agent:main:subagent:child",
++      childRunId: "run-delete-give-up",
++      task: "completion cleanup retry",
++      expectsCompletionMessage: true,
++      frozenResultText: "final completion reply",
++    });
+ 
+     await vi.advanceTimersByTimeAsync(1_000);
+     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(2);
+@@ -245,7 +257,75 @@ describe("subagent registry seam flow", () => {
+     ).toBeUndefined();
+   });
+ 
+-  it("finalizes retry-budgeted completion delete runs during resume", async () => {
++  it("reuses durable pending final delivery payload on resumed completion cleanup retries", async () => {
++    mocks.runSubagentAnnounceFlow.mockResolvedValue(false);
++    mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
++      runs: Map<string, unknown>;
++      mergeOnly?: boolean;
++    }) => {
++      params.runs.set("run-resume-pending", {
++        runId: "run-resume-pending",
++        childSessionKey: "agent:main:subagent:child",
++        requesterSessionKey: "agent:main:main",
++        requesterDisplayKey: "main",
++        task: "stale live task should not be reused",
++        cleanup: "delete",
++        createdAt: Date.parse("2026-03-24T11:58:00Z"),
++        startedAt: Date.parse("2026-03-24T11:59:00Z"),
++        endedAt: Date.parse("2026-03-24T11:59:30Z"),
++        expectsCompletionMessage: true,
++        pendingFinalDelivery: true,
++        pendingFinalDeliveryCreatedAt: Date.parse("2026-03-24T11:59:31Z"),
++        pendingFinalDeliveryLastAttemptAt: Date.parse("2026-03-24T11:59:31Z"),
++        pendingFinalDeliveryAttemptCount: 1,
++        pendingFinalDeliveryLastError: "direct failed",
++        pendingFinalDeliveryPayload: {
++          requesterSessionKey: "agent:main:restored-parent",
++          requesterOrigin: { channel: "whatsapp", to: "+905000000000", accountId: "acct-r" },
++          requesterDisplayKey: "restored-parent",
++          childSessionKey: "agent:main:subagent:child",
++          childRunId: "run-resume-pending",
++          task: "restored durable task",
++          label: "restored durable label",
++          startedAt: 123,
++          endedAt: 456,
++          outcome: { status: "ok" },
++          expectsCompletionMessage: true,
++          spawnMode: "run",
++          frozenResultText: "durable frozen reply",
++          fallbackFrozenResultText: "durable fallback reply",
++          wakeOnDescendantSettle: true,
++        },
++      });
++      return 1;
++    }) as never);
++
++    mod.initSubagentRegistry();
++    await Promise.resolve();
++    await Promise.resolve();
++
++    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
++    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledWith(
++      expect.objectContaining({
++        childSessionKey: "agent:main:subagent:child",
++        childRunId: "run-resume-pending",
++        requesterSessionKey: "agent:main:restored-parent",
++        requesterOrigin: { channel: "whatsapp", to: "+905000000000", accountId: "acct-r" },
++        requesterDisplayKey: "restored-parent",
++        task: "restored durable task",
++        label: "restored durable label",
++        roundOneReply: "durable frozen reply",
++        fallbackReply: "durable fallback reply",
++        startedAt: 123,
++        endedAt: 456,
++        outcome: { status: "ok" },
++        expectsCompletionMessage: true,
++        wakeOnDescendantSettle: true,
++      }),
++    );
++  });
++
++  it("clears pending final delivery state when retry-budgeted completion delete runs give up during resume", async () => {
+     const endedHookRunner = {
+       hasHooks: (hookName: string) => hookName === "subagent_ended",
+       runSubagentEnded: mocks.runSubagentEnded,
+@@ -278,6 +358,17 @@ describe("subagent registry seam flow", () => {
+ 
+     expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+     expect(mocks.runSubagentEnded).toHaveBeenCalledTimes(1);
++    const resumed = mod
++      .listSubagentRunsForRequester("agent:main:main")
++      .find((entry) => entry.runId === "run-resume-delete");
++    expect(resumed).toMatchObject({
++      pendingFinalDelivery: undefined,
++      pendingFinalDeliveryCreatedAt: undefined,
++      pendingFinalDeliveryLastAttemptAt: undefined,
++      pendingFinalDeliveryAttemptCount: undefined,
++      pendingFinalDeliveryLastError: undefined,
++      pendingFinalDeliveryPayload: undefined,
++    });
+     await vi.waitFor(() => {
+       expect(mocks.onSubagentEnded).toHaveBeenCalledWith({
+         childSessionKey: "agent:main:subagent:child",
+diff --git a/src/agents/subagent-registry.ts b/src/agents/subagent-registry.ts
+index fb1567b2db..b3cc8e1241 100644
+--- a/src/agents/subagent-registry.ts
++++ b/src/agents/subagent-registry.ts
+@@ -58,7 +58,10 @@ import {
+   persistSubagentRunsToDisk,
+   restoreSubagentRunsFromDisk,
+ } from "./subagent-registry-state.js";
+-import type { SubagentRunRecord } from "./subagent-registry.types.js";
++import type {
++  PendingFinalDeliveryPayload,
++  SubagentRunRecord,
++} from "./subagent-registry.types.js";
+ import { resolveAgentTimeoutMs } from "./timeout.js";
+ 
+ export type { SubagentRunRecord } from "./subagent-registry.types.js";
+@@ -124,6 +127,55 @@ function resolveAnnounceRetryDelayMs(retryCount: number) {
+   return Math.min(baseDelay, MAX_ANNOUNCE_RETRY_DELAY_MS);
+ }
+ 
++function clearPendingFinalDelivery(entry: SubagentRunRecord) {
++  entry.pendingFinalDelivery = undefined;
++  entry.pendingFinalDeliveryCreatedAt = undefined;
++  entry.pendingFinalDeliveryLastAttemptAt = undefined;
++  entry.pendingFinalDeliveryAttemptCount = undefined;
++  entry.pendingFinalDeliveryLastError = undefined;
++  entry.pendingFinalDeliveryPayload = undefined;
++}
++
++function loadPendingFinalDeliveryPayload(entry: SubagentRunRecord): PendingFinalDeliveryPayload {
++  return {
++    requesterSessionKey: entry.pendingFinalDeliveryPayload?.requesterSessionKey ?? entry.requesterSessionKey,
++    requesterOrigin: entry.pendingFinalDeliveryPayload?.requesterOrigin ?? entry.requesterOrigin,
++    requesterDisplayKey:
++      entry.pendingFinalDeliveryPayload?.requesterDisplayKey ?? entry.requesterDisplayKey,
++    childSessionKey: entry.pendingFinalDeliveryPayload?.childSessionKey ?? entry.childSessionKey,
++    childRunId: entry.pendingFinalDeliveryPayload?.childRunId ?? entry.runId,
++    task: entry.pendingFinalDeliveryPayload?.task ?? entry.task,
++    label: entry.pendingFinalDeliveryPayload?.label ?? entry.label,
++    startedAt: entry.pendingFinalDeliveryPayload?.startedAt ?? entry.startedAt,
++    endedAt: entry.pendingFinalDeliveryPayload?.endedAt ?? entry.endedAt,
++    outcome: entry.pendingFinalDeliveryPayload?.outcome ?? entry.outcome,
++    expectsCompletionMessage:
++      entry.pendingFinalDeliveryPayload?.expectsCompletionMessage ?? entry.expectsCompletionMessage,
++    spawnMode: entry.pendingFinalDeliveryPayload?.spawnMode ?? entry.spawnMode,
++    frozenResultText: entry.pendingFinalDeliveryPayload?.frozenResultText ?? entry.frozenResultText,
++    fallbackFrozenResultText:
++      entry.pendingFinalDeliveryPayload?.fallbackFrozenResultText ?? entry.fallbackFrozenResultText,
++    wakeOnDescendantSettle:
++      entry.pendingFinalDeliveryPayload?.wakeOnDescendantSettle ?? entry.wakeOnDescendantSettle,
++  };
++}
++
++function markPendingFinalDelivery(params: {
++  entry: SubagentRunRecord;
++  error?: string;
++}) {
++  const now = Date.now();
++  const payload: PendingFinalDeliveryPayload = loadPendingFinalDeliveryPayload(params.entry);
++
++  params.entry.pendingFinalDelivery = true;
++  params.entry.pendingFinalDeliveryCreatedAt ??= now;
++  params.entry.pendingFinalDeliveryLastAttemptAt = now;
++  params.entry.pendingFinalDeliveryAttemptCount =
++    (params.entry.pendingFinalDeliveryAttemptCount ?? 0) + 1;
++  params.entry.pendingFinalDeliveryLastError = params.error ?? null;
++  params.entry.pendingFinalDeliveryPayload = payload;
++}
++
+ function logAnnounceGiveUp(entry: SubagentRunRecord, reason: "retry-limit" | "expiry") {
+   const retryCount = entry.announceRetryCount ?? 0;
+   const endedAgoMs =
+@@ -645,7 +697,8 @@ function startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecor
+   if (!beginSubagentCleanup(runId)) {
+     return false;
+   }
+-  const requesterOrigin = normalizeDeliveryContext(entry.requesterOrigin);
++  const pendingPayload = loadPendingFinalDeliveryPayload(entry);
++  const requesterOrigin = normalizeDeliveryContext(pendingPayload.requesterOrigin);
+   const finalizeAnnounceCleanup = (didAnnounce: boolean) => {
+     void finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce).catch((err) => {
+       defaultRuntime.log(`[warn] subagent cleanup finalize failed (${runId}): ${String(err)}`);
+@@ -659,24 +712,24 @@ function startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecor
+   };
+ 
+   void runSubagentAnnounceFlow({
+-    childSessionKey: entry.childSessionKey,
+-    childRunId: entry.runId,
+-    requesterSessionKey: entry.requesterSessionKey,
++    childSessionKey: pendingPayload.childSessionKey,
++    childRunId: pendingPayload.childRunId,
++    requesterSessionKey: pendingPayload.requesterSessionKey,
+     requesterOrigin,
+-    requesterDisplayKey: entry.requesterDisplayKey,
+-    task: entry.task,
++    requesterDisplayKey: pendingPayload.requesterDisplayKey,
++    task: pendingPayload.task,
+     timeoutMs: SUBAGENT_ANNOUNCE_TIMEOUT_MS,
+     cleanup: entry.cleanup,
+-    roundOneReply: entry.frozenResultText ?? undefined,
+-    fallbackReply: entry.fallbackFrozenResultText ?? undefined,
++    roundOneReply: pendingPayload.frozenResultText ?? undefined,
++    fallbackReply: pendingPayload.fallbackFrozenResultText ?? undefined,
+     waitForCompletion: false,
+-    startedAt: entry.startedAt,
+-    endedAt: entry.endedAt,
+-    label: entry.label,
+-    outcome: entry.outcome,
+-    spawnMode: entry.spawnMode,
+-    expectsCompletionMessage: entry.expectsCompletionMessage,
+-    wakeOnDescendantSettle: entry.wakeOnDescendantSettle === true,
++    startedAt: pendingPayload.startedAt,
++    endedAt: pendingPayload.endedAt,
++    label: pendingPayload.label,
++    outcome: pendingPayload.outcome,
++    spawnMode: pendingPayload.spawnMode,
++    expectsCompletionMessage: pendingPayload.expectsCompletionMessage,
++    wakeOnDescendantSettle: pendingPayload.wakeOnDescendantSettle === true,
+   })
+     .then((didAnnounce) => {
+       finalizeAnnounceCleanup(didAnnounce);
+@@ -1002,6 +1055,7 @@ async function finalizeSubagentCleanup(
+     return;
+   }
+   if (didAnnounce) {
++    clearPendingFinalDelivery(entry);
+     entry.wakeOnDescendantSettle = undefined;
+     entry.fallbackFrozenResultText = undefined;
+     entry.fallbackFrozenResultCapturedAt = undefined;
+@@ -1056,6 +1110,7 @@ async function finalizeSubagentCleanup(
+   }
+ 
+   if (deferredDecision.kind === "give-up") {
++    clearPendingFinalDelivery(entry);
+     entry.wakeOnDescendantSettle = undefined;
+     entry.fallbackFrozenResultText = undefined;
+     entry.fallbackFrozenResultCapturedAt = undefined;
+@@ -1077,6 +1132,10 @@ async function finalizeSubagentCleanup(
+ 
+   // Keep both cleanup modes retryable after deferred/failed announce.
+   // Delete-mode is finalized only after announce succeeds or give-up triggers.
++  markPendingFinalDelivery({
++    entry,
++    error: didAnnounce ? undefined : "announce deferred or direct delivery failed",
++  });
+   entry.cleanupHandled = false;
+   // Clear the in-flight resume marker so the scheduled retry can run again.
+   resumedRuns.delete(runId);
+@@ -1094,6 +1153,7 @@ async function finalizeResumedAnnounceGiveUp(params: {
+   entry: SubagentRunRecord;
+   reason: "retry-limit" | "expiry";
+ }) {
++  clearPendingFinalDelivery(params.entry);
+   params.entry.wakeOnDescendantSettle = undefined;
+   params.entry.fallbackFrozenResultText = undefined;
+   params.entry.fallbackFrozenResultCapturedAt = undefined;
+diff --git a/src/agents/subagent-registry.types.ts b/src/agents/subagent-registry.types.ts
+index 299adb83e3..4a0e20f84f 100644
+--- a/src/agents/subagent-registry.types.ts
++++ b/src/agents/subagent-registry.types.ts
+@@ -3,6 +3,24 @@ import type { SubagentRunOutcome } from "./subagent-announce.js";
+ import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
+ import type { SpawnSubagentMode } from "./subagent-spawn.js";
+ 
++export type PendingFinalDeliveryPayload = {
++  requesterSessionKey: string;
++  requesterOrigin?: DeliveryContext;
++  requesterDisplayKey: string;
++  childSessionKey: string;
++  childRunId: string;
++  task: string;
++  label?: string;
++  startedAt?: number;
++  endedAt?: number;
++  outcome?: SubagentRunOutcome;
++  expectsCompletionMessage?: boolean;
++  spawnMode?: SpawnSubagentMode;
++  frozenResultText?: string | null;
++  fallbackFrozenResultText?: string | null;
++  wakeOnDescendantSettle?: boolean;
++};
++
+ export type SubagentRunRecord = {
+   runId: string;
+   childSessionKey: string;
+@@ -57,6 +75,13 @@ export type SubagentRunRecord = {
+   fallbackFrozenResultCapturedAt?: number;
+   /** Set after the subagent_ended hook has been emitted successfully once. */
+   endedHookEmittedAt?: number;
++  /** Durable marker that final user delivery still needs a retry/resume pass. */
++  pendingFinalDelivery?: boolean;
++  pendingFinalDeliveryCreatedAt?: number;
++  pendingFinalDeliveryLastAttemptAt?: number;
++  pendingFinalDeliveryAttemptCount?: number;
++  pendingFinalDeliveryLastError?: string | null;
++  pendingFinalDeliveryPayload?: PendingFinalDeliveryPayload;
+   attachmentsDir?: string;
+   attachmentsRootDir?: string;
+   retainAttachmentsOnKeep?: boolean;

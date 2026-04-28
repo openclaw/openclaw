@@ -1,0 +1,9 @@
+{
+  "action": "sketchup-ping",
+  "probeMode": "probe-first",
+  "fallbackMode": "mock-sample",
+  "options": {
+    "documentName": "office-demo.skp",
+    "sketchupExePath": "C:\\Program Files\\SketchUp\\SketchUp 2025\\SketchUp.exe"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "command": "extract-model-snapshot",
+  "requestId": "req-model-001",
+  "outputPath": "samples/out/model-snapshot.json",
+  "options": {
+    "documentName": "office-demo.skp",
+    "documentPath": "C:\\Projects\\office-demo.skp"
+  }
+}

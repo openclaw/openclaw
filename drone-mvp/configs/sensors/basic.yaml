@@ -1,0 +1,15 @@
+rgb_camera:
+  enabled: true
+  resolution: [1280, 720]
+  fov_deg: 90
+  update_hz: 20
+
+depth_camera:
+  enabled: true
+  resolution: [640, 480]
+  fov_deg: 90
+  update_hz: 20
+
+imu:
+  enabled: true
+  update_hz: 100

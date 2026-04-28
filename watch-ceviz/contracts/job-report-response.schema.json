@@ -1,0 +1,157 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Job Report Response",
+  "$defs": {
+    "reportMeta": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "title": { "type": "string" },
+        "status": { "type": "string" },
+        "severity": { "type": "string" },
+        "category": { "type": "string" },
+        "watch_summary": { "type": "string" },
+        "requires_phone_handoff": { "type": "boolean" },
+        "handoff_reason": { "type": ["string", "null"] },
+        "phone_report": { "type": "string" },
+        "next_action": { "type": ["string", "null"] },
+        "retry_count": { "type": "integer" },
+        "failure_code": { "type": ["string", "null"] },
+        "failure_message": { "type": ["string", "null"] }
+      },
+      "required": [
+        "title",
+        "status",
+        "severity",
+        "category",
+        "watch_summary",
+        "requires_phone_handoff",
+        "handoff_reason",
+        "phone_report",
+        "next_action",
+        "retry_count",
+        "failure_code",
+        "failure_message"
+      ]
+    },
+    "nextActionItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "label": { "type": "string" },
+        "kind": { "type": "string" },
+        "target": { "type": ["string", "null"] }
+      },
+      "required": ["id", "label", "kind", "target"]
+    },
+    "section": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "enum": [
+            "category",
+            "watch-summary",
+            "expanded-analysis",
+            "suggested-next-action",
+            "capture"
+          ]
+        },
+        "title": { "type": "string" },
+        "eyebrow": { "type": "string" },
+        "icon": { "type": "string" },
+        "content": { "type": "string" }
+      },
+      "required": ["id", "title", "eyebrow", "icon", "content"]
+    },
+    "reportSection": {
+      "allOf": [
+        { "$ref": "#/$defs/section" },
+        {
+          "properties": {
+            "id": {
+              "enum": ["watch-summary", "expanded-analysis", "suggested-next-action"]
+            }
+          }
+        }
+      ]
+    },
+    "previewSection": {
+      "allOf": [
+        { "$ref": "#/$defs/section" },
+        {
+          "properties": {
+            "id": {
+              "enum": [
+                "category",
+                "watch-summary",
+                "expanded-analysis",
+                "suggested-next-action",
+                "capture"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "job_id": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["running", "completed", "failed", "queued"]
+    },
+    "report_title": {
+      "type": "string"
+    },
+    "report_content": {
+      "type": "string"
+    },
+    "report_sections": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/reportSection" }
+    },
+    "preview_sections": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/previewSection" },
+      "description": "Continuation-card preview sections derived from the same structured section source as report_sections."
+    },
+    "watch_summary": {
+      "type": "string"
+    },
+    "requires_phone_handoff": {
+      "type": "boolean"
+    },
+    "deep_link": {
+      "type": "string"
+    },
+    "handoff_reason": {
+      "type": ["string", "null"]
+    },
+    "next_action": {
+      "type": ["string", "null"]
+    },
+    "next_actions": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/nextActionItem" }
+    },
+    "report_meta": {
+      "$ref": "#/$defs/reportMeta"
+    }
+  },
+  "required": [
+    "job_id",
+    "status",
+    "report_title",
+    "report_content",
+    "report_sections",
+    "preview_sections",
+    "report_meta"
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "group": "group",
+  "component_instance": "component_instance",
+  "component_definition": "component_definition",
+  "image": "image",
+  "edge": "edge",
+  "face": "face",
+  "text": "text",
+  "dimension": "dimension",
+  "section_plane": "section_plane",
+  "unknown": "unknown"
+}

@@ -1,0 +1,34 @@
+{
+  "kind": "sketchup-live-extractor-request",
+  "contractVersion": "1.0.0",
+  "requestId": "local-smoke",
+  "requestedAtUtc": "2026-04-10T00:00:00Z",
+  "action": "extract-model-snapshot",
+  "readOnly": true,
+  "sourceKind": "bridge-live-handoff",
+  "target": {
+    "sketchupExecutablePathHint": "/bin/echo",
+    "sketchupVersionHint": "2025",
+    "sketchupProcessId": 123,
+    "documentDetected": true,
+    "documentNameHint": "office-demo.skp",
+    "documentPathHint": "/tmp/office-demo.skp",
+    "documentSource": "process-command-line"
+  },
+  "artifacts": {
+    "responseArtifactPath": "/home/mertb/.openclaw/workspace/sketchup-poc/tmp/live-extractor-response.json",
+    "outputArtifactPath": "/home/mertb/.openclaw/workspace/sketchup-poc/tmp/live-extractor-response.output.json",
+    "snapshotOutputPath": "/home/mertb/.openclaw/workspace/sketchup-poc/tmp/live-model-snapshot.json"
+  },
+  "strategy": {
+    "key": "ruby-startup-open-document",
+    "attachMode": "launch-or-reuse",
+    "startupMode": "ruby-startup"
+  },
+  "options": {
+    "documentPath": "/tmp/office-demo.skp",
+    "documentName": "office-demo.skp",
+    "sketchupExePath": "/bin/echo",
+    "bootstrapAckTimeoutSeconds": 5
+  }
+}

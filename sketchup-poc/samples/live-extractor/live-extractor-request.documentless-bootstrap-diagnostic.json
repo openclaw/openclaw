@@ -1,0 +1,45 @@
+{
+  "kind": "sketchup-live-extractor-request",
+  "contractVersion": "1.0.0",
+  "requestId": "sketchup-poc-docless-diagnostic-001",
+  "requestedAtUtc": "2026-04-10T00:00:00Z",
+  "action": "extract-model-snapshot",
+  "readOnly": true,
+  "sourceKind": "manual-sample",
+  "target": {
+    "sketchupExecutablePathHint": "C:\\Program Files\\SketchUp\\SketchUp 2025\\SketchUp.exe",
+    "sketchupVersionHint": "2025",
+    "sketchupProcessId": null,
+    "documentDetected": false,
+    "documentNameHint": null,
+    "documentPathHint": null,
+    "documentSource": "diagnostic-documentless"
+  },
+  "artifacts": {
+    "responseArtifactPath": "C:\\OpenClaw\\SketchUpPoC\\documentless-live-extractor-response.json",
+    "outputArtifactPath": "C:\\OpenClaw\\SketchUpPoC\\documentless-live-extractor-response.output.json",
+    "snapshotOutputPath": "C:\\OpenClaw\\SketchUpPoC\\documentless-live-model-snapshot.json"
+  },
+  "strategy": {
+    "key": "ruby-startup-empty-session",
+    "attachMode": "launch-new",
+    "startupMode": "ruby-startup",
+    "notes": [
+      "Diagnostic mode for isolating RubyStartup/bootstrap acknowledgment from document-open behavior.",
+      "Launch SketchUp with -RubyStartup but without a .skp document argument.",
+      "If ack is still missing, the blocker is RubyStartup/bootstrap execution rather than document-open."
+    ]
+  },
+  "options": {
+    "documentName": null,
+    "documentPath": null,
+    "sketchupExePath": "C:\\Program Files\\SketchUp\\SketchUp 2025\\SketchUp.exe",
+    "bootstrapAckTimeoutSeconds": 120,
+    "keepSketchUpOpen": false
+  },
+  "probeContext": {
+    "probeSource": "manual-documentless-diagnostic",
+    "probeStatus": "process-running-no-document",
+    "metadataResultKind": "real-probe-no-metadata"
+  }
+}

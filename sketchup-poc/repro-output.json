@@ -1,0 +1,34 @@
+{
+  "kind": "sketchup-live-extraction-output",
+  "contractVersion": "1.0.0",
+  "requestId": "repro-null-path",
+  "action": "extract-model-snapshot",
+  "executionState": "failed-preflight",
+  "sourceKind": "preflight-only",
+  "readOnly": true,
+  "generatedAtUtc": "2026-04-09T22:27:47.3395720Z",
+  "preflight": {
+    "status": "blocked",
+    "bootstrapActionable": false,
+    "trueLiveExtractionReady": false,
+    "blockerCodes": ["artifact-path-not-ready", "bootstrap-path-blocked"]
+  },
+  "bootstrap": null,
+  "bootstrapAck": null,
+  "liveModelHeader": null,
+  "liveModelAccess": null,
+  "safeQueryProof": null,
+  "snapshot": null,
+  "validation": {
+    "attempted": false,
+    "valid": null,
+    "validator": null
+  },
+  "statsAvailable": false,
+  "stats": null,
+  "warnings": [
+    "This artifact records extractor execution/preflight state only.",
+    "No live SketchUp snapshot has been emitted yet.",
+    "Any stats in this artifact are lightweight top-level counts derived from Sketchup.active_model access, not traversal output."
+  ]
+}

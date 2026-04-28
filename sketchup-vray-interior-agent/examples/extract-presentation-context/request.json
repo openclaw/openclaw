@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "sketchup-bridge-request-envelope-v1",
+  "requestId": "extract-presentation-context-seeded-001",
+  "kind": "extract-presentation-context",
+  "createdAtUtc": "2026-04-01T20:45:00Z",
+  "status": "pending",
+  "payload": {
+    "extractionMode": "seeded",
+    "sceneHint": "Daire-Sunum-v03"
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SketchUp Action Payload",
+  "type": "object",
+  "required": ["action"],
+  "properties": {
+    "action": {
+      "type": "string",
+      "enum": ["sketchup-ping", "get-minimal-live-metadata", "extract-model-snapshot"]
+    },
+    "probeMode": {
+      "type": "string",
+      "enum": ["probe-first", "skip-probe"],
+      "default": "probe-first"
+    },
+    "fallbackMode": {
+      "type": "string",
+      "enum": ["mock-sample", "live-only"],
+      "default": "mock-sample"
+    },
+    "snapshotOutputPath": { "type": "string" },
+    "responseArtifactPath": { "type": "string" },
+    "options": {
+      "type": "object",
+      "properties": {
+        "documentName": { "type": "string" },
+        "documentPath": { "type": "string" },
+        "sketchupExePath": { "type": "string" }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,8 @@
+{
+  "action": "get-minimal-live-metadata",
+  "probeMode": "probe-first",
+  "fallbackMode": "mock-sample",
+  "options": {
+    "sketchupExePath": "C:\\Program Files\\SketchUp\\SketchUp 2025\\SketchUp.exe"
+  }
+}

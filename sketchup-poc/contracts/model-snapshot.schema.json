@@ -1,0 +1,231 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.openclaw/sketchup-poc/model-snapshot.schema.json",
+  "title": "SketchUp Model Snapshot",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "source",
+    "model",
+    "selection",
+    "scenes",
+    "tags",
+    "materials",
+    "entities"
+  ],
+  "properties": {
+    "schemaVersion": { "type": "string" },
+    "source": {
+      "type": "object",
+      "required": [
+        "app",
+        "appVersion",
+        "documentName",
+        "documentPath",
+        "capturedAt",
+        "captureMode",
+        "readOnly"
+      ],
+      "properties": {
+        "app": { "type": "string" },
+        "appVersion": { "type": "string" },
+        "documentName": { "type": "string" },
+        "documentPath": { "type": "string" },
+        "capturedAt": { "type": "string", "format": "date-time" },
+        "captureMode": { "type": "string", "enum": ["manual", "polling", "event-driven"] },
+        "readOnly": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "model": {
+      "type": "object",
+      "required": [
+        "title",
+        "unitSystem",
+        "tagCount",
+        "sceneCount",
+        "materialCount",
+        "componentDefinitionCount",
+        "componentInstanceCount",
+        "groupCount",
+        "entityCount"
+      ],
+      "properties": {
+        "title": { "type": "string" },
+        "unitSystem": { "type": "string" },
+        "tagCount": { "type": "integer", "minimum": 0 },
+        "sceneCount": { "type": "integer", "minimum": 0 },
+        "materialCount": { "type": "integer", "minimum": 0 },
+        "componentDefinitionCount": { "type": "integer", "minimum": 0 },
+        "componentInstanceCount": { "type": "integer", "minimum": 0 },
+        "groupCount": { "type": "integer", "minimum": 0 },
+        "entityCount": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "selection": {
+      "type": "object",
+      "required": ["count", "entityIds"],
+      "properties": {
+        "count": { "type": "integer", "minimum": 0 },
+        "entityIds": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "scenes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "index"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "index": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "visible"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "visible": { "type": "boolean" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "materials": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "entities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "name",
+          "tag",
+          "material",
+          "boundingBox",
+          "transform",
+          "attributes"
+        ],
+        "properties": {
+          "id": { "type": "string" },
+          "kind": { "type": "string" },
+          "name": { "type": "string" },
+          "definitionName": { "type": ["string", "null"] },
+          "tag": { "type": ["string", "null"] },
+          "material": { "type": ["string", "null"] },
+          "layerPath": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "transform": {
+            "type": "object",
+            "required": ["translation", "rotation", "scale"],
+            "properties": {
+              "translation": {
+                "type": "array",
+                "minItems": 3,
+                "maxItems": 3,
+                "items": { "type": "number" }
+              },
+              "rotation": {
+                "type": "array",
+                "minItems": 3,
+                "maxItems": 3,
+                "items": { "type": "number" }
+              },
+              "scale": {
+                "type": "array",
+                "minItems": 3,
+                "maxItems": 3,
+                "items": { "type": "number" }
+              }
+            },
+            "additionalProperties": false
+          },
+          "boundingBox": {
+            "type": "object",
+            "required": ["min", "max"],
+            "properties": {
+              "min": {
+                "type": "array",
+                "minItems": 3,
+                "maxItems": 3,
+                "items": { "type": "number" }
+              },
+              "max": {
+                "type": "array",
+                "minItems": 3,
+                "maxItems": 3,
+                "items": { "type": "number" }
+              }
+            },
+            "additionalProperties": false
+          },
+          "attributes": {
+            "type": "object",
+            "additionalProperties": {
+              "type": ["string", "number", "boolean", "null"]
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "summaryHints": {
+      "type": "object",
+      "properties": {
+        "topTags": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "count"],
+            "properties": {
+              "name": { "type": "string" },
+              "count": { "type": "integer", "minimum": 0 }
+            },
+            "additionalProperties": false
+          }
+        },
+        "topDefinitions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "count"],
+            "properties": {
+              "name": { "type": "string" },
+              "count": { "type": "integer", "minimum": 0 }
+            },
+            "additionalProperties": false
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

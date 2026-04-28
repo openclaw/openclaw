@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ceviz.local/contracts/solidworks-bridge-request-envelope-v1.json",
+  "title": "SolidWorksBridgeRequestEnvelopeV1",
+  "type": "object",
+  "required": ["schemaVersion", "requestId", "kind", "createdAtUtc", "status", "payload"],
+  "properties": {
+    "schemaVersion": {
+      "const": "solidworks-bridge-request-envelope-v1"
+    },
+    "requestId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "ping",
+        "capabilities",
+        "get-active-document",
+        "get-document-metadata",
+        "get-selection-context",
+        "get-assembly-summary",
+        "extract-poc-context"
+      ]
+    },
+    "createdAtUtc": {
+      "type": "string"
+    },
+    "status": {
+      "const": "pending"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "extractionMode": {
+          "type": "string",
+          "enum": ["seeded", "prefer-live", "live-only"]
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}

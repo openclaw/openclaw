@@ -1,0 +1,61 @@
+name: CevizWatch
+options:
+  bundleIdPrefix: com.openclaw
+  generateEmptyDirectories: true
+  deploymentTarget:
+    iOS: "16.0"
+    watchOS: "9.0"
+settings:
+  base:
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+    APP_MARKETING_VERSION: "1.1"
+    APP_PROJECT_VERSION: "2"
+    IOS_BUNDLE_ID: com.openclaw.ceviz
+    WATCH_BUNDLE_ID: com.openclaw.ceviz.watchkitapp
+
+targets:
+  CevizBridge:
+    type: application
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: ios-bridge
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        CURRENT_PROJECT_VERSION: $(APP_PROJECT_VERSION)
+        MARKETING_VERSION: $(APP_MARKETING_VERSION)
+        PRODUCT_BUNDLE_IDENTIFIER: $(IOS_BUNDLE_ID)
+        PRODUCT_NAME: CevizBridge
+        CODE_SIGNING_ALLOWED: "YES"
+        TARGETED_DEVICE_FAMILY: "1"
+        INFOPLIST_KEY_CFBundleDisplayName: Ceviz
+        INFOPLIST_KEY_CFBundleName: CevizBridge
+        INFOPLIST_KEY_CFBundleShortVersionString: $(APP_MARKETING_VERSION)
+        INFOPLIST_KEY_CFBundleVersion: $(APP_PROJECT_VERSION)
+        INFOPLIST_KEY_CFBundleURLTypes:
+          - CFBundleURLSchemes:
+              - ceviz
+        INFOPLIST_KEY_NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: YES
+    dependencies:
+      - target: CevizWatchApp
+        embed: true
+
+  CevizWatchApp:
+    type: application
+    platform: watchOS
+    deploymentTarget: "9.0"
+    sources:
+      - path: apple-watch
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: apple-watch/Info.plist
+        CURRENT_PROJECT_VERSION: $(APP_PROJECT_VERSION)
+        MARKETING_VERSION: $(APP_MARKETING_VERSION)
+        PRODUCT_BUNDLE_IDENTIFIER: $(IOS_BUNDLE_ID).watchkitapp
+        PRODUCT_NAME: CevizWatchApp
+        TARGETED_DEVICE_FAMILY: "4"
+        CODE_SIGNING_ALLOWED: "YES"

@@ -1,0 +1,195 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SketchUp Live Extraction Output Artifact",
+  "type": "object",
+  "required": [
+    "kind",
+    "contractVersion",
+    "requestId",
+    "action",
+    "executionState",
+    "preflight",
+    "sourceKind",
+    "readOnly",
+    "generatedAtUtc",
+    "snapshot",
+    "validation"
+  ],
+  "properties": {
+    "kind": { "type": "string", "const": "sketchup-live-extraction-output" },
+    "contractVersion": { "type": "string", "const": "1.0.0" },
+    "requestId": { "type": "string", "minLength": 1 },
+    "action": {
+      "type": "string",
+      "enum": ["extract-model-snapshot", "extract-selection-snapshot"]
+    },
+    "executionState": {
+      "type": "string",
+      "enum": [
+        "succeeded-live",
+        "succeeded-live-model-access",
+        "succeeded-bootstrap-ack",
+        "failed-live",
+        "failed-not-implemented",
+        "failed-preflight"
+      ]
+    },
+    "sourceKind": {
+      "type": "string",
+      "enum": [
+        "live",
+        "mock",
+        "preflight-only",
+        "bootstrap-live-ack",
+        "bootstrap-live-model-access"
+      ]
+    },
+    "readOnly": { "type": "boolean", "const": true },
+    "generatedAtUtc": { "type": "string", "format": "date-time" },
+    "preflight": {
+      "type": "object",
+      "required": ["status", "bootstrapActionable", "trueLiveExtractionReady", "blockerCodes"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["ready", "blocked", "unsupported"]
+        },
+        "bootstrapActionable": { "type": "boolean" },
+        "trueLiveExtractionReady": { "type": "boolean" },
+        "blockerCodes": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "bootstrap": {
+      "type": ["object", "null"],
+      "properties": {
+        "strategyKey": { "type": "string" },
+        "ready": { "type": "boolean" },
+        "invocation": {
+          "type": "object",
+          "properties": {
+            "executablePath": { "type": ["string", "null"] },
+            "attachMode": { "type": ["string", "null"] },
+            "startupMode": { "type": ["string", "null"] },
+            "launchArguments": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "commandPreview": { "type": ["string", "null"] }
+          },
+          "additionalProperties": false
+        },
+        "artifacts": {
+          "type": "object",
+          "properties": {
+            "bootstrapDirectory": { "type": "string" },
+            "manifestPath": { "type": "string" },
+            "rubyScriptPath": { "type": "string" },
+            "contextPath": { "type": "string" },
+            "bootstrapStatusPath": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "bootstrapAck": {
+      "type": ["object", "null"],
+      "properties": {
+        "path": { "type": ["string", "null"] },
+        "stage": { "type": ["string", "null"] },
+        "status": { "type": ["string", "null"] },
+        "sourceKind": { "type": ["string", "null"], "enum": ["bootstrap-live", null] }
+      },
+      "additionalProperties": false
+    },
+    "liveModelAccess": {
+      "type": ["object", "null"],
+      "properties": {
+        "proofKind": { "type": "string", "const": "sketchup-active-model-access" },
+        "activeModelAccessible": { "type": "boolean" },
+        "rubyProcessId": { "type": ["integer", "null"] },
+        "rubyVersion": { "type": ["string", "null"] },
+        "modelTitle": { "type": ["string", "null"] },
+        "modelPath": { "type": ["string", "null"] },
+        "modelGuid": { "type": ["string", "null"] },
+        "requestedDocumentPath": { "type": ["string", "null"] },
+        "requestedDocumentMatched": { "type": ["boolean", "null"] },
+        "rootEntitiesAccessible": { "type": "boolean" },
+        "rootEntityCount": { "type": ["integer", "null"] },
+        "selectionAccessible": { "type": "boolean" },
+        "selectionCount": { "type": ["integer", "null"] },
+        "scenesAccessible": { "type": "boolean" },
+        "sceneCount": { "type": ["integer", "null"] },
+        "safeQueryProof": {
+          "oneOf": [{ "$ref": "./safe-query-proof.schema.json" }, { "type": "null" }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "liveModelHeader": {
+      "type": ["object", "null"],
+      "properties": {
+        "modelTitle": { "type": ["string", "null"] },
+        "modelPath": { "type": ["string", "null"] },
+        "modelGuid": { "type": ["string", "null"] },
+        "requestedDocumentMatched": { "type": ["boolean", "null"] },
+        "sourceKind": { "type": ["string", "null"], "enum": ["bootstrap-live-model-access", null] },
+        "stats": {
+          "type": ["object", "null"],
+          "properties": {
+            "entityCount": { "type": ["integer", "null"] },
+            "sceneCount": { "type": ["integer", "null"] },
+            "selectionCount": { "type": ["integer", "null"] }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "safeQueryProof": {
+      "oneOf": [{ "$ref": "./safe-query-proof.schema.json" }, { "type": "null" }]
+    },
+    "snapshot": {
+      "type": ["object", "null"],
+      "required": ["path", "kind", "schemaPath"],
+      "properties": {
+        "path": { "type": ["string", "null"] },
+        "kind": { "type": ["string", "null"], "enum": ["model", "selection", null] },
+        "schemaPath": {
+          "type": ["string", "null"],
+          "enum": ["contracts/model-snapshot.schema.json", null]
+        }
+      },
+      "additionalProperties": false
+    },
+    "validation": {
+      "type": "object",
+      "required": ["attempted", "valid"],
+      "properties": {
+        "attempted": { "type": "boolean" },
+        "valid": { "type": ["boolean", "null"] },
+        "validator": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "statsAvailable": { "type": "boolean" },
+    "stats": {
+      "type": ["object", "null"],
+      "properties": {
+        "entityCount": { "type": ["integer", "null"] },
+        "sceneCount": { "type": ["integer", "null"] },
+        "selectionCount": { "type": ["integer", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "additionalProperties": false
+}

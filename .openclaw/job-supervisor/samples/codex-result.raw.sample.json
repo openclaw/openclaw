@@ -1,0 +1,17 @@
+{
+  "job_id": "codex-20260403-1452-adapter",
+  "status": "success",
+  "sequence": 11,
+  "completed_at": "2026-04-03T11:52:00Z",
+  "summary": "Codex adapter eklendi ve completion-event-v1 sozlesmesine map edildi.",
+  "files_changed": [
+    ".openclaw/job-supervisor/scripts/adapt_codex_result.py",
+    ".openclaw/job-supervisor/README.md",
+    ".openclaw/job-supervisor/samples/codex-result.raw.sample.json"
+  ],
+  "testing": [
+    "python3 scripts/adapt_codex_result.py --raw-result-file samples/codex-result.raw.sample.json",
+    "python3 scripts/supervise_job_events.py --event-file /tmp/codex-adapted-event.json"
+  ],
+  "open_questions": []
+}

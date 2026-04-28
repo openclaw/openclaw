@@ -1,0 +1,109 @@
+{
+  "action": "extract-model-snapshot",
+  "readOnly": true,
+  "liveProbe": {
+    "attempted": true,
+    "source": "windows-host-real",
+    "status": "process-running-document-detected",
+    "available": true,
+    "launchable": true,
+    "processRunning": true,
+    "documentDetected": true,
+    "automationImplemented": false
+  },
+  "liveMetadata": {
+    "kind": "real-minimal-metadata",
+    "source": "windows-host-real",
+    "extractionKind": "process-metadata-only"
+  },
+  "execution": {
+    "mode": "bootstrap-ack",
+    "usedFallback": false,
+    "fallbackReason": null,
+    "extractorContractKind": "sketchup-live-extractor-request",
+    "probeResultKind": "real",
+    "metadataResultKind": "real-minimal-metadata",
+    "snapshotResultKind": "none",
+    "resultKind": "succeeded-live-model-access",
+    "liveExtractorResponsePath": "C:\\OpenClaw\\SketchUpPoC\\live-extractor-response.json"
+  },
+  "result": {
+    "liveMetadataAvailable": true,
+    "snapshotPath": null,
+    "snapshotKind": "none",
+    "resultSource": "live-model-access",
+    "bootstrapAck": {
+      "path": "C:\\OpenClaw\\SketchUpPoC\\bootstrap\\sketchup-poc-action-demo124.bootstrap-status.json",
+      "stage": "startup",
+      "status": "acknowledged"
+    },
+    "liveModelHeader": {
+      "modelTitle": "office-demo",
+      "modelPath": "C:\\Projects\\office-demo.skp",
+      "modelGuid": "c0ffee00-demo-4bad-beef-000000000124",
+      "requestedDocumentMatched": true,
+      "sourceKind": "bootstrap-live-model-access",
+      "stats": {
+        "entityCount": 418,
+        "sceneCount": 4,
+        "selectionCount": 2
+      }
+    },
+    "liveModelAccess": {
+      "proofKind": "sketchup-active-model-access",
+      "activeModelAccessible": true,
+      "rubyProcessId": 13244,
+      "rubyVersion": "3.2.2",
+      "modelTitle": "office-demo",
+      "modelPath": "C:\\Projects\\office-demo.skp",
+      "modelGuid": "c0ffee00-demo-4bad-beef-000000000124",
+      "requestedDocumentPath": "C:\\Projects\\office-demo.skp",
+      "requestedDocumentMatched": true,
+      "rootEntitiesAccessible": true,
+      "rootEntityCount": 418,
+      "selectionAccessible": true,
+      "selectionCount": 2,
+      "scenesAccessible": true,
+      "sceneCount": 4,
+      "safeQueryProof": {
+        "queryKind": "model-bounds-summary",
+        "sourceKind": "bootstrap-live-safe-query",
+        "readOnly": true,
+        "available": true,
+        "status": "available",
+        "value": {
+          "width": 12840.0,
+          "height": 3048.0,
+          "depth": 9120.0,
+          "diagonal": 16032.45
+        },
+        "unavailableReason": null
+      }
+    },
+    "safeQueryProof": {
+      "queryKind": "model-bounds-summary",
+      "sourceKind": "bootstrap-live-safe-query",
+      "readOnly": true,
+      "available": true,
+      "status": "available",
+      "value": {
+        "width": 12840.0,
+        "height": 3048.0,
+        "depth": 9120.0,
+        "diagonal": 16032.45
+      },
+      "unavailableReason": null
+    },
+    "liveModelStats": {
+      "entityCount": 418,
+      "sceneCount": 4,
+      "selectionCount": 2,
+      "sourceKind": "bootstrap-live-model-access"
+    },
+    "message": "Real probe data triggered the live extractor and the Ruby bootstrap proved access to Sketchup.active_model."
+  },
+  "warnings": [
+    "Live probe data was handed off into the live extractor for a real bootstrap acknowledgment attempt.",
+    "A real SketchUp-side bootstrap artifact proved Ruby-side access to Sketchup.active_model, but traversal and snapshot emission are still unimplemented."
+  ]
+}
