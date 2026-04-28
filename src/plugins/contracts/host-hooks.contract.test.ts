@@ -1073,6 +1073,18 @@ describe("host-hook fixture plugin contract", () => {
         },
       }),
     ).resolves.toEqual({ enqueued: false, id: "", sessionKey: "agent:main:main" });
+
+    await expect(
+      enqueuePluginNextTurnInjection({
+        cfg: {},
+        pluginId: "approval-fixture",
+        injection: {
+          sessionKey: "agent:main:main",
+          text: "invalid priority",
+          priority: Number.POSITIVE_INFINITY,
+        },
+      }),
+    ).resolves.toEqual({ enqueued: false, id: "", sessionKey: "agent:main:main" });
   });
 
   it("reports duplicate next-turn injections as not newly enqueued", async () => {
@@ -1353,6 +1365,14 @@ describe("host-hook fixture plugin contract", () => {
                     placement: "append_context",
                     createdAt: 2,
                   },
+                  {
+                    id: "bad-priority",
+                    pluginId: "injector-b",
+                    text: "bad priority",
+                    placement: "append_context",
+                    priority: "high",
+                    createdAt: 2,
+                  } as never,
                 ],
               },
             };
