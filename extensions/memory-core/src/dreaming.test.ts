@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   enqueueSystemEvent,
   resetSystemEventsForTest,
@@ -1917,18 +1917,22 @@ describe("short-term dreaming trigger", () => {
     });
 
     expect(result?.handled).toBe(true);
-    expect(subagent.run).toHaveBeenCalled();
-    expect(subagent.run.mock.calls[0]?.[0]).toMatchObject({
-      model: "anthropic/claude-sonnet-4-6",
-    });
     const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
     expect(memoryText).toContain("Move backups to S3 Glacier.");
+    // Detached cron narratives now go through a bounded queue
+    // (see runDetachedDreamNarrative), so subagent.run lands a few extra
+    // microtasks after promotion returns. Wait for the full delivery chain
+    // rather than asserting on the exact tick order.
     await vi.waitFor(async () => {
+      expect(subagent.run).toHaveBeenCalled();
       expect(subagent.waitForRun).toHaveBeenCalled();
       expect(subagent.getSessionMessages).toHaveBeenCalled();
       expect(subagent.deleteSession).toHaveBeenCalled();
       const dreamsText = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
       expect(dreamsText).toContain("A diary entry.");
+    });
+    expect(subagent.run.mock.calls[0]?.[0]).toMatchObject({
+      model: "anthropic/claude-sonnet-4-6",
     });
   });
 

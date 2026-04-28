@@ -24,6 +24,7 @@ import {
   failTransportStream,
   finalizeTransportStream,
   mergeTransportHeaders,
+  sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
 
@@ -50,7 +51,6 @@ const CLAUDE_CODE_TOOLS = [
 const CLAUDE_CODE_TOOL_LOOKUP = new Map(
   CLAUDE_CODE_TOOLS.map((tool) => [normalizeLowercaseStringOrEmpty(tool), tool]),
 );
-
 type AnthropicTransportModel = Model<"anthropic-messages"> & {
   headers?: Record<string, string>;
   provider: string;
@@ -215,26 +215,34 @@ function convertContentBlocks(
 ) {
   const hasImages = content.some((item) => item.type === "image");
   if (!hasImages) {
-    return sanitizeTransportPayloadText(
+    return sanitizeNonEmptyTransportPayloadText(
       content.map((item) => ("text" in item ? item.text : "")).join("\n"),
     );
   }
-  const blocks = content.map((block) => {
+  const blocks: Array<
+    | { type: "text"; text: string }
+    | {
+        type: "image";
+        source: { type: "base64"; media_type: string; data: string };
+      }
+  > = [];
+  for (const block of content) {
     if (block.type === "text") {
-      return {
-        type: "text",
-        text: sanitizeTransportPayloadText(block.text),
-      };
+      const text = sanitizeTransportPayloadText(block.text);
+      if (text.trim().length > 0) {
+        blocks.push({ type: "text", text });
+      }
+    } else {
+      blocks.push({
+        type: "image" as const,
+        source: {
+          type: "base64",
+          media_type: block.mimeType,
+          data: block.data,
+        },
+      });
     }
-    return {
-      type: "image",
-      source: {
-        type: "base64",
-        media_type: block.mimeType,
-        data: block.data,
-      },
-    };
-  });
+  }
   if (!blocks.some((block) => block.type === "text")) {
     blocks.unshift({
       type: "text",

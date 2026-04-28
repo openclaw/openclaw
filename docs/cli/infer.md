@@ -159,6 +159,7 @@ openclaw infer model run --local --model openai/gpt-4.1 --prompt "Reply with exa
 Notes:
 
 - Local `model run` is the narrowest CLI smoke for provider/model/auth health because it sends only the supplied prompt to the selected model.
+- `model run --prompt` must contain non-whitespace text; empty prompts are rejected before local providers or the Gateway are called.
 - Local `model run` exits non-zero when the provider returns no text output, so unreachable local providers and empty completions do not look like successful probes.
 - Use `model run --gateway` when you need to test Gateway routing, agent-runtime setup, or Gateway-managed provider state instead of the lean local completion path.
 - `model auth login`, `model auth logout`, and `model auth status` manage saved provider auth state.

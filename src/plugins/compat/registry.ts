@@ -720,7 +720,8 @@ export const PLUGIN_COMPAT_RECORDS = [
     deprecated: "2026-04-26",
     warningStarts: "2026-04-26",
     removeAfter: "2026-07-26",
-    replacement: "`api.runtime.tasks.flows`",
+    replacement:
+      "`api.runtime.tasks.managedFlows` for managed mutations or `api.runtime.tasks.flows` for DTO reads",
     docsPath: "/plugins/sdk-runtime",
     surfaces: ["api.runtime.taskFlow", "api.runtime.tasks.flow"],
     diagnostics: ["plugin runtime compatibility warning"],

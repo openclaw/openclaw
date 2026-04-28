@@ -1,5 +1,8 @@
 {
   "id": "opencode-go",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["opencode-go"],
   "providerEndpoints": [

@@ -95,9 +95,6 @@ export const pluginSdkDocMetadata = {
   "provider-selection-runtime": {
     category: "provider",
   },
-  opencode: {
-    category: "provider",
-  },
   "runtime-store": {
     category: "runtime",
   },

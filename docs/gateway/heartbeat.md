@@ -455,6 +455,12 @@ Heartbeats run full agent turns. Shorter intervals burn more tokens. To reduce c
 - Keep `HEARTBEAT.md` small.
 - Use `target: "none"` if you only want internal state updates.
 
+## Context overflow after heartbeat
+
+If a heartbeat uses a smaller local model, for example an Ollama model with a 32k window, and the next main-session turn reports context overflow, check whether the previous heartbeat left the session on the heartbeat model. OpenClaw's reset message calls this out when the last runtime model matches configured `heartbeat.model`.
+
+Use `isolatedSession: true` to run heartbeats in a fresh session, combine it with `lightContext: true` for the smallest prompt, or choose a heartbeat model with a context window large enough for the shared session.
+
 ## Related
 
 - [Automation & Tasks](/automation) — all automation mechanisms at a glance

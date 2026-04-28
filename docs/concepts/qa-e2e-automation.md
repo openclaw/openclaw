@@ -128,11 +128,11 @@ The doctor checks Convex broker env, validates endpoint settings, and verifies a
 
 Live transport lanes share one contract instead of each inventing their own scenario list shape. `qa-channel` is the broad synthetic product-behavior suite and is not part of the live transport coverage matrix.
 
-| Lane     | Canary | Mention gating | Allowlist block | Top-level reply | Restart resume | Thread follow-up | Thread isolation | Reaction observation | Help command | Native command registration |
-| -------- | ------ | -------------- | --------------- | --------------- | -------------- | ---------------- | ---------------- | -------------------- | ------------ | --------------------------- |
-| Matrix   | x      | x              | x               | x               | x              | x                | x                | x                    |              |                             |
-| Telegram | x      | x              |                 |                 |                |                  |                  |                      | x            |                             |
-| Discord  | x      | x              |                 |                 |                |                  |                  |                      |              | x                           |
+| Lane     | Canary | Mention gating | Bot-to-bot | Allowlist block | Top-level reply | Restart resume | Thread follow-up | Thread isolation | Reaction observation | Help command | Native command registration |
+| -------- | ------ | -------------- | ---------- | --------------- | --------------- | -------------- | ---------------- | ---------------- | -------------------- | ------------ | --------------------------- |
+| Matrix   | x      | x              | x          | x               | x               | x              | x                | x                | x                    |              |                             |
+| Telegram | x      | x              | x          |                 |                 |                |                  |                  |                      | x            |                             |
+| Discord  | x      | x              | x          |                 |                 |                |                  |                  |                      |              | x                           |
 
 This keeps `qa-channel` as the broad product-behavior suite while Matrix,
 Telegram, and future live transports share one explicit transport-contract

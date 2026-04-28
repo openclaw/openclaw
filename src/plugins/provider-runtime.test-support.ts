@@ -15,7 +15,6 @@ export const expectedAugmentedOpenaiCodexCatalogEntries = [
   { provider: "openai", id: "gpt-5.4-nano", name: "gpt-5.4-nano" },
   { provider: "openai-codex", id: "gpt-5.4", name: "gpt-5.4" },
   { provider: "openai-codex", id: "gpt-5.4-pro", name: "gpt-5.4-pro" },
-  { provider: "openai-codex", id: "gpt-5.4-mini", name: "gpt-5.4-mini" },
 ];
 
 export const expectedAugmentedOpenaiCodexCatalogEntriesWithGpt55 = [
@@ -24,6 +23,11 @@ export const expectedAugmentedOpenaiCodexCatalogEntriesWithGpt55 = [
   { provider: "openai-codex", id: "gpt-5.5-pro", name: "gpt-5.5-pro" },
   ...expectedAugmentedOpenaiCodexCatalogEntries.slice(4),
 ];
+
+export const expectedOpenaiPluginCodexCatalogEntriesWithGpt55 =
+  expectedAugmentedOpenaiCodexCatalogEntriesWithGpt55.filter(
+    (entry) => !(entry.provider === "openai-codex" && entry.id === "gpt-5.4-mini"),
+  );
 
 export function expectCodexMissingAuthHint(
   buildProviderMissingAuthMessageWithPlugin: (params: {

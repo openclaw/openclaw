@@ -114,6 +114,11 @@ describe("scripts/lib/docker-e2e-plan", () => {
       profile: RELEASE_PATH_PROFILE,
       releaseChunk: "bundled-channels-update-a",
     });
+    const bundledChannelsUpdateDiscord = planFor({
+      includeOpenWebUI: true,
+      profile: RELEASE_PATH_PROFILE,
+      releaseChunk: "bundled-channels-update-discord",
+    });
     const bundledChannelsUpdateB = planFor({
       includeOpenWebUI: true,
       profile: RELEASE_PATH_PROFILE,
@@ -167,9 +172,15 @@ describe("scripts/lib/docker-e2e-plan", () => {
     ]);
     expect(bundledChannelsUpdateA.lanes.map((lane) => lane.name)).toEqual([
       "bundled-channel-update-telegram",
-      "bundled-channel-update-discord",
       "bundled-channel-update-memory-lancedb",
     ]);
+    expect(bundledChannelsUpdateDiscord.lanes.map((lane) => lane.name)).toEqual([
+      "bundled-channel-update-discord",
+    ]);
+    expect(bundledChannelsUpdateDiscord.lanes[0]).toMatchObject({
+      noOutputTimeoutMs: 4 * 60 * 1000,
+      timeoutMs: 6 * 60 * 1000,
+    });
     expect(bundledChannelsUpdateB.lanes.map((lane) => lane.name)).toEqual([
       "bundled-channel-update-slack",
       "bundled-channel-update-feishu",
@@ -196,6 +207,11 @@ describe("scripts/lib/docker-e2e-plan", () => {
       profile: RELEASE_PATH_PROFILE,
       releaseChunk: "plugins-runtime",
     });
+    const bundledChannelsUpdateALegacy = planFor({
+      includeOpenWebUI: true,
+      profile: RELEASE_PATH_PROFILE,
+      releaseChunk: "bundled-channels-update-a-legacy",
+    });
     const legacy = planFor({
       includeOpenWebUI: true,
       profile: RELEASE_PATH_PROFILE,
@@ -217,6 +233,11 @@ describe("scripts/lib/docker-e2e-plan", () => {
         "openwebui",
       ]),
     );
+    expect(bundledChannelsUpdateALegacy.lanes.map((lane) => lane.name)).toEqual([
+      "bundled-channel-update-telegram",
+      "bundled-channel-update-discord",
+      "bundled-channel-update-memory-lancedb",
+    ]);
     expect(legacy.lanes.map((lane) => lane.name)).toEqual(
       expect.arrayContaining([
         "plugins",

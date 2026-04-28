@@ -38,6 +38,7 @@ const DEPRECATED_TEST_BARREL_SPECIFIERS = new Set([
 const DEPRECATED_TEST_BARREL_ALLOWED_REFERENCE_FILES = new Set([
   "src/plugin-sdk/testing.ts",
   "src/plugin-sdk/test-utils.ts",
+  "packages/plugin-sdk/src/testing.ts",
   "src/plugins/compat/registry.ts",
   "src/plugins/contracts/plugin-entry-guardrails.test.ts",
   "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
@@ -361,6 +362,16 @@ function collectDeprecatedTestBarrelImports(): Array<{ file: string; specifier: 
   return leaks;
 }
 
+function collectDeprecatedPackageTestingBridgeDrift(): string[] {
+  const source = readFileSync(
+    resolve(REPO_ROOT, "packages/plugin-sdk/src/testing.ts"),
+    "utf8",
+  ).trim();
+  return source === 'export * from "../../../src/plugin-sdk/testing.js";'
+    ? []
+    : ["packages/plugin-sdk/src/testing.ts"];
+}
+
 function parseTestApiNamedExports(source: string): string[] {
   const exports = new Set<string>();
   const declarationPattern =
@@ -474,6 +485,32 @@ function collectCrossOwnerReservedSdkImports(): Array<{
     }
   }
   return leaks;
+}
+
+function collectReservedSdkSubpathImports(): string[] {
+  const imports = new Set<string>();
+  const reserved = new Set<string>(reservedBundledPluginSdkEntrypoints);
+  const importPatterns = [
+    /\b(?:import|export)\b[\s\S]*?\bfrom\s*["']openclaw\/plugin-sdk\/([a-z0-9][a-z0-9-]*)["']/g,
+    /\bimport\s*\(\s*["']openclaw\/plugin-sdk\/([a-z0-9][a-z0-9-]*)["']\s*\)/g,
+    /\bvi\.(?:mock|doMock)\s*\(\s*["']openclaw\/plugin-sdk\/([a-z0-9][a-z0-9-]*)["']/g,
+  ];
+
+  for (const root of ["src", "test", "extensions", "packages", "scripts"]) {
+    for (const file of collectCodeFiles(resolve(REPO_ROOT, root))) {
+      const source = readFileSync(file, "utf8");
+      for (const importPattern of importPatterns) {
+        for (const match of source.matchAll(importPattern)) {
+          const subpath = match[1];
+          if (subpath && reserved.has(subpath)) {
+            imports.add(subpath);
+          }
+        }
+      }
+    }
+  }
+
+  return [...imports].toSorted();
 }
 
 describe("plugin-sdk package contract guardrails", () => {
@@ -614,12 +651,25 @@ describe("plugin-sdk package contract guardrails", () => {
     expect(collectDeprecatedTestBarrelImports()).toEqual([]);
   });
 
+  it("keeps the package testing barrel as a single deprecated bridge", () => {
+    expect(collectDeprecatedPackageTestingBridgeDrift()).toEqual([]);
+  });
+
   it("keeps extension test-api exports consumed", () => {
     expect(collectUnusedExtensionTestApiExports()).toEqual([]);
   });
 
   it("keeps reserved SDK compatibility subpaths inside their owning bundled plugins", () => {
     expect(collectCrossOwnerReservedSdkImports()).toEqual([]);
+  });
+
+  it("keeps reserved SDK compatibility subpaths actively used", () => {
+    const usedReserved = new Set(collectReservedSdkSubpathImports());
+    const unusedReserved = reservedBundledPluginSdkEntrypoints.filter(
+      (entrypoint) => !usedReserved.has(entrypoint),
+    );
+
+    expect(unusedReserved).toEqual([]);
   });
 
   it("keeps generic core poll helpers free of plugin owner names", () => {

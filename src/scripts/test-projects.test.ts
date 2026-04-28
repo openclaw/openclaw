@@ -440,12 +440,23 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it("routes acp targets to the acp config", () => {
+  it("routes unit-fast acp targets to the cache-friendly unit-fast config", () => {
     expect(buildVitestRunPlans(["src/acp/control-plane/runtime-cache.test.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.unit-fast.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/acp/control-plane/runtime-cache.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes reset-heavy acp targets to the acp config", () => {
+    expect(buildVitestRunPlans(["src/acp/runtime/session-meta.test.ts"])).toEqual([
       {
         config: "test/vitest/vitest.acp.config.ts",
         forwardedArgs: [],
-        includePatterns: ["src/acp/control-plane/runtime-cache.test.ts"],
+        includePatterns: ["src/acp/runtime/session-meta.test.ts"],
         watchMode: false,
       },
     ]);

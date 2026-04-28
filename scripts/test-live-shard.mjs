@@ -18,7 +18,6 @@ export const RELEASE_LIVE_TEST_SHARDS = Object.freeze([
   "native-live-extensions-o-z-other",
   "native-live-extensions-xai",
   "native-live-extensions-media-audio",
-  "native-live-extensions-media-music",
   "native-live-extensions-media-music-google",
   "native-live-extensions-media-music-minimax",
   "native-live-extensions-media-video",
@@ -28,6 +27,7 @@ export const LIVE_TEST_SHARDS = Object.freeze([
   ...RELEASE_LIVE_TEST_SHARDS,
   "native-live-extensions-o-z",
   "native-live-extensions-media",
+  "native-live-extensions-media-music",
 ]);
 
 function walkFiles(rootDir) {

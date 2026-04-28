@@ -102,6 +102,8 @@ Choose your preferred auth method and follow the setup steps.
     - Runtime: `google-gemini-cli`
     - Alias: `gemini-cli`
 
+    Gemini 3.1 Pro's Gemini API model id is `gemini-3.1-pro-preview`. OpenClaw accepts the shorter `google/gemini-3.1-pro` as a convenience alias and normalizes it before provider calls.
+
     **Environment variables:**
 
     - `OPENCLAW_GEMINI_OAUTH_CLIENT_ID`

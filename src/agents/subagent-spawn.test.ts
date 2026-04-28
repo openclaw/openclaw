@@ -239,6 +239,7 @@ describe("spawnSubagentDirect seam flow", () => {
       sessionKey: childSessionKey,
       provider: "openai-codex",
       model: "gpt-5.4",
+      overrideSource: "user",
     });
     expect(operations.indexOf("store:update")).toBeGreaterThan(-1);
     expect(operations.indexOf("gateway:agent")).toBeGreaterThan(

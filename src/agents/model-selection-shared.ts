@@ -8,6 +8,7 @@ import {
 import { sanitizeForLog, stripAnsi } from "../terminal/ansi.js";
 import { resolveConfiguredProviderFallback } from "./configured-provider-fallback.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
+import { findModelCatalogEntry } from "./model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import { normalizeStaticProviderModelId } from "./model-ref-shared.js";
@@ -573,7 +574,18 @@ export function buildAllowedModelSetWithFallbacks(params: {
   }
 
   const allowedKeys = new Set<string>();
+  const allowedRefs: ModelRef[] = [];
   const syntheticCatalogEntries = new Map<string, ModelCatalogEntry>();
+  const addAllowedCatalogRef = (ref: ModelRef) => {
+    if (
+      !allowedRefs.some(
+        (existing) =>
+          modelKey(existing.provider, existing.model) === modelKey(ref.provider, ref.model),
+      )
+    ) {
+      allowedRefs.push(ref);
+    }
+  };
   const addAllowedModelRef = (raw: string) => {
     const trimmed = raw.trim();
     const defaultProvider = !trimmed.includes("/")
@@ -594,8 +606,12 @@ export function buildAllowedModelSetWithFallbacks(params: {
     }
     const key = modelKey(parsed.provider, parsed.model);
     allowedKeys.add(key);
+    addAllowedCatalogRef(parsed);
 
-    if (!catalogKeys.has(key) && !syntheticCatalogEntries.has(key)) {
+    if (
+      !findModelCatalogEntry(catalog, { provider: parsed.provider, modelId: parsed.model }) &&
+      !syntheticCatalogEntries.has(key)
+    ) {
       syntheticCatalogEntries.set(key, buildSyntheticAllowedCatalogEntry({ parsed, metadata }));
     }
   };
@@ -610,10 +626,18 @@ export function buildAllowedModelSetWithFallbacks(params: {
 
   if (defaultKey) {
     allowedKeys.add(defaultKey);
+    if (defaultRef) {
+      addAllowedCatalogRef(defaultRef);
+    }
   }
 
   const allowedCatalog = [
-    ...catalog.filter((entry) => allowedKeys.has(modelKey(entry.provider, entry.id))),
+    ...catalog.filter((entry) =>
+      allowedRefs.some(
+        (ref) =>
+          findModelCatalogEntry([entry], { provider: ref.provider, modelId: ref.model }) === entry,
+      ),
+    ),
     ...syntheticCatalogEntries.values(),
   ];
 
@@ -655,7 +679,12 @@ export function getModelRefStatusFromAllowedSet(params: {
   const key = modelKey(params.ref.provider, params.ref.model);
   return {
     key,
-    inCatalog: params.catalog.some((entry) => modelKey(entry.provider, entry.id) === key),
+    inCatalog: Boolean(
+      findModelCatalogEntry(params.catalog, {
+        provider: params.ref.provider,
+        modelId: params.ref.model,
+      }),
+    ),
     allowAny: params.allowed.allowAny,
     allowed: params.allowed.allowAny || params.allowed.allowedKeys.has(key),
   };

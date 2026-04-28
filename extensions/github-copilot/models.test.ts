@@ -16,6 +16,11 @@ vi.mock("@mariozechner/pi-ai/oauth", async () => {
 
 vi.mock("openclaw/plugin-sdk/provider-model-shared", () => ({
   normalizeModelCompat: (model: Record<string, unknown>) => model,
+  resolveProviderEndpoint: (baseUrl: string) => ({
+    baseUrl,
+    endpointClass: "custom",
+    warnings: [],
+  }),
 }));
 
 const loadJsonFile = vi.fn();

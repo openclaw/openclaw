@@ -145,6 +145,56 @@ function buildRequestScopedFallbackNarrative(data: NarrativePhaseData): string {
   );
 }
 
+function buildNarrativeAttemptSessionKey(baseSessionKey: string, attempt: number): string {
+  return attempt === 0 ? baseSessionKey : `${baseSessionKey}-retry-${attempt}`;
+}
+
+function isConfiguredModelUnavailableNarrativeError(raw: string): boolean {
+  const message = raw.trim();
+  if (!message) {
+    return false;
+  }
+  if (/requested model may be(?: temporarily)? unavailable/i.test(message)) {
+    return true;
+  }
+  if (/model unavailable/i.test(message)) {
+    return true;
+  }
+  if (/no endpoints found for/i.test(message)) {
+    return true;
+  }
+  if (/unknown model/i.test(message)) {
+    return true;
+  }
+  if (/model(?:[_\-\s])?not(?:[_\-\s])?found/i.test(message)) {
+    return true;
+  }
+  if (/\b404\b/.test(message) && /not(?:[_\-\s])?found/i.test(message)) {
+    return true;
+  }
+  if (/not_found_error/i.test(message)) {
+    return true;
+  }
+  if (/models\/[^\s]+ is not found/i.test(message)) {
+    return true;
+  }
+  if (/model/i.test(message) && /does not exist/i.test(message)) {
+    return true;
+  }
+  if (/unsupported model/i.test(message)) {
+    return true;
+  }
+  if (/is not a valid model id/i.test(message)) {
+    return true;
+  }
+  return false;
+}
+
+function formatNarrativeTerminalStatus(params: { status: string; error?: string }): string {
+  const detail = params.error?.trim();
+  return detail ? `status=${params.status} (${detail})` : `status=${params.status}`;
+}
+
 async function startNarrativeRunOrFallback(params: {
   subagent: SubagentSurface;
   sessionKey: string;
@@ -869,39 +919,81 @@ export async function generateAndAppendDreamNarrative(params: {
     nowMs,
   });
   const message = buildNarrativePrompt(params.data);
-  let runId: string | null = null;
-  let shouldDeleteSession = false;
+  const attempts: Array<{ sessionKey: string; runId: string | null }> = [];
+  let successfulSessionKey: string | null = null;
   try {
-    runId = await startNarrativeRunOrFallback({
-      subagent: params.subagent,
-      sessionKey,
-      message,
-      data: params.data,
-      workspaceDir: params.workspaceDir,
-      nowMs,
-      timezone: params.timezone,
-      model: params.model,
-      logger: params.logger,
-    });
-    if (!runId) {
-      return;
+    const attemptModels = params.model ? [params.model, undefined] : [undefined];
+
+    for (const [attemptIndex, attemptModel] of attemptModels.entries()) {
+      const attemptSessionKey = buildNarrativeAttemptSessionKey(sessionKey, attemptIndex);
+      const attempt = { sessionKey: attemptSessionKey, runId: null as string | null };
+      attempts.push(attempt);
+
+      try {
+        const runId = await startNarrativeRunOrFallback({
+          subagent: params.subagent,
+          sessionKey: attemptSessionKey,
+          message,
+          data: params.data,
+          workspaceDir: params.workspaceDir,
+          nowMs,
+          timezone: params.timezone,
+          model: attemptModel,
+          logger: params.logger,
+        });
+        if (!runId) {
+          return;
+        }
+        attempt.runId = runId;
+
+        const result = await params.subagent.waitForRun({
+          runId,
+          timeoutMs: NARRATIVE_TIMEOUT_MS,
+        });
+
+        if (result.status === "ok") {
+          successfulSessionKey = attemptSessionKey;
+          break;
+        }
+
+        if (
+          attemptModel &&
+          result.status === "error" &&
+          isConfiguredModelUnavailableNarrativeError(result.error ?? "")
+        ) {
+          params.logger.warn(
+            `memory-core: narrative generation ended with ${formatNarrativeTerminalStatus({
+              status: result.status,
+              error: result.error,
+            })} for ${params.data.phase} phase using configured model "${attemptModel}"; retrying with the session default.`,
+          );
+          continue;
+        }
+
+        params.logger.warn(
+          `memory-core: narrative generation ended with ${formatNarrativeTerminalStatus({
+            status: result.status,
+            error: result.error,
+          })} for ${params.data.phase} phase.`,
+        );
+        return;
+      } catch (err) {
+        if (attemptModel && isConfiguredModelUnavailableNarrativeError(formatErrorMessage(err))) {
+          params.logger.warn(
+            `memory-core: narrative generation could not start with configured model "${attemptModel}" for ${params.data.phase} phase; retrying with the session default (${formatErrorMessage(err)}).`,
+          );
+          continue;
+        }
+        throw err;
+      }
     }
-    shouldDeleteSession = true;
 
-    const result = await params.subagent.waitForRun({
-      runId,
-      timeoutMs: NARRATIVE_TIMEOUT_MS,
-    });
-
-    if (result.status !== "ok") {
-      params.logger.warn(
-        `memory-core: narrative generation ended with status=${result.status} for ${params.data.phase} phase.`,
-      );
+    if (!successfulSessionKey) {
       return;
     }
 
     const { messages } = await params.subagent.getSessionMessages({
-      sessionKey,
+      sessionKey: successfulSessionKey,
       limit: 5,
     });
 
@@ -931,9 +1023,14 @@ export async function generateAndAppendDreamNarrative(params: {
   } finally {
     // Only cleanup after a run was accepted. Request-scoped fallback writes a
     // local diary entry without creating a subagent session.
-    if (shouldDeleteSession && params.subagent) {
+    const cleanedSessionKeys = new Set<string>();
+    for (const attempt of attempts) {
+      if (!attempt.runId || cleanedSessionKeys.has(attempt.sessionKey)) {
+        continue;
+      }
+      cleanedSessionKeys.add(attempt.sessionKey);
       try {
-        await params.subagent.deleteSession({ sessionKey });
+        await params.subagent.deleteSession({ sessionKey: attempt.sessionKey });
       } catch (cleanupErr) {
         params.logger.warn(
           `memory-core: narrative session cleanup failed for ${params.data.phase} phase: ${formatErrorMessage(cleanupErr)}`,
@@ -947,4 +1044,54 @@ export async function generateAndAppendDreamNarrative(params: {
       );
     });
   }
+}
+
+// ── Detached narrative concurrency limit ───────────────────────────────
+//
+// Cron-driven dreaming detaches narrative generation across light, REM, and
+// deep phases for every workspace, so a 10-workspace cron sweep used to fire
+// 30 concurrent narrative subagents at once. Each one holds the session
+// write-lock while it runs and burns a model slot, which caused lock
+// contention (>30 s) and cascading narrative timeouts (#73198).
+//
+// `runDetachedDreamNarrative` wraps `generateAndAppendDreamNarrative` with a
+// FIFO queue capped at `DETACHED_NARRATIVE_CONCURRENCY` so the total in-flight
+// detached narratives across phases/workspaces stays bounded.
+const DETACHED_NARRATIVE_CONCURRENCY = 3;
+
+let activeDetachedNarratives = 0;
+const detachedNarrativeQueue: Array<() => void> = [];
+
+function releaseDetachedNarrativeSlot(): void {
+  activeDetachedNarratives -= 1;
+  detachedNarrativeQueue.shift()?.();
+}
+
+async function acquireDetachedNarrativeSlot(): Promise<void> {
+  if (activeDetachedNarratives >= DETACHED_NARRATIVE_CONCURRENCY) {
+    await new Promise<void>((resolve) => {
+      detachedNarrativeQueue.push(resolve);
+    });
+  }
+  activeDetachedNarratives += 1;
+}
+
+export function runDetachedDreamNarrative(
+  params: Parameters<typeof generateAndAppendDreamNarrative>[0],
+): void {
+  queueMicrotask(() => {
+    void (async () => {
+      await acquireDetachedNarrativeSlot();
+      try {
+        await generateAndAppendDreamNarrative(params);
+      } catch {
+        // Detached narratives intentionally swallow errors — callers (cron
+        // sweeps) cannot recover, and surfacing here would only cause noisy
+        // unhandled rejections. Logging happens inside
+        // generateAndAppendDreamNarrative.
+      } finally {
+        releaseDetachedNarrativeSlot();
+      }
+    })();
+  });
 }

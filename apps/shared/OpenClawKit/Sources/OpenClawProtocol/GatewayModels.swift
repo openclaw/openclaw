@@ -3185,7 +3185,19 @@ public struct ModelChoice: Codable, Sendable {
     }
 }
 
-public struct ModelsListParams: Codable, Sendable {}
+public struct ModelsListParams: Codable, Sendable {
+    public let view: AnyCodable?
+
+    public init(
+        view: AnyCodable?)
+    {
+        self.view = view
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case view
+    }
+}
 
 public struct ModelsListResult: Codable, Sendable {
     public let models: [ModelChoice]

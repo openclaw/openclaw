@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { isContainerEnvironment } from "./container-environment.js";
 import { formatErrorMessage } from "./errors.js";
 import { triggerOpenClawRestart } from "./restart.js";
 import { detectRespawnSupervisor } from "./supervisor-markers.js";
@@ -64,6 +65,12 @@ export function restartGatewayProcessWithFreshPid(): GatewayRespawnResult {
     return {
       mode: "disabled",
       detail: "win32: detached respawn unsupported without Scheduled Task markers",
+    };
+  }
+  if (isContainerEnvironment()) {
+    return {
+      mode: "disabled",
+      detail: "container: use in-process restart to keep PID 1 alive",
     };
   }
 

@@ -4,7 +4,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   expectAugmentedCodexCatalog,
-  expectedAugmentedOpenaiCodexCatalogEntriesWithGpt55,
+  expectedOpenaiPluginCodexCatalogEntriesWithGpt55,
   expectCodexMissingAuthHint,
   importProviderRuntimeCatalogModule,
   loadBundledPluginPublicSurface,
@@ -129,7 +129,7 @@ export function describeOpenAIProviderCatalogContract() {
         const { augmentModelCatalogWithProviderPlugins } = await contractDepsPromise;
         await expectAugmentedCodexCatalog(
           augmentModelCatalogWithProviderPlugins,
-          expectedAugmentedOpenaiCodexCatalogEntriesWithGpt55,
+          expectedOpenaiPluginCodexCatalogEntriesWithGpt55,
         );
       });
     },

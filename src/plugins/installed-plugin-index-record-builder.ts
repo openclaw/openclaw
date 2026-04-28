@@ -76,7 +76,9 @@ function buildStartupInfo(record: PluginManifestRecord): InstalledPluginStartupI
   };
 }
 
-function collectCompatCodes(record: PluginManifestRecord): readonly PluginCompatCode[] {
+export function collectPluginManifestCompatCodes(
+  record: PluginManifestRecord,
+): readonly PluginCompatCode[] {
   const codes: PluginCompatCode[] = [];
   if (isLegacyImplicitStartupSidecar(record)) {
     codes.push("legacy-implicit-startup-sidecar");
@@ -271,7 +273,7 @@ export function buildInstalledPluginIndexRecords(params: {
       origin: record.origin,
       enabled,
       startup: buildStartupInfo(record),
-      compat: collectCompatCodes(record),
+      compat: collectPluginManifestCompatCodes(record),
     };
     if (record.format && record.format !== "openclaw") {
       indexRecord.format = record.format;

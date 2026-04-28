@@ -153,6 +153,8 @@ on:
         required: false
       CEREBRAS_API_KEY:
         required: false
+      DEEPINFRA_API_KEY:
+        required: false
       DASHSCOPE_API_KEY:
         required: false
       GROQ_API_KEY:
@@ -469,10 +471,13 @@ jobs:
             timeout_minutes: 90
           - chunk_id: bundled-channels-update-a
             label: bundled channels update A
-            timeout_minutes: 90
+            timeout_minutes: 45
+          - chunk_id: bundled-channels-update-discord
+            label: bundled channels update Discord
+            timeout_minutes: 30
           - chunk_id: bundled-channels-update-b
             label: bundled channels update B
-            timeout_minutes: 90
+            timeout_minutes: 45
           - chunk_id: bundled-channels-contracts
             label: bundled channels contracts
             timeout_minutes: 90
@@ -484,6 +489,7 @@ jobs:
       ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+      DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
@@ -525,6 +531,7 @@ jobs:
       OPENCLAW_DOCKER_E2E_BARE_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.bare_image }}
       OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.functional_image }}
       OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
+      OPENCLAW_DOCKER_E2E_REPO_ROOT: ${{ github.workspace }}
       OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       OPENCLAW_CURRENT_PACKAGE_TGZ: .artifacts/docker-e2e-package/openclaw-current.tgz
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
@@ -536,6 +543,13 @@ jobs:
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
+
+      - name: Checkout trusted release harness
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          path: .release-harness
 
       - name: Log in to GHCR for shared Docker E2E image
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
@@ -573,8 +587,8 @@ jobs:
           export OPENCLAW_DOCKER_ALL_INCLUDE_OPENWEBUI="$INCLUDE_OPENWEBUI"
 
           plan_path=".artifacts/docker-tests/release-${CHUNK}-plan.json"
-          node scripts/test-docker-all.mjs --plan-json > "$plan_path"
-          node scripts/docker-e2e.mjs github-outputs "$plan_path" >> "$GITHUB_OUTPUT"
+          node .release-harness/scripts/test-docker-all.mjs --plan-json > "$plan_path"
+          node .release-harness/scripts/docker-e2e.mjs github-outputs "$plan_path" >> "$GITHUB_OUTPUT"
           echo "plan_json=$plan_path" >> "$GITHUB_OUTPUT"
 
       - name: Download OpenClaw Docker E2E package
@@ -630,7 +644,7 @@ jobs:
           export OPENCLAW_DOCKER_ALL_TIMINGS_FILE=".artifacts/docker-tests/release-${DOCKER_E2E_CHUNK}-timings.json"
           export OPENCLAW_DOCKER_ALL_PNPM_COMMAND="$(command -v pnpm)"
 
-          pnpm test:docker:all
+          node .release-harness/scripts/test-docker-all.mjs
 
       - name: Summarize Docker E2E chunk
         if: always()
@@ -642,7 +656,7 @@ jobs:
             echo "Docker chunk summary missing: \`$summary\`" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          node scripts/docker-e2e.mjs summary "$summary" "Docker E2E chunk: ${DOCKER_E2E_CHUNK:-unknown}" >> "$GITHUB_STEP_SUMMARY"
+          node .release-harness/scripts/docker-e2e.mjs summary "$summary" "Docker E2E chunk: ${DOCKER_E2E_CHUNK:-unknown}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload Docker E2E chunk artifacts
         if: always()
@@ -697,6 +711,7 @@ jobs:
       ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+      DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
@@ -738,6 +753,7 @@ jobs:
       OPENCLAW_DOCKER_E2E_BARE_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.bare_image }}
       OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.functional_image }}
       OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
+      OPENCLAW_DOCKER_E2E_REPO_ROOT: ${{ github.workspace }}
       OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       OPENCLAW_CURRENT_PACKAGE_TGZ: .artifacts/docker-e2e-package/openclaw-current.tgz
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
@@ -749,6 +765,13 @@ jobs:
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
+
+      - name: Checkout trusted release harness
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          path: .release-harness
 
       - name: Log in to GHCR for shared Docker E2E image
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
@@ -785,8 +808,8 @@ jobs:
           export OPENCLAW_DOCKER_ALL_INCLUDE_OPENWEBUI="$INCLUDE_OPENWEBUI"
 
           plan_path=".artifacts/docker-tests/targeted-plan.json"
-          node scripts/test-docker-all.mjs --plan-json > "$plan_path"
-          node scripts/docker-e2e.mjs github-outputs "$plan_path" >> "$GITHUB_OUTPUT"
+          node .release-harness/scripts/test-docker-all.mjs --plan-json > "$plan_path"
+          node .release-harness/scripts/docker-e2e.mjs github-outputs "$plan_path" >> "$GITHUB_OUTPUT"
           suffix="$(printf '%s' "$LANES" | tr ',[:space:]' '-' | tr -cd 'A-Za-z0-9._-' | sed -E 's/-+/-/g; s/^-//; s/-$//')"
           echo "artifact_suffix=${suffix:-targeted}" >> "$GITHUB_OUTPUT"
           echo "plan_json=$plan_path" >> "$GITHUB_OUTPUT"
@@ -842,11 +865,11 @@ jobs:
           export OPENCLAW_DOCKER_ALL_TIMINGS_FILE=".artifacts/docker-tests/targeted-${{ steps.plan.outputs.artifact_suffix }}-timings.json"
           export OPENCLAW_DOCKER_ALL_PNPM_COMMAND="$(command -v pnpm)"
           if [[ "${{ steps.plan.outputs.needs_live_image }}" == "1" ]]; then
-            pnpm test:docker:live-build
+            OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" bash .release-harness/scripts/test-live-build-docker.sh
           fi
           export OPENCLAW_DOCKER_ALL_BUILD=0
 
-          pnpm test:docker:all
+          node .release-harness/scripts/test-docker-all.mjs
 
       - name: Summarize targeted Docker E2E lanes
         if: always()
@@ -858,7 +881,7 @@ jobs:
             echo "Docker targeted summary missing: \`$summary\`" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          node scripts/docker-e2e.mjs summary "$summary" "Docker E2E targeted lanes" >> "$GITHUB_STEP_SUMMARY"
+          node .release-harness/scripts/docker-e2e.mjs summary "$summary" "Docker E2E targeted lanes" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload targeted Docker E2E artifacts
         if: always()
@@ -880,6 +903,7 @@ jobs:
       OPENCLAW_DOCKER_E2E_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.image }}
       OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.functional_image }}
       OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
+      OPENCLAW_DOCKER_E2E_REPO_ROOT: ${{ github.workspace }}
       OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       OPENCLAW_CURRENT_PACKAGE_TGZ: .artifacts/docker-e2e-package/openclaw-current.tgz
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
@@ -889,6 +913,13 @@ jobs:
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
+
+      - name: Checkout trusted release harness
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          path: .release-harness
 
       - name: Log in to GHCR for shared Docker E2E image
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
@@ -924,8 +955,8 @@ jobs:
           export OPENCLAW_DOCKER_ALL_INCLUDE_OPENWEBUI=true
 
           plan_path=".artifacts/docker-tests/release-openwebui-plan.json"
-          node scripts/test-docker-all.mjs --plan-json > "$plan_path"
-          node scripts/docker-e2e.mjs github-outputs "$plan_path" >> "$GITHUB_OUTPUT"
+          node .release-harness/scripts/test-docker-all.mjs --plan-json > "$plan_path"
+          node .release-harness/scripts/docker-e2e.mjs github-outputs "$plan_path" >> "$GITHUB_OUTPUT"
           echo "plan_json=$plan_path" >> "$GITHUB_OUTPUT"
 
       - name: Download OpenClaw Docker E2E package
@@ -963,7 +994,7 @@ jobs:
           export OPENCLAW_DOCKER_ALL_TIMINGS_FILE=".artifacts/docker-tests/release-openwebui-timings.json"
           export OPENCLAW_DOCKER_ALL_PNPM_COMMAND="$(command -v pnpm)"
 
-          pnpm test:docker:all
+          node .release-harness/scripts/test-docker-all.mjs
 
       - name: Summarize Open WebUI Docker E2E chunk
         if: always()
@@ -975,7 +1006,7 @@ jobs:
             echo "Docker Open WebUI summary missing: \`$summary\`" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          node scripts/docker-e2e.mjs summary "$summary" "Docker E2E chunk: openwebui" >> "$GITHUB_STEP_SUMMARY"
+          node .release-harness/scripts/docker-e2e.mjs summary "$summary" "Docker E2E chunk: openwebui" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload Open WebUI Docker E2E artifacts
         if: always()
@@ -1006,12 +1037,20 @@ jobs:
     env:
       DOCKER_BUILD_SUMMARY: "false"
       DOCKER_BUILD_RECORD_UPLOAD: "false"
+      OPENCLAW_DOCKER_E2E_REPO_ROOT: ${{ github.workspace }}
     steps:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
+
+      - name: Checkout trusted release harness
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          path: .release-harness
 
       - name: Plan Docker E2E images
         id: plan
@@ -1035,8 +1074,8 @@ jobs:
           export OPENCLAW_DOCKER_ALL_INCLUDE_OPENWEBUI="$INCLUDE_OPENWEBUI"
 
           plan_path=".artifacts/docker-tests/plan.json"
-          node scripts/test-docker-all.mjs --plan-json > "$plan_path"
-          node scripts/docker-e2e.mjs github-outputs "$plan_path" >> "$GITHUB_OUTPUT"
+          node .release-harness/scripts/test-docker-all.mjs --plan-json > "$plan_path"
+          node .release-harness/scripts/docker-e2e.mjs github-outputs "$plan_path" >> "$GITHUB_OUTPUT"
           echo "plan_json=$plan_path" >> "$GITHUB_OUTPUT"
 
       - name: Setup Node environment
@@ -1255,6 +1294,7 @@ jobs:
       ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+      DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
@@ -1289,6 +1329,14 @@ jobs:
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
+
+      - name: Checkout trusted live Docker harness
+        if: contains(matrix.profiles, inputs.release_test_profile)
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          path: .release-harness
 
       - name: Setup Node environment
         if: contains(matrix.profiles, inputs.release_test_profile)
@@ -1339,7 +1387,7 @@ jobs:
 
       - name: Run Docker live model sweep
         if: contains(matrix.profiles, inputs.release_test_profile)
-        run: pnpm test:docker:live-models
+        run: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" bash .release-harness/scripts/test-live-models-docker.sh
 
   validate_live_models_docker_targeted:
     name: Docker live models (selected providers)
@@ -1355,6 +1403,7 @@ jobs:
       ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+      DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
@@ -1388,6 +1437,13 @@ jobs:
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
+
+      - name: Checkout trusted live Docker harness
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          path: .release-harness
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -1496,7 +1552,7 @@ jobs:
           done
 
       - name: Run Docker live model sweep
-        run: pnpm test:docker:live-models
+        run: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" bash .release-harness/scripts/test-live-models-docker.sh
 
   validate_live_provider_suites:
     needs: validate_selected_ref
@@ -1509,196 +1565,196 @@ jobs:
         include:
           - suite_id: native-live-src-agents
             label: Native live agents
-            command: node scripts/test-live-shard.mjs native-live-src-agents
+            command: node .release-harness/scripts/test-live-shard.mjs native-live-src-agents
             timeout_minutes: 90
             needs_ffmpeg: false
             profile_env_only: false
             profiles: stable full
           - suite_id: native-live-src-gateway-core
             label: Native live gateway core
-            command: node scripts/test-live-shard.mjs native-live-src-gateway-core
+            command: node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-core
             timeout_minutes: 90
             needs_ffmpeg: false
             profile_env_only: false
             profiles: minimum stable full
           - suite_id: native-live-src-gateway-profiles-anthropic
             label: Native live gateway profiles Anthropic
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic node scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 90
             needs_ffmpeg: false
             profile_env_only: false
             profiles: stable full
           - suite_id: native-live-src-gateway-profiles-google
             label: Native live gateway profiles Google
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=google node scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=google OPENCLAW_LIVE_GATEWAY_MODELS=google/gemini-3.1-pro-preview,google/gemini-3-flash-preview node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 90
             needs_ffmpeg: false
             profile_env_only: false
             profiles: stable full
           - suite_id: native-live-src-gateway-profiles-minimax
             label: Native live gateway profiles MiniMax
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=minimax,minimax-portal node scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=minimax,minimax-portal node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 90
             needs_ffmpeg: false
             profile_env_only: false
             profiles: stable full
           - suite_id: native-live-src-gateway-profiles-openai
             label: Native live gateway profiles OpenAI
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai node scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MODELS=openai/gpt-5.2 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 90
             needs_ffmpeg: false
             profile_env_only: false
             profiles: minimum stable full
           - suite_id: native-live-src-gateway-profiles-fireworks
             label: Native live gateway profiles Fireworks
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=fireworks node scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=fireworks node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 90
             needs_ffmpeg: false
             profile_env_only: false
             profiles: full
           - suite_id: native-live-src-gateway-profiles-deepseek
             label: Native live gateway profiles DeepSeek
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek node scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 90
             needs_ffmpeg: false
             profile_env_only: false
             profiles: full
           - suite_id: native-live-src-gateway-profiles-opencode-go
             label: Native live gateway profiles OpenCode Go deep
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go node scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 90
             needs_ffmpeg: false
             profile_env_only: false
             profiles: full
           - suite_id: native-live-src-gateway-profiles-opencode-go-smoke
             label: Native live gateway profiles OpenCode Go smoke
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_SMOKE=1 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1 node scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_SMOKE=1 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 45
             needs_ffmpeg: false
             profile_env_only: false
             profiles: stable
           - suite_id: native-live-src-gateway-profiles-openrouter
             label: Native live gateway profiles OpenRouter
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=openrouter node scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=openrouter node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 90
             needs_ffmpeg: false
             profile_env_only: false
             profiles: full
           - suite_id: native-live-src-gateway-profiles-xai
             label: Native live gateway profiles xAI
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=xai node scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=xai node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 90
             needs_ffmpeg: false
             profile_env_only: false
             profiles: full
           - suite_id: native-live-src-gateway-profiles-zai
             label: Native live gateway profiles Z.ai
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=zai node scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=zai node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 90
             needs_ffmpeg: false
             profile_env_only: false
             profiles: full
           - suite_id: native-live-src-gateway-backends
             label: Native live gateway backends
-            command: node scripts/test-live-shard.mjs native-live-src-gateway-backends
+            command: node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-backends
             timeout_minutes: 90
             needs_ffmpeg: false
             profile_env_only: false
             profiles: stable full
           - suite_id: native-live-test
             label: Native live test harnesses
-            command: node scripts/test-live-shard.mjs native-live-test
+            command: node .release-harness/scripts/test-live-shard.mjs native-live-test
             timeout_minutes: 90
             needs_ffmpeg: false
             profile_env_only: false
             profiles: stable full
           - suite_id: native-live-extensions-a-k
             label: Native live plugins A-K
-            command: node scripts/test-live-shard.mjs native-live-extensions-a-k
+            command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-a-k
             timeout_minutes: 90
             needs_ffmpeg: true
             profile_env_only: false
             profiles: full
           - suite_id: native-live-extensions-l-n
             label: Native live plugins L-N
-            command: node scripts/test-live-shard.mjs native-live-extensions-l-n
+            command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-l-n
             timeout_minutes: 90
             needs_ffmpeg: false
             profile_env_only: false
             profiles: full
           - suite_id: native-live-extensions-openai
             label: Native live OpenAI plugin
-            command: node scripts/test-live-shard.mjs native-live-extensions-openai
+            command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-openai
             timeout_minutes: 90
             needs_ffmpeg: false
             profile_env_only: false
             profiles: minimum stable full
           - suite_id: native-live-extensions-o-z-other
             label: Native live plugins O-Z other
-            command: node scripts/test-live-shard.mjs native-live-extensions-o-z-other
+            command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-o-z-other
             timeout_minutes: 90
             needs_ffmpeg: false
             profile_env_only: false
             profiles: full
           - suite_id: native-live-extensions-xai
             label: Native live xAI plugin
-            command: node scripts/test-live-shard.mjs native-live-extensions-xai
+            command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-xai
             timeout_minutes: 90
             needs_ffmpeg: false
             profile_env_only: false
             profiles: full
           - suite_id: native-live-extensions-media-audio
             label: Native live media audio plugins
-            command: node scripts/test-live-shard.mjs native-live-extensions-media-audio
+            command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-audio
             timeout_minutes: 90
             needs_ffmpeg: true
             profile_env_only: false
             profiles: full
           - suite_id: native-live-extensions-media-music-google
             label: Native live media music Google
-            command: OPENCLAW_LIVE_MUSIC_GENERATION_PROVIDERS=google node scripts/test-live-shard.mjs native-live-extensions-media-music-google
+            command: OPENCLAW_LIVE_MUSIC_GENERATION_PROVIDERS=google node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-music-google
             timeout_minutes: 90
             needs_ffmpeg: true
             profile_env_only: false
             profiles: full
           - suite_id: native-live-extensions-media-music-minimax
             label: Native live media music MiniMax
-            command: OPENCLAW_LIVE_MUSIC_GENERATION_PROVIDERS=minimax node scripts/test-live-shard.mjs native-live-extensions-media-music-minimax
+            command: OPENCLAW_LIVE_MUSIC_GENERATION_PROVIDERS=minimax node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-music-minimax
             timeout_minutes: 90
             needs_ffmpeg: true
             profile_env_only: false
             profiles: full
           - suite_id: native-live-extensions-media-video
             label: Native live media video plugins
-            command: node scripts/test-live-shard.mjs native-live-extensions-media-video
+            command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-video
             timeout_minutes: 90
             needs_ffmpeg: true
             profile_env_only: false
             profiles: full
           - suite_id: live-gateway-docker
             label: Docker live gateway
-            command: pnpm test:docker:live-gateway
+            command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" bash .release-harness/scripts/test-live-gateway-models-docker.sh
             timeout_minutes: 120
             needs_ffmpeg: false
             profile_env_only: false
             profiles: minimum stable full
           - suite_id: live-cli-backend-docker
             label: Docker live CLI backend
-            command: pnpm test:docker:live-cli-backend
+            command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" bash .release-harness/scripts/test-live-cli-backend-docker.sh
             timeout_minutes: 120
             needs_ffmpeg: false
             profile_env_only: false
             profiles: stable full
           - suite_id: live-acp-bind-docker
             label: Docker live ACP bind
-            command: pnpm test:docker:live-acp-bind
+            command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" bash .release-harness/scripts/test-live-acp-bind-docker.sh
             timeout_minutes: 120
             needs_ffmpeg: false
             profile_env_only: false
             profiles: stable full
           - suite_id: live-codex-harness-docker
             label: Docker live Codex harness
-            command: pnpm test:docker:live-codex-harness
+            command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" bash .release-harness/scripts/test-live-codex-harness-docker.sh
             timeout_minutes: 120
             needs_ffmpeg: false
             profile_env_only: false
@@ -1711,6 +1767,7 @@ jobs:
       ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+      DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
@@ -1758,6 +1815,14 @@ jobs:
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
+
+      - name: Checkout trusted live shard harness
+        if: contains(matrix.profiles, inputs.release_test_profile)
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          path: .release-harness
 
       - name: Setup Node environment
         if: contains(matrix.profiles, inputs.release_test_profile)

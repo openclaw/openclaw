@@ -53,4 +53,34 @@ describe("live cache regression runner", () => {
     ]);
     expect(warnings).toEqual([]);
   });
+
+  it("retries hard cache baseline misses once", () => {
+    expect(
+      __testing.shouldRetryBaselineFindings(
+        {
+          regressions: ["anthropic:image cacheRead=0 < min=4500"],
+          warnings: [],
+        },
+        1,
+      ),
+    ).toBe(true);
+    expect(
+      __testing.shouldRetryBaselineFindings(
+        {
+          regressions: ["anthropic:image cacheRead=0 < min=4500"],
+          warnings: [],
+        },
+        2,
+      ),
+    ).toBe(false);
+    expect(
+      __testing.shouldRetryBaselineFindings(
+        {
+          regressions: [],
+          warnings: ["openai:image cacheRead=0 < min=3840"],
+        },
+        1,
+      ),
+    ).toBe(false);
+  });
 });

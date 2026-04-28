@@ -98,6 +98,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
 }));
 
 let resolveTelegramFetch: typeof import("./fetch.js").resolveTelegramFetch;
+let resolveTelegramApiBase: typeof import("./fetch.js").resolveTelegramApiBase;
 let resolveTelegramTransport: typeof import("./fetch.js").resolveTelegramTransport;
 
 type TelegramDispatcherPolicy = NonNullable<
@@ -105,7 +106,8 @@ type TelegramDispatcherPolicy = NonNullable<
 >[number]["dispatcherPolicy"];
 
 beforeAll(async () => {
-  ({ resolveTelegramFetch, resolveTelegramTransport } = await import("./fetch.js"));
+  ({ resolveTelegramApiBase, resolveTelegramFetch, resolveTelegramTransport } =
+    await import("./fetch.js"));
 });
 
 beforeEach(() => {
@@ -308,6 +310,12 @@ afterEach(() => {
 });
 
 describe("resolveTelegramFetch", () => {
+  it("normalizes a full bot endpoint apiRoot before callers append bot paths", () => {
+    expect(resolveTelegramApiBase("https://api.telegram.org/bot123456:ABC/")).toBe(
+      "https://api.telegram.org",
+    );
+  });
+
   it("wraps proxy fetches and leaves retry policy to caller-provided fetch", async () => {
     const proxyFetch = vi.fn(async () => ({ ok: true }) as Response) as unknown as typeof fetch;
 
@@ -754,6 +762,30 @@ describe("resolveTelegramFetch", () => {
     expect(secondDispatcher).not.toBe(thirdDispatcher);
     expect(thirdDispatcher).toBe(fourthDispatcher);
     expectPinnedFallbackIpDispatcher(3);
+  });
+
+  it("keeps the armed fallback sticky when all attempts fail", async () => {
+    undiciFetch
+      .mockRejectedValueOnce(buildFetchFallbackError("ETIMEDOUT"))
+      .mockRejectedValueOnce(buildFetchFallbackError("EHOSTUNREACH"))
+      .mockRejectedValueOnce(buildFetchFallbackError("ETIMEDOUT"))
+      .mockResolvedValueOnce({ ok: true } as Response);
+
+    const resolved = resolveTelegramFetchOrThrow(undefined, {
+      network: {
+        autoSelectFamily: true,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    await expect(resolved("https://api.telegram.org/botx/deleteWebhook")).rejects.toThrow(
+      "fetch failed",
+    );
+    await resolved("https://api.telegram.org/botx/getMe");
+
+    expect(undiciFetch).toHaveBeenCalledTimes(4);
+    expectPinnedFallbackIpDispatcher(3);
+    expect(getDispatcherFromUndiciCall(4)).toBe(getDispatcherFromUndiciCall(3));
   });
 
   it("preserves caller-provided dispatcher across fallback retry", async () => {

@@ -122,10 +122,13 @@ export function laneResources(poolLane) {
 export function laneSummary(poolLane) {
   const resources = laneResources(poolLane).join(",");
   const timeout = poolLane.timeoutMs ? ` timeout=${Math.round(poolLane.timeoutMs / 1000)}s` : "";
+  const noOutputTimeout = poolLane.noOutputTimeoutMs
+    ? ` no-output=${Math.round(poolLane.noOutputTimeoutMs / 1000)}s`
+    : "";
   const retries = poolLane.retries > 0 ? ` retries=${poolLane.retries}` : "";
   const cache = poolLane.cacheKey ? ` cache=${poolLane.cacheKey}` : "";
   const image = poolLane.e2eImageKind ? ` image=${poolLane.e2eImageKind}` : "";
-  return `${poolLane.name}(w=${laneWeight(poolLane)} r=${resources}${timeout}${retries}${cache}${image})`;
+  return `${poolLane.name}(w=${laneWeight(poolLane)} r=${resources}${timeout}${noOutputTimeout}${retries}${cache}${image})`;
 }
 
 export function lanesNeedE2eImageKind(poolLanes, kind) {
@@ -179,6 +182,7 @@ export function buildPlanJson(params) {
       imageKind: poolLane.e2eImageKind,
       live: poolLane.live,
       name: poolLane.name,
+      noOutputTimeoutMs: poolLane.noOutputTimeoutMs,
       resources: laneResources(poolLane),
       timeoutMs: poolLane.timeoutMs,
       weight: laneWeight(poolLane),

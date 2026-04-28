@@ -381,6 +381,7 @@ OpenClaw uses the **pre-threshold flush** approach:
 Config (`agents.defaults.compaction.memoryFlush`):
 
 - `enabled` (default: `true`)
+- `model` (optional exact provider/model override for the flush turn, for example `ollama/qwen3:8b`)
 - `softThresholdTokens` (default: `4000`)
 - `prompt` (user message for the flush turn)
 - `systemPrompt` (extra system prompt appended for the flush turn)
@@ -389,6 +390,9 @@ Notes:
 
 - The default prompt/system prompt include a `NO_REPLY` hint to suppress
   delivery.
+- When `model` is set, the flush turn uses that model without inheriting the
+  active session fallback chain, so local-only housekeeping does not silently
+  fall back to a paid conversation model.
 - The flush runs once per compaction cycle (tracked in `sessions.json`).
 - The flush runs only for embedded Pi sessions (CLI backends skip it).
 - The flush is skipped when the session workspace is read-only (`workspaceAccess: "ro"` or `"none"`).

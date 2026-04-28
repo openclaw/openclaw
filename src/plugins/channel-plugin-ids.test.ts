@@ -662,6 +662,22 @@ describe("resolveGatewayStartupPluginIds", () => {
     });
   });
 
+  it("can disable deprecated implicit startup sidecar fallback for future-mode testing", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        enabledPluginIds: ["demo-global-sidecar"],
+        allowPluginIds: ["demo-global-sidecar"],
+        noConfiguredChannels: true,
+        memorySlot: "none",
+      }),
+      env: {
+        ...process.env,
+        OPENCLAW_DISABLE_LEGACY_IMPLICIT_STARTUP_SIDECARS: "1",
+      },
+      expected: [],
+    });
+  });
+
   it("skips deprecated implicit startup sidecar fallback when activation.onStartup is false", () => {
     expectStartupPluginIdsCase({
       config: createStartupConfig({
@@ -682,6 +698,10 @@ describe("resolveGatewayStartupPluginIds", () => {
         noConfiguredChannels: true,
         memorySlot: "none",
       }),
+      env: {
+        ...process.env,
+        OPENCLAW_DISABLE_LEGACY_IMPLICIT_STARTUP_SIDECARS: "1",
+      },
       expected: ["demo-global-explicit-startup"],
     });
   });

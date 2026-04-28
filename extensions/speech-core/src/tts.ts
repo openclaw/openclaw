@@ -27,6 +27,7 @@ import {
 import {
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
+  selectApplicableRuntimeConfig,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { isVerbose, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
@@ -235,41 +236,14 @@ function _resolveRegistryDefaultSpeechProviderId(cfg?: OpenClawConfig): TtsProvi
   return sortSpeechProvidersForAutoSelection(cfg)[0]?.id ?? "";
 }
 
-function stableConfigStringify(value: unknown): string {
-  if (value === null || typeof value !== "object") {
-    return JSON.stringify(value) ?? "null";
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map((entry) => stableConfigStringify(entry)).join(",")}]`;
-  }
-  const record = value as Record<string, unknown>;
-  return `{${Object.keys(record)
-    .toSorted()
-    .map((key) => `${JSON.stringify(key)}:${stableConfigStringify(record[key])}`)
-    .join(",")}}`;
-}
-
-function configSnapshotsMatch(left: OpenClawConfig, right: OpenClawConfig): boolean {
-  if (left === right) {
-    return true;
-  }
-  try {
-    return stableConfigStringify(left) === stableConfigStringify(right);
-  } catch {
-    return false;
-  }
-}
-
 function resolveTtsRuntimeConfig(cfg: OpenClawConfig): OpenClawConfig {
-  const runtimeConfig = getRuntimeConfigSnapshot();
-  if (!runtimeConfig || cfg === runtimeConfig) {
-    return cfg;
-  }
-  const sourceConfig = getRuntimeConfigSourceSnapshot();
-  if (!sourceConfig || configSnapshotsMatch(cfg, sourceConfig)) {
-    return runtimeConfig;
-  }
-  return cfg;
+  return (
+    selectApplicableRuntimeConfig({
+      inputConfig: cfg,
+      runtimeConfig: getRuntimeConfigSnapshot(),
+      runtimeSourceConfig: getRuntimeConfigSourceSnapshot(),
+    }) ?? cfg
+  );
 }
 
 function asProviderConfig(value: unknown): SpeechProviderConfig {

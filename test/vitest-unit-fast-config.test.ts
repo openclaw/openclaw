@@ -23,6 +23,8 @@ describe("unit-fast vitest lane", () => {
     expect(config.test?.include).toContain(
       "src/agents/pi-tools.deferred-followup-guidance.test.ts",
     );
+    expect(config.test?.include).toContain("src/acp/control-plane/runtime-cache.test.ts");
+    expect(config.test?.include).toContain("src/acp/runtime/registry.test.ts");
     expect(config.test?.include).toContain("src/commands/status-overview-values.test.ts");
     expect(config.test?.include).toContain("src/plugins/config-policy.test.ts");
     expect(config.test?.include).toContain("src/plugin-sdk/provider-entry.test.ts");
@@ -45,7 +47,7 @@ describe("unit-fast vitest lane", () => {
     expect(isUnitFastTestFile("src/agents/sandbox.resolveSandboxContext.test.ts")).toBe(false);
     expect(isUnitFastTestFile("src/crestodian/assistant.test.ts")).toBe(false);
     expect(isUnitFastTestFile("src/proxy-capture/coverage.test.ts")).toBe(false);
-    expect(isUnitFastTestFile("src/security/audit-config-symlink.test.ts")).toBe(false);
+    expect(isUnitFastTestFile("src/secrets/runtime.test.ts")).toBe(false);
     expect(resolveUnitFastTestIncludePattern("src/plugin-sdk/temp-path.ts")).toBeNull();
     expect(classifyUnitFastTestFileContent("vi.resetModules(); await import('./x.js')")).toEqual([
       "module-mocking",
