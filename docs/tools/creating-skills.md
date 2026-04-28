@@ -39,8 +39,8 @@ For how skills are loaded and prioritized, see [Skills](/tools/skills).
     "Hello from your custom skill!".
     ```
 
-    Use lowercase letters, digits, and hyphens for the skill `name`. Keep the
-    folder name and frontmatter `name` aligned.
+    Use hyphen-case with lowercase letters, digits, and hyphens for the skill
+    `name`. Keep the folder name and frontmatter `name` aligned.
 
   </Step>
 
