@@ -714,7 +714,7 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
           name: "level",
           description: "Thinking level",
           type: "string",
-          choices: ({ provider, model }) => listThinkingLevels(provider, model),
+          choices: ({ provider, model, catalog }) => listThinkingLevels(provider, model, catalog),
         },
       ],
       argsMenu: "auto",

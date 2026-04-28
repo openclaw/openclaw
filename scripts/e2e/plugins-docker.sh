@@ -7,7 +7,11 @@ IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-plugins-e2e" OPENCLAW_PLUGINS_E
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" plugins
 
-DOCKER_ENV_ARGS=(-e COREPACK_ENABLE_DOWNLOAD_PROMPT=0)
+OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 plugins empty)"
+DOCKER_ENV_ARGS=(
+  -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+  -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64"
+)
 for env_name in \
   OPENCLAW_PLUGINS_E2E_CLAWHUB \
   OPENCLAW_PLUGINS_E2E_CLAWHUB_SPEC \
@@ -64,8 +68,7 @@ NODE
 )"
 export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
 
-home_dir=$(mktemp -d "/tmp/openclaw-plugins-e2e.XXXXXX")
-export HOME="$home_dir"
+eval "$(printf "%s" "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}" | base64 -d)"
 BUNDLED_PLUGIN_ROOT_DIR="extensions"
 OPENCLAW_PLUGIN_HOME="$HOME/.openclaw/$BUNDLED_PLUGIN_ROOT_DIR"
 
