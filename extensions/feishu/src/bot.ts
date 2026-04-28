@@ -246,9 +246,9 @@ export function parseFeishuMessageEvent(
     chatType: event.message.chat_type,
     mentionedBot,
     hasAnyMention,
-    rootId: event.message.root_id || undefined,
-    parentId: event.message.parent_id || undefined,
-    threadId: event.message.thread_id || undefined,
+    rootId: event.message.root_id?.trim() || undefined,
+    parentId: event.message.parent_id?.trim() || undefined,
+    threadId: event.message.thread_id?.trim() || undefined,
     content,
     contentType: event.message.message_type,
   };

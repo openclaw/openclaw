@@ -2959,8 +2959,8 @@ describe("handleFeishuMessage command authorization", () => {
       sender: { sender_id: { open_id: "ou-dm-thread-user" } },
       message: {
         message_id: "om_dm_thread_reply",
-        root_id: "om_dm_thread_root",
-        thread_id: "omt_dm_thread",
+        root_id: " om_dm_thread_root ",
+        thread_id: " omt_dm_thread ",
         chat_id: "oc-dm",
         chat_type: "p2p",
         message_type: "text",
