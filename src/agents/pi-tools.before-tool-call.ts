@@ -232,7 +232,7 @@ export async function runBeforeToolCallHook(args: {
   }
 
   const hookRunner = getGlobalHookRunner();
-  if (!hookRunner?.hasHooks("before_tool_call")) {
+  if (!hookRunner?.hasHooks("before_tool_call", toolName)) {
     return { blocked: false, params: args.params };
   }
 

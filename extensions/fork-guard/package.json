@@ -1,0 +1,24 @@
+{
+  "name": "@openclaw/fork-guard",
+  "version": "2026.4.28",
+  "private": true,
+  "description": "OpenClaw fork-leak guard plugin — blocks git pushes / PR creates that would leak private content",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.4.25"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

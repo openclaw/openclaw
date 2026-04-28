@@ -1293,7 +1293,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record: PluginRecord,
     hookName: K,
     handler: PluginHookHandlerMap[K],
-    opts?: { priority?: number },
+    opts?: { priority?: number; toolNames?: string[] },
     policy?: PluginTypedHookPolicy,
   ) => {
     if (!isPluginHookName(hookName)) {
@@ -1357,6 +1357,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       hookName,
       handler: effectiveHandler,
       priority: opts?.priority,
+      ...(opts?.toolNames ? { toolNames: opts.toolNames } : {}),
       source: record.source,
     } as TypedPluginHookRegistration);
   };

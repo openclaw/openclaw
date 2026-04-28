@@ -197,6 +197,21 @@ function getHooksForName<K extends PluginHookName>(
     .toSorted((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
 }
 
+/**
+ * Get hooks for a specific hook name filtered to those that apply to a given
+ * tool name. Hooks without `toolNames` are global and always included.
+ * Priority order is preserved.
+ */
+function getHooksForNameAndTool<K extends PluginHookName>(
+  registry: HookRunnerRegistry,
+  hookName: K,
+  toolName: string,
+): PluginHookRegistration<K>[] {
+  return getHooksForName(registry, hookName).filter(
+    (h) => !h.toolNames || h.toolNames.includes(toolName),
+  );
+}
+
 function getHooksForNameAndPlugin<K extends PluginHookName>(
   registry: HookRunnerRegistry,
   hookName: K,
@@ -814,51 +829,103 @@ export function createHookRunner(
    * Run before_tool_call hook.
    * Allows plugins to modify or block tool calls.
    * Runs sequentially.
+   *
+   * Only hooks whose `toolNames` list includes `event.toolName` are invoked.
+   * Hooks without `toolNames` (global hooks) are always invoked.
    */
   async function runBeforeToolCall(
     event: PluginHookBeforeToolCallEvent,
     ctx: PluginHookToolContext,
   ): Promise<PluginHookBeforeToolCallResult | undefined> {
-    return runModifyingHook<"before_tool_call", PluginHookBeforeToolCallResult>(
-      "before_tool_call",
-      event,
-      ctx,
-      {
-        mergeResults: (acc, next, reg) => {
-          if (acc?.block === true) {
-            return acc;
+    const hooks = getHooksForNameAndTool(registry, "before_tool_call", event.toolName);
+    if (hooks.length === 0) {
+      return undefined;
+    }
+
+    logger?.debug?.(
+      `[hooks] running before_tool_call (${hooks.length} handlers, sequential) tool=${event.toolName}`,
+    );
+
+    let result: PluginHookBeforeToolCallResult | undefined;
+
+    for (const hook of hooks) {
+      try {
+        const handlerResult = await (
+          hook.handler as (
+            event: PluginHookBeforeToolCallEvent,
+            ctx: PluginHookToolContext,
+          ) => Promise<PluginHookBeforeToolCallResult>
+        )(event, ctx);
+
+        if (handlerResult !== undefined && handlerResult !== null) {
+          if (result?.block === true) {
+            break;
           }
-          const approvalPluginId = acc?.requireApproval?.pluginId;
+          const approvalPluginId = result?.requireApproval?.pluginId;
           const freezeParamsForDifferentPlugin =
-            Boolean(approvalPluginId) && approvalPluginId !== reg.pluginId;
-          return {
+            Boolean(approvalPluginId) && approvalPluginId !== hook.pluginId;
+          result = {
             params: freezeParamsForDifferentPlugin
-              ? acc?.params
-              : lastDefined(acc?.params, next.params),
-            block: stickyTrue(acc?.block, next.block),
-            blockReason: lastDefined(acc?.blockReason, next.blockReason),
+              ? result?.params
+              : lastDefined(result?.params, handlerResult.params),
+            block: stickyTrue(result?.block, handlerResult.block),
+            blockReason: lastDefined(result?.blockReason, handlerResult.blockReason),
             requireApproval:
-              acc?.requireApproval ??
-              (next.requireApproval
-                ? { ...next.requireApproval, pluginId: reg.pluginId }
+              result?.requireApproval ??
+              (handlerResult.requireApproval
+                ? { ...handlerResult.requireApproval, pluginId: hook.pluginId }
                 : undefined),
           };
-        },
-        shouldStop: (result) => result.block === true,
-        terminalLabel: "block=true",
-      },
-    );
+          if (result.block === true) {
+            const priority = hook.priority ?? 0;
+            logger?.debug?.(
+              `[hooks] before_tool_call block=true decided by ${hook.pluginId} (priority=${priority}); skipping remaining handlers`,
+            );
+            break;
+          }
+        }
+      } catch (err) {
+        handleHookError({ hookName: "before_tool_call", pluginId: hook.pluginId, error: err });
+      }
+    }
+
+    return result;
   }
 
   /**
    * Run after_tool_call hook.
    * Runs in parallel (fire-and-forget).
+   *
+   * Only hooks whose `toolNames` list includes `event.toolName` are invoked.
+   * Hooks without `toolNames` (global hooks) are always invoked.
    */
   async function runAfterToolCall(
     event: PluginHookAfterToolCallEvent,
     ctx: PluginHookToolContext,
   ): Promise<void> {
-    return runVoidHook("after_tool_call", event, ctx);
+    const hooks = getHooksForNameAndTool(registry, "after_tool_call", event.toolName);
+    if (hooks.length === 0) {
+      return;
+    }
+
+    logger?.debug?.(
+      `[hooks] running after_tool_call (${hooks.length} handlers) tool=${event.toolName}`,
+    );
+
+    const promises = hooks.map(async (hook) => {
+      try {
+        await (
+          hook.handler as (
+            event: PluginHookAfterToolCallEvent,
+            ctx: PluginHookToolContext,
+          ) => Promise<void>
+        )(event, ctx);
+      } catch (err) {
+        handleHookError({ hookName: "after_tool_call", pluginId: hook.pluginId, error: err });
+      }
+    });
+
+    await Promise.all(promises);
   }
 
   /**
@@ -1134,8 +1201,17 @@ export function createHookRunner(
 
   /**
    * Check if any hooks are registered for a given hook name.
+   *
+   * When `toolName` is provided and the hook name is `before_tool_call` or
+   * `after_tool_call`, only hooks that would actually fire for that tool are
+   * counted (global hooks + per-tool scoped hooks for that tool name).
    */
-  function hasHooks(hookName: PluginHookName): boolean {
+  function hasHooks(hookName: PluginHookName, toolName?: string): boolean {
+    if (toolName && (hookName === "before_tool_call" || hookName === "after_tool_call")) {
+      return registry.typedHooks.some(
+        (h) => h.hookName === hookName && (!h.toolNames || h.toolNames.includes(toolName)),
+      );
+    }
     return registry.typedHooks.some((h) => h.hookName === hookName);
   }
 

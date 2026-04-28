@@ -77,6 +77,7 @@ export function addTestHook(params: {
   hookName: PluginHookRegistration["hookName"];
   handler: PluginHookRegistration["handler"];
   priority?: number;
+  toolNames?: string[];
 }) {
   params.registry.typedHooks.push({
     pluginId: params.pluginId,
@@ -84,6 +85,7 @@ export function addTestHook(params: {
     handler: params.handler,
     priority: params.priority ?? 0,
     source: "test",
+    ...(params.toolNames ? { toolNames: params.toolNames } : {}),
   } as PluginHookRegistration);
 }
 
@@ -94,6 +96,7 @@ export function addTestHooks(
     hookName: PluginHookRegistration["hookName"];
     handler: PluginHookRegistration["handler"];
     priority?: number;
+    toolNames?: string[];
   }>,
 ) {
   for (const hook of hooks) {
@@ -103,6 +106,7 @@ export function addTestHooks(
       hookName: hook.hookName,
       handler: hook.handler,
       ...(hook.priority !== undefined ? { priority: hook.priority } : {}),
+      ...(hook.toolNames ? { toolNames: hook.toolNames } : {}),
     });
   }
 }
@@ -115,17 +119,19 @@ export function addStaticTestHooks<TResult>(
       pluginId: string;
       result: TResult;
       priority?: number;
+      toolNames?: string[];
       handler?: () => TResult | Promise<TResult>;
     }>;
   },
 ) {
   addTestHooks(
     registry,
-    params.hooks.map(({ pluginId, result, priority, handler }) => ({
+    params.hooks.map(({ pluginId, result, priority, toolNames, handler }) => ({
       pluginId,
       hookName: params.hookName,
       handler: (handler ?? (() => result)) as PluginHookRegistration["handler"],
       ...(priority !== undefined ? { priority } : {}),
+      ...(toolNames ? { toolNames } : {}),
     })),
   );
 }

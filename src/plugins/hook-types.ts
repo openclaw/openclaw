@@ -813,4 +813,15 @@ export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = 
   handler: PluginHookHandlerMap[K];
   priority?: number;
   source: string;
+  /**
+   * Optional allowlist of tool names this registration applies to.
+   *
+   * When set, the hook is only invoked for `before_tool_call` / `after_tool_call`
+   * events whose `toolName` appears in this list. Tools not in the list skip the
+   * hook entirely — zero dispatch overhead on hot paths.
+   *
+   * Omit (or set to `undefined`) to apply the hook to every tool call (global
+   * behavior, unchanged from before this field was added).
+   */
+  toolNames?: string[];
 };

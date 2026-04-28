@@ -2216,7 +2216,19 @@ export type OpenClawPluginApi = {
   on: <K extends PluginHookName>(
     hookName: K,
     handler: PluginHookHandlerMap[K],
-    opts?: { priority?: number },
+    opts?: {
+      priority?: number;
+      /**
+       * Restrict this hook to specific tool names.
+       *
+       * When set, the hook only fires for `before_tool_call` / `after_tool_call`
+       * events whose `toolName` is in this list. All other tools skip this hook
+       * entirely, keeping their call path overhead-free.
+       *
+       * Omit to receive all tool calls (global/unscoped behavior).
+       */
+      toolNames?: string[];
+    },
   ) => void;
 };
 
