@@ -3891,7 +3891,10 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       sendPolicy: "deny",
     };
     const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async () => ({ text: "agent reply" }) satisfies ReplyPayload);
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      expect(opts?.suppressTyping).toBe(true);
+      return { text: "agent reply" } satisfies ReplyPayload;
+    });
     const ctx = buildTestCtx({ SessionKey: "test:session" });
 
     await dispatchReplyFromConfig({
@@ -4220,8 +4223,11 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       itemEvent: vi.fn(),
       planUpdate: vi.fn(),
       toolResult: vi.fn(),
+      typingStart: vi.fn(async () => {}),
     };
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      expect(opts?.suppressTyping).toBe(false);
+      await opts?.onReplyStart?.();
       await opts?.onPartialReply?.({ text: "draft leak" });
       await opts?.onReasoningStream?.({ text: "reasoning leak" });
       await opts?.onAssistantMessageStart?.();
@@ -4244,6 +4250,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         onPartialReply: callbacks.partial,
         onReasoningStream: callbacks.reasoning,
         onAssistantMessageStart: callbacks.assistantStart,
+        onReplyStart: callbacks.typingStart,
         onBlockReplyQueued: callbacks.blockQueued,
         onToolStart: callbacks.toolStart,
         onItemEvent: callbacks.itemEvent,
@@ -4257,7 +4264,11 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
-    for (const callback of Object.values(callbacks)) {
+    expect(callbacks.typingStart).toHaveBeenCalledTimes(1);
+    for (const [name, callback] of Object.entries(callbacks)) {
+      if (name === "typingStart") {
+        continue;
+      }
       expect(callback).not.toHaveBeenCalled();
     }
     expect(hookMocks.runner.runReplyDispatch).toHaveBeenCalledWith(
@@ -4275,6 +4286,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       expect(opts?.sourceReplyDeliveryMode).toBe("message_tool_only");
+      expect(opts?.suppressTyping).toBe(false);
       return { text: "final reply" } satisfies ReplyPayload;
     });
 

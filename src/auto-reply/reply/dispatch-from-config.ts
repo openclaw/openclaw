@@ -1054,7 +1054,7 @@ export async function dispatchReplyFromConfig(
     const typing = resolveRunTypingPolicy({
       requestedPolicy: params.replyOptions?.typingPolicy,
       suppressTyping:
-        suppressDelivery || params.replyOptions?.suppressTyping === true || shouldSuppressTyping,
+        sendPolicyDenied || params.replyOptions?.suppressTyping === true || shouldSuppressTyping,
       originatingChannel: routeReplyChannel,
       systemEvent: shouldRouteToOriginating,
     });
