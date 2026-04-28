@@ -416,4 +416,15 @@ describe("buildEmbeddedRunPayloads placeholder reply detection", () => {
       "I checked the file and the config key is missing from the JSON payload.",
     );
   });
+
+  it("keeps normal replies that mention placeholder phrases inline", () => {
+    const reply =
+      "The benchmark completes in one sec on my machine, but it still needs CI confirmation.";
+    const payloads = buildPayloads({
+      assistantTexts: [reply],
+      lastAssistant: makeAssistantMessage(reply),
+    });
+
+    expectSinglePayloadText(payloads, reply);
+  });
 });

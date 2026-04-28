@@ -123,7 +123,7 @@ type LegacyGatewayQueryAuthAttempt = {
 };
 
 /**
- * Detect legacy websocket clients that pass auth via query parameters
+ * Detect legacy websocket clients that pass agent auth via query parameters
  * (`/ws?agent=...&token=...`) instead of the current connect-challenge
  * handshake. These clients cause repeated handshake-timeout noise and
  * should be rejected immediately with a clear error.
@@ -141,14 +141,14 @@ function detectLegacyGatewayQueryAuth(
     return null;
   }
   const pathname = parsed.pathname || "/";
-  if (pathname !== "/ws") {
+  if (pathname !== "/" && pathname !== "/ws") {
     return null;
   }
   const params = parsed.searchParams;
   const agent = params.get("agent")?.trim();
   const token = params.get("token")?.trim();
   const password = params.get("password")?.trim();
-  if (!token && !password) {
+  if (!agent || (!token && !password)) {
     return null;
   }
   return {

@@ -69,15 +69,12 @@ const DID_NOT_FAIL_PATTERN = /\b(?:did not|didn't)\s+fail\b/u;
 const NEGATED_FAILURE_PATTERN = /\b(?:no|not|without)\s+(?:failures?|errors?)\b/u;
 
 // Short, future-action-phrased replies with no tool execution indicate the model
-// is stalling rather than performing real work. Only short replies (<=220 chars,
-// <=4 lines) matching explicit "let me check" / "one sec" patterns are flagged.
+// is stalling rather than performing real work. Keep these anchored so normal
+// prose that only mentions a placeholder phrase is not replaced by an error.
 const NON_EXECUTING_REPLY_PATTERNS = [
-  /\bone sec\b/i,
-  /(?:^|[.!?]\s+)hold on\b/i,
-  /\bstill planning to\b/i,
-  /\bworking on it\b/i,
-  /\blet me (?:actually )?(?:check|do|look|read|run|test|open|inspect|verify|fetch|pull)\b/i,
-  /\bi(?:'|')ll (?:check|do|look|read|run|test|open|inspect|verify|fetch|pull)\b[^.!?\n]{0,60}\bnow\b/i,
+  /^(?:ok(?:ay)?[,.! ]*)?(?:one sec(?:ond)?|give me (?:a )?(?:sec(?:ond)?|moment)|hold on)\b[^\n]{0,120}$/i,
+  /^(?:still planning to|working on it)\b[^\n]{0,120}$/i,
+  /^(?:let me (?:actually )?(?:check|do|look|read|run|test|open|inspect|verify|fetch|pull)\b|i(?:'|\u2019)ll (?:check|do|look|read|run|test|open|inspect|verify|fetch|pull)\b[^.!?\n]{0,60}\bnow\b)[^\n]{0,120}$/i,
 ] as const;
 
 const NON_EXECUTING_REPLY_MAX_CHARS = 220;
