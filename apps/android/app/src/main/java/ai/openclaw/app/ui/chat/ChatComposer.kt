@@ -16,9 +16,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
@@ -30,6 +32,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -46,6 +49,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.ui.mobileAccent
 import ai.openclaw.app.ui.mobileAccentBorderStrong
 import ai.openclaw.app.ui.mobileAccentSoft
@@ -53,6 +57,7 @@ import ai.openclaw.app.ui.mobileBorder
 import ai.openclaw.app.ui.mobileBorderStrong
 import ai.openclaw.app.ui.mobileCallout
 import ai.openclaw.app.ui.mobileCaption1
+import ai.openclaw.app.ui.mobileCaption2
 import ai.openclaw.app.ui.mobileCardSurface
 import ai.openclaw.app.ui.mobileHeadline
 import ai.openclaw.app.ui.mobileSurface
@@ -98,6 +103,8 @@ fun ChatComposer(
   thinkingLevel: String,
   pendingRunCount: Int,
   attachments: List<PendingImageAttachment>,
+  replyToMessage: ChatMessage? = null,
+  onCancelReply: () -> Unit = {},
   onDraftApplied: () -> Unit,
   onPickImages: () -> Unit,
   onRemoveAttachment: (id: String) -> Unit,
@@ -123,6 +130,10 @@ fun ChatComposer(
   val sendBusy = pendingRunCount > 0
 
   Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    replyToMessage?.let {
+      ReplyPreview(message = it, onCancel = onCancelReply)
+    }
+
     if (attachments.isNotEmpty()) {
       AttachmentsStrip(attachments = attachments, onRemoveAttachment = onRemoveAttachment)
     }
@@ -244,6 +255,57 @@ fun ChatComposer(
           style = mobileHeadline.copy(fontWeight = FontWeight.Bold),
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
+        )
+      }
+    }
+  }
+}
+
+@Composable
+private fun ReplyPreview(message: ChatMessage, onCancel: () -> Unit) {
+  val text = message.content.filter { it.type == "text" }.joinToString(" ") { it.text ?: "" }
+  Surface(
+    shape = RoundedCornerShape(12.dp),
+    color = mobileAccentSoft.copy(alpha = 0.5f),
+    border = BorderStroke(1.dp, mobileAccent.copy(alpha = 0.3f)),
+    modifier = Modifier.fillMaxWidth()
+  ) {
+    Row(
+      modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+      Icon(
+        Icons.AutoMirrored.Filled.Reply,
+        contentDescription = null,
+        tint = mobileAccent,
+        modifier = Modifier.size(16.dp)
+      )
+      Column(modifier = Modifier.weight(1f)) {
+        Text(
+          text = "Replying to ${message.role.replaceFirstChar { it.uppercase() }}",
+          style = mobileCaption2.copy(fontWeight = FontWeight.Bold),
+          color = mobileAccent
+        )
+        Text(
+          text = text,
+          style = mobileCaption1,
+          color = mobileTextSecondary,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis
+        )
+      }
+      Surface(
+        onClick = onCancel,
+        shape = CircleShape,
+        color = Color.Transparent,
+        modifier = Modifier.size(24.dp)
+      ) {
+        Icon(
+          Icons.Default.Close,
+          contentDescription = "Cancel reply",
+          tint = mobileTextTertiary,
+          modifier = Modifier.padding(4.dp)
         )
       }
     }
