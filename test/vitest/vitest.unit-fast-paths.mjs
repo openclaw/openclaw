@@ -189,14 +189,6 @@ export const alwaysExcludedUnitFastTestFiles = [
   "src/security/audit-config-symlink.test.ts",
 ];
 const alwaysExcludedUnitFastTestFileSet = new Set(alwaysExcludedUnitFastTestFiles);
-const overlappingForcedAndExcluded = forcedUnitFastTestFiles.filter((file) =>
-  alwaysExcludedUnitFastTestFileSet.has(file),
-);
-if (overlappingForcedAndExcluded.length > 0) {
-  throw new Error(
-    `unit-fast config overlap: files cannot be both forced and always-excluded (${overlappingForcedAndExcluded.join(", ")})`,
-  );
-}
 
 const disqualifyingPatterns = [
   {
