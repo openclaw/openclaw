@@ -12,7 +12,11 @@ export default definePluginEntry({
           import("./src/config.js"),
         ]);
         const pluginConfig = appConfig.plugins?.entries?.["memory-wiki"]?.config;
-        registerWikiCli(program, resolveMemoryWikiConfig(pluginConfig), appConfig);
+        registerWikiCli(
+          program,
+          resolveMemoryWikiConfig(pluginConfig, { instanceId: appConfig.instanceId }),
+          appConfig,
+        );
       },
       {
         descriptors: [

@@ -23,7 +23,9 @@ Put config under `plugins.entries.memory-wiki.config`:
   vaultMode: "isolated",
 
   vault: {
-    path: "~/.openclaw/wiki/main",
+    // Omit path to use the instance-scoped default:
+    // ~/.openclaw/wiki/{instanceId}, or ~/.openclaw/wiki/main when unset.
+    // path: "~/custom/wiki",
     renderMode: "obsidian", // or "native"
   },
 

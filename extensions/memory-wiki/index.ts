@@ -18,7 +18,9 @@ export default definePluginEntry({
   description: "Persistent wiki compiler and Obsidian-friendly knowledge vault for OpenClaw.",
   configSchema: memoryWikiConfigSchema,
   register(api) {
-    const config = resolveMemoryWikiConfig(api.pluginConfig);
+    const config = resolveMemoryWikiConfig(api.pluginConfig, {
+      instanceId: api.config.instanceId,
+    });
 
     api.registerMemoryPromptSupplement(createWikiPromptSectionBuilder(config));
     api.registerMemoryCorpusSupplement(

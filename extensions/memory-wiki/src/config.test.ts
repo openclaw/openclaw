@@ -65,6 +65,58 @@ describe("resolveMemoryWikiConfig", () => {
 
     expect(canonical.bridge.readMemoryArtifacts).toBe(false);
   });
+
+  it("scopes vault path to instanceId when set (Phase D2.1)", () => {
+    const config = resolveMemoryWikiConfig(undefined, {
+      homedir: "/Users/tester",
+      instanceId: "acme-corp",
+    });
+    expect(config.vault.path).toBe("/Users/tester/.openclaw/wiki/acme-corp");
+  });
+
+  it("falls back to main vault when instanceId is absent (Tier A)", () => {
+    const config = resolveMemoryWikiConfig(undefined, { homedir: "/Users/tester" });
+    expect(config.vault.path).toBe("/Users/tester/.openclaw/wiki/main");
+  });
+
+  it("rejects path-traversal instanceIds and falls back to main", () => {
+    const config = resolveMemoryWikiConfig(undefined, {
+      homedir: "/Users/tester",
+      instanceId: "../evil",
+    });
+    expect(config.vault.path).toBe("/Users/tester/.openclaw/wiki/main");
+  });
+
+  it("respects an explicit vault.path override even when instanceId is set", () => {
+    const config = resolveMemoryWikiConfig(
+      { vault: { path: "~/custom/wiki" } },
+      { homedir: "/Users/tester", instanceId: "acme-corp" },
+    );
+    expect(config.vault.path).toBe("/Users/tester/custom/wiki");
+  });
+});
+
+describe("resolveDefaultMemoryWikiVaultPath", () => {
+  it("returns the main vault when no instanceId is given", () => {
+    expect(resolveDefaultMemoryWikiVaultPath("/Users/tester")).toBe(
+      "/Users/tester/.openclaw/wiki/main",
+    );
+  });
+
+  it("scopes to the instanceId when valid", () => {
+    expect(resolveDefaultMemoryWikiVaultPath("/Users/tester", "bench-prod-01")).toBe(
+      "/Users/tester/.openclaw/wiki/bench-prod-01",
+    );
+  });
+
+  it("falls back to main on invalid instanceId", () => {
+    expect(resolveDefaultMemoryWikiVaultPath("/Users/tester", "has/slash")).toBe(
+      "/Users/tester/.openclaw/wiki/main",
+    );
+    expect(resolveDefaultMemoryWikiVaultPath("/Users/tester", "")).toBe(
+      "/Users/tester/.openclaw/wiki/main",
+    );
+  });
 });
 
 describe("memory-wiki manifest config schema", () => {
