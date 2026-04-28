@@ -81,6 +81,30 @@ describe("buildChatItems", () => {
     );
   });
 
+  it("counts nested tool_result content blocks toward the char budget", () => {
+    const largeContent = "x".repeat(150_000);
+    const messages: unknown[] = [];
+    for (let i = 0; i < 4; i++) {
+      messages.push({ role: "assistant", content: "using the tool", timestamp: i * 3 + 1 });
+      messages.push({
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: `tool-${i}`,
+            content: [{ type: "text", text: largeContent }],
+          },
+        ],
+        timestamp: i * 3 + 2,
+      });
+      messages.push({ role: "assistant", content: "ok", timestamp: i * 3 + 3 });
+    }
+
+    expect(firstNoticeText({ messages })).toBe(
+      "Showing last 4 messages (8 older messages hidden).",
+    );
+  });
+
   it("excludes hidden tool messages from the history budget when tool calls are hidden", () => {
     const messages: unknown[] = [];
     for (let i = 0; i < 10; i++) {

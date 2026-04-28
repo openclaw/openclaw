@@ -151,6 +151,27 @@ function isHiddenToolMessage(message: unknown, showToolCalls: boolean): boolean 
   return !showToolCalls && normalizeMessage(message).role.toLowerCase() === "toolresult";
 }
 
+function estimateRawContentChars(value: unknown): number {
+  if (typeof value === "string") {
+    return value.length;
+  }
+  if (Array.isArray(value)) {
+    return value.reduce((total, item) => total + estimateRawContentChars(item), 0);
+  }
+  if (!value || typeof value !== "object") {
+    return 0;
+  }
+  const record = value as Record<string, unknown>;
+  let chars = 0;
+  if (typeof record.text === "string") {
+    chars += record.text.length;
+  }
+  if (record.content !== undefined) {
+    chars += estimateRawContentChars(record.content);
+  }
+  return chars;
+}
+
 function estimateMessageRenderChars(message: unknown): number {
   const normalized = normalizeMessage(message);
   const raw = message as Record<string, unknown>;
@@ -159,15 +180,25 @@ function estimateMessageRenderChars(message: unknown): number {
   for (let i = 0; i < normalized.content.length; i++) {
     const item = normalized.content[i];
     const rawItem = rawContent[i] as Record<string, unknown> | undefined;
-    if (typeof item.text === "string") {
+    if (
+      (item.type === "text" || item.type === "tool_call" || item.type === "tool_result") &&
+      typeof item.text === "string"
+    ) {
       chars += item.text.length;
     }
-    if (rawItem && typeof rawItem.content === "string") {
-      chars += rawItem.content.length;
+    if (rawItem?.content !== undefined) {
+      chars += estimateRawContentChars(rawItem.content);
     }
-    if (typeof item.args === "string") {
+    if (
+      (item.type === "text" || item.type === "tool_call" || item.type === "tool_result") &&
+      typeof item.args === "string"
+    ) {
       chars += item.args.length;
-    } else if (item.args && typeof item.args === "object") {
+    } else if (
+      (item.type === "text" || item.type === "tool_call" || item.type === "tool_result") &&
+      item.args &&
+      typeof item.args === "object"
+    ) {
       try {
         chars += JSON.stringify(item.args).length;
       } catch {
