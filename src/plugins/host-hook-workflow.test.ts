@@ -7,15 +7,23 @@ import { schedulePluginSessionTurn } from "./host-hook-workflow.js";
 
 const mocks = vi.hoisted(() => ({
   callGatewayTool: vi.fn(),
+  warn: vi.fn(),
 }));
 
 vi.mock("../agents/tools/gateway.js", () => ({
   callGatewayTool: mocks.callGatewayTool,
 }));
 
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => ({
+    warn: mocks.warn,
+  }),
+}));
+
 describe("plugin host workflow helpers", () => {
   afterEach(() => {
     mocks.callGatewayTool.mockReset();
+    mocks.warn.mockReset();
     clearPluginHostRuntimeState();
   });
 
@@ -54,5 +62,25 @@ describe("plugin host workflow helpers", () => {
         kind: "session-turn",
       },
     ]);
+  });
+
+  it("attributes scheduler validation warnings to the plugin and schedule", async () => {
+    await expect(
+      schedulePluginSessionTurn({
+        pluginId: "scheduler-fixture",
+        origin: "bundled",
+        schedule: {
+          sessionKey: "agent:main:main",
+          name: "wake-soon",
+          message: "wake",
+          delayMs: 1_000,
+          deliveryMode: "unsupported" as never,
+        },
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(mocks.warn).toHaveBeenCalledWith(
+      "plugin session turn scheduling failed (pluginId=scheduler-fixture sessionKey=agent:main:main name=wake-soon): unsupported deliveryMode",
+    );
   });
 });

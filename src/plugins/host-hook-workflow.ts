@@ -219,6 +219,25 @@ function resolveSessionTurnDeliveryMode(deliveryMode: unknown): "none" | "announ
   return undefined;
 }
 
+function formatScheduleLogContext(params: {
+  pluginId: string;
+  sessionKey?: string;
+  name?: string;
+  jobId?: string;
+}): string {
+  const parts = [`pluginId=${params.pluginId}`];
+  if (params.sessionKey) {
+    parts.push(`sessionKey=${params.sessionKey}`);
+  }
+  if (params.name) {
+    parts.push(`name=${params.name}`);
+  }
+  if (params.jobId) {
+    parts.push(`jobId=${params.jobId}`);
+  }
+  return parts.join(" ");
+}
+
 function extractCronJobId(value: unknown): string | undefined {
   if (!value || typeof value !== "object") {
     return undefined;
@@ -259,13 +278,18 @@ export async function schedulePluginSessionTurn(params: {
   }
   const rawDeliveryMode = (params.schedule as { deliveryMode?: unknown }).deliveryMode;
   const deliveryMode = resolveSessionTurnDeliveryMode(rawDeliveryMode);
+  const scheduleName = normalizeOptionalString(params.schedule.name);
   if (rawDeliveryMode !== undefined && !deliveryMode) {
-    log.warn("plugin session turn scheduling failed: unsupported deliveryMode");
+    log.warn(
+      `plugin session turn scheduling failed (${formatScheduleLogContext({
+        pluginId: params.pluginId,
+        sessionKey,
+        ...(scheduleName ? { name: scheduleName } : {}),
+      })}): unsupported deliveryMode`,
+    );
     return undefined;
   }
-  const name =
-    normalizeOptionalString(params.schedule.name) ??
-    `plugin:${params.pluginId}:${sessionKey}:${randomUUID()}`;
+  const name = scheduleName ?? `plugin:${params.pluginId}:${sessionKey}:${randomUUID()}`;
   let result: unknown;
   try {
     result = await callGatewayTool(
@@ -287,7 +311,13 @@ export async function schedulePluginSessionTurn(params: {
       { scopes: [ADMIN_SCOPE] },
     );
   } catch (error) {
-    log.warn(`plugin session turn scheduling failed: ${formatErrorMessage(error)}`);
+    log.warn(
+      `plugin session turn scheduling failed (${formatScheduleLogContext({
+        pluginId: params.pluginId,
+        sessionKey,
+        name,
+      })}): ${formatErrorMessage(error)}`,
+    );
     return undefined;
   }
   const jobId = extractCronJobId(result);
@@ -305,7 +335,14 @@ export async function schedulePluginSessionTurn(params: {
         try {
           await callGatewayTool("cron.remove", {}, { id: jobId }, { scopes: [ADMIN_SCOPE] });
         } catch (error) {
-          log.warn(`plugin session turn cleanup failed: ${formatErrorMessage(error)}`);
+          log.warn(
+            `plugin session turn cleanup failed (${formatScheduleLogContext({
+              pluginId: params.pluginId,
+              sessionKey,
+              name,
+              jobId,
+            })}): ${formatErrorMessage(error)}`,
+          );
         }
       },
     },
