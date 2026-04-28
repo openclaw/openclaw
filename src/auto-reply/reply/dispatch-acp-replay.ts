@@ -42,6 +42,7 @@ class AcpDurableProjectionRunner {
   private settledResolve!: () => void;
   private settledReject!: (error: unknown) => void;
   private stopped = false;
+  private started = false;
 
   constructor(
     private readonly params: {
@@ -62,8 +63,16 @@ class AcpDurableProjectionRunner {
     });
   }
 
+  // start() must be idempotent: ensureProjection() may call start() multiple
+  // times for the same target (re-entry while a projection is already running).
+  // A second run() loop on shared state (coordinator/projector, settled
+  // resolvers, nextSeq, terminalProjected) would double-deliver events and
+  // race the settlement. All callers receive the same settled promise.
   start(): Promise<void> {
-    void this.run();
+    if (!this.started) {
+      this.started = true;
+      void this.run();
+    }
     return this.settledPromise;
   }
 

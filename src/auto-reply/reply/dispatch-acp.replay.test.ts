@@ -266,6 +266,63 @@ describe("AcpDurableProjectionService", () => {
     );
   });
 
+  it("does not spawn duplicate run() loops when ensureProjection re-enters for an active target", async () => {
+    const store = await createStore();
+    const sessionKey = "agent:main:acp:test-session";
+    await seedTerminalRun({
+      store,
+      sessionKey,
+      runId: "run-reentry",
+      channel: "telegram",
+      to: "telegram:reentry",
+      text: "reentry body",
+      now: 10,
+    });
+
+    const harness = createProjectionRestartHarness();
+    const service = new AcpDurableProjectionService({
+      store,
+      coordinatorFactory: harness.createCoordinatorFactory(),
+    });
+    const cfg = createAcpTestConfig();
+    const target = (await store.getRunDeliveryTarget("run-reentry", "primary"))!;
+
+    // Fire two ensureProjection calls for the same target in parallel. The
+    // second call must hit the existing-runner branch and share the same
+    // run() loop rather than spawning a duplicate.
+    const [first, second] = await Promise.all([
+      service.ensureProjection({
+        cfg,
+        target,
+        shouldSendToolSummaries: true,
+        restartMode: true,
+      }),
+      service.ensureProjection({
+        cfg,
+        target,
+        shouldSendToolSummaries: true,
+        restartMode: true,
+      }),
+    ]);
+
+    expect(first).toBeUndefined();
+    expect(second).toBeUndefined();
+
+    const reentryInstances = harness.deliveries
+      .filter((entry) => entry.targetKey === "run-reentry:primary")
+      .map((entry) => entry.instanceId);
+    // Only one coordinator (i.e. one run() loop) should have produced
+    // deliveries for this target.
+    expect(new Set(reentryInstances).size).toBe(1);
+    const reentryBlocks = harness.deliveries.filter(
+      (entry) => entry.targetKey === "run-reentry:primary" && entry.kind === "block",
+    );
+    expect(reentryBlocks).toHaveLength(1);
+    expect(reentryBlocks[0]?.payload).toEqual(
+      expect.objectContaining({ text: expect.stringContaining("reentry body") }),
+    );
+  });
+
   it("replays only the unfinished remainder when restart lands mid-event projection", async () => {
     const baselineStore = await createStore();
     await seedTerminalRun({
