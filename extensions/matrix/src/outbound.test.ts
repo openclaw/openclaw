@@ -257,4 +257,97 @@ describe("matrixOutbound cfg threading", () => {
       }),
     );
   });
+
+  it("sends all media URLs via sendPayload", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          accessToken: "resolved-token",
+        },
+      },
+    } as OpenClawConfig;
+
+    await matrixOutbound.sendPayload!({
+      cfg,
+      to: "room:!room:example",
+      text: "caption",
+      payload: {
+        text: "caption",
+        mediaUrls: ["file:///tmp/a.png", "file:///tmp/b.png"],
+      },
+      accountId: "default",
+      threadId: "$thread",
+    });
+
+    expect(mocks.sendMessageMatrix).toHaveBeenCalledTimes(2);
+    // First call: caption + media
+    expect(mocks.sendMessageMatrix).toHaveBeenNthCalledWith(
+      1,
+      "room:!room:example",
+      "caption",
+      expect.objectContaining({
+        mediaUrl: "file:///tmp/a.png",
+        threadId: "$thread",
+      }),
+    );
+    // Second call: no text, just media
+    expect(mocks.sendMessageMatrix).toHaveBeenNthCalledWith(
+      2,
+      "room:!room:example",
+      "",
+      expect.objectContaining({
+        mediaUrl: "file:///tmp/b.png",
+        threadId: "$thread",
+      }),
+    );
+  });
+
+  it("sends mediaUrls with extraContent only on first item", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          accessToken: "resolved-token",
+        },
+      },
+    } as OpenClawConfig;
+
+    await matrixOutbound.sendPayload!({
+      cfg,
+      to: "room:!room:example",
+      text: "caption",
+      payload: {
+        text: "caption",
+        mediaUrls: ["file:///tmp/a.png", "file:///tmp/b.png"],
+        channelData: {
+          matrix: {
+            extraContent: {
+              "com.openclaw.presentation": { version: 1 },
+            },
+          },
+        },
+      },
+      accountId: "default",
+      threadId: "$thread",
+    });
+
+    expect(mocks.sendMessageMatrix).toHaveBeenCalledTimes(2);
+    // First call gets extraContent
+    expect(mocks.sendMessageMatrix).toHaveBeenNthCalledWith(
+      1,
+      "room:!room:example",
+      "caption",
+      expect.objectContaining({
+        extraContent: { "com.openclaw.presentation": { version: 1 } },
+      }),
+    );
+    // Second call does NOT get extraContent
+    expect(mocks.sendMessageMatrix).toHaveBeenNthCalledWith(
+      2,
+      "room:!room:example",
+      "",
+      expect.not.objectContaining({
+        extraContent: expect.anything(),
+      }),
+    );
+  });
 });
