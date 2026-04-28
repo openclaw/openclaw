@@ -2,8 +2,8 @@ import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
-import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { pipeline } from "node:stream/promises";
+import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runPluginCommandWithTimeout } from "openclaw/plugin-sdk/run-command";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -30,9 +30,7 @@ function makeSizeCapTransform(maxBytes: number): Transform {
     transform(chunk: Buffer, _enc, cb) {
       received += chunk.byteLength;
       if (received > maxBytes) {
-        cb(
-          new Error(`signal-cli archive exceeded the ${maxBytes}-byte download cap mid-stream.`),
-        );
+        cb(new Error(`signal-cli archive exceeded the ${maxBytes}-byte download cap mid-stream.`));
         return;
       }
       cb(null, chunk);
