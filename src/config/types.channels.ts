@@ -1,4 +1,5 @@
 import type { ContextVisibilityMode, GroupPolicy } from "./types.base.js";
+import type { SecretInput } from "./types.secrets.js";
 
 export type ChannelHeartbeatVisibilityConfig = {
   /** Show HEARTBEAT_OK acknowledgments in chat (default: false). */
@@ -28,7 +29,7 @@ export type ChannelModelByChannelConfig = Record<string, Record<string, string>>
 
 export type ExtensionNestedPolicyConfig = {
   policy?: string;
-  allowFrom?: Array<string | number> | ReadonlyArray<string | number>;
+  allowFrom?: Array<string | number | SecretInput> | ReadonlyArray<string | number | SecretInput>;
   [key: string]: unknown;
 };
 
@@ -38,9 +39,9 @@ export type ExtensionNestedPolicyConfig = {
  */
 export type ExtensionChannelConfig = {
   enabled?: boolean;
-  allowFrom?: Array<string | number> | ReadonlyArray<string | number>;
-  /** Default delivery target for CLI --deliver when no explicit --reply-to is provided. */
-  defaultTo?: string | number;
+  allowFrom?: Array<string | number | SecretInput> | ReadonlyArray<string | number | SecretInput>;
+  /** Default delivery target for CLI --deliver when no explicit --reply-to is provided (plain string or SecretRef). */
+  defaultTo?: string | number | SecretInput;
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;
   dmPolicy?: string;

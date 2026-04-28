@@ -9,6 +9,7 @@ import {
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 import type { ModelCompatConfig } from "./types.models.js";
 import { MODEL_APIS } from "./types.models.js";
+import { isSecretRef, type SecretInput } from "./types.secrets.js";
 import type { MediaToolsConfig } from "./types.tools.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import { sensitive } from "./zod-schema.sensitive.js";
@@ -618,12 +619,13 @@ export const CliBackendSchema = z
   })
   .strict();
 
-export const normalizeAllowFrom = (values?: ReadonlyArray<unknown>): string[] =>
-  normalizeStringEntries(values);
+export const normalizeAllowFrom = (
+  values?: ReadonlyArray<string | number | SecretInput>,
+): string[] => normalizeStringEntries(values?.filter((v) => !isSecretRef(v)));
 
 export const requireOpenAllowFrom = (params: {
   policy?: string;
-  allowFrom?: ReadonlyArray<unknown>;
+  allowFrom?: ReadonlyArray<string | number | SecretInput>;
   ctx: z.RefinementCtx;
   path: Array<string | number>;
   message: string;
@@ -649,7 +651,7 @@ export const requireOpenAllowFrom = (params: {
  */
 export const requireAllowlistAllowFrom = (params: {
   policy?: string;
-  allowFrom?: ReadonlyArray<unknown>;
+  allowFrom?: ReadonlyArray<string | number | SecretInput>;
   ctx: z.RefinementCtx;
   path: Array<string | number>;
   message: string;
