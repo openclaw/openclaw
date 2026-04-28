@@ -578,6 +578,7 @@ export async function getHealthSnapshot(params?: {
     ...(params?.eventLoop ? { eventLoop: params.eventLoop } : {}),
     ...(pluginHealth ? { plugins: pluginHealth } : {}),
     modelPricing: getGatewayModelPricingHealth({ enabled: isGatewayModelPricingEnabled(cfg) }),
+    ...(cfg.instanceId ? { instanceId: cfg.instanceId } : {}),
     channels,
     channelOrder,
     channelLabels,

@@ -761,6 +761,7 @@ export type HealthSummary = {
   ok: boolean;
   ts: number;
   durationMs: number;
+  instanceId?: string;
   heartbeatSeconds: number;
   defaultAgentId: string;
   agents: Array<{ id: string; name?: string }>;

@@ -549,6 +549,25 @@ describe("getHealthSnapshot", () => {
     expect(snap.sessions.recent[0]?.key).toBe("foo");
   });
 
+  it("omits instanceId from health summary when unset (Tier A default)", async () => {
+    testConfig = { session: { store: "/tmp/x" } };
+    testStore = {};
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
+    vi.stubEnv("DISCORD_BOT_TOKEN", "");
+    const snap = (await getHealthSnapshot({ timeoutMs: 10 })) satisfies HealthSummary;
+    expect("instanceId" in snap).toBe(false);
+    expect(snap.instanceId).toBeUndefined();
+  });
+
+  it("surfaces instanceId on health summary when set (Phase D2.1)", async () => {
+    testConfig = { session: { store: "/tmp/x" }, instanceId: "acme-corp" };
+    testStore = {};
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
+    vi.stubEnv("DISCORD_BOT_TOKEN", "");
+    const snap = (await getHealthSnapshot({ timeoutMs: 10 })) satisfies HealthSummary;
+    expect(snap.instanceId).toBe("acme-corp");
+  });
+
   it("probes telegram getMe + webhook info when configured", async () => {
     const { calls, telegram } = await runSuccessfulTelegramProbe({
       channels: { telegram: { botToken: "t-1" } },
