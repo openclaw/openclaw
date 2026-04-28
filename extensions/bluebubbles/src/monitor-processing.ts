@@ -631,17 +631,20 @@ function buildInboundHistorySnapshot(params: {
 function sanitizeForLog(value: unknown, maxLen = 200): string {
   let cleaned = String(value).replace(/[\r\n\t\p{C}]/gu, " ");
   // Redact common secret-bearing patterns before logging. BlueBubbles uses
-  // query-string auth (`?password=...`) by default, so attachment download
-  // failures and similar errors can carry the API password in the captured
-  // request URL; other libraries occasionally surface `Authorization: Bearer …`
-  // headers in error chains. Strip both before they reach the log sink (CWE-532).
+  // query-string auth (`?password=...`, `?guid=...`, or `?token=...`) by
+  // default, so attachment download failures and similar errors can carry the
+  // API password in the captured request URL; other libraries occasionally
+  // surface `Authorization: Bearer ...` headers in error chains. Strip both
+  // before they reach the log sink (CWE-532).
   cleaned = cleaned.replace(
-    /([?&](?:password|token|api[_-]?key|secret)=)[^&\s"]+/gi,
+    /([?&](?:password|guid|token|api[_-]?key|secret)=)[^&\s"]+/gi,
     "$1<redacted>",
   );
   cleaned = cleaned.replace(/(authorization\s*:\s*(?:bearer|basic)\s+)[^\s"]+/gi, "$1<redacted>");
   return cleaned.length > maxLen ? cleaned.slice(0, maxLen) + "..." : cleaned;
 }
+
+export const _sanitizeBlueBubblesLogValueForTest = sanitizeForLog;
 
 /**
  * Signal object threaded through `processMessageAfterDedupe` so the outer
@@ -810,7 +813,7 @@ async function processMessageAfterDedupe(
       logVerbose(
         core,
         runtime,
-        `attachment retry failed for msgId=${message.messageId}: ${String(err)}`,
+        `attachment retry failed for msgId=${sanitizeForLog(message.messageId)}: ${sanitizeForLog(err)}`,
       );
     }
   }
@@ -904,18 +907,22 @@ async function processMessageAfterDedupe(
   }
 
   if (isSelfChatMessage && hasBlueBubblesSelfChatCopy(selfChatLookup)) {
-    logVerbose(core, runtime, `drop: reflected self-chat duplicate sender=${message.senderId}`);
+    logVerbose(
+      core,
+      runtime,
+      `drop: reflected self-chat duplicate sender=${sanitizeForLog(message.senderId)}`,
+    );
     return;
   }
 
   if (!rawBody) {
-    logVerbose(core, runtime, `drop: empty text sender=${message.senderId}`);
+    logVerbose(core, runtime, `drop: empty text sender=${sanitizeForLog(message.senderId)}`);
     return;
   }
   logVerbose(
     core,
     runtime,
-    `msg sender=${message.senderId} group=${isGroup} textLen=${text.length} attachments=${attachments.length} chatGuid=${message.chatGuid ?? ""} chatId=${message.chatId ?? ""}`,
+    `msg sender=${sanitizeForLog(message.senderId)} group=${isGroup} textLen=${text.length} attachments=${attachments.length} chatGuid=${sanitizeForLog(message.chatGuid ?? "")} chatId=${sanitizeForLog(message.chatId ?? "")}`,
   );
 
   const dmPolicy = account.config.dmPolicy ?? "pairing";
@@ -1011,8 +1018,14 @@ async function processMessageAfterDedupe(
         senderIdLine: `Your BlueBubbles sender id: ${message.senderId}`,
         meta: { name: message.senderName },
         onCreated: () => {
-          runtime.log?.(`[bluebubbles] pairing request sender=${message.senderId} created=true`);
-          logVerbose(core, runtime, `bluebubbles pairing request sender=${message.senderId}`);
+          runtime.log?.(
+            `[bluebubbles] pairing request sender=${sanitizeForLog(message.senderId)} created=true`,
+          );
+          logVerbose(
+            core,
+            runtime,
+            `bluebubbles pairing request sender=${sanitizeForLog(message.senderId)}`,
+          );
         },
         sendPairingReply: async (text) => {
           await sendMessageBlueBubbles(message.senderId, text, {
@@ -1025,10 +1038,10 @@ async function processMessageAfterDedupe(
           logVerbose(
             core,
             runtime,
-            `bluebubbles pairing reply failed for ${message.senderId}: ${String(err)}`,
+            `bluebubbles pairing reply failed for ${sanitizeForLog(message.senderId)}: ${sanitizeForLog(err)}`,
           );
           runtime.error?.(
-            `[bluebubbles] pairing reply failed sender=${message.senderId}: ${String(err)}`,
+            `[bluebubbles] pairing reply failed sender=${sanitizeForLog(message.senderId)}: ${sanitizeForLog(err)}`,
           );
         },
       });
@@ -1159,7 +1172,7 @@ async function processMessageAfterDedupe(
       logVerbose(
         core,
         runtime,
-        `bluebubbles: participant fallback lookup failed chat=${peerId}: ${String(err)}`,
+        `bluebubbles: participant fallback lookup failed chat=${sanitizeForLog(peerId)}: ${sanitizeForLog(err)}`,
       );
     }
   }
@@ -1225,7 +1238,7 @@ async function processMessageAfterDedupe(
           logVerbose(
             core,
             runtime,
-            `attachment download failed guid=${attachment.guid} err=${String(err)}`,
+            `attachment download failed guid=${sanitizeForLog(attachment.guid)} err=${sanitizeForLog(err)}`,
           );
         }
       }
@@ -1410,7 +1423,7 @@ async function processMessageAfterDedupe(
             logVerbose(
               core,
               runtime,
-              `ack reaction failed chatGuid=${chatGuidForActions} msg=${ackMessageId}: ${String(err)}`,
+              `ack reaction failed chatGuid=${sanitizeForLog(chatGuidForActions)} msg=${sanitizeForLog(ackMessageId)}: ${sanitizeForLog(err)}`,
             );
             return false;
           },
@@ -1425,9 +1438,9 @@ async function processMessageAfterDedupe(
         cfg: config,
         accountId: account.accountId,
       });
-      logVerbose(core, runtime, `marked read chatGuid=${chatGuidForActions}`);
+      logVerbose(core, runtime, `marked read chatGuid=${sanitizeForLog(chatGuidForActions)}`);
     } catch (err) {
-      runtime.error?.(`[bluebubbles] mark read failed: ${String(err)}`);
+      runtime.error?.(`[bluebubbles] mark read failed: ${sanitizeForLog(err)}`);
     }
   } else if (!sendReadReceipts) {
     logVerbose(core, runtime, "mark read skipped (sendReadReceipts=false)");
@@ -1569,7 +1582,7 @@ async function processMessageAfterDedupe(
         logVerbose(
           core,
           runtime,
-          `history backfill failed for ${historyIdentifier}: ${String(err)} (retries left=${Math.max(remainingAttempts, 0)} next_in_ms=${nextBackoffMs})`,
+          `history backfill failed for ${sanitizeForLog(historyIdentifier)}: ${sanitizeForLog(err)} (retries left=${Math.max(remainingAttempts, 0)} next_in_ms=${nextBackoffMs})`,
         );
       }
     }
@@ -1660,7 +1673,7 @@ async function processMessageAfterDedupe(
         cfg: config,
         accountId: account.accountId,
       }).catch((err) => {
-        runtime.error?.(`[bluebubbles] typing restart failed: ${String(err)}`);
+        runtime.error?.(`[bluebubbles] typing restart failed: ${sanitizeForLog(err)}`);
       });
     }, typingRestartDelayMs);
   };
@@ -1686,7 +1699,7 @@ async function processMessageAfterDedupe(
               accountId: account.accountId,
             });
           } catch (err) {
-            runtime.error?.(`[bluebubbles] typing start failed: ${String(err)}`);
+            runtime.error?.(`[bluebubbles] typing start failed: ${sanitizeForLog(err)}`);
           }
         },
         onIdle: () => {
@@ -1848,7 +1861,7 @@ async function processMessageAfterDedupe(
           if (info.kind === "final") {
             dedupeSignal.deliveryFailed = true;
           }
-          runtime.error?.(`BlueBubbles ${info.kind} reply failed: ${String(err)}`);
+          runtime.error?.(`BlueBubbles ${info.kind} reply failed: ${sanitizeForLog(err)}`);
         },
       },
       replyOptions: {

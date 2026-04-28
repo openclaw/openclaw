@@ -4,7 +4,7 @@ import {
   type ChannelOutboundSessionRouteParams,
 } from "openclaw/plugin-sdk/channel-core";
 import { resolveGroupFlagFromChatGuid } from "./monitor-normalize.js";
-import { parseBlueBubblesTarget } from "./targets.js";
+import { extractHandleFromChatGuid, parseBlueBubblesTarget } from "./targets.js";
 
 export function resolveBlueBubblesOutboundSessionRoute(params: ChannelOutboundSessionRouteParams) {
   const stripped = stripChannelTargetPrefix(params.target, "bluebubbles");
@@ -27,11 +27,15 @@ export function resolveBlueBubblesOutboundSessionRoute(params: ChannelOutboundSe
       : parsed.kind === "chat_guid"
         ? (groupFromChatGuid ?? true)
         : false;
+  const dmHandleFromChatGuid =
+    parsed.kind === "chat_guid" && groupFromChatGuid === false
+      ? extractHandleFromChatGuid(parsed.chatGuid)
+      : null;
   const peerId =
     parsed.kind === "chat_id"
       ? String(parsed.chatId)
       : parsed.kind === "chat_guid"
-        ? parsed.chatGuid
+        ? (dmHandleFromChatGuid ?? parsed.chatGuid)
         : parsed.kind === "chat_identifier"
           ? parsed.chatIdentifier
           : parsed.to;

@@ -3,10 +3,13 @@ import type { OpenClawConfig } from "./runtime-api.js";
 import { resolveBlueBubblesOutboundSessionRoute } from "./session-route.js";
 
 const EMPTY_CFG = {} as OpenClawConfig;
+const PER_PEER_CFG = {
+  session: { dmScope: "per-peer" },
+} as OpenClawConfig;
 
-function call(target: string) {
+function call(target: string, cfg = EMPTY_CFG) {
   return resolveBlueBubblesOutboundSessionRoute({
-    cfg: EMPTY_CFG,
+    cfg,
     agentId: "agent-1",
     accountId: "default",
     target,
@@ -25,8 +28,10 @@ describe("resolveBlueBubblesOutboundSessionRoute DM/group disambiguation", () =>
     const route = call("bluebubbles:chat_guid:iMessage;-;+15551234567");
     expect(route).not.toBeNull();
     expect(route?.peer.kind).toBe("direct");
+    expect(route?.peer.id).toBe("+15551234567");
     expect(route?.chatType).toBe("direct");
-    expect(route?.from).toMatch(/^bluebubbles:/);
+    expect(route?.from).toBe("bluebubbles:+15551234567");
+    expect(route?.to).toBe("bluebubbles:chat_guid:iMessage;-;+15551234567");
     expect(route?.from).not.toMatch(/^group:/);
   });
 
@@ -71,11 +76,14 @@ describe("resolveBlueBubblesOutboundSessionRoute DM/group disambiguation", () =>
   it("DM via chat_guid and DM via handle land on the same session key", () => {
     // The point of disambiguation: a DM addressed two different ways must
     // converge on the same sessionKey so existing bindings keep matching.
-    const handleRoute = call("bluebubbles:imessage:+15551234567");
-    const chatGuidRoute = call("bluebubbles:chat_guid:iMessage;-;+15551234567");
+    const handleRoute = call("bluebubbles:imessage:+15551234567", PER_PEER_CFG);
+    const chatGuidRoute = call("bluebubbles:chat_guid:iMessage;-;+15551234567", PER_PEER_CFG);
     expect(handleRoute?.sessionKey).toBeDefined();
     expect(chatGuidRoute?.sessionKey).toBeDefined();
-    // Both are direct now; sessionKey base derives from peer.id.
     expect(handleRoute?.peer.kind).toBe(chatGuidRoute?.peer.kind);
+    expect(handleRoute?.peer.id).toBe(chatGuidRoute?.peer.id);
+    expect(handleRoute?.from).toBe(chatGuidRoute?.from);
+    expect(handleRoute?.sessionKey).toBe(chatGuidRoute?.sessionKey);
+    expect(chatGuidRoute?.to).toBe("bluebubbles:chat_guid:iMessage;-;+15551234567");
   });
 });

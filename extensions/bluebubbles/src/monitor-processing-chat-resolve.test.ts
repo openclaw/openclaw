@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildBlueBubblesInboundChatResolveTarget } from "./monitor-processing.js";
+import {
+  _sanitizeBlueBubblesLogValueForTest,
+  buildBlueBubblesInboundChatResolveTarget,
+} from "./monitor-processing.js";
 
 describe("buildBlueBubblesInboundChatResolveTarget", () => {
   it("uses chat_id for group inbound when chatId is present", () => {
@@ -109,5 +112,26 @@ describe("buildBlueBubblesInboundChatResolveTarget", () => {
       senderId: "   ",
     });
     expect(target).toBeNull();
+  });
+});
+
+describe("BlueBubbles monitor log sanitization", () => {
+  it("redacts BlueBubbles query auth and Authorization headers", () => {
+    const input =
+      "GET /api/v1/attachment?password=secret&guid=socket-secret&token=api-token Authorization: Bearer abc123";
+
+    const sanitized = _sanitizeBlueBubblesLogValueForTest(input);
+
+    expect(sanitized).toContain("password=<redacted>");
+    expect(sanitized).toContain("guid=<redacted>");
+    expect(sanitized).toContain("token=<redacted>");
+    expect(sanitized).toContain("Authorization: Bearer <redacted>");
+    expect(sanitized).not.toContain("secret");
+    expect(sanitized).not.toContain("api-token");
+    expect(sanitized).not.toContain("abc123");
+  });
+
+  it("strips control characters before logging", () => {
+    expect(_sanitizeBlueBubblesLogValueForTest("one\ntwo\tt\u0000hree")).toBe("one two t hree");
   });
 });
