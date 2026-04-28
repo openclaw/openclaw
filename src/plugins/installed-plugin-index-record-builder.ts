@@ -55,8 +55,10 @@ function hasRuntimeContractSurface(record: PluginManifestRecord): boolean {
  * startup decision so Gateway boot can avoid importing inert plugins.
  */
 function isLegacyImplicitStartupSidecar(record: PluginManifestRecord): boolean {
+  // Some legacy/synthetic registry rows omit array fields entirely; treat
+  // missing as empty so the legacy classification doesn't crash on them.
   return (
-    record.channels.length === 0 &&
+    (record.channels?.length ?? 0) === 0 &&
     !hasRuntimeContractSurface(record) &&
     record.activation?.onStartup === undefined
   );
