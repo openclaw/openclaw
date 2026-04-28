@@ -319,26 +319,6 @@ async function promptInstallChoice(params: {
       ...(safeLocalPath ? { hint: safeLocalPath } : {}),
     });
   }
-  // If there is only one real install source (e.g. npm but no local copy, or
-  // local but no npm spec), the "Install <plugin>?" prompt degenerates into
-  // "<the only source> vs Skip". Reaching this prompt already means the user
-  // explicitly picked the channel in the previous menu, so re-asking whether
-  // to install adds friction without surfacing a meaningful choice. Resolve
-  // directly to the available source and let the caller proceed; the user can
-  // still bail out via Ctrl+C during the actual install step. When multiple
-  // real sources exist (npm + local), keep the prompt so the user can pick
-  // which one to use.
-  const realSources: InstallChoice[] = [];
-  if (safeNpmSpec) {
-    realSources.push("npm");
-  }
-  if (params.localPath) {
-    realSources.push("local");
-  }
-  if (realSources.length === 1) {
-    return realSources[0];
-  }
-
   options.push({ value: "skip", label: "Skip for now" });
 
   const initialValue =
