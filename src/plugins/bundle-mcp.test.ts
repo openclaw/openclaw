@@ -11,6 +11,7 @@ import {
   withBundleHomeEnv,
   writeClaudeBundleManifest,
 } from "./bundle-mcp.test-support.js";
+import { pluginTestRepoRoot } from "./generated-plugin-test-helpers.js";
 
 function getServerArgs(value: unknown): unknown[] | undefined {
   return isRecord(value) && Array.isArray(value.args) ? value.args : undefined;
@@ -217,5 +218,17 @@ describe("loadEnabledBundleMcpConfig", () => {
         });
       },
     );
+  });
+
+  it("loads the bundled Higgsfield MCP plugin", () => {
+    const loaded = loadEnabledBundleMcpConfig({
+      workspaceDir: pluginTestRepoRoot,
+      cfg: createEnabledBundleConfig(["higgsfield"]),
+    });
+
+    expectNoDiagnostics(loaded.diagnostics);
+    expect(loaded.config.mcpServers.higgsfield).toMatchObject({
+      url: "https://mcp.higgsfield.ai/mcp",
+    });
   });
 });

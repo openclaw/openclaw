@@ -437,6 +437,38 @@ describe("copyBundledPluginMetadata", () => {
     expect(fs.existsSync(path.join(repoRoot, "dist", "extensions", pluginId))).toBe(expectedExists);
   });
 
+  it("copies bundled bundle plugin metadata", () => {
+    const repoRoot = makeRepoRoot("openclaw-bundled-bundle-plugin-");
+    const pluginDir = path.join(repoRoot, "extensions", "higgsfield");
+    fs.mkdirSync(path.join(pluginDir, ".claude-plugin"), { recursive: true });
+    fs.mkdirSync(path.join(pluginDir, "skills"), { recursive: true });
+    writeJson(path.join(pluginDir, ".claude-plugin", "plugin.json"), {
+      name: "Higgsfield",
+      mcpServers: [".mcp.json"],
+      skills: ["skills"],
+    });
+    writeJson(path.join(pluginDir, ".mcp.json"), {
+      mcpServers: {
+        higgsfield: { url: "https://mcp.higgsfield.ai/mcp" },
+      },
+    });
+    fs.writeFileSync(path.join(pluginDir, "skills", "SKILL.md"), "# Higgsfield\n", "utf8");
+
+    copyBundledPluginMetadata({ repoRoot });
+
+    expect(
+      fs.existsSync(
+        path.join(repoRoot, "dist", "extensions", "higgsfield", ".claude-plugin", "plugin.json"),
+      ),
+    ).toBe(true);
+    expect(
+      fs.existsSync(path.join(repoRoot, "dist", "extensions", "higgsfield", ".mcp.json")),
+    ).toBe(true);
+    expect(
+      fs.existsSync(path.join(repoRoot, "dist", "extensions", "higgsfield", "skills", "SKILL.md")),
+    ).toBe(true);
+  });
+
   it("preserves manifest-less runtime support package outputs and copies package metadata", () => {
     const repoRoot = makeRepoRoot("openclaw-bundled-runtime-support-");
     const pluginDir = path.join(repoRoot, "extensions", "image-generation-core");

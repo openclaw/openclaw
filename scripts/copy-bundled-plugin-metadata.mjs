@@ -77,6 +77,42 @@ function isManifestlessBundledRuntimeSupportPackage(params) {
   return params.topLevelPublicSurfaceEntries.length > 0;
 }
 
+function isBundledBundlePluginDir(pluginDir) {
+  return [
+    path.join(pluginDir, ".codex-plugin", "plugin.json"),
+    path.join(pluginDir, ".claude-plugin", "plugin.json"),
+    path.join(pluginDir, ".cursor-plugin", "plugin.json"),
+  ].some((candidate) => fs.existsSync(candidate));
+}
+
+function copyBundlePluginRuntimeMetadata(pluginDir, distPluginDir) {
+  removePathIfExists(distPluginDir);
+  const entries = [
+    ".codex-plugin",
+    ".claude-plugin",
+    ".cursor-plugin",
+    ".mcp.json",
+    ".lsp.json",
+    "commands",
+    "skills",
+    "agents",
+    "hooks",
+    "output-styles",
+    "settings.json",
+  ];
+  for (const entry of entries) {
+    const source = path.join(pluginDir, entry);
+    if (!fs.existsSync(source)) {
+      continue;
+    }
+    fs.cpSync(source, path.join(distPluginDir, entry), {
+      recursive: true,
+      force: true,
+      dereference: false,
+    });
+  }
+}
+
 function rewritePackageEntry(entry) {
   if (typeof entry !== "string" || entry.trim().length === 0) {
     return undefined;
@@ -347,13 +383,19 @@ export function copyBundledPluginMetadata(params = {}) {
         packageJson,
         topLevelPublicSurfaceEntries,
       });
+    const isBundlePlugin = !fs.existsSync(manifestPath) && isBundledBundlePluginDir(pluginDir);
 
     sourcePluginDirs.add(dirent.name);
 
     const distManifestPath = path.join(distPluginDir, "openclaw.plugin.json");
     const distPackageJsonPath = path.join(distPluginDir, "package.json");
-    if (!fs.existsSync(manifestPath) && !isManifestlessSupportPackage) {
+    if (!fs.existsSync(manifestPath) && !isManifestlessSupportPackage && !isBundlePlugin) {
       removePathIfExists(distPluginDir);
+      continue;
+    }
+
+    if (isBundlePlugin) {
+      copyBundlePluginRuntimeMetadata(pluginDir, distPluginDir);
       continue;
     }
 

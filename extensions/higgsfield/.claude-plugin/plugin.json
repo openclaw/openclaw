@@ -1,0 +1,6 @@
+{
+  "name": "Higgsfield",
+  "description": "Higgsfield AI image and video generation MCP bundle for OpenClaw.",
+  "mcpServers": [".mcp.json"],
+  "skills": ["skills"]
+}
