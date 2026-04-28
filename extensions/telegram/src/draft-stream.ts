@@ -3,6 +3,7 @@ import {
   createFinalizableDraftStreamControlsForState,
   takeMessageIdAfterStop,
 } from "openclaw/plugin-sdk/channel-lifecycle";
+import type { ReplyToMode } from "openclaw/plugin-sdk/config-types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 import { isSafeToRetrySendError, isTelegramClientRejection } from "./network-errors.js";
@@ -129,6 +130,7 @@ export function createTelegramDraftStream(params: {
   thread?: TelegramThreadSpec | null;
   previewTransport?: "auto" | "message" | "draft";
   replyToMessageId?: number;
+  replyToMode?: ReplyToMode;
   throttleMs?: number;
   /** Minimum chars before sending first message (debounce for push notifications) */
   minInitialChars?: number;
@@ -155,7 +157,9 @@ export function createTelegramDraftStream(params: {
         : params.thread?.scope === "dm";
   const threadParams = buildTelegramThreadParams(params.thread);
   const replyToMessageId = normalizeTelegramReplyToMessageId(params.replyToMessageId);
-  const replyParams =
+  const replyToMode = params.replyToMode ?? "first";
+  let hasAppliedSingleUseReply = false;
+  const baseReplyParams =
     replyToMessageId != null
       ? {
           ...threadParams,
@@ -194,6 +198,30 @@ export function createTelegramDraftStream(params: {
     renderedParseMode: "HTML" | undefined;
     fallbackWarnMessage: string;
   }) => {
+    // For single-use modes, only apply reply_to_message_id to the first preview
+    // send. Rotated previews otherwise point at previews that may be deleted
+    // after cleanup and expose Telegram "Deleted message" artifacts (#39718).
+    const shouldIncludeReply =
+      (replyToMode === "all" || !hasAppliedSingleUseReply) &&
+      baseReplyParams != null &&
+      "reply_to_message_id" in baseReplyParams &&
+      baseReplyParams.reply_to_message_id != null;
+    const replyParams = shouldIncludeReply ? baseReplyParams : threadParams;
+    // Mark single-use replies as applied before awaiting to prevent races with
+    // forceNewMessage. Safe first-send failures restore the context below.
+    const consumedSingleUseReply = shouldIncludeReply && replyToMode !== "all";
+    if (consumedSingleUseReply) {
+      hasAppliedSingleUseReply = true;
+    }
+    const restoreReplyForSafeFailure = (err: unknown) => {
+      if (
+        consumedSingleUseReply &&
+        typeof streamMessageId !== "number" &&
+        (isSafeToRetrySendError(err) || isTelegramClientRejection(err))
+      ) {
+        hasAppliedSingleUseReply = false;
+      }
+    };
     const sendParams = sendArgs.renderedParseMode
       ? {
           ...replyParams,
@@ -208,19 +236,25 @@ export function createTelegramDraftStream(params: {
       };
     } catch (err) {
       if (!usedThreadParams || !THREAD_NOT_FOUND_RE.test(String(err))) {
+        restoreReplyForSafeFailure(err);
         throw err;
       }
       const threadlessParams: TelegramSendMessageParams = { ...sendParams };
       delete threadlessParams.message_thread_id;
       params.warn?.(sendArgs.fallbackWarnMessage);
-      return {
-        sent: await params.api.sendMessage(
-          chatId,
-          sendArgs.renderedText,
-          Object.keys(threadlessParams).length > 0 ? threadlessParams : undefined,
-        ),
-        usedThreadParams: false,
-      };
+      try {
+        return {
+          sent: await params.api.sendMessage(
+            chatId,
+            sendArgs.renderedText,
+            Object.keys(threadlessParams).length > 0 ? threadlessParams : undefined,
+          ),
+          usedThreadParams: false,
+        };
+      } catch (retryErr) {
+        restoreReplyForSafeFailure(retryErr);
+        throw retryErr;
+      }
     }
   };
   const sendMessageTransportPreview = async ({
