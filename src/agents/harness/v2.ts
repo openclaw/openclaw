@@ -78,14 +78,27 @@ export type AgentHarnessV2 = {
  */
 export type NativeAgentHarnessV2Factory = (harness: AgentHarness) => AgentHarnessV2;
 
-const nativeAgentHarnessV2Factories = new Map<string, NativeAgentHarnessV2Factory>();
+export type NativeAgentHarnessV2FactoryEntry = {
+  harnessId: string;
+  factory: NativeAgentHarnessV2Factory;
+  source: "builtin" | "plugin";
+};
+
+const nativeAgentHarnessV2Factories = new Map<
+  string,
+  Omit<NativeAgentHarnessV2FactoryEntry, "harnessId">
+>();
 
 export function registerNativeAgentHarnessV2Factory(
   harnessId: string,
   factory: NativeAgentHarnessV2Factory,
+  options?: { source?: NativeAgentHarnessV2FactoryEntry["source"] },
 ): () => void {
   const previous = nativeAgentHarnessV2Factories.get(harnessId);
-  nativeAgentHarnessV2Factories.set(harnessId, factory);
+  nativeAgentHarnessV2Factories.set(harnessId, {
+    factory,
+    source: options?.source ?? "plugin",
+  });
   return () => {
     if (previous) {
       nativeAgentHarnessV2Factories.set(harnessId, previous);
@@ -98,7 +111,35 @@ export function registerNativeAgentHarnessV2Factory(
 export function getNativeAgentHarnessV2Factory(
   harnessId: string,
 ): NativeAgentHarnessV2Factory | undefined {
-  return nativeAgentHarnessV2Factories.get(harnessId);
+  return nativeAgentHarnessV2Factories.get(harnessId)?.factory;
+}
+
+export function listNativeAgentHarnessV2FactoryEntries(): NativeAgentHarnessV2FactoryEntry[] {
+  return [...nativeAgentHarnessV2Factories.entries()].map(([harnessId, entry]) => ({
+    harnessId,
+    factory: entry.factory,
+    source: entry.source,
+  }));
+}
+
+export function restoreNativeAgentHarnessV2FactoryEntries(
+  entries: readonly NativeAgentHarnessV2FactoryEntry[],
+): void {
+  nativeAgentHarnessV2Factories.clear();
+  for (const entry of entries) {
+    nativeAgentHarnessV2Factories.set(entry.harnessId, {
+      factory: entry.factory,
+      source: entry.source,
+    });
+  }
+}
+
+export function clearPluginNativeAgentHarnessV2Factories(): void {
+  for (const [harnessId, entry] of nativeAgentHarnessV2Factories) {
+    if (entry.source !== "builtin") {
+      nativeAgentHarnessV2Factories.delete(harnessId);
+    }
+  }
 }
 
 /**
@@ -109,7 +150,7 @@ export function getNativeAgentHarnessV2Factory(
  */
 export function resolveAgentHarnessV2(harness: AgentHarness): AgentHarnessV2 {
   const factory = nativeAgentHarnessV2Factories.get(harness.id);
-  return factory ? factory(harness) : adaptAgentHarnessToV2(harness);
+  return factory ? factory.factory(harness) : adaptAgentHarnessToV2(harness);
 }
 
 export function adaptAgentHarnessToV2(harness: AgentHarness): AgentHarnessV2 {

@@ -4,6 +4,11 @@ import {
   registerAgentHarness as registerGlobalAgentHarness,
 } from "../agents/harness/registry.js";
 import type { AgentHarness } from "../agents/harness/types.js";
+import {
+  getNativeAgentHarnessV2Factory,
+  registerNativeAgentHarnessV2Factory,
+} from "../agents/harness/v2.js";
+import type { NativeAgentHarnessV2Factory } from "../agents/harness/v2.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import {
@@ -180,6 +185,7 @@ export type {
   PluginConversationBindingResolvedHandlerRegistration,
   PluginHookRegistration,
   PluginAgentHarnessRegistration,
+  PluginAgentHarnessV2FactoryRegistration,
   PluginMemoryEmbeddingProviderRegistration,
   PluginNodeHostCommandRegistration,
   PluginProviderRegistration,
@@ -264,6 +270,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     ...Object.keys(registryParams.coreGatewayHandlers ?? {}),
   ]);
   const pluginHookRollback = new Map<string, HookRollbackEntry[]>();
+  const agentHarnessV2FactoryRollback = new Map<string, Array<() => void>>();
   const pluginsWithChannelRegistrationConflict = new Set<string>();
 
   const pushDiagnostic = (diag: PluginDiagnostic) => {
@@ -845,6 +852,50 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginId: record.id,
       pluginName: record.name,
       harness: normalizedHarness,
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
+  const registerAgentHarnessV2Factory = (
+    record: PluginRecord,
+    harnessId: string,
+    factory: NativeAgentHarnessV2Factory,
+  ) => {
+    const id = harnessId.trim();
+    if (!id) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "agent harness V2 factory registration missing harness id",
+      });
+      return;
+    }
+    const existing =
+      registryParams.activateGlobalSideEffects === false
+        ? registry.agentHarnessV2Factories.find((entry) => entry.harnessId === id)?.factory
+        : getNativeAgentHarnessV2Factory(id);
+    if (existing) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `agent harness V2 factory already registered: ${id}`,
+      });
+      return;
+    }
+    if (registryParams.activateGlobalSideEffects !== false) {
+      const restore = registerNativeAgentHarnessV2Factory(id, factory);
+      const rollbacks = agentHarnessV2FactoryRollback.get(record.id) ?? [];
+      rollbacks.push(restore);
+      agentHarnessV2FactoryRollback.set(record.id, rollbacks);
+    }
+    registry.agentHarnessV2Factories.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      harnessId: id,
+      factory,
       source: record.source,
       rootDir: record.rootDir,
     });
@@ -1973,6 +2024,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerHttpRoute: (routeParams) => registerHttpRoute(record, routeParams),
               registerProvider: (provider) => registerProvider(record, provider),
               registerAgentHarness: (harness) => registerAgentHarness(record, harness),
+              registerAgentHarnessV2Factory: (harnessId, factory) =>
+                registerAgentHarnessV2Factory(record, harnessId, factory),
               registerDetachedTaskRuntime: (runtime) => {
                 const existing = getDetachedTaskLifecycleRuntimeRegistration();
                 if (existing && existing.pluginId !== record.id) {
@@ -2278,6 +2331,12 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     clearPluginInteractiveHandlersForPlugin(pluginId);
     clearContextEnginesForOwner(`plugin:${pluginId}`);
 
+    const harnessV2Rollbacks = agentHarnessV2FactoryRollback.get(pluginId) ?? [];
+    for (const rollback of harnessV2Rollbacks.toReversed()) {
+      rollback();
+    }
+    agentHarnessV2FactoryRollback.delete(pluginId);
+
     const hookRollbackEntries = pluginHookRollback.get(pluginId) ?? [];
     for (const entry of hookRollbackEntries.toReversed()) {
       const activeRegistrations = activePluginHookRegistrations.get(entry.name) ?? [];
@@ -2307,6 +2366,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerChannel,
     registerProvider,
     registerAgentHarness,
+    registerAgentHarnessV2Factory,
     registerCliBackend,
     registerTextTransforms,
     registerSpeechProvider,

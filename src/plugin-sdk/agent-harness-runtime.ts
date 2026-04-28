@@ -22,6 +22,11 @@ export type {
   AgentHarnessSupportContext,
 } from "../agents/harness/types.js";
 export type {
+  AgentHarnessV2,
+  NativeAgentHarnessV2Factory,
+  NativeAgentHarnessV2Factory as AgentHarnessV2Factory,
+} from "../agents/harness/v2.js";
+export type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
 } from "../agents/pi-embedded-runner/run/types.js";

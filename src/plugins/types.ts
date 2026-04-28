@@ -10,6 +10,7 @@ import type {
   AuthProfileStore,
 } from "../agents/auth-profiles/types.js";
 import type { AgentHarness } from "../agents/harness/types.js";
+import type { NativeAgentHarnessV2Factory } from "../agents/harness/v2.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import type { FailoverReason } from "../agents/pi-embedded-helpers/types.js";
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
@@ -171,6 +172,8 @@ export type {
 } from "./tool-types.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
 export type { AgentHarness } from "../agents/harness/types.js";
+export type { AgentHarnessV2 } from "../agents/harness/v2.js";
+export type AgentHarnessV2Factory = NativeAgentHarnessV2Factory;
 export type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareContext,
@@ -2326,6 +2329,14 @@ export type OpenClawPluginApi = {
   ) => void;
   /** Register an agent harness implementation. */
   registerAgentHarness: (harness: AgentHarness) => void;
+  /**
+   * Register a native Harness V2 lifecycle factory for an already registered
+   * agent harness id. V1 `registerAgentHarness(...)` remains the compatibility
+   * path; this optional factory lets trusted harness plugins opt into the
+   * internal prepare/start/send/outcome/cleanup lifecycle without changing
+   * selection or public V1 behavior.
+   */
+  registerAgentHarnessV2Factory: (harnessId: string, factory: NativeAgentHarnessV2Factory) => void;
   /**
    * Register a Codex app-server extension factory for Codex harness tool-result
    * middleware. Only bundled plugins may use this seam, and

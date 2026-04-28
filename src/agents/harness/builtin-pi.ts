@@ -57,4 +57,6 @@ export function createPiAgentHarnessV2(harness: AgentHarness): AgentHarnessV2 {
   };
 }
 
-registerNativeAgentHarnessV2Factory(PI_AGENT_HARNESS_ID, createPiAgentHarnessV2);
+registerNativeAgentHarnessV2Factory(PI_AGENT_HARNESS_ID, createPiAgentHarnessV2, {
+  source: "builtin",
+});

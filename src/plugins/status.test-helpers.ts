@@ -132,7 +132,13 @@ export function createCustomHook(params: {
 export function createPluginLoadResult(
   overrides: Partial<PluginLoadResult> & Pick<PluginLoadResult, "plugins"> = { plugins: [] },
 ): PluginLoadResult {
-  const { plugins, realtimeTranscriptionProviders, realtimeVoiceProviders, ...rest } = overrides;
+  const {
+    plugins,
+    agentHarnessV2Factories,
+    realtimeTranscriptionProviders,
+    realtimeVoiceProviders,
+    ...rest
+  } = overrides;
   return {
     plugins,
     diagnostics: [],
@@ -152,6 +158,7 @@ export function createPluginLoadResult(
     memoryEmbeddingProviders: [],
     textTransforms: [],
     agentHarnesses: [],
+    agentHarnessV2Factories: agentHarnessV2Factories ?? [],
     tools: [],
     hooks: [],
     typedHooks: [],

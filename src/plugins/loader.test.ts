@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { listAgentHarnessIds } from "../agents/harness/registry.js";
+import { getNativeAgentHarnessV2Factory } from "../agents/harness/v2.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -3383,6 +3384,66 @@ module.exports = { id: "throws-after-import", register() {} };`,
       },
     });
     expect(listAgentHarnessIds()).toEqual([]);
+  });
+
+  it("registers and clears plugin AgentHarnessV2 factories with their V1 harnesses", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "codex-harness-v2",
+      filename: "codex-harness-v2.cjs",
+      body: `module.exports = {
+        id: "codex-harness-v2",
+        register(api) {
+          api.registerAgentHarness({
+            id: "codex",
+            label: "Codex",
+            supports: () => ({ supported: true }),
+            runAttempt: async () => ({ ok: false, error: "unused" }),
+          });
+          api.registerAgentHarnessV2Factory("codex", (harness) => ({
+            id: harness.id,
+            label: harness.label,
+            supports: (ctx) => harness.supports(ctx),
+            prepare: async (params) => ({
+              harnessId: harness.id,
+              label: harness.label,
+              params,
+              lifecycleState: "prepared",
+            }),
+            start: async (prepared) => ({ ...prepared, lifecycleState: "started" }),
+            send: async (session) => harness.runAttempt(session.params),
+            resolveOutcome: async (_session, result) => result,
+            cleanup: async () => {},
+          }));
+        },
+      };`,
+    });
+
+    loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["codex-harness-v2"],
+        },
+      },
+      onlyPluginIds: ["codex-harness-v2"],
+    });
+    expect(listAgentHarnessIds()).toEqual(["codex"]);
+    expect(getNativeAgentHarnessV2Factory("codex")).toBeDefined();
+
+    loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: makeTempDir(),
+      config: {
+        plugins: {
+          allow: [],
+        },
+      },
+    });
+    expect(listAgentHarnessIds()).toEqual([]);
+    expect(getNativeAgentHarnessV2Factory("codex")).toBeUndefined();
   });
 
   it("does not register internal hooks globally during non-activating loads", () => {

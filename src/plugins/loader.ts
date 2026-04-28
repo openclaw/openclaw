@@ -6,6 +6,11 @@ import {
   listRegisteredAgentHarnesses,
   restoreRegisteredAgentHarnesses,
 } from "../agents/harness/registry.js";
+import {
+  clearPluginNativeAgentHarnessV2Factories,
+  listNativeAgentHarnessV2FactoryEntries,
+  restoreNativeAgentHarnessV2FactoryEntries,
+} from "../agents/harness/v2.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -234,6 +239,7 @@ type CachedPluginState = {
   memoryCapability: ReturnType<typeof getMemoryCapabilityRegistration>;
   memoryCorpusSupplements: ReturnType<typeof listMemoryCorpusSupplements>;
   agentHarnesses: ReturnType<typeof listRegisteredAgentHarnesses>;
+  agentHarnessV2Factories: ReturnType<typeof listNativeAgentHarnessV2FactoryEntries>;
   compactionProviders: ReturnType<typeof listRegisteredCompactionProviders>;
   memoryEmbeddingProviders: ReturnType<typeof listRegisteredMemoryEmbeddingProviders>;
   memoryFlushPlanResolver: ReturnType<typeof getMemoryFlushPlanResolver>;
@@ -281,6 +287,7 @@ export function clearPluginLoaderCache(): void {
   clearBundledRuntimeDependencyNodePaths();
   bundledRuntimeDependencyJitiAliases.clear();
   clearAgentHarnesses();
+  clearPluginNativeAgentHarnessV2Factories();
   clearPluginCommands();
   clearCompactionProviders();
   clearDetachedTaskLifecycleRuntimeRegistration();
@@ -2239,6 +2246,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     if (cached) {
       if (shouldActivate) {
         restoreRegisteredAgentHarnesses(cached.agentHarnesses);
+        restoreNativeAgentHarnessV2FactoryEntries(cached.agentHarnessV2Factories);
         restorePluginCommands(cached.commands ?? []);
         restoreRegisteredCompactionProviders(cached.compactionProviders);
         restoreDetachedTaskLifecycleRuntimeRegistration(cached.detachedTaskRuntimeRegistration);
@@ -2268,6 +2276,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     // Skip for non-activating (snapshot) loads to avoid wiping commands from other plugins.
     if (shouldActivate) {
       clearAgentHarnesses();
+      clearPluginNativeAgentHarnessV2Factories();
       clearPluginCommands();
       clearPluginInteractiveHandlers();
       clearDetachedTaskLifecycleRuntimeRegistration();
@@ -3148,6 +3157,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       });
       const registrySnapshot = snapshotPluginRegistry(registry);
       const previousAgentHarnesses = listRegisteredAgentHarnesses();
+      const previousAgentHarnessV2Factories = listNativeAgentHarnessV2FactoryEntries();
       const previousCompactionProviders = listRegisteredCompactionProviders();
       const previousDetachedTaskRuntimeRegistration = getDetachedTaskLifecycleRuntimeRegistration();
       const previousMemoryCapability = getMemoryCapabilityRegistration();
@@ -3167,6 +3177,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         // Snapshot loads should not replace process-global runtime prompt state.
         if (!shouldActivate) {
           restoreRegisteredAgentHarnesses(previousAgentHarnesses);
+          restoreNativeAgentHarnessV2FactoryEntries(previousAgentHarnessV2Factories);
           restoreRegisteredCompactionProviders(previousCompactionProviders);
           restoreDetachedTaskLifecycleRuntimeRegistration(previousDetachedTaskRuntimeRegistration);
           restoreRegisteredMemoryEmbeddingProviders(previousMemoryEmbeddingProviders);
@@ -3185,6 +3196,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         rollbackPluginGlobalSideEffects(record.id);
         restorePluginRegistry(registry, registrySnapshot);
         restoreRegisteredAgentHarnesses(previousAgentHarnesses);
+        restoreNativeAgentHarnessV2FactoryEntries(previousAgentHarnessV2Factories);
         restoreRegisteredCompactionProviders(previousCompactionProviders);
         restoreDetachedTaskLifecycleRuntimeRegistration(previousDetachedTaskRuntimeRegistration);
         restoreRegisteredMemoryEmbeddingProviders(previousMemoryEmbeddingProviders);
@@ -3251,6 +3263,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         memoryCorpusSupplements: listMemoryCorpusSupplements(),
         registry,
         agentHarnesses: listRegisteredAgentHarnesses(),
+        agentHarnessV2Factories: listNativeAgentHarnessV2FactoryEntries(),
         compactionProviders: listRegisteredCompactionProviders(),
         memoryEmbeddingProviders: listRegisteredMemoryEmbeddingProviders(),
         memoryFlushPlanResolver: getMemoryFlushPlanResolver(),

@@ -43,6 +43,7 @@ export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPlugi
     registerContextEngine() {},
     registerCompactionProvider() {},
     registerAgentHarness() {},
+    registerAgentHarnessV2Factory() {},
     registerCodexAppServerExtensionFactory() {},
     registerAgentToolResultMiddleware() {},
     registerDetachedTaskRuntime() {},

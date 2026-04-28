@@ -39,6 +39,8 @@ import {
 
 export type {
   AgentHarness,
+  AgentHarnessV2,
+  AgentHarnessV2Factory,
   AnyAgentTool,
   MediaUnderstandingProviderPlugin,
   OpenClawPluginApi,

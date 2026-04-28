@@ -41,6 +41,8 @@ export type {
 } from "../channels/plugins/setup-wizard-types.js";
 export type {
   AgentHarness,
+  AgentHarnessV2,
+  AgentHarnessV2Factory,
   AnyAgentTool,
   CliBackendPlugin,
   MediaUnderstandingProviderPlugin,

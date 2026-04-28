@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { createCodexAppServerAgentHarness } from "./harness.js";
+import { createCodexAppServerAgentHarness, createCodexAppServerAgentHarnessV2 } from "./harness.js";
 import { buildCodexMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { buildCodexProvider } from "./provider.js";
 import { createCodexCommand } from "./src/commands.js";
@@ -23,7 +23,11 @@ export default definePluginEntry({
         "codex",
         api.pluginConfig as Record<string, unknown>,
       ) ?? api.pluginConfig;
-    api.registerAgentHarness(createCodexAppServerAgentHarness({ pluginConfig: api.pluginConfig }));
+    const agentHarness = createCodexAppServerAgentHarness({ pluginConfig: api.pluginConfig });
+    api.registerAgentHarness(agentHarness);
+    api.registerAgentHarnessV2Factory(agentHarness.id, (harness) =>
+      createCodexAppServerAgentHarnessV2(harness, { pluginConfig: api.pluginConfig }),
+    );
     api.registerProvider(buildCodexProvider({ pluginConfig: api.pluginConfig }));
     api.registerMediaUnderstandingProvider(
       buildCodexMediaUnderstandingProvider({ pluginConfig: api.pluginConfig }),

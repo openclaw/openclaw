@@ -99,6 +99,57 @@ export default definePluginEntry({
 });
 ```
 
+## Optional native Harness V2 factory
+
+`registerAgentHarness(...)` remains the public compatibility contract. Trusted
+plugins that already own a native lifecycle can additionally register a V2
+factory for the same harness id:
+
+```typescript
+import type { AgentHarnessV2Factory } from "openclaw/plugin-sdk/agent-harness";
+
+const myHarnessV2Factory: AgentHarnessV2Factory = (harness) => ({
+  id: harness.id,
+  label: harness.label,
+  pluginId: harness.pluginId,
+  supports: (ctx) => harness.supports(ctx),
+  prepare: async (params) => ({
+    harnessId: harness.id,
+    label: harness.label,
+    pluginId: harness.pluginId,
+    params,
+    lifecycleState: "prepared",
+  }),
+  start: async (prepared) => ({
+    ...prepared,
+    lifecycleState: "started",
+  }),
+  send: async (session) => runMyNativeTurn(session.params),
+  resolveOutcome: async (session, result) => ({
+    ...result,
+    agentHarnessId: session.harnessId,
+  }),
+  cleanup: async () => {
+    // Per-attempt cleanup only. Global shutdown still belongs on dispose().
+  },
+});
+
+export default definePluginEntry({
+  id: "my-native-agent",
+  name: "My Native Agent",
+  description: "Runs selected models through a native agent daemon.",
+  register(api) {
+    api.registerAgentHarness(myHarness);
+    api.registerAgentHarnessV2Factory(myHarness.id, myHarnessV2Factory);
+  },
+});
+```
+
+The V2 factory is selected only after the V1 harness is selected. It does not
+change support probing, priority, fallback, compaction, reset, or disposal
+semantics. If a plugin does not register a V2 factory, OpenClaw adapts the V1
+harness automatically.
+
 ## Selection policy
 
 OpenClaw chooses a harness after provider/model resolution:

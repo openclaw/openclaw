@@ -15,6 +15,7 @@ describe("codex plugin", () => {
 
   it("registers the codex provider and agent harness", () => {
     const registerAgentHarness = vi.fn();
+    const registerAgentHarnessV2Factory = vi.fn();
     const registerCommand = vi.fn();
     const registerMediaUnderstandingProvider = vi.fn();
     const registerProvider = vi.fn();
@@ -30,6 +31,7 @@ describe("codex plugin", () => {
         pluginConfig: {},
         runtime: {} as never,
         registerAgentHarness,
+        registerAgentHarnessV2Factory,
         registerCommand,
         registerMediaUnderstandingProvider,
         registerProvider,
@@ -44,6 +46,7 @@ describe("codex plugin", () => {
       label: "Codex agent harness",
       dispose: expect.any(Function),
     });
+    expect(registerAgentHarnessV2Factory).toHaveBeenCalledWith("codex", expect.any(Function));
     expect(registerMediaUnderstandingProvider.mock.calls[0]?.[0]).toMatchObject({
       id: "codex",
       capabilities: ["image"],
