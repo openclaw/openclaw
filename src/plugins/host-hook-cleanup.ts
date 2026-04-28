@@ -5,6 +5,7 @@ import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targe
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { withPluginHostCleanupTimeout } from "./host-hook-cleanup-timeout.js";
 import {
   cleanupPluginSessionSchedulerJobs,
   clearPluginRunContext,
@@ -136,16 +137,19 @@ export async function runPluginHostCleanup(params: {
     if (!cleanup) {
       continue;
     }
+    const hookId = `session:${registration.extension.namespace}`;
     try {
-      await cleanup({
-        reason: params.reason,
-        sessionKey: params.sessionKey,
-      });
+      await withPluginHostCleanupTimeout(hookId, () =>
+        cleanup({
+          reason: params.reason,
+          sessionKey: params.sessionKey,
+        }),
+      );
       cleanupCount += 1;
     } catch (error) {
       failures.push({
         pluginId: registration.pluginId,
-        hookId: `session:${registration.extension.namespace}`,
+        hookId,
         error,
       });
     }
@@ -158,17 +162,20 @@ export async function runPluginHostCleanup(params: {
     if (!cleanup) {
       continue;
     }
+    const hookId = `runtime:${registration.lifecycle.id}`;
     try {
-      await cleanup({
-        reason: params.reason,
-        sessionKey: params.sessionKey,
-        runId: params.runId,
-      });
+      await withPluginHostCleanupTimeout(hookId, () =>
+        cleanup({
+          reason: params.reason,
+          sessionKey: params.sessionKey,
+          runId: params.runId,
+        }),
+      );
       cleanupCount += 1;
     } catch (error) {
       failures.push({
         pluginId: registration.pluginId,
-        hookId: `runtime:${registration.lifecycle.id}`,
+        hookId,
         error,
       });
     }
@@ -205,7 +212,7 @@ export async function runPluginHostCleanup(params: {
       failures.push(failure);
     }
   }
-  if (params.pluginId || params.runId) {
+  if ((params.pluginId || params.runId) && (params.reason !== "restart" || params.runId)) {
     clearPluginRunContext({ pluginId: params.pluginId, runId: params.runId });
   }
   return { cleanupCount, failures };

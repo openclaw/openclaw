@@ -105,6 +105,7 @@ import {
 } from "./memory-state.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { isPluginRegistryRetired } from "./registry-lifecycle.js";
 import type {
   PluginCliBackendRegistration,
   PluginCliRegistration,
@@ -186,6 +187,10 @@ type PluginOwnedProviderRegistration<T extends { id: string }> = {
   provider: T;
   source: string;
   rootDir?: string;
+};
+
+type PluginSideEffectGuard = {
+  active: boolean;
 };
 
 export type {
@@ -290,6 +295,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   ]);
   const pluginHookRollback = new Map<string, HookRollbackEntry[]>();
   const pluginsWithChannelRegistrationConflict = new Set<string>();
+  const pluginSideEffectGuards = new Map<string, Set<PluginSideEffectGuard>>();
 
   const pushDiagnostic = (diag: PluginDiagnostic) => {
     registry.diagnostics.push(diag);
@@ -304,6 +310,25 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       throw new Error(message);
     }
     return value;
+  };
+
+  const createPluginSideEffectGuard = (pluginId: string): PluginSideEffectGuard => {
+    const guard = { active: true };
+    const guards = pluginSideEffectGuards.get(pluginId) ?? new Set<PluginSideEffectGuard>();
+    guards.add(guard);
+    pluginSideEffectGuards.set(pluginId, guards);
+    return guard;
+  };
+
+  const deactivatePluginSideEffectGuards = (pluginId: string): void => {
+    const guards = pluginSideEffectGuards.get(pluginId);
+    if (!guards) {
+      return;
+    }
+    for (const guard of guards) {
+      guard.active = false;
+    }
+    pluginSideEffectGuards.delete(pluginId);
   };
 
   const registerCodexAppServerExtensionFactory = (
@@ -2191,6 +2216,11 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     const registrationMode = params.registrationMode ?? "full";
     const registrationCapabilities = resolvePluginRegistrationCapabilities(registrationMode);
     pluginRuntimeRecordById.set(record.id, record);
+    const sideEffectGuard = createPluginSideEffectGuard(record.id);
+    const shouldCommitWorkflowSideEffect = () =>
+      sideEffectGuard.active &&
+      !isPluginRegistryRetired(registry) &&
+      registry.plugins.some((plugin) => plugin.id === record.id && plugin.status === "loaded");
     return buildPluginApi({
       id: record.id,
       name: record.name,
@@ -2424,6 +2454,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                       pluginName: record.name,
                       origin: record.origin,
                       schedule,
+                      shouldCommit: shouldCommitWorkflowSideEffect,
                     }),
               sendSessionAttachment: (params) =>
                 registryParams.activateGlobalSideEffects === false
@@ -2591,6 +2622,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   };
 
   const rollbackPluginGlobalSideEffects = (pluginId: string) => {
+    deactivatePluginSideEffectGuards(pluginId);
     if (registryParams.activateGlobalSideEffects === false) {
       return;
     }

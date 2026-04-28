@@ -2,6 +2,7 @@ import type { AgentEventPayload } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { withPluginHostCleanupTimeout } from "./host-hook-cleanup-timeout.js";
 import {
   isPluginJsonValue,
   type PluginHostCleanupReason,
@@ -445,16 +446,19 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
       // A newer generation may already own this id. The old cleanup callback can
       // still release plugin-owned resources, while deletion below is generation
       // matched so it cannot remove the newer live record.
+      const hookId = `scheduler:${jobId}`;
       try {
-        await record.job.cleanup?.({
-          reason: params.reason,
-          sessionKey,
-          jobId,
-        });
+        await withPluginHostCleanupTimeout(hookId, () =>
+          record.job.cleanup?.({
+            reason: params.reason,
+            sessionKey,
+            jobId,
+          }),
+        );
       } catch (error) {
         failures.push({
           pluginId: record.pluginId,
-          hookId: `scheduler:${jobId}`,
+          hookId,
           error,
         });
         continue;
@@ -484,16 +488,19 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
       if (params.preserveJobIds?.has(jobId)) {
         continue;
       }
+      const hookId = `scheduler:${jobId}`;
       try {
-        await record.job.cleanup?.({
-          reason: params.reason,
-          sessionKey: record.job.sessionKey,
-          jobId,
-        });
+        await withPluginHostCleanupTimeout(hookId, () =>
+          record.job.cleanup?.({
+            reason: params.reason,
+            sessionKey: record.job.sessionKey,
+            jobId,
+          }),
+        );
       } catch (error) {
         failures.push({
           pluginId,
-          hookId: `scheduler:${jobId}`,
+          hookId,
           error,
         });
         continue;

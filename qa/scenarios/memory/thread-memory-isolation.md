@@ -74,22 +74,19 @@ steps:
       - set: beforeCursor
         value:
           expr: state.getSnapshot().messages.length
-      - call: state.addInboundMessage
+      - call: runAgentPrompt
         args:
-          - conversation:
-              id:
-                expr: config.channelId
-              kind: channel
-              title:
-                expr: config.channelTitle
-            senderId: alice
-            senderName: Alice
-            text:
+          - ref: env
+          - sessionKey:
+              expr: "buildAgentSessionKey({ agentId: 'qa', channel: 'qa-channel', peer: { kind: 'channel', id: config.channelId } })"
+            to:
+              expr: "`thread:${config.channelId}/${threadId}`"
+            message:
               expr: config.prompt
             threadId:
               ref: threadId
-            threadTitle:
-              expr: config.threadTitle
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 75000)
       - call: waitForOutboundMessage
         saveAs: outbound
         args:

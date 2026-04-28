@@ -1,7 +1,12 @@
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
 import { consumeControlPlaneWriteBudget } from "./control-plane-rate-limit.js";
-import { ADMIN_SCOPE, authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import {
+  ADMIN_SCOPE,
+  APPROVALS_SCOPE,
+  WRITE_SCOPE,
+  authorizeOperatorScopesForMethod,
+} from "./method-scopes.js";
 import { ErrorCodes, errorShape } from "./protocol/index.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "./role-policy.js";
 import { agentHandlers } from "./server-methods/agent.js";
@@ -63,6 +68,12 @@ function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["c
   }
   if (scopes.includes(ADMIN_SCOPE)) {
     return null;
+  }
+  if (method === "plugins.sessionAction") {
+    if (scopes.includes(WRITE_SCOPE) || scopes.includes(APPROVALS_SCOPE)) {
+      return null;
+    }
+    return errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${WRITE_SCOPE}`);
   }
   const scopeAuth = authorizeOperatorScopesForMethod(method, scopes);
   if (!scopeAuth.allowed) {

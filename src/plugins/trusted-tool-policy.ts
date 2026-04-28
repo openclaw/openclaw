@@ -68,7 +68,10 @@ export async function runTrustedToolPolicies(
       hasAdjustedParams = true;
     }
     if ("requireApproval" in decision && decision.requireApproval && !approval) {
-      approval = decision.requireApproval;
+      approval = {
+        ...decision.requireApproval,
+        pluginId: decision.requireApproval.pluginId ?? registration.pluginId,
+      };
     }
   }
   if (!hasAdjustedParams && !approval) {
