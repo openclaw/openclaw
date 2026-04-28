@@ -1628,6 +1628,45 @@ describe("gateway server sessions", () => {
     ws.close();
   });
 
+  test("sessions.compact with maxLines rejects when an embedded run is active and does not stop", async () => {
+    const { dir, storePath } = await createSessionStoreDir();
+    const transcriptPath = path.join(dir, "sess-main.jsonl");
+    const lines = Array.from({ length: 10 }, (_, i) =>
+      JSON.stringify({ role: i % 2 === 0 ? "user" : "assistant", content: `msg ${i}` }),
+    ).join("\n");
+    await fs.writeFile(transcriptPath, `${lines}\n`, "utf-8");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        "agent:main:main": { sessionId: "sess-main", updatedAt: Date.now() },
+      }),
+      "utf-8",
+    );
+
+    embeddedRunMock.activeIds.add("sess-main");
+    embeddedRunMock.waitResults.set("sess-main", false);
+
+    try {
+      const result = await directSessionReq("sessions.compact", {
+        key: "main",
+        maxLines: 3,
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.error?.code).toBe("UNAVAILABLE");
+
+      const afterLines = (await fs.readFile(transcriptPath, "utf-8"))
+        .split(/\r?\n/)
+        .filter((l) => l.trim().length > 0);
+      expect(afterLines).toHaveLength(10);
+      const files = await fs.readdir(dir);
+      expect(files.some((f) => f.startsWith("sess-main.jsonl.bak."))).toBe(false);
+    } finally {
+      embeddedRunMock.activeIds.delete("sess-main");
+      embeddedRunMock.waitResults.delete("sess-main");
+    }
+  });
+
   test("sessions.patch preserves nested model ids under provider overrides", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-sessions-nested-"));
     const storePath = path.join(dir, "sessions.json");
