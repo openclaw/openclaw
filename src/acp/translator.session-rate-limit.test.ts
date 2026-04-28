@@ -379,6 +379,10 @@ describe("acp session UX bridge behavior", () => {
         sessionUpdate: "session_info_update",
         title: "Fix ACP bridge",
         updatedAt: "2024-03-09T16:00:00.000Z",
+        _meta: {
+          sessionKey: "agent:main:work",
+          kind: "direct",
+        },
       },
     });
     expect(sessionUpdate).toHaveBeenCalledWith({
@@ -952,6 +956,10 @@ describe("acp session metadata and usage updates", () => {
         sessionUpdate: "session_info_update",
         title: "Usage session",
         updatedAt: "2024-03-09T16:02:03.000Z",
+        _meta: {
+          sessionKey: "usage-session",
+          kind: "direct",
+        },
       },
     });
     expect(sessionUpdate).toHaveBeenCalledWith({
