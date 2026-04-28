@@ -106,7 +106,7 @@ export type TelegramDraftStream = {
   materialize?: () => Promise<number | undefined>;
   /** Reset internal state so the next update creates a new message instead of editing. */
   forceNewMessage: () => void;
-  /** True when a preview sendMessage was attempted but the response was lost. */
+  /** True when a preview/materialize sendMessage was attempted but the response was lost. */
   sendMayHaveLanded?: () => boolean;
 };
 
@@ -438,6 +438,7 @@ export function createTelegramDraftStream(params: {
       return undefined;
     }
     const renderedParseMode = lastSentText ? lastSentParseMode : undefined;
+    messageSendAttempted = true;
     try {
       const { sent, usedThreadParams } = await sendRenderedMessageWithThreadFallback({
         renderedText,
@@ -462,6 +463,9 @@ export function createTelegramDraftStream(params: {
         return streamMessageId;
       }
     } catch (err) {
+      if (isSafeToRetrySendError(err) || isTelegramClientRejection(err)) {
+        messageSendAttempted = false;
+      }
       params.warn?.(`telegram stream preview materialize failed: ${formatErrorMessage(err)}`);
     }
     return undefined;

@@ -331,6 +331,28 @@ describe("createTelegramDraftStream", () => {
     );
   });
 
+  it("marks sendMayHaveLanded after an ambiguous materialize send failure", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage.mockRejectedValueOnce(new Error("timeout after Telegram accepted send"));
+    const warn = vi.fn();
+    const stream = createDraftStream(api, {
+      thread: { id: 42, scope: "dm" },
+      previewTransport: "draft",
+      warn,
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+    const materializedId = await stream.materialize?.();
+
+    expect(materializedId).toBeUndefined();
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", { message_thread_id: 42 });
+    expect(stream.sendMayHaveLanded?.()).toBe(true);
+    expect(warn).toHaveBeenCalledWith(
+      "telegram stream preview materialize failed: timeout after Telegram accepted send",
+    );
+  });
+
   it("returns existing preview id when materializing message transport", async () => {
     const api = createMockDraftApi();
     const stream = createDraftStream(api, {
