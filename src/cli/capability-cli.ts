@@ -18,6 +18,7 @@ import {
   completeWithPreparedSimpleCompletionModel,
   prepareSimpleCompletionModelForAgent,
 } from "../agents/simple-completion-runtime.js";
+import { normalizeThinkLevel, type ThinkLevel } from "../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -650,10 +651,27 @@ async function readModelRunImageFiles(files: string[] | undefined): Promise<Mode
   );
 }
 
+function normalizeModelRunThinking(value: unknown): ThinkLevel | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "string") {
+    throw new Error("--thinking must be a string.");
+  }
+  const normalized = normalizeThinkLevel(value);
+  if (!normalized) {
+    throw new Error(
+      "Invalid thinking level. Use one of: off, minimal, low, medium, high, adaptive, xhigh, max.",
+    );
+  }
+  return normalized;
+}
+
 async function runModelRun(params: {
   prompt: string;
   files?: string[];
   model?: string;
+  thinking?: ThinkLevel;
   transport: CapabilityTransport;
 }) {
   const cfg = getRuntimeConfig();
@@ -715,6 +733,7 @@ async function runModelRun(params: {
           typeof prepared.model.maxTokens === "number" && Number.isFinite(prepared.model.maxTokens)
             ? prepared.model.maxTokens
             : undefined,
+        ...(params.thinking ? { reasoning: params.thinking } : {}),
       },
     });
     const text = collectModelRunText(result.content);
@@ -783,6 +802,7 @@ async function runModelRun(params: {
           : undefined,
       provider,
       model,
+      ...(params.thinking ? { thinking: params.thinking } : {}),
       modelRun: true,
       promptMode: "none",
       cleanupBundleMcpOnRunEnd: true,
@@ -1651,12 +1671,14 @@ export function registerCapabilityCli(program: Command) {
     .requiredOption("--prompt <text>", "Prompt text")
     .option("--file <path>", "Image file", collectOption, [])
     .option("--model <provider/model>", "Model override")
+    .option("--thinking <level>", "Thinking level override")
     .option("--local", "Force local execution", false)
     .option("--gateway", "Force gateway execution", false)
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const prompt = requireModelRunPrompt(opts.prompt);
+        const thinking = normalizeModelRunThinking(opts.thinking);
         const transport = resolveTransport({
           local: Boolean(opts.local),
           gateway: Boolean(opts.gateway),
@@ -1667,6 +1689,7 @@ export function registerCapabilityCli(program: Command) {
           prompt,
           files: opts.file as string[] | undefined,
           model: opts.model as string | undefined,
+          thinking,
           transport,
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);

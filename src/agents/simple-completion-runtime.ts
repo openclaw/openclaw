@@ -1,4 +1,5 @@
 import { complete, type Api, type Model } from "@mariozechner/pi-ai";
+import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.runtime.js";
@@ -32,6 +33,7 @@ type AllowedMissingApiKeyMode = ResolvedProviderAuth["mode"];
 export type SimpleCompletionModelOptions = {
   maxTokens?: number;
   temperature?: number;
+  reasoning?: ThinkLevel;
   signal?: AbortSignal;
 };
 
