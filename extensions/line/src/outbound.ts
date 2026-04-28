@@ -74,6 +74,19 @@ function isNumericIdString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && /^[0-9]+$/.test(value);
 }
 
+function validateStickerIds(sticker: { packageId: string; stickerId: string }): boolean {
+  const { packageId, stickerId } = sticker;
+  if (isNumericIdString(packageId) && isNumericIdString(stickerId)) {
+    return true;
+  }
+  logVerbose(
+    `line: dropping sticker payload with non-numeric ids (packageId length=${
+      typeof packageId === "string" ? packageId.length : "n/a"
+    }, stickerId length=${typeof stickerId === "string" ? stickerId.length : "n/a"})`,
+  );
+  return false;
+}
+
 export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>["outbound"]> = {
   deliveryMode: "direct",
   chunker: (text, limit) => getLineRuntime().channel.text.chunkMarkdownText(text, limit),
@@ -206,21 +219,12 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         });
       }
 
-      if (lineData.sticker) {
-        const { packageId, stickerId } = lineData.sticker;
-        if (isNumericIdString(packageId) && isNumericIdString(stickerId)) {
-          lastResult = await sendSticker(to, packageId, stickerId, {
-            verbose: false,
-            cfg,
-            accountId: accountId ?? undefined,
-          });
-        } else {
-          logVerbose(
-            `line: dropping sticker payload with non-numeric ids (packageId length=${
-              typeof packageId === "string" ? packageId.length : "n/a"
-            }, stickerId length=${typeof stickerId === "string" ? stickerId.length : "n/a"})`,
-          );
-        }
+      if (lineData.sticker && validateStickerIds(lineData.sticker)) {
+        lastResult = await sendSticker(to, lineData.sticker.packageId, lineData.sticker.stickerId, {
+          verbose: false,
+          cfg,
+          accountId: accountId ?? undefined,
+        });
       }
 
       for (const flexMsg of processed.flexMessages) {
@@ -279,21 +283,12 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
           longitude: lineData.location.longitude,
         });
       }
-      if (lineData.sticker) {
-        const { packageId, stickerId } = lineData.sticker;
-        if (isNumericIdString(packageId) && isNumericIdString(stickerId)) {
-          quickReplyMessages.push({
-            type: "sticker",
-            packageId,
-            stickerId,
-          });
-        } else {
-          logVerbose(
-            `line: dropping sticker payload with non-numeric ids (packageId length=${
-              typeof packageId === "string" ? packageId.length : "n/a"
-            }, stickerId length=${typeof stickerId === "string" ? stickerId.length : "n/a"})`,
-          );
-        }
+      if (lineData.sticker && validateStickerIds(lineData.sticker)) {
+        quickReplyMessages.push({
+          type: "sticker",
+          packageId: lineData.sticker.packageId,
+          stickerId: lineData.sticker.stickerId,
+        });
       }
       for (const flexMsg of processed.flexMessages) {
         quickReplyMessages.push({

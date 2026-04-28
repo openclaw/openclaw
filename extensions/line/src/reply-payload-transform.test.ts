@@ -459,5 +459,13 @@ describe("parseLineDirectives", () => {
       expect(hasLineDirectives("STICKER:abc:1988")).toBe(false);
       expect(hasLineDirectives("STICKER:446:1988 trailing")).toBe(false);
     });
+
+    it("hasLineDirectives ignores STICKER inside fenced code block", () => {
+      // Guard against parseLineDirectives running its text-normalization step
+      // when the only STICKER directive is inside a fenced code block.
+      expect(hasLineDirectives("See:\n```\nSTICKER:446:1988\n```\nThanks!")).toBe(false);
+      // Mixed: fenced block first, then a real directive on its own line.
+      expect(hasLineDirectives("```\nSTICKER:446:1988\n```\nSTICKER:789:10855")).toBe(true);
+    });
   });
 });

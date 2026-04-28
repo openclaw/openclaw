@@ -359,9 +359,25 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
 }
 
 export function hasLineDirectives(text: string): boolean {
-  return (
+  if (
     /\[\[(quick_replies|location|confirm|buttons|media_player|event|agenda|device|appletv_remote):/i.test(
       text,
-    ) || /^STICKER:[0-9]+:[0-9]+\s*$/m.test(text)
-  );
+    )
+  ) {
+    return true;
+  }
+  // STICKER directive: fence-aware line scan, mirroring extractStickerDirective
+  // so directives inside fenced code blocks do not trigger parseLineDirectives
+  // and its trailing text-normalization step.
+  let inFence = false;
+  for (const line of text.split("\n")) {
+    if (line.trim().startsWith("```")) {
+      inFence = !inFence;
+      continue;
+    }
+    if (!inFence && /^STICKER:[0-9]+:[0-9]+\s*$/.test(line)) {
+      return true;
+    }
+  }
+  return false;
 }

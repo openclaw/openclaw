@@ -43,5 +43,10 @@ Thanks for letting me know!
 STICKER:446:1988
 ```
 
-This delivers a text message ("Thanks for letting me know!") followed by a
-sticker from package 446. The directive line itself is removed from the text.
+This delivers a sticker (from package 446) together with the surrounding
+text. The directive line itself is removed from the user-visible text.
+The LINE plugin dispatches sticker-bearing payloads with the same ordering
+as the existing LINE-native carriers (`flexMessage` / `templateMessage` /
+`location`): the native message first, then any text chunks. Authors who
+need a strict text-then-sticker sequence should send two separate replies
+rather than relying on placement of the directive within a single reply.
