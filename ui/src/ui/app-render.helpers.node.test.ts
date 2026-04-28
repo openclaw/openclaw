@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 const {
   refreshChatMock,
@@ -498,7 +499,9 @@ describe("switchChatSession", () => {
     const state = {
       sessionKey: "main",
       chatMessage: "draft",
-      chatAttachments: [{ mimeType: "image/png", dataUrl: "data:image/png;base64,AAA" }],
+      chatAttachments: [
+        { id: "att-1", mimeType: "image/png", dataUrl: "data:image/png;base64,AAA" },
+      ],
       chatMessages: [{ role: "assistant", content: "old" }],
       chatToolMessages: [{ id: "tool-1" }],
       chatStreamSegments: [{ text: "segment", ts: 1 }],
@@ -528,6 +531,7 @@ describe("switchChatSession", () => {
       loadAssistantIdentity: vi.fn(),
       resetToolStream: vi.fn(),
       resetChatScroll: vi.fn(),
+      resetChatInputHistoryNavigation: vi.fn(),
     } as unknown as AppViewState;
 
     refreshChatAvatarMock.mockResolvedValue(undefined);
@@ -540,6 +544,10 @@ describe("switchChatSession", () => {
 
     expect(state.chatSideResult).toBeNull();
     expect(state.chatSideResultTerminalRuns.size).toBe(0);
+    expect(
+      (state as unknown as { resetChatInputHistoryNavigation: ReturnType<typeof vi.fn> })
+        .resetChatInputHistoryNavigation,
+    ).toHaveBeenCalled();
     expect(refreshChatAvatarMock).toHaveBeenCalledWith(state);
     expect(refreshSlashCommandsMock).toHaveBeenCalledWith({
       client: undefined,
@@ -581,6 +589,7 @@ describe("switchChatSession", () => {
       loadAssistantIdentity: vi.fn(),
       resetToolStream: vi.fn(),
       resetChatScroll: vi.fn(),
+      resetChatInputHistoryNavigation: vi.fn(),
       client: { request: vi.fn() },
     } as unknown as AppViewState;
 

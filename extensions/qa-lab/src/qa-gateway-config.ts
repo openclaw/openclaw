@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   defaultQaModelForMode,
@@ -118,10 +118,11 @@ export function buildQaGatewayConfig(params: {
       allow: allowedPlugins,
       entries: {
         acpx: {
-          // The parity gateway stages a clean bundled-plugin tree. Keep the
-          // runtime backend plugin in the allowlist so this disabled entry is
-          // not mistaken for stale config when optional bundles are pruned.
-          enabled: false,
+          enabled: true,
+          config: {
+            pluginToolsMcpBridge: true,
+            openClawToolsMcpBridge: true,
+          },
         },
         "memory-core": {
           enabled: true,

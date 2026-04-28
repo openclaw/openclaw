@@ -19,7 +19,7 @@ import { filterInternalMarkers } from "../utils/text-parsing.js";
 import { decodeMediaPath } from "./decode-media-path.js";
 import {
   sendText as senderSendText,
-  sendImage as senderSendImage,
+  sendMedia as senderSendMedia,
   withTokenRetry,
   buildDeliveryTarget,
   accountToCreds,
@@ -350,14 +350,11 @@ export async function parseAndSendMediaTags(
     return { handled: false, normalizedText: text };
   }
 
-  const tagCounts = mediaTagMatches.reduce(
-    (acc, m) => {
-      const t = normalizeLowercaseStringOrEmpty(m[1]);
-      acc[t] = (acc[t] ?? 0) + 1;
-      return acc;
-    },
-    {} as Record<string, number>,
-  );
+  const tagCounts = mediaTagMatches.reduce<Record<string, number>>((acc, m) => {
+    const t = normalizeLowercaseStringOrEmpty(m[1]);
+    acc[t] = (acc[t] ?? 0) + 1;
+    return acc;
+  }, {});
   log?.debug?.(
     `Detected media tags: ${Object.entries(tagCounts)
       .map(([k, v]) => `${v} <${k}>`)
@@ -465,6 +462,7 @@ export interface PlainReplyPayload {
   text?: string;
   mediaUrls?: string[];
   mediaUrl?: string;
+  audioAsVoice?: boolean;
 }
 
 /**
@@ -661,7 +659,13 @@ async function sendMarkdownReply(
         const creds = accountToCreds(account);
         if (target.type === "c2c" || target.type === "group") {
           await withTokenRetry(creds, async () => {
-            await senderSendImage(target, imageUrl, creds, { msgId: event.messageId });
+            await senderSendMedia({
+              target,
+              creds,
+              kind: "image",
+              source: { url: imageUrl },
+              msgId: event.messageId,
+            });
           });
         } else {
           log?.debug?.(`${target.type} does not support rich media, skipping Base64 image`);

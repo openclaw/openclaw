@@ -19,6 +19,7 @@ describe("createCacheTrace", () => {
       writer: {
         filePath: "memory",
         write: (line) => lines.push(line),
+        flush: async () => undefined,
       },
     });
     return { lines, trace };
@@ -48,6 +49,7 @@ describe("createCacheTrace", () => {
       writer: {
         filePath: "memory",
         write: (line) => lines.push(line),
+        flush: async () => undefined,
       },
     });
 
@@ -78,6 +80,7 @@ describe("createCacheTrace", () => {
       writer: {
         filePath: "memory",
         write: (line) => lines.push(line),
+        flush: async () => undefined,
       },
     });
 
@@ -85,6 +88,19 @@ describe("createCacheTrace", () => {
 
     const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
     expect(event.prompt).toBe("");
+    expect(event.system).toBe("");
+  });
+
+  it("records raw model run session stages", () => {
+    const { lines, trace } = createMemoryTraceForTest();
+
+    trace?.recordStage("session:raw-model-run", {
+      messages: [],
+      system: "",
+    });
+
+    const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
+    expect(event.stage).toBe("session:raw-model-run");
     expect(event.system).toBe("");
   });
 
@@ -103,6 +119,7 @@ describe("createCacheTrace", () => {
       writer: {
         filePath: "memory",
         write: (line) => lines.push(line),
+        flush: async () => undefined,
       },
     });
 
@@ -147,6 +164,7 @@ describe("createCacheTrace", () => {
       writer: {
         filePath: "memory",
         write: (line) => lines.push(line),
+        flush: async () => undefined,
       },
     });
 

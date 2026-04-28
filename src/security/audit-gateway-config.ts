@@ -7,6 +7,7 @@ import {
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
+import { collectCoreInsecureOrDangerousFlags } from "./core-dangerous-config-flags.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "./dangerous-tools.js";
 
 type CollectDangerousConfigFlags = (cfg: OpenClawConfig) => string[];
@@ -17,33 +18,6 @@ export type CollectGatewayConfigFindingsOptions = {
 
 function hasNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
-}
-
-function collectCoreInsecureOrDangerousFlags(cfg: OpenClawConfig): string[] {
-  const enabledFlags: string[] = [];
-  if (cfg.gateway?.controlUi?.allowInsecureAuth === true) {
-    enabledFlags.push("gateway.controlUi.allowInsecureAuth=true");
-  }
-  if (cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true) {
-    enabledFlags.push("gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true");
-  }
-  if (cfg.gateway?.controlUi?.dangerouslyDisableDeviceAuth === true) {
-    enabledFlags.push("gateway.controlUi.dangerouslyDisableDeviceAuth=true");
-  }
-  if (cfg.hooks?.gmail?.allowUnsafeExternalContent === true) {
-    enabledFlags.push("hooks.gmail.allowUnsafeExternalContent=true");
-  }
-  if (Array.isArray(cfg.hooks?.mappings)) {
-    for (const [index, mapping] of cfg.hooks.mappings.entries()) {
-      if (mapping?.allowUnsafeExternalContent === true) {
-        enabledFlags.push(`hooks.mappings[${index}].allowUnsafeExternalContent=true`);
-      }
-    }
-  }
-  if (cfg.tools?.exec?.applyPatch?.workspaceOnly === false) {
-    enabledFlags.push("tools.exec.applyPatch.workspaceOnly=false");
-  }
-  return enabledFlags;
 }
 
 export function collectGatewayConfigFindings(
@@ -349,6 +323,20 @@ export function collectGatewayConfigFindings(
         remediation:
           "Set gateway.auth.trustedProxy.userHeader to the header name your proxy uses " +
           '(e.g., "x-forwarded-user", "x-pomerium-claim-email").',
+      });
+    }
+
+    if (trustedProxyConfig?.allowLoopback === true) {
+      findings.push({
+        checkId: "gateway.trusted_proxy_allow_loopback",
+        severity: "warn",
+        title: "Trusted-proxy auth allows loopback proxy sources",
+        detail:
+          "gateway.auth.trustedProxy.allowLoopback=true allows loopback-source requests " +
+          "from configured gateway.trustedProxies entries to satisfy trusted-proxy auth.",
+        remediation:
+          "Enable this only when a same-host reverse proxy is the intended trust boundary. " +
+          "Keep direct Gateway access private to the host and require the proxy to strip or overwrite identity headers.",
       });
     }
 

@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 const SRC_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -10,6 +11,7 @@ const tsFilesCache = new Map<string, string[]>();
 const BUNDLED_TYPED_HOOK_REGISTRATION_FILES = [
   "extensions/acpx/index.ts",
   "extensions/active-memory/index.ts",
+  "extensions/codex/index.ts",
   "extensions/diffs/src/plugin.ts",
   "extensions/discord/subagent-hooks-api.ts",
   "extensions/feishu/subagent-hooks-api.ts",
@@ -22,6 +24,7 @@ const BUNDLED_TYPED_HOOK_REGISTRATION_FILES = [
 const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
   "extensions/acpx/index.ts": ["reply_dispatch"],
   "extensions/active-memory/index.ts": ["before_prompt_build"],
+  "extensions/codex/index.ts": ["inbound_claim"],
   "extensions/diffs/src/plugin.ts": ["before_prompt_build"],
   "extensions/discord/subagent-hooks-api.ts": [
     "subagent_delivery_target",
@@ -38,14 +41,71 @@ const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
     "subagent_ended",
     "subagent_spawning",
   ],
-  "extensions/memory-core/src/dreaming.ts": ["before_agent_reply", "gateway_start"],
-  "extensions/memory-lancedb/index.ts": ["agent_end", "before_prompt_build"],
+  "extensions/memory-core/src/dreaming.ts": ["before_agent_reply", "gateway_start", "gateway_stop"],
+  "extensions/memory-lancedb/index.ts": ["agent_end", "before_prompt_build", "session_end"],
   "extensions/skill-workshop/index.ts": ["agent_end", "before_prompt_build"],
   "extensions/thread-ownership/index.ts": ["message_received", "message_sending"],
 } as const satisfies Record<
   (typeof BUNDLED_TYPED_HOOK_REGISTRATION_FILES)[number],
   readonly string[]
 >;
+const BUNDLED_LIVE_CONFIG_HOOK_GUARDS = {
+  "extensions/active-memory/index.ts": ["resolveLivePluginConfigObject(", '"active-memory"'],
+  "extensions/codex/index.ts": ["resolveLivePluginConfigObject(", '"codex"'],
+  "extensions/diffs/src/plugin.ts": [
+    "resolveLivePluginConfigObject(",
+    '"diffs"',
+    "api.runtime.config?.current?.() ?? api.config",
+  ],
+  "extensions/memory-core/src/dreaming.ts": [
+    'params.reason === "runtime"',
+    "resolveMemoryCorePluginConfig(startupCfg)",
+    "api.runtime.config?.current?.() ?? api.config",
+  ],
+  "extensions/memory-lancedb/index.ts": ["resolveLivePluginConfigObject(", '"memory-lancedb"'],
+  "extensions/skill-workshop/index.ts": ["resolveLivePluginConfigObject(", '"skill-workshop"'],
+  "extensions/thread-ownership/index.ts": [
+    "resolveLivePluginConfigObject(",
+    '"thread-ownership"',
+    "api.runtime.config?.current?.() ?? api.config",
+  ],
+} as const satisfies Record<string, readonly string[]>;
+const BUNDLED_LIVE_CONFIG_PROVIDER_GUARDS = {
+  "extensions/amazon-bedrock/register.sync.runtime.ts": [
+    "resolvePluginConfigObject(",
+    "const startupPluginConfig = (api.pluginConfig ?? {})",
+    "const currentPluginConfig = resolveCurrentPluginConfig(ctx.config);",
+    "const currentGuardrail = resolveCurrentPluginConfig(config)?.guardrail;",
+  ],
+  "extensions/codex/provider.ts": [
+    "resolvePluginConfigObject(",
+    "const runtimePluginConfig = resolvePluginConfigObject(ctx.config, CODEX_PROVIDER_ID);",
+    "const pluginConfig = runtimePluginConfig ?? (ctx.config ? undefined : options.pluginConfig);",
+  ],
+  "extensions/github-copilot/index.ts": [
+    "resolvePluginConfigObject(",
+    'const runtimePluginConfig = resolvePluginConfigObject(config, "github-copilot");',
+    "return config ? {} : startupPluginConfig;",
+  ],
+  "extensions/ollama/index.ts": [
+    "resolvePluginConfigObject(",
+    'const runtimePluginConfig = resolvePluginConfigObject(config, "ollama");',
+    "return config ? {} : startupPluginConfig;",
+  ],
+  "extensions/openai/index.ts": [
+    "resolvePluginConfigObject(",
+    'const runtimePluginConfig = resolvePluginConfigObject(ctx.config, "openai");',
+    "runtimePluginConfig ??",
+    "ctx.config ? undefined : (api.pluginConfig as Record<string, unknown>)",
+  ],
+} as const satisfies Record<string, readonly string[]>;
+const BUNDLED_STARTUP_GATED_HOOK_FORBIDDEN_SNIPPETS = {
+  "extensions/memory-lancedb/index.ts": ["if (cfg.autoRecall)", "if (cfg.autoCapture)"],
+  "extensions/skill-workshop/index.ts": [
+    "if (!startupConfig.enabled)",
+    'if (startupConfig.autoCapture && startupConfig.reviewMode !== "off")',
+  ],
+} as const satisfies Record<string, readonly string[]>;
 
 type FileFilter = {
   excludeTests?: boolean;
@@ -65,6 +125,9 @@ function listTsFiles(rootRelativePath: string, filter: FileFilter = {}): string[
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
       const fullPath = resolve(directory, entry.name);
       if (entry.isDirectory()) {
+        if (entry.name === "node_modules" || entry.name === "dist" || entry.name === ".git") {
+          continue;
+        }
         walk(fullPath);
         continue;
       }
@@ -103,14 +166,46 @@ function isAllowedBundledExtensionImport(specifier: string): boolean {
 }
 
 function collectBundledExtensionImports(source: string): string[] {
-  const matches = [
-    ...source.matchAll(/from\s+["']([^"']*extensions\/[^"']+)["']/gu),
-    ...source.matchAll(/vi\.(?:mock|doMock)\(\s*["']([^"']*extensions\/[^"']+)["']/gu),
-    ...source.matchAll(/importActual(?:<[^>]*>)?\(\s*["']([^"']*extensions\/[^"']+)["']/gu),
-  ];
-  return matches
-    .map((match) => match[1])
-    .filter((specifier): specifier is string => typeof specifier === "string");
+  const sourceFile = ts.createSourceFile(
+    "boundary-invariants-input.ts",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const specifiers: string[] = [];
+
+  function visit(node: ts.Node): void {
+    if (
+      (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+      node.moduleSpecifier &&
+      ts.isStringLiteralLike(node.moduleSpecifier)
+    ) {
+      specifiers.push(node.moduleSpecifier.text);
+    }
+    if (ts.isCallExpression(node) && isBundledExtensionImportHelperCall(node.expression)) {
+      const firstArgument = node.arguments[0];
+      if (firstArgument && ts.isStringLiteralLike(firstArgument)) {
+        specifiers.push(firstArgument.text);
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return specifiers.filter((specifier) => specifier.includes("extensions/"));
+}
+
+function isBundledExtensionImportHelperCall(expression: ts.Expression): boolean {
+  if (ts.isPropertyAccessExpression(expression)) {
+    return (
+      ((expression.name.text === "mock" || expression.name.text === "doMock") &&
+        ts.isIdentifier(expression.expression) &&
+        expression.expression.text === "vi") ||
+      expression.name.text === "importActual"
+    );
+  }
+  return ts.isIdentifier(expression) && expression.text === "importActual";
 }
 
 function collectTypedHookNames(source: string): string[] {
@@ -160,7 +255,13 @@ describe("plugin contract boundary invariants", () => {
       if (file === "src/plugins/contracts/boundary-invariants.test.ts") {
         return false;
       }
-      return readRepoSource(file).includes("test/helpers/bundled-plugin-paths");
+      const source = readRepoSource(file);
+      return (
+        source.includes("openclaw/plugin-sdk/test-fixtures") &&
+        /\b(?:BUNDLED_PLUGIN_|bundled(?:Dist)?Plugin(?:Root|File|DirPrefix)|installedPluginRoot|repoInstallSpec)\b/u.test(
+          source,
+        )
+      );
     });
     expect(offenders).toEqual([]);
   });
@@ -211,6 +312,42 @@ describe("plugin contract boundary invariants", () => {
   it("keeps bundled plugin production code off raw registerHook calls", () => {
     const files = listTsFiles("extensions", { excludeTests: true });
     const offenders = files.filter((file) => /\bregisterHook\(/u.test(readRepoSource(file)));
+    expect(offenders).toEqual([]);
+  });
+
+  it("keeps long-lived bundled hook handlers on live runtime config lookups", () => {
+    const missingGuards = Object.entries(BUNDLED_LIVE_CONFIG_HOOK_GUARDS).flatMap(
+      ([file, requiredSnippets]) => {
+        const source = readRepoSource(file);
+        return requiredSnippets
+          .filter((snippet) => !source.includes(snippet))
+          .map((snippet) => `${file}: ${snippet}`);
+      },
+    );
+    expect(missingGuards).toEqual([]);
+  });
+
+  it("keeps live provider config surfaces on runtime config lookups", () => {
+    const missingGuards = Object.entries(BUNDLED_LIVE_CONFIG_PROVIDER_GUARDS).flatMap(
+      ([file, requiredSnippets]) => {
+        const source = readRepoSource(file);
+        return requiredSnippets
+          .filter((snippet) => !source.includes(snippet))
+          .map((snippet) => `${file}: ${snippet}`);
+      },
+    );
+    expect(missingGuards).toEqual([]);
+  });
+
+  it("keeps long-lived bundled hook handlers off startup-only registration gates", () => {
+    const offenders = Object.entries(BUNDLED_STARTUP_GATED_HOOK_FORBIDDEN_SNIPPETS).flatMap(
+      ([file, forbiddenSnippets]) => {
+        const source = readRepoSource(file);
+        return forbiddenSnippets
+          .filter((snippet) => source.includes(snippet))
+          .map((snippet) => `${file}: ${snippet}`);
+      },
+    );
     expect(offenders).toEqual([]);
   });
 });

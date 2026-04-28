@@ -1,14 +1,12 @@
 ---
-title: "Building Channel Plugins"
-sidebarTitle: "Channel Plugins"
 summary: "Step-by-step guide to building a messaging channel plugin for OpenClaw"
+title: "Building channel plugins"
+sidebarTitle: "Channel Plugins"
 read_when:
   - You are building a new messaging channel plugin
   - You want to connect OpenClaw to a messaging platform
   - You need to understand the ChannelPlugin adapter surface
 ---
-
-# Building Channel Plugins
 
 This guide walks through building a channel plugin that connects OpenClaw to a
 messaging platform. By the end you will have a working channel with DM security,
@@ -59,6 +57,15 @@ id, explicit `baseConversationId`, and any `parentConversationCandidates`.
 When you return `parentConversationCandidates`, keep them ordered from the
 narrowest parent to the broadest/base conversation.
 
+Use `openclaw/plugin-sdk/channel-route` when plugin code needs to normalize
+route-like fields, compare a child thread with its parent route, or build a
+stable dedupe key from `{ channel, to, accountId, threadId }`. The helper
+normalizes numeric thread ids the same way core does, so plugins should prefer
+it over ad hoc `String(threadId)` comparisons.
+Plugins with provider-specific target grammar can inject their parser into
+`resolveChannelRouteTargetWithParser(...)` and still get the same route target
+shape and thread fallback semantics core uses.
+
 Bundled plugins that need the same parsing before the channel registry boots
 can also expose a top-level `session-key-api.ts` file with a matching
 `resolveSessionConversation(...)` export. Core uses that bootstrap-safe surface
@@ -89,6 +96,8 @@ Most channel plugins do not need approval-specific code.
 - Use `approvalCapability.describeExecApprovalSetup` when the channel wants the disabled-path reply to explain the exact config knobs needed to enable native exec approvals. The hook receives `{ channel, channelLabel, accountId }`; named-account channels should render account-scoped paths such as `channels.<channel>.accounts.<id>.execApprovals.*` instead of top-level defaults.
 - If a channel can infer stable owner-like DM identities from existing config, use `createResolvedApproverActionAuthAdapter` from `openclaw/plugin-sdk/approval-runtime` to restrict same-chat `/approve` without adding approval-specific core logic.
 - If a channel needs native approval delivery, keep channel code focused on target normalization plus transport/presentation facts. Use `createChannelExecApprovalProfile`, `createChannelNativeOriginTargetResolver`, `createChannelApproverDmTargetResolver`, and `createApproverRestrictedNativeApprovalCapability` from `openclaw/plugin-sdk/approval-runtime`. Put the channel-specific facts behind `approvalCapability.nativeRuntime`, ideally via `createChannelApprovalNativeRuntimeAdapter(...)` or `createLazyChannelApprovalNativeRuntimeAdapter(...)`, so core can assemble the handler and own request filtering, routing, dedupe, expiry, gateway subscription, and routed-elsewhere notices. `nativeRuntime` is split into a few smaller seams:
+- `createChannelNativeOriginTargetResolver` uses the shared channel-route matcher by default for `{ to, accountId, threadId }` targets. Pass `targetsMatch` only when a channel has provider-specific equivalence rules, such as Slack timestamp prefix matching.
+- Pass `normalizeTargetForMatch` to `createChannelNativeOriginTargetResolver` when the channel needs to canonicalize provider ids before the default route matcher or a custom `targetsMatch` callback runs, while preserving the original target for delivery. Use `normalizeTarget` only when the resolved delivery target itself should be canonicalized.
 - `availability` — whether the account is configured and whether a request should be handled
 - `presentation` — map the shared approval view model into pending/resolved/expired native payloads or final actions
 - `transport` — prepare targets plus send/update/delete native approval messages
@@ -153,6 +162,14 @@ SecretRef scans before the plugin runtime starts, add `openclaw.setupEntry` in
 paths and should return the channel metadata, setup-safe config adapter, status
 adapter, and channel secret target metadata needed for those summaries. Do not
 start clients, listeners, or transport runtimes from the setup entry.
+
+Keep the main channel entry import path narrow too. Discovery can evaluate the
+entry and the channel plugin module to register capabilities without activating
+the channel. Files such as `channel-plugin-api.ts` should export the channel
+plugin object without importing setup wizards, transport clients, socket
+listeners, subprocess launchers, or service startup modules. Put those runtime
+pieces in modules loaded from `registerFull(...)`, runtime setters, or lazy
+capability adapters.
 
 `createOptionalChannelSetupWizard`, `DEFAULT_ACCOUNT_ID`,
 `createTopLevelChannelDmPolicy`, `setSetupChannelEnabled`, and
@@ -324,9 +341,13 @@ should use `resolveInboundMentionDecision({ facts, policy })`.
       "configSchema": {
         "type": "object",
         "additionalProperties": false,
-        "properties": {
-          "acme-chat": {
+        "properties": {}
+      },
+      "channelConfigs": {
+        "acme-chat": {
+          "schema": {
             "type": "object",
+            "additionalProperties": false,
             "properties": {
               "token": { "type": "string" },
               "allowFrom": {
@@ -334,12 +355,23 @@ should use `resolveInboundMentionDecision({ facts, policy })`.
                 "items": { "type": "string" }
               }
             }
+          },
+          "uiHints": {
+            "token": {
+              "label": "Bot token",
+              "sensitive": true
+            }
           }
         }
       }
     }
     ```
     </CodeGroup>
+
+    `configSchema` validates `plugins.entries.acme-chat.config`. Use it for
+    plugin-owned settings that are not the channel account config. `channelConfigs`
+    validates `channels.acme-chat` and is the cold-path source used by config
+    schema, setup, and UI surfaces before the plugin runtime loads.
 
   </Step>
 
@@ -453,6 +485,14 @@ should use `resolveInboundMentionDecision({ facts, policy })`.
 
       You can also pass raw adapter objects instead of the declarative options
       if you need full control.
+
+      Raw outbound adapters may define a `chunker(text, limit, ctx)` function.
+      The optional `ctx.formatting` carries delivery-time formatting decisions
+      such as `maxLinesPerMessage`; apply it before sending so reply threading
+      and chunk boundaries are resolved once by shared outbound delivery.
+      Send contexts also include `replyToIdSource` (`implicit` or `explicit`)
+      when a native reply target was resolved, so payload helpers can preserve
+      explicit reply tags without consuming an implicit single-use reply slot.
     </Accordion>
 
   </Step>
@@ -604,7 +644,7 @@ Write colocated tests in `src/channel.test.ts`:
 
     For shared test helpers, see [Testing](/plugins/sdk-testing).
 
-  </Step>
+</Step>
 </Steps>
 
 ## File structure
@@ -633,7 +673,7 @@ Write colocated tests in `src/channel.test.ts`:
   <Card title="Message tool integration" icon="puzzle" href="/plugins/architecture#channel-plugins-and-the-shared-message-tool">
     describeMessageTool and action discovery
   </Card>
-  <Card title="Target resolution" icon="crosshair" href="/plugins/architecture#channel-target-resolution">
+  <Card title="Target resolution" icon="crosshair" href="/plugins/architecture-internals#channel-target-resolution">
     inferTargetChatType, looksLikeId, resolveTarget
   </Card>
   <Card title="Runtime helpers" icon="settings" href="/plugins/sdk-runtime">
@@ -654,3 +694,9 @@ surface unless you are maintaining that bundled plugin family directly.
 - [SDK Overview](/plugins/sdk-overview) — full subpath import reference
 - [SDK Testing](/plugins/sdk-testing) — test utilities and contract tests
 - [Plugin Manifest](/plugins/manifest) — full manifest schema
+
+## Related
+
+- [Plugin SDK setup](/plugins/sdk-setup)
+- [Building plugins](/plugins/building-plugins)
+- [Agent harness plugins](/plugins/sdk-agent-harness)

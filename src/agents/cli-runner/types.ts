@@ -1,4 +1,5 @@
 import type { ImageContent } from "@mariozechner/pi-ai";
+import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { CliSessionBinding } from "../../config/sessions.js";
@@ -7,22 +8,29 @@ import type { CliBackendConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
+import type { EmbeddedRunTrigger } from "../pi-embedded-runner/run/params.js";
 import type { SkillSnapshot } from "../skills.js";
+import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 
 export type RunCliAgentParams = {
   sessionId: string;
   sessionKey?: string;
   agentId?: string;
+  trigger?: EmbeddedRunTrigger;
   sessionFile: string;
   workspaceDir: string;
   config?: OpenClawConfig;
   prompt: string;
+  transcriptPrompt?: string;
   provider: string;
   model?: string;
   thinkLevel?: ThinkLevel;
   timeoutMs: number;
   runId: string;
+  jobId?: string;
   extraSystemPrompt?: string;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  silentReplyPromptMode?: SilentReplyPromptMode;
   /** Static portion of extraSystemPrompt (excluding per-message inbound metadata) for session reuse hashing. */
   extraSystemPromptStatic?: string;
   streamParams?: import("../command/types.js").AgentStreamParams;
@@ -35,11 +43,25 @@ export type RunCliAgentParams = {
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
   skillsSnapshot?: SkillSnapshot;
+  messageChannel?: string;
   messageProvider?: string;
   agentAccountId?: string;
   senderIsOwner?: boolean;
   abortSignal?: AbortSignal;
+  onExecutionStarted?: () => void;
   replyOperation?: ReplyOperation;
+  /**
+   * Close any long-lived CLI live session created for this run after the run
+   * finishes. Intended for temporary helper calls that should not keep process
+   * handles alive after returning.
+   */
+  cleanupCliLiveSessionOnRunEnd?: boolean;
+  /**
+   * Close process-wide bundle MCP resources after this run. Intended for
+   * one-shot local CLI calls where the loopback server should not keep Node
+   * alive after the JSON response is emitted.
+   */
+  cleanupBundleMcpOnRunEnd?: boolean;
 };
 
 export type CliPreparedBackend = {
@@ -68,6 +90,7 @@ export type PreparedCliRunContext = {
   systemPrompt: string;
   systemPromptReport: SessionSystemPromptReport;
   bootstrapPromptWarningLines: string[];
+  openClawHistoryPrompt?: string;
   heartbeatPrompt?: string;
   authEpoch?: string;
   authEpochVersion: number;

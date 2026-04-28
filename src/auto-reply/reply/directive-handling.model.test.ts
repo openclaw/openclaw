@@ -87,6 +87,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentConfig: vi.fn(() => ({})),
   resolveAgentDir: vi.fn(() => "/tmp/agent"),
   resolveAgentEffectiveModelPrimary: vi.fn(() => undefined),
+  resolveAgentModelFallbacksOverride: vi.fn(() => undefined),
   resolveSessionAgentId: vi.fn(() => "main"),
 }));
 
@@ -336,6 +337,16 @@ describe("/model chat UX", () => {
     expect(reply?.text).toContain("Switch: /model <provider/model>");
   });
 
+  it("treats /model list as a models browser alias, not a model id", async () => {
+    const reply = await resolveModelInfoReply({
+      directives: parseInlineDirectives("/model list"),
+    });
+
+    expect(reply?.text).toContain("Providers:");
+    expect(reply?.text).toContain("Use: /models <provider>");
+    expect(reply?.text).toContain("Switch: /model <provider/model>");
+  });
+
   it("shows active runtime model when different from selected model", async () => {
     const reply = await resolveModelInfoReply({
       provider: "fireworks",
@@ -539,7 +550,7 @@ describe("/model chat UX", () => {
       isDefault: false,
     });
     expect(resolved.profileOverride).toBeUndefined();
-  });
+  }, 240_000);
 
   it("persists inferred numeric auth-profile overrides for mixed-content messages", async () => {
     const { sessionEntry } = await persistModelDirectiveForTest({
@@ -551,6 +562,60 @@ describe("/model chat UX", () => {
     expect(sessionEntry.providerOverride).toBe("openai");
     expect(sessionEntry.modelOverride).toBe("gpt-4o");
     expect(sessionEntry.authProfileOverride).toBe(OPENAI_DATE_PROFILE_ID);
+  });
+
+  it("persists provider-compatible runtime overrides for mixed-content messages", async () => {
+    const { sessionEntry } = await persistModelDirectiveForTest({
+      command: "/model openai/gpt-4o --runtime codex hello",
+      allowedModelKeys: ["openai/gpt-4o"],
+    });
+
+    expect(sessionEntry.providerOverride).toBe("openai");
+    expect(sessionEntry.modelOverride).toBe("gpt-4o");
+    expect(sessionEntry.agentRuntimeOverride).toBe("codex");
+  });
+
+  it("canonicalizes legacy Codex app-server runtime overrides during persistence", async () => {
+    const { sessionEntry } = await persistModelDirectiveForTest({
+      command: "/model openai/gpt-4o --runtime codex-app-server hello",
+      allowedModelKeys: ["openai/gpt-4o"],
+    });
+
+    expect(sessionEntry.agentRuntimeOverride).toBe("codex");
+  });
+
+  it("clears runtime overrides when the model directive asks for default runtime", async () => {
+    const { sessionEntry } = await persistModelDirectiveForTest({
+      command: "/model openai/gpt-4o --runtime default hello",
+      allowedModelKeys: ["openai/gpt-4o"],
+      sessionEntry: createSessionEntry({ agentRuntimeOverride: "codex" }),
+      provider: "openai",
+      model: "gpt-4o",
+      initialModelLabel: "openai/gpt-4o",
+    });
+
+    expect(sessionEntry.agentRuntimeOverride).toBeUndefined();
+  });
+
+  it("ignores runtime overrides that do not belong to the selected provider", async () => {
+    vi.mocked(enqueueSystemEvent).mockClear();
+    const { sessionEntry } = await persistModelDirectiveForTest({
+      command: "/model openai/gpt-4o --runtime claude-cli hello",
+      allowedModelKeys: ["openai/gpt-4o"],
+      sessionEntry: createSessionEntry({ agentRuntimeOverride: "pi" }),
+      provider: "openai",
+      model: "gpt-4o",
+      initialModelLabel: "openai/gpt-4o",
+    });
+
+    expect(sessionEntry.agentRuntimeOverride).toBe("pi");
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      "Ignored unsupported runtime claude-cli for openai.",
+      {
+        sessionKey: "agent:main:dm:1",
+        contextKey: "model-runtime:openai:claude-cli",
+      },
+    );
   });
 
   it("persists alias-based numeric auth-profile overrides for mixed-content messages", async () => {
@@ -741,6 +806,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       key: sessionKey,
       nextProvider: "openai",
       nextModel: "gpt-4o",
+      nextModelOverrideSource: "user",
       nextAuthProfileId: undefined,
       nextAuthProfileIdSource: undefined,
     });
@@ -783,6 +849,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       key: sessionKey,
       nextProvider: "anthropic",
       nextModel: "claude-opus-4-6",
+      nextModelOverrideSource: "user",
       nextAuthProfileId: "anthropic:work",
       nextAuthProfileIdSource: "user",
     });
@@ -862,6 +929,54 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
 
     expect(result?.text).toContain("Current thinking level: low");
     expect(result?.text).toContain("Options: off, minimal, low, medium, adaptive, high.");
+  });
+
+  it("uses catalog reasoning metadata for provider-owned thinking levels", async () => {
+    setDirectiveTestProviders([
+      {
+        id: "ollama",
+        label: "Ollama",
+        auth: [],
+        resolveThinkingProfile: ({ reasoning }) => ({
+          levels:
+            reasoning === true
+              ? [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }]
+              : [{ id: "off" }],
+          defaultLevel: "off",
+        }),
+      },
+    ]);
+    const sessionEntry = createSessionEntry();
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/think medium"),
+        provider: "ollama",
+        model: "qwen3.6:35b-a3b-mxfp8",
+        allowedModelCatalog: [
+          {
+            provider: "ollama",
+            id: "qwen3.6:35b-a3b-mxfp8",
+            name: "qwen3.6:35b-a3b-mxfp8",
+            reasoning: true,
+          },
+        ],
+        thinkingCatalog: [
+          {
+            provider: "ollama",
+            id: "qwen3.6:35b-a3b-mxfp8",
+            name: "qwen3.6:35b-a3b-mxfp8",
+            reasoning: true,
+          },
+        ],
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+
+    expect(result?.text).toContain("Thinking level set to medium.");
+    expect(sessionEntry.thinkingLevel).toBe("medium");
   });
 
   it("persists verbose on and off directives", async () => {

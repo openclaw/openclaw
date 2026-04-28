@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
 import type { ChannelMessageActionName, ChannelPlugin } from "../../channels/plugins/types.js";
@@ -30,7 +30,7 @@ function createTelegramPollExtraToolSchemas() {
 
 const mocks = vi.hoisted(() => ({
   runMessageAction: vi.fn(),
-  loadConfig: vi.fn(() => ({})),
+  getRuntimeConfig: vi.fn(() => ({})),
   resolveCommandSecretRefsViaGateway: vi.fn(async ({ config }: { config: unknown }) => ({
     resolvedConfig: config,
     diagnostics: [],
@@ -116,7 +116,7 @@ vi.mock("../../config/config.js", async () => {
     await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
   return {
     ...actual,
-    loadConfig: mocks.loadConfig,
+    getRuntimeConfig: mocks.getRuntimeConfig,
   };
 });
 
@@ -159,7 +159,7 @@ beforeAll(async () => {
 beforeEach(() => {
   resetPluginRuntimeStateForTest();
   mocks.runMessageAction.mockReset();
-  mocks.loadConfig.mockReset().mockReturnValue({});
+  mocks.getRuntimeConfig.mockReset().mockReturnValue({});
   mocks.resolveCommandSecretRefsViaGateway.mockReset().mockImplementation(async ({ config }) => ({
     resolvedConfig: config,
     diagnostics: [],
@@ -238,7 +238,7 @@ async function executeSend(params: {
 describe("message tool secret scoping", () => {
   it("scopes command-time secret resolution to the selected channel/account", async () => {
     mockSendResult({ channel: "discord", to: "discord:123" });
-    mocks.loadConfig.mockReturnValue({
+    mocks.getRuntimeConfig.mockReturnValue({
       channels: {
         discord: {
           token: { source: "env", provider: "default", id: "DISCORD_TOKEN" },
@@ -256,7 +256,7 @@ describe("message tool secret scoping", () => {
     const tool = createMessageTool({
       currentChannelProvider: "discord",
       agentAccountId: "ops",
-      loadConfig: mocks.loadConfig as never,
+      getRuntimeConfig: mocks.getRuntimeConfig as never,
       getScopedChannelsCommandSecretTargets: mocks.getScopedChannelsCommandSecretTargets as never,
       resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway as never,
       runMessageAction: mocks.runMessageAction as never,
@@ -749,6 +749,19 @@ describe("message tool description", () => {
     },
   });
 
+  it("surfaces explicit cross-channel target syntax in the target schema", () => {
+    const tool = createMessageTool({
+      config: {} as never,
+    });
+    const properties = getToolProperties(tool);
+    const target = properties.target as { description?: string } | undefined;
+
+    expect(target?.description).toContain(
+      "Discord/Slack/Mattermost <channelId|user:ID|channel:ID>",
+    );
+    expect(target?.description).toContain("Telegram chat id/@username");
+  });
+
   it("hides BlueBubbles group actions for DM targets", () => {
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "bluebubbles", source: "test", plugin: bluebubblesPlugin }]),
@@ -800,6 +813,57 @@ describe("message tool description", () => {
     // Other configured channels are also listed
     expect(tool.description).toContain("Other configured channels:");
     expect(tool.description).toContain("telegram (delete, edit, react, send, topic-create)");
+  });
+
+  it("does not advertise cross-channel actions whose params are hidden by current-channel schema", () => {
+    const signalPlugin = createChannelPlugin({
+      id: "signal",
+      label: "Signal",
+      docsPath: "/channels/signal",
+      blurb: "Signal test plugin.",
+      actions: ["send", "react"],
+    });
+    const matrixProfilePlugin = createChannelPlugin({
+      id: "matrix",
+      label: "Matrix",
+      docsPath: "/channels/matrix",
+      blurb: "Matrix test plugin.",
+      actions: ["send", "set-profile"],
+      toolSchema: {
+        properties: {
+          displayName: Type.Optional(Type.String()),
+          avatarUrl: Type.Optional(Type.String()),
+        },
+      },
+    });
+
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "signal", source: "test", plugin: signalPlugin },
+        { pluginId: "matrix", source: "test", plugin: matrixProfilePlugin },
+      ]),
+    );
+
+    const crossChannelTool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "signal",
+    });
+    const crossChannelProperties = getToolProperties(crossChannelTool);
+
+    expect(getActionEnum(crossChannelProperties)).not.toContain("set-profile");
+    expect(crossChannelProperties.displayName).toBeUndefined();
+    expect(crossChannelProperties.avatarUrl).toBeUndefined();
+    expect(crossChannelTool.description).not.toContain("matrix (send, set-profile)");
+
+    const currentChannelTool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "matrix",
+    });
+    const currentChannelProperties = getToolProperties(currentChannelTool);
+
+    expect(getActionEnum(currentChannelProperties)).toContain("set-profile");
+    expect(currentChannelProperties.displayName).toBeDefined();
+    expect(currentChannelProperties.avatarUrl).toBeDefined();
   });
 
   it("normalizes channel aliases before building the current channel description", () => {

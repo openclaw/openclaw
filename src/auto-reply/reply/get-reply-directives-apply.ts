@@ -213,6 +213,31 @@ export async function applyInlineDirectiveOverrides(params: {
     };
   }
 
+  const directivePersistenceContext = {
+    directives,
+    effectiveModelDirective,
+    cfg,
+    agentDir,
+    sessionEntry,
+    sessionStore,
+    sessionKey,
+    storePath,
+    elevatedEnabled,
+    elevatedAllowed,
+    defaultProvider,
+    defaultModel,
+    aliasIndex,
+    allowedModelKeys: modelState.allowedModelKeys,
+    thinkingCatalog: modelState.allowedModelCatalog,
+    initialModelLabel,
+    formatModelSwitchEvent,
+    agentCfg,
+    messageProvider: ctx.Provider,
+    surface: ctx.Surface,
+    gatewayClientScopes: ctx.GatewayClientScopes,
+    senderIsOwner: command.senderIsOwner,
+  };
+
   if (
     isDirectiveOnly({
       directives,
@@ -251,29 +276,9 @@ export async function applyInlineDirectiveOverrides(params: {
         const persisted = await (
           await loadDirectivePersist()
         ).persistInlineDirectives({
-          directives,
-          effectiveModelDirective,
-          cfg,
-          agentDir,
-          sessionEntry,
-          sessionStore,
-          sessionKey,
-          storePath,
-          elevatedEnabled,
-          elevatedAllowed,
-          defaultProvider,
-          defaultModel,
-          aliasIndex,
-          allowedModelKeys: modelState.allowedModelKeys,
+          ...directivePersistenceContext,
           provider,
           model,
-          initialModelLabel,
-          formatModelSwitchEvent,
-          agentCfg,
-          messageProvider: ctx.Provider,
-          surface: ctx.Surface,
-          gatewayClientScopes: ctx.GatewayClientScopes,
-          senderIsOwner: command.senderIsOwner,
           markLiveSwitchPending: true,
         });
         const label = `${modelSelection.provider}/${modelSelection.model}`;
@@ -308,15 +313,18 @@ export async function applyInlineDirectiveOverrides(params: {
       resolveDefaultThinkingLevel: () => modelState.resolveDefaultThinkingLevel(),
     });
     const currentThinkLevel = resolvedDefaultThinkLevel;
+    const thinkingCatalog = await modelState.resolveThinkingCatalog();
     const directiveReply = await (
       await loadDirectiveImpl()
     ).handleDirectiveOnly({
       ...createDirectiveHandlingBase(),
+      thinkingCatalog,
       currentThinkLevel,
       currentFastMode,
       currentVerboseLevel,
       currentReasoningLevel,
       currentElevatedLevel,
+      ctx,
       messageProvider: ctx.Provider,
       surface: ctx.Surface,
       gatewayClientScopes: ctx.GatewayClientScopes,
@@ -387,6 +395,7 @@ export async function applyInlineDirectiveOverrides(params: {
       agentCfg,
       modelState: {
         resolveDefaultThinkingLevel: modelState.resolveDefaultThinkingLevel,
+        resolveThinkingCatalog: modelState.resolveThinkingCatalog,
         ...directiveModelState,
       },
     });
@@ -398,29 +407,9 @@ export async function applyInlineDirectiveOverrides(params: {
   const persisted = await (
     await loadDirectivePersist()
   ).persistInlineDirectives({
-    directives,
-    effectiveModelDirective,
-    cfg,
-    agentDir,
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    elevatedEnabled,
-    elevatedAllowed,
-    defaultProvider,
-    defaultModel,
-    aliasIndex,
-    allowedModelKeys: modelState.allowedModelKeys,
+    ...directivePersistenceContext,
     provider,
     model,
-    initialModelLabel,
-    formatModelSwitchEvent,
-    agentCfg,
-    messageProvider: ctx.Provider,
-    surface: ctx.Surface,
-    gatewayClientScopes: ctx.GatewayClientScopes,
-    senderIsOwner: command.senderIsOwner,
   });
   provider = persisted.provider;
   model = persisted.model;

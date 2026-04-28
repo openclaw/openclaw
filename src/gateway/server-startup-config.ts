@@ -1,18 +1,24 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import {
-  type ConfigFileSnapshot,
-  type GatewayAuthConfig,
-  type GatewayTailscaleConfig,
-  type OpenClawConfig,
-  applyConfigOverrides,
-  isNixMode,
-  readConfigFileSnapshot,
+  readConfigFileSnapshotWithPluginMetadata,
   recoverConfigFromLastKnownGood,
-  writeConfigFile,
-} from "../config/config.js";
+  recoverConfigFromJsonRootSuffix,
+} from "../config/io.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
+import { asResolvedSourceConfig, materializeRuntimeConfig } from "../config/materialize.js";
+import { replaceConfigFile } from "../config/mutate.js";
+import { isNixMode } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import {
+  isPluginLocalInvalidConfigSnapshot,
+  shouldAttemptLastKnownGoodRecovery,
+} from "../config/recovery-policy.js";
+import { applyConfigOverrides } from "../config/runtime-overrides.js";
+import type { GatewayAuthConfig, GatewayTailscaleConfig } from "../config/types.gateway.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import { validateConfigObjectWithPlugins } from "../config/validation.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   GATEWAY_AUTH_SURFACE_PATHS,
   evaluateGatewayAuthSurfaceStates,
@@ -51,17 +57,151 @@ type GatewayStartupConfigOverrides = {
   tailscale?: GatewayTailscaleConfig;
 };
 
+type GatewayStartupConfigMeasure = <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
+
 export type GatewayStartupConfigSnapshotLoadResult = {
   snapshot: ConfigFileSnapshot;
   wroteConfig: boolean;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  degradedProviderApi?: boolean;
+  degradedPluginConfig?: boolean;
 };
+
+const MODEL_PROVIDER_API_PATH_RE = /^models\.providers\.([^.]+)\.api$/;
+const MODEL_PROVIDER_MODEL_API_PATH_RE = /^models\.providers\.([^.]+)\.models\.\d+\.api$/;
+
+function resolveInvalidModelProviderApiIssueProviderId(issue: {
+  path: string;
+  message: string;
+}): string | null {
+  if (!issue.message.startsWith("Invalid option:")) {
+    return null;
+  }
+  const providerMatch =
+    issue.path.match(MODEL_PROVIDER_API_PATH_RE) ??
+    issue.path.match(MODEL_PROVIDER_MODEL_API_PATH_RE);
+  return providerMatch?.[1] ?? null;
+}
+
+function cloneConfigWithoutModelProviders(
+  config: OpenClawConfig,
+  providerIds: ReadonlySet<string>,
+): OpenClawConfig {
+  const providers = config.models?.providers;
+  if (!providers) {
+    return config;
+  }
+  let changed = false;
+  const nextProviders = { ...providers };
+  for (const providerId of providerIds) {
+    if (!Object.hasOwn(nextProviders, providerId)) {
+      continue;
+    }
+    delete nextProviders[providerId];
+    changed = true;
+  }
+  if (!changed) {
+    return config;
+  }
+  return {
+    ...config,
+    models: {
+      ...config.models,
+      providers: nextProviders,
+    },
+  };
+}
+
+function resolveGatewayStartupConfigWithoutInvalidModelProviders(params: {
+  snapshot: ConfigFileSnapshot;
+  log: GatewayStartupLog;
+}): ConfigFileSnapshot | null {
+  if (params.snapshot.valid || params.snapshot.legacyIssues.length > 0) {
+    return null;
+  }
+  const providerIds = new Set<string>();
+  for (const issue of params.snapshot.issues) {
+    const providerId = resolveInvalidModelProviderApiIssueProviderId(issue);
+    if (!providerId) {
+      return null;
+    }
+    providerIds.add(providerId);
+  }
+  if (providerIds.size === 0) {
+    return null;
+  }
+
+  const prunedSourceConfig = cloneConfigWithoutModelProviders(
+    params.snapshot.sourceConfig,
+    providerIds,
+  );
+  const validated = validateConfigObjectWithPlugins(prunedSourceConfig);
+  if (!validated.ok) {
+    return null;
+  }
+  const runtimeConfig = materializeRuntimeConfig(validated.config, "load");
+  for (const providerId of providerIds) {
+    params.log.warn(
+      `gateway: skipped model provider ${providerId}; configured provider api is invalid. Run "openclaw doctor --fix" to repair the config.`,
+    );
+  }
+  return {
+    ...params.snapshot,
+    sourceConfig: asResolvedSourceConfig(validated.config),
+    resolved: asResolvedSourceConfig(validated.config),
+    valid: true,
+    runtimeConfig,
+    config: runtimeConfig,
+    issues: [],
+    warnings: validated.warnings,
+  };
+}
+
+function resolveGatewayStartupConfigWithoutInvalidPluginEntries(params: {
+  snapshot: ConfigFileSnapshot;
+  log: GatewayStartupLog;
+}): ConfigFileSnapshot | null {
+  if (!isPluginLocalInvalidConfigSnapshot(params.snapshot)) {
+    return null;
+  }
+  const validated = validateConfigObjectWithPlugins(params.snapshot.sourceConfig, {
+    pluginValidation: "skip",
+  });
+  if (!validated.ok) {
+    return null;
+  }
+  const runtimeConfig = materializeRuntimeConfig(validated.config, "load");
+  for (const issue of params.snapshot.issues) {
+    params.log.warn(
+      `gateway: skipped plugin config validation issue at ${issue.path}: ${issue.message}. Run "openclaw doctor --fix" to quarantine the plugin config.`,
+    );
+  }
+  return {
+    ...params.snapshot,
+    sourceConfig: asResolvedSourceConfig(validated.config),
+    resolved: asResolvedSourceConfig(validated.config),
+    valid: true,
+    runtimeConfig,
+    config: runtimeConfig,
+    issues: [],
+    warnings: [...params.snapshot.warnings, ...params.snapshot.issues],
+  };
+}
 
 export async function loadGatewayStartupConfigSnapshot(params: {
   minimalTestGateway: boolean;
   log: GatewayStartupLog;
+  measure?: GatewayStartupConfigMeasure;
 }): Promise<GatewayStartupConfigSnapshotLoadResult> {
-  let configSnapshot = await readConfigFileSnapshot();
+  const measure = params.measure ?? (async (_name, run) => await run());
+  let snapshotRead = await measure("config.snapshot.read", () =>
+    readConfigFileSnapshotWithPluginMetadata({ measure }),
+  );
+  let configSnapshot = snapshotRead.snapshot;
+  let pluginMetadataSnapshot = snapshotRead.pluginMetadataSnapshot;
   let wroteConfig = false;
+  let degradedStartupConfig = false;
+  let degradedPluginConfig = false;
   if (configSnapshot.legacyIssues.length > 0 && isNixMode) {
     throw new Error(
       "Legacy config entries detected while running in Nix mode. Update your Nix config to the latest schema and restart.",
@@ -69,16 +209,48 @@ export async function loadGatewayStartupConfigSnapshot(params: {
   }
   if (configSnapshot.exists) {
     if (!configSnapshot.valid) {
-      const recovered = await recoverConfigFromLastKnownGood({
+      const providerApiPrunedSnapshot = resolveGatewayStartupConfigWithoutInvalidModelProviders({
         snapshot: configSnapshot,
-        reason: "startup-invalid-config",
+        log: params.log,
       });
+      if (providerApiPrunedSnapshot) {
+        degradedStartupConfig = true;
+        configSnapshot = providerApiPrunedSnapshot;
+      }
+    }
+    if (!configSnapshot.valid) {
+      const pluginConfigDegradedSnapshot = resolveGatewayStartupConfigWithoutInvalidPluginEntries({
+        snapshot: configSnapshot,
+        log: params.log,
+      });
+      if (pluginConfigDegradedSnapshot) {
+        degradedPluginConfig = true;
+        configSnapshot = pluginConfigDegradedSnapshot;
+      }
+    }
+    if (!configSnapshot.valid) {
+      const canRecoverFromLastKnownGood = shouldAttemptLastKnownGoodRecovery(configSnapshot);
+      const recovered = canRecoverFromLastKnownGood
+        ? await recoverConfigFromLastKnownGood({
+            snapshot: configSnapshot,
+            reason: "startup-invalid-config",
+          })
+        : false;
+      if (!canRecoverFromLastKnownGood) {
+        params.log.warn(
+          `gateway: last-known-good recovery skipped for plugin-local config invalidity: ${configSnapshot.path}`,
+        );
+      }
       if (recovered) {
         wroteConfig = true;
         params.log.warn(
           `gateway: invalid config was restored from last-known-good backup: ${configSnapshot.path}`,
         );
-        configSnapshot = await readConfigFileSnapshot();
+        snapshotRead = await measure("config.snapshot.recovery-read", () =>
+          readConfigFileSnapshotWithPluginMetadata({ measure }),
+        );
+        configSnapshot = snapshotRead.snapshot;
+        pluginMetadataSnapshot = snapshotRead.pluginMetadataSnapshot;
         if (configSnapshot.valid) {
           enqueueConfigRecoveryNotice({
             cfg: configSnapshot.config,
@@ -88,21 +260,54 @@ export async function loadGatewayStartupConfigSnapshot(params: {
           });
         }
       }
+      if (!recovered && (await recoverConfigFromJsonRootSuffix(configSnapshot))) {
+        wroteConfig = true;
+        params.log.warn(
+          `gateway: invalid config was repaired by stripping a non-JSON prefix: ${configSnapshot.path}`,
+        );
+        snapshotRead = await measure("config.snapshot.prefix-recovery-read", () =>
+          readConfigFileSnapshotWithPluginMetadata({ measure }),
+        );
+        configSnapshot = snapshotRead.snapshot;
+        pluginMetadataSnapshot = snapshotRead.pluginMetadataSnapshot;
+      }
     }
     assertValidGatewayStartupConfigSnapshot(configSnapshot, { includeDoctorHint: true });
   }
 
-  const autoEnable = params.minimalTestGateway
-    ? { config: configSnapshot.config, changes: [] as string[] }
-    : applyPluginAutoEnable({ config: configSnapshot.config, env: process.env });
+  const autoEnable =
+    params.minimalTestGateway || degradedStartupConfig || degradedPluginConfig
+      ? { config: configSnapshot.config, changes: [] as string[] }
+      : await measure("config.snapshot.auto-enable", () =>
+          applyPluginAutoEnable({
+            config: configSnapshot.sourceConfig,
+            env: process.env,
+            ...(pluginMetadataSnapshot?.manifestRegistry
+              ? { manifestRegistry: pluginMetadataSnapshot.manifestRegistry }
+              : {}),
+          }),
+        );
   if (autoEnable.changes.length === 0) {
-    return { snapshot: configSnapshot, wroteConfig };
+    return {
+      snapshot: configSnapshot,
+      wroteConfig,
+      ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+      ...(degradedStartupConfig ? { degradedProviderApi: true } : {}),
+      ...(degradedPluginConfig ? { degradedPluginConfig: true } : {}),
+    };
   }
 
   try {
-    await writeConfigFile(autoEnable.config);
+    await replaceConfigFile({
+      nextConfig: autoEnable.config,
+      afterWrite: { mode: "auto" },
+    });
     wroteConfig = true;
-    configSnapshot = await readConfigFileSnapshot();
+    snapshotRead = await measure("config.snapshot.auto-enable-read", () =>
+      readConfigFileSnapshotWithPluginMetadata({ measure }),
+    );
+    configSnapshot = snapshotRead.snapshot;
+    pluginMetadataSnapshot = snapshotRead.pluginMetadataSnapshot;
     assertValidGatewayStartupConfigSnapshot(configSnapshot);
     params.log.info(
       `gateway: auto-enabled plugins:\n${autoEnable.changes.map((entry) => `- ${entry}`).join("\n")}`,
@@ -111,7 +316,13 @@ export async function loadGatewayStartupConfigSnapshot(params: {
     params.log.warn(`gateway: failed to persist plugin auto-enable changes: ${String(err)}`);
   }
 
-  return { snapshot: configSnapshot, wroteConfig };
+  return {
+    snapshot: configSnapshot,
+    wroteConfig,
+    ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+    ...(degradedStartupConfig ? { degradedProviderApi: true } : {}),
+    ...(degradedPluginConfig ? { degradedPluginConfig: true } : {}),
+  };
 }
 
 export function createRuntimeSecretsActivator(params: {
@@ -209,6 +420,7 @@ export async function prepareGatewayStartupConfig(params: {
   authOverride?: GatewayAuthConfig;
   tailscaleOverride?: GatewayTailscaleConfig;
   activateRuntimeSecrets: ActivateRuntimeSecrets;
+  persistStartupAuth?: boolean;
 }): Promise<Awaited<ReturnType<typeof ensureGatewayStartupAuth>>> {
   assertValidGatewayStartupConfigSnapshot(params.configSnapshot);
 
@@ -245,7 +457,7 @@ export async function prepareGatewayStartupConfig(params: {
     env: process.env,
     authOverride: preflightAuthOverride,
     tailscaleOverride: params.tailscaleOverride,
-    persist: true,
+    persist: params.persistStartupAuth ?? true,
     baseHash: params.configSnapshot.hash,
   });
   const runtimeStartupConfig = applyGatewayAuthOverridesForStartupPreflight(authBootstrap.cfg, {

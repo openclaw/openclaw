@@ -1,5 +1,6 @@
 import { vi, type Mock } from "vitest";
 import { clearAgentHarnesses } from "../harness/registry.js";
+import type { CompactionTranscriptRotation } from "./compaction-successor-transcript.js";
 
 type MockResolvedModel = {
   model: { provider: string; api: string; id: string; input: unknown[] };
@@ -95,6 +96,14 @@ export const registerProviderStreamForModelMock: Mock<(params?: unknown) => unkn
 export const applyExtraParamsToAgentMock = vi.fn(() => ({ effectiveExtraParams: {} }));
 export const resolveAgentTransportOverrideMock: Mock<(params?: unknown) => string | undefined> =
   vi.fn(() => undefined);
+export const resolveSandboxContextMock = vi.fn(async () => null);
+export const maybeCompactAgentHarnessSessionMock: Mock<(params?: unknown) => Promise<unknown>> =
+  vi.fn(async () => undefined);
+export const rotateTranscriptAfterCompactionMock: Mock<
+  (_params?: unknown) => Promise<CompactionTranscriptRotation>
+> = vi.fn(async () => ({
+  rotated: false,
+}));
 
 export function resetCompactSessionStateMocks(): void {
   sanitizeSessionHistoryMock.mockReset();
@@ -131,6 +140,12 @@ export function resetCompactSessionStateMocks(): void {
   applyExtraParamsToAgentMock.mockReturnValue({ effectiveExtraParams: {} });
   resolveAgentTransportOverrideMock.mockReset();
   resolveAgentTransportOverrideMock.mockReturnValue(undefined);
+  resolveSandboxContextMock.mockReset();
+  resolveSandboxContextMock.mockResolvedValue(null);
+  maybeCompactAgentHarnessSessionMock.mockReset();
+  maybeCompactAgentHarnessSessionMock.mockResolvedValue(undefined);
+  rotateTranscriptAfterCompactionMock.mockReset();
+  rotateTranscriptAfterCompactionMock.mockResolvedValue({ rotated: false });
 }
 
 export function resetCompactHooksHarnessMocks(): void {
@@ -197,11 +212,12 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../harness/selection.js", () => ({
-    maybeCompactAgentHarnessSession: vi.fn(async () => undefined),
+    maybeCompactAgentHarnessSession: maybeCompactAgentHarnessSessionMock,
   }));
 
   vi.doMock("../../plugins/provider-runtime.js", () => ({
     prepareProviderRuntimeAuth: vi.fn(async () => ({ resolvedApiKey: undefined })),
+    resolveProviderReasoningOutputModeWithPlugin: vi.fn(() => undefined),
     resolveProviderSystemPromptContribution: vi.fn(() => undefined),
     resolveProviderTextTransforms: vi.fn(() => undefined),
     transformProviderSystemPrompt: vi.fn(
@@ -257,12 +273,17 @@ export async function loadCompactHooksHarness(): Promise<{
           session.messages.splice(1);
           return await sessionCompactImpl();
         }),
+        setActiveToolsByName: vi.fn(),
         abortCompaction: sessionAbortCompactionMock,
         dispose: vi.fn(),
       };
       return { session };
     }),
-    DefaultResourceLoader: function DefaultResourceLoader() {},
+    DefaultResourceLoader: function DefaultResourceLoader() {
+      return {
+        reload: vi.fn(async () => undefined),
+      };
+    },
     SessionManager: {
       open: vi.fn(() => ({})),
     },
@@ -280,6 +301,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../pi-settings.js", () => ({
+    applyPiCompactionSettingsFromConfig: vi.fn(),
     ensurePiCompactionReserveTokens: vi.fn(),
     resolveCompactionReserveTokensFloor: vi.fn(() => 0),
   }));
@@ -296,7 +318,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../sandbox.js", () => ({
-    resolveSandboxContext: vi.fn(async () => null),
+    resolveSandboxContext: resolveSandboxContextMock,
   }));
 
   vi.doMock("../session-file-repair.js", () => ({
@@ -332,10 +354,12 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("../bootstrap-files.js", () => ({
     makeBootstrapWarn: vi.fn(() => () => {}),
+    resolveContextInjectionMode: vi.fn(() => "always"),
     resolveBootstrapContextForRun: vi.fn(async () => ({ contextFiles: [] })),
   }));
 
   vi.doMock("../pi-bundle-mcp-tools.js", () => ({
+    retireSessionMcpRuntime: vi.fn(async () => true),
     createBundleMcpToolRuntime: vi.fn(async () => ({
       tools: [],
       dispose: vi.fn(async () => {}),
@@ -351,7 +375,10 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../docs-path.js", () => ({
-    resolveOpenClawDocsPath: vi.fn(async () => undefined),
+    resolveOpenClawReferencePaths: vi.fn(async () => ({
+      docsPath: undefined,
+      sourcePath: undefined,
+    })),
   }));
 
   vi.doMock("../channel-tools.js", () => ({
@@ -382,10 +409,11 @@ export async function loadCompactHooksHarness(): Promise<{
   vi.doMock("./extra-params.js", () => ({
     applyExtraParamsToAgent: applyExtraParamsToAgentMock,
     resolveAgentTransportOverride: resolveAgentTransportOverrideMock,
+    resolvePreparedExtraParams: vi.fn(() => ({})),
   }));
 
   vi.doMock("./tool-split.js", () => ({
-    splitSdkTools: vi.fn(() => ({ builtInTools: [], customTools: [] })),
+    splitSdkTools: vi.fn(() => ({ customTools: [] })),
   }));
 
   vi.doMock("./compaction-safety-timeout.js", () => ({
@@ -429,6 +457,16 @@ export async function loadCompactHooksHarness(): Promise<{
     resolveCompactionTimeoutMs: vi.fn(() => 30_000),
   }));
 
+  vi.doMock("./compaction-successor-transcript.js", async () => {
+    const actual = await vi.importActual<typeof import("./compaction-successor-transcript.js")>(
+      "./compaction-successor-transcript.js",
+    );
+    return {
+      ...actual,
+      rotateTranscriptAfterCompaction: rotateTranscriptAfterCompactionMock,
+    };
+  });
+
   vi.doMock("./wait-for-idle-before-flush.js", () => ({
     flushPendingToolResultsAfterIdle: vi.fn(async () => {}),
   }));
@@ -463,6 +501,8 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("../agent-scope.js", () => ({
     listAgentEntries: vi.fn(() => []),
+    resolveAgentConfig: vi.fn(() => undefined),
+    resolveDefaultAgentId: vi.fn(() => "main"),
     resolveSessionAgentId: resolveSessionAgentIdMock,
     resolveSessionAgentIds: vi.fn(() => ({ defaultAgentId: "main", sessionAgentId: "main" })),
   }));

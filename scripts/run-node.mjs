@@ -4,11 +4,17 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { resolveGitHead, writeBuildStamp as writeDistBuildStamp } from "./build-stamp.mjs";
 import {
   BUNDLED_PLUGIN_PATH_PREFIX,
   BUNDLED_PLUGIN_ROOT_DIR,
 } from "./lib/bundled-plugin-paths.mjs";
+import {
+  BUILD_STAMP_FILE,
+  RUNTIME_POSTBUILD_STAMP_FILE,
+  resolveGitHead,
+  writeBuildStamp as writeDistBuildStamp,
+  writeRuntimePostBuildStamp as writeDistRuntimePostBuildStamp,
+} from "./lib/local-build-metadata.mjs";
 import { runRuntimePostBuild } from "./runtime-postbuild.mjs";
 
 const buildScript = "scripts/tsdown-build.mjs";
@@ -17,12 +23,14 @@ const compilerArgs = [buildScript, "--no-clean"];
 const runNodeSourceRoots = ["src", BUNDLED_PLUGIN_ROOT_DIR];
 const runNodeConfigFiles = ["tsconfig.json", "package.json", "tsdown.config.ts"];
 export const runNodeWatchedPaths = [...runNodeSourceRoots, ...runNodeConfigFiles];
-const runtimePostBuildStampFile = ".runtime-postbuildstamp";
 const runtimePostBuildWatchedPaths = [
   "scripts/copy-bundled-plugin-metadata.mjs",
   "scripts/copy-plugin-sdk-root-alias.mjs",
   "scripts/lib",
+  "scripts/lib/local-build-metadata.mjs",
+  "scripts/lib/local-build-metadata-paths.mjs",
   "scripts/npm-runner.mjs",
+  "scripts/runtime-postbuild-stamp.mjs",
   "scripts/runtime-postbuild-shared.mjs",
   "scripts/runtime-postbuild.mjs",
   "scripts/stage-bundled-plugin-runtime-deps.mjs",
@@ -219,13 +227,13 @@ const hasDirtyRuntimePostBuildInputs = (deps) => {
   return parseGitStatusPaths(output).some((repoPath) => isRuntimePostBuildRelevantPath(repoPath));
 };
 
-const readBuildStamp = (deps) => {
-  const mtime = statMtime(deps.buildStampPath, deps.fs);
+const readJsonStamp = (filePath, deps) => {
+  const mtime = statMtime(filePath, deps.fs);
   if (mtime == null) {
     return { mtime: null, head: null };
   }
   try {
-    const raw = deps.fs.readFileSync(deps.buildStampPath, "utf8").trim();
+    const raw = deps.fs.readFileSync(filePath, "utf8").trim();
     if (!raw.startsWith("{")) {
       return { mtime, head: null };
     }
@@ -237,22 +245,10 @@ const readBuildStamp = (deps) => {
   }
 };
 
+const readBuildStamp = (deps) => readJsonStamp(deps.buildStampPath, deps);
+
 const readRuntimePostBuildStamp = (deps) => {
-  const mtime = statMtime(deps.runtimePostBuildStampPath, deps.fs);
-  if (mtime == null) {
-    return { mtime: null, head: null };
-  }
-  try {
-    const raw = deps.fs.readFileSync(deps.runtimePostBuildStampPath, "utf8").trim();
-    if (!raw.startsWith("{")) {
-      return { mtime, head: null };
-    }
-    const parsed = JSON.parse(raw);
-    const head = typeof parsed?.head === "string" && parsed.head.trim() ? parsed.head.trim() : null;
-    return { mtime, head };
-  } catch {
-    return { mtime, head: null };
-  }
+  return readJsonStamp(deps.runtimePostBuildStampPath, deps);
 };
 
 const hasSourceMtimeChanged = (stampMtime, deps) => {
@@ -547,8 +543,20 @@ const waitForSpawnedProcess = async (childProcess, deps) => {
 
   try {
     return await new Promise((resolve) => {
+      let settled = false;
+      const settle = (res) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        resolve(res);
+      };
+      childProcess.on("error", (error) => {
+        logRunner(`Spawn failed: ${error?.message ?? String(error)}`, deps);
+        settle({ exitCode: 1, exitSignal: null, forwardedSignal });
+      });
       childProcess.on("exit", (exitCode, exitSignal) => {
-        resolve({ exitCode, exitSignal, forwardedSignal });
+        settle({ exitCode, exitSignal, forwardedSignal });
       });
     });
   } finally {
@@ -610,8 +618,33 @@ const closeRunNodeOutputTee = async (deps, exitCode) => {
   return exitCode;
 };
 
+const readBuildLockOwnerPid = (deps, lockDir) => {
+  try {
+    const raw = deps.fs.readFileSync(path.join(lockDir, "owner.json"), "utf8");
+    const parsed = JSON.parse(raw);
+    const pid = Number(parsed?.pid);
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+};
+
+const isBuildLockOwnerDead = (deps, pid) => {
+  try {
+    deps.process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    return error?.code === "ESRCH";
+  }
+};
+
 const removeStaleBuildLock = (deps, lockDir, staleMs) => {
   try {
+    const ownerPid = readBuildLockOwnerPid(deps, lockDir);
+    if (ownerPid !== null && isBuildLockOwnerDead(deps, ownerPid)) {
+      deps.fs.rmSync(lockDir, { recursive: true, force: true });
+      return true;
+    }
     const stats = deps.fs.statSync(lockDir);
     if (Date.now() - stats.mtimeMs < staleMs) {
       return false;
@@ -731,20 +764,11 @@ const syncRuntimeArtifacts = async (deps) => {
 
 const writeRuntimePostBuildStamp = (deps) => {
   try {
-    deps.fs.mkdirSync(path.dirname(deps.runtimePostBuildStampPath), { recursive: true });
-    const head = resolveGitHead(deps);
-    deps.fs.writeFileSync(
-      deps.runtimePostBuildStampPath,
-      `${JSON.stringify(
-        {
-          syncedAt: Date.now(),
-          ...(head ? { head } : {}),
-        },
-        null,
-        2,
-      )}\n`,
-      "utf8",
-    );
+    writeDistRuntimePostBuildStamp({
+      cwd: deps.cwd,
+      fs: deps.fs,
+      spawnSync: deps.spawnSync,
+    });
   } catch (error) {
     logRunner(
       `Failed to write runtime postbuild stamp: ${error?.message ?? "unknown error"}`,
@@ -776,6 +800,15 @@ const writeBuildStamp = (deps) => {
 
 const shouldSkipCleanWatchRuntimeSync = (deps) => deps.env.OPENCLAW_WATCH_MODE === "1";
 
+const isGatewayClientCommand = (args) =>
+  args[0] === "gateway" && (args[1] === "call" || args[1] === "status");
+
+const shouldUseExistingDistForGatewayClient = (deps, buildRequirement) =>
+  buildRequirement.reason === "dirty_watched_tree" &&
+  isGatewayClientCommand(deps.args) &&
+  deps.env.OPENCLAW_FORCE_BUILD !== "1" &&
+  statMtime(deps.distEntry, deps.fs) != null;
+
 export async function runNodeMain(params = {}) {
   const deps = {
     spawn: params.spawn ?? spawn,
@@ -793,8 +826,8 @@ export async function runNodeMain(params = {}) {
 
   deps.distRoot = path.join(deps.cwd, "dist");
   deps.distEntry = path.join(deps.distRoot, "/entry.js");
-  deps.buildStampPath = path.join(deps.distRoot, ".buildstamp");
-  deps.runtimePostBuildStampPath = path.join(deps.distRoot, runtimePostBuildStampFile);
+  deps.buildStampPath = path.join(deps.distRoot, BUILD_STAMP_FILE);
+  deps.runtimePostBuildStampPath = path.join(deps.distRoot, RUNTIME_POSTBUILD_STAMP_FILE);
   deps.sourceRoots = runNodeSourceRoots.map((sourceRoot) => ({
     name: sourceRoot,
     path: path.join(deps.cwd, sourceRoot),
@@ -809,9 +842,16 @@ export async function runNodeMain(params = {}) {
 
   try {
     let exitCode = 1;
-    const buildRequirement = resolveBuildRequirement(deps);
+    let buildRequirement = resolveBuildRequirement(deps);
+    const useExistingGatewayClientDist = shouldUseExistingDistForGatewayClient(
+      deps,
+      buildRequirement,
+    );
+    if (useExistingGatewayClientDist) {
+      buildRequirement = { shouldBuild: false, reason: "gateway_client_existing_dist" };
+    }
     if (!buildRequirement.shouldBuild) {
-      if (!shouldSkipCleanWatchRuntimeSync(deps)) {
+      if (!useExistingGatewayClientDist && !shouldSkipCleanWatchRuntimeSync(deps)) {
         const runtimePostBuildRequirement = resolveRuntimePostBuildRequirement(deps);
         if (runtimePostBuildRequirement.shouldSync) {
           const synced = await withRunNodeBuildLock(deps, async () => {

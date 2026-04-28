@@ -2,7 +2,6 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
-import { loadConfig } from "../../config/config.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
@@ -101,6 +100,7 @@ async function runGatewayInflightWork(params: {
 async function resolveRequestedChannel(params: {
   requestChannel: unknown;
   unsupportedMessage: (input: string) => string;
+  context: GatewayRequestContext;
   rejectWebchatAsInternalOnly?: boolean;
 }): Promise<
   | {
@@ -128,7 +128,7 @@ async function resolveRequestedChannel(params: {
     };
   }
   const cfg = applyPluginAutoEnable({
-    config: loadConfig(),
+    config: params.context.getRuntimeConfig(),
     env: process.env,
   }).config;
   let channel = normalizedChannel;
@@ -318,6 +318,7 @@ export const sendHandlers: GatewayRequestHandlers = {
     const resolvedChannel = await resolveRequestedChannel({
       requestChannel: request.channel,
       unsupportedMessage: (input) => `unsupported channel: ${input}`,
+      context,
       rejectWebchatAsInternalOnly: true,
     });
     if ("error" in resolvedChannel) {
@@ -393,6 +394,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       channel?: string;
       accountId?: string;
       agentId?: string;
+      replyToId?: string;
       threadId?: string;
       sessionKey?: string;
       idempotencyKey: string;
@@ -422,6 +424,7 @@ export const sendHandlers: GatewayRequestHandlers = {
     const resolvedChannel = await resolveRequestedChannel({
       requestChannel: request.channel,
       unsupportedMessage: (input) => `unsupported channel: ${input}`,
+      context,
       rejectWebchatAsInternalOnly: true,
     });
     if ("error" in resolvedChannel) {
@@ -430,6 +433,7 @@ export const sendHandlers: GatewayRequestHandlers = {
     }
     const { cfg, channel } = resolvedChannel;
     const accountId = normalizeOptionalString(request.accountId);
+    const replyToId = normalizeOptionalString(request.replyToId);
     const threadId = normalizeOptionalString(request.threadId);
     const outboundChannel = channel;
     const plugin = resolveOutboundChannelPlugin({ channel, cfg });
@@ -485,6 +489,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           target: deliveryTarget,
           currentSessionKey: providedSessionKey,
           resolvedTarget: idLikeTarget,
+          replyToId,
           threadId,
         });
         const providedSessionBaseKey =
@@ -523,6 +528,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           cfg,
           agentId: effectiveAgentId,
           sessionKey: outboundSessionKey,
+          conversationType: outboundRoute?.chatType,
         });
         const results = await deliverOutboundPayloads({
           cfg,
@@ -530,6 +536,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           to: deliveryTarget,
           accountId,
           payloads: outboundPayloads,
+          replyToId: replyToId ?? null,
           session: outboundSession,
           gifPlayback: request.gifPlayback,
           threadId: outboundRoute?.threadId ?? threadId ?? null,
@@ -598,6 +605,7 @@ export const sendHandlers: GatewayRequestHandlers = {
     const resolvedChannel = await resolveRequestedChannel({
       requestChannel: request.channel,
       unsupportedMessage: (input) => `unsupported poll channel: ${input}`,
+      context,
     });
     if ("error" in resolvedChannel) {
       respond(false, undefined, resolvedChannel.error);

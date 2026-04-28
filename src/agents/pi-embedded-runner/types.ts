@@ -1,12 +1,27 @@
 import type { CliSessionBinding, SessionSystemPromptReport } from "../../config/sessions/types.js";
+import type { DiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import type { MessagingToolSend } from "../pi-embedded-messaging.types.js";
 
 export type EmbeddedPiAgentMeta = {
   sessionId: string;
+  sessionFile?: string;
   provider: string;
   model: string;
+  contextTokens?: number;
+  agentHarnessId?: string;
   cliSessionBinding?: CliSessionBinding;
   compactionCount?: number;
+  /**
+   * Token count estimate after the most recent successful auto-compaction.
+   * Used as the freshest context snapshot when the follow-up model call omits
+   * usage metadata.
+   */
+  compactionTokensAfter?: number;
+  /**
+   * Prompt/context snapshot from the latest model request. Prefer this for
+   * context-window utilization because provider usage totals can include cached
+   * and completion tokens that are useful for billing but noisy as live context.
+   */
   promptTokens?: number;
   usage?: {
     input?: number;
@@ -94,6 +109,15 @@ export type ContextManagementTrace = {
 
 export type EmbeddedRunLivenessState = "working" | "paused" | "blocked" | "abandoned";
 
+export type EmbeddedRunFailureSignal = {
+  kind: "execution_denied";
+  source: "tool";
+  toolName?: string;
+  code: "SYSTEM_RUN_DENIED" | "INVALID_REQUEST";
+  message: string;
+  fatalForCron: true;
+};
+
 export type EmbeddedPiRunMeta = {
   durationMs: number;
   agentMeta?: EmbeddedPiAgentMeta;
@@ -104,6 +128,9 @@ export type EmbeddedPiRunMeta = {
   finalAssistantRawText?: string;
   replayInvalid?: boolean;
   livenessState?: EmbeddedRunLivenessState;
+  agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";
+  terminalReplyKind?: "silent-empty";
+  yielded?: boolean;
   error?: {
     kind:
       | "context_overflow"
@@ -113,6 +140,7 @@ export type EmbeddedPiRunMeta = {
       | "retry_limit";
     message: string;
   };
+  failureSignal?: EmbeddedRunFailureSignal;
   /** Stop reason for the agent run (e.g., "completed", "tool_calls"). */
   stopReason?: string;
   /** Pending tool calls when stopReason is "tool_calls". */
@@ -140,6 +168,7 @@ export type EmbeddedPiRunResult = {
     audioAsVoice?: boolean;
   }>;
   meta: EmbeddedPiRunMeta;
+  diagnosticTrace?: DiagnosticTraceContext;
   // True if a messaging tool successfully sent a message.
   // Used to suppress agent's confirmation text.
   didSendViaMessagingTool?: boolean;
@@ -163,6 +192,8 @@ export type EmbeddedPiCompactResult = {
     tokensBefore: number;
     tokensAfter?: number;
     details?: unknown;
+    sessionId?: string;
+    sessionFile?: string;
   };
 };
 

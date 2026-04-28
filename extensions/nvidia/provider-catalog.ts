@@ -1,3 +1,4 @@
+import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 
 export const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
@@ -53,4 +54,11 @@ export function buildNvidiaProvider(): ModelProviderConfig {
       },
     ],
   };
+import manifest from "./openclaw.plugin.json" with { type: "json" };
+
+export function buildNvidiaProvider(): ModelProviderConfig {
+  return buildManifestModelProviderConfig({
+    providerId: "nvidia",
+    catalog: manifest.modelCatalog.providers.nvidia,
+  });
 }

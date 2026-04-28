@@ -8,7 +8,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   downloadBlueBubblesAttachment,
   fetchBlueBubblesMessageAttachments,
@@ -178,7 +178,7 @@ async function queryBlueBubblesChats(params: {
     return [];
   }
   const payload = (await res.json().catch(() => null)) as Record<string, unknown> | null;
-  const data = payload && typeof payload.data !== "undefined" ? (payload.data as unknown) : null;
+  const data = payload && payload.data !== undefined ? (payload.data as unknown) : null;
   return Array.isArray(data) ? (data as BlueBubblesChatRecord[]) : [];
 }
 
@@ -1686,6 +1686,7 @@ async function processMessageAfterDedupe(
                     caption: caption ?? undefined,
                     replyToId: replyToMessageGuid || null,
                     accountId: account.accountId,
+                    asVoice: payload.audioAsVoice === true,
                   });
                 } catch (err) {
                   forgetPendingOutboundMessageId(pendingId);

@@ -97,19 +97,6 @@ export const SessionSchema = z
             });
           }
         }
-        if (val.rotateBytes !== undefined) {
-          try {
-            parseByteSize(normalizeStringifiedOptionalString(val.rotateBytes) ?? "", {
-              defaultUnit: "b",
-            });
-          } catch {
-            ctx.addIssue({
-              code: z.ZodIssueCode.custom,
-              path: ["rotateBytes"],
-              message: "invalid size (use b, kb, mb, gb, tb)",
-            });
-          }
-        }
         if (val.resetArchiveRetention !== undefined && val.resetArchiveRetention !== false) {
           try {
             parseDurationMs(normalizeStringifiedOptionalString(val.resetArchiveRetention) ?? "", {
@@ -208,7 +195,6 @@ export const CommandsSchema = z
     native: NativeCommandsSettingSchema.optional().default("auto"),
     nativeSkills: NativeCommandsSettingSchema.optional().default("auto"),
     text: z.boolean().optional(),
-    modelsWrite: z.boolean().optional().default(true),
     bash: z.boolean().optional(),
     bashForegroundMs: z.number().int().min(0).max(30_000).optional(),
     config: z.boolean().optional(),
@@ -229,7 +215,6 @@ export const CommandsSchema = z
       ({
         native: "auto",
         nativeSkills: "auto",
-        modelsWrite: true,
         restart: true,
         ownerDisplay: "raw",
       }) as const,

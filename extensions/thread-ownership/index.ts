@@ -1,3 +1,4 @@
+import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   definePluginEntry,
@@ -19,6 +20,10 @@ type ThreadOwnershipMessageSendingResult = { cancel: true } | undefined;
 // Entries expire after 5 minutes.
 const mentionedThreads = new Map<string, number>();
 const MENTION_TTL_MS = 5 * 60 * 1000;
+
+function isThreadOwnershipConfig(value: unknown): value is ThreadOwnershipConfig {
+  return value !== null && typeof value === "object";
+}
 
 function resolveThreadToken(value: unknown): string {
   return typeof value === "string" || typeof value === "number" ? String(value) : "";
@@ -72,30 +77,23 @@ function resolveOwnershipAgent(config: OpenClawConfig): { id: string; name: stri
   return { id, name };
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function resolveThreadOwnershipPluginConfigFromConfig(
-  config: OpenClawConfig,
-): ThreadOwnershipConfig | undefined {
-  return asRecord(asRecord(config.plugins?.entries)?.["thread-ownership"])?.config as
-    | ThreadOwnershipConfig
-    | undefined;
-}
-
 export default definePluginEntry({
   id: "thread-ownership",
   name: "Thread Ownership",
   description: "Slack thread claim coordination for multi-agent setups",
   register(api: OpenClawPluginApi) {
     const resolveCurrentState = () => {
-      const currentConfig = api.runtime.config?.loadConfig?.() ?? api.config;
-      const pluginCfg =
-        resolveThreadOwnershipPluginConfigFromConfig(currentConfig) ||
-        ((api.pluginConfig ?? {}) as ThreadOwnershipConfig);
+      const currentConfig = (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
+      const livePluginCfg = resolveLivePluginConfigObject(
+        api.runtime.config?.current
+          ? () => api.runtime.config.current() as OpenClawConfig
+          : undefined,
+        "thread-ownership",
+        isThreadOwnershipConfig(api.pluginConfig)
+          ? (api.pluginConfig as Record<string, unknown>)
+          : undefined,
+      );
+      const pluginCfg = isThreadOwnershipConfig(livePluginCfg) ? livePluginCfg : {};
       return {
         currentConfig,
         forwarderUrl: (

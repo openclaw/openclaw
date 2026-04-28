@@ -1,6 +1,6 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
-import { Type } from "@sinclair/typebox";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { Type, type TSchema } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { createFeishuToolClient } from "./tool-account.js";
@@ -543,13 +543,11 @@ const UpdateRecordSchema = Type.Object({
 
 export function registerFeishuBitableTools(api: OpenClawPluginApi) {
   if (!api.config) {
-    api.logger.debug?.("feishu_bitable: No config available, skipping bitable tools");
     return;
   }
 
   const accounts = listEnabledFeishuAccounts(api.config);
   if (accounts.length === 0) {
-    api.logger.debug?.("feishu_bitable: No Feishu accounts configured, skipping bitable tools");
     return;
   }
 
@@ -565,7 +563,7 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     name: string;
     label: string;
     description: string;
-    parameters: unknown;
+    parameters: TSchema;
     execute: (args: { params: TParams; defaultAccountId?: string }) => Promise<unknown>;
   }) => {
     api.registerTool(
@@ -732,6 +730,4 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
       );
     },
   });
-
-  api.logger.debug?.("feishu_bitable: Registered bitable tools");
 }

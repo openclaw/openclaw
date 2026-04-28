@@ -16,6 +16,8 @@ import type {
 export type CronEvent = {
   jobId: string;
   action: "added" | "updated" | "removed" | "started" | "finished";
+  /** Snapshot of the job at the time of the event. Present for all actions where the job is accessible. */
+  job?: CronJob;
   runAtMs?: number;
   durationMs?: number;
   status?: CronRunStatus;
@@ -86,6 +88,7 @@ export type CronServiceDeps = {
     job: CronJob;
     message: string;
     abortSignal?: AbortSignal;
+    onExecutionStarted?: () => void;
   }) => Promise<
     {
       summary?: string;
@@ -128,6 +131,12 @@ export type CronServiceState = {
   running: boolean;
   op: Promise<unknown>;
   warnedDisabled: boolean;
+  /**
+   * Job ids whose missing `sessionTarget` was defaulted at load and warned
+   * about. Used to suppress duplicate warns across forceReload ticks so a
+   * single broken job does not spam the log on every scheduler cycle.
+   */
+  warnedMissingSessionTargetJobIds: Set<string>;
   storeLoadedAtMs: number | null;
   storeFileMtimeMs: number | null;
 };
@@ -140,6 +149,7 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     running: false,
     op: Promise.resolve(),
     warnedDisabled: false,
+    warnedMissingSessionTargetJobIds: new Set<string>(),
     storeLoadedAtMs: null,
     storeFileMtimeMs: null,
   };

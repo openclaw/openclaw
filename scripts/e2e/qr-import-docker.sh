@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
+source "$ROOT_DIR/scripts/lib/docker-build.sh"
 IMAGE_NAME="${OPENCLAW_QR_SMOKE_IMAGE:-openclaw-qr-smoke}"
 DOCKER_BUILD_ARGS=()
 
@@ -15,11 +15,11 @@ if [[ "${OPENCLAW_QR_SMOKE_FORCE_INSTALL:-0}" == "1" ]]; then
 fi
 
 echo "Building Docker image..."
-run_logged qr-import-build docker build \
+docker_build_run qr-import-build \
   "${DOCKER_BUILD_ARGS[@]}" \
   -t "$IMAGE_NAME" \
   -f "$ROOT_DIR/scripts/e2e/Dockerfile.qr-import" \
   "$ROOT_DIR"
 
-echo "Running qrcode-terminal import smoke..."
-run_logged qr-import-run docker run --rm -t "$IMAGE_NAME" node -e "import('qrcode-terminal').then((m)=>m.default.generate('qr-smoke',{small:true}))"
+echo "Running qrcode-tui import smoke..."
+run_logged qr-import-run docker run --rm -t "$IMAGE_NAME" node -e "import('@vincentkoc/qrcode-tui').then(async (m)=>{process.stdout.write(await m.renderTerminal('qr-smoke',{small:true}))})"

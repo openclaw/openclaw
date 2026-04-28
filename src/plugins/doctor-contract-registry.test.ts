@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { shouldExpectNativeJitiForJavaScriptTestRuntime } from "../test-utils/jiti-runtime.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import {
   getRegistryJitiMocks,
@@ -34,7 +36,7 @@ describe("doctor-contract-registry getJiti", () => {
     clearPluginDoctorContractRegistryCache();
   });
 
-  it("disables native jiti loading on Windows for contract-api modules", () => {
+  it("uses the runtime-supported Jiti boundary on Windows for contract-api modules", () => {
     const pluginRoot = makeTempDir();
     fs.writeFileSync(path.join(pluginRoot, "contract-api.js"), "export default {};\n", "utf-8");
     mocks.loadPluginManifestRegistry.mockReturnValue({
@@ -42,6 +44,7 @@ describe("doctor-contract-registry getJiti", () => {
       diagnostics: [],
     });
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const expectedTryNative = shouldExpectNativeJitiForJavaScriptTestRuntime();
 
     try {
       listPluginDoctorLegacyConfigRules({
@@ -53,10 +56,12 @@ describe("doctor-contract-registry getJiti", () => {
     }
 
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
-    expect(mocks.createJiti.mock.calls[0]?.[0]).toBe(path.join(pluginRoot, "contract-api.js"));
+    expect(mocks.createJiti.mock.calls[0]?.[0]).toBe(
+      pathToFileURL(path.join(pluginRoot, "contract-api.js"), { windows: true }).href,
+    );
     expect(mocks.createJiti.mock.calls[0]?.[1]).toEqual(
       expect.objectContaining({
-        tryNative: false,
+        tryNative: expectedTryNative,
       }),
     );
   });

@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActiveWebListener } from "./inbound/types.js";
@@ -10,6 +10,7 @@ import type { ActiveWebListener } from "./inbound/types.js";
 const hoisted = vi.hoisted(() => ({
   loadOutboundMediaFromUrl: vi.fn(),
   controllerListeners: new Map<string, ActiveWebListener>(),
+  runFfmpeg: vi.fn(),
 }));
 const loadWebMediaMock = vi.fn();
 let sendMessageWhatsApp: typeof import("./send.js").sendMessageWhatsApp;
@@ -49,6 +50,24 @@ vi.mock("./outbound-media.runtime.js", async () => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
+    "openclaw/plugin-sdk/media-runtime",
+  );
+  return {
+    ...actual,
+    runFfmpeg: hoisted.runFfmpeg,
+  };
+});
+
+vi.mock("./text-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("./text-runtime.js")>("./text-runtime.js");
+  return {
+    ...actual,
+    sleep: vi.fn(async () => {}),
+  };
+});
+
 describe("web outbound", () => {
   const sendComposingTo = vi.fn(async () => {});
   const sendMessage = vi.fn(async () => ({ messageId: "msg123" }));
@@ -62,6 +81,10 @@ describe("web outbound", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    hoisted.runFfmpeg.mockReset().mockImplementation(async (args: string[]) => {
+      fsSync.writeFileSync(args.at(-1) ?? "", Buffer.from("opus-output"));
+      return "";
+    });
     hoisted.loadOutboundMediaFromUrl.mockReset().mockImplementation(
       async (
         mediaUrl: string,
@@ -161,6 +184,16 @@ describe("web outbound", () => {
     expect(sendMessage).toHaveBeenLastCalledWith("+1555", "caption", buf, "image/jpeg");
   });
 
+  it("preserves intentional indentation when the caller opts out of transport trimming", async () => {
+    await sendMessageWhatsApp("+1555", "    indented", {
+      verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
+      preserveLeadingWhitespace: true,
+    });
+
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "    indented", undefined, undefined);
+  });
+
   it("skips whitespace-only text sends without media", async () => {
     const result = await sendMessageWhatsApp("+1555", "\n \t", {
       verbose: false,
@@ -212,12 +245,39 @@ describe("web outbound", () => {
       cfg: WHATSAPP_TEST_CFG,
       mediaUrl: "/tmp/voice.ogg",
     });
-    expect(sendMessage).toHaveBeenLastCalledWith(
+    expect(sendMessage).toHaveBeenNthCalledWith(1, "+1555", "", buf, "audio/ogg; codecs=opus");
+    expect(sendMessage).toHaveBeenNthCalledWith(2, "+1555", "voice note", undefined, undefined);
+  });
+
+  it.each([
+    { name: "mp3", contentType: "audio/mpeg", fileName: "voice.mp3" },
+    { name: "webm", contentType: "audio/webm", fileName: "voice.webm" },
+  ])("transcodes $name audio to Ogg Opus before sending a PTT voice note", async (media) => {
+    const buf = Buffer.from(media.name);
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: media.contentType,
+      kind: "audio",
+      fileName: media.fileName,
+    });
+
+    await sendMessageWhatsApp("+1555", "voice note", {
+      verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
+      mediaUrl: `/tmp/${media.fileName}`,
+    });
+
+    expect(hoisted.runFfmpeg).toHaveBeenCalledWith(
+      expect.arrayContaining(["-c:a", "libopus", "-ar", "48000", "-b:a", "64k"]),
+    );
+    expect(sendMessage).toHaveBeenNthCalledWith(
+      1,
       "+1555",
-      "voice note",
-      buf,
+      "",
+      Buffer.from("opus-output"),
       "audio/ogg; codecs=opus",
     );
+    expect(sendMessage).toHaveBeenNthCalledWith(2, "+1555", "voice note", undefined, undefined);
   });
 
   it("maps video with caption", async () => {
@@ -265,6 +325,39 @@ describe("web outbound", () => {
       cfg: WHATSAPP_TEST_CFG,
       mediaUrl: "/tmp/pic.jpg",
     });
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "pic", buf, "image/jpeg");
+  });
+
+  it("does not retry transient outbound send failures to avoid duplicate sends", async () => {
+    sendMessage.mockRejectedValueOnce({ error: { message: "connection closed" } });
+
+    await expect(
+      sendMessageWhatsApp("+1555", "hi", { verbose: false, cfg: WHATSAPP_TEST_CFG }),
+    ).rejects.toEqual({ error: { message: "connection closed" } });
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("prefers explicit mediaUrl over mediaUrls when both are present", async () => {
+    const buf = Buffer.from("img");
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: "image/jpeg",
+      kind: "image",
+    });
+
+    await sendMessageWhatsApp("+1555", "pic", {
+      verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
+      mediaUrl: "/tmp/primary.jpg",
+      mediaUrls: [" /tmp/secondary.jpg "],
+    });
+
+    expect(loadWebMediaMock).toHaveBeenCalledWith(
+      "/tmp/primary.jpg",
+      expect.objectContaining({
+        hostReadCapability: false,
+      }),
+    );
     expect(sendMessage).toHaveBeenLastCalledWith("+1555", "pic", buf, "image/jpeg");
   });
 
