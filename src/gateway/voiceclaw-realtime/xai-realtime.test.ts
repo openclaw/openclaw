@@ -384,3 +384,240 @@ describe("VoiceClawXaiRealtimeAdapter secret discipline", () => {
     expect(() => new VoiceClawXaiRealtimeAdapter()).not.toThrow();
   });
 });
+
+describe("VoiceClawXaiRealtimeAdapter client-side methods (forwarding)", () => {
+  function makeAdapterWithCapture(): {
+    adapter: VoiceClawXaiRealtimeAdapter;
+    upstream: Record<string, unknown>[];
+    events: VoiceClawServerEvent[];
+  } {
+    const adapter = new VoiceClawXaiRealtimeAdapter();
+    const upstream: Record<string, unknown>[] = [];
+    const events: VoiceClawServerEvent[] = [];
+    const internals = adapter as unknown as {
+      sendUpstream: (msg: Record<string, unknown>, kind: string) => void;
+      sendToClient: (event: VoiceClawServerEvent) => void;
+    };
+    internals.sendUpstream = (msg) => upstream.push(msg);
+    internals.sendToClient = (event) => events.push(event);
+    return { adapter, upstream, events };
+  }
+
+  it("commitAudio forwards input_audio_buffer.commit", () => {
+    const { adapter, upstream } = makeAdapterWithCapture();
+    adapter.commitAudio();
+    expect(upstream).toEqual([{ type: "input_audio_buffer.commit" }]);
+  });
+
+  it("createResponse forwards response.create", () => {
+    const { adapter, upstream } = makeAdapterWithCapture();
+    adapter.createResponse();
+    expect(upstream).toEqual([{ type: "response.create" }]);
+  });
+
+  it("cancelResponse forwards response.cancel best-effort", () => {
+    const { adapter, upstream } = makeAdapterWithCapture();
+    adapter.cancelResponse();
+    expect(upstream).toEqual([{ type: "response.cancel" }]);
+  });
+
+  it("injectContext forwards a system-role conversation.item.create", () => {
+    const { adapter, upstream } = makeAdapterWithCapture();
+    adapter.injectContext("background context here");
+    expect(upstream).toEqual([
+      {
+        type: "conversation.item.create",
+        item: {
+          type: "message",
+          role: "system",
+          content: [{ type: "input_text", text: "background context here" }],
+        },
+      },
+    ]);
+  });
+
+  it("sendFrame logs warning and drops silently (xAI Voice Agent is audio-only at GA)", () => {
+    const { adapter, upstream } = makeAdapterWithCapture();
+    adapter.sendFrame("imagedataframe", "image/jpeg");
+    expect(upstream).toEqual([]);
+  });
+
+  it("getTranscript returns a copy (caller mutation does not affect internal state)", () => {
+    const adapter = new VoiceClawXaiRealtimeAdapter();
+    const internals = adapter as unknown as {
+      transcript: { role: "user" | "assistant"; text: string }[];
+    };
+    internals.transcript = [
+      { role: "user", text: "hi" },
+      { role: "assistant", text: "hello" },
+    ];
+    const t = adapter.getTranscript();
+    expect(t).toEqual([
+      { role: "user", text: "hi" },
+      { role: "assistant", text: "hello" },
+    ]);
+    t.push({ role: "user", text: "tampering" });
+    expect(adapter.getTranscript()).toHaveLength(2);
+  });
+
+  it("disconnect clears state and is idempotent", () => {
+    const { adapter } = makeAdapterWithCapture();
+    const internals = adapter as unknown as {
+      asyncToolCallIds: Set<string>;
+      disconnected: boolean;
+    };
+    internals.asyncToolCallIds.add("call_test_1");
+    expect(internals.asyncToolCallIds.size).toBe(1);
+    adapter.disconnect();
+    expect(internals.disconnected).toBe(true);
+    expect(internals.asyncToolCallIds.size).toBe(0);
+    // Idempotent: calling again does not throw
+    expect(() => adapter.disconnect()).not.toThrow();
+  });
+});
+
+describe("VoiceClawXaiRealtimeAdapter close-handling", () => {
+  function makeWithUpstreamHook(): {
+    adapter: VoiceClawXaiRealtimeAdapter;
+    events: VoiceClawServerEvent[];
+  } {
+    const adapter = new VoiceClawXaiRealtimeAdapter();
+    const events: VoiceClawServerEvent[] = [];
+    const internals = adapter as unknown as {
+      sendToClient: (event: VoiceClawServerEvent) => void;
+      reconnect: (reason: string) => Promise<void>;
+    };
+    internals.sendToClient = (event) => events.push(event);
+    // Stub reconnect so close-code 1006 path doesn't actually try to open a WS.
+    internals.reconnect = async () => {};
+    return { adapter, events };
+  }
+
+  it("ignores normal close (code 1000) without surfacing an error", () => {
+    const { adapter, events } = makeWithUpstreamHook();
+    const internals = adapter as unknown as {
+      handleUpstreamClose: (code: number) => void;
+    };
+    internals.handleUpstreamClose(1000);
+    expect(events).toEqual([]);
+  });
+
+  it("emits a sanitized error for non-reconnectable, non-normal close codes", () => {
+    const { adapter, events } = makeWithUpstreamHook();
+    const internals = adapter as unknown as {
+      handleUpstreamClose: (code: number) => void;
+    };
+    internals.handleUpstreamClose(4001);
+    expect(events).toEqual([
+      { type: "error", message: "xAI Realtime connection closed", code: 502 },
+    ]);
+  });
+
+  it("invokes reconnect path for reconnectable close codes", () => {
+    const adapter = new VoiceClawXaiRealtimeAdapter();
+    const events: VoiceClawServerEvent[] = [];
+    let reconnectCalls = 0;
+    const internals = adapter as unknown as {
+      sendToClient: (event: VoiceClawServerEvent) => void;
+      reconnect: (reason: string) => Promise<void>;
+      handleUpstreamClose: (code: number) => void;
+    };
+    internals.sendToClient = (event) => events.push(event);
+    internals.reconnect = async (reason: string) => {
+      reconnectCalls += 1;
+      events.push({
+        type: "session.rotated",
+        sessionId: `xai-resumed-stub-${reason}`,
+      });
+    };
+    internals.handleUpstreamClose(1006);
+    // reconnect is fire-and-forget (void); we verified the path was taken
+    // and the stub was invoked.
+    expect(reconnectCalls).toBe(1);
+  });
+
+  it("cancels active tool calls if upstream closes mid-tool-call", () => {
+    const adapter = new VoiceClawXaiRealtimeAdapter();
+    const events: VoiceClawServerEvent[] = [];
+    const internals = adapter as unknown as {
+      sendToClient: (event: VoiceClawServerEvent) => void;
+      pendingToolCallIds: Set<string>;
+      handleUpstreamClose: (code: number) => void;
+    };
+    internals.sendToClient = (event) => events.push(event);
+    internals.pendingToolCallIds.add("call_inflight");
+    internals.handleUpstreamClose(1011);
+    expect(events).toContainEqual({
+      type: "tool.cancelled",
+      callIds: ["call_inflight"],
+    });
+    expect(events).toContainEqual({
+      type: "error",
+      message: "xAI Realtime closed while a tool call was in flight",
+      code: 502,
+    });
+  });
+});
+
+describe("VoiceClawXaiRealtimeAdapter conversation history replay", () => {
+  it("replays the most recent 12 history entries via conversation.item.create", () => {
+    const adapter = new VoiceClawXaiRealtimeAdapter();
+    const upstream: Record<string, unknown>[] = [];
+    const internals = adapter as unknown as {
+      sendUpstream: (msg: Record<string, unknown>, kind: string) => void;
+      replayConversationHistory: (config: {
+        type: "session.config";
+        conversationHistory: { role: "user" | "assistant"; text: string }[];
+      }) => void;
+    };
+    internals.sendUpstream = (msg) => upstream.push(msg);
+
+    const history = Array.from({ length: 15 }, (_, i) => ({
+      role: (i % 2 === 0 ? "user" : "assistant") as "user" | "assistant",
+      text: `message-${i}`,
+    }));
+
+    internals.replayConversationHistory({
+      type: "session.config",
+      conversationHistory: history,
+    });
+
+    // The adapter slices to the last 12 entries.
+    expect(upstream).toHaveLength(12);
+    // First replayed item should be entry index 3 (15 - 12 = 3).
+    const firstItem = upstream[0] as { item: { content: { text: string }[] } };
+    expect(firstItem.item.content[0]!.text).toBe("message-3");
+
+    // User entries serialize as `input_text`; assistant as `text`.
+    const userItem = upstream.find(
+      (m) => (m as { item: { role: string } }).item.role === "user",
+    ) as { item: { content: { type: string }[] } } | undefined;
+    expect(userItem?.item.content[0]?.type).toBe("input_text");
+    const assistantItem = upstream.find(
+      (m) => (m as { item: { role: string } }).item.role === "assistant",
+    ) as { item: { content: { type: string }[] } } | undefined;
+    expect(assistantItem?.item.content[0]?.type).toBe("text");
+  });
+
+  it("does nothing when conversationHistory is empty or missing", () => {
+    const adapter = new VoiceClawXaiRealtimeAdapter();
+    const upstream: Record<string, unknown>[] = [];
+    const internals = adapter as unknown as {
+      sendUpstream: (msg: Record<string, unknown>, kind: string) => void;
+      replayConversationHistory: (config: {
+        type: "session.config";
+        conversationHistory?: { role: "user" | "assistant"; text: string }[];
+      }) => void;
+    };
+    internals.sendUpstream = (msg) => upstream.push(msg);
+
+    internals.replayConversationHistory({ type: "session.config" });
+    expect(upstream).toEqual([]);
+
+    internals.replayConversationHistory({
+      type: "session.config",
+      conversationHistory: [],
+    });
+    expect(upstream).toEqual([]);
+  });
+});
