@@ -33,7 +33,7 @@ export async function callGatewayFromCliRuntime(
         params,
         deviceIdentity: extra?.deviceIdentity,
         expectFinal: extra?.expectFinal ?? Boolean(opts.expectFinal),
-        scopes: extra?.scopes,
+        scopes: extra?.scopes ?? opts.scopes,
         timeoutMs: Number(opts.timeout ?? 10_000),
         clientName: extra?.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
         mode: extra?.mode ?? GATEWAY_CLIENT_MODES.CLI,

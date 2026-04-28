@@ -7,6 +7,15 @@ type QaGatewayRpcRequestOptions = {
   timeoutMs?: number;
 };
 
+const QA_GATEWAY_OPERATOR_SCOPES = [
+  "operator.admin",
+  "operator.read",
+  "operator.write",
+  "operator.approvals",
+  "operator.pairing",
+  "operator.talk.secrets",
+] as const;
+
 export type QaGatewayRpcClient = {
   request(method: string, rpcParams?: unknown, opts?: QaGatewayRpcRequestOptions): Promise<unknown>;
   stop(): Promise<void>;
@@ -52,6 +61,7 @@ export async function startQaGatewayRpcClient(params: {
                 timeout: String(opts?.timeoutMs ?? 20_000),
                 expectFinal: opts?.expectFinal,
                 json: true,
+                scopes: [...QA_GATEWAY_OPERATOR_SCOPES],
               },
               rpcParams ?? {},
               {
