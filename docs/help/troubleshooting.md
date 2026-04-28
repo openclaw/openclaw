@@ -167,6 +167,15 @@ flowchart TD
       locked out; another localhost origin uses a separate bucket.
     - repeated `unauthorized` after that retry → wrong token/password, auth mode mismatch, or stale paired device token.
     - `gateway connect failed:` → UI is targeting the wrong URL/port or unreachable gateway.
+    - `127.0.0.1` works inside a VM/WSL2/OrbStack shell but not from the host browser → loopback is scoped to that VM/network namespace. Use Tailscale Serve, an SSH tunnel, or deliberate host/VM forwarding instead of assuming `gateway.bind` is broken.
+    - WSL2 `172.x.x.x` addresses appear in output but other LAN devices cannot connect → expected WSL NAT behavior; prefer Tailscale/SSH or a Windows-managed port proxy.
+
+    Quick reachability checklist:
+
+    1. Run `openclaw gateway status`, `openclaw gateway probe`, and `curl -fsS http://127.0.0.1:18789/health` on the Gateway host.
+    2. Check `openclaw config get gateway.bind` and remember `loopback` is same-network-namespace only.
+    3. If the client is outside that namespace, use Tailscale Serve or SSH tunneling before trying a LAN bind.
+    4. If you intentionally use `lan`, `tailnet`, a custom bind, or a reverse proxy, configure gateway auth first.
 
     Deep pages:
 

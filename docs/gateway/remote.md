@@ -15,6 +15,93 @@ This repo supports “remote over SSH” by keeping a single Gateway (the master
 - The Gateway WebSocket binds to **loopback** on your configured port (defaults to 18789).
 - For remote use, you forward that loopback port over SSH (or use a tailnet/VPN and tunnel less).
 
+## Reachability triage: loopback, LAN, VM, WSL2, or tailnet
+
+When a dashboard, node, or remote CLI cannot reach the Gateway, first separate
+**where the Gateway listens** from **which network can route to that address**.
+VMs, OrbStack, Docker Desktop, and WSL2 often add NAT boundaries that look like
+OpenClaw bind problems even when the Gateway is behaving correctly.
+
+### 1. Prove the Gateway is healthy on the host that runs it
+
+Run these on the Gateway host, not from the remote client:
+
+```bash
+openclaw gateway status
+openclaw gateway probe
+curl -fsS http://127.0.0.1:18789/health
+```
+
+If loopback fails on the Gateway host, debug the Gateway process before changing
+networking. If loopback succeeds but another machine cannot connect, keep going:
+that is a reachability problem, not proof that OpenClaw failed to bind.
+
+### 2. Identify the bind mode
+
+Check config and runtime output:
+
+```bash
+openclaw config get gateway.bind
+openclaw gateway status
+```
+
+Interpretation:
+
+- `loopback` / `127.0.0.1`: reachable only from the same network namespace.
+  A browser on the host OS cannot always reach `127.0.0.1` inside a Linux VM,
+  OrbStack container, Docker container, or WSL2 distro.
+- `lan` / `0.0.0.0`: listens on non-loopback interfaces, but still only works
+  where the surrounding VM/NAT/firewall allows inbound traffic.
+- `tailnet`: listens on the host's Tailscale `100.x` address. This requires
+  Tailscale to be running on that same host/network namespace.
+- `auto`: prefers loopback. Do not assume it is LAN-reachable.
+
+### 3. Account for VM and NAT boundaries
+
+Common confusing cases:
+
+- **OrbStack / Linux VM on macOS:** `127.0.0.1` inside the VM is the VM, not
+  the macOS host. Use OrbStack's host forwarding, an SSH tunnel, Tailscale Serve,
+  or run the Gateway on the host you want to browse from.
+- **WSL2:** addresses like `172.x.x.x` are usually WSL's private NAT network.
+  They are not stable LAN addresses and are often unreachable from other LAN
+  devices. Prefer Tailscale, SSH tunneling, or a Windows port-proxy/firewall rule
+  you intentionally manage.
+- **Remote local-inference hosts:** a model server reachable from WSL does not
+  imply the Gateway is reachable from Windows, macOS, iOS, or another node. Test
+  the Gateway URL from the actual client that needs it.
+
+### 4. Pick the safest exposure pattern
+
+Recommended order:
+
+1. **Loopback + Tailscale Serve** for Control UI/WebSocket access. The Gateway
+   stays bound to `127.0.0.1`, and Tailscale provides HTTPS and tailnet routing.
+2. **Loopback + SSH tunnel** when Tailscale is unavailable or you only need one
+   client path.
+3. **Tailnet bind** when you explicitly want the Gateway to listen on the
+   Tailscale IP without Serve.
+4. **LAN/custom bind** only on a trusted network, with Gateway auth configured.
+
+Use a reverse SSH tunnel only when the Gateway host cannot accept inbound
+connections but can dial out to a reachable bastion/client. Treat it like any
+other remote exposure: keep shared-secret auth enabled unless another trusted
+identity layer is deliberately configured.
+
+### 5. Security checks before non-loopback exposure
+
+Before using `gateway.bind: "lan"`, `"tailnet"`, or a reverse proxy/tunnel that
+accepts traffic from another machine:
+
+- Configure gateway auth (`token`, `password`, or a deliberate
+  `trusted-proxy` setup).
+- Avoid putting shared secrets in URLs; pass tokens/passwords through config,
+  environment, or explicit CLI flags.
+- For reverse proxies, preserve and validate the expected forwarded headers only
+  in trusted-proxy deployments. Do not trust arbitrary client-supplied
+  `x-forwarded-*` headers on raw LAN traffic.
+- Prefer Tailscale Serve over public exposure for operator UI and node traffic.
+
 ## Common VPN and tailnet setups
 
 Think of the **Gateway host** as where the agent lives. It owns sessions, auth profiles, channels, and state. Your laptop, desktop, and nodes connect to that host.
