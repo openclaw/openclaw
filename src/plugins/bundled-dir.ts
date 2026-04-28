@@ -91,6 +91,20 @@ function resolveTrustedExistingOverride(resolvedOverride: string): string | null
   return realOverride;
 }
 
+function overrideResolvesUnderPackageBundledRoot(params: {
+  resolvedOverride: string;
+  packageRoot: string;
+}): boolean {
+  const realOverride = safeRealpathSync(params.resolvedOverride);
+  if (!realOverride) {
+    return false;
+  }
+  return trustedBundledPluginRootsForPackageRoot(params.packageRoot)
+    .map((trustedRoot) => safeRealpathSync(trustedRoot))
+    .filter((entry): entry is string => Boolean(entry))
+    .some((trustedRoot) => pathContains(trustedRoot, realOverride));
+}
+
 function runningSourceTypeScriptProcess(): boolean {
   const argv1 = process.argv[1]?.toLowerCase();
   if (
@@ -160,7 +174,7 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
   }
 
   const override = env.OPENCLAW_BUNDLED_PLUGINS_DIR?.trim();
-  let ignoreArgvRoot = false;
+  let rejectedExistingOverride: string | null = null;
   if (override) {
     const resolvedOverride = resolveUserPath(override, env);
     if (fs.existsSync(resolvedOverride)) {
@@ -168,18 +182,25 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
       if (trustedOverride) {
         return trustedOverride;
       }
-      ignoreArgvRoot = true;
+      rejectedExistingOverride = resolvedOverride;
     }
   }
 
   const preferSourceCheckout = runningSourceTypeScriptProcess();
 
   try {
-    const argvRoot = ignoreArgvRoot
-      ? null
-      : resolveOpenClawPackageRootSync({ argv1: process.argv[1] });
+    const argvRoot = resolveOpenClawPackageRootSync({ argv1: process.argv[1] });
+    const rejectedOverrideUsesArgvRoot = Boolean(
+      argvRoot &&
+      rejectedExistingOverride &&
+      overrideResolvesUnderPackageBundledRoot({
+        resolvedOverride: rejectedExistingOverride,
+        packageRoot: argvRoot,
+      }),
+    );
+    const safeArgvRoot = rejectedOverrideUsesArgvRoot ? null : argvRoot;
     const moduleRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
-    const packageRoots = [argvRoot, moduleRoot].filter(
+    const packageRoots = [safeArgvRoot, moduleRoot].filter(
       (entry, index, all): entry is string => Boolean(entry) && all.indexOf(entry) === index,
     );
     for (const packageRoot of packageRoots) {
