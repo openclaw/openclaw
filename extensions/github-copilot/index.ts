@@ -4,12 +4,71 @@ import { ensureAuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveFirstGithubToken } from "./auth.js";
 import { githubCopilotMemoryEmbeddingProviderAdapter } from "./embeddings.js";
+import { fetchCopilotModels } from "./models-api.js";
+import { mapCopilotModels, type MappedCopilotModelWithCapabilities } from "./models-mapping.js";
 import { PROVIDER_ID, resolveCopilotForwardCompatModel } from "./models.js";
 import { buildGithubCopilotReplayPolicy } from "./replay-policy.js";
+import { resolveThinkingProfileFromCapabilities } from "./thinking.js";
 import { wrapCopilotProviderStream } from "./stream.js";
 
 const COPILOT_ENV_VARS = ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"];
-const COPILOT_XHIGH_MODEL_IDS = ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2", "gpt-5.2-codex"] as const;
+
+/**
+ * Module-level cache for API-fetched model capabilities.
+ * Populated by fetchAndCacheModels() and consumed by resolveThinkingProfile().
+ */
+let cachedModelCapabilities = new Map<string, MappedCopilotModelWithCapabilities>();
+
+/** In-flight fetch promise to prevent concurrent API calls. */
+let fetchModelsPromise: Promise<MappedCopilotModelWithCapabilities[]> | null = null;
+
+async function fetchAndCacheModels(
+  config: OpenClawConfig | undefined,
+  env: NodeJS.ProcessEnv,
+): Promise<MappedCopilotModelWithCapabilities[]> {
+  if (cachedModelCapabilities.size > 0) {
+    return [...cachedModelCapabilities.values()];
+  }
+  if (fetchModelsPromise) {
+    return fetchModelsPromise;
+  }
+  fetchModelsPromise = (async () => {
+    try {
+      const { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotApiToken } =
+        await loadGithubCopilotRuntime();
+      const { githubToken } = await resolveFirstGithubToken({
+        config,
+        env,
+      });
+      if (!githubToken) {
+        return [];
+      }
+      let baseUrl = DEFAULT_COPILOT_API_BASE_URL;
+      let apiToken: string | undefined;
+      try {
+        const token = await resolveCopilotApiToken({ githubToken, env });
+        baseUrl = token.baseUrl;
+        apiToken = token.token;
+      } catch {
+        return [];
+      }
+      if (!apiToken) {
+        return [];
+      }
+      const apiModels = await fetchCopilotModels(baseUrl, apiToken);
+      const mapped = mapCopilotModels(apiModels);
+      const newCache = new Map<string, MappedCopilotModelWithCapabilities>();
+      for (const m of mapped) {
+        newCache.set(m.id.toLowerCase(), m);
+      }
+      cachedModelCapabilities = newCache;
+      return mapped;
+    } finally {
+      fetchModelsPromise = null;
+    }
+  })();
+  return fetchModelsPromise;
+}
 
 type GithubCopilotPluginConfig = {
   discovery?: {
@@ -126,6 +185,7 @@ export default definePluginEntry({
             return null;
           }
           let baseUrl = DEFAULT_COPILOT_API_BASE_URL;
+          let apiToken: string | undefined;
           if (githubToken) {
             try {
               const token = await resolveCopilotApiToken({
@@ -133,35 +193,84 @@ export default definePluginEntry({
                 env: ctx.env,
               });
               baseUrl = token.baseUrl;
+              apiToken = token.token;
             } catch {
               baseUrl = DEFAULT_COPILOT_API_BASE_URL;
             }
           }
+
+          // Fetch models from Copilot API to get dynamic capabilities
+          let catalogModels: MappedCopilotModelWithCapabilities[] = [];
+          if (apiToken) {
+            try {
+              const apiModels = await fetchCopilotModels(baseUrl, apiToken);
+              catalogModels = mapCopilotModels(apiModels);
+              // Cache capabilities for thinking profile resolution
+              const newCache = new Map<string, MappedCopilotModelWithCapabilities>();
+              for (const m of catalogModels) {
+                newCache.set(m.id.toLowerCase(), m);
+              }
+              cachedModelCapabilities = newCache;
+            } catch {
+              // Fall back to empty — resolveDynamicModel will handle unknown models
+            }
+          }
+
           return {
             provider: {
               baseUrl,
-              models: [],
+              // Strip internal _copilotCapabilities before returning to catalog
+              models: catalogModels.map(({ _copilotCapabilities: _, ...model }) => model),
             },
           };
         },
       },
       resolveDynamicModel: (ctx) => resolveCopilotForwardCompatModel(ctx),
+      prepareDynamicModel: async (ctx) => {
+        // Lazily fetch model catalog from Copilot API when a model is requested
+        // but not yet in the cache. This ensures dynamic models get API-sourced
+        // capabilities even when catalog.run didn't execute during startup.
+        if (cachedModelCapabilities.size > 0) {
+          return;
+        }
+        try {
+          await fetchAndCacheModels(ctx.config, process.env as NodeJS.ProcessEnv);
+        } catch {
+          // Silently skip — resolveDynamicModel fallback handles unknown models
+        }
+      },
+      augmentModelCatalog: async (ctx) => {
+        // Add dynamically-fetched Copilot models to the model catalog so they
+        // appear in /models list. This runs during loadModelCatalog, after the
+        // static model registry is loaded.
+        try {
+          const models = await fetchAndCacheModels(
+            ctx.config,
+            ctx.env ?? (process.env as NodeJS.ProcessEnv),
+          );
+          return models.map((m) => ({
+            id: m.id,
+            name: m.name,
+            provider: PROVIDER_ID,
+            contextWindow: m.contextWindow,
+            reasoning: m.reasoning,
+            input: m.input,
+          }));
+        } catch {
+          return [];
+        }
+      },
       wrapStreamFn: wrapCopilotProviderStream,
       buildReplayPolicy: ({ modelId }) => buildGithubCopilotReplayPolicy(modelId),
-      resolveThinkingProfile: ({ modelId }) => ({
-        levels: [
-          { id: "off" },
-          { id: "minimal" },
-          { id: "low" },
-          { id: "medium" },
-          { id: "high" },
-          ...(COPILOT_XHIGH_MODEL_IDS.includes(
-            (normalizeOptionalLowercaseString(modelId) ?? "") as never,
-          )
-            ? [{ id: "xhigh" as const }]
-            : []),
-        ],
-      }),
+      resolveThinkingProfile: ({ modelId }) => {
+        const lower = normalizeOptionalLowercaseString(modelId) ?? "";
+        const cached = cachedModelCapabilities.get(lower);
+        if (cached?._copilotCapabilities) {
+          return resolveThinkingProfileFromCapabilities(cached._copilotCapabilities);
+        }
+        // Fallback: basic heuristic when API data is not available
+        return resolveThinkingProfileFromCapabilities(undefined);
+      },
       prepareRuntimeAuth: async (ctx) => {
         const { resolveCopilotApiToken } = await loadGithubCopilotRuntime();
         const token = await resolveCopilotApiToken({
