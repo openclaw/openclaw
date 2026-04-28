@@ -10,6 +10,8 @@ describe("talk normalization", () => {
       modelId: "eleven_v3",
       outputFormat: "pcm_44100",
       apiKey: "secret-key", // pragma: allowlist secret
+      consultThinkingLevel: " low ",
+      consultFastMode: true,
       speechLocale: " ru-RU ",
       interruptOnSpeech: false,
       silenceTimeoutMs: 1500,
@@ -17,6 +19,8 @@ describe("talk normalization", () => {
 
     expect(normalized).toEqual({
       speechLocale: "ru-RU",
+      consultThinkingLevel: "low",
+      consultFastMode: true,
       interruptOnSpeech: false,
       silenceTimeoutMs: 1500,
     });

@@ -378,11 +378,13 @@ export async function createVoiceCallRuntime(params: {
             voiceConfig: effectiveConfig,
             agentRuntime,
           });
-          const thinkLevel = agentRuntime.resolveThinkingDefault({
-            cfg,
-            provider: agentProvider,
-            model,
-          });
+          const thinkLevel =
+            effectiveConfig.realtime.consultThinkingLevel ??
+            agentRuntime.resolveThinkingDefault({
+              cfg,
+              provider: agentProvider,
+              model,
+            });
           return await consultRealtimeVoiceAgent({
             cfg,
             agentRuntime,
@@ -401,6 +403,7 @@ export async function createVoiceCallRuntime(params: {
             provider: agentProvider,
             model,
             thinkLevel,
+            fastMode: effectiveConfig.realtime.consultFastMode,
             timeoutMs: effectiveConfig.responseTimeoutMs,
             spawnedBy: requesterSessionKey,
             contextMode: requesterSessionKey ? "fork" : undefined,
