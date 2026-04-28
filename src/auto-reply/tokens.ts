@@ -106,17 +106,25 @@ function isReasoningWrappedSilentReply(text: string, token: string): boolean {
   }
 
   // Bare form: a literal "think" line followed by reasoning lines.
-  const bareStart = trimmed.match(/^think\s*\r?\n/i);
+  // Marker only consumes horizontal whitespace + a single newline so a
+  // blank-line separator immediately after `think\n` is not eaten by the
+  // marker itself (Codex P1 re-review on PR #66755 — `\s*` previously
+  // included newlines and could swallow the boundary).
+  const bareStart = trimmed.match(/^think[ \t]*\r?\n/i);
   if (bareStart) {
     const afterMarker = trimmed.slice(bareStart[0].length);
     if (!trailRegex.test(afterMarker)) {
       return false;
     }
-    // A blank-line separator marks the end of the reasoning block.
-    // Anything after it (and before the trailing token) is user-facing.
-    const blankBoundary = afterMarker.search(/\r?\n\s*\r?\n/);
-    if (blankBoundary !== -1) {
-      const tailRegion = afterMarker.slice(blankBoundary);
+    // A blank-line separator marks the end of the reasoning block. It
+    // can show up as a leading newline at the start of afterMarker
+    // (i.e. the marker consumed one of the separator's two newlines)
+    // or as a `\n\s*\n` pair somewhere within afterMarker.
+    const blankBoundaryAtStart = /^\r?\n/.test(afterMarker);
+    const blankBoundaryWithin = afterMarker.search(/\r?\n\s*\r?\n/);
+    if (blankBoundaryAtStart || blankBoundaryWithin !== -1) {
+      const boundaryIndex = blankBoundaryAtStart ? 0 : blankBoundaryWithin;
+      const tailRegion = afterMarker.slice(boundaryIndex);
       const remainderAfterToken = tailRegion.replace(trailRegex, "").trim();
       return remainderAfterToken === "";
     }
@@ -133,10 +141,7 @@ function isReasoningWrappedSilentReply(text: string, token: string): boolean {
     if (!trailMatch) {
       return false;
     }
-    const charBeforeToken = afterMarker.slice(
-      0,
-      trailMatch.index ?? afterMarker.length,
-    );
+    const charBeforeToken = afterMarker.slice(0, trailMatch.index ?? afterMarker.length);
     const trulyAdjacent = charBeforeToken.length > 0 && !/\s$/.test(charBeforeToken);
     return trulyAdjacent;
   }

@@ -138,11 +138,9 @@ describe("isSilentReplyText", () => {
     // just newline-separated) still leaves the reasoning/output
     // boundary ambiguous and should return false.
     it("does NOT classify as silent when bare-think ends with space-separated token", () => {
-      const text = [
-        "think",
-        "Reasoning about the request.",
-        "Here is the answer. NO_REPLY",
-      ].join("\n");
+      const text = ["think", "Reasoning about the request.", "Here is the answer. NO_REPLY"].join(
+        "\n",
+      );
       expect(isSilentReplyText(text)).toBe(false);
     });
 
@@ -151,6 +149,17 @@ describe("isSilentReplyText", () => {
     it("classifies bare-think with token truly glued to preceding punctuation as silent", () => {
       const text = "think\nReasoning.\nI will stay quiet here.NO_REPLY";
       expect(isSilentReplyText(text)).toBe(true);
+    });
+
+    // Codex P1 re-review on PR #66755 (line 109): the bare-think marker
+    // regex previously used `\s*` which includes newlines, so a
+    // blank-line separator like `think\n\nHere is the answer.NO_REPLY`
+    // got swallowed by the marker. With the boundary gone, the
+    // adjacency check would then misclassify the substantive answer as
+    // silent. Marker now only eats horizontal whitespace + one newline.
+    it("does NOT classify as silent when blank line separates marker from substantive reply (token glued)", () => {
+      const text = "think\n\nHere is the answer.NO_REPLY";
+      expect(isSilentReplyText(text)).toBe(false);
     });
 
     // Codex P2 re-review on PR #66755: an unclosed <think> tag (common
