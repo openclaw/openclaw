@@ -225,6 +225,16 @@ describe("lookupContextTokens", () => {
     expect(
       shouldEagerWarmContextWindowCache(["node", "openclaw", "memory", "search", "--json"]),
     ).toBe(false);
+    expect(
+      shouldEagerWarmContextWindowCache([
+        "node",
+        "openclaw",
+        "message",
+        "send",
+        "--channel",
+        "telegram",
+      ]),
+    ).toBe(false);
     expect(shouldEagerWarmContextWindowCache(["node", "openclaw", "status", "--json"])).toBe(false);
     expect(shouldEagerWarmContextWindowCache(["node", "openclaw", "sessions", "--json"])).toBe(
       false,

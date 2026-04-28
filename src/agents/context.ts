@@ -152,6 +152,7 @@ const SKIP_EAGER_WARMUP_PRIMARY_COMMANDS = new Set([
   "hooks",
   "logs",
   "memory",
+  "message",
   "models",
   "pairing",
   "plugins",
