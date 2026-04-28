@@ -7,7 +7,6 @@ import { emitAgentPlanEvent } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import {
@@ -18,7 +17,6 @@ import {
 import {
   type AuthProfileFailureReason,
   markAuthProfileFailure,
-  resolveAuthProfileEligibility,
   markAuthProfileGood,
   markAuthProfileUsed,
 } from "../auth-profiles.js";
@@ -30,16 +28,9 @@ import {
   FailoverError,
   resolveFailoverStatus,
 } from "../failover-error.js";
-import { selectAgentHarness } from "../harness/selection.js";
 import { LiveSessionModelSwitchError } from "../live-model-switch-error.js";
 import { shouldSwitchToLiveModel, clearLiveModelSwitchPending } from "../live-model-switch.js";
-import {
-  ensureAuthProfileStore,
-  type ResolvedProviderAuth,
-  resolveAuthProfileOrder,
-  shouldPreferExplicitConfigApiKeyAuth,
-} from "../model-auth.js";
-import { ensureOpenClawModelsJson } from "../models-config.js";
+import type { ResolvedProviderAuth } from "../model-auth.js";
 import {
   retireSessionMcpRuntime,
   retireSessionMcpRuntimeForSessionKey,
@@ -60,8 +51,6 @@ import {
   parseImageSizeError,
   pickFallbackThinkingLevel,
 } from "../pi-embedded-helpers.js";
-import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
-import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { runPostCompactionSideEffects } from "./compaction-hooks.js";
@@ -69,7 +58,6 @@ import { buildEmbeddedCompactionRuntimeContext } from "./compaction-runtime-cont
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { resolveEmbeddedRunFailureSignal } from "./failure-signal.js";
 import { log } from "./logger.js";
-import { resolveModelAsync } from "./model.js";
 import { createEmbeddedRunReplayState, observeReplayMetadata } from "./replay-state.js";
 import { handleAssistantFailover } from "./run/assistant-failover.js";
 import { forgetPromptBuildDrainCacheForRun } from "./run/attempt.prompt-helpers.js";
@@ -115,6 +103,7 @@ import {
   resolveEmbeddedRunWorkspaceContext,
   throwIfEmbeddedRunAborted,
 } from "./run/lane-workspace.js";
+import { buildEmbeddedRunModelAuthPlan } from "./run/model-auth-plan.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
@@ -122,14 +111,9 @@ import {
   backfillSessionKey,
   buildHandledReplyPayloads,
   buildTraceToolSummary,
-  createEmptyAuthProfileStore,
 } from "./run/run-orchestration-helpers.js";
 import { buildEmbeddedRunAttemptInput } from "./run/runtime-plan-factory.js";
-import {
-  buildBeforeModelResolveAttachments,
-  resolveEffectiveRuntimeModel,
-  resolveHookModelSelection,
-} from "./run/setup.js";
+import { buildBeforeModelResolveAttachments, resolveHookModelSelection } from "./run/setup.js";
 import {
   buildEmbeddedRunTerminalResult,
   resolveEmbeddedRunStopReason,
@@ -266,139 +250,32 @@ export async function runEmbeddedPiAgent(
       provider = hookSelection.provider;
       modelId = hookSelection.modelId;
       const legacyBeforeAgentStartResult = hookSelection.legacyBeforeAgentStartResult;
-      const agentHarness = selectAgentHarness({
+      const modelAuthPlan = await buildEmbeddedRunModelAuthPlan({
         provider,
         modelId,
+        agentDir,
         config: params.config,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         agentHarnessId: params.agentHarnessId,
+        authProfileId: params.authProfileId,
+        authProfileIdSource: params.authProfileIdSource,
+        workspaceDir: resolvedWorkspace,
       });
-      const pluginHarnessOwnsTransport = agentHarness.id !== "pi";
-      const dynamicModelResolution = await resolveModelAsync(
-        provider,
-        modelId,
-        agentDir,
-        params.config,
-        {
-          // Plugin dynamic model hooks can resolve explicit model refs without
-          // first generating PI models.json. This keeps one-shot model runs from
-          // blocking on unrelated provider discovery.
-          skipPiDiscovery: true,
-        },
-      );
-      const modelResolution =
-        dynamicModelResolution.model || pluginHarnessOwnsTransport
-          ? dynamicModelResolution
-          : await (async () => {
-              await ensureOpenClawModelsJson(params.config, agentDir);
-              return await resolveModelAsync(provider, modelId, agentDir, params.config);
-            })();
-      const { model, error, authStorage, modelRegistry } = modelResolution;
-      if (!model) {
-        throw new FailoverError(error ?? `Unknown model: ${provider}/${modelId}`, {
-          reason: "model_not_found",
-          provider,
-          model: modelId,
-        });
-      }
-      let runtimeModel = model;
-
-      const resolvedRuntimeModel = resolveEffectiveRuntimeModel({
-        cfg: params.config,
-        provider,
-        modelId,
-        runtimeModel,
-      });
-      const ctxInfo = resolvedRuntimeModel.ctxInfo;
-      let effectiveModel = resolvedRuntimeModel.effectiveModel;
-
-      const authStore = pluginHarnessOwnsTransport
-        ? createEmptyAuthProfileStore()
-        : ensureAuthProfileStore(agentDir, {
-            allowKeychainPrompt: false,
-          });
-      const preferredProfileId = params.authProfileId?.trim();
-      let lockedProfileId = params.authProfileIdSource === "user" ? preferredProfileId : undefined;
-      if (lockedProfileId) {
-        if (pluginHarnessOwnsTransport) {
-          const runtimeAuthPlan = buildAgentRuntimeAuthPlan({
-            provider,
-            authProfileProvider: lockedProfileId.split(":", 1)[0],
-            sessionAuthProfileId: lockedProfileId,
-            config: params.config,
-            workspaceDir: resolvedWorkspace,
-            harnessId: agentHarness.id,
-          });
-          if (!runtimeAuthPlan.forwardedAuthProfileId) {
-            lockedProfileId = undefined;
-          }
-        } else {
-          const lockedProfile = authStore.profiles[lockedProfileId];
-          const lockedProfileProvider = lockedProfile
-            ? resolveProviderIdForAuth(lockedProfile.provider, {
-                config: params.config,
-                workspaceDir: resolvedWorkspace,
-              })
-            : undefined;
-          const runProvider = resolveProviderIdForAuth(provider, {
-            config: params.config,
-            workspaceDir: resolvedWorkspace,
-          });
-          if (!lockedProfile || !lockedProfileProvider || lockedProfileProvider !== runProvider) {
-            lockedProfileId = undefined;
-          }
-        }
-      }
-      if (lockedProfileId && !pluginHarnessOwnsTransport) {
-        const eligibility = resolveAuthProfileEligibility({
-          cfg: params.config,
-          store: authStore,
-          provider,
-          profileId: lockedProfileId,
-        });
-        if (!eligibility.eligible) {
-          throw new Error(`Auth profile "${lockedProfileId}" is not configured for ${provider}.`);
-        }
-      }
-      const profileOrder = shouldPreferExplicitConfigApiKeyAuth(params.config, provider)
-        ? []
-        : resolveAuthProfileOrder({
-            cfg: params.config,
-            store: authStore,
-            provider,
-            preferredProfile: preferredProfileId,
-          });
-      const providerPreferredProfileId = lockedProfileId
-        ? undefined
-        : resolveProviderAuthProfileId({
-            provider,
-            config: params.config,
-            workspaceDir: resolvedWorkspace,
-            context: {
-              config: params.config,
-              agentDir,
-              workspaceDir: resolvedWorkspace,
-              provider,
-              modelId,
-              preferredProfileId,
-              lockedProfileId,
-              profileOrder,
-              authStore,
-            },
-          });
-      const providerOrderedProfiles =
-        providerPreferredProfileId && profileOrder.includes(providerPreferredProfileId)
-          ? [
-              providerPreferredProfileId,
-              ...profileOrder.filter((profileId) => profileId !== providerPreferredProfileId),
-            ]
-          : profileOrder;
-      const profileCandidates = lockedProfileId
-        ? [lockedProfileId]
-        : providerOrderedProfiles.length > 0
-          ? providerOrderedProfiles
-          : [undefined];
+      const {
+        agentHarness,
+        authStorage,
+        authStore,
+        ctxInfo,
+        lockedProfileId,
+        model,
+        modelRegistry,
+        pluginHarnessOwnsTransport,
+        preferredProfileId,
+        profileCandidates,
+      } = modelAuthPlan;
+      let runtimeModel = modelAuthPlan.runtimeModel;
+      let effectiveModel = modelAuthPlan.effectiveModel;
       let profileIndex = 0;
       const traceAttempts: TraceAttempt[] = [];
 
