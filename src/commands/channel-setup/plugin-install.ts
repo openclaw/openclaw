@@ -42,6 +42,7 @@ export async function ensureChannelSetupPluginInstalled(params: {
   runtime: RuntimeEnv;
   workspaceDir?: string;
   promptInstall?: boolean;
+  autoConfirmSingleSource?: boolean;
 }): Promise<InstallResult> {
   const result = await ensureOnboardingPluginInstalled({
     cfg: params.cfg,
@@ -50,6 +51,9 @@ export async function ensureChannelSetupPluginInstalled(params: {
     runtime: params.runtime,
     workspaceDir: params.workspaceDir,
     ...(params.promptInstall !== undefined ? { promptInstall: params.promptInstall } : {}),
+    ...(params.autoConfirmSingleSource !== undefined
+      ? { autoConfirmSingleSource: params.autoConfirmSingleSource }
+      : {}),
   });
   return {
     cfg: result.cfg,

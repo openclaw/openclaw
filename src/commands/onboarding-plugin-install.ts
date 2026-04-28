@@ -289,6 +289,11 @@ async function promptInstallChoice(params: {
   bundledLocalPath?: string | null;
   defaultChoice: InstallChoice;
   prompter: WizardPrompter;
+  /** When true and only one real install source (npm *or* local, not both)
+   *  exists, skip the "Install <plugin>? / Skip" prompt and resolve directly
+   *  to that source. Useful when the caller already knows the user's intent
+   *  (e.g. they just picked the channel in a previous menu). */
+  autoConfirmSingleSource?: boolean;
 }): Promise<InstallChoice> {
   const rawNpmSpec = resolveNpmSpecForOnboarding(params.entry.install);
   // When the plugin already ships bundled with the host (i.e. lives under
@@ -319,6 +324,20 @@ async function promptInstallChoice(params: {
       ...(safeLocalPath ? { hint: safeLocalPath } : {}),
     });
   }
+
+  if (params.autoConfirmSingleSource) {
+    const realSources: InstallChoice[] = [];
+    if (safeNpmSpec) {
+      realSources.push("npm");
+    }
+    if (params.localPath) {
+      realSources.push("local");
+    }
+    if (realSources.length === 1) {
+      return realSources[0];
+    }
+  }
+
   options.push({ value: "skip", label: "Skip for now" });
 
   const initialValue =
@@ -567,6 +586,7 @@ export async function ensureOnboardingPluginInstalled(params: {
   runtime: RuntimeEnv;
   workspaceDir?: string;
   promptInstall?: boolean;
+  autoConfirmSingleSource?: boolean;
 }): Promise<OnboardingPluginInstallResult> {
   const { entry, prompter, runtime, workspaceDir } = params;
   let next = params.cfg;
@@ -596,6 +616,7 @@ export async function ensureOnboardingPluginInstalled(params: {
           bundledLocalPath,
           defaultChoice,
           prompter,
+          autoConfirmSingleSource: params.autoConfirmSingleSource,
         });
 
   if (choice === "skip") {

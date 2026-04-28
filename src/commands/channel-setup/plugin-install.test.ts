@@ -560,6 +560,46 @@ describe("ensureChannelSetupPluginInstalled", () => {
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
+  it("skips the install prompt when autoConfirmSingleSource is set and only npm is available", async () => {
+    const runtime = makeRuntime();
+    const { prompter, select } = makeSkipInstallPrompter();
+    const cfg: OpenClawConfig = {};
+    // npm-only entry (no local path)
+    const npmOnlyEntry: ChannelPluginCatalogEntry = {
+      id: "wecom",
+      pluginId: "wecom",
+      meta: {
+        id: "wecom",
+        label: "WeCom",
+        selectionLabel: "WeCom",
+        docsPath: "/channels/wecom",
+        blurb: "WeCom channel",
+      },
+      install: {
+        npmSpec: "@openclaw/wecom@2026.4.23",
+      },
+    };
+    installPluginFromNpmSpec.mockResolvedValue({
+      ok: true,
+      pluginId: "wecom",
+      installPath: "/tmp/wecom",
+    });
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    resolveBundledPluginSources.mockReturnValue(new Map());
+
+    const result = await ensureChannelSetupPluginInstalled({
+      cfg,
+      entry: npmOnlyEntry,
+      prompter,
+      runtime,
+      autoConfirmSingleSource: true,
+    });
+
+    expect(select).not.toHaveBeenCalled();
+    expect(result.installed).toBe(true);
+    expect(result.pluginId).toBe("wecom");
+  });
+
   it("clears discovery cache before reloading the setup plugin registry", () => {
     const runtime = makeRuntime();
     const cfg: OpenClawConfig = {};

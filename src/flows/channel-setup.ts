@@ -578,6 +578,7 @@ export async function setupChannels(
         prompter,
         runtime,
         workspaceDir,
+        autoConfirmSingleSource: true,
       });
       next = result.cfg;
       if (!result.installed) {

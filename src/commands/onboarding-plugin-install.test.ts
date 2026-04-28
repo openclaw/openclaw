@@ -19,9 +19,7 @@ vi.mock("../cli/plugins-registry-refresh.js", () => ({
 
 const resolveBundledPluginSources = vi.hoisted(() => vi.fn(() => new Map()));
 const findBundledPluginSourceInMap = vi.hoisted(() =>
-  vi.fn<
-    (...args: unknown[]) => { localPath: string } | undefined
-  >(() => undefined),
+  vi.fn<(...args: unknown[]) => { localPath: string } | undefined>(() => undefined),
 );
 vi.mock("../plugins/bundled-sources.js", () => ({
   resolveBundledPluginSources,
