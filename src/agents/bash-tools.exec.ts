@@ -1482,6 +1482,7 @@ export function createExecTool(
           env,
           requestedEnv: {
             ...params.env,
+            OPENCLAW_AGENT_ID: agentId ?? "",
             OPENCLAW_SESSION_KEY: defaults?.sessionKey ?? "",
           },
           requestedNode: params.node?.trim(),
@@ -1576,6 +1577,7 @@ export function createExecTool(
         notifyOnExit,
         notifyOnExitEmptySuccess,
         scopeKey: defaults?.scopeKey,
+        agentId,
         sessionKey: notifySessionKey,
         notifyDeliveryContext,
         timeoutSec: effectiveTimeout,
