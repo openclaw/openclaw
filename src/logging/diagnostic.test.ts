@@ -23,6 +23,7 @@ import {
 import {
   logSessionStateChange,
   resetDiagnosticStateForTest,
+  resolveStuckSessionAbortMs,
   resolveStuckSessionWarnMs,
   startDiagnosticHeartbeat,
 } from "./diagnostic.js";
@@ -326,6 +327,26 @@ describe("stuck session diagnostics threshold", () => {
     expect(resolveStuckSessionWarnMs({ diagnostics: { stuckSessionWarnMs: -1 } })).toBe(120_000);
     expect(resolveStuckSessionWarnMs({ diagnostics: { stuckSessionWarnMs: 0 } })).toBe(120_000);
     expect(resolveStuckSessionWarnMs()).toBe(120_000);
+  });
+});
+
+describe("resolveStuckSessionAbortMs", () => {
+  it("uses configured abort threshold", () => {
+    expect(
+      resolveStuckSessionAbortMs({
+        diagnostics: { stuckSessionAbortMs: 300_000 },
+      }),
+    ).toBe(300_000);
+  });
+
+  it("uses default 600s when not configured", () => {
+    expect(resolveStuckSessionAbortMs({})).toBe(600_000);
+    expect(resolveStuckSessionAbortMs()).toBe(600_000);
+  });
+
+  it("clamps to valid range", () => {
+    expect(resolveStuckSessionAbortMs({ diagnostics: { stuckSessionAbortMs: 1_000 } })).toBe(600_000);
+    expect(resolveStuckSessionAbortMs({ diagnostics: { stuckSessionAbortMs: 0 } })).toBe(600_000);
   });
 });
 

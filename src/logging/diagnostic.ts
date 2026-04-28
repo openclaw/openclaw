@@ -1,3 +1,4 @@
+import { clearCommandLane } from "../process/command-queue.js";
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -45,6 +46,9 @@ const webhookStats = {
 const DEFAULT_STUCK_SESSION_WARN_MS = 120_000;
 const MIN_STUCK_SESSION_WARN_MS = 1_000;
 const MAX_STUCK_SESSION_WARN_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_STUCK_SESSION_ABORT_MS = 600_000;
+const MIN_STUCK_SESSION_ABORT_MS = 60_000;
+const MAX_STUCK_SESSION_ABORT_MS = 24 * 60 * 60 * 1000;
 const RECENT_DIAGNOSTIC_ACTIVITY_MS = 120_000;
 const DEFAULT_LIVENESS_EVENT_LOOP_DELAY_WARN_MS = 1_000;
 const DEFAULT_LIVENESS_EVENT_LOOP_UTILIZATION_WARN = 0.95;
@@ -286,6 +290,18 @@ export function resolveStuckSessionWarnMs(config?: OpenClawConfig): number {
   const rounded = Math.floor(raw);
   if (rounded < MIN_STUCK_SESSION_WARN_MS || rounded > MAX_STUCK_SESSION_WARN_MS) {
     return DEFAULT_STUCK_SESSION_WARN_MS;
+  }
+  return rounded;
+}
+
+export function resolveStuckSessionAbortMs(config?: OpenClawConfig): number {
+  const raw = config?.diagnostics?.stuckSessionAbortMs;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) {
+    return DEFAULT_STUCK_SESSION_ABORT_MS;
+  }
+  const rounded = Math.floor(raw);
+  if (rounded < MIN_STUCK_SESSION_ABORT_MS || rounded > MAX_STUCK_SESSION_ABORT_MS) {
+    return DEFAULT_STUCK_SESSION_ABORT_MS;
   }
   return rounded;
 }
@@ -650,6 +666,7 @@ export function startDiagnosticHeartbeat(
         diag.debug(`command-poll-backoff prune failed: ${String(err)}`);
       });
 
+    const stuckSessionAbortMs = resolveStuckSessionAbortMs(heartbeatConfig);
     for (const [, state] of diagnosticSessionStates) {
       const ageMs = now - state.lastActivity;
       if (state.state === "processing" && ageMs > stuckSessionWarnMs) {
@@ -659,6 +676,23 @@ export function startDiagnosticHeartbeat(
           state: state.state,
           ageMs,
         });
+        if (ageMs > stuckSessionAbortMs && state.sessionKey) {
+          const laneKey = `session:${state.sessionKey}`;
+          const cleared = clearCommandLane(laneKey);
+          state.state = "idle";
+          state.queueDepth = 0;
+          state.lastActivity = now;
+          diag.error(
+            `stuck session aborted: sessionKey=${state.sessionKey} age=${Math.round(ageMs / 1000)}s laneCleared=${cleared} laneKey=${laneKey}`,
+          );
+          emitDiagnosticEvent({
+            type: "session.aborted",
+            sessionId: state.sessionId,
+            sessionKey: state.sessionKey,
+            ageMs,
+            laneCleared: cleared,
+          });
+        }
       }
     }
   }, 30_000);

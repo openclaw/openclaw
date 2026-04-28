@@ -151,6 +151,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Age threshold in milliseconds for emitting stuck-session warnings while a session remains in processing state. Increase for long multi-tool turns to reduce false positives; decrease for faster hang detection.",
           },
+          stuckSessionAbortMs: {
+            type: "integer",
+            exclusiveMinimum: 0,
+            maximum: 9007199254740991,
+            title: "Stuck Session Abort Threshold (ms)",
+            description:
+              "Age threshold in milliseconds after which a stuck processing session is force-aborted: the command lane queue is cleared and the session state is reset to idle, allowing subsequent messages to be processed. Default 600s (10 min). Set higher than stuckSessionWarnMs.",
+          },
           otel: {
             type: "object",
             properties: {
@@ -24215,6 +24223,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "diagnostics.stuckSessionWarnMs": {
       label: "Stuck Session Warning Threshold (ms)",
       help: "Age threshold in milliseconds for emitting stuck-session warnings while a session remains in processing state. Increase for long multi-tool turns to reduce false positives; decrease for faster hang detection.",
+      tags: ["observability", "storage"],
+    },
+    "diagnostics.stuckSessionAbortMs": {
+      label: "Stuck Session Abort Threshold (ms)",
+      help: "Age threshold in milliseconds after which a stuck processing session is force-aborted: the command lane queue is cleared and the session state is reset to idle, allowing subsequent messages to be processed. Default 600s (10 min). Set higher than stuckSessionWarnMs.",
       tags: ["observability", "storage"],
     },
     "diagnostics.otel.enabled": {

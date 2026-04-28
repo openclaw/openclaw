@@ -278,6 +278,8 @@ export type DiagnosticsConfig = {
   flags?: string[];
   /** Threshold in ms before a processing session logs "stuck session" diagnostics. */
   stuckSessionWarnMs?: number;
+  /** Threshold in ms before a stuck processing session is force-aborted (clears lane, resets state). */
+  stuckSessionAbortMs?: number;
   otel?: DiagnosticsOtelConfig;
   cacheTrace?: DiagnosticsCacheTraceConfig;
 };
