@@ -241,6 +241,27 @@ describe("google transport stream", () => {
     );
   });
 
+  it("rejects pathful Google model ids before building the Generative AI URL", async () => {
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        buildGeminiModel({ id: "google/../v1beta/models/gemini-2.5-pro" }),
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as unknown as Parameters<typeof streamFn>[1],
+        { apiKey: "gemini-api-key" } as Parameters<typeof streamFn>[2],
+      ),
+    );
+
+    const result = await stream.result();
+
+    expect(guardedFetchMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorMessage: "Invalid Google model id",
+    });
+  });
+
   it("uses bearer auth when the Google api key is an OAuth JSON payload", async () => {
     guardedFetchMock.mockResolvedValueOnce(buildSseResponse([]));
 

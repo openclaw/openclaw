@@ -189,9 +189,32 @@ function resolveGoogleModelPath(modelId: string): string {
   return `models/${modelId}`;
 }
 
+function encodeGoogleModelPathSegment(segment: string): string {
+  if (segment === "." || segment === "..") {
+    throw new Error("Invalid Google model id");
+  }
+  if (!/^[a-zA-Z0-9._-]+$/.test(segment)) {
+    throw new Error("Invalid Google model id");
+  }
+  return encodeURIComponent(segment);
+}
+
+function encodeGoogleModelPath(path: string): string {
+  const tunedModelPrefix = "tunedModels/";
+  if (path.startsWith(tunedModelPrefix)) {
+    return `${tunedModelPrefix}${encodeGoogleModelPathSegment(path.slice(tunedModelPrefix.length))}`;
+  }
+  const modelPrefix = "models/";
+  if (path.startsWith(modelPrefix)) {
+    return `${modelPrefix}${encodeGoogleModelPathSegment(path.slice(modelPrefix.length))}`;
+  }
+  throw new Error("Invalid Google model id");
+}
+
 function buildGoogleRequestUrl(model: GoogleTransportModel): string {
   const baseUrl = normalizeGoogleApiBaseUrl(model.baseUrl);
-  return `${baseUrl}/${resolveGoogleModelPath(normalizeGoogleModelId(model.id))}:streamGenerateContent?alt=sse`;
+  const path = encodeGoogleModelPath(resolveGoogleModelPath(normalizeGoogleModelId(model.id)));
+  return `${baseUrl}/${path}:streamGenerateContent?alt=sse`;
 }
 
 function resolveThinkingLevel(level: ThinkingLevel, modelId: string): GoogleThinkingLevel {
