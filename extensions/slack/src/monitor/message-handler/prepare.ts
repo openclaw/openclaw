@@ -16,6 +16,7 @@ import { resolveChannelSourceReplyDeliveryMode } from "openclaw/plugin-sdk/chann
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-gating";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
+import { ensureConfiguredBindingRouteReady } from "openclaw/plugin-sdk/conversation-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import {
@@ -340,6 +341,8 @@ export async function prepareSlackMessage(params: {
   const {
     route,
     runtimeBinding,
+    configuredBinding,
+    configuredBindingSessionKey,
     replyToMode,
     threadContext,
     threadTs,
@@ -352,6 +355,30 @@ export async function prepareSlackMessage(params: {
     logVerbose(
       `slack: routed via bound conversation ${runtimeBinding.conversation.conversationId} -> ${runtimeBinding.targetSessionKey}`,
     );
+  }
+  if (configuredBinding) {
+    const ensured = await ensureConfiguredBindingRouteReady({
+      cfg,
+      bindingResolution: configuredBinding,
+    });
+    if (ensured.ok) {
+      if (shouldLogVerbose()) {
+        logVerbose(
+          `slack: using configured ACP binding for ${configuredBinding.record.conversation.conversationId} -> ${configuredBindingSessionKey}`,
+        );
+      }
+    } else {
+      logVerbose(
+        `slack: configured ACP binding unavailable for ${configuredBinding.record.conversation.conversationId}: ${ensured.error}`,
+      );
+      logInboundDrop({
+        log: logVerbose,
+        channel: "slack",
+        reason: "configured ACP binding unavailable",
+        target: configuredBinding.record.conversation.conversationId,
+      });
+      return null;
+    }
   }
   const implicitMentionKinds =
     isDirectMessage || !ctx.botUserId || !message.thread_ts
