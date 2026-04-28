@@ -99,11 +99,15 @@ export function resolveAnthropicBetas(
   const betas = new Set<string>();
   const configured = extraParams?.anthropicBeta;
   if (typeof configured === "string" && configured.trim()) {
-    betas.add(configured.trim());
+    for (const beta of parseHeaderList(configured)) {
+      betas.add(beta);
+    }
   } else if (Array.isArray(configured)) {
     for (const beta of configured) {
       if (typeof beta === "string" && beta.trim()) {
-        betas.add(beta.trim());
+        for (const betaValue of parseHeaderList(beta)) {
+          betas.add(betaValue);
+        }
       }
     }
   }

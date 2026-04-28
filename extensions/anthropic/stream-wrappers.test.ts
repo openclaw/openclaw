@@ -125,6 +125,15 @@ describe("anthropic stream wrappers", () => {
     ).toEqual(["files-api-2025-04-14"]);
   });
 
+  it("strips legacy context-1m beta from comma-separated string config", () => {
+    expect(
+      resolveAnthropicBetas(
+        { anthropicBeta: `${CONTEXT_1M_BETA},files-api-2025-04-14` },
+        "claude-sonnet-4-6",
+      ),
+    ).toEqual(["files-api-2025-04-14"]);
+  });
+
   it("preserves OAuth-required betas when context1m is the only configured beta trigger", () => {
     const captured: { headers?: Record<string, string> } = {};
     const wrapped = wrapAnthropicProviderStream({
