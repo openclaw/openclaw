@@ -144,8 +144,8 @@ then share the returned `meetingUri`.
 ```
 
 For an observe-only/browser-control join, set `"mode": "transcribe"`. That does
-not start the duplex realtime model bridge, so it will not talk back into the
-meeting.
+not start the duplex realtime model bridge, does not require BlackHole or SoX,
+and will not talk back into the meeting.
 
 During realtime sessions, `google_meet` status includes browser and audio bridge
 health such as `inCall`, `manualActionRequired`, `providerConnected`,
@@ -155,10 +155,10 @@ appears, browser automation handles it when it can. Login, host admission, and
 browser/OS permission prompts are reported as manual action with a reason and
 message for the agent to relay.
 
-Local Chrome joins through the signed-in OpenClaw browser profile. In Meet, pick
-`BlackHole 2ch` for the microphone/speaker path used by OpenClaw. For clean
-duplex audio, use separate virtual devices or a Loopback-style graph; a single
-BlackHole device is enough for a first smoke test but can echo.
+Local Chrome joins through the signed-in OpenClaw browser profile. Realtime mode
+requires `BlackHole 2ch` for the microphone/speaker path used by OpenClaw. For
+clean duplex audio, use separate virtual devices or a Loopback-style graph; a
+single BlackHole device is enough for a first smoke test but can echo.
 
 ### Local gateway + Parallels Chrome
 
@@ -1224,7 +1224,9 @@ openclaw googlemeet doctor
 ```
 
 Use `mode: "realtime"` for listen/talk-back. `mode: "transcribe"` intentionally
-does not start the duplex realtime voice bridge.
+does not start the duplex realtime voice bridge. `googlemeet test-speech`
+always checks the realtime path and reports whether bridge output bytes were
+observed.
 
 Also verify:
 
@@ -1317,7 +1319,7 @@ call still needs a participant path. This plugin keeps that boundary visible:
 Chrome handles browser participation and local audio routing; Twilio handles
 phone dial-in participation.
 
-Chrome realtime mode needs either:
+Chrome realtime mode needs `BlackHole 2ch` plus either:
 
 - `chrome.audioInputCommand` plus `chrome.audioOutputCommand`: OpenClaw owns the
   realtime model bridge and pipes audio in `chrome.audioFormat` between those

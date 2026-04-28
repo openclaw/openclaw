@@ -95,57 +95,59 @@ export async function launchChromeMeet(params: {
     | ({ type: "command-pair" } & ChromeRealtimeAudioBridgeHandle);
   browser?: GoogleMeetChromeHealth;
 }> {
-  await assertBlackHole2chAvailable({
-    runtime: params.runtime,
-    timeoutMs: Math.min(params.config.chrome.joinTimeoutMs, 10_000),
-  });
-
-  if (params.config.chrome.audioBridgeHealthCommand) {
-    const health = await params.runtime.system.runCommandWithTimeout(
-      params.config.chrome.audioBridgeHealthCommand,
-      { timeoutMs: params.config.chrome.joinTimeoutMs },
-    );
-    if (health.code !== 0) {
-      throw new Error(
-        `Chrome audio bridge health check failed: ${health.stderr || health.stdout || health.code}`,
-      );
-    }
-  }
-
   let audioBridge:
     | { type: "external-command" }
     | ({ type: "command-pair" } & ChromeRealtimeAudioBridgeHandle)
     | undefined;
 
-  if (params.config.chrome.audioBridgeCommand) {
-    const bridge = await params.runtime.system.runCommandWithTimeout(
-      params.config.chrome.audioBridgeCommand,
-      { timeoutMs: params.config.chrome.joinTimeoutMs },
-    );
-    if (bridge.code !== 0) {
-      throw new Error(
-        `failed to start Chrome audio bridge: ${bridge.stderr || bridge.stdout || bridge.code}`,
+  if (params.mode === "realtime") {
+    await assertBlackHole2chAvailable({
+      runtime: params.runtime,
+      timeoutMs: Math.min(params.config.chrome.joinTimeoutMs, 10_000),
+    });
+
+    if (params.config.chrome.audioBridgeHealthCommand) {
+      const health = await params.runtime.system.runCommandWithTimeout(
+        params.config.chrome.audioBridgeHealthCommand,
+        { timeoutMs: params.config.chrome.joinTimeoutMs },
       );
+      if (health.code !== 0) {
+        throw new Error(
+          `Chrome audio bridge health check failed: ${health.stderr || health.stdout || health.code}`,
+        );
+      }
     }
-    audioBridge = { type: "external-command" };
-  } else if (params.mode === "realtime") {
-    if (!params.config.chrome.audioInputCommand || !params.config.chrome.audioOutputCommand) {
-      throw new Error(
-        "Chrome realtime mode requires chrome.audioInputCommand and chrome.audioOutputCommand, or chrome.audioBridgeCommand for an external bridge.",
+
+    if (params.config.chrome.audioBridgeCommand) {
+      const bridge = await params.runtime.system.runCommandWithTimeout(
+        params.config.chrome.audioBridgeCommand,
+        { timeoutMs: params.config.chrome.joinTimeoutMs },
       );
+      if (bridge.code !== 0) {
+        throw new Error(
+          `failed to start Chrome audio bridge: ${bridge.stderr || bridge.stdout || bridge.code}`,
+        );
+      }
+      audioBridge = { type: "external-command" };
+    } else {
+      if (!params.config.chrome.audioInputCommand || !params.config.chrome.audioOutputCommand) {
+        throw new Error(
+          "Chrome realtime mode requires chrome.audioInputCommand and chrome.audioOutputCommand, or chrome.audioBridgeCommand for an external bridge.",
+        );
+      }
+      audioBridge = {
+        type: "command-pair",
+        ...(await startCommandRealtimeAudioBridge({
+          config: params.config,
+          fullConfig: params.fullConfig,
+          runtime: params.runtime,
+          meetingSessionId: params.meetingSessionId,
+          inputCommand: params.config.chrome.audioInputCommand,
+          outputCommand: params.config.chrome.audioOutputCommand,
+          logger: params.logger,
+        })),
+      };
     }
-    audioBridge = {
-      type: "command-pair",
-      ...(await startCommandRealtimeAudioBridge({
-        config: params.config,
-        fullConfig: params.fullConfig,
-        runtime: params.runtime,
-        meetingSessionId: params.meetingSessionId,
-        inputCommand: params.config.chrome.audioInputCommand,
-        outputCommand: params.config.chrome.audioOutputCommand,
-        logger: params.logger,
-      })),
-    };
   }
 
   if (!params.config.chrome.launch) {

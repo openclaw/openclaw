@@ -55,6 +55,14 @@ function resolveMode(input: GoogleMeetMode | undefined, config: GoogleMeetConfig
   return input ?? config.defaultMode;
 }
 
+function isRealtimeAudioHealthy(health: GoogleMeetChromeHealth | undefined): boolean {
+  return health?.audioOutputActive === true || (health?.lastOutputBytes ?? 0) > 0;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function collectChromeAudioCommands(config: GoogleMeetConfig): string[] {
   const commands = config.chrome.audioBridgeCommand
     ? [config.chrome.audioBridgeCommand[0]]
@@ -103,13 +111,16 @@ export class GoogleMeetRuntime {
     return session ? { found: true, session } : { found: false };
   }
 
-  async setupStatus(options: { transport?: GoogleMeetTransport } = {}) {
+  async setupStatus(options: { transport?: GoogleMeetTransport; mode?: GoogleMeetMode } = {}) {
     const transport = resolveTransport(options.transport, this.params.config);
+    const mode = resolveMode(options.mode, this.params.config);
     const shouldCheckChromeNode =
       transport === "chrome-node" ||
       (!options.transport && Boolean(this.params.config.chromeNode.node));
     let status = getGoogleMeetSetupStatus(this.params.config, {
       fullConfig: this.params.fullConfig,
+      mode,
+      transport,
     });
     if (shouldCheckChromeNode) {
       try {
@@ -131,7 +142,7 @@ export class GoogleMeetRuntime {
         });
       }
     }
-    if (transport === "chrome") {
+    if (transport === "chrome" && mode === "realtime") {
       try {
         await assertBlackHole2chAvailable({
           runtime: this.params.runtime,
@@ -302,7 +313,9 @@ export class GoogleMeetRuntime {
             ? transport === "chrome-node"
               ? "Chrome node transport joins as the signed-in Google profile on the selected node and routes realtime audio through the node bridge."
               : "Chrome transport joins as the signed-in Google profile and routes realtime audio through the configured bridge."
-            : "Chrome transport joins as the signed-in Google profile and expects BlackHole 2ch audio routing.",
+            : mode === "realtime"
+              ? "Chrome transport joins as the signed-in Google profile and expects BlackHole 2ch audio routing."
+              : "Chrome transport joins as the signed-in Google profile without starting the realtime audio bridge.",
         );
       } else {
         const dialInNumber = normalizeDialInNumber(
@@ -398,14 +411,40 @@ export class GoogleMeetRuntime {
     manualActionReason?: GoogleMeetChromeHealth["manualActionReason"];
     manualActionMessage?: string;
     spoken: boolean;
+    speechOutputVerified: boolean;
+    speechOutputTimedOut: boolean;
+    audioOutputActive?: boolean;
+    lastOutputBytes?: number;
     session: GoogleMeetSession;
   }> {
+    if (request.mode === "transcribe") {
+      throw new Error(
+        "test_speech requires mode: realtime; use join mode: transcribe for observe-only sessions.",
+      );
+    }
     const before = new Set(this.list().map((session) => session.id));
     const result = await this.join({
       ...request,
+      mode: "realtime",
       message: request.message ?? "Say exactly: Google Meet speech test complete.",
     });
-    const health = result.session.chrome?.health;
+    let health = result.session.chrome?.health;
+    const shouldWaitForOutput =
+      result.spoken === true &&
+      health?.manualActionRequired !== true &&
+      this.#sessionHealth.has(result.session.id);
+    if (shouldWaitForOutput && !isRealtimeAudioHealthy(health)) {
+      const deadline = Date.now() + Math.min(this.params.config.chrome.joinTimeoutMs, 5_000);
+      while (Date.now() < deadline) {
+        await sleep(100);
+        this.#refreshHealth(result.session.id);
+        health = result.session.chrome?.health;
+        if (isRealtimeAudioHealthy(health)) {
+          break;
+        }
+      }
+    }
+    const speechOutputVerified = isRealtimeAudioHealthy(health);
     return {
       createdSession: !before.has(result.session.id),
       inCall: health?.inCall,
@@ -413,6 +452,10 @@ export class GoogleMeetRuntime {
       manualActionReason: health?.manualActionReason,
       manualActionMessage: health?.manualActionMessage,
       spoken: result.spoken ?? false,
+      speechOutputVerified,
+      speechOutputTimedOut: shouldWaitForOutput && !speechOutputVerified,
+      audioOutputActive: health?.audioOutputActive,
+      lastOutputBytes: health?.lastOutputBytes,
       session: result.session,
     };
   }
