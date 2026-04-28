@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { describe, expect, it } from "vitest";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./helpers/bundled-plugin-paths.js";
-import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "./helpers/plugins/public-artifacts.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const ALLOWED_EXTENSION_PUBLIC_SURFACE_BASENAMES = new Set(
