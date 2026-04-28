@@ -127,9 +127,9 @@ async function downloadToFile(url: string, dest: string, maxRedirects = 5): Prom
 
     let totalBytes = 0;
     const body = response.body as unknown;
-    const readable = (
-      isNodeReadableStream(body) ? (body as Readable) : Readable.fromWeb(body as NodeReadableStream)
-    ) as Readable;
+    const readable = isNodeReadableStream(body)
+      ? (body as Readable)
+      : Readable.fromWeb(body as NodeReadableStream);
     const limiter = new Transform({
       transform(chunk: unknown, _encoding, callback) {
         totalBytes += chunkByteLength(chunk);
