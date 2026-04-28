@@ -4,7 +4,7 @@ import { createCliRuntimeCapture } from "../../test-support.js";
 import * as browserCliSharedModule from "./browser-cli-shared.js";
 import * as cliCoreApiModule from "./core-api.js";
 
-const { defaultRuntime: runtime, resetRuntimeCapture } = createCliRuntimeCapture();
+const { defaultRuntime: runtime, resetRuntimeCapture, runtimeLogs } = createCliRuntimeCapture();
 
 const gatewayMocks = vi.hoisted(() => ({
   callGatewayFromCli: vi.fn(async () => ({
@@ -182,5 +182,35 @@ describe("browser cli snapshot defaults", () => {
       targetId: "tab-1",
       labels: true,
     });
+  });
+
+  it("emits screenshot MEDIA: with absolute path so the shared media validator accepts it (regression for #73796)", async () => {
+    const homeDir = process.env.HOME ?? "/home/test-user";
+    const absolutePath = `${homeDir}/.openclaw/media/browser/abc.png`;
+    sharedMocks.callBrowserRequest.mockResolvedValueOnce({
+      ok: true,
+      path: absolutePath,
+    });
+    await runBrowserInspect(["screenshot", "tab-1"]);
+    const mediaLines = runtimeLogs.filter((line) => line.startsWith("MEDIA:"));
+    expect(mediaLines).toEqual([`MEDIA:${absolutePath}`]);
+    expect(mediaLines[0]).not.toMatch(/^MEDIA:~/);
+  });
+
+  it("emits snapshot MEDIA: with absolute path for ai snapshots (regression for #73796)", async () => {
+    const homeDir = process.env.HOME ?? "/home/test-user";
+    const absolutePath = `${homeDir}/.openclaw/media/browser/snap.png`;
+    sharedMocks.callBrowserRequest.mockResolvedValueOnce({
+      ok: true,
+      format: "ai",
+      targetId: "t1",
+      url: "https://example.com",
+      snapshot: "ok",
+      imagePath: absolutePath,
+    });
+    await runBrowserInspect(["snapshot"]);
+    const mediaLines = runtimeLogs.filter((line) => line.startsWith("MEDIA:"));
+    expect(mediaLines).toEqual([`MEDIA:${absolutePath}`]);
+    expect(mediaLines[0]).not.toMatch(/^MEDIA:~/);
   });
 });
