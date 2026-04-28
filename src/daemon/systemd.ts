@@ -182,6 +182,25 @@ function buildSystemdRestartHandoffScript(): string {
  `;
 }
 
+function parseSystemdRestartExpectationMarker(raw: string): {
+  expectedUnit: string;
+  epochSeconds: number;
+} | null {
+  const lines = raw.split(/\r?\n/);
+  if (lines.at(-1) === "") {
+    lines.pop();
+  }
+  if (lines.length !== 2) {
+    return null;
+  }
+  const expectedUnit = normalizeSystemdUnitName(lines[0]);
+  const epochSeconds = parseStrictPositiveInteger(lines[1]);
+  if (!expectedUnit || epochSeconds === undefined) {
+    return null;
+  }
+  return { expectedUnit, epochSeconds };
+}
+
 export function consumeSystemdRestartExpectationMarker(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
   maxAgeMs = 600_000,
@@ -198,19 +217,14 @@ export function consumeSystemdRestartExpectationMarker(
   } catch {
     // Best effort only. Restart semantics should still continue.
   }
-  const [unitLine = "", tsLine = ""] = raw.split(/\r?\n/);
-  const expectedUnit = normalizeSystemdUnitName(unitLine);
+  const marker = parseSystemdRestartExpectationMarker(raw);
   const currentUnit =
     normalizeSystemdUnitName(env.OPENCLAW_SYSTEMD_UNIT) ??
     `${resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE)}.service`;
-  if (!expectedUnit || expectedUnit !== currentUnit) {
+  if (!marker || marker.expectedUnit !== currentUnit) {
     return false;
   }
-  const epochSeconds = parseStrictPositiveInteger(tsLine);
-  if (epochSeconds === undefined) {
-    return false;
-  }
-  const ageMs = Date.now() - epochSeconds * 1000;
+  const ageMs = Date.now() - marker.epochSeconds * 1000;
   if (ageMs < 0 || ageMs > maxAgeMs) {
     return false;
   }

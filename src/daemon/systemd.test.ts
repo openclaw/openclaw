@@ -17,6 +17,7 @@ vi.mock("node:child_process", async () => {
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import { parseSystemdExecStart } from "./systemd-unit.js";
 import {
+  consumeSystemdRestartExpectationMarker,
   installSystemdService,
   isNonFatalSystemdInstallProbeError,
   isSystemdServiceEnabled,
@@ -1477,5 +1478,55 @@ describe("systemd service control", () => {
         cb(null, "", "");
       });
     await assertRestartSuccess({ USER: "debian" });
+  });
+});
+
+describe("systemd restart expectation markers", () => {
+  it("rejects marker files with a missing timestamp", async () => {
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-marker-missing-"));
+    const markerPath = path.join(
+      tmpRoot,
+      "openclaw-systemd-restart-expected-openclaw-gateway.service.txt",
+    );
+
+    try {
+      await fs.writeFile(markerPath, `${GATEWAY_SERVICE}\n`, "utf8");
+
+      expect(
+        consumeSystemdRestartExpectationMarker({
+          TMPDIR: tmpRoot,
+          OPENCLAW_SYSTEMD_UNIT: GATEWAY_SERVICE,
+        }),
+      ).toBe(false);
+      await expect(fs.access(markerPath)).rejects.toThrow();
+    } finally {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects marker files with extra payload after the timestamp", async () => {
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-marker-extra-"));
+    const markerPath = path.join(
+      tmpRoot,
+      "openclaw-systemd-restart-expected-openclaw-gateway.service.txt",
+    );
+
+    try {
+      await fs.writeFile(
+        markerPath,
+        `${GATEWAY_SERVICE}\n${Math.floor(Date.now() / 1000)}\nextra\n`,
+        "utf8",
+      );
+
+      expect(
+        consumeSystemdRestartExpectationMarker({
+          TMPDIR: tmpRoot,
+          OPENCLAW_SYSTEMD_UNIT: GATEWAY_SERVICE,
+        }),
+      ).toBe(false);
+      await expect(fs.access(markerPath)).rejects.toThrow();
+    } finally {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
   });
 });
