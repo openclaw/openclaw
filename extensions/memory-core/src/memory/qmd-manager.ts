@@ -1455,7 +1455,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     await this.pendingUpdate?.catch(() => undefined);
     await this.queuedForcedUpdate?.catch(() => undefined);
     if (this.db) {
-      (this.db as import("node:sqlite").DatabaseSync).close();
+      this.db.close();
       this.db = null;
     }
   }
@@ -2182,7 +2182,7 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private ensureDb(): import("node:sqlite").DatabaseSync {
     if (this.db) {
-      return this.db as import("node:sqlite").DatabaseSync;
+      return this.db;
     }
     const { DatabaseSync } = requireNodeSqlite();
     const db = new DatabaseSync(this.indexPath, { readOnly: true });
