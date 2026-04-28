@@ -652,6 +652,12 @@ describe("host-hook fixture plugin contract", () => {
           id: "bad-continue-agent",
           handler: () => ({ continueAgent: "yes" as never }),
         });
+        api.registerSessionAction({
+          id: "throws-secret",
+          handler: () => {
+            throw new Error("secret-token-123");
+          },
+        });
       },
     });
     setActivePluginRegistry(registry.registry);
@@ -755,6 +761,20 @@ describe("host-hook fixture plugin contract", () => {
       error: {
         code: "INVALID_REQUEST",
         message: "plugin session action continueAgent must be a boolean",
+      },
+    });
+    await expect(
+      callPluginSessionActionForTest({
+        body: {
+          pluginId: "session-action-validation-fixture",
+          actionId: "throws-secret",
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "UNAVAILABLE",
+        message: "plugin session action failed",
       },
     });
   });
@@ -1255,6 +1275,40 @@ describe("host-hook fixture plugin contract", () => {
       ok: false,
       error: "session attachments are restricted to bundled plugins",
     });
+
+    await expect(
+      sendPluginSessionAttachment({
+        origin: "bundled",
+        sessionKey: "agent:main:main",
+        files: Array.from({ length: 11 }, () => ({ path: "/tmp/secret.txt" })),
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: "at most 10 attachment files are allowed",
+    });
+
+    const attachmentDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-attachments-"),
+    );
+    try {
+      const first = path.join(attachmentDir, "first.txt");
+      const second = path.join(attachmentDir, "second.txt");
+      await fs.writeFile(first, "123", "utf8");
+      await fs.writeFile(second, "456", "utf8");
+      await expect(
+        sendPluginSessionAttachment({
+          origin: "bundled",
+          sessionKey: "agent:main:main",
+          files: [{ path: first }, { path: second }],
+          maxBytes: 5,
+        }),
+      ).resolves.toEqual({
+        ok: false,
+        error: "attachment files exceed 5 bytes total",
+      });
+    } finally {
+      await fs.rm(attachmentDir, { recursive: true, force: true });
+    }
 
     await expect(
       schedulePluginSessionTurn({

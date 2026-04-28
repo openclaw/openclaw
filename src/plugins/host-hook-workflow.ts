@@ -21,6 +21,7 @@ import {
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
 const DEFAULT_ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024;
+const MAX_ATTACHMENT_FILES = 10;
 const log = createSubsystemLogger("plugins/host-workflow");
 type SendMessage = typeof import("../infra/outbound/message.js").sendMessage;
 let sendMessagePromise: Promise<SendMessage> | undefined;
@@ -96,7 +97,11 @@ async function validateAttachmentFiles(
   files: PluginSessionAttachmentParams["files"],
   maxBytes: number,
 ): Promise<string[] | { error: string }> {
+  if (files.length > MAX_ATTACHMENT_FILES) {
+    return { error: `at most ${MAX_ATTACHMENT_FILES} attachment files are allowed` };
+  }
   const paths: string[] = [];
+  let totalBytes = 0;
   for (const file of files) {
     const filePath = normalizeOptionalString(file.path);
     if (!filePath) {
@@ -108,6 +113,10 @@ async function validateAttachmentFiles(
     }
     if (info.size > maxBytes) {
       return { error: `attachment file exceeds ${maxBytes} bytes: ${filePath}` };
+    }
+    totalBytes += info.size;
+    if (totalBytes > maxBytes) {
+      return { error: `attachment files exceed ${maxBytes} bytes total` };
     }
     paths.push(filePath);
   }
@@ -129,7 +138,7 @@ export async function sendPluginSessionAttachment(
   }
   const maxBytes =
     typeof params.maxBytes === "number" && Number.isFinite(params.maxBytes)
-      ? Math.max(1, Math.floor(params.maxBytes))
+      ? Math.min(DEFAULT_ATTACHMENT_MAX_BYTES, Math.max(1, Math.floor(params.maxBytes)))
       : DEFAULT_ATTACHMENT_MAX_BYTES;
   const validated = await validateAttachmentFiles(params.files, maxBytes);
   if (!Array.isArray(validated)) {

@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "../../infra/errors.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isPluginJsonValue } from "../../plugins/host-hooks.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -15,6 +16,8 @@ import {
   validatePluginsUiDescriptorsParams,
 } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
+
+const log = createSubsystemLogger("gateway/plugin-host-hooks");
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -250,14 +253,10 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
         ...(success?.reply !== undefined ? { reply: success.reply } : {}),
       });
     } catch (error) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          `plugin session action failed: ${formatErrorMessage(error)}`,
-        ),
+      log.warn(
+        `plugin session action failed plugin=${pluginId} action=${actionId}: ${formatErrorMessage(error)}`,
       );
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "plugin session action failed"));
     }
   },
 };
