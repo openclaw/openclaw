@@ -539,6 +539,16 @@ describe("host-hook fixture plugin contract", () => {
           streams: { length: 1, 0: "tool" } as never,
           handle: () => undefined,
         });
+        api.registerSessionAction({
+          id: "bad-schema-shape",
+          schema: "not-an-object" as never,
+          handler: () => ({ ok: true }),
+        });
+        api.registerSessionAction({
+          id: "bad-schema-compile",
+          schema: { type: "not-a-json-schema-type" } as never,
+          handler: () => ({ ok: true }),
+        });
         api.registerSessionSchedulerJob({
           id: "bad-scheduler-cleanup",
           sessionKey: "agent:main:main",
@@ -550,6 +560,7 @@ describe("host-hook fixture plugin contract", () => {
 
     expect(registry.registry.runtimeLifecycles ?? []).toHaveLength(1);
     expect(registry.registry.agentEventSubscriptions ?? []).toHaveLength(1);
+    expect(registry.registry.sessionActions ?? []).toHaveLength(0);
     expect(registry.registry.diagnostics).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -571,6 +582,16 @@ describe("host-hook fixture plugin contract", () => {
         expect.objectContaining({
           pluginId: "duplicate-host-hook-fixture",
           message: "agent event subscription streams must be an array of strings: bad-streams",
+        }),
+        expect.objectContaining({
+          pluginId: "duplicate-host-hook-fixture",
+          message: "session action schema must be a JSON schema object: bad-schema-shape",
+        }),
+        expect.objectContaining({
+          pluginId: "duplicate-host-hook-fixture",
+          message: expect.stringContaining(
+            "session action schema is not valid JSON Schema: bad-schema-compile",
+          ),
         }),
         expect.objectContaining({
           pluginId: "duplicate-host-hook-fixture",

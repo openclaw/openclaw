@@ -25,6 +25,7 @@ import {
 } from "../infra/node-commands.js";
 import { normalizePluginGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   getDetachedTaskLifecycleRuntimeRegistration,
@@ -123,6 +124,7 @@ import type {
 } from "./registry-types.js";
 import { withPluginRuntimePluginIdScope } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import { validateJsonSchemaValue } from "./schema-validator.js";
 import { defaultSlotIdForKey, hasKind } from "./slots.js";
 import {
   isConversationHookName,
@@ -1409,6 +1411,51 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     return normalized as string[];
   };
 
+  const validateSessionActionSchema = (
+    record: PluginRecord,
+    id: string,
+    schema: unknown,
+  ): schema is JsonSchemaObject => {
+    if (schema === undefined) {
+      return true;
+    }
+    if (!isPluginJsonValue(schema)) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `session action schema must be JSON-compatible: ${id}`,
+      });
+      return false;
+    }
+    if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `session action schema must be a JSON schema object: ${id}`,
+      });
+      return false;
+    }
+    try {
+      validateJsonSchemaValue({
+        schema: schema as JsonSchemaObject,
+        cacheKey: `plugin-session-action-registration:${record.id}:${id}`,
+        value: undefined,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `session action schema is not valid JSON Schema: ${id}: ${message}`,
+      });
+      return false;
+    }
+    return true;
+  };
+
   const controlUiSurfaces = new Set<PluginControlUiDescriptor["surface"]>([
     "session",
     "tool",
@@ -1863,13 +1910,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         return;
       }
     }
-    if (action.schema !== undefined && !isPluginJsonValue(action.schema)) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `session action schema must be JSON-compatible: ${id}`,
-      });
+    if (!validateSessionActionSchema(record, id, action.schema)) {
       return;
     }
     const existing = (registry.sessionActions ?? []).find(
