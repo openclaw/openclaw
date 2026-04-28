@@ -2839,6 +2839,75 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("suppresses internal message:received hook message delivery when sendPolicy is deny", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "deny",
+    };
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "feishu",
+      Surface: "feishu",
+      OriginatingChannel: "feishu",
+      OriginatingTo: "feishu:ou_123",
+      AccountId: "acc-1",
+      SessionKey: "agent:main:main",
+      CommandBody: "/help",
+    });
+    internalHookMocks.triggerInternalHook.mockImplementationOnce(async (event: unknown) => {
+      const hookEvent = event as { messages: string[] };
+      hookEvent.messages.push("Hook echo");
+    });
+
+    const replyResolver = vi.fn(async () => ({ text: "hi" }) satisfies ReplyPayload);
+    const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(false);
+    expect(mocks.routeReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("suppresses internal message:received hook message delivery in message-tool-only mode", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "feishu",
+      Surface: "feishu",
+      OriginatingChannel: "feishu",
+      OriginatingTo: "feishu:ou_123",
+      AccountId: "acc-1",
+      SessionKey: "agent:main:main",
+      CommandBody: "/help",
+    });
+    internalHookMocks.triggerInternalHook.mockImplementationOnce(async (event: unknown) => {
+      const hookEvent = event as { messages: string[] };
+      hookEvent.messages.push("Hook echo");
+    });
+
+    const replyResolver = vi.fn(async () => ({ text: "hi" }) satisfies ReplyPayload);
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver,
+      replyOptions: { sourceReplyDeliveryMode: "message_tool_only" },
+    });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(false);
+    expect(mocks.routeReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
   it("uses bound ACP session context for internal message:received hook replies", async () => {
     setNoAbort();
     const boundSessionKey = "agent:opencode:acp:bound-session";

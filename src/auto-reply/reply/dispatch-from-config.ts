@@ -732,6 +732,9 @@ export async function dispatchReplyFromConfig(
     fireAndForgetHook(
       (async () => {
         await triggerInternalHook(hookEvent);
+        if (suppressHookUserDelivery) {
+          return;
+        }
         const hookReplyText = hookEvent.messages.join("\n\n").trim();
         const hookReplyChannel = normalizeMessageChannel(
           replyRoute.channel ?? ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider,
