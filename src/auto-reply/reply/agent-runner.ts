@@ -3,6 +3,10 @@ import { hasConfiguredModelFallbacks, resolveSessionAgentId } from "../../agents
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
+import {
+  buildModelRouteChangeGuardNotice,
+  evaluateModelRouteChangeGuard,
+} from "../../agents/model-route-change-guard.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { queueEmbeddedPiMessage } from "../../agents/pi-embedded-runner/runs.js";
 import { deriveContextPromptTokens, hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
@@ -1256,6 +1260,31 @@ export async function runReplyAgent(params: {
       attempts: fallbackAttempts,
       state: fallbackStateEntry,
     });
+    const modelRouteGuard = fallbackTransition.fallbackTransitioned
+      ? evaluateModelRouteChangeGuard({
+          selectedProvider,
+          selectedModel,
+          activeProvider: providerUsed,
+          activeModel: modelUsed,
+          selectedAuthMode: resolveModelAuthMode(selectedProvider, cfg),
+          activeAuthMode: resolveModelAuthMode(providerUsed, cfg),
+          enforcement: "dry-run",
+        })
+      : undefined;
+    if (modelRouteGuard?.escalationRequired && isDiagnosticsEnabled(cfg)) {
+      emitTrustedDiagnosticEvent({
+        type: "model.route_change_guard",
+        sessionKey,
+        sessionId: followupRun.run.sessionId,
+        channel: replyToChannel,
+        agentId: followupRun.run.agentId,
+        action: modelRouteGuard.action,
+        enforcement: modelRouteGuard.enforcement,
+        ...(modelRouteGuard.reason ? { reason: modelRouteGuard.reason } : {}),
+        selected: modelRouteGuard.selected,
+        active: modelRouteGuard.active,
+      });
+    }
     if (fallbackTransition.stateChanged) {
       if (fallbackStateEntry) {
         fallbackStateEntry.fallbackNoticeSelectedModel = fallbackTransition.nextState.selectedModel;
@@ -1502,6 +1531,12 @@ export async function runReplyAgent(params: {
         });
         if (fallbackNotice) {
           verboseNotices.push({ text: fallbackNotice });
+        }
+        const guardNotice = modelRouteGuard
+          ? buildModelRouteChangeGuardNotice(modelRouteGuard)
+          : undefined;
+        if (guardNotice) {
+          verboseNotices.push({ text: guardNotice });
         }
       }
     }

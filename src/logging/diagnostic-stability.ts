@@ -193,6 +193,14 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.costUsd = event.costUsd;
       record.durationMs = event.durationMs;
       break;
+    case "model.route_change_guard":
+      record.channel = event.channel;
+      record.provider = event.active.provider;
+      record.model = event.active.model;
+      record.action = event.action;
+      record.mode = event.enforcement;
+      assignReasonCode(record, event.reason);
+      break;
     case "webhook.received":
       record.channel = event.channel;
       break;

@@ -45,6 +45,29 @@ export type DiagnosticUsageEvent = DiagnosticBaseEvent & {
   durationMs?: number;
 };
 
+export type DiagnosticModelRouteChangeGuardEvent = DiagnosticBaseEvent & {
+  type: "model.route_change_guard";
+  sessionKey?: string;
+  sessionId?: string;
+  agentId?: string;
+  channel?: string;
+  action: "allow" | "escalate" | "block";
+  enforcement: "dry-run" | "block";
+  reason?: string;
+  selected: {
+    provider: string;
+    model: string;
+    authMode: string;
+    billingMode: string;
+  };
+  active: {
+    provider: string;
+    model: string;
+    authMode: string;
+    billingMode: string;
+  };
+};
+
 export type DiagnosticWebhookReceivedEvent = DiagnosticBaseEvent & {
   type: "webhook.received";
   channel: string;
@@ -445,6 +468,7 @@ export type DiagnosticTelemetryExporterEvent = DiagnosticBaseEvent & {
 
 export type DiagnosticEventPayload =
   | DiagnosticUsageEvent
+  | DiagnosticModelRouteChangeGuardEvent
   | DiagnosticWebhookReceivedEvent
   | DiagnosticWebhookProcessedEvent
   | DiagnosticWebhookErrorEvent
