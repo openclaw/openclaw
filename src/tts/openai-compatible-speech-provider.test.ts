@@ -1,17 +1,22 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createOpenAiCompatibleSpeechProvider } from "./openai-compatible-speech-provider.js";
 
-const { assertOkOrThrowHttpErrorMock, postJsonRequestMock, resolveProviderHttpRequestConfigMock } =
-  vi.hoisted(() => ({
-    assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
-    postJsonRequestMock: vi.fn(),
-    resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
-      baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://example.test/v1",
-      allowPrivateNetwork: false,
-      headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
-      dispatcherPolicy: undefined,
-    })),
-  }));
+const {
+  assertOkOrThrowHttpErrorMock,
+  logVerboseMock,
+  postJsonRequestMock,
+  resolveProviderHttpRequestConfigMock,
+} = vi.hoisted(() => ({
+  assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
+  logVerboseMock: vi.fn(),
+  postJsonRequestMock: vi.fn(),
+  resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
+    baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://example.test/v1",
+    allowPrivateNetwork: false,
+    headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
+    dispatcherPolicy: undefined,
+  })),
+}));
 
 vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
@@ -19,9 +24,14 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
 }));
 
+vi.mock("../globals.js", () => ({
+  logVerbose: logVerboseMock,
+}));
+
 describe("createOpenAiCompatibleSpeechProvider", () => {
   afterEach(() => {
     assertOkOrThrowHttpErrorMock.mockClear();
+    logVerboseMock.mockClear();
     postJsonRequestMock.mockReset();
     resolveProviderHttpRequestConfigMock.mockClear();
     vi.unstubAllEnvs();
@@ -176,7 +186,7 @@ describe("createOpenAiCompatibleSpeechProvider", () => {
       envKey: "DEMO_API_KEY",
       responseFormats: ["mp3", "pcm"],
       defaultResponseFormat: "pcm",
-      voiceCompatibleResponseFormats: ["mp3"],
+      voiceCompatibleResponseFormats: ["mp3", "pcm"],
     });
 
     const result = await provider.synthesize({
@@ -195,6 +205,92 @@ describe("createOpenAiCompatibleSpeechProvider", () => {
     expect(result.audioBuffer.readUInt32LE(24)).toBe(24_000);
     expect(result.audioBuffer.readUInt16LE(22)).toBe(1);
     expect(result.audioBuffer.subarray(44)).toEqual(Buffer.from([1, 0, 2, 0]));
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("logs when a requested PCM response has a non-PCM content type", async () => {
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: new Response(new Uint8Array([9, 8, 7]), {
+        status: 200,
+        headers: { "content-type": "application/octet-stream" },
+      }),
+      release,
+    });
+    vi.stubEnv("DEMO_API_KEY", "sk-env");
+
+    const provider = createOpenAiCompatibleSpeechProvider({
+      id: "demo",
+      label: "Demo",
+      autoSelectOrder: 40,
+      models: ["demo-tts"],
+      voices: ["alloy"],
+      defaultModel: "demo-tts",
+      defaultVoice: "alloy",
+      defaultBaseUrl: "https://example.test/v1",
+      envKey: "DEMO_API_KEY",
+      responseFormats: ["mp3", "pcm"],
+      defaultResponseFormat: "pcm",
+      voiceCompatibleResponseFormats: ["mp3"],
+    });
+
+    const result = await provider.synthesize({
+      text: "hello",
+      cfg: {} as never,
+      providerConfig: { responseFormat: "pcm" },
+      target: "audio-file",
+      timeoutMs: 1234,
+    });
+
+    expect(result.outputFormat).toBe("pcm");
+    expect(result.fileExtension).toBe(".pcm");
+    expect(result.audioBuffer).toEqual(Buffer.from([9, 8, 7]));
+    expect(logVerboseMock).toHaveBeenCalledWith(
+      "Demo TTS: requested pcm responseFormat but response content-type was application/octet-stream; leaving raw PCM audio unwrapped.",
+    );
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("leaves declared PCM responses unwrapped when PCM parameters are out of range", async () => {
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: new Response(new Uint8Array([6, 5, 4]), {
+        status: 200,
+        headers: { "content-type": "audio/pcm;rate=999999999999;channels=999999" },
+      }),
+      release,
+    });
+    vi.stubEnv("DEMO_API_KEY", "sk-env");
+
+    const provider = createOpenAiCompatibleSpeechProvider({
+      id: "demo",
+      label: "Demo",
+      autoSelectOrder: 40,
+      models: ["demo-tts"],
+      voices: ["alloy"],
+      defaultModel: "demo-tts",
+      defaultVoice: "alloy",
+      defaultBaseUrl: "https://example.test/v1",
+      envKey: "DEMO_API_KEY",
+      responseFormats: ["mp3", "pcm"],
+      defaultResponseFormat: "pcm",
+      voiceCompatibleResponseFormats: ["mp3"],
+    });
+
+    const result = await provider.synthesize({
+      text: "hello",
+      cfg: {} as never,
+      providerConfig: { responseFormat: "pcm" },
+      target: "audio-file",
+      timeoutMs: 1234,
+    });
+
+    expect(result.outputFormat).toBe("pcm");
+    expect(result.fileExtension).toBe(".pcm");
+    expect(result.audioBuffer).toEqual(Buffer.from([6, 5, 4]));
+    expect(logVerboseMock).toHaveBeenCalledWith(
+      "Demo TTS: requested pcm responseFormat but response content-type was audio/pcm;rate=999999999999;channels=999999; leaving raw PCM audio unwrapped.",
+    );
     expect(release).toHaveBeenCalledOnce();
   });
 });

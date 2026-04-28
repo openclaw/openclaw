@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { asFiniteNumber, asObject, trimToUndefined } from "../agents/provider-http-errors.js";
+import { logVerbose } from "../globals.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import type {
@@ -86,6 +87,11 @@ function responseFormatToFileExtension(format: string): `.${string}` {
   return `.${format}`;
 }
 
+const PCM_MIN_SAMPLE_RATE = 8_000;
+const PCM_MAX_SAMPLE_RATE = 192_000;
+const PCM_MIN_CHANNELS = 1;
+const PCM_MAX_CHANNELS = 8;
+
 function parsePcmAudioContentType(contentType: string | null):
   | {
       sampleRate: number;
@@ -112,6 +118,15 @@ function parsePcmAudioContentType(contentType: string | null):
     } else if (key === "channels") {
       channels = Math.trunc(value);
     }
+  }
+
+  if (
+    sampleRate < PCM_MIN_SAMPLE_RATE ||
+    sampleRate > PCM_MAX_SAMPLE_RATE ||
+    channels < PCM_MIN_CHANNELS ||
+    channels > PCM_MAX_CHANNELS
+  ) {
+    return undefined;
   }
 
   return { sampleRate, channels };
@@ -143,23 +158,27 @@ function wrapPcm16LeToWav(params: { pcm: Buffer; sampleRate: number; channels: n
 
 function normalizeAudioResponse(params: {
   audioBuffer: Buffer;
+  providerLabel: string;
   response: Response;
   responseFormat: string;
 }): { audioBuffer: Buffer; outputFormat: string; fileExtension: `.${string}` } {
-  const pcm =
-    params.responseFormat === "pcm"
-      ? parsePcmAudioContentType(params.response.headers.get("content-type"))
-      : undefined;
-  if (pcm) {
-    return {
-      audioBuffer: wrapPcm16LeToWav({
-        pcm: params.audioBuffer,
-        sampleRate: pcm.sampleRate,
-        channels: pcm.channels,
-      }),
-      outputFormat: "wav",
-      fileExtension: ".wav",
-    };
+  if (params.responseFormat === "pcm") {
+    const contentType = params.response.headers.get("content-type");
+    const pcm = parsePcmAudioContentType(contentType);
+    if (pcm) {
+      return {
+        audioBuffer: wrapPcm16LeToWav({
+          pcm: params.audioBuffer,
+          sampleRate: pcm.sampleRate,
+          channels: pcm.channels,
+        }),
+        outputFormat: "wav",
+        fileExtension: ".wav",
+      };
+    }
+    logVerbose(
+      `${params.providerLabel} TTS: requested pcm responseFormat but response content-type was ${contentType ?? "missing"}; leaving raw PCM audio unwrapped.`,
+    );
   }
   return {
     audioBuffer: params.audioBuffer,
@@ -465,6 +484,7 @@ export function createOpenAiCompatibleSpeechProvider<
         );
         const audio = normalizeAudioResponse({
           audioBuffer: Buffer.from(await response.arrayBuffer()),
+          providerLabel: options.label,
           response,
           responseFormat,
         });
@@ -472,7 +492,7 @@ export function createOpenAiCompatibleSpeechProvider<
           audioBuffer: audio.audioBuffer,
           outputFormat: audio.outputFormat,
           fileExtension: audio.fileExtension,
-          voiceCompatible: options.voiceCompatibleResponseFormats.includes(responseFormat),
+          voiceCompatible: options.voiceCompatibleResponseFormats.includes(audio.outputFormat),
         };
       } finally {
         await release();

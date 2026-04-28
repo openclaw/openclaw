@@ -161,6 +161,7 @@ export async function deliverWebReply(params: {
             ),
           "media:audio",
         );
+        // Voice-note captions are not sent again as text; duplicate text makes TTS replies noisy.
       } else if (media.kind === "video") {
         const quote = getQuote();
         await sendWithRetry(

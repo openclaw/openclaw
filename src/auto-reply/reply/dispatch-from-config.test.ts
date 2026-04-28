@@ -4371,8 +4371,9 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       expect(opts?.sourceReplyDeliveryMode).toBe("message_tool_only");
       return {
         text: "NO_REPLY",
-        mediaUrl: "https://example.com/tts-group.wav",
+        mediaUrl: "/tmp/openclaw/tts-group.wav",
         audioAsVoice: true,
+        trustedLocalMedia: true,
       } satisfies ReplyPayload;
     });
 
@@ -4394,8 +4395,9 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
       expect.objectContaining({
         text: undefined,
-        mediaUrl: "https://example.com/tts-group.wav",
+        mediaUrl: "/tmp/openclaw/tts-group.wav",
         audioAsVoice: true,
+        trustedLocalMedia: true,
       }),
     );
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
@@ -4409,8 +4411,9 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       expect(opts?.sourceReplyDeliveryMode).toBe("message_tool_only");
       await opts?.onBlockReply?.({
         text: "NO_REPLY",
-        mediaUrl: "https://example.com/tts-tool-group.wav",
+        mediaUrl: "/tmp/openclaw/tts-tool-group.wav",
         audioAsVoice: true,
+        trustedLocalMedia: true,
       });
       return { text: "NO_REPLY" } satisfies ReplyPayload;
     });
@@ -4434,10 +4437,87 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
       expect.objectContaining({
         text: undefined,
-        mediaUrl: "https://example.com/tts-tool-group.wav",
+        mediaUrl: "/tmp/openclaw/tts-tool-group.wav",
         audioAsVoice: true,
+        trustedLocalMedia: true,
       }),
     );
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+  });
+
+  it("does not deliver trusted remote voice media in message-tool-only groups", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      expect(opts?.sourceReplyDeliveryMode).toBe("message_tool_only");
+      await opts?.onBlockReply?.({
+        text: "NO_REPLY",
+        mediaUrl: "https://example.com/remote.wav",
+        audioAsVoice: true,
+        trustedLocalMedia: true,
+      });
+      return {
+        text: "NO_REPLY",
+        mediaUrl: "https://example.com/final-remote.wav",
+        audioAsVoice: true,
+        trustedLocalMedia: true,
+      } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "whatsapp",
+        Surface: "whatsapp",
+        ChatType: "group",
+        WasMentioned: true,
+        SessionKey: "test:whatsapp:group:G1",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(false);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+  });
+
+  it("does not deliver untrusted voice media in message-tool-only groups", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      expect(opts?.sourceReplyDeliveryMode).toBe("message_tool_only");
+      await opts?.onBlockReply?.({
+        text: "NO_REPLY",
+        mediaUrl: "https://example.com/model-block.wav",
+        audioAsVoice: true,
+      });
+      return {
+        text: "NO_REPLY",
+        mediaUrl: "https://example.com/model-final.wav",
+        audioAsVoice: true,
+      } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "whatsapp",
+        Surface: "whatsapp",
+        ChatType: "group",
+        WasMentioned: true,
+        SessionKey: "test:whatsapp:group:G1",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(false);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
   });

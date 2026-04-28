@@ -91,6 +91,28 @@ let runtimePluginsPromise: Promise<typeof import("./runtime-plugins.runtime.js")
 let replyMediaPathsRuntimePromise: Promise<typeof import("./reply-media-paths.runtime.js")> | null =
   null;
 
+const FILE_URL_RE = /^file:\/\//iu;
+const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/u;
+
+function isLocalTrustedMediaSource(mediaUrl: string): boolean {
+  const value = mediaUrl.trim();
+  if (!value) {
+    return false;
+  }
+  if (value.startsWith("/") || WINDOWS_DRIVE_RE.test(value)) {
+    return true;
+  }
+  if (!FILE_URL_RE.test(value)) {
+    return false;
+  }
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "file:" && !parsed.host && parsed.pathname.startsWith("/");
+  } catch {
+    return false;
+  }
+}
+
 function loadRouteReplyRuntime() {
   routeReplyRuntimePromise ??= import("./route-reply.runtime.js");
   return routeReplyRuntimePromise;
@@ -815,7 +837,10 @@ export async function dispatchReplyFromConfig(
       payload: ReplyPayload,
     ): Promise<{ queuedFinal: boolean; routedFinalCount: number }> => {
       const parts = resolveSendableOutboundReplyParts(payload);
-      if (!payload.audioAsVoice || !parts.hasMedia) {
+      if (!payload.audioAsVoice || payload.trustedLocalMedia !== true || !parts.hasMedia) {
+        return { queuedFinal: false, routedFinalCount: 0 };
+      }
+      if (!parts.mediaUrls.every(isLocalTrustedMediaSource)) {
         return { queuedFinal: false, routedFinalCount: 0 };
       }
       const mediaKey = parts.mediaUrls.join("\n");
@@ -827,6 +852,9 @@ export async function dispatchReplyFromConfig(
         ...payload,
         text: undefined,
       });
+      if (!resolveSendableOutboundReplyParts(normalizedPayload).hasMedia) {
+        return { queuedFinal: false, routedFinalCount: 0 };
+      }
       const result = await routeReplyToOriginating(normalizedPayload);
       if (result) {
         if (!result.ok) {
