@@ -254,6 +254,18 @@ export async function runGatewayLoop(params: {
       exitProcess(0);
       return;
     }
+    if (respawn.mode === "orchestrator") {
+      // Container PID 1 with no supervisor hint: exit non-zero so Docker /
+      // Kubernetes / Swarm `on-failure` restart policies relaunch the
+      // entrypoint instead of marking the task complete. EX_TEMPFAIL (75)
+      // signals "transient failure, please restart" without colliding with
+      // EX_USAGE (64) or generic exit 1. See #73178.
+      gatewayLog.info(
+        `restart mode: orchestrator restart (${respawn.detail ?? "pid-1 unsupervised"})`,
+      );
+      exitProcess(75);
+      return;
+    }
     if (respawn.mode === "failed") {
       await writeStabilityBundle("gateway.restart_respawn_failed");
       gatewayLog.warn(

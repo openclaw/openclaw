@@ -27,6 +27,7 @@ const originalArgv = [...process.argv];
 const originalExecArgv = [...process.execArgv];
 const envSnapshot = captureFullEnv();
 const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+const originalPidDescriptor = Object.getOwnPropertyDescriptor(process, "pid");
 
 function setPlatform(platform: string) {
   if (!originalPlatformDescriptor) {
@@ -38,6 +39,16 @@ function setPlatform(platform: string) {
   });
 }
 
+function setPid(pid: number) {
+  if (!originalPidDescriptor) {
+    return;
+  }
+  Object.defineProperty(process, "pid", {
+    ...originalPidDescriptor,
+    value: pid,
+  });
+}
+
 afterEach(() => {
   envSnapshot.restore();
   process.argv = [...originalArgv];
@@ -46,6 +57,9 @@ afterEach(() => {
   triggerOpenClawRestartMock.mockClear();
   if (originalPlatformDescriptor) {
     Object.defineProperty(process, "platform", originalPlatformDescriptor);
+  }
+  if (originalPidDescriptor) {
+    Object.defineProperty(process, "pid", originalPidDescriptor);
   }
 });
 
@@ -232,6 +246,44 @@ describe("restartGatewayProcessWithFreshPid", () => {
     const result = restartGatewayProcessWithFreshPid();
     expect(result.mode).toBe("failed");
     expect(result.detail).toContain("spawn failed");
+  });
+
+  it("returns orchestrator mode when running as PID 1 without supervisor hints (#73178)", () => {
+    delete process.env.OPENCLAW_NO_RESPAWN;
+    clearSupervisorHints();
+    setPlatform("linux");
+    setPid(1);
+
+    const result = restartGatewayProcessWithFreshPid();
+
+    expect(result.mode).toBe("orchestrator");
+    expect(result.detail).toContain("pid-1");
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("PID 1 with a supervisor hint still returns supervised, not orchestrator (#73178)", () => {
+    delete process.env.OPENCLAW_NO_RESPAWN;
+    clearSupervisorHints();
+    setPlatform("linux");
+    setPid(1);
+    process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
+
+    const result = restartGatewayProcessWithFreshPid();
+
+    expect(result.mode).toBe("supervised");
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("PID 1 with OPENCLAW_NO_RESPAWN=1 still returns disabled, not orchestrator (#73178)", () => {
+    clearSupervisorHints();
+    setPlatform("linux");
+    setPid(1);
+    process.env.OPENCLAW_NO_RESPAWN = "1";
+
+    const result = restartGatewayProcessWithFreshPid();
+
+    expect(result.mode).toBe("disabled");
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 });
 

@@ -39,6 +39,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/restart: when running as PID 1 inside a container with no detected supervisor (Docker, Docker Swarm, Kubernetes without a parent process supervisor), restart-triggering signals now exit the entrypoint with code 75 (`EX_TEMPFAIL`) instead of spawning an unsupervised detached sibling and exiting 0. Orchestrators with `restart_policy.condition: on-failure` / `restartPolicy: OnFailure` will now relaunch the task instead of marking it complete and leaving the service stuck at 0/1 replicas. Fixes #73178.
 - Gateway/startup: keep value-option foreground starts on the gateway fast path and skip proxy bootstrap unless proxy env is configured, reducing normal gateway startup RSS and avoiding full CLI graph loading. Thanks @vincentkoc.
 - Subagents/models: persist `sessions_spawn.model` and configured subagent models as child-session model overrides before the first turn, so spawned subagents actually run on the requested provider/model instead of reverting to the target agent default. Fixes #73180. Thanks @danielzinhu99.
 - Backup: skip installed plugin `extensions/*/node_modules` dependency trees while keeping plugin manifests and source files in archives, so local backups avoid rebuildable npm payload bloat. Fixes #64144. Thanks @BrilliantWang.

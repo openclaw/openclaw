@@ -4,7 +4,7 @@ import { formatErrorMessage } from "./errors.js";
 import { triggerOpenClawRestart } from "./restart.js";
 import { detectRespawnSupervisor } from "./supervisor-markers.js";
 
-type RespawnMode = "spawned" | "supervised" | "disabled" | "failed";
+type RespawnMode = "spawned" | "supervised" | "disabled" | "failed" | "orchestrator";
 
 export type GatewayRespawnResult = {
   mode: RespawnMode;
@@ -36,6 +36,9 @@ function spawnDetachedGatewayProcess(): { child: ChildProcess; pid?: number } {
  * Attempt to restart this process with a fresh PID.
  * - supervised environments (launchd/systemd/schtasks): caller should exit and let supervisor restart
  * - OPENCLAW_NO_RESPAWN=1: caller should keep in-process restart behavior (tests/dev)
+ * - PID 1 in a container without a known supervisor: caller should exit non-zero
+ *   so the orchestrator (Docker/Swarm/Kubernetes) restarts the entrypoint task
+ *   rather than seeing a clean exit and marking the task complete (#73178).
  * - otherwise: spawn detached child with current argv/execArgv, then caller exits
  */
 export function restartGatewayProcessWithFreshPid(): GatewayRespawnResult {
@@ -64,6 +67,18 @@ export function restartGatewayProcessWithFreshPid(): GatewayRespawnResult {
     return {
       mode: "disabled",
       detail: "win32: detached respawn unsupported without Scheduled Task markers",
+    };
+  }
+  if (process.pid === 1) {
+    // Inside a container with no supervisor hint, PID 1 *is* the orchestrator's
+    // tracked process. Spawning a detached sibling and exiting clean leaves the
+    // orchestrator marking the task complete (Docker Swarm `restart_policy.
+    // condition: on-failure`, K8s `restartPolicy: OnFailure`, etc.) — the new
+    // sibling is unsupervised and the service stays at 0/1 until human
+    // intervention. Defer the restart to the orchestrator instead.
+    return {
+      mode: "orchestrator",
+      detail: "pid-1 unsupervised: orchestrator should restart entrypoint",
     };
   }
 
