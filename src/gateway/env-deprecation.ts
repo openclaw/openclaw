@@ -1,30 +1,36 @@
+import { isVitestRuntimeEnv } from "../infra/env.js";
+
 const LEGACY_ENV_PREFIXES = ["CLAWDBOT_", "MOLTBOT_"] as const;
+type LegacyEnvPrefix = (typeof LEGACY_ENV_PREFIXES)[number];
 
 let warned = false;
 
 export function warnLegacyOpenClawEnvVars(env: NodeJS.ProcessEnv = process.env): void {
-  if (warned || process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
+  if (warned || isVitestRuntimeEnv(env)) {
     return;
   }
 
-  const legacyVars = Object.keys(env)
-    .flatMap((key) => {
-      const prefix = LEGACY_ENV_PREFIXES.find((candidate) => key.startsWith(candidate));
-      if (!prefix) {
-        return [];
-      }
-      return [{ legacy: key, replacement: `OPENCLAW_${key.slice(prefix.length)}` }];
-    })
-    .toSorted((left, right) => left.legacy.localeCompare(right.legacy));
+  const prefixCounts = new Map<LegacyEnvPrefix, number>();
+  for (const key of Object.keys(env)) {
+    const prefix = LEGACY_ENV_PREFIXES.find((candidate) => key.startsWith(candidate));
+    if (prefix) {
+      prefixCounts.set(prefix, (prefixCounts.get(prefix) ?? 0) + 1);
+    }
+  }
 
-  if (legacyVars.length === 0) {
+  const legacyVarCount = [...prefixCounts.values()].reduce((total, count) => total + count, 0);
+  if (legacyVarCount === 0) {
     return;
   }
+
+  const detectedPrefixes = LEGACY_ENV_PREFIXES.filter((prefix) => prefixCounts.has(prefix))
+    .map((prefix) => `${prefix}*`)
+    .join(", ");
 
   process.emitWarning(
     [
-      "Legacy CLAWDBOT_* or MOLTBOT_* environment variables were detected, but OpenClaw only reads OPENCLAW_* names now.",
-      ...legacyVars.map(({ legacy, replacement }) => `${legacy} -> ${replacement}`),
+      `Legacy ${detectedPrefixes} environment variables were detected (${legacyVarCount} total), but OpenClaw only reads OPENCLAW_* names now.`,
+      "Rename them by replacing the legacy prefix with OPENCLAW_; the old names are ignored.",
     ].join("\n"),
     { code: "OPENCLAW_LEGACY_ENV_VARS", type: "DeprecationWarning" },
   );

@@ -23,10 +23,11 @@ describe("warnLegacyOpenClawEnvVars", () => {
     restoreEnv("VITEST", originalVitest);
   });
 
-  it("warns with OPENCLAW replacements for legacy prefixes", () => {
+  it("warns with counts and prefixes instead of secret-shaped env names", () => {
     warnLegacyOpenClawEnvVars({
       CLAWDBOT_GATEWAY_TOKEN: "old-token",
       MOLTBOT_GATEWAY_PASSWORD: "old-password", // pragma: allowlist secret
+      "CLAWDBOT_MALICIOUS\nforged": "old-value",
     });
 
     expect(emitWarning).toHaveBeenCalledOnce();
@@ -34,8 +35,12 @@ describe("warnLegacyOpenClawEnvVars", () => {
       string,
       { code: string; type: string },
     ];
-    expect(message).toContain("CLAWDBOT_GATEWAY_TOKEN -> OPENCLAW_GATEWAY_TOKEN");
-    expect(message).toContain("MOLTBOT_GATEWAY_PASSWORD -> OPENCLAW_GATEWAY_PASSWORD");
+    expect(message).toContain("Legacy CLAWDBOT_*, MOLTBOT_* environment variables");
+    expect(message).toContain("3 total");
+    expect(message).toContain("replacing the legacy prefix with OPENCLAW_");
+    expect(message).not.toContain("GATEWAY_TOKEN");
+    expect(message).not.toContain("GATEWAY_PASSWORD");
+    expect(message).not.toContain("forged");
     expect(options).toEqual({
       code: "OPENCLAW_LEGACY_ENV_VARS",
       type: "DeprecationWarning",
@@ -70,12 +75,21 @@ describe("warnLegacyOpenClawEnvVars", () => {
     expect(emitWarning).toHaveBeenCalledTimes(2);
   });
 
-  it("suppresses warning noise in tests", () => {
+  it("suppresses warning noise based on the passed env", () => {
+    warnLegacyOpenClawEnvVars({
+      CLAWDBOT_GATEWAY_TOKEN: "old-token",
+      VITEST: "true",
+    });
+
+    expect(emitWarning).not.toHaveBeenCalled();
+  });
+
+  it("does not let process.env test flags suppress a synthetic env", () => {
     process.env.VITEST = "true";
 
     warnLegacyOpenClawEnvVars({ CLAWDBOT_GATEWAY_TOKEN: "old-token" });
 
-    expect(emitWarning).not.toHaveBeenCalled();
+    expect(emitWarning).toHaveBeenCalledOnce();
   });
 });
 
