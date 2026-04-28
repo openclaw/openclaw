@@ -13,6 +13,7 @@ import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   clearPluginCommands,
   clearPluginCommandsForPlugin,
+  isReservedCommandName,
   listPluginInvocationKeys,
   registerPluginCommand,
   validateCommandName,
@@ -234,7 +235,11 @@ export async function executePluginCommand(params: {
   });
   const effectiveAccountId = bindingConversation?.accountId ?? params.accountId;
   const senderIsOwnerForCommand =
-    command.ownership === "reserved" ? params.senderIsOwner : undefined;
+    command.ownership === "reserved" &&
+    isReservedCommandName(command.name) &&
+    command.pluginId === normalizeLowercaseStringOrEmpty(command.name)
+      ? params.senderIsOwner
+      : undefined;
 
   const ctx: PluginCommandContext = {
     senderId,

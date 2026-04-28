@@ -550,6 +550,45 @@ describe("codex command", () => {
     expect(safeCodexControlRequest).not.toHaveBeenCalled();
   });
 
+  it("keeps diagnostics confirmation eviction scoped to account identity", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({ schemaVersion: 1, threadId: "thread-confirm-scope", cwd: "/repo" }),
+    );
+
+    const firstRequest = await handleCodexCommand(
+      createContext("diagnostics", sessionFile, {
+        accountId: "account-kept",
+        channelId: "channel-kept",
+      }),
+      { deps: createDeps() },
+    );
+    const firstToken = readDiagnosticsConfirmationToken(firstRequest);
+
+    for (let index = 0; index < 100; index += 1) {
+      await handleCodexCommand(
+        createContext(`diagnostics ${index}`, sessionFile, {
+          accountId: "account-noisy",
+          channelId: "channel-noisy",
+        }),
+        { deps: createDeps() },
+      );
+    }
+
+    await expect(
+      handleCodexCommand(
+        createContext(`diagnostics cancel ${firstToken}`, sessionFile, {
+          accountId: "account-kept",
+          channelId: "channel-kept",
+        }),
+        { deps: createDeps() },
+      ),
+    ).resolves.toEqual({
+      text: "Codex diagnostics upload canceled.",
+    });
+  });
+
   it("bounds diagnostics notes before upload", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await fs.writeFile(

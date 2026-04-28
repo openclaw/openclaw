@@ -415,7 +415,7 @@ describe("registerPluginCommand", () => {
 
   it("keeps reserved command bypass scoped to the primary command name", () => {
     const result = registerPluginCommand(
-      "bundled-plugin",
+      "status",
       createVoiceCommand({
         name: "status",
         nativeNames: {
@@ -442,6 +442,24 @@ describe("registerPluginCommand", () => {
     expect(result).toEqual({
       ok: false,
       error: 'Command name "codex" is reserved by a built-in command',
+    });
+  });
+
+  it("rejects reserved ownership on non-reserved direct command registrations", () => {
+    const result = registerPluginCommand(
+      "demo-plugin",
+      {
+        name: "voice",
+        description: "Voice command",
+        ownership: "reserved",
+        handler: async () => ({ text: "ok" }),
+      },
+      { allowReservedCommandNames: true },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      error: "Reserved command ownership requires a reserved command name: voice",
     });
   });
 
@@ -473,7 +491,7 @@ describe("registerPluginCommand", () => {
   it("exposes owner status only to reserved bundled command owners", async () => {
     let observedOwnerStatus: boolean | undefined;
     registerPluginCommand(
-      "bundled-plugin",
+      "codex",
       {
         name: "codex",
         description: "Codex command",
@@ -498,6 +516,25 @@ describe("registerPluginCommand", () => {
     });
 
     expect(observedOwnerStatus).toBe(true);
+  });
+
+  it("rejects mismatched reserved command owners", () => {
+    const result = registerPluginCommand(
+      "bundled-plugin",
+      {
+        name: "codex",
+        description: "Codex command",
+        ownership: "reserved",
+        handler: async () => ({ text: "ok" }),
+      },
+      { allowReservedCommandNames: true },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      error:
+        'Reserved command ownership requires plugin id "bundled-plugin" to match reserved command name "codex"',
+    });
   });
 
   it("shares plugin commands across duplicate module instances", async () => {

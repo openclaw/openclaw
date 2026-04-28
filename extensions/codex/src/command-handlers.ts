@@ -133,6 +133,7 @@ type PendingCodexDiagnosticsConfirmation = {
   messageThreadId?: string;
   threadParentId?: string;
   sessionKey?: string;
+  scopeKey: string;
   createdAt: number;
 };
 
@@ -143,16 +144,19 @@ const CODEX_DIAGNOSTICS_ERROR_MAX_CHARS = 500;
 const CODEX_DIAGNOSTICS_COOLDOWN_MAX_THREADS = 100;
 const CODEX_DIAGNOSTICS_COOLDOWN_MAX_SCOPES = 100;
 const CODEX_DIAGNOSTICS_CONFIRMATION_TTL_MS = 5 * 60_000;
-const CODEX_DIAGNOSTICS_CONFIRMATION_MAX_REQUESTS = 100;
+const CODEX_DIAGNOSTICS_CONFIRMATION_MAX_REQUESTS_PER_SCOPE = 100;
+const CODEX_DIAGNOSTICS_CONFIRMATION_MAX_SCOPES = 100;
 
 const lastCodexDiagnosticsUploadByThread = new Map<string, number>();
 const lastCodexDiagnosticsUploadByScope = new Map<string, number>();
 const pendingCodexDiagnosticsConfirmations = new Map<string, PendingCodexDiagnosticsConfirmation>();
+const pendingCodexDiagnosticsConfirmationTokensByScope = new Map<string, string[]>();
 
 export function resetCodexDiagnosticsFeedbackStateForTests(): void {
   lastCodexDiagnosticsUploadByThread.clear();
   lastCodexDiagnosticsUploadByScope.clear();
   pendingCodexDiagnosticsConfirmations.clear();
+  pendingCodexDiagnosticsConfirmationTokensByScope.clear();
 }
 
 export async function handleCodexSubcommand(
@@ -598,6 +602,7 @@ async function requestCodexDiagnosticsFeedbackApproval(
     note: reason,
     senderId: ctx.senderId,
     channel: ctx.channel,
+    scopeKey: readCodexDiagnosticsCooldownScope(ctx),
     ...readCodexDiagnosticsConfirmationScope(ctx),
     now,
   });
@@ -659,10 +664,10 @@ async function confirmCodexDiagnosticsFeedback(
   }
   const binding = await deps.readCodexAppServerBinding(sessionFile);
   if (binding?.threadId !== pending.threadId) {
-    pendingCodexDiagnosticsConfirmations.delete(token);
+    deletePendingCodexDiagnosticsConfirmation(token);
     return "The attached Codex thread changed before confirmation. Run /diagnostics again for the current thread.";
   }
-  pendingCodexDiagnosticsConfirmations.delete(token);
+  deletePendingCodexDiagnosticsConfirmation(token);
   return await sendCodexDiagnosticsFeedback(deps, ctx, pluginConfig, pending.note ?? "");
 }
 
@@ -684,7 +689,7 @@ function cancelCodexDiagnosticsFeedback(ctx: PluginCommandContext, token: string
   if (scopeMismatch) {
     return scopeMismatch.cancelMessage;
   }
-  pendingCodexDiagnosticsConfirmations.delete(token);
+  deletePendingCodexDiagnosticsConfirmation(token);
   return "Codex diagnostics upload canceled.";
 }
 
@@ -782,17 +787,31 @@ function createCodexDiagnosticsConfirmation(params: {
   messageThreadId?: string;
   threadParentId?: string;
   sessionKey?: string;
+  scopeKey: string;
   now: number;
 }): string {
   prunePendingCodexDiagnosticsConfirmations(params.now);
-  while (pendingCodexDiagnosticsConfirmations.size >= CODEX_DIAGNOSTICS_CONFIRMATION_MAX_REQUESTS) {
-    const oldestToken = pendingCodexDiagnosticsConfirmations.keys().next().value;
-    if (typeof oldestToken !== "string") {
+  if (
+    !pendingCodexDiagnosticsConfirmationTokensByScope.has(params.scopeKey) &&
+    pendingCodexDiagnosticsConfirmationTokensByScope.size >=
+      CODEX_DIAGNOSTICS_CONFIRMATION_MAX_SCOPES
+  ) {
+    const oldestScopeKey = pendingCodexDiagnosticsConfirmationTokensByScope.keys().next().value;
+    if (typeof oldestScopeKey === "string") {
+      deletePendingCodexDiagnosticsConfirmationScope(oldestScopeKey);
+    }
+  }
+  const scopeTokens = pendingCodexDiagnosticsConfirmationTokensByScope.get(params.scopeKey) ?? [];
+  while (scopeTokens.length >= CODEX_DIAGNOSTICS_CONFIRMATION_MAX_REQUESTS_PER_SCOPE) {
+    const oldestToken = scopeTokens.shift();
+    if (!oldestToken) {
       break;
     }
     pendingCodexDiagnosticsConfirmations.delete(oldestToken);
   }
   const token = crypto.randomBytes(6).toString("hex");
+  scopeTokens.push(token);
+  pendingCodexDiagnosticsConfirmationTokensByScope.set(params.scopeKey, scopeTokens);
   pendingCodexDiagnosticsConfirmations.set(token, {
     token,
     threadId: params.threadId,
@@ -804,6 +823,7 @@ function createCodexDiagnosticsConfirmation(params: {
     messageThreadId: params.messageThreadId,
     threadParentId: params.threadParentId,
     sessionKey: params.sessionKey,
+    scopeKey: params.scopeKey,
     createdAt: params.now,
   });
   return token;
@@ -883,9 +903,36 @@ function readPendingCodexDiagnosticsConfirmation(
 function prunePendingCodexDiagnosticsConfirmations(now: number): void {
   for (const [token, pending] of pendingCodexDiagnosticsConfirmations) {
     if (now - pending.createdAt >= CODEX_DIAGNOSTICS_CONFIRMATION_TTL_MS) {
-      pendingCodexDiagnosticsConfirmations.delete(token);
+      deletePendingCodexDiagnosticsConfirmation(token);
     }
   }
+}
+
+function deletePendingCodexDiagnosticsConfirmation(token: string): void {
+  const pending = pendingCodexDiagnosticsConfirmations.get(token);
+  pendingCodexDiagnosticsConfirmations.delete(token);
+  if (!pending) {
+    return;
+  }
+  const scopeTokens = pendingCodexDiagnosticsConfirmationTokensByScope.get(pending.scopeKey);
+  if (!scopeTokens) {
+    return;
+  }
+  const tokenIndex = scopeTokens.indexOf(token);
+  if (tokenIndex >= 0) {
+    scopeTokens.splice(tokenIndex, 1);
+  }
+  if (scopeTokens.length === 0) {
+    pendingCodexDiagnosticsConfirmationTokensByScope.delete(pending.scopeKey);
+  }
+}
+
+function deletePendingCodexDiagnosticsConfirmationScope(scopeKey: string): void {
+  const scopeTokens = pendingCodexDiagnosticsConfirmationTokensByScope.get(scopeKey) ?? [];
+  for (const token of scopeTokens) {
+    pendingCodexDiagnosticsConfirmations.delete(token);
+  }
+  pendingCodexDiagnosticsConfirmationTokensByScope.delete(scopeKey);
 }
 
 function buildDiagnosticsTags(ctx: PluginCommandContext): Record<string, string> {
