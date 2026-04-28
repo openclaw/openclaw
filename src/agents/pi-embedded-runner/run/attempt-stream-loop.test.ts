@@ -39,6 +39,27 @@ describe("attempt stream loop helpers", () => {
     });
   });
 
+  it("rejects already-aborted work while still draining the wrapped promise", async () => {
+    const controller = new AbortController();
+    const abortable = createAttemptAbortable(controller);
+    const reason = new Error("sessions_yield");
+    let rejectLate: ((error: Error) => void) | undefined;
+    const pending = new Promise<string>((_resolve, reject) => {
+      rejectLate = reject;
+    });
+
+    controller.abort(reason);
+
+    await expect(abortable(pending)).rejects.toMatchObject({
+      name: "AbortError",
+      message: "sessions_yield",
+      cause: reason,
+    });
+
+    rejectLate?.(new Error("late transport rejection"));
+    await Promise.resolve();
+  });
+
   it("submits runtime-only prompts without image or runtime-context side effects", async () => {
     const prompt = vi.fn(async () => undefined);
     const queueRuntimeContextForNextTurn = vi.fn(async () => undefined);

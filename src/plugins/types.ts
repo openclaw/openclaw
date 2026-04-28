@@ -2336,7 +2336,7 @@ export type OpenClawPluginApi = {
    * internal prepare/start/send/outcome/cleanup lifecycle without changing
    * selection or public V1 behavior.
    */
-  registerAgentHarnessV2Factory: (harnessId: string, factory: NativeAgentHarnessV2Factory) => void;
+  registerAgentHarnessV2Factory: (harnessId: string, factory: AgentHarnessV2Factory) => void;
   /**
    * Register a Codex app-server extension factory for Codex harness tool-result
    * middleware. Only bundled plugins may use this seam, and

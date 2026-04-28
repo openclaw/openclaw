@@ -331,6 +331,7 @@ type PluginRegistrySnapshot = {
     agentToolResultMiddlewares: PluginRegistry["agentToolResultMiddlewares"];
     memoryEmbeddingProviders: PluginRegistry["memoryEmbeddingProviders"];
     agentHarnesses: PluginRegistry["agentHarnesses"];
+    agentHarnessV2Factories: PluginRegistry["agentHarnessV2Factories"];
     httpRoutes: PluginRegistry["httpRoutes"];
     cliRegistrars: PluginRegistry["cliRegistrars"];
     reloads: NonNullable<PluginRegistry["reloads"]>;
@@ -370,6 +371,7 @@ function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistrySnapsho
       agentToolResultMiddlewares: [...registry.agentToolResultMiddlewares],
       memoryEmbeddingProviders: [...registry.memoryEmbeddingProviders],
       agentHarnesses: [...registry.agentHarnesses],
+      agentHarnessV2Factories: [...registry.agentHarnessV2Factories],
       httpRoutes: [...registry.httpRoutes],
       cliRegistrars: [...registry.cliRegistrars],
       reloads: [...(registry.reloads ?? [])],
@@ -408,6 +410,7 @@ function restorePluginRegistry(registry: PluginRegistry, snapshot: PluginRegistr
   registry.agentToolResultMiddlewares = snapshot.arrays.agentToolResultMiddlewares;
   registry.memoryEmbeddingProviders = snapshot.arrays.memoryEmbeddingProviders;
   registry.agentHarnesses = snapshot.arrays.agentHarnesses;
+  registry.agentHarnessV2Factories = snapshot.arrays.agentHarnessV2Factories;
   registry.httpRoutes = snapshot.arrays.httpRoutes;
   registry.cliRegistrars = snapshot.arrays.cliRegistrars;
   registry.reloads = snapshot.arrays.reloads;

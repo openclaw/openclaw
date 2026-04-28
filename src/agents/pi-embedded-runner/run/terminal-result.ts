@@ -70,6 +70,7 @@ export function buildEmbeddedRunTerminalResult(params: {
     | "messagingToolSentTexts"
     | "successfulCronAdds"
     | "systemPromptReport"
+    | "yieldDetected"
   >;
   payloadsWithToolMedia?: EmbeddedPiRunResult["payloads"];
   emptyAssistantReplyIsSilent: boolean;
@@ -116,6 +117,7 @@ export function buildEmbeddedRunTerminalResult(params: {
       replayInvalid: params.replayInvalid,
       livenessState: params.livenessState,
       agentHarnessResultClassification: params.attempt.agentHarnessResultClassification,
+      ...(params.attempt.yieldDetected === true ? { yielded: true } : {}),
       ...(params.emptyAssistantReplyIsSilent ? { terminalReplyKind: "silent-empty" as const } : {}),
       stopReason: params.stopReason,
       pendingToolCalls: params.attempt.clientToolCall

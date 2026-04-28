@@ -92,6 +92,7 @@ describe("terminal-result helpers", () => {
         messagingToolSentTexts: ["sent"],
         successfulCronAdds: 1,
         systemPromptReport: undefined,
+        yieldDetected: true,
       },
       payloadsWithToolMedia: [{ text: "done" }],
       emptyAssistantReplyIsSilent: false,
@@ -124,6 +125,7 @@ describe("terminal-result helpers", () => {
     expect(result.payloads).toEqual([{ text: "done" }]);
     expect(result.didSendViaMessagingTool).toBe(true);
     expect(result.didSendDeterministicApprovalPrompt).toBe(true);
+    expect(result.meta.yielded).toBe(true);
     expect(result.meta.pendingToolCalls).toEqual([
       {
         id: "tool-id",
@@ -159,6 +161,7 @@ describe("terminal-result helpers", () => {
         messagingToolSentTexts: [],
         successfulCronAdds: undefined,
         systemPromptReport: undefined,
+        yieldDetected: undefined,
       },
       payloadsWithToolMedia: undefined,
       emptyAssistantReplyIsSilent: true,

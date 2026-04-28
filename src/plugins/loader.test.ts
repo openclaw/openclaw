@@ -3773,6 +3773,27 @@ module.exports = { id: "throws-after-import", register() {} };`,
             ingest: async () => {},
             assemble: async () => ({ messages: [] }),
           }));
+          api.registerAgentHarness({
+            id: "failme-harness",
+            label: "Failme Harness",
+            supports: () => ({ supported: true }),
+            runAttempt: async () => ({ ok: false, error: "unused" }),
+          });
+          api.registerAgentHarnessV2Factory("failme-harness", (harness) => ({
+            id: harness.id,
+            label: harness.label,
+            supports: (ctx) => harness.supports(ctx),
+            prepare: async (params) => ({
+              harnessId: harness.id,
+              label: harness.label,
+              params,
+              lifecycleState: "prepared",
+            }),
+            start: async (prepared) => ({ ...prepared, lifecycleState: "started" }),
+            send: async (session) => harness.runAttempt(session.params),
+            resolveOutcome: async (_session, result) => result,
+            cleanup: async () => {},
+          }));
           throw new Error("boom");
         },
       };`,
@@ -3805,6 +3826,9 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(resolvePluginInteractiveNamespaceMatch("slack", "failme:payload")).toBeNull();
     expect(getContextEngineFactory("failme-context")).toBeUndefined();
     expect(listContextEngineIds()).not.toContain("failme-context");
+    expect(listAgentHarnessIds()).not.toContain("failme-harness");
+    expect(getNativeAgentHarnessV2Factory("failme-harness")).toBeUndefined();
+    expect(registry.agentHarnessV2Factories).toEqual([]);
 
     const event = createInternalHookEvent("gateway", "startup", "gateway:startup");
     await triggerInternalHook(event);

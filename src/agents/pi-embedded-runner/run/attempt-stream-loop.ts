@@ -37,25 +37,31 @@ export function makeAttemptAbortError(signal: AbortSignal): Error {
 export function createAttemptAbortable(runAbortController: AbortController) {
   return <T>(promise: Promise<T>): Promise<T> => {
     const signal = runAbortController.signal;
-    if (signal.aborted) {
-      return Promise.reject(makeAttemptAbortError(signal));
-    }
     return new Promise<T>((resolve, reject) => {
-      const onAbort = () => {
+      let settled = false;
+      const settle = (fn: () => void) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
         signal.removeEventListener("abort", onAbort);
-        reject(makeAttemptAbortError(signal));
+        fn();
+      };
+      const onAbort = () => {
+        settle(() => reject(makeAttemptAbortError(signal)));
       };
       signal.addEventListener("abort", onAbort, { once: true });
       promise.then(
         (value) => {
-          signal.removeEventListener("abort", onAbort);
-          resolve(value);
+          settle(() => resolve(value));
         },
         (err) => {
-          signal.removeEventListener("abort", onAbort);
-          reject(err);
+          settle(() => reject(err));
         },
       );
+      if (signal.aborted) {
+        onAbort();
+      }
     });
   };
 }
