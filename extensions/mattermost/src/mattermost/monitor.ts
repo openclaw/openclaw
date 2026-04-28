@@ -1744,7 +1744,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 dispatcher,
                 replyOptions: {
                   ...replyOptions,
-                  disableBlockStreaming: true,
+                  disableBlockStreaming:
+                    typeof account.blockStreaming === "boolean"
+                      ? !account.blockStreaming
+                      : undefined,
                   onModelSelected,
                   onPartialReply: (payload) => {
                     updateDraftFromPartial(payload.text);
