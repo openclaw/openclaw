@@ -12,7 +12,7 @@ Docs: https://docs.openclaw.ai
 
 - Plugins/media: auto-enable provider plugins referenced by `agents.defaults.imageGenerationModel`, `videoGenerationModel`, and `musicGenerationModel` primary/fallback refs, so configured Google and MiniMax media providers do not stay disabled behind a restrictive plugin allowlist. Thanks @vincentkoc.
 - Memory-core/dreaming: retry managed dreaming cron registration after startup when the cron service is not reachable yet, so the scheduled Memory Dreaming Promotion sweep recovers without waiting for heartbeat traffic. Fixes #72841. Thanks @amknight.
-- Channels/Telegram: scope the streaming-disable guard for native quote replies to actual user-selected quotes (`replyQuoteText` + resolvable `replyQuoteMessageId`), so plain `reply_to_message_id` replies under `channels.telegram.replyToMode: "first"` no longer trip `hasNativeQuoteReply` and silently fall back to whole-message delivery, while quote-bearing replies still skip the streaming preview path that `editMessageText` cannot re-send. Fixes #73505.
+- Channels/Telegram: scope the streaming-disable guard for native quote replies to actual user-selected quotes (`replyQuoteText` + resolvable `replyQuoteMessageId`), so plain `reply_to_message_id` replies under `channels.telegram.replyToMode: "first"` no longer trip `hasNativeQuoteReply` and silently fall back to whole-message delivery, while quote-bearing replies still skip the streaming preview path that `editMessageText` cannot re-send. Fixes #73505. Thanks @choury.
 
 ## 2026.4.27
 
