@@ -12,7 +12,7 @@ import type {
 } from "@modelcontextprotocol/sdk/validation/types.js";
 import type { ErrorObject, ValidateFunction } from "ajv";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { logWarn } from "../logger.js";
+import { logInfo, logWarn } from "../logger.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
@@ -273,10 +273,12 @@ export function createSessionMcpRuntime(params: {
           // and break its own _transport cleanup. Calling our handler before
           // the SDK's runs lets the manager evict the cached runtime in the
           // same tick the SDK nulls out Client._transport.
+          // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP SDK Transport interface uses onclose/onerror fields, not DOM EventTarget
           resolved.transport.onclose = () => {
             sessions.delete(serverName);
             params.onTransportClosed?.({ serverName });
           };
+          // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP SDK Transport interface uses onclose/onerror fields, not DOM EventTarget
           resolved.transport.onerror = (error: Error) => {
             if (!disposed) {
               logWarn(
@@ -558,6 +560,9 @@ function createSessionMcpRuntimeManager(
           cfg: params.cfg,
           configFingerprint: nextFingerprint,
           onTransportClosed: ({ serverName }) => {
+            logInfo(
+              `bundle-mcp: retiring runtime for session ${params.sessionId} after transport "${serverName}" closed; next getOrCreate will respawn`,
+            );
             void disposeSessionInternal(params.sessionId).catch((error) => {
               logWarn(
                 `bundle-mcp: failed to retire runtime for session ${params.sessionId} ` +
