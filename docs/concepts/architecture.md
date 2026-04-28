@@ -44,7 +44,7 @@ title: "Gateway architecture"
 
 Protocol details:
 
-- [Gateway protocol](/gateway/protocol)
+- [Gateway protocol](../gateway/protocol.md)
 
 ### WebChat
 
@@ -113,8 +113,8 @@ sequenceDiagram
 - Gateway auth (`gateway.auth.*`) still applies to **all** connections, local or
   remote.
 
-Details: [Gateway protocol](/gateway/protocol), [Pairing](/channels/pairing),
-[Security](/gateway/security).
+Details: [Gateway protocol](../gateway/protocol.md), [Pairing](../channels/pairing.md),
+[Security](../gateway/security/index.md).
 
 ## Protocol typing and codegen
 
