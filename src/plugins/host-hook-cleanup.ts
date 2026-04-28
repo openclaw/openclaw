@@ -5,7 +5,11 @@ import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targe
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { cleanupPluginSessionSchedulerJobs, clearPluginRunContext } from "./host-hook-runtime.js";
+import {
+  cleanupPluginSessionSchedulerJobs,
+  clearPluginRunContext,
+  makePluginSessionSchedulerJobKey,
+} from "./host-hook-runtime.js";
 import type { PluginHostCleanupReason } from "./host-hooks.js";
 import type { PluginRegistry } from "./registry-types.js";
 
@@ -180,18 +184,22 @@ export async function runPluginHostCleanup(params: {
     failures.push(failure);
   }
   if (registry?.sessionSchedulerJobs) {
-    const registrySchedulerJobIds = new Set(
+    const registrySchedulerJobKeys = new Set(
       registry.sessionSchedulerJobs
         .filter((record) => !params.pluginId || record.pluginId === params.pluginId)
-        .map((record) => record.job.id)
-        .filter((jobId): jobId is string => typeof jobId === "string" && jobId.length > 0),
+        .map((record) => ({
+          pluginId: record.pluginId,
+          jobId: typeof record.job.id === "string" ? record.job.id.trim() : "",
+        }))
+        .filter(({ jobId }) => jobId.length > 0)
+        .map(({ pluginId, jobId }) => makePluginSessionSchedulerJobKey(pluginId, jobId)),
     );
     const runtimeSchedulerFailures = await cleanupPluginSessionSchedulerJobs({
       pluginId: params.pluginId,
       reason: params.reason,
       sessionKey: params.sessionKey,
       preserveJobIds: params.preserveSchedulerJobIds,
-      excludeJobIds: registrySchedulerJobIds,
+      excludeJobKeys: registrySchedulerJobKeys,
     });
     for (const failure of runtimeSchedulerFailures) {
       failures.push(failure);

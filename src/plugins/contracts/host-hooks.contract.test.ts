@@ -2097,6 +2097,53 @@ describe("host-hook fixture plugin contract", () => {
     expect(listPluginSessionSchedulerJobs("runtime-scheduler-fixture")).toEqual([]);
   });
 
+  it("does not skip runtime-only scheduler jobs with ids reused by another plugin", async () => {
+    const cleanupEvents: string[] = [];
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "registry-scheduler-owner",
+        name: "Registry Scheduler Owner",
+      }),
+      register(api) {
+        api.registerSessionSchedulerJob({
+          id: "daily",
+          sessionKey: "agent:main:main",
+          kind: "monitor",
+          cleanup: ({ reason, jobId }) => {
+            cleanupEvents.push(`registry:${reason}:${jobId}`);
+          },
+        });
+      },
+    });
+    registerPluginSessionSchedulerJob({
+      pluginId: "runtime-scheduler-owner",
+      pluginName: "Runtime Scheduler Owner",
+      job: {
+        id: "daily",
+        sessionKey: "agent:main:main",
+        kind: "session-turn",
+        cleanup: ({ reason, jobId }) => {
+          cleanupEvents.push(`runtime:${reason}:${jobId}`);
+        },
+      },
+    });
+
+    await expect(
+      runPluginHostCleanup({
+        cfg: config,
+        registry: registry.registry,
+        reason: "reset",
+      }),
+    ).resolves.toMatchObject({ failures: [] });
+
+    expect(cleanupEvents.toSorted()).toEqual(["registry:reset:daily", "runtime:reset:daily"]);
+    expect(listPluginSessionSchedulerJobs("registry-scheduler-owner")).toEqual([]);
+    expect(listPluginSessionSchedulerJobs("runtime-scheduler-owner")).toEqual([]);
+  });
+
   it("preserves restarted scheduler jobs while cleaning the replaced registry", async () => {
     const cleanupEvents: string[] = [];
     const previous = createEmptyPluginRegistry();
