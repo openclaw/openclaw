@@ -388,6 +388,47 @@ describe("registerSlackInteractionEvents", () => {
     expect(app.client.chat.update).toHaveBeenCalledTimes(1);
   });
 
+  it("does not wake the heartbeat when block-action event enqueue is skipped", async () => {
+    enqueueSystemEventMock.mockReturnValueOnce(false);
+    const { ctx, getHandler } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    const handler = getHandler();
+    expect(handler).toBeTruthy();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await handler!({
+      ack,
+      body: {
+        user: { id: "U123" },
+        channel: { id: "C1" },
+        container: { channel_id: "C1", message_ts: "100.200", thread_ts: "100.100" },
+        message: {
+          ts: "100.200",
+          text: "fallback",
+          blocks: [
+            {
+              type: "actions",
+              block_id: "verify_block",
+              elements: [{ type: "button", action_id: "openclaw:verify" }],
+            },
+          ],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:verify",
+        block_id: "verify_block",
+        value: "approved",
+        text: { type: "plain_text", text: "Approve" },
+      },
+    });
+
+    expect(ack).toHaveBeenCalled();
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+  });
+
   it("registers a matcher that accepts plugin action ids beyond the OpenClaw prefix", () => {
     const { ctx, getActionMatcher } = createContext();
     registerSlackInteractionEvents({ ctx: ctx as never });
@@ -1847,6 +1888,34 @@ describe("registerSlackInteractionEvents", () => {
 
     expect(ack).toHaveBeenCalled();
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not wake the heartbeat when modal event enqueue is skipped", async () => {
+    enqueueSystemEventMock.mockReturnValueOnce(false);
+    const { ctx, getViewHandler } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+    const viewHandler = getViewHandler();
+    expect(viewHandler).toBeTruthy();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await viewHandler!({
+      ack,
+      body: {
+        user: { id: "U444" },
+        view: {
+          id: "V444",
+          callback_id: "openclaw:routing_form",
+          private_metadata: JSON.stringify({ userId: "U444" }),
+          state: {
+            values: {},
+          },
+        },
+      },
+    } as never);
+
+    expect(ack).toHaveBeenCalled();
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
   });
 
   it("captures modal input labels and picker values across block types", async () => {
