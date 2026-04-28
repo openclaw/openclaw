@@ -1,5 +1,8 @@
 {
   "id": "openai",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["openai", "openai-codex"],
   "modelSupport": {

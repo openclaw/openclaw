@@ -217,6 +217,9 @@ importers:
 
   extensions/acpx:
     dependencies:
+      '@zed-industries/codex-acp':
+        specifier: 0.12.0
+        version: 0.12.0
       acpx:
         specifier: 0.6.1
         version: 0.6.1
@@ -4364,6 +4367,46 @@ packages:
   '@whiskeysockets/libsignal-node@https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67':
     resolution: {tarball: https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67}
     version: 2.0.1
+
+  '@zed-industries/codex-acp-darwin-arm64@0.12.0':
+    resolution: {integrity: sha512-RvTXH21sLpswEo8xLeQXcA/uWZauyNP1y+WI6b355+/o7sQ5wrvBkxt+NyhaJXJIQvbfdpl04LND4cmM+DTcNg==}
+    cpu: [arm64]
+    os: [darwin]
+    hasBin: true
+
+  '@zed-industries/codex-acp-darwin-x64@0.12.0':
+    resolution: {integrity: sha512-N7EhrUTioix3L21qnm6kZzAESc+B7Mac+/uW3khn/UQe7fJJ7u1ojbgMPDdGo/8Xm6HBBXgak2NOj7mJ+NNXSw==}
+    cpu: [x64]
+    os: [darwin]
+    hasBin: true
+
+  '@zed-industries/codex-acp-linux-arm64@0.12.0':
+    resolution: {integrity: sha512-Kq35FclgZiSMBKyf80PnCvvJ3xfMjZIkPJXpci35U/VqXVQelhHCwYWwA3waTxvW07tNHxsehv1eQICz7wZdVQ==}
+    cpu: [arm64]
+    os: [linux]
+    hasBin: true
+
+  '@zed-industries/codex-acp-linux-x64@0.12.0':
+    resolution: {integrity: sha512-twmX9noSqfgWgVkGG1dd9u20Pxp8vNRXggvJ61RQSrNYITGuqHil2F3ViYICZoXyr9w1gok28bWG5DU2d9adPg==}
+    cpu: [x64]
+    os: [linux]
+    hasBin: true
+
+  '@zed-industries/codex-acp-win32-arm64@0.12.0':
+    resolution: {integrity: sha512-VoFsTIrQopO917x2EpxYXm3jTIoSknCbzP76FwX9uOThlRms+M+fHWJ4kJttOPpeofz1ulAS3vPVMQ3WNlvnhw==}
+    cpu: [arm64]
+    os: [win32]
+    hasBin: true
+
+  '@zed-industries/codex-acp-win32-x64@0.12.0':
+    resolution: {integrity: sha512-HImgXGIYgW6Wxr3rylrHS7Dzs35zvcQQB7eqAEWZ2Lj+3AxP/7TViW9KkjS+PTPnVWqpTkz0hYDQhk63Ruw3JA==}
+    cpu: [x64]
+    os: [win32]
+    hasBin: true
+
+  '@zed-industries/codex-acp@0.12.0':
+    resolution: {integrity: sha512-0d7gRzOiYTgDmIyh783mCcq50h3mdOg/TtKdLfBIghOLushpQRwhuLjKK8Q9hxZfNlPL0Ua56DoPjnsW8amf8g==}
+    hasBin: true
 
   abbrev@1.1.1:
     resolution: {integrity: sha512-nne9/IiQ/hzIhY6pdDnbBtz7DjPTKrY00P/zvPSm5pOFkl6xuGrGnXn/VtTNNfNtAfZ9/1RtehkszU9qcTii0Q==}
@@ -11114,6 +11157,33 @@ snapshots:
     dependencies:
       curve25519-js: 0.0.4
       protobufjs: 7.5.5
+
+  '@zed-industries/codex-acp-darwin-arm64@0.12.0':
+    optional: true
+
+  '@zed-industries/codex-acp-darwin-x64@0.12.0':
+    optional: true
+
+  '@zed-industries/codex-acp-linux-arm64@0.12.0':
+    optional: true
+
+  '@zed-industries/codex-acp-linux-x64@0.12.0':
+    optional: true
+
+  '@zed-industries/codex-acp-win32-arm64@0.12.0':
+    optional: true
+
+  '@zed-industries/codex-acp-win32-x64@0.12.0':
+    optional: true
+
+  '@zed-industries/codex-acp@0.12.0':
+    optionalDependencies:
+      '@zed-industries/codex-acp-darwin-arm64': 0.12.0
+      '@zed-industries/codex-acp-darwin-x64': 0.12.0
+      '@zed-industries/codex-acp-linux-arm64': 0.12.0
+      '@zed-industries/codex-acp-linux-x64': 0.12.0
+      '@zed-industries/codex-acp-win32-arm64': 0.12.0
+      '@zed-industries/codex-acp-win32-x64': 0.12.0
 
   abbrev@1.1.1:
     optional: true

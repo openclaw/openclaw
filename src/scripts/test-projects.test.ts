@@ -790,7 +790,7 @@ describe("test-projects args", () => {
   });
 
   it("widens top-level test helpers to sibling repo tests under contracts", () => {
-    expect(buildVitestRunPlans(["test/helpers/temp-home.ts"])).toEqual([
+    expect(buildVitestRunPlans(["test/helpers/temp-dir.ts"])).toEqual([
       {
         config: "test/vitest/vitest.tooling.config.ts",
         forwardedArgs: [],

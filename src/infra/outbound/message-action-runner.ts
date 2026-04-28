@@ -366,7 +366,7 @@ type ResolvedActionContext = {
   abortSignal?: AbortSignal;
 };
 
-async function maybeCallGatewayPluginMessageAction(params: {
+async function runGatewayPluginMessageActionOrNull(params: {
   cfg: OpenClawConfig;
   params: Record<string, unknown>;
   channel: ChannelId;
@@ -376,7 +376,8 @@ async function maybeCallGatewayPluginMessageAction(params: {
   gateway?: MessageActionRunnerGateway;
   input: RunMessageActionParams;
   agentId?: string;
-}): Promise<{ payload: unknown } | null> {
+  result: (payload: unknown) => MessageActionRunResult;
+}): Promise<MessageActionRunResult | null> {
   if (params.dryRun || !params.gateway) {
     return null;
   }
@@ -388,26 +389,25 @@ async function maybeCallGatewayPluginMessageAction(params: {
   if (executionMode !== "gateway") {
     return null;
   }
-  return {
-    payload: await callGatewayMessageAction<unknown>({
-      gateway: params.gateway,
-      actionParams: {
-        channel: params.channel,
-        action: params.action,
-        params: params.params,
-        accountId: params.accountId ?? undefined,
-        requesterSenderId: params.input.requesterSenderId ?? undefined,
-        senderIsOwner: params.input.senderIsOwner,
-        sessionKey: params.input.sessionKey,
-        sessionId: params.input.sessionId,
-        agentId: params.agentId,
-        toolContext: params.input.toolContext,
-        idempotencyKey: await resolveGatewayActionIdempotencyKey(
-          normalizeOptionalString(params.params.idempotencyKey),
-        ),
-      },
-    }),
-  };
+  const payload = await callGatewayMessageAction<unknown>({
+    gateway: params.gateway,
+    actionParams: {
+      channel: params.channel,
+      action: params.action,
+      params: params.params,
+      accountId: params.accountId ?? undefined,
+      requesterSenderId: params.input.requesterSenderId ?? undefined,
+      senderIsOwner: params.input.senderIsOwner,
+      sessionKey: params.input.sessionKey,
+      sessionId: params.input.sessionId,
+      agentId: params.agentId,
+      toolContext: params.input.toolContext,
+      idempotencyKey: await resolveGatewayActionIdempotencyKey(
+        normalizeOptionalString(params.params.idempotencyKey),
+      ),
+    },
+  });
+  return params.result(payload);
 }
 
 function resolveGateway(input: RunMessageActionParams): MessageActionRunnerGateway | undefined {
@@ -636,7 +636,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     mergedMediaUrls.length > 0 ? mergedMediaUrls : mediaUrl ? [mediaUrl] : undefined;
   throwIfAborted(abortSignal);
 
-  const gatewayPluginAction = await maybeCallGatewayPluginMessageAction({
+  const gatewayPluginAction = await runGatewayPluginMessageActionOrNull({
     cfg,
     params,
     channel,
@@ -646,17 +646,18 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     gateway,
     input,
     agentId,
-  });
-  if (gatewayPluginAction) {
-    return {
+    result: (payload) => ({
       kind: "send",
       channel,
       action,
       to,
       handledBy: "plugin",
-      payload: gatewayPluginAction.payload,
+      payload,
       dryRun,
-    };
+    }),
+  });
+  if (gatewayPluginAction) {
+    return gatewayPluginAction;
   }
 
   const send = await executeSendAction({
@@ -743,7 +744,7 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
     preferPresentation: false,
   });
 
-  const gatewayPluginAction = await maybeCallGatewayPluginMessageAction({
+  const gatewayPluginAction = await runGatewayPluginMessageActionOrNull({
     cfg,
     params,
     channel,
@@ -753,17 +754,18 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
     gateway,
     input,
     agentId,
-  });
-  if (gatewayPluginAction) {
-    return {
+    result: (payload) => ({
       kind: "poll",
       channel,
       action,
       to,
       handledBy: "plugin",
-      payload: gatewayPluginAction.payload,
+      payload,
       dryRun,
-    };
+    }),
+  });
+  if (gatewayPluginAction) {
+    return gatewayPluginAction;
   }
 
   const poll = await executePollAction({
@@ -850,7 +852,7 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
   if (!plugin?.actions?.handleAction) {
     throw new Error(`Channel ${channel} is unavailable for message actions (plugin not loaded).`);
   }
-  const gatewayPluginAction = await maybeCallGatewayPluginMessageAction({
+  const gatewayPluginAction = await runGatewayPluginMessageActionOrNull({
     cfg,
     params,
     channel,
@@ -860,17 +862,18 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
     gateway,
     input,
     agentId,
-  });
-  if (gatewayPluginAction) {
-    // Gateway-owned actions must execute where the live channel runtime exists.
-    return {
+    result: (payload) => ({
       kind: "action",
       channel,
       action,
       handledBy: "plugin",
-      payload: gatewayPluginAction.payload,
+      payload,
       dryRun,
-    };
+    }),
+  });
+  if (gatewayPluginAction) {
+    // Gateway-owned actions must execute where the live channel runtime exists.
+    return gatewayPluginAction;
   }
 
   const handled = await dispatchChannelMessageAction({

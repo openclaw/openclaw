@@ -6,17 +6,17 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { vi, type Mock } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
-import type { ResolvedZaloAccount } from "../src/types.js";
+import type { ResolvedZaloAccount } from "../types.js";
 
-type MonitorModule = typeof import("../src/monitor.js");
-type SecretInputModule = typeof import("../src/secret-input.js");
-type WebhookModule = typeof import("../src/monitor.webhook.js");
+type MonitorModule = typeof import("../monitor.js");
+type SecretInputModule = typeof import("../secret-input.js");
+type WebhookModule = typeof import("../monitor.webhook.js");
 
-const monitorModuleUrl = new URL("../src/monitor.ts", import.meta.url).href;
-const secretInputModuleUrl = new URL("../src/secret-input.ts", import.meta.url).href;
-const webhookModuleUrl = new URL("../src/monitor.webhook.ts", import.meta.url).href;
-const apiModuleId = new URL("../src/api.js", import.meta.url).pathname;
-const runtimeModuleId = new URL("../src/runtime.js", import.meta.url).pathname;
+const monitorModuleUrl = new URL("../monitor.ts", import.meta.url).href;
+const secretInputModuleUrl = new URL("../secret-input.ts", import.meta.url).href;
+const webhookModuleUrl = new URL("../monitor.webhook.ts", import.meta.url).href;
+const apiModuleId = new URL("../api.js", import.meta.url).pathname;
+const runtimeModuleId = new URL("../runtime.js", import.meta.url).pathname;
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;

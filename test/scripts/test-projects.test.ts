@@ -701,9 +701,9 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it("uses import-graph targets in default changed mode", () => {
-    expect(
-      resolveChangedTestTargetPlan(["test/helpers/provider-replay-policy.ts"]).targets,
-    ).toContain("extensions/openrouter/index.test.ts");
+    expect(resolveChangedTestTargetPlan(["test/helpers/normalize-text.ts"]).targets).toContain(
+      "src/auto-reply/status.test.ts",
+    );
   });
 
   it.each([

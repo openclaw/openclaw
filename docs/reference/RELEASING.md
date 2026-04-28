@@ -237,6 +237,7 @@ gh workflow run full-release-validation.yml \
   -f ref=release/YYYY.M.D \
   -f provider=openai \
   -f mode=both \
+  -f release_profile=full \
   -f evidence_package_spec=openclaw@YYYY.M.D-beta.N
 ```
 
@@ -248,11 +249,24 @@ install smoke, cross-OS release checks, live/E2E Docker release-path coverage,
 Package Acceptance with Telegram package QA, QA Lab parity, live Matrix, and
 live Telegram. A full run is only acceptable when the `Full Release Validation`
 summary shows `normal_ci` and `release_checks` as successful, and any optional
-`npm_telegram` child is either successful or intentionally skipped.
+`npm_telegram` child is either successful or intentionally skipped. The final
+verifier summary includes slowest-job tables for each child run, so the release
+manager can see the current critical path without downloading logs.
 Child workflows are dispatched from the trusted ref that runs `Full Release
 Validation`, normally `--ref main`, even when the target `ref` points at an
 older release branch or tag. There is no separate Full Release Validation
 workflow-ref input; choose the trusted harness by choosing the workflow run ref.
+
+Use `release_profile` to select live/provider breadth:
+
+- `minimum`: fastest release-critical OpenAI/core live and Docker path
+- `stable`: minimum plus stable provider/backend coverage for release approval
+- `full`: stable plus broad advisory provider/media coverage
+
+`OpenClaw Release Checks` uses the trusted workflow ref to resolve the target
+ref once as `release-package-under-test` and reuses that artifact in both
+release-path Docker checks and Package Acceptance. This keeps all
+package-facing boxes on the same bytes and avoids repeated package builds.
 
 Use these variants depending on release stage:
 
@@ -262,7 +276,8 @@ gh workflow run full-release-validation.yml \
   --ref main \
   -f ref=release/YYYY.M.D \
   -f provider=openai \
-  -f mode=both
+  -f mode=both \
+  -f release_profile=stable
 
 # Validate an exact pushed commit.
 gh workflow run full-release-validation.yml \

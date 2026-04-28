@@ -1,5 +1,8 @@
 {
   "id": "openrouter",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["openrouter"],
   "modelIdNormalization": {

@@ -38,6 +38,30 @@ const FORBIDDEN_PATTERNS: Array<{ pattern: RegExp; hint: string }> = [
     hint: "Use openclaw/plugin-sdk/provider-test-contracts or openclaw/plugin-sdk/provider-http-test-mocks instead of repo-only media provider helper bridges.",
   },
   {
+    pattern:
+      /["'](?:\.\.\/)+(?:test\/helpers\/(?:bundled-channel-entry|envelope-timestamp|pairing-reply)\.(?:js|ts))["']/,
+    hint: "Use openclaw/plugin-sdk/channel-test-helpers instead of repo-only channel test helper bridges.",
+  },
+  {
+    pattern:
+      /["'](?:\.\.\/)+(?:test\/helpers\/(?:http-test-server|mock-incoming-request|temp-home)\.(?:js|ts))["']/,
+    hint: "Use openclaw/plugin-sdk/test-env instead of repo-only environment/network test helper bridges.",
+  },
+  {
+    pattern:
+      /["'](?:\.\.\/)+(?:test\/helpers\/(?:bundled-plugin-paths|import-fresh|node-builtin-mocks)\.(?:js|ts))["']/,
+    hint: "Use openclaw/plugin-sdk/test-fixtures instead of repo-only generic test helper bridges.",
+  },
+  {
+    pattern:
+      /["'](?:\.\.\/)+(?:test\/helpers\/(?:provider-replay-policy|stt-live-audio)\.(?:js|ts))["']/,
+    hint: "Use openclaw/plugin-sdk/provider-test-contracts instead of repo-only provider test helper bridges.",
+  },
+  {
+    pattern: /["'](?:\.\.\/)+(?:test\/helpers\/)[^"']+["']/,
+    hint: "Use a documented openclaw/plugin-sdk test subpath instead of repo-only test helper bridges.",
+  },
+  {
     pattern: /["'](?:\.\.\/)+(?:src\/channels\/plugins\/contracts\/test-helpers\/)[^"']+["']/,
     hint: "Use openclaw/plugin-sdk/channel-test-helpers or another focused SDK test subpath instead of core-only channel contract helpers.",
   },
@@ -62,6 +86,8 @@ const MOCK_RELATIVE_MODULE_PATTERN =
 
 const RELATIVE_CORE_HINT =
   "Use a focused plugin-sdk test/runtime subpath instead of core internals.";
+const ROOT_TEST_SUPPORT_LOCAL_SRC_HINT =
+  "Move this helper under the extension's src/test-support tree or expose a narrow test-api/runtime-api surface instead of reaching into private src from package-root test-support.";
 
 // Tombstones for retired repo-only plugin helper bridge files. Keep this list so
 // deleted bridges fail loudly if they are recreated instead of using SDK subpaths.
@@ -114,6 +140,25 @@ const RETIRED_EXTENSION_TEST_HELPER_BRIDGE_FILES = [
   "test/helpers/media-generation/dashscope-video-provider.ts",
   "test/helpers/media-generation/provider-capability-assertions.ts",
   "test/helpers/media-generation/provider-http-mocks.ts",
+  "test/helpers/bundled-channel-entry.ts",
+  "test/helpers/bundled-plugin-paths.ts",
+  "test/helpers/envelope-timestamp.ts",
+  "test/helpers/http-test-server.ts",
+  "test/helpers/import-fresh.ts",
+  "test/helpers/mock-incoming-request.ts",
+  "test/helpers/node-builtin-mocks.ts",
+  "test/helpers/pairing-reply.ts",
+  "test/helpers/provider-replay-policy.ts",
+  "test/helpers/stt-live-audio.ts",
+  "test/helpers/temp-home.ts",
+  "test/helpers/agents/auth-profile-runtime-contract.ts",
+  "test/helpers/agents/delivery-no-reply-runtime-contract.ts",
+  "test/helpers/agents/openclaw-owned-tool-runtime-contract.ts",
+  "test/helpers/agents/outcome-fallback-runtime-contract.ts",
+  "test/helpers/agents/prompt-overlay-runtime-contract.ts",
+  "test/helpers/agents/schema-normalization-runtime-contract.ts",
+  "test/helpers/agents/transcript-repair-runtime-contract.ts",
+  "test/helpers/sandbox-fixtures.ts",
 ];
 
 function isExtensionTestFile(filePath: string): boolean {
@@ -160,6 +205,30 @@ function resolvesToRepoSrc(filePath: string, specifier: string): boolean {
   return repoRelative === "src" || repoRelative.startsWith("src/");
 }
 
+function getExtensionRootForFile(filePath: string): string | undefined {
+  const relativePath = path.relative(process.cwd(), filePath).replaceAll(path.sep, "/");
+  const match = /^extensions\/[^/]+(?:\/|$)/u.exec(relativePath);
+  return match ? path.resolve(process.cwd(), match[0]) : undefined;
+}
+
+function isRootExtensionTestSupportFile(filePath: string): boolean {
+  const relativePath = path.relative(process.cwd(), filePath).replaceAll(path.sep, "/");
+  return /^extensions\/[^/]+\/test-support(?:\.[cm]?[jt]sx?|\/)/u.test(relativePath);
+}
+
+function resolvesToExtensionLocalSrc(filePath: string, specifier: string): boolean {
+  if (!specifier.startsWith(".")) {
+    return false;
+  }
+  const extensionRoot = getExtensionRootForFile(filePath);
+  if (!extensionRoot) {
+    return false;
+  }
+  const resolved = path.resolve(path.dirname(filePath), specifier);
+  const localSrc = path.join(extensionRoot, "src");
+  return resolved === localSrc || resolved.startsWith(`${localSrc}${path.sep}`);
+}
+
 function collectRelativeCoreImportOffenders(
   filePath: string,
   content: string,
@@ -179,6 +248,34 @@ function collectRelativeCoreImportOffenders(
     offenders.push({
       file: filePath,
       hint: RELATIVE_CORE_HINT,
+      line: lineNumberForOffset(content, match.index ?? 0),
+      specifier,
+    });
+  }
+  return offenders;
+}
+
+function collectRootTestSupportLocalSrcImportOffenders(
+  filePath: string,
+  content: string,
+): Offender[] {
+  if (!isRootExtensionTestSupportFile(filePath)) {
+    return [];
+  }
+  const offenders: Offender[] = [];
+  const matches = [
+    ...content.matchAll(STATIC_RELATIVE_MODULE_PATTERN),
+    ...content.matchAll(DYNAMIC_RELATIVE_MODULE_PATTERN),
+    ...content.matchAll(MOCK_RELATIVE_MODULE_PATTERN),
+  ];
+  for (const match of matches) {
+    const specifier = match[1];
+    if (!specifier || !resolvesToExtensionLocalSrc(filePath, specifier)) {
+      continue;
+    }
+    offenders.push({
+      file: filePath,
+      hint: ROOT_TEST_SUPPORT_LOCAL_SRC_HINT,
       line: lineNumberForOffset(content, match.index ?? 0),
       specifier,
     });
@@ -229,6 +326,7 @@ function main() {
         includeDynamic: true,
       }),
     );
+    offenders.push(...collectRootTestSupportLocalSrcImportOffenders(file, content));
   }
 
   for (const file of pluginHelperFiles) {

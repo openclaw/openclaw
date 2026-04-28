@@ -9,14 +9,14 @@ import {
   createLifecycleMonitorSetup,
   createTextUpdate,
   settleAsyncWork,
-} from "../test-support/lifecycle-test-support.js";
+} from "./test-support/lifecycle-test-support.js";
 import {
   getUpdatesMock,
   loadCachedLifecycleMonitorModule,
   resetLifecycleTestState,
   sendPhotoMock,
   setLifecycleRuntimeCore,
-} from "../test-support/monitor-mocks-test-support.js";
+} from "./test-support/monitor-mocks-test-support.js";
 
 const prepareHostedZaloMediaUrlMock = vi.fn();
 

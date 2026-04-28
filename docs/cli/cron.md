@@ -100,7 +100,7 @@ Note: cron job definitions live in `jobs.json`, while pending runtime state live
 `cron add|edit --model <ref>` selects an allowed model for the job.
 
 <Warning>
-If the model is not allowed, cron warns and falls back to the job's agent or default model selection.
+If the model is not allowed or cannot be resolved, cron fails the run with an explicit validation error instead of falling back to the job's agent or default model selection.
 </Warning>
 
 Cron `--model` is a **job primary**, not a chat-session `/model` override. That means:

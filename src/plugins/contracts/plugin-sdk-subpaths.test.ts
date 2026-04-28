@@ -53,6 +53,7 @@ const sourceCache = new Map<string, string>();
 const repoTsFilesCache = new Map<string, string[]>();
 const representativeRuntimeSmokeSubpaths = ["channel-runtime", "conversation-runtime"] as const;
 const PUBLIC_SDK_TEST_HELPER_SUBPATHS = [
+  "agent-runtime-test-contracts",
   "channel-contract-testing",
   "channel-target-testing",
   "channel-test-helpers",
@@ -63,6 +64,7 @@ const PUBLIC_SDK_TEST_HELPER_SUBPATHS = [
   "provider-test-contracts",
   "test-env",
   "test-fixtures",
+  "test-node-mocks",
 ] as const;
 const PUBLIC_SDK_TEST_HELPER_SUBPATHS_WITH_TOP_LEVEL_MOCKS = ["provider-http-test-mocks"] as const;
 
@@ -744,8 +746,26 @@ describe("plugin-sdk subpath exports", () => {
       "createPluginSetupWizardStatus",
       "runProviderCatalog",
     ]);
+    expectSourceMentions("agent-runtime-test-contracts", [
+      "AUTH_PROFILE_RUNTIME_CONTRACT",
+      "DELIVERY_NO_REPLY_RUNTIME_CONTRACT",
+      "createParameterFreeTool",
+      "QUEUED_USER_MESSAGE_MARKER",
+    ]);
+    expectSourceMentions("channel-test-helpers", [
+      "assertBundledChannelEntries",
+      "formatEnvelopeTimestamp",
+      "expectPairingReplyText",
+    ]);
+    expectSourceMentions("provider-test-contracts", [
+      "expectPassthroughReplayPolicy",
+      "runRealtimeSttLiveTest",
+    ]);
     expectSourceMentions("test-env", [
       "withEnv",
+      "withServer",
+      "withTempHome",
+      "createMockIncomingRequest",
       "withFetchPreconnect",
       "createRequestCaptureJsonFetch",
       "installPinnedHostnameTestHooks",
@@ -753,10 +773,17 @@ describe("plugin-sdk subpath exports", () => {
     ]);
     expectSourceMentions("test-fixtures", [
       "createCliRuntimeCapture",
+      "importFreshModule",
+      "bundledPluginRoot",
       "createSandboxTestContext",
       "makeAgentAssistantMessage",
       "peekSystemEvents",
       "typedCases",
+    ]);
+    expectSourceMentions("test-node-mocks", [
+      "mockNodeBuiltinModule",
+      "mockNodeChildProcessExecFile",
+      "mockNodeChildProcessSpawnSync",
     ]);
     expectSourceMentions("channel-target-testing", [
       "installCommonResolveTargetErrorCases",

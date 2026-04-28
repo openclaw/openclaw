@@ -1,8 +1,10 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  dormantReservedBundledPluginSdkEntrypoints,
+  dormantReservedBundledPluginSdkEntrypointRecords,
   pluginSdkEntrypoints,
   publicPluginOwnedSdkEntrypoints,
   reservedBundledPluginSdkEntrypoints,
@@ -30,6 +32,18 @@ const DEPRECATED_EXTENSION_SDK_SPECIFIERS = new Set([
   "openclaw/plugin-sdk/compat",
   "openclaw/plugin-sdk/testing",
   "openclaw/plugin-sdk/test-utils",
+]);
+const DEPRECATED_TEST_BARREL_SPECIFIERS = new Set([
+  "openclaw/plugin-sdk/testing",
+  "openclaw/plugin-sdk/test-utils",
+]);
+const DEPRECATED_TEST_BARREL_ALLOWED_REFERENCE_FILES = new Set([
+  "src/plugin-sdk/testing.ts",
+  "src/plugin-sdk/test-utils.ts",
+  "packages/plugin-sdk/src/testing.ts",
+  "src/plugins/compat/registry.ts",
+  "src/plugins/contracts/plugin-entry-guardrails.test.ts",
+  "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
 ]);
 
 function collectPluginSdkPackageExports(): string[] {
@@ -300,6 +314,148 @@ function collectDeprecatedExtensionSdkImports(): Array<{ file: string; specifier
   return leaks;
 }
 
+function collectCodeFiles(dir: string): string[] {
+  const files: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === "dist" || entry.name === "node_modules" || entry.name === ".git") {
+      continue;
+    }
+    const nextPath = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...collectCodeFiles(nextPath));
+      continue;
+    }
+    if (!entry.isFile() || !/\.(?:[cm]?ts|tsx|mts|cts)$/.test(entry.name)) {
+      continue;
+    }
+    files.push(nextPath);
+  }
+  return files;
+}
+
+function collectDeprecatedTestBarrelImports(): Array<{ file: string; specifier: string }> {
+  const leaks: Array<{ file: string; specifier: string }> = [];
+  const importPatterns = [
+    /\b(?:import|export)\b[\s\S]*?\bfrom\s*["'](openclaw\/plugin-sdk\/(?:testing|test-utils))["']/g,
+    /\bimport\s*\(\s*["'](openclaw\/plugin-sdk\/(?:testing|test-utils))["']\s*\)/g,
+    /\bvi\.(?:mock|doMock)\s*\(\s*["'](openclaw\/plugin-sdk\/(?:testing|test-utils))["']/g,
+  ];
+  for (const root of ["src", "test", "extensions", "packages"]) {
+    for (const file of collectCodeFiles(resolve(REPO_ROOT, root))) {
+      const repoRelativePath = relative(REPO_ROOT, file).replaceAll("\\", "/");
+      if (DEPRECATED_TEST_BARREL_ALLOWED_REFERENCE_FILES.has(repoRelativePath)) {
+        continue;
+      }
+      const source = readFileSync(file, "utf8");
+      for (const importPattern of importPatterns) {
+        for (const match of source.matchAll(importPattern)) {
+          const specifier = match[1];
+          if (!specifier || !DEPRECATED_TEST_BARREL_SPECIFIERS.has(specifier)) {
+            continue;
+          }
+          leaks.push({
+            file: repoRelativePath,
+            specifier,
+          });
+        }
+      }
+    }
+  }
+  return leaks;
+}
+
+function collectDeprecatedPackageTestingBridgeDrift(): string[] {
+  const source = readFileSync(
+    resolve(REPO_ROOT, "packages/plugin-sdk/src/testing.ts"),
+    "utf8",
+  ).trim();
+  return source === 'export * from "../../../src/plugin-sdk/testing.js";'
+    ? []
+    : ["packages/plugin-sdk/src/testing.ts"];
+}
+
+function parseTestApiNamedExports(source: string): string[] {
+  const exports = new Set<string>();
+  const declarationPattern =
+    /\bexport\s+(?:const|function|class|async\s+function|type|interface)\s+([A-Za-z_$][\w$]*)/g;
+  const exportListPattern = /\bexport\s*\{([^}]+)\}/g;
+
+  for (const match of source.matchAll(declarationPattern)) {
+    const exportName = match[1];
+    if (exportName) {
+      exports.add(exportName);
+    }
+  }
+
+  for (const match of source.matchAll(exportListPattern)) {
+    const exportList = match[1];
+    if (!exportList) {
+      continue;
+    }
+    for (const part of exportList.split(",")) {
+      const item = part.trim().replace(/^type\s+/, "");
+      const aliasMatch = /\bas\s+([A-Za-z_$][\w$]*)$/u.exec(item);
+      const nameMatch = /^([A-Za-z_$][\w$]*)/u.exec(item);
+      const exportName = aliasMatch?.[1] ?? nameMatch?.[1];
+      if (exportName && exportName !== "default") {
+        exports.add(exportName);
+      }
+    }
+  }
+
+  return [...exports].toSorted();
+}
+
+function collectWorkspaceCodeFiles(): string[] {
+  const files: string[] = [];
+  for (const root of ["src", "test", "extensions", "packages", "scripts"]) {
+    const dir = resolve(REPO_ROOT, root);
+    if (existsSync(dir)) {
+      files.push(...collectCodeFiles(dir));
+    }
+  }
+  return files;
+}
+
+function countIdentifierReferences(
+  files: readonly string[],
+  excludedFile: string,
+  name: string,
+): number {
+  let count = 0;
+  const pattern = new RegExp(`\\b${name}\\b`, "g");
+  for (const file of files) {
+    if (file === excludedFile) {
+      continue;
+    }
+    const source = readFileSync(file, "utf8");
+    count += [...source.matchAll(pattern)].length;
+  }
+  return count;
+}
+
+function collectUnusedExtensionTestApiExports(): Array<{ file: string; exportName: string }> {
+  const leaks: Array<{ file: string; exportName: string }> = [];
+  const workspaceCodeFiles = collectWorkspaceCodeFiles();
+  const testApiFiles = collectCodeFiles(resolve(REPO_ROOT, "extensions")).filter((file) =>
+    file.endsWith("/test-api.ts"),
+  );
+
+  for (const file of testApiFiles) {
+    const repoRelativePath = relative(REPO_ROOT, file).replaceAll("\\", "/");
+    const source = readFileSync(file, "utf8");
+    for (const exportName of parseTestApiNamedExports(source)) {
+      if (countIdentifierReferences(workspaceCodeFiles, file, exportName) === 0) {
+        leaks.push({ file: repoRelativePath, exportName });
+      }
+    }
+  }
+
+  return leaks.toSorted(
+    (a, b) => a.file.localeCompare(b.file) || a.exportName.localeCompare(b.exportName),
+  );
+}
+
 function collectCrossOwnerReservedSdkImports(): Array<{
   file: string;
   specifier: string;
@@ -333,6 +489,68 @@ function collectCrossOwnerReservedSdkImports(): Array<{
   return leaks;
 }
 
+function collectReservedSdkSubpathImports(): string[] {
+  const imports = new Set<string>();
+  const reserved = new Set<string>(reservedBundledPluginSdkEntrypoints);
+  const importPatterns = [
+    /\b(?:import|export)\b[\s\S]*?\bfrom\s*["']openclaw\/plugin-sdk\/([a-z0-9][a-z0-9-]*)["']/g,
+    /\bimport\s*\(\s*["']openclaw\/plugin-sdk\/([a-z0-9][a-z0-9-]*)["']\s*\)/g,
+    /\bvi\.(?:mock|doMock)\s*\(\s*["']openclaw\/plugin-sdk\/([a-z0-9][a-z0-9-]*)["']/g,
+  ];
+
+  for (const root of ["src", "test", "extensions", "packages", "scripts"]) {
+    for (const file of collectCodeFiles(resolve(REPO_ROOT, root))) {
+      const source = readFileSync(file, "utf8");
+      for (const importPattern of importPatterns) {
+        for (const match of source.matchAll(importPattern)) {
+          const subpath = match[1];
+          if (subpath && reserved.has(subpath)) {
+            imports.add(subpath);
+          }
+        }
+      }
+    }
+  }
+
+  return [...imports].toSorted();
+}
+
+function collectDormantReservedMetadataDrift(): string[] {
+  const failures: string[] = [];
+  const recordsBySubpath = new Map<
+    string,
+    (typeof dormantReservedBundledPluginSdkEntrypointRecords)[number]
+  >();
+  for (const record of dormantReservedBundledPluginSdkEntrypointRecords) {
+    if (recordsBySubpath.has(record.subpath)) {
+      failures.push(`${record.subpath}: duplicate dormant metadata record`);
+      continue;
+    }
+    recordsBySubpath.set(record.subpath, record);
+    if (record.replacement.trim().length === 0) {
+      failures.push(`${record.subpath}: missing replacement`);
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(record.removeAfter)) {
+      failures.push(`${record.subpath}: invalid removeAfter ${record.removeAfter}`);
+    }
+    if (record.owner.trim().length === 0) {
+      failures.push(`${record.subpath}: missing owner`);
+    }
+    const resolvedOwner = resolvePluginOwnerFromEntrypoint(record.subpath);
+    if (resolvedOwner && resolvedOwner !== record.owner) {
+      failures.push(`${record.subpath}: owner ${record.owner} should be ${resolvedOwner}`);
+    }
+  }
+
+  const recordSubpaths = [...recordsBySubpath.keys()].toSorted();
+  const derivedSubpaths = [...dormantReservedBundledPluginSdkEntrypoints].toSorted();
+  if (JSON.stringify(recordSubpaths) !== JSON.stringify(derivedSubpaths)) {
+    failures.push("dormant subpath list must be derived from dormant metadata records");
+  }
+
+  return failures.toSorted();
+}
+
 describe("plugin-sdk package contract guardrails", () => {
   it("keeps plugin-sdk entrypoint metadata unique", () => {
     const counts = new Map<string, number>();
@@ -354,8 +572,12 @@ describe("plugin-sdk package contract guardrails", () => {
   it("keeps bundled plugin SDK compatibility subpaths explicitly classified", () => {
     const entrypoints = new Set(pluginSdkEntrypoints);
     const reserved = new Set<string>(reservedBundledPluginSdkEntrypoints);
+    const dormantReserved = new Set<string>(dormantReservedBundledPluginSdkEntrypoints);
     const supported = new Set<string>(supportedBundledFacadeSdkEntrypoints);
     const unknownReserved = [...reserved].filter((entrypoint) => !entrypoints.has(entrypoint));
+    const unknownDormantReserved = [...dormantReserved].filter(
+      (entrypoint) => !reserved.has(entrypoint),
+    );
     const unknownSupported = [...supported].filter((entrypoint) => !entrypoints.has(entrypoint));
     const unclassifiedBundledFacades = collectBundledFacadeSdkEntrypoints().filter(
       (entrypoint) => !reserved.has(entrypoint) && !supported.has(entrypoint),
@@ -366,15 +588,21 @@ describe("plugin-sdk package contract guardrails", () => {
 
     expect({
       unknownReserved,
+      unknownDormantReserved,
       unknownSupported,
       unclassifiedBundledFacades,
       unreservedPrivateSurfaces,
     }).toEqual({
       unknownReserved: [],
+      unknownDormantReserved: [],
       unknownSupported: [],
       unclassifiedBundledFacades: [],
       unreservedPrivateSurfaces: [],
     });
+  });
+
+  it("keeps dormant reserved SDK compatibility subpaths annotated for retirement", () => {
+    expect(collectDormantReservedMetadataDrift()).toEqual([]);
   });
 
   it("keeps plugin-owned SDK subpaths explicitly classified and documented", () => {
@@ -467,8 +695,36 @@ describe("plugin-sdk package contract guardrails", () => {
     expect(collectDeprecatedExtensionSdkImports()).toEqual([]);
   });
 
+  it("keeps real tests off deprecated plugin-sdk testing barrels", () => {
+    expect(collectDeprecatedTestBarrelImports()).toEqual([]);
+  });
+
+  it("keeps the package testing barrel as a single deprecated bridge", () => {
+    expect(collectDeprecatedPackageTestingBridgeDrift()).toEqual([]);
+  });
+
+  it("keeps extension test-api exports consumed", () => {
+    expect(collectUnusedExtensionTestApiExports()).toEqual([]);
+  });
+
   it("keeps reserved SDK compatibility subpaths inside their owning bundled plugins", () => {
     expect(collectCrossOwnerReservedSdkImports()).toEqual([]);
+  });
+
+  it("keeps unused reserved SDK compatibility subpaths classified as dormant", () => {
+    const usedReserved = new Set(collectReservedSdkSubpathImports());
+    const dormantReserved = new Set<string>(dormantReservedBundledPluginSdkEntrypoints);
+    const usedButDormant = [...usedReserved].filter((entrypoint) =>
+      dormantReserved.has(entrypoint),
+    );
+    const unusedUnclassified = reservedBundledPluginSdkEntrypoints.filter(
+      (entrypoint) => !usedReserved.has(entrypoint) && !dormantReserved.has(entrypoint),
+    );
+
+    expect({ usedButDormant, unusedUnclassified }).toEqual({
+      usedButDormant: [],
+      unusedUnclassified: [],
+    });
   });
 
   it("keeps generic core poll helpers free of plugin owner names", () => {

@@ -2,7 +2,7 @@ import type {
   SandboxBrowserConfig,
   SandboxPruneConfig,
   SandboxSshConfig,
-} from "../../src/agents/sandbox/types.js";
+} from "../../agents/sandbox/types.js";
 
 export function createSandboxBrowserConfig(
   overrides: Partial<SandboxBrowserConfig> = {},

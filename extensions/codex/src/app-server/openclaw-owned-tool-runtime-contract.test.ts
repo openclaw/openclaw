@@ -1,13 +1,13 @@
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness";
 import { wrapToolWithBeforeToolCallHook } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   installCodexToolResultMiddleware,
   installOpenClawOwnedToolHooks,
   mediaToolResult,
   resetOpenClawOwnedToolHooks,
   textToolResult,
-} from "../../../../test/helpers/agents/openclaw-owned-tool-runtime-contract.js";
+} from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 
 function createContractTool(overrides: Partial<AnyAgentTool>): AnyAgentTool {

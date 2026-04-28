@@ -83,6 +83,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     surfaces: ["openclaw/plugin-sdk/testing"],
     diagnostics: ["plugin SDK compatibility warning"],
     tests: [
+      "src/plugins/compat/registry.test.ts",
       "scripts/check-no-extension-test-core-imports.ts",
       "test/extension-test-boundary.test.ts",
     ],
@@ -844,7 +845,10 @@ export const PLUGIN_COMPAT_RECORDS = [
     docsPath: "/plugins/sdk-migration",
     surfaces: ["openclaw/plugin-sdk/test-utils"],
     diagnostics: ["plugin SDK compatibility warning"],
-    tests: ["src/plugins/contracts/plugin-sdk-subpaths.test.ts"],
+    tests: [
+      "src/plugins/compat/registry.test.ts",
+      "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
+    ],
   },
 ] as const satisfies readonly PluginCompatRecord[];
 

@@ -1,6 +1,14 @@
 // Public image-generation helpers and types for provider plugins.
 
 export {
+  createOpenAiCompatibleImageGenerationProvider,
+  type OpenAiCompatibleImageProviderOptions,
+  type OpenAiCompatibleImageProviderRequestBody,
+  type OpenAiCompatibleImageProviderRequestParams,
+  type OpenAiCompatibleImageRequestMode,
+} from "../image-generation/openai-compatible-image-provider.js";
+
+export {
   generatedImageAssetFromBase64,
   generatedImageAssetFromDataUrl,
   generatedImageAssetFromOpenAiCompatibleEntry,

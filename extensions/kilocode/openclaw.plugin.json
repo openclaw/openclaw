@@ -1,5 +1,8 @@
 {
   "id": "kilocode",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["kilocode"],
   "modelPricing": {

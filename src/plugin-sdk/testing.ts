@@ -1,5 +1,9 @@
-// Broad legacy compatibility barrel for older plugin tests.
-// New tests should import focused plugin-sdk/* test subpaths.
+/**
+ * @deprecated Broad compatibility barrel for older plugin tests.
+ *
+ * New tests should import focused `openclaw/plugin-sdk/*` test subpaths such as
+ * `plugin-test-runtime`, `channel-test-helpers`, `test-env`, or `test-fixtures`.
+ */
 
 export {
   createAckReactionHandle,

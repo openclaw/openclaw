@@ -113,6 +113,9 @@ export const pluginSdkDocMetadata = {
   "channel-test-helpers": {
     category: "utilities",
   },
+  "agent-runtime-test-contracts": {
+    category: "utilities",
+  },
   "channel-target-testing": {
     category: "utilities",
   },

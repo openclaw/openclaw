@@ -7,9 +7,9 @@ import {
   runSetupWizardConfigure,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { bundledPluginRoot } from "../../../test/helpers/bundled-plugin-paths.js";
 import type { OpenClawConfig, PluginRuntime, ResolvedLineAccount } from "../api.js";
 import { linePlugin } from "./channel.js";
 import { lineGatewayAdapter } from "./gateway.js";

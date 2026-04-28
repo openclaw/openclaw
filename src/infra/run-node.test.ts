@@ -2,6 +2,11 @@ import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  bundledDistPluginFile,
+  bundledPluginFile,
+  bundledPluginRoot,
+} from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import {
   acquireRunNodeBuildLock,
@@ -9,11 +14,6 @@ import {
   resolveRuntimePostBuildRequirement,
   runNodeMain,
 } from "../../scripts/run-node.mjs";
-import {
-  bundledDistPluginFile,
-  bundledPluginFile,
-  bundledPluginRoot,
-} from "../../test/helpers/bundled-plugin-paths.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 
 const ROOT_SRC = "src/index.ts";

@@ -1,5 +1,5 @@
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../test/helpers/import-fresh.js";
 
 const loadConfigMock = vi.hoisted(() => vi.fn());
 

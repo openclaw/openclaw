@@ -1,8 +1,8 @@
+import { expect } from "vitest";
 import type {
   RealtimeTranscriptionProviderConfig,
   RealtimeTranscriptionProviderPlugin,
-} from "openclaw/plugin-sdk/realtime-transcription";
-import { expect } from "vitest";
+} from "../realtime-transcription.js";
 
 const DEFAULT_ELEVENLABS_BASE_URL = "https://api.elevenlabs.io";
 const DEFAULT_ELEVENLABS_VOICE_ID = "pMsXgVXv3BLzUgSXRplE";

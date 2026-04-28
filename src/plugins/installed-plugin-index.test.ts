@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginCandidate } from "./discovery.js";
+import { buildInstalledPluginIndexRecords } from "./installed-plugin-index-record-builder.js";
 import {
   loadInstalledPluginIndexInstallRecordsSync,
   writePersistedInstalledPluginIndexInstallRecords,
@@ -16,6 +17,7 @@ import {
   refreshInstalledPluginIndex,
 } from "./installed-plugin-index.js";
 import { recordPluginInstall } from "./installs.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -282,6 +284,42 @@ describe("installed plugin index", () => {
 
     expect(index.plugins[0]).toMatchObject({
       pluginId: "legacy-sidecar",
+      startup: {
+        sidecar: true,
+      },
+      compat: ["legacy-implicit-startup-sidecar"],
+    });
+  });
+
+  it("tolerates stale manifest records without normalized channels", () => {
+    const rootDir = makeTempDir();
+    writeRuntimeEntry(rootDir);
+    const manifestPath = path.join(rootDir, "openclaw.plugin.json");
+
+    const records = buildInstalledPluginIndexRecords({
+      candidates: [createPluginCandidate({ rootDir })],
+      registry: {
+        plugins: [
+          {
+            id: "stale-record",
+            providers: [],
+            cliBackends: [],
+            skills: [],
+            hooks: [],
+            origin: "global",
+            rootDir,
+            source: path.join(rootDir, "index.ts"),
+            manifestPath,
+          } as unknown as PluginManifestRecord,
+        ],
+        diagnostics: [],
+      },
+      diagnostics: [],
+      installRecords: {},
+    });
+
+    expect(records[0]).toMatchObject({
+      pluginId: "stale-record",
       startup: {
         sidecar: true,
       },

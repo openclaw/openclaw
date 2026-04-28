@@ -64,6 +64,9 @@ present.
   same-source collections into one QMD search invocation. Older QMD releases
   keep the compatible per-collection fallback.
 - If QMD fails entirely, OpenClaw falls back to the builtin SQLite engine.
+  Repeated chat-turn attempts back off briefly after an open failure so a
+  missing binary or broken sidecar dependency does not create a retry storm;
+  `openclaw memory status` and one-shot CLI probes still recheck QMD directly.
 
 <Info>
 The first search may be slow -- QMD auto-downloads GGUF models (~2 GB) for

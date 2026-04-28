@@ -11,9 +11,9 @@ import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { runRealtimeSttLiveTest } from "openclaw/plugin-sdk/provider-test-contracts";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { describe, expect, it } from "vitest";
-import { runRealtimeSttLiveTest } from "../../test/helpers/stt-live-audio.js";
 import plugin from "./index.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
