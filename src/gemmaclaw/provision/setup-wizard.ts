@@ -1,6 +1,7 @@
 import readline from "node:readline/promises";
 import type { HardwareInfo, SystemTools } from "./hardware.js";
 import { DEFAULT_MODELS } from "./model-registry.js";
+import { selectBestModel } from "./model-selector.js";
 import type { BackendId } from "./types.js";
 
 export type SetupProfile = {
@@ -8,6 +9,10 @@ export type SetupProfile = {
   model?: string;
   port: number;
   reason: string;
+  /** Display name for the recommended model (from catalog). */
+  modelDisplayName?: string;
+  /** Download size in bytes (from catalog). */
+  modelDownloadBytes?: number;
 };
 
 // -----------------------------------------------------------------------
@@ -15,55 +20,43 @@ export type SetupProfile = {
 // -----------------------------------------------------------------------
 
 /**
- * Select the safest backend for quick setup.
+ * Select backend and model for quick setup using the hardware-aware model catalog.
  *
- * Rules:
+ * Backend rules:
  *   1. Never default to gemma-cpp (requires HF_TOKEN + build tools).
- *   2. NVIDIA GPU detected -> Ollama (best GPU acceleration).
- *   3. x86_64 CPU, no GPU -> llama-cpp (efficient CPU inference, pre-built binary).
- *   4. arm64 or other arch -> Ollama (arm64 binary available, llama-cpp only ships x64).
+ *   2. GPU detected (Apple Silicon or NVIDIA) -> Ollama.
+ *   3. x86_64 CPU, no GPU -> llama-cpp.
+ *   4. arm64 or other -> Ollama.
  *   5. If a system binary is already installed, prefer that backend.
+ *
+ * Model selection is driven by model-catalog.json, matching available RAM to
+ * the best Gemma 4 model the hardware can run comfortably.
  */
 export function selectQuickProfile(hw: HardwareInfo, tools: SystemTools): SetupProfile {
-  // If the user already has a backend installed, prefer it (system-first).
+  const recommendation = selectBestModel(hw);
+
+  // Determine backend. Prefer system-installed runtime when only one is present.
+  let backend: BackendId = "ollama";
+  let port = 11434;
+
   if (tools.ollamaInstalled && !tools.llamacppInstalled) {
-    return {
-      backend: "ollama",
-      port: 11434,
-      reason: "Ollama is already installed on this system.",
-    };
-  }
-  if (tools.llamacppInstalled && !tools.ollamaInstalled && hw.cpu.arch === "x64") {
-    return {
-      backend: "llama-cpp",
-      port: 8080,
-      reason: "llama-server is already installed on this system.",
-    };
+    backend = "ollama";
+    port = 11434;
+  } else if (tools.llamacppInstalled && !tools.ollamaInstalled && hw.cpu.arch === "x64") {
+    backend = "llama-cpp";
+    port = 8080;
+  } else if (hw.cpu.arch === "x64" && !hw.gpu.detected) {
+    backend = "llama-cpp";
+    port = 8080;
   }
 
-  // GPU detected -> Ollama.
-  if (hw.gpu.detected && hw.gpu.nvidia) {
-    return {
-      backend: "ollama",
-      port: 11434,
-      reason: "NVIDIA GPU detected. Ollama provides the best GPU acceleration.",
-    };
-  }
-
-  // x86_64 without GPU -> llama-cpp (pre-built binary, efficient CPU inference).
-  if (hw.cpu.arch === "x64") {
-    return {
-      backend: "llama-cpp",
-      port: 8080,
-      reason: "CPU-only x86_64 system. llama.cpp offers efficient CPU inference.",
-    };
-  }
-
-  // arm64 or other -> Ollama (has arm64 binaries; llama-cpp only ships x64).
   return {
-    backend: "ollama",
-    port: 11434,
-    reason: `${hw.cpu.arch} system. Ollama provides the broadest hardware support.`,
+    backend,
+    model: recommendation.model.ollamaTag,
+    port,
+    reason: recommendation.reason,
+    modelDisplayName: recommendation.model.displayName,
+    modelDownloadBytes: recommendation.model.downloadSizeBytes,
   };
 }
 

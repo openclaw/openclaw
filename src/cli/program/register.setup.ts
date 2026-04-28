@@ -25,6 +25,10 @@ export function registerSetupCommand(program: Command) {
       "Run interactive advanced setup with manual backend/model/port selection",
       false,
     )
+    .option(
+      "--no-container",
+      "Run the gateway directly on the host instead of inside a Docker container",
+    )
     .option("--workspace-only", "Only initialize workspace config (skip Gemma provisioning)", false)
     .option("--wizard", "Run interactive onboarding (workspace config)", false)
     .option("--non-interactive", "Run onboarding without prompts", false)
@@ -62,7 +66,10 @@ export function registerSetupCommand(program: Command) {
 
         // Default: Gemma setup wizard.
         const { setupGemmaCommand } = await import("../../commands/setup-gemma.js");
-        await setupGemmaCommand({ advanced: Boolean(opts.advanced) }, defaultRuntime);
+        await setupGemmaCommand(
+          { advanced: Boolean(opts.advanced), noContainer: opts.container === false },
+          defaultRuntime,
+        );
       });
     });
 }

@@ -102,7 +102,7 @@ export async function verifyCompletion(
       body: JSON.stringify({
         model: modelId,
         messages: [{ role: "user", content: "Say hello in exactly one word." }],
-        max_tokens: 32,
+        max_tokens: 256,
         temperature: 0,
       }),
       signal: AbortSignal.timeout(120_000),
@@ -114,14 +114,20 @@ export async function verifyCompletion(
     }
 
     const data = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
+      choices?: Array<{ message?: { content?: string; reasoning?: string } }>;
     };
 
-    const content = data.choices?.[0]?.message?.content ?? "";
+    // Gemma 4 models use a reasoning/thinking phase. The actual reply may be
+    // in `content` or the model may have only produced reasoning tokens within
+    // the token budget. Accept either field as proof the model is working.
+    const msg = data.choices?.[0]?.message;
+    const content = (msg?.content ?? "").trim();
+    const reasoning = (msg?.reasoning ?? "").trim();
+    const hasOutput = content.length > 0 || reasoning.length > 0;
     return {
-      ok: content.trim().length > 0,
-      content: content.trim(),
-      error: content.trim().length === 0 ? "Empty response" : undefined,
+      ok: hasOutput,
+      content: content || reasoning.slice(0, 80),
+      error: hasOutput ? undefined : "Empty response",
     };
   } catch (err) {
     return {

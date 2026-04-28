@@ -636,7 +636,7 @@ export const en: TranslationMap = {
     },
   },
   login: {
-    subtitle: "Gateway Dashboard",
+    subtitle: "Gemmaclaw Dashboard",
     passwordPlaceholder: "optional",
     showToken: "Show token",
     hideToken: "Hide token",

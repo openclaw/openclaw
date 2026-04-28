@@ -1,10 +1,17 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { downloadFile, extractTarGz, fileExists, waitForHealthy, whichBinary } from "./download.js";
+import {
+  downloadFile,
+  extractTarGz,
+  extractZip,
+  fileExists,
+  waitForHealthy,
+  whichBinary,
+} from "./download.js";
 import { DEFAULT_MODELS, resolveOllamaBinaryUrl } from "./model-registry.js";
 import type { ProvisionProgress, RuntimeHandle, RuntimeManager } from "./types.js";
-import { resolveModelsDir, resolveRuntimeDir } from "./types.js";
+import { resolveRuntimeDir } from "./types.js";
 
 const BACKEND_ID = "ollama" as const;
 
@@ -47,50 +54,67 @@ export function createOllamaManager(): RuntimeManager {
         return;
       }
 
-      const url = resolveOllamaBinaryUrl();
+      const artifact = resolveOllamaBinaryUrl();
       const runtimeDir = resolveRuntimeDir(BACKEND_ID);
-      const archiveDest = path.join(runtimeDir, "ollama.tgz");
-      progress?.(`Downloading Ollama from ${url}...`);
-
-      const result = await downloadFile(url, archiveDest, {
-        onProgress: (bytes, total) => {
-          if (total) {
-            const pct = Math.round((bytes / total) * 100);
-            progress?.(`Downloading Ollama... ${pct}%`);
-          }
-        },
-      });
-
-      progress?.("Extracting Ollama...");
-      await extractTarGz(archiveDest, runtimeDir);
-      await fs.unlink(archiveDest).catch(() => {});
-
-      // The archive extracts to bin/ollama. Move it to the expected location.
-      const extractedBin = path.join(runtimeDir, "bin", "ollama");
       const dest = binaryPath();
-      try {
+      await fs.mkdir(runtimeDir, { recursive: true });
+      progress?.(`Downloading Ollama from ${artifact.url}...`);
+
+      const onProgress = (bytes: number, total: number | null) => {
+        if (total) {
+          const pct = Math.round((bytes / total) * 100);
+          progress?.(`Downloading Ollama... ${pct}%`);
+        }
+      };
+
+      if (artifact.format === "zip") {
+        // macOS: Ollama-darwin.zip contains an Electron app bundle.
+        // The CLI binary lives at Ollama.app/Contents/Resources/ollama.
+        const archiveDest = path.join(runtimeDir, "ollama.zip");
+        const result = await downloadFile(artifact.url, archiveDest, { onProgress });
+
+        progress?.("Extracting Ollama...");
+        await extractZip(archiveDest, runtimeDir);
+        await fs.unlink(archiveDest).catch(() => {});
+
+        const extractedBin = path.join(runtimeDir, "Ollama.app", "Contents", "Resources", "ollama");
         await fs.access(extractedBin);
         await fs.rename(extractedBin, dest);
-        await fs.rm(path.join(runtimeDir, "bin"), { recursive: true, force: true });
-      } catch {
-        // Some versions extract directly as "ollama" in the root.
-      }
+        await fs.rm(path.join(runtimeDir, "Ollama.app"), { recursive: true, force: true });
 
-      await fs.chmod(dest, "755");
-      progress?.(`Ollama installed (sha256: ${result.sha256.slice(0, 12)}...).`);
+        await fs.chmod(dest, "755");
+        progress?.(`Ollama installed (sha256: ${result.sha256.slice(0, 12)}...).`);
+      } else {
+        // Linux: .tgz archive that extracts to bin/ollama.
+        const archiveDest = path.join(runtimeDir, "ollama.tgz");
+        const result = await downloadFile(artifact.url, archiveDest, { onProgress });
+
+        progress?.("Extracting Ollama...");
+        await extractTarGz(archiveDest, runtimeDir);
+        await fs.unlink(archiveDest).catch(() => {});
+
+        const extractedBin = path.join(runtimeDir, "bin", "ollama");
+        try {
+          await fs.access(extractedBin);
+          await fs.rename(extractedBin, dest);
+          await fs.rm(path.join(runtimeDir, "bin"), { recursive: true, force: true });
+        } catch {
+          // Some versions extract directly as "ollama" in the root.
+        }
+
+        await fs.chmod(dest, "755");
+        progress?.(`Ollama installed (sha256: ${result.sha256.slice(0, 12)}...).`);
+      }
     },
 
     async start(port?: number): Promise<RuntimeHandle> {
       const actualPort = port ?? this.defaultPort;
       const bin = await resolveBinary();
-      const modelsDir = resolveModelsDir(BACKEND_ID);
-      await fs.mkdir(modelsDir, { recursive: true });
 
       const child: ChildProcess = spawn(bin, ["serve"], {
         env: {
           ...process.env,
           OLLAMA_HOST: `127.0.0.1:${actualPort}`,
-          OLLAMA_MODELS: modelsDir,
         },
         stdio: "ignore",
         detached: true,

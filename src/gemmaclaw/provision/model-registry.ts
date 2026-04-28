@@ -25,9 +25,8 @@ export type ModelArtifact = {
 // -----------------------------------------------------------------------
 
 export const OLLAMA_RUNTIME: RuntimeArtifact = {
-  version: "0.6.2",
-  urlTemplate:
-    "https://github.com/ollama/ollama/releases/download/v{version}/ollama-linux-{arch}.tgz",
+  version: "0.21.2",
+  urlTemplate: "https://github.com/ollama/ollama/releases/download/v{version}/ollama-{os}-{arch}",
 };
 
 export const LLAMACPP_RUNTIME: RuntimeArtifact = {
@@ -68,11 +67,29 @@ export const DEFAULT_MODELS: Record<BackendId, ModelArtifact> = {
   },
 };
 
-export function resolveOllamaBinaryUrl(): string {
+export type OllamaArtifactInfo = {
+  url: string;
+  /** "tgz" for Linux archives, "zip" for the macOS app bundle. */
+  format: "tgz" | "zip";
+};
+
+export function resolveOllamaBinaryUrl(): OllamaArtifactInfo {
+  const isDarwin = process.platform === "darwin";
+
+  if (isDarwin) {
+    // macOS: universal app bundle distributed as Ollama-darwin.zip.
+    // The CLI binary lives at Ollama.app/Contents/Resources/ollama.
+    const url = `https://github.com/ollama/ollama/releases/download/v${OLLAMA_RUNTIME.version}/Ollama-darwin.zip`;
+    return { url, format: "zip" };
+  }
+
   const arch = process.arch === "x64" ? "amd64" : "arm64";
-  return OLLAMA_RUNTIME.urlTemplate
-    .replace("{version}", OLLAMA_RUNTIME.version)
-    .replace("{arch}", arch);
+  const url =
+    OLLAMA_RUNTIME.urlTemplate
+      .replace("{version}", OLLAMA_RUNTIME.version)
+      .replace("{os}", "linux")
+      .replace("{arch}", arch) + ".tgz";
+  return { url, format: "tgz" };
 }
 
 export function resolveLlamaCppUrl(): string {

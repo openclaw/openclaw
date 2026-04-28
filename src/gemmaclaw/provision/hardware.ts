@@ -15,6 +15,7 @@ export type HardwareInfo = {
   gpu: {
     detected: boolean;
     nvidia: boolean;
+    apple: boolean;
     name?: string;
     vramBytes?: number;
   };
@@ -51,24 +52,48 @@ export function detectHardware(): HardwareInfo {
 }
 
 function detectGpu(): HardwareInfo["gpu"] {
-  // Check for NVIDIA GPU via /dev/nvidia0 or nvidia-smi.
+  // NVIDIA GPU via /dev/nvidia0 or nvidia-smi (check first since it is most specific).
   const devExists = safeFileExists("/dev/nvidia0");
-
   if (devExists || hasNvidiaSmi()) {
     const smiInfo = queryNvidiaSmi();
     if (smiInfo) {
       return {
         detected: true,
         nvidia: true,
+        apple: false,
         name: smiInfo.name,
         vramBytes: smiInfo.vramMb ? smiInfo.vramMb * 1024 * 1024 : undefined,
       };
     }
-    // Device exists but nvidia-smi gave no details.
-    return { detected: true, nvidia: true };
+    return { detected: true, nvidia: true, apple: false };
   }
 
-  return { detected: false, nvidia: false };
+  // Apple Silicon: Metal GPU with unified memory (all system RAM is GPU-accessible).
+  if (process.platform === "darwin" && process.arch === "arm64") {
+    const chipName = queryAppleSiliconChip();
+    return {
+      detected: true,
+      nvidia: false,
+      apple: true,
+      name: chipName ?? "Apple Silicon (Metal)",
+      vramBytes: os.totalmem(),
+    };
+  }
+
+  return { detected: false, nvidia: false, apple: false };
+}
+
+function queryAppleSiliconChip(): string | null {
+  try {
+    const output = execSync("sysctl -n machdep.cpu.brand_string", {
+      timeout: 3_000,
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
+    return output || null;
+  } catch {
+    return null;
+  }
 }
 
 function safeFileExists(filePath: string): boolean {
@@ -147,9 +172,20 @@ export function formatHardwareInfo(hw: HardwareInfo): string[] {
     `  RAM: ${ramGb} GB total, ${freeRamGb} GB available`,
   ];
 
-  if (hw.gpu.detected && hw.gpu.nvidia) {
-    const vram = hw.gpu.vramBytes ? ` (${(hw.gpu.vramBytes / 1024 ** 3).toFixed(0)} GB VRAM)` : "";
-    lines.push(`  GPU: ${hw.gpu.name ?? "NVIDIA GPU"}${vram}`);
+  if (hw.gpu.detected) {
+    if (hw.gpu.apple) {
+      const unified = hw.gpu.vramBytes
+        ? ` (${(hw.gpu.vramBytes / 1024 ** 3).toFixed(0)} GB unified memory)`
+        : "";
+      lines.push(`  GPU: ${hw.gpu.name ?? "Apple Silicon (Metal)"}${unified}`);
+    } else if (hw.gpu.nvidia) {
+      const vram = hw.gpu.vramBytes
+        ? ` (${(hw.gpu.vramBytes / 1024 ** 3).toFixed(0)} GB VRAM)`
+        : "";
+      lines.push(`  GPU: ${hw.gpu.name ?? "NVIDIA GPU"}${vram}`);
+    } else {
+      lines.push(`  GPU: ${hw.gpu.name ?? "detected"}`);
+    }
   } else {
     lines.push("  GPU: none detected");
   }

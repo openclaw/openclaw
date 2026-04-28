@@ -1,22 +1,32 @@
 <svg viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <linearGradient id="lobster-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#ff4d4d"/>
-      <stop offset="100%" stop-color="#991b1b"/>
+    <linearGradient id="gem-top" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#60a5fa"/>
+      <stop offset="100%" stop-color="#818cf8"/>
+    </linearGradient>
+    <linearGradient id="gem-left" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#4338ca"/>
+    </linearGradient>
+    <linearGradient id="gem-right" x1="100%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#818cf8"/>
+      <stop offset="100%" stop-color="#4f46e5"/>
+    </linearGradient>
+    <linearGradient id="gem-bottom" x1="50%" y1="0%" x2="50%" y2="100%">
+      <stop offset="0%" stop-color="#4338ca"/>
+      <stop offset="100%" stop-color="#312e81"/>
     </linearGradient>
   </defs>
-  <!-- Body -->
-  <path d="M60 10 C30 10 15 35 15 55 C15 75 30 95 45 100 L45 110 L55 110 L55 100 C55 100 60 102 65 100 L65 110 L75 110 L75 100 C90 95 105 75 105 55 C105 35 90 10 60 10Z" fill="url(#lobster-gradient)"/>
-  <!-- Left Claw -->
-  <path d="M20 45 C5 40 0 50 5 60 C10 70 20 65 25 55 C28 48 25 45 20 45Z" fill="url(#lobster-gradient)"/>
-  <!-- Right Claw -->
-  <path d="M100 45 C115 40 120 50 115 60 C110 70 100 65 95 55 C92 48 95 45 100 45Z" fill="url(#lobster-gradient)"/>
-  <!-- Antenna -->
-  <path d="M45 15 Q35 5 30 8" stroke="#ff4d4d" stroke-width="3" stroke-linecap="round"/>
-  <path d="M75 15 Q85 5 90 8" stroke="#ff4d4d" stroke-width="3" stroke-linecap="round"/>
-  <!-- Eyes -->
-  <circle cx="45" cy="35" r="6" fill="#050810"/>
-  <circle cx="75" cy="35" r="6" fill="#050810"/>
-  <circle cx="46" cy="34" r="2.5" fill="#00e5cc"/>
-  <circle cx="76" cy="34" r="2.5" fill="#00e5cc"/>
+  <!-- Top facet -->
+  <polygon points="60,8 18,42 60,52 102,42" fill="url(#gem-top)"/>
+  <!-- Left facet -->
+  <polygon points="18,42 60,52 60,112 30,68" fill="url(#gem-left)"/>
+  <!-- Right facet -->
+  <polygon points="102,42 60,52 60,112 90,68" fill="url(#gem-right)"/>
+  <!-- Bottom-left facet -->
+  <polygon points="18,42 30,68 60,112" fill="url(#gem-bottom)" opacity="0.8"/>
+  <!-- Bottom-right facet -->
+  <polygon points="102,42 90,68 60,112" fill="url(#gem-bottom)" opacity="0.6"/>
+  <!-- Shine highlight -->
+  <polygon points="60,8 38,42 60,52" fill="white" opacity="0.18"/>
 </svg>

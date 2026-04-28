@@ -83,10 +83,15 @@ describe("detectHardware", () => {
     expect(hw.ram.availableBytes).toBe(8 * 1024 ** 3);
   });
 
-  it("reports no GPU when /dev/nvidia0 absent and nvidia-smi fails", () => {
+  it("reports no NVIDIA GPU when /dev/nvidia0 absent and nvidia-smi fails", () => {
     const hw = detectHardware();
-    expect(hw.gpu.detected).toBe(false);
     expect(hw.gpu.nvidia).toBe(false);
+    if (process.platform === "darwin" && process.arch === "arm64") {
+      expect(hw.gpu.detected).toBe(true);
+      expect(hw.gpu.apple).toBe(true);
+    } else {
+      expect(hw.gpu.detected).toBe(false);
+    }
   });
 
   it("detects GPU via /dev/nvidia0 without nvidia-smi details", () => {
@@ -181,7 +186,7 @@ describe("formatHardwareInfo", () => {
     const hw: HardwareInfo = {
       cpu: { arch: "x64", cores: 8, model: "AMD Ryzen 7" },
       ram: { totalBytes: 16 * 1024 ** 3, availableBytes: 10 * 1024 ** 3 },
-      gpu: { detected: false, nvidia: false },
+      gpu: { detected: false, nvidia: false, apple: false },
     };
     const lines = formatHardwareInfo(hw);
     expect(lines).toHaveLength(3);
@@ -195,7 +200,13 @@ describe("formatHardwareInfo", () => {
     const hw: HardwareInfo = {
       cpu: { arch: "x64", cores: 12, model: "Intel i9" },
       ram: { totalBytes: 32 * 1024 ** 3, availableBytes: 20 * 1024 ** 3 },
-      gpu: { detected: true, nvidia: true, name: "RTX 4090", vramBytes: 24 * 1024 ** 3 },
+      gpu: {
+        detected: true,
+        nvidia: true,
+        apple: false,
+        name: "RTX 4090",
+        vramBytes: 24 * 1024 ** 3,
+      },
     };
     const lines = formatHardwareInfo(hw);
     expect(lines[2]).toContain("RTX 4090");

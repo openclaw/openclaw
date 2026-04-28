@@ -17,13 +17,15 @@ No manual model shopping. No "which quant do I pick?" guesswork. It just works.
 
 ## How it works
 
-1. **Hardware detection.** Gemmaclaw probes your system: GPU vendor and VRAM, CPU architecture, total and available RAM.
-2. **Tier classification.** Based on what it finds, your machine is slotted into a hardware tier (e.g., "16 GB VRAM, mid-range GPU" or "CPU-only, 8 GB RAM").
-3. **Profile selection.** Each tier maps to a tested configuration profile: which backend to use (Ollama, llama.cpp, or gemma.cpp), which Gemma model size, and which quantization level.
-4. **Provisioning.** Gemmaclaw pulls the model and configures the backend automatically.
-5. **Verification.** A quick smoke test confirms the setup works: inference runs, latency is acceptable, and tool-use prompts parse correctly.
+1. **Hardware detection.** Gemmaclaw probes your system: GPU vendor and VRAM, CPU architecture, total and available RAM. Apple Silicon Metal GPUs are detected with unified memory.
+2. **Tier classification.** Based on what it finds, your machine is slotted into a hardware tier (e.g., "48 GB Apple Silicon" or "CPU-only, 8 GB RAM").
+3. **Profile selection.** Each tier maps to a tested Gemma 4 model. Known issues (e.g., Flash Attention hangs on the 31B Dense model) are tracked in the model catalog with citations, and the selector automatically falls back to a stable alternative.
+4. **Provisioning.** Gemmaclaw downloads Ollama, pulls the model, and runs a smoke test.
+5. **Configuration.** Writes gateway config with the local Ollama provider, auth disabled for localhost, and full tool access enabled.
+6. **Sandboxed tool execution.** When Docker is available, the agent's tool execution (shell commands, file operations, browser automation) runs inside isolated Docker containers via the OpenClaw sandbox system. The gateway itself runs on the host for simplicity. Pass `--no-container` to disable sandboxing and run tools directly on the host.
+7. **Verification.** A smoke test confirms the model responds before the gateway starts.
 
-If something does not fit (too little RAM, unsupported GPU), Gemmaclaw tells you what it tried and why it fell back, rather than silently degrading.
+If something does not fit (too little RAM, model has known issues on your platform), Gemmaclaw tells you what it tried and why it fell back, rather than silently degrading.
 
 ## Non-GPU support
 
@@ -50,9 +52,10 @@ Phase 2 tooling is live: `gemmaclaw setup` auto-detects hardware and provisions 
 ### Prerequisites
 
 - Node.js 22+
+- Docker (recommended, for containerized gateway)
 - For gemma.cpp backend (advanced): cmake, g++ (or clang++), git, and a [HuggingFace token](https://huggingface.co/settings/tokens) (`HF_TOKEN`)
 
-No pre-installed Ollama, llama.cpp, or gemma.cpp required. Gemmaclaw downloads and manages everything under `~/.gemmaclaw/`.
+No pre-installed Ollama, llama.cpp, or gemma.cpp required. Gemmaclaw downloads and manages everything.
 
 ### Install
 
@@ -66,14 +69,25 @@ pnpm build
 npm install -g .
 ```
 
-Then run the setup wizard and start chatting:
+Then run setup:
 
 ```bash
 gemmaclaw setup
-gemmaclaw chat
 ```
 
-`gemmaclaw setup` detects your hardware, picks the best backend, downloads the model, and runs a smoke test. `gemmaclaw chat` starts the gateway and opens a web chat UI in your browser where you can talk to your Gemma assistant directly.
+This detects your hardware, picks the best Gemma 4 model, downloads it via Ollama, configures the gateway, and starts it. When Docker is available, agent tool execution is automatically sandboxed in Docker containers. Open the Chat UI URL it prints at the end.
+
+To disable Docker sandboxing (tools run directly on the host):
+
+```bash
+gemmaclaw setup --no-container
+```
+
+To restart the gateway later:
+
+```bash
+gemmaclaw chat
+```
 
 ### Developer install
 
@@ -92,23 +106,32 @@ Example output:
 
 ```
 Detecting hardware...
-  CPU: x64, 12 cores (AMD Ryzen 9 5900X)
-  RAM: 31.3 GB total, 22.1 GB available
-  GPU: NVIDIA RTX 3090 (24 GB VRAM)
+  CPU: arm64, 16 cores (Apple M4 Max)
+  RAM: 48.0 GB total, 20.6 GB available
+  GPU: Apple M4 Max (48 GB unified memory)
 
-Recommended: Gemma 3 1B (Ollama) (815 MB download)
-  NVIDIA GPU detected. Ollama provides the best GPU acceleration.
+Recommended: Gemma 4 26B MoE (4B active) (18.0 GB download)
+  Apple Silicon with 48 GB unified memory. Gemma 4 31B Dense skipped due to
+  3 open issue(s) on darwin-arm64. 36+ GB RAM, M-series Max/Ultra.
 
 Provisioning ollama on port 11434...
 [Ollama] Runtime started on port 11434 (PID 12345).
 [Ollama] Model ready.
 
-Smoke test passed. Response: "Hello!"
+Smoke test passed. Response: "Hello."
+
+Writing gateway configuration...
+  Provider: ollama (http://127.0.0.1:11434/v1)
+  Model: ollama/gemma4:26b
 
 Setup complete! Your Gemma assistant is ready.
-  API: http://127.0.0.1:11434/v1/chat/completions
-  Model: gemma3:1b
-  PID: 12345
+
+  Sandbox: Docker (tools run in isolated containers)
+
+Starting gateway on port 18789...
+Gateway is ready.
+
+Chat UI: http://127.0.0.1:18789/
 ```
 
 ### Advanced setup
@@ -219,19 +242,20 @@ Results are written to `results/<model>__<timestamp>/` with three formats:
 
 ## Commands
 
-| Command                      | Description                                                |
-| ---------------------------- | ---------------------------------------------------------- |
-| `gemmaclaw setup`            | Auto-detect hardware and provision the best Gemma backend  |
-| `gemmaclaw setup --advanced` | Interactive wizard for manual backend/model/port selection |
-| `gemmaclaw chat`             | Open a browser-based chat UI for your Gemma assistant      |
-| `gemmaclaw chat --no-open`   | Start gateway without auto-opening the browser             |
-| `gemmaclaw chat --port 3001` | Start gateway on a specific port                           |
-| `gemmaclaw tui`              | Open terminal chat (TUI) with your Gemma assistant         |
-| `gemmaclaw benchmark`        | Run the benchmark suite (full LLM judge mode)              |
-| `gemmaclaw benchmark --mock` | Run benchmark with deterministic scoring (fast CI mode)    |
-| `gemmaclaw provision`        | Low-level: manually provision a specific backend           |
-| `gemmaclaw doctor`           | Health checks and quick fixes                              |
-| `gemmaclaw config`           | View and edit configuration                                |
+| Command                          | Description                                                 |
+| -------------------------------- | ----------------------------------------------------------- |
+| `gemmaclaw setup`                | Auto-detect hardware, provision, configure, and start       |
+| `gemmaclaw setup --no-container` | Same as above but disable Docker sandbox for tool execution |
+| `gemmaclaw setup --advanced`     | Interactive wizard for manual backend/model/port selection  |
+| `gemmaclaw chat`                 | Open a browser-based chat UI for your Gemma assistant       |
+| `gemmaclaw chat --no-open`       | Start gateway without auto-opening the browser              |
+| `gemmaclaw chat --port 3001`     | Start gateway on a specific port                            |
+| `gemmaclaw tui`                  | Open terminal chat (TUI) with your Gemma assistant          |
+| `gemmaclaw benchmark`            | Run the benchmark suite (full LLM judge mode)               |
+| `gemmaclaw benchmark --mock`     | Run benchmark with deterministic scoring (fast CI mode)     |
+| `gemmaclaw provision`            | Low-level: manually provision a specific backend            |
+| `gemmaclaw doctor`               | Health checks and quick fixes                               |
+| `gemmaclaw config`               | View and edit configuration                                 |
 
 ### npm scripts (development)
 
