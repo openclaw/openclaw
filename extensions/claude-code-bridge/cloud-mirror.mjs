@@ -2,9 +2,9 @@
 // Cloud mirror daemon: pushes local OpenClaw wiki deltas to benchagi.com.
 //
 // Direction is one-way (local vault -> cloud). The local filesystem at
-// ~/.openclaw/wiki/main/ stays authoritative. This daemon watches for
-// changes, computes per-file content hashes, and POSTs deltas to the
-// /api/v1/wiki/ingest endpoint in the Bench web app.
+// ~/.openclaw/wiki/{instanceId || 'main'}/ stays authoritative. This daemon
+// watches for changes, computes per-file content hashes, and POSTs deltas
+// to the /api/v1/wiki/ingest endpoint in the Bench web app.
 //
 // The cloud mirror is a READ-ONLY copy from the daemon's perspective —
 // all approval, rarity-tagging, and harness-manifest publication happen
@@ -16,6 +16,12 @@
 //   BENCH_WIKI_INGEST_KEY    - Required API key (super-admin scope) for X-API-Key auth
 //   BENCH_WIKI_MIRROR_DEBOUNCE_MS  - Debounce window (default: 2000)
 //   BENCH_WIKI_MIRROR_BATCH_SIZE   - Entries per POST (default: 50)
+//   BENCH_INSTANCE_ID        - Override the instanceId from openclaw.json (advanced)
+//
+// Config: ~/.openclaw/openclaw.json — top-level `instanceId` selects the
+//   per-instance vault directory (~/.openclaw/wiki/{instanceId}/) and is
+//   stamped onto each ingest payload as `sourceInstanceId`. When unset, the
+//   daemon falls back to single-user Tier A (~/.openclaw/wiki/main/).
 //
 // State file: ~/.openclaw/state/wiki-mirror.json — tracks per-slug localHash
 //   so we only POST when content actually changed.
@@ -25,14 +31,50 @@
 
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
+import { readFileSync } from "node:fs";
 import { watch } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 const HOME = os.homedir();
-const VAULT_DIR = path.join(HOME, ".openclaw", "wiki", "main");
+const OPENCLAW_CONFIG_PATH = path.join(HOME, ".openclaw", "openclaw.json");
+
+const INSTANCE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+
+/**
+ * Read `instanceId` from ~/.openclaw/openclaw.json. Returns null when the
+ * file is missing, unparseable, or the field is absent/invalid — callers
+ * fall back to the single-user Tier A default.
+ */
+function readInstanceIdFromConfig() {
+  const override = process.env.BENCH_INSTANCE_ID;
+  if (typeof override === "string" && INSTANCE_ID_PATTERN.test(override)) {
+    return override;
+  }
+  try {
+    const raw = readFileSync(OPENCLAW_CONFIG_PATH, "utf8");
+    const parsed = JSON.parse(raw);
+    const value = parsed?.instanceId;
+    if (typeof value === "string" && INSTANCE_ID_PATTERN.test(value)) {
+      return value;
+    }
+  } catch {
+    // Missing or unparseable config — Tier A fallback.
+  }
+  return null;
+}
+
+const INSTANCE_ID = readInstanceIdFromConfig();
+const VAULT_NAME = INSTANCE_ID ?? "main";
+const VAULT_DIR = path.join(HOME, ".openclaw", "wiki", VAULT_NAME);
 const STATE_DIR = path.join(HOME, ".openclaw", "state");
-const STATE_PATH = path.join(STATE_DIR, "wiki-mirror.json");
+// State is keyed per-vault so switching instanceId doesn't re-POST the whole
+// previous vault; an unset-then-set transition looks like a fresh sync, which
+// is the correct behavior for the cloud-side `sourceInstanceId` tagging.
+const STATE_PATH = path.join(
+  STATE_DIR,
+  INSTANCE_ID ? `wiki-mirror.${INSTANCE_ID}.json` : "wiki-mirror.json",
+);
 const LOG_DIR = path.join(HOME, ".openclaw", "logs");
 const LOG_PATH = path.join(LOG_DIR, "wiki-mirror.log");
 
@@ -167,6 +209,7 @@ async function scanEntries(state) {
       localHash,
       localMtime: stat.mtime.toISOString(),
       sourcePath: path.relative(path.dirname(VAULT_DIR), absPath),
+      ...(INSTANCE_ID ? { sourceInstanceId: INSTANCE_ID } : {}),
     });
   }
 
@@ -289,6 +332,7 @@ function startWatcher() {
 (async () => {
   await log("info", "cloud-mirror starting", {
     vault: VAULT_DIR,
+    instanceId: INSTANCE_ID ?? null,
     ingestUrl: INGEST_URL,
     hasKey: Boolean(INGEST_KEY),
   });
