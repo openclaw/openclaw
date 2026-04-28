@@ -65,6 +65,8 @@ import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import {
   enqueueFollowupRun,
   refreshQueuedFollowupSession,
+  scheduleDiscordStuckSessionCircuitBreaker,
+  scheduleFollowupDrain,
   type FollowupRun,
   type QueueSettings,
 } from "./queue.js";
@@ -825,6 +827,9 @@ export async function runReplyAgent(params: {
   shouldFollowup: boolean;
   isActive: boolean;
   isRunActive?: () => boolean;
+  isRunStreaming?: () => boolean;
+  resolveActiveRunSessionId?: () => string | undefined;
+  abortActiveRun?: (activeSessionId: string) => boolean;
   isStreaming: boolean;
   opts?: GetReplyOptions;
   typing: TypingController;
@@ -862,6 +867,9 @@ export async function runReplyAgent(params: {
     shouldFollowup,
     isActive,
     isRunActive,
+    isRunStreaming,
+    resolveActiveRunSessionId,
+    abortActiveRun,
     isStreaming,
     opts,
     typing,
@@ -974,6 +982,17 @@ export async function runReplyAgent(params: {
     // the followup queue idle if the original run already finished.
     if (!isRunActive?.()) {
       finalizeWithFollowup(undefined, queueKey, queuedRunFollowupTurn);
+    } else if (isRunStreaming?.() !== true && resolveActiveRunSessionId && abortActiveRun) {
+      scheduleDiscordStuckSessionCircuitBreaker({
+        queueKey,
+        followupRun,
+        runFollowup: queuedRunFollowupTurn,
+        resolveActiveRunSessionId,
+        isRunActive,
+        isRunStreaming: () => isRunStreaming?.() === true,
+        abortActiveRun,
+        scheduleDrain: scheduleFollowupDrain,
+      });
     }
     await touchActiveSessionEntry();
     typing.cleanup();
