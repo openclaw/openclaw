@@ -73,6 +73,7 @@ Docs: https://docs.openclaw.ai
 - Auto-reply/session: carry the tail of user/assistant turns into the freshly-rotated transcript on silent in-reply session resets (compaction failure, role-ordering conflict) so direct-chat continuity survives the rebind. Fixes #70853. (#70898) Thanks @neeravmakwana.
 - Config: skip malformed non-string `env.vars` entries before env-reference checks, so config loading no longer crashes on JSON values like numbers or booleans. (#42402) Thanks @MiltonHeYan.
 - Docker Compose: default missing config and workspace bind mounts to `${HOME:-/tmp}/.openclaw` so manual compose runs do not create invalid empty-source volume specs. (#64485) Thanks @jlapenna.
+- Agents/context engines: preserve the child agent's configured `agentDir` when subagent cleanup re-resolves a context engine, so `onSubagentEnded` hooks keep operating on the correct per-agent state. (#67243) Thanks @jarimustonen.
 - Channels/WhatsApp: restrict pairing verification replies to real inbound user content, preventing unsolicited prompts from receipts, typing indicators, presence updates, and other non-message Baileys upserts. Fixes #73797. (#73823) Thanks @hclsys.
 
 ## 2026.4.27
@@ -269,7 +270,6 @@ Docs: https://docs.openclaw.ai
 - CLI/skills: resolve workspace-backed skills commands from `--agent`, then the current agent workspace, before falling back to the default agent, so multi-agent ClawHub installs, updates, and status checks stay scoped to the active workspace. Fixes #56161; carries forward #72726. Thanks @langbowang and @luyao618.
 - Plugin SDK: fall back from partial bundled plugin directory overrides to package source public surfaces while preserving `OPENCLAW_DISABLE_BUNDLED_PLUGINS` as a hard disable. (#72817) Thanks @serkonyc.
 - Agents/ACPX: stop forwarding Codex ACP timeout config controls that Codex rejects while preserving OpenClaw's run-timeout watchdog for ACP subagents. Fixes #73052. Thanks @pfrederiksen and @richa65.
-- Agents/context engines: preserve the child agent's configured `agentDir` when subagent cleanup re-resolves a context engine, so `onSubagentEnded` hooks keep operating on the correct per-agent state. (#67243) Thanks @jarimustonen.
 - Memory Core: stream fallback vector search scoring with a bounded top-K result set so large indexes do not materialize every chunk embedding when sqlite-vec is unavailable. (#73069) Thanks @parkertoddbrooks.
 - Memory Core: stream embedding-cache seeding during safe reindex so large local caches do not materialize every row into the V8 heap before the atomic rebuild. (#73067) Thanks @parkertoddbrooks.
 - Memory/Ollama: add `memorySearch.remote.nonBatchConcurrency` for inline embedding indexing, default Ollama non-batch indexing to one request at a time, and keep batch concurrency separate from non-batch concurrency so local embedding backfills avoid timeout storms on smaller hosts. Carries forward #57733. Thanks @itilys.

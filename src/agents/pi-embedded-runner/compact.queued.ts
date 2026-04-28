@@ -52,9 +52,10 @@ export async function compactEmbeddedPiSession(
   });
   ensureContextEnginesInitialized();
   const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
+  const resolvedWorkspaceDir = resolveUserPath(params.workspaceDir);
   const contextEngine = await resolveContextEngine(params.config, {
     agentDir,
-    workspaceDir: resolveUserPath(params.workspaceDir),
+    workspaceDir: resolvedWorkspaceDir,
   });
   let contextTokenBudget = params.contextTokenBudget;
   if (!contextTokenBudget || !Number.isFinite(contextTokenBudget) || contextTokenBudget <= 0) {
