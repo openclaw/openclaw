@@ -83,6 +83,23 @@ export function hasExplicitMemorySearchConfig(cfg: OpenClawConfig, agentId: stri
   );
 }
 
+function withGatewayProbeFallback<T>(params: {
+  promise: Promise<T>;
+  timeoutMs: number;
+  fallback: () => T;
+}): Promise<T> {
+  let timeout: NodeJS.Timeout | undefined;
+  const fallbackPromise = new Promise<T>((resolve) => {
+    timeout = setTimeout(() => resolve(params.fallback()), Math.max(1, params.timeoutMs));
+    timeout.unref?.();
+  });
+  return Promise.race([params.promise, fallbackPromise]).finally(() => {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  });
+}
+
 export function resolveMemoryPluginStatus(cfg: OpenClawConfig): MemoryPluginStatus {
   const pluginsEnabled = cfg.plugins?.enabled !== false;
   if (!pluginsEnabled) {
@@ -115,10 +132,18 @@ export async function resolveGatewayProbeSnapshot(params: {
   const shouldProbe =
     params.opts.skipProbe !== true &&
     (!remoteUrlMissing || params.opts.probeWhenRemoteUrlMissing === true);
+  const authTimeoutMs = Math.min(params.opts.all ? 5000 : 2500, params.opts.timeoutMs ?? 10_000);
   const gatewayProbeAuthResolution = shouldResolveAuth
-    ? await loadGatewayProbeModule().then(({ resolveGatewayProbeAuthResolution }) =>
-        resolveGatewayProbeAuthResolution(params.cfg),
-      )
+    ? await withGatewayProbeFallback({
+        promise: loadGatewayProbeModule().then(({ resolveGatewayProbeAuthResolution }) =>
+          resolveGatewayProbeAuthResolution(params.cfg),
+        ),
+        timeoutMs: authTimeoutMs,
+        fallback: () => ({
+          auth: {},
+          warning: `gateway probe auth resolution timed out after ${authTimeoutMs}ms; probing without configured auth credentials.`,
+        }),
+      })
     : { auth: {}, warning: undefined };
   let gatewayProbeAuthWarning = gatewayProbeAuthResolution.warning;
   const gatewayProbe = shouldProbe
