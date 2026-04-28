@@ -194,6 +194,12 @@ export {
   normalizeMessagesForLlmBoundary,
   remapInjectedContextFilesToWorkspace,
 } from "./attempt-prompt.js";
+import {
+  createAttemptAbortable,
+  getAttemptAbortReason,
+  makeAttemptTimeoutAbortReason,
+  runEmbeddedAttemptPromptSubmission,
+} from "./attempt-stream-loop.js";
 import { applyAttemptStreamWrappers } from "./attempt-stream-wrappers.js";
 import {
   applyEmbeddedAttemptToolsAllow,
@@ -1426,26 +1432,6 @@ export async function runEmbeddedAttempt(
       }
 
       let yieldAborted = false;
-      const getAbortReason = (signal: AbortSignal): unknown =>
-        "reason" in signal ? (signal as { reason?: unknown }).reason : undefined;
-      const makeTimeoutAbortReason = (): Error => {
-        const err = new Error("request timed out");
-        err.name = "TimeoutError";
-        return err;
-      };
-      const makeAbortError = (signal: AbortSignal): Error => {
-        const reason = getAbortReason(signal);
-        // If the reason is already an Error, preserve it to keep the original message
-        // (e.g., "LLM idle timeout (<n>s): no response from model" instead of "aborted")
-        if (reason instanceof Error) {
-          const err = new Error(reason.message, { cause: reason });
-          err.name = "AbortError";
-          return err;
-        }
-        const err = reason ? new Error("aborted", { cause: reason }) : new Error("aborted");
-        err.name = "AbortError";
-        return err;
-      };
       const abortCompaction = () => {
         if (!activeSession.isCompacting) {
           return;
@@ -1466,7 +1452,7 @@ export async function runEmbeddedAttempt(
           timedOut = true;
         }
         if (isTimeout) {
-          runAbortController.abort(reason ?? makeTimeoutAbortReason());
+          runAbortController.abort(reason ?? makeAttemptTimeoutAbortReason());
         } else {
           runAbortController.abort(reason);
         }
@@ -1477,29 +1463,7 @@ export async function runEmbeddedAttempt(
         idleTimedOut = true;
         abortRun(true, error);
       };
-      const abortable = <T>(promise: Promise<T>): Promise<T> => {
-        const signal = runAbortController.signal;
-        if (signal.aborted) {
-          return Promise.reject(makeAbortError(signal));
-        }
-        return new Promise<T>((resolve, reject) => {
-          const onAbort = () => {
-            signal.removeEventListener("abort", onAbort);
-            reject(makeAbortError(signal));
-          };
-          signal.addEventListener("abort", onAbort, { once: true });
-          promise.then(
-            (value) => {
-              signal.removeEventListener("abort", onAbort);
-              resolve(value);
-            },
-            (err) => {
-              signal.removeEventListener("abort", onAbort);
-              reject(err);
-            },
-          );
-        });
-      };
+      const abortable = createAttemptAbortable(runAbortController);
 
       const subscription = subscribeEmbeddedPiSession(
         buildEmbeddedSubscriptionParams({
@@ -1651,7 +1615,7 @@ export async function runEmbeddedAttempt(
       let sessionFileUsed: string | undefined = params.sessionFile;
       const onAbort = () => {
         externalAbort = true;
-        const reason = params.abortSignal ? getAbortReason(params.abortSignal) : undefined;
+        const reason = params.abortSignal ? getAttemptAbortReason(params.abortSignal) : undefined;
         const timeout = reason ? isTimeoutError(reason) : false;
         if (
           shouldFlagCompactionTimeout({
@@ -2127,40 +2091,29 @@ export async function runEmbeddedAttempt(
               messages: btwSnapshotMessages,
               inFlightPrompt: promptSubmission.prompt,
             });
-            if (promptSubmission.runtimeOnly) {
-              await abortable(activeSession.prompt(promptSubmission.prompt));
-            } else {
-              const runtimeContext = promptSubmission.runtimeContext?.trim();
-              const runtimeSystemPrompt = runtimeContext
-                ? composeSystemPromptWithHookContext({
-                    baseSystemPrompt: systemPromptText,
-                    appendSystemContext: buildRuntimeContextSystemContext(runtimeContext),
-                  })
-                : undefined;
-              if (runtimeSystemPrompt) {
+            await runEmbeddedAttemptPromptSubmission({
+              abortable,
+              session: activeSession,
+              promptSubmission,
+              images: imageResult.images,
+              buildRuntimeSystemPrompt: (runtimeContext) =>
+                composeSystemPromptWithHookContext({
+                  baseSystemPrompt: systemPromptText,
+                  appendSystemContext: buildRuntimeContextSystemContext(runtimeContext),
+                }),
+              applyRuntimeSystemPrompt: (runtimeSystemPrompt) => {
                 applySystemPromptOverrideToSession(activeSession, runtimeSystemPrompt);
-              }
-              try {
+              },
+              restoreSystemPrompt: () => {
+                applySystemPromptOverrideToSession(activeSession, systemPromptText);
+              },
+              queueRuntimeContextForNextTurn: async (runtimeContext) => {
                 await queueRuntimeContextForNextTurn({
                   session: activeSession,
                   runtimeContext,
                 });
-
-                // Only pass images option if there are actually images to pass
-                // This avoids potential issues with models that don't expect the images parameter
-                if (imageResult.images.length > 0) {
-                  await abortable(
-                    activeSession.prompt(promptSubmission.prompt, { images: imageResult.images }),
-                  );
-                } else {
-                  await abortable(activeSession.prompt(promptSubmission.prompt));
-                }
-              } finally {
-                if (runtimeSystemPrompt) {
-                  applySystemPromptOverrideToSession(activeSession, systemPromptText);
-                }
-              }
-            }
+              },
+            });
           }
         } catch (err) {
           yieldAborted =
