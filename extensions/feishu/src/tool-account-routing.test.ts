@@ -2,9 +2,16 @@ import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
 
-const createFeishuClientMock = vi.fn((account: { appId?: string } | undefined) => ({
-  __appId: account?.appId,
-}));
+const VALID_FEISHU_LINK_TOKEN = "ABCDEFGHIJKLMNOPQRSTUV";
+
+const createFeishuClientMock = vi.fn(
+  (account: { appId?: string } | undefined) =>
+    ({
+      __appId: account?.appId,
+      wiki: undefined,
+      bitable: undefined,
+    }) as Record<string, unknown>,
+);
 
 vi.mock("./client.js", () => ({
   createFeishuClient: (account: { appId?: string } | undefined) => createFeishuClientMock(account),
@@ -137,6 +144,81 @@ describe("feishu tool account routing", () => {
 
     expect(createFeishuClientMock.mock.calls[0]?.[0]?.appId).toBe("app-b");
     expect(createFeishuClientMock.mock.calls[1]?.[0]?.appId).toBe("app-a");
+  });
+
+  test("bitable get_meta accepts /space/wiki and /space/base urls using the shared document parser", async () => {
+    const wikiGetNodeMock = vi.fn().mockResolvedValue({
+      code: 0,
+      data: {
+        node: {
+          obj_type: "bitable",
+          obj_token: "app_space_wiki_token_123",
+        },
+      },
+    });
+    const bitableAppGetMock = vi.fn().mockResolvedValue({
+      code: 0,
+      data: {
+        app: {
+          name: "Space Linked Bitable",
+        },
+      },
+    });
+    const bitableAppTableListMock = vi.fn().mockResolvedValue({
+      code: 0,
+      data: {
+        items: [],
+      },
+    });
+    createFeishuClientMock.mockReturnValue({
+      wiki: {
+        space: {
+          getNode: wikiGetNodeMock,
+        },
+      },
+      bitable: {
+        app: {
+          get: bitableAppGetMock,
+        },
+        appTable: {
+          list: bitableAppTableListMock,
+        },
+      },
+    });
+
+    const { api, resolveTool } = createToolFactoryHarness(createConfig({}));
+    registerFeishuBitableTools(api);
+
+    const tool = resolveTool("feishu_bitable_get_meta", { agentAccountId: "a" });
+    const wikiResult = await tool.execute("call-space-wiki", {
+      url: `https://example.test/space/wiki/${VALID_FEISHU_LINK_TOKEN}?table=tbl_space_wiki`,
+    });
+    const baseResult = await tool.execute("call-space-base", {
+      url: `https://example.test/space/base/${VALID_FEISHU_LINK_TOKEN}?table=tbl_space_base`,
+    });
+
+    expect(wikiGetNodeMock).toHaveBeenCalledWith({
+      params: { token: VALID_FEISHU_LINK_TOKEN },
+    });
+    expect(bitableAppGetMock).toHaveBeenNthCalledWith(1, {
+      path: { app_token: "app_space_wiki_token_123" },
+    });
+    expect(bitableAppGetMock).toHaveBeenNthCalledWith(2, {
+      path: { app_token: VALID_FEISHU_LINK_TOKEN },
+    });
+    expect(wikiResult.details).toMatchObject({
+      app_token: "app_space_wiki_token_123",
+      table_id: "tbl_space_wiki",
+      url_type: "wiki",
+      name: "Space Linked Bitable",
+    });
+    expect(baseResult.details).toMatchObject({
+      app_token: VALID_FEISHU_LINK_TOKEN,
+      table_id: "tbl_space_base",
+      url_type: "base",
+      name: "Space Linked Bitable",
+    });
+    expect(bitableAppTableListMock).not.toHaveBeenCalled();
   });
 
   test("falls back to the configured Feishu default selection when agentAccountId is not a real account", async () => {

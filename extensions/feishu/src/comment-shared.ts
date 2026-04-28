@@ -6,6 +6,7 @@ import {
   readStringValue,
 } from "openclaw/plugin-sdk/text-runtime";
 import { FEISHU_COMMENT_FILE_TYPES, type CommentFileType } from "./comment-target.js";
+import { parseFeishuDocumentLink } from "./document-link.js";
 
 export function encodeQuery(params: Record<string, string | undefined>): string {
   const query = new URLSearchParams();
@@ -163,56 +164,12 @@ function readElementTextPreservingWhitespace(element: Record<string, unknown>): 
   );
 }
 
-const FEISHU_LINK_TOKEN_MIN_LENGTH = 22;
-const FEISHU_LINK_TOKEN_MAX_LENGTH = 28;
-const COMMENT_LINK_KIND_ALIASES = new Map<string, ParsedCommentResolvedDocumentType | "wiki">([
-  ["doc", "doc"],
-  ["docs", "doc"],
-  ["docx", "docx"],
-  ["sheet", "sheet"],
-  ["sheets", "sheet"],
-  ["slide", "slides"],
-  ["slides", "slides"],
-  ["file", "file"],
-  ["files", "file"],
-  ["wiki", "wiki"],
-  ["mindnote", "mindnote"],
-  ["mindnotes", "mindnote"],
-  ["bitable", "bitable"],
-  ["base", "base"],
-]);
-
 function isCommentFileType(
   value: ParsedCommentResolvedDocumentType | "wiki" | undefined,
 ): value is CommentFileType {
   return (
     typeof value === "string" && (FEISHU_COMMENT_FILE_TYPES as readonly string[]).includes(value)
   );
-}
-
-function isReasonableFeishuLinkToken(token: string | undefined): token is string {
-  return (
-    typeof token === "string" &&
-    token.length >= FEISHU_LINK_TOKEN_MIN_LENGTH &&
-    token.length <= FEISHU_LINK_TOKEN_MAX_LENGTH
-  );
-}
-
-function parseCommentLinkedDocumentPath(pathname: string): {
-  urlKind: ParsedCommentResolvedDocumentType | "wiki";
-  token: string;
-} | null {
-  const segments = pathname
-    .split("/")
-    .map((segment) => segment.trim())
-    .filter(Boolean);
-  const offset = segments[0]?.toLowerCase() === "space" ? 1 : 0;
-  const kind = COMMENT_LINK_KIND_ALIASES.get(segments[offset]?.toLowerCase() ?? "");
-  const token = normalizeString(segments[offset + 1]);
-  if (!kind || !isReasonableFeishuLinkToken(token)) {
-    return null;
-  }
-  return { urlKind: kind, token };
 }
 
 function hasResolvedLinkedDocumentReference(link: ParsedCommentLinkedDocument): boolean {
@@ -229,38 +186,32 @@ export function resolveCommentLinkedDocumentFromUrl(params: {
     rawUrl: params.rawUrl,
     urlKind: "unknown",
   };
-  try {
-    const parsed = new URL(params.rawUrl);
-    const parsedPath = parseCommentLinkedDocumentPath(parsed.pathname);
-    if (!parsedPath) {
-      return link;
-    }
-    const { urlKind, token } = parsedPath;
-    link.urlKind = urlKind;
-    if (urlKind === "wiki") {
-      link.urlKind = "wiki";
-      link.wikiNodeToken = token;
-    } else {
-      link.resolvedObjType = urlKind;
-      link.resolvedObjToken = token;
-    }
-    if (
-      link.resolvedObjType &&
-      link.resolvedObjToken &&
-      isCommentFileType(link.resolvedObjType) &&
-      params.currentDocument?.fileType === link.resolvedObjType &&
-      params.currentDocument.fileToken === link.resolvedObjToken
-    ) {
-      link.isCurrentDocument = true;
-    } else if (
-      link.resolvedObjType &&
-      link.resolvedObjToken &&
-      isCommentFileType(link.resolvedObjType)
-    ) {
-      link.isCurrentDocument = false;
-    }
-  } catch {
+  const parsedLink = parseFeishuDocumentLink(params.rawUrl);
+  if (!parsedLink) {
     return link;
+  }
+  const { urlKind, token } = parsedLink;
+  link.urlKind = urlKind;
+  if (urlKind === "wiki") {
+    link.wikiNodeToken = token;
+  } else {
+    link.resolvedObjType = urlKind;
+    link.resolvedObjToken = token;
+  }
+  if (
+    link.resolvedObjType &&
+    link.resolvedObjToken &&
+    isCommentFileType(link.resolvedObjType) &&
+    params.currentDocument?.fileType === link.resolvedObjType &&
+    params.currentDocument.fileToken === link.resolvedObjToken
+  ) {
+    link.isCurrentDocument = true;
+  } else if (
+    link.resolvedObjType &&
+    link.resolvedObjToken &&
+    isCommentFileType(link.resolvedObjType)
+  ) {
+    link.isCurrentDocument = false;
   }
   return link;
 }
