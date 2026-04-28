@@ -166,5 +166,13 @@ export async function maybeHandleResetCommand(
     previousSessionEntry: params.previousSessionEntry,
     workspaceDir: params.workspaceDir,
   });
+  if (!resetTail) {
+    return {
+      shouldContinue: false,
+      reply: {
+        text: commandAction === "reset" ? "✅ Session reset." : "✅ New session started.",
+      },
+    };
+  }
   return null;
 }
