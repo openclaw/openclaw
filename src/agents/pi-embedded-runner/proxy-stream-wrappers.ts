@@ -7,6 +7,7 @@ import { resolveProviderRequestPolicy } from "../provider-attribution.js";
 import { resolveProviderRequestPolicyConfig } from "../provider-request-config.js";
 import { applyAnthropicEphemeralCacheControlMarkers } from "./anthropic-cache-control-payload.js";
 import { isAnthropicModelRef } from "./anthropic-family-cache-semantics.js";
+import { isClosedSourceQwenModelRef } from "./qwen-family-cache-semantics.js";
 import { mapThinkingLevelToReasoningEffort } from "./reasoning-effort-utils.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 const KILOCODE_FEATURE_HEADER = "X-KILOCODE-FEATURE";
@@ -62,7 +63,7 @@ export function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | unde
     }).endpointClass;
     if (
       !modelId ||
-      !isAnthropicModelRef(modelId) ||
+      (!isAnthropicModelRef(modelId) && !isClosedSourceQwenModelRef(modelId)) ||
       !(
         endpointClass === "openrouter" ||
         (endpointClass === "default" && normalizeOptionalLowercaseString(provider) === "openrouter")
