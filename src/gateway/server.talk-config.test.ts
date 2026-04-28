@@ -122,7 +122,7 @@ async function fetchTalkConfig(
   ws: GatewaySocket,
   params?: { includeSecrets?: boolean } | Record<string, unknown>,
 ) {
-  return rpcReq<TalkConfigPayload>(ws, "talk.config", params ?? {}, 30_000);
+  return rpcReq<TalkConfigPayload>(ws, "talk.config", params ?? {}, 60_000);
 }
 
 async function withTalkConfigConnection<T>(

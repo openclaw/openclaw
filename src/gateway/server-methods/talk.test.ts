@@ -151,6 +151,7 @@ describe("talk.config handler", () => {
       messages: {
         tts: {
           provider: "acme",
+          timeoutMs: 12_345,
           providers: {
             acme: {
               apiKey: { source: "env", provider: "default", id: "ACME_SPEECH_API_KEY" },
@@ -164,6 +165,7 @@ describe("talk.config handler", () => {
       messages: {
         tts: {
           provider: "acme",
+          timeoutMs: 54_321,
           providers: {
             acme: {
               apiKey: "env-acme-key",
@@ -185,9 +187,11 @@ describe("talk.config handler", () => {
       resolveTalkConfig: ({
         baseTtsConfig,
         talkProviderConfig,
+        timeoutMs,
       }: {
         baseTtsConfig: Record<string, unknown>;
         talkProviderConfig: Record<string, unknown>;
+        timeoutMs: number;
       }) => {
         const providers = (baseTtsConfig.providers ?? {}) as Record<string, unknown>;
         const providerConfig = (providers.acme ?? {}) as Record<string, unknown>;
@@ -196,6 +200,7 @@ describe("talk.config handler", () => {
           path: "messages.tts.providers.acme.apiKey",
         });
         expect(apiKey).toBe("env-acme-key");
+        expect(timeoutMs).toBe(54_321);
         return {
           ...talkProviderConfig,
           ...(apiKey === undefined ? {} : { apiKey }),
