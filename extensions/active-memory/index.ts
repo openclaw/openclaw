@@ -848,8 +848,10 @@ function buildRecallPrompt(params: {
     "Another model is preparing the final user-facing answer.",
     "Your job is to search memory and return only the most relevant memory context for that model.",
     "You receive conversation context, including the user's latest message.",
-    "Use only memory_search and memory_get.",
-    "When searching for preference or habit recall, use a permissive memory_search threshold before deciding that no useful memory exists.",
+    "Use only the available memory tools.",
+    "Prefer memory_recall when available.",
+    "If memory_recall is unavailable, use memory_search and memory_get.",
+    "When searching for preference or habit recall, use a permissive recall limit or memory_search threshold before deciding that no useful memory exists.",
     "Do not answer the user directly.",
     `Prompt style: ${params.config.promptStyle}.`,
     ...buildPromptStyleLines(params.config.promptStyle),
@@ -1448,14 +1450,18 @@ function extractActiveMemorySearchDebugFromSessionRecord(
   const record = asRecord(value);
   const nestedMessage = asRecord(record?.message);
   const topLevelMessage =
-    record?.role === "toolResult" || record?.toolName === "memory_search" ? record : undefined;
+    record?.role === "toolResult" ||
+    record?.toolName === "memory_search" ||
+    record?.toolName === "memory_recall"
+      ? record
+      : undefined;
   const message = nestedMessage ?? topLevelMessage;
   if (!message) {
     return undefined;
   }
   const role = normalizeOptionalString(message.role);
   const toolName = normalizeOptionalString(message.toolName);
-  if (role !== "toolResult" || toolName !== "memory_search") {
+  if (role !== "toolResult" || (toolName !== "memory_search" && toolName !== "memory_recall")) {
     return undefined;
   }
   const details = asRecord(message.details);
@@ -2072,7 +2078,7 @@ async function runRecallSubagent(params: {
       timeoutMs: params.config.timeoutMs,
       runId: subagentSessionId,
       trigger: "manual",
-      toolsAllow: ["memory_search", "memory_get"],
+      toolsAllow: ["memory_recall", "memory_search", "memory_get"],
       disableMessageTool: true,
       bootstrapContextMode: "lightweight",
       verboseLevel: "off",

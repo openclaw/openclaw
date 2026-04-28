@@ -80,7 +80,7 @@ because it follows your existing provider, auth, and model preferences.
 If you want Active Memory to feel faster, use a dedicated inference model
 instead of borrowing the main chat model. Recall quality matters, but latency
 matters more than for the main answer path, and Active Memory's tool surface
-is narrow (it only calls `memory_search` and `memory_get`).
+is narrow (it only calls available memory recall tools).
 
 Good fast-model options:
 
@@ -332,8 +332,9 @@ flowchart LR
   I --> M["Main Reply"]
 ```
 
-The blocking memory sub-agent can use only:
+The blocking memory sub-agent can use only the available memory recall tools:
 
+- `memory_recall`
 - `memory_search`
 - `memory_get`
 
@@ -644,9 +645,10 @@ If active memory is too slow:
 
 ## Common issues
 
-Active Memory rides on the normal `memory_search` pipeline under
-`agents.defaults.memorySearch`, so most recall surprises are embedding-provider
-problems, not Active Memory bugs.
+Active Memory rides on the configured memory plugin's recall pipeline, so most
+recall surprises are embedding-provider problems, not Active Memory bugs. The
+default `memory-core` path uses `memory_search`; `memory-lancedb` uses
+`memory_recall`.
 
 <AccordionGroup>
   <Accordion title="Embedding provider switched or stopped working">

@@ -13,6 +13,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Active Memory: allow `allowedChatTypes` to include explicit portal/webchat sessions and classify `agent:...:explicit:...` session keys before opaque session ids can shadow the chat type. Fixes #65775. (#66285) Thanks @Lidang-Jiang.
+- Active Memory: allow the hidden recall sub-agent to use both `memory_recall` and the legacy `memory_search`/`memory_get` memory tool contract, so bundled `memory-lancedb` recall works without breaking the default `memory-core` path. Fixes #73502. (#73584) Thanks @Takhoffman.
 - fix(device-pairing): validate callerScopes against resolved token scopes on repair [AI]. (#72925) Thanks @pgondhi987.
 - Active Memory docs: document the `cacheTtlMs` 1000-120000 ms range and 15000 ms default so setup snippets do not lead users past the schema limit. Fixes #65708. (#65737) Thanks @WuKongAI-CMU.
 - fix(agents): canonicalize provider aliases in byProvider tool policy lookup [AI]. (#72917) Thanks @pgondhi987.
