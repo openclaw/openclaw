@@ -5051,6 +5051,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     description:
                       "Pre-compaction memory flush settings that run an agentic memory write before heavy compaction. Keep enabled for long sessions so salient context is persisted before aggressive trimming.",
                   },
+                  structuredStateFile: {
+                    type: "string",
+                  },
                   truncateAfterCompaction: {
                     type: "boolean",
                     title: "Rotate Transcript After Compaction",

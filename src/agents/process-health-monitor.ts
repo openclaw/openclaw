@@ -1,4 +1,3 @@
-import type { ProcessSession } from "./bash-process-registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("agent/process-health");
@@ -20,6 +19,17 @@ export type ProcessHealthIssue = {
 export type ProcessHealthReport = {
   checkedAt: number;
   issues: ProcessHealthIssue[];
+};
+
+export type MonitoredProcessSession = {
+  id: string;
+  command?: string;
+  scopeKey?: string;
+  sessionKey?: string;
+  pid?: number;
+  startedAt?: number;
+  backgrounded?: boolean;
+  exited?: boolean;
 };
 
 type SessionSidecar = {
@@ -61,13 +71,13 @@ function isPidAlive(pid: number): boolean {
   }
 }
 
-function crashLoopKeyFor(session: ProcessSession): CrashLoopKey {
+function crashLoopKeyFor(session: MonitoredProcessSession): CrashLoopKey {
   const scope = session.scopeKey ?? "";
   const cmd = session.command ?? "";
   return `${scope}::${cmd}`;
 }
 
-function noteRestart(session: ProcessSession) {
+function noteRestart(session: MonitoredProcessSession) {
   const key = crashLoopKeyFor(session);
   const now = Date.now();
   const entry = crashLoops.get(key) ?? { restarts: [] };
@@ -76,7 +86,7 @@ function noteRestart(session: ProcessSession) {
   crashLoops.set(key, entry);
 }
 
-export function noteProcessSessionAdded(session: ProcessSession) {
+export function noteProcessSessionAdded(session: MonitoredProcessSession) {
   sidecar.set(session.id, {
     lastOutputAt: Date.now(),
     lastSeenAliveAt: Date.now(),
@@ -84,7 +94,7 @@ export function noteProcessSessionAdded(session: ProcessSession) {
   noteRestart(session);
 }
 
-export function noteProcessSessionOutput(session: ProcessSession) {
+export function noteProcessSessionOutput(session: MonitoredProcessSession) {
   const entry = sidecar.get(session.id);
   const now = Date.now();
   if (entry) {
@@ -106,7 +116,7 @@ export function forgetProcessSession(sessionId: string) {
   sidecar.delete(sessionId);
 }
 
-export function checkProcessSessions(sessions: ProcessSession[]): ProcessHealthReport {
+export function checkProcessSessions(sessions: MonitoredProcessSession[]): ProcessHealthReport {
   const now = Date.now();
   const issues: ProcessHealthIssue[] = [];
 
@@ -176,7 +186,7 @@ let pollerActive = false;
 
 export function startProcessHealthPoller(params: {
   /** Callable that returns current running sessions. */
-  listSessions: () => ProcessSession[];
+  listSessions: () => MonitoredProcessSession[];
   intervalMs?: number;
   onReport?: (report: ProcessHealthReport) => void;
 }) {
