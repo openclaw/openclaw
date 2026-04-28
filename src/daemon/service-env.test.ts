@@ -1,6 +1,7 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolveGatewayStateDir } from "./paths.js";
 import {
   buildMinimalServicePath,
@@ -261,8 +262,8 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
       env: {
         HOME: "/home/testuser",
         PNPM_HOME: "/home/testuser/workspace/evil-pnpm-home",
-        NPM_CONFIG_PREFIX: "/proc/self/cwd/evil-npm-prefix",
-        BUN_INSTALL: "/home/testuser/workspace/evil-bun",
+        NPM_CONFIG_PREFIX: "/proc/thread-self/cwd/evil-npm-prefix",
+        BUN_INSTALL: "/proc/12345/cwd/evil-bun",
         VOLTA_HOME: "/opt/volta",
         ASDF_DATA_DIR: "relative-asdf",
         NIX_PROFILES: "/nix/var/nix/profiles/default /home/testuser/workspace/evil-nix-profile",
@@ -271,12 +272,43 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     });
 
     expect(result).not.toContain("/home/testuser/workspace/evil-pnpm-home");
-    expect(result).not.toContain("/proc/self/cwd/evil-npm-prefix/bin");
-    expect(result).not.toContain("/home/testuser/workspace/evil-bun/bin");
+    expect(result).not.toContain("/proc/thread-self/cwd/evil-npm-prefix/bin");
+    expect(result).not.toContain("/proc/12345/cwd/evil-bun/bin");
     expect(result).not.toContain("relative-asdf/shims");
     expect(result).not.toContain("/home/testuser/workspace/evil-nix-profile/bin");
     expect(result).toContain("/opt/volta/bin");
     expect(result).toContain("/nix/var/nix/profiles/default/bin");
+  });
+
+  it("excludes env-configured bin roots whose existing parent resolves into the workspace", () => {
+    const realpathNative = vi.spyOn(fs.realpathSync, "native").mockImplementation((candidate) => {
+      const value = String(candidate);
+      if (value === "/tmp/workspace-link") {
+        return "/home/testuser/workspace";
+      }
+      if (value === "/home/testuser/workspace" || value === "/home/testuser") {
+        return value;
+      }
+      throw Object.assign(new Error("missing"), { code: "ENOENT" });
+    });
+
+    try {
+      const result = getMinimalServicePathPartsFromEnv({
+        platform: "linux",
+        cwd: "/home/testuser/workspace",
+        env: {
+          HOME: "/home/testuser",
+          PNPM_HOME: "/tmp/workspace-link/missing-pnpm-home",
+          VOLTA_HOME: "/opt/volta",
+        },
+        existsSync: noneExist,
+      });
+
+      expect(result).not.toContain("/tmp/workspace-link/missing-pnpm-home");
+      expect(result).toContain("/opt/volta/bin");
+    } finally {
+      realpathNative.mockRestore();
+    }
   });
 
   it("keeps env-configured user toolchain roots when the install cwd is HOME", () => {

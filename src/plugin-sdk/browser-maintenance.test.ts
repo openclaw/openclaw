@@ -31,7 +31,9 @@ describe("browser maintenance", () => {
     runExec.mockReset();
     vi.spyOn(Date, "now").mockReturnValue(123);
     vi.spyOn(os, "homedir").mockReturnValue("/home/test");
+    vi.spyOn(os, "tmpdir").mockReturnValue("/tmp");
     vi.spyOn(fs, "lstatSync").mockReturnValue({
+      isDirectory: () => true,
       isSymbolicLink: () => false,
     } as fs.Stats);
     vi.spyOn(fs.realpathSync, "native").mockImplementation((candidate) => String(candidate));
@@ -77,11 +79,41 @@ describe("browser maintenance", () => {
       "/home/test/.Trash/demo-123-secure/demo",
     );
     expect(runExec).not.toHaveBeenCalled();
-    expect(mkdirSync).toHaveBeenCalledWith("/home/test/.Trash", { recursive: true });
+    expect(mkdirSync).toHaveBeenCalledWith("/home/test/.Trash", {
+      recursive: true,
+      mode: 0o700,
+    });
     expect(mkdtempSync).toHaveBeenCalledWith("/home/test/.Trash/demo-123-");
     expect(renameSync).toHaveBeenCalledWith("/tmp/demo", "/home/test/.Trash/demo-123-secure/demo");
     expect(cpSync).not.toHaveBeenCalled();
     expect(rmSync).not.toHaveBeenCalled();
+  });
+
+  it("uses the resolved trash directory for reserved destinations", async () => {
+    vi.spyOn(fs, "mkdirSync").mockImplementation(() => undefined);
+    vi.spyOn(fs.realpathSync, "native").mockImplementation((candidate) => {
+      const value = String(candidate);
+      if (value === "/home/test") {
+        return "/real/home/test";
+      }
+      if (value === "/home/test/.Trash") {
+        return "/real/home/test/.Trash";
+      }
+      return value;
+    });
+    const mkdtempSync = mockTrashContainer("secure");
+    const renameSync = vi.spyOn(fs, "renameSync").mockImplementation(() => undefined);
+
+    const { movePathToTrash } = await import("./browser-maintenance.js");
+
+    await expect(movePathToTrash("/tmp/demo")).resolves.toBe(
+      "/real/home/test/.Trash/demo-123-secure/demo",
+    );
+    expect(mkdtempSync).toHaveBeenCalledWith("/real/home/test/.Trash/demo-123-");
+    expect(renameSync).toHaveBeenCalledWith(
+      "/tmp/demo",
+      "/real/home/test/.Trash/demo-123-secure/demo",
+    );
   });
 
   it("refuses to trash filesystem roots", async () => {
@@ -90,16 +122,25 @@ describe("browser maintenance", () => {
     await expect(movePathToTrash("/")).rejects.toThrow("Refusing to trash root path");
   });
 
+  it("refuses to trash paths outside allowed roots", async () => {
+    const { movePathToTrash } = await import("./browser-maintenance.js");
+
+    await expect(movePathToTrash("/etc/openclaw-demo")).rejects.toThrow(
+      "Refusing to trash path outside allowed roots",
+    );
+  });
+
   it("refuses to use a symlinked trash directory", async () => {
     vi.spyOn(fs, "mkdirSync").mockImplementation(() => undefined);
     vi.spyOn(fs, "lstatSync").mockReturnValue({
+      isDirectory: () => true,
       isSymbolicLink: () => true,
     } as fs.Stats);
 
     const { movePathToTrash } = await import("./browser-maintenance.js");
 
     await expect(movePathToTrash("/tmp/demo")).rejects.toThrow(
-      "Refusing to use symlinked trash directory",
+      "Refusing to use non-directory/symlink trash directory",
     );
   });
 
@@ -123,7 +164,7 @@ describe("browser maintenance", () => {
       force: false,
       errorOnExist: true,
     });
-    expect(rmSync).toHaveBeenCalledWith("/tmp/demo", { recursive: true, force: true });
+    expect(rmSync).toHaveBeenCalledWith("/tmp/demo", { recursive: true, force: false });
   });
 
   it("retries copy fallback when the copy destination is created concurrently", async () => {

@@ -189,13 +189,32 @@ function mergeServicePath(
   });
   const isSameOrChildPath = (candidate: string, parent: string) =>
     candidate === parent || candidate.startsWith(`${parent}${path.sep}`);
+  const isUnsafeProcPath = (candidate: string) =>
+    candidate === `${path.sep}proc` || candidate.startsWith(`${path.sep}proc${path.sep}`);
+  const realpathExistingPath = (candidate: string): string | undefined => {
+    const parts: string[] = [];
+    let current = candidate;
+    while (current && current !== path.dirname(current)) {
+      try {
+        const realCurrent = path.normalize(fs.realpathSync.native(current));
+        return path.normalize(path.join(realCurrent, ...parts.toReversed()));
+      } catch {
+        parts.push(path.basename(current));
+        current = path.dirname(current);
+      }
+    }
+    try {
+      return path.normalize(path.join(fs.realpathSync.native(current), ...parts.toReversed()));
+    } catch {
+      return undefined;
+    }
+  };
   const normalizePreservedPathSegment = (segment: string): string | undefined => {
     if (!path.isAbsolute(segment)) {
       return undefined;
     }
     const normalized = path.normalize(segment);
-    const procSelfCwd = path.normalize("/proc/self/cwd");
-    if (isSameOrChildPath(normalized, procSelfCwd)) {
+    if (isUnsafeProcPath(normalized)) {
       return undefined;
     }
     const cwd = path.resolve(process.cwd());
@@ -203,9 +222,9 @@ function mergeServicePath(
       return undefined;
     }
     try {
-      const realSegment = path.normalize(fs.realpathSync.native(normalized));
+      const realSegment = realpathExistingPath(normalized);
       const realCwd = path.normalize(fs.realpathSync.native(cwd));
-      if (isSameOrChildPath(realSegment, realCwd)) {
+      if (realSegment && isSameOrChildPath(realSegment, realCwd)) {
         return undefined;
       }
     } catch {
@@ -215,12 +234,7 @@ function mergeServicePath(
   };
   const shouldPreserveNormalizedPathSegment = (segment: string) => {
     const resolved = path.resolve(segment);
-    let realResolved = resolved;
-    try {
-      realResolved = path.normalize(fs.realpathSync.native(resolved));
-    } catch {
-      // Legacy PATH entries may no longer exist; keep filtering best-effort.
-    }
+    const realResolved = realpathExistingPath(resolved) ?? resolved;
     return ![...normalizedTmpDirs, ...realTmpDirs].some(
       (tmpRoot) => isSameOrChildPath(resolved, tmpRoot) || isSameOrChildPath(realResolved, tmpRoot),
     );

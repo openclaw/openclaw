@@ -47,26 +47,46 @@ function isSameOrChildPath(candidate: string, parent: string): boolean {
   return candidate === parent || candidate.startsWith(`${parent}${path.sep}`);
 }
 
+function resolveAllowedTrashRoots(): string[] {
+  const roots = [os.homedir(), os.tmpdir()].map((root) => {
+    try {
+      return path.resolve(fs.realpathSync.native(root));
+    } catch {
+      return path.resolve(root);
+    }
+  });
+  return [...new Set(roots)];
+}
+
+function assertAllowedTrashTarget(targetPath: string): void {
+  let resolvedTargetPath = path.resolve(targetPath);
+  try {
+    resolvedTargetPath = path.resolve(fs.realpathSync.native(targetPath));
+  } catch {
+    // The subsequent move will surface missing or inaccessible targets.
+  }
+  const isAllowed = resolveAllowedTrashRoots().some(
+    (root) => resolvedTargetPath !== root && isSameOrChildPath(resolvedTargetPath, root),
+  );
+  if (!isAllowed) {
+    throw new Error(`Refusing to trash path outside allowed roots: ${targetPath}`);
+  }
+}
+
 function resolveTrashDir(): string {
   const homeDir = os.homedir();
   const trashDir = path.join(homeDir, ".Trash");
-  fs.mkdirSync(trashDir, { recursive: true });
-  if (fs.lstatSync(trashDir).isSymbolicLink()) {
-    throw new Error(`Refusing to use symlinked trash directory: ${trashDir}`);
+  fs.mkdirSync(trashDir, { recursive: true, mode: 0o700 });
+  const trashDirStat = fs.lstatSync(trashDir);
+  if (!trashDirStat.isDirectory() || trashDirStat.isSymbolicLink()) {
+    throw new Error(`Refusing to use non-directory/symlink trash directory: ${trashDir}`);
   }
-  try {
-    const realHome = path.resolve(fs.realpathSync.native(homeDir));
-    const realTrashDir = path.resolve(fs.realpathSync.native(trashDir));
-    if (realTrashDir === realHome || !isSameOrChildPath(realTrashDir, realHome)) {
-      throw new Error(`Trash directory escaped home directory: ${trashDir}`);
-    }
-  } catch (error) {
-    if (error instanceof Error && error.message.includes("escaped home directory")) {
-      throw error;
-    }
-    // Keep trash usable in constrained environments where realpath checks are unavailable.
+  const realHome = path.resolve(fs.realpathSync.native(homeDir));
+  const resolvedTrashDir = path.resolve(fs.realpathSync.native(trashDir));
+  if (resolvedTrashDir === realHome || !isSameOrChildPath(resolvedTrashDir, realHome)) {
+    throw new Error(`Trash directory escaped home directory: ${trashDir}`);
   }
-  return trashDir;
+  return resolvedTrashDir;
 }
 
 function trashBaseName(targetPath: string): string {
@@ -119,7 +139,7 @@ function movePathToDestination(targetPath: string, dest: string): boolean {
 
   try {
     fs.cpSync(targetPath, dest, { recursive: true, force: false, errorOnExist: true });
-    fs.rmSync(targetPath, { recursive: true, force: true });
+    fs.rmSync(targetPath, { recursive: true, force: false });
     return true;
   } catch (error) {
     if (isTrashDestinationCollision(error)) {
@@ -149,6 +169,7 @@ export async function closeTrackedBrowserTabsForSessions(
 export async function movePathToTrash(targetPath: string): Promise<string> {
   // Avoid resolving external trash helpers through the service PATH during cleanup.
   const base = trashBaseName(targetPath);
+  assertAllowedTrashTarget(targetPath);
   const trashDir = resolveTrashDir();
   const timestamp = Date.now();
   for (let attempt = 0; attempt < TRASH_DESTINATION_RETRY_LIMIT; attempt += 1) {

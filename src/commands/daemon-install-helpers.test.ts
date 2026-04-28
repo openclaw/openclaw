@@ -556,7 +556,17 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       port: 3000,
       runtime: "node",
       existingEnvironment: {
-        PATH: `.:/tmp/evil:/proc/self/cwd/evil-bin:${process.cwd()}/evil-bin:/custom/go/bin:/usr/bin`,
+        PATH: [
+          ".",
+          "/tmp/evil",
+          "/proc/self/cwd/evil-bin",
+          "/proc/thread-self/cwd/evil-bin",
+          "/proc/12345/cwd/evil-bin",
+          "/proc/self/root/evil-bin",
+          `${process.cwd()}/evil-bin`,
+          "/custom/go/bin",
+          "/usr/bin",
+        ].join(path.delimiter),
         GOBIN: "/Users/test/.local/gopath/bin",
         BLOGWATCHER_HOME: "/Users/test/.blogwatcher",
         NODE_OPTIONS: "--require /tmp/evil.js",
@@ -584,7 +594,16 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     });
     const realpathNative = vi.spyOn(fs.realpathSync, "native").mockImplementation((candidate) => {
       const value = String(candidate);
-      return value === "/opt/safe/bin" ? "/tmp/evil/bin" : value;
+      if (value === "/opt/safe/bin") {
+        return "/tmp/evil/bin";
+      }
+      if (value === "/opt/safe") {
+        return "/tmp/evil";
+      }
+      if (value === "/opt/safe/missing-bin") {
+        throw Object.assign(new Error("missing"), { code: "ENOENT" });
+      }
+      return value;
     });
 
     try {
@@ -593,7 +612,7 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
         port: 3000,
         runtime: "node",
         existingEnvironment: {
-          PATH: "/opt/safe/bin:/custom/go/bin:/usr/bin",
+          PATH: "/opt/safe/bin:/opt/safe/missing-bin:/custom/go/bin:/usr/bin",
         },
       });
 
