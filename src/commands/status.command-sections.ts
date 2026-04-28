@@ -78,15 +78,18 @@ export function buildStatusTasksValue(params: {
   if (params.summary.tasks.total <= 0) {
     return params.muted("none");
   }
+  const recentFailures = params.summary.tasks.recentFailures ?? params.summary.tasks.failures;
+  const historicalFailures = params.summary.tasks.historicalFailures ?? 0;
   return [
     `${params.summary.tasks.active} active`,
-    `${params.summary.tasks.byStatus.queued} queued`,
-    `${params.summary.tasks.byStatus.running} running`,
-    params.summary.tasks.failures > 0
-      ? params.warn(
-          `${params.summary.tasks.failures} issue${params.summary.tasks.failures === 1 ? "" : "s"}`,
+    recentFailures > 0
+      ? params.warn(`${recentFailures} recent failure${recentFailures === 1 ? "" : "s"}`)
+      : params.muted("no recent failures"),
+    historicalFailures > 0
+      ? params.muted(
+          `${historicalFailures} historical failure${historicalFailures === 1 ? "" : "s"}`,
         )
-      : params.muted("no issues"),
+      : null,
     params.summary.taskAudit.errors > 0
       ? params.warn(
           `audit ${params.summary.taskAudit.errors} error${params.summary.taskAudit.errors === 1 ? "" : "s"} · ${params.summary.taskAudit.warnings} warn`,
@@ -95,7 +98,9 @@ export function buildStatusTasksValue(params: {
         ? params.muted(`audit ${params.summary.taskAudit.warnings} warn`)
         : params.muted("audit clean"),
     `${params.summary.tasks.total} tracked`,
-  ].join(" · ");
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 export function buildStatusHeartbeatValue(params: { summary: Pick<SummaryLike, "heartbeat"> }) {

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
+import { createRunningTaskRun } from "../tasks/task-executor.js";
 import {
   createManagedTaskFlow,
   resetTaskFlowRegistryForTests,
@@ -10,7 +11,7 @@ import {
   resetTaskRegistryForTests,
 } from "../tasks/task-registry.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import { tasksAuditCommand, tasksMaintenanceCommand } from "./tasks.js";
+import { tasksAuditCommand, tasksListCommand, tasksMaintenanceCommand } from "./tasks.js";
 
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 
@@ -159,6 +160,55 @@ describe("tasks commands", () => {
       expect(payload.auditBefore.taskFlows.byCode.stale_running).toBe(0);
       expect(payload.auditAfter.byCode).toBeDefined();
       expect(payload.auditAfter.taskFlows.byCode.stale_running).toBe(0);
+    });
+  });
+
+  it("surfaces recent versus historical task failures in task pressure", async () => {
+    await withTaskCommandStateDir(async () => {
+      const now = Date.now();
+
+      createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "task-active",
+        task: "Investigate live issue",
+        startedAt: now - 1_000,
+        lastEventAt: now - 1_000,
+      });
+
+      createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "task-recent-failure",
+        task: "Recent failure",
+        status: "failed",
+        deliveryStatus: "failed",
+        lastEventAt: now - 1_000,
+      });
+
+      createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "task-historical-failure",
+        task: "Historical failure",
+        status: "failed",
+        deliveryStatus: "failed",
+        lastEventAt: now - 10 * 60_000,
+      });
+
+      const runtime = createRuntime();
+      await tasksListCommand({}, runtime);
+
+      const output = vi
+        .mocked(runtime.log)
+        .mock.calls.map(([line]) => String(line))
+        .join("\n");
+      expect(output).toContain(
+        "Task pressure: 1 active · 1 recent failure · 1 historical failure · 3 tracked",
+      );
     });
   });
 });

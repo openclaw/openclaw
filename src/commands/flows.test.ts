@@ -6,6 +6,7 @@ import {
   resetTaskFlowRegistryForTests,
 } from "../tasks/task-flow-registry.js";
 import {
+  createTaskRecord,
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
 } from "../tasks/task-registry.js";
@@ -164,6 +165,56 @@ describe("flows commands", () => {
       expect(output).not.toContain("blockedTaskId:");
       expect(output).not.toContain("blockedSummary:");
       expect(output).not.toContain("wait:");
+    });
+  });
+
+  it("surfaces recent and historical task failures in flow summaries", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      const now = Date.now();
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/flows-command",
+        goal: "Triage follow-ups",
+        status: "blocked",
+        blockedSummary: "Waiting on retries",
+        createdAt: now - 2_000,
+        updatedAt: now - 2_000,
+      });
+
+      createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        runId: "flow-recent-failure",
+        task: "Recent failure",
+        status: "failed",
+        deliveryStatus: "failed",
+        lastEventAt: now - 1_000,
+      });
+
+      createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        runId: "flow-historical-failure",
+        task: "Historical failure",
+        status: "failed",
+        deliveryStatus: "failed",
+        lastEventAt: now - 10 * 60_000,
+      });
+
+      const runtime = createRuntime();
+      await flowsShowCommand({ lookup: flow.flowId, json: false }, runtime);
+
+      const output = vi
+        .mocked(runtime.log)
+        .mock.calls.map(([line]) => String(line))
+        .join("\n");
+      expect(output).toContain(
+        "tasks: 2 total · 0 active · 1 recent failure · 1 historical failure",
+      );
     });
   });
 

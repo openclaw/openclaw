@@ -34,8 +34,8 @@ import {
   reconcileInspectableTasks,
   reconcileTaskLookupToken,
 } from "../tasks/task-registry.reconcile.js";
-import { summarizeTaskRecords } from "../tasks/task-registry.summary.js";
 import type { TaskNotifyPolicy, TaskRecord } from "../tasks/task-registry.types.js";
+import { buildTaskStatusSnapshot } from "../tasks/task-status.js";
 import { isRich, theme } from "../terminal/theme.js";
 
 const RUNTIME_PAD = 8;
@@ -126,8 +126,18 @@ function formatTaskRows(tasks: TaskRecord[], rich: boolean) {
 }
 
 function formatTaskListSummary(tasks: TaskRecord[]) {
-  const summary = summarizeTaskRecords(tasks);
-  return `${summary.byStatus.queued} queued · ${summary.byStatus.running} running · ${summary.failures} issues`;
+  const snapshot = buildTaskStatusSnapshot(tasks);
+  const parts = [
+    `${snapshot.activeCount} active`,
+    `${snapshot.recentFailureCount} recent failure${snapshot.recentFailureCount === 1 ? "" : "s"}`,
+  ];
+  if (snapshot.historicalFailureCount > 0) {
+    parts.push(
+      `${snapshot.historicalFailureCount} historical failure${snapshot.historicalFailureCount === 1 ? "" : "s"}`,
+    );
+  }
+  parts.push(`${tasks.length} tracked`);
+  return parts.join(" · ");
 }
 
 function formatAgeMs(ageMs: number | undefined): string {

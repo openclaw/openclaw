@@ -6,6 +6,7 @@ import {
   buildStatusPairingRecoveryLines,
   buildStatusPluginCompatibilityLines,
   buildStatusSecurityAuditLines,
+  buildStatusTasksValue,
   buildStatusSessionsRows,
   buildStatusSystemEventsRows,
   buildStatusSystemEventsTrailer,
@@ -192,6 +193,50 @@ describe("status.command-sections", () => {
       "muted(Fallback: cmd:openclaw devices approve --latest)",
       "muted(Inspect: cmd:openclaw devices list)",
     ]);
+  });
+
+  it("uses active, recent-failure, and historical-failure wording for task summaries", () => {
+    expect(
+      buildStatusTasksValue({
+        summary: {
+          tasks: {
+            total: 4,
+            active: 2,
+            terminal: 2,
+            failures: 2,
+            recentFailures: 1,
+            historicalFailures: 1,
+            byStatus: {
+              queued: 1,
+              running: 1,
+              succeeded: 0,
+              failed: 1,
+              timed_out: 1,
+              cancelled: 0,
+              lost: 0,
+            },
+            byRuntime: { subagent: 4, acp: 0, cli: 0, cron: 0 },
+          },
+          taskAudit: {
+            total: 0,
+            errors: 0,
+            warnings: 0,
+            byCode: {
+              stale_queued: 0,
+              stale_running: 0,
+              lost: 0,
+              delivery_failed: 0,
+              missing_cleanup: 0,
+              inconsistent_timestamps: 0,
+            },
+          },
+        },
+        warn: (value) => `warn(${value})`,
+        muted: (value) => `muted(${value})`,
+      }),
+    ).toBe(
+      "2 active · warn(1 recent failure) · muted(1 historical failure) · muted(audit clean) · 4 tracked",
+    );
   });
 
   it("builds system event rows and health columns", () => {
