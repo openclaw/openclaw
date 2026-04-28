@@ -1,4 +1,30 @@
 import type { Command } from "commander";
+import {
+  modelsAliasesAddCommand,
+  modelsAliasesListCommand,
+  modelsAliasesRemoveCommand,
+  modelsAuthAddCommand,
+  modelsAuthLoginCommand,
+  modelsAuthOrderClearCommand,
+  modelsAuthOrderGetCommand,
+  modelsAuthOrderSetCommand,
+  modelsAuthPasteTokenCommand,
+  modelsAuthSetupTokenCommand,
+  modelsCustomTestCommand,
+  modelsFallbacksAddCommand,
+  modelsFallbacksClearCommand,
+  modelsFallbacksListCommand,
+  modelsFallbacksRemoveCommand,
+  modelsImageFallbacksAddCommand,
+  modelsImageFallbacksClearCommand,
+  modelsImageFallbacksListCommand,
+  modelsImageFallbacksRemoveCommand,
+  modelsListCommand,
+  modelsScanCommand,
+  modelsSetCommand,
+  modelsSetImageCommand,
+  modelsStatusCommand,
+} from "../commands/models.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
@@ -266,6 +292,25 @@ export function registerModelsCli(program: Command) {
       await runModelsCommand(async () => {
         const { modelsScanCommand } = await import("../commands/models/scan.js");
         await modelsScanCommand(opts, defaultRuntime);
+      });
+    });
+
+  models
+    .command("custom-test")
+    .description("Test all configured custom model providers")
+    .option("--provider <id>", "Only test a specific provider id")
+    .option("--concurrency <n>", "Number of concurrent tests", "4")
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runModelsCommand(async () => {
+        await modelsCustomTestCommand(
+          {
+            provider: opts.provider as string | undefined,
+            concurrency: opts.concurrency as string | undefined,
+            json: Boolean(opts.json),
+          },
+          defaultRuntime,
+        );
       });
     });
 
