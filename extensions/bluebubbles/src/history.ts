@@ -206,7 +206,14 @@ export async function fetchBlueBubblesMessageByGuid(
   }
 
   // Strip part-index prefix (e.g. "p:0/msg-guid" → "msg-guid")
-  const bareGuid = trimmed.includes("/") ? trimmed.split("/").pop()! : trimmed;
+  const bareGuid = trimmed.includes("/") ? (trimmed.split("/").pop() ?? "") : trimmed;
+  // Reject empty / pathological GUIDs before they reach the path. A trailing
+  // `/` would yield an empty bareGuid and turn the request into a list query
+  // against `/api/v1/message/`; a malformed GUID would let an attacker steer
+  // arbitrary BlueBubbles routes via the encoded segment (CWE-20).
+  if (!bareGuid || bareGuid.length > 128 || !/^[A-Za-z0-9._:-]+$/.test(bareGuid)) {
+    return null;
+  }
 
   // Route through the SSRF-guarded client (matches fetchBlueBubblesHistory):
   // a bare blueBubblesFetchWithTimeout call without `ssrfPolicy` skips the
