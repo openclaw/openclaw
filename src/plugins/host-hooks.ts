@@ -1,6 +1,5 @@
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { AgentEventPayload, AgentEventStream } from "../infra/agent-events.js";
-import type { ReplyPayload } from "../plugin-sdk/reply-payload.js";
 import type {
   PluginHookAgentContext,
   PluginHookBeforeToolCallEvent,
@@ -112,7 +111,7 @@ export type PluginSessionActionResult =
   | {
       ok?: true;
       data?: PluginJsonValue;
-      reply?: ReplyPayload;
+      reply?: PluginJsonValue;
       continueAgent?: boolean;
     }
   | {

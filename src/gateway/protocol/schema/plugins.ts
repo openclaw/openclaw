@@ -62,10 +62,9 @@ export const PluginsSessionActionParamsSchema = Type.Object(
 // (transport-level `ok: true`) with the plugin payload's `ok: false` plus
 // typed `error` / optional `code` / optional `details` fields. Transport
 // errors (validation, schema mismatch, dispatch error) still go through
-// errorShape. Per copilot review on plugins.ts:69 — declare both the
-// success and failure shapes so generated clients (e.g. Swift) decode the
-// failure path correctly instead of dropping fields under
-// `additionalProperties: false`.
+// errorShape. Declare both the success and failure shapes so generated
+// clients (e.g. Swift) decode the failure path correctly instead of dropping
+// fields under `additionalProperties: false`.
 export const PluginsSessionActionResultSchema = Type.Object(
   {
     ok: Type.Boolean(),

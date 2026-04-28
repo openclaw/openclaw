@@ -7,6 +7,7 @@ import {
   type JsonSchemaValidationError,
 } from "../../plugins/schema-validator.js";
 import type { JsonSchemaObject } from "../../shared/json-schema.types.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { ADMIN_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
 import {
   ErrorCodes,
@@ -60,8 +61,20 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const pluginId = params.pluginId.trim();
-    const actionId = params.actionId.trim();
+    const pluginId = normalizeOptionalString(params.pluginId);
+    const actionId = normalizeOptionalString(params.actionId);
+    const sessionKey = normalizeOptionalString(params.sessionKey);
+    if (!pluginId || !actionId) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "plugins.sessionAction pluginId and actionId must be non-empty",
+        ),
+      );
+      return;
+    }
     const registration = (getActivePluginRegistry()?.sessionActions ?? []).find(
       (entry) => entry.pluginId === pluginId && entry.action.id === actionId,
     );
@@ -138,7 +151,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
       const result = await registration.action.handler({
         pluginId,
         actionId,
-        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+        ...(sessionKey ? { sessionKey } : {}),
         ...(params.payload !== undefined ? { payload: params.payload } : {}),
         client: {
           ...(client?.connId ? { connId: client.connId } : {}),

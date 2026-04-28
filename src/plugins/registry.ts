@@ -2417,6 +2417,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   });
                 }
                 return enqueuePluginNextTurnInjection({
+                  cfg: params.config,
                   pluginId: record.id,
                   pluginName: record.name,
                   injection,

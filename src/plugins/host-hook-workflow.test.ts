@@ -85,6 +85,22 @@ describe("plugin host workflow helpers", () => {
     );
   });
 
+  it("rejects negative delay schedules instead of coercing them to immediate wakes", async () => {
+    await expect(
+      schedulePluginSessionTurn({
+        pluginId: "scheduler-fixture",
+        origin: "bundled",
+        schedule: {
+          sessionKey: "agent:main:main",
+          message: "wake",
+          delayMs: -1,
+        },
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(mocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
   it("keeps scheduled-turn records when cron cleanup fails", async () => {
     mocks.callGatewayTool.mockImplementation(async (method) => {
       if (method === "cron.add") {
