@@ -481,6 +481,8 @@ describe("runMessageAction plugin dispatch", () => {
         },
         requesterSenderId: "trusted-user",
         sessionKey: "agent:alpha:requestchat:group:ops",
+        trustGroupContext: true,
+        verifiedGroupIds: ["ops"],
         dryRun: false,
       });
 
@@ -558,6 +560,8 @@ describe("runMessageAction plugin dispatch", () => {
         },
         requesterSenderUsername: "alice_u",
         sessionKey: "agent:alpha:requestchat:group:ops",
+        trustGroupContext: true,
+        verifiedGroupIds: ["ops"],
         dryRun: false,
       });
 
@@ -652,6 +656,8 @@ describe("runMessageAction plugin dispatch", () => {
         requesterAccountId: "source",
         requesterSenderId: "trusted-user",
         sessionKey: "agent:alpha:requestchat:group:ops",
+        trustGroupContext: true,
+        verifiedGroupIds: ["ops"],
         dryRun: false,
       });
 
@@ -733,6 +739,8 @@ describe("runMessageAction plugin dispatch", () => {
         },
         requesterSenderId: "trusted-user",
         sessionKey: "agent:alpha:policychat:group:ops",
+        trustGroupContext: true,
+        verifiedGroupIds: ["ops"],
         dryRun: false,
       });
 
