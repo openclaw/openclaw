@@ -51,6 +51,10 @@ describe("sanitizeMimeType", () => {
     expect(sanitizeMimeType("image/png; charset=utf-8 garbage")).toBeUndefined();
   });
 
+  it("rejects non-ASCII values before lowercasing the result", () => {
+    expect(sanitizeMimeType("\u212Amage/png")).toBeUndefined();
+  });
+
   it("rejects empty, whitespace, or non-string input", () => {
     expect(sanitizeMimeType("")).toBeUndefined();
     expect(sanitizeMimeType("   ")).toBeUndefined();
