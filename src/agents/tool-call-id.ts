@@ -374,11 +374,7 @@ function rewriteAssistantToolCallIds(params: {
     const rec = block as { type?: unknown; id?: unknown };
     const type = rec.type;
     const id = rec.id;
-    if (
-      (type !== "functionCall" && type !== "toolUse" && type !== "toolCall") ||
-      typeof id !== "string" ||
-      !id
-    ) {
+    if (typeof type !== "string" || !TOOL_CALL_TYPES.has(type) || typeof id !== "string" || !id) {
       return block;
     }
     const nextId = params.resolveId(id);
