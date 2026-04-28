@@ -267,6 +267,7 @@ describe("agentCliCommand", () => {
       expect(agentCommand).toHaveBeenCalledTimes(1);
       expect(agentCommand.mock.calls[0]?.[0]).toMatchObject({
         cleanupBundleMcpOnRunEnd: true,
+        cleanupCliLiveSessionOnRunEnd: true,
       });
       expect(agentCommand.mock.calls[0]?.[0]).not.toHaveProperty("resultMetaOverrides");
       expect(runtime.log).toHaveBeenCalledWith("local");
@@ -283,6 +284,7 @@ describe("agentCliCommand", () => {
       expect(agentCommand).toHaveBeenCalledTimes(1);
       expect(agentCommand.mock.calls[0]?.[0]).toMatchObject({
         cleanupBundleMcpOnRunEnd: true,
+        cleanupCliLiveSessionOnRunEnd: true,
       });
     });
   });
