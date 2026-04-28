@@ -14,7 +14,6 @@ import {
   isSessionArchiveArtifactName,
   isPrimarySessionTranscriptFileName,
   isSilentReplyPayloadText,
-  isUsageCountedSessionTranscriptFileName,
   resolveSessionTranscriptsDirForAgent,
   stripInboundMetadata,
   stripInternalRuntimeContext,

@@ -10,7 +10,6 @@ import {
   isCompactionCheckpointTranscriptFileName,
   isPrimarySessionTranscriptFileName,
   isSessionArchiveArtifactName,
-  isUsageCountedSessionTranscriptFileName,
 } from "../../config/sessions/artifacts.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions/paths.js";
 import { isExecCompletionEvent } from "../../infra/heartbeat-events-filter.js";
