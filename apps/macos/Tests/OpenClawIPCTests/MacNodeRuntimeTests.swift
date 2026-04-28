@@ -720,6 +720,68 @@ struct MacNodeRuntimeTests {
         #expect(oversizedProjection > 25 * 1024 * 1024)
     }
 
+    @Test
+    func `projected outer frame bytes accounts for control character escape expansion`() throws {
+        // Codex P2 (2026-04-27) flagged that `jsonStringEscapeOverhead` only
+        // counted `"`, `\`, and `/`, while `JSONEncoder` also expands C0
+        // control characters in strings (the five short escapes `\b`, `\t`,
+        // `\n`, `\f`, `\r` plus the six-byte `\u00XX` form for the rest).
+        // `nodeId` is only constrained as `NonEmptyString` on the gateway
+        // protocol side, so a control-character-heavy node id could otherwise
+        // pass the projection guard and still serialize a frame above the
+        // 25 MiB transport ceiling. This test pins both halves: the projection
+        // must (a) bound the real serialized frame for an inner payload that
+        // contains both short and `\uXXXX` control bytes alongside `"`/`\\`,
+        // and (b) push past the 25 MiB ceiling on its own when a large
+        // control-character `nodeId` would force a multiplicative blow-up at
+        // wrap time.
+        let inner = "{\"format\":\"png\",\"note\":\"\u{0001}\u{0002}\n\t\\\"raw\\\"\",\"width\":1,\"height\":1,\"capturedAtMs\":0}"
+        let innerId = "req-control-char-1"
+        let outerNodeId = "node-\u{0001}\u{0002}\u{0003}\n\t-id"
+
+        let projected = MacNodeRuntime.projectedOuterFrameBytes(
+            forPayloadJSON: inner,
+            requestId: innerId,
+            nodeId: outerNodeId)
+
+        struct Frame: Encodable {
+            let type: String
+            let id: String
+            let method: String
+            let params: Params
+            struct Params: Encodable {
+                let id: String
+                let nodeId: String
+                let ok: Bool
+                let payloadJSON: String
+            }
+        }
+        let frame = Frame(
+            type: "req",
+            id: UUID().uuidString,
+            method: "node.invoke.result",
+            params: Frame.Params(
+                id: innerId,
+                nodeId: outerNodeId,
+                ok: true,
+                payloadJSON: inner))
+        let serialized = try JSONEncoder().encode(frame)
+        #expect(projected >= serialized.count)
+
+        // A `nodeId` packed with `\uXXXX`-class control bytes (every source
+        // byte expands to 6 wire bytes) only needs ~5 MiB of input to project
+        // above the 25 MiB transport ceiling. Without the control-character
+        // escape accounting added in this commit, the same input would have
+        // been treated as ~5 MiB on the wire and falsely accepted.
+        let controlByte: Character = "\u{0001}"
+        let controlHeavyNodeId = String(repeating: controlByte, count: 5 * 1024 * 1024)
+        let controlHeavyProjection = MacNodeRuntime.projectedOuterFrameBytes(
+            forPayloadJSON: "{}",
+            requestId: innerId,
+            nodeId: controlHeavyNodeId)
+        #expect(controlHeavyProjection > 25 * 1024 * 1024)
+    }
+
     @Test func `handle invoke browser proxy uses injected request`() async {
         let runtime = MacNodeRuntime(browserProxyRequest: { paramsJSON in
             #expect(paramsJSON?.contains("/tabs") == true)

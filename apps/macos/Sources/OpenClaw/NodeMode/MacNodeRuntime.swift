@@ -1059,13 +1059,16 @@ extension MacNodeRuntime {
     // RequestFrame when `payload` is embedded as a JSON string in its
     // `payloadJSON` field, the per-request `id` is echoed in the inner
     // `params.id` field, and the gateway-supplied `nodeId` is echoed in
-    // `params.nodeId`. The outer `JSONEncoder` escapes `"`, `\`, and `/` by
-    // default, so every such byte in any of those three strings consumes 2
-    // outer bytes instead of 1. Including `id` and `nodeId` byte counts here
-    // matters because gateway node ids are only `NonEmptyString` on the wire
-    // (no upper length bound), so a long node id paired with a near-budget
-    // payload could otherwise pass a fixed-reserve guard and still overflow
-    // the 25 MiB transport ceiling at send time.
+    // `params.nodeId`. The outer `JSONEncoder` escapes `"`, `\`, and `/`
+    // (each 1 byte → 2 wire bytes), the five short-form control characters
+    // (`\b`, `\t`, `\n`, `\f`, `\r`; each 1 byte → 2 wire bytes), and the
+    // remaining C0 control characters as `\u00XX` (each 1 byte → 6 wire
+    // bytes). `jsonStringEscapeOverhead(_:)` accounts for all three classes.
+    // Including `id` and `nodeId` byte counts here matters because gateway
+    // node ids are only `NonEmptyString` on the wire (no upper length bound
+    // and no charset bound), so a long or control-character-heavy node id
+    // paired with a near-budget payload could otherwise pass a fixed-reserve
+    // guard and still overflow the 25 MiB transport ceiling at send time.
     static func projectedOuterFrameBytes(
         forPayloadJSON payload: String,
         requestId: String,
@@ -1079,16 +1082,33 @@ extension MacNodeRuntime {
     }
 
     // Count of extra bytes the outer `JSONEncoder` emits when `s` is wrapped
-    // as a JSON string value: every `"`, `\`, and `/` byte costs one extra
-    // backslash on the wire. Used by `projectedOuterFrameBytes` to project
-    // the post-encode length without paying for a real outer encode pass.
+    // as a JSON string value:
+    //   - every `"`, `\`, and `/` byte costs one extra backslash (1 byte → 2);
+    //   - every control character (`U+0000`..`U+001F`) is escaped: the five
+    //     short forms `\b`, `\t`, `\n`, `\f`, `\r` cost one extra byte
+    //     (1 byte → 2), and the remaining control bytes are emitted as the
+    //     six-byte `\u00XX` form (1 byte → 6, so +5 overhead each).
+    // Used by `projectedOuterFrameBytes` to project the post-encode length
+    // without paying for a real outer encode pass. Gateway node ids are only
+    // `NonEmptyString` on the wire, so a `nodeId` carrying control characters
+    // would otherwise undercount here and could pass the guard while still
+    // overflowing the 25 MiB transport ceiling at send time.
     static func jsonStringEscapeOverhead(_ s: String) -> Int {
         var overhead = 0
-        for byte in s.utf8 where byte == UInt8(ascii: "\"")
-            || byte == UInt8(ascii: "\\")
-            || byte == UInt8(ascii: "/")
-        {
-            overhead += 1
+        for byte in s.utf8 {
+            switch byte {
+            case UInt8(ascii: "\""), UInt8(ascii: "\\"), UInt8(ascii: "/"):
+                overhead += 1
+            case 0x08, 0x09, 0x0A, 0x0C, 0x0D:
+                // \b \t \n \f \r — JSON short escapes, 1 byte → 2 bytes.
+                overhead += 1
+            case 0x00...0x1F:
+                // Remaining C0 control bytes — emitted as `\u00XX`, so the
+                // single source byte expands to six wire bytes.
+                overhead += 5
+            default:
+                continue
+            }
         }
         return overhead
     }
