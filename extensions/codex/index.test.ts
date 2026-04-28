@@ -72,9 +72,9 @@ describe("codex plugin", () => {
       registerMediaUnderstandingProvider: vi.fn(),
       registerProvider: vi.fn(),
       on: vi.fn(),
-    }) as ReturnType<typeof createTestPluginApi> & {
-      onConversationBindingResolved?: ReturnType<typeof vi.fn>;
-    };
+    });
+    // Simulate a capture-API runtime that has not yet wired the conversation
+    // binding hook, exercising the codex plugin's defensive registration path.
     delete (api as { onConversationBindingResolved?: unknown }).onConversationBindingResolved;
 
     expect(() => plugin.register(api)).not.toThrow();
