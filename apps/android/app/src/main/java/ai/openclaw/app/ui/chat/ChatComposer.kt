@@ -1,5 +1,20 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.chat.ChatModelCatalogEntry
+import ai.openclaw.app.chat.ChatSessionDefaults
+import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.ui.mobileAccent
+import ai.openclaw.app.ui.mobileAccentBorderStrong
+import ai.openclaw.app.ui.mobileAccentSoft
+import ai.openclaw.app.ui.mobileBorder
+import ai.openclaw.app.ui.mobileBorderStrong
+import ai.openclaw.app.ui.mobileCallout
+import ai.openclaw.app.ui.mobileCaption1
+import ai.openclaw.app.ui.mobileCardSurface
+import ai.openclaw.app.ui.mobileSurface
+import ai.openclaw.app.ui.mobileText
+import ai.openclaw.app.ui.mobileTextSecondary
+import ai.openclaw.app.ui.mobileTextTertiary
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.horizontalScroll
@@ -50,22 +65,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import ai.openclaw.app.chat.ChatModelCatalogEntry
-import ai.openclaw.app.chat.ChatSessionDefaults
-import ai.openclaw.app.chat.ChatSessionEntry
-import ai.openclaw.app.ui.mobileAccent
-import ai.openclaw.app.ui.mobileAccentBorderStrong
-import ai.openclaw.app.ui.mobileAccentSoft
-import ai.openclaw.app.ui.mobileBorder
-import ai.openclaw.app.ui.mobileBorderStrong
-import ai.openclaw.app.ui.mobileCallout
-import ai.openclaw.app.ui.mobileCaption1
-import ai.openclaw.app.ui.mobileCardSurface
-import ai.openclaw.app.ui.mobileHeadline
-import ai.openclaw.app.ui.mobileSurface
-import ai.openclaw.app.ui.mobileText
-import ai.openclaw.app.ui.mobileTextSecondary
-import ai.openclaw.app.ui.mobileTextTertiary
 
 internal data class DraftApplication(
   val input: String,
@@ -512,8 +511,8 @@ internal fun normalizeThinkingLevelForUi(raw: String?): String {
   }
 }
 
-internal fun thinkingLabel(raw: String): String {
-  return when (normalizeThinkingLevelForUi(raw)) {
+internal fun thinkingLabel(raw: String): String =
+  when (normalizeThinkingLevelForUi(raw)) {
     "minimal" -> "Minimal"
     "low" -> "Low"
     "medium" -> "Medium"
@@ -523,7 +522,6 @@ internal fun thinkingLabel(raw: String): String {
     "off" -> "Off"
     else -> "Default"
   }
-}
 
 internal fun resolveCurrentModelValue(activeSession: ChatSessionEntry?): String {
   val model = activeSession?.model?.trim().orEmpty()
@@ -539,7 +537,10 @@ internal fun resolveDefaultModelValue(defaults: ChatSessionDefaults): String {
   return if (provider.isNotEmpty() && !model.startsWith("$provider/")) "$provider/$model" else model
 }
 
-internal fun formatModelLabel(value: String, catalog: List<ChatModelCatalogEntry>): String {
+internal fun formatModelLabel(
+  value: String,
+  catalog: List<ChatModelCatalogEntry>,
+): String {
   val trimmed = value.trim()
   if (trimmed.isEmpty()) return ""
   val hit = catalog.firstOrNull { optionValue(it).equals(trimmed, ignoreCase = true) }
@@ -603,9 +604,7 @@ internal fun thinkingMenuLabel(
   activeSession: ChatSessionEntry?,
   sessionDefaults: ChatSessionDefaults,
   modelCatalog: List<ChatModelCatalogEntry>,
-): String {
-  return if (currentThinking.isBlank()) thinkingDefaultLabel(activeSession, sessionDefaults, modelCatalog) else "Think: ${thinkingLabel(currentThinking)}"
-}
+): String = if (currentThinking.isBlank()) thinkingDefaultLabel(activeSession, sessionDefaults, modelCatalog) else "Think: ${thinkingLabel(currentThinking)}"
 
 private fun resolveThinkingDefault(
   provider: String?,
@@ -624,9 +623,7 @@ private fun resolveThinkingDefault(
   return if (hit?.reasoning == true) "low" else "off"
 }
 
-private fun optionValue(entry: ChatModelCatalogEntry): String {
-  return "${entry.provider.trim()}/${entry.id.trim()}".trim('/')
-}
+private fun optionValue(entry: ChatModelCatalogEntry): String = "${entry.provider.trim()}/${entry.id.trim()}".trim('/')
 
 @Composable
 private fun AttachmentsStrip(
@@ -647,7 +644,10 @@ private fun AttachmentsStrip(
 }
 
 @Composable
-private fun AttachmentChip(fileName: String, onRemove: () -> Unit) {
+private fun AttachmentChip(
+  fileName: String,
+  onRemove: () -> Unit,
+) {
   Surface(
     shape = RoundedCornerShape(999.dp),
     color = mobileAccentSoft,

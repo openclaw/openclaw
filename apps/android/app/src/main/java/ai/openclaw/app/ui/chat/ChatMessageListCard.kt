@@ -1,5 +1,15 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.chat.ChatTimelineItem
+import ai.openclaw.app.chat.ChatTimelineMessageItem
+import ai.openclaw.app.chat.ChatTimelineToolItem
+import ai.openclaw.app.ui.mobileBorder
+import ai.openclaw.app.ui.mobileCallout
+import ai.openclaw.app.ui.mobileCardSurface
+import ai.openclaw.app.ui.mobileHeadline
+import ai.openclaw.app.ui.mobileText
+import ai.openclaw.app.ui.mobileTextSecondary
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,16 +28,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import ai.openclaw.app.chat.ChatPendingToolCall
-import ai.openclaw.app.chat.ChatTimelineItem
-import ai.openclaw.app.chat.ChatTimelineMessageItem
-import ai.openclaw.app.chat.ChatTimelineToolItem
-import ai.openclaw.app.ui.mobileBorder
-import ai.openclaw.app.ui.mobileCallout
-import ai.openclaw.app.ui.mobileCardSurface
-import ai.openclaw.app.ui.mobileHeadline
-import ai.openclaw.app.ui.mobileText
-import ai.openclaw.app.ui.mobileTextSecondary
 
 @Composable
 fun ChatMessageListCard(
@@ -65,7 +65,9 @@ fun ChatMessageListCard(
       state = listState,
       reverseLayout = true,
       verticalArrangement = Arrangement.spacedBy(10.dp),
-      contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 8.dp),
+      contentPadding =
+        androidx.compose.foundation.layout
+          .PaddingValues(bottom = 8.dp),
     ) {
       if (!stream.isNullOrEmpty()) {
         item(key = "stream") {

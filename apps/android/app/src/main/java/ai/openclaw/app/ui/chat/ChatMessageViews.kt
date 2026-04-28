@@ -1,5 +1,27 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.chat.ChatCanvasPreview
+import ai.openclaw.app.chat.ChatMessage
+import ai.openclaw.app.chat.ChatMessageContent
+import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.chat.ChatTimelineMessageItem
+import ai.openclaw.app.chat.ChatTimelineToolItem
+import ai.openclaw.app.tools.ToolDisplayRegistry
+import ai.openclaw.app.ui.mobileAccent
+import ai.openclaw.app.ui.mobileAccentSoft
+import ai.openclaw.app.ui.mobileBorder
+import ai.openclaw.app.ui.mobileBorderStrong
+import ai.openclaw.app.ui.mobileCallout
+import ai.openclaw.app.ui.mobileCaption1
+import ai.openclaw.app.ui.mobileCaption2
+import ai.openclaw.app.ui.mobileCardSurface
+import ai.openclaw.app.ui.mobileCodeBg
+import ai.openclaw.app.ui.mobileCodeBorder
+import ai.openclaw.app.ui.mobileCodeText
+import ai.openclaw.app.ui.mobileText
+import ai.openclaw.app.ui.mobileTextSecondary
+import ai.openclaw.app.ui.mobileWarning
+import ai.openclaw.app.ui.mobileWarningSoft
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -27,28 +49,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import ai.openclaw.app.chat.ChatCanvasPreview
-import ai.openclaw.app.chat.ChatMessage
-import ai.openclaw.app.chat.ChatMessageContent
-import ai.openclaw.app.chat.ChatPendingToolCall
-import ai.openclaw.app.chat.ChatTimelineMessageItem
-import ai.openclaw.app.chat.ChatTimelineToolItem
-import ai.openclaw.app.tools.ToolDisplayRegistry
-import ai.openclaw.app.ui.mobileAccent
-import ai.openclaw.app.ui.mobileAccentSoft
-import ai.openclaw.app.ui.mobileBorder
-import ai.openclaw.app.ui.mobileBorderStrong
-import ai.openclaw.app.ui.mobileCallout
-import ai.openclaw.app.ui.mobileCaption1
-import ai.openclaw.app.ui.mobileCaption2
-import ai.openclaw.app.ui.mobileCardSurface
-import ai.openclaw.app.ui.mobileCodeBg
-import ai.openclaw.app.ui.mobileCodeBorder
-import ai.openclaw.app.ui.mobileCodeText
-import ai.openclaw.app.ui.mobileText
-import ai.openclaw.app.ui.mobileTextSecondary
-import ai.openclaw.app.ui.mobileWarning
-import ai.openclaw.app.ui.mobileWarningSoft
 import java.util.Locale
 
 private data class ChatBubbleStyle(
@@ -145,9 +145,10 @@ fun ChatCompletedToolBubble(
   onOpenCanvas: ((String) -> Unit)? = null,
 ) {
   val context = LocalContext.current
-  val display = remember(item.toolName, item.args, context) {
-    ToolDisplayRegistry.resolve(context = context, name = item.toolName, args = item.args)
-  }
+  val display =
+    remember(item.toolName, item.args, context) {
+      ToolDisplayRegistry.resolve(context = context, name = item.toolName, args = item.args)
+    }
 
   ChatBubbleContainer(
     style = bubbleStyle("assistant"),
@@ -302,8 +303,7 @@ private fun ChatCanvasPreviewCard(
             } else {
               Modifier
             },
-          )
-          .padding(10.dp),
+          ).padding(10.dp),
       verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
       Text(
@@ -406,7 +406,10 @@ fun ChatStreamingAssistantBubble(text: String) {
 }
 
 @Composable
-private fun ChatBase64Image(base64: String, mimeType: String?) {
+private fun ChatBase64Image(
+  base64: String,
+  mimeType: String?,
+) {
   val imageState = rememberBase64ImageState(base64)
   val image = imageState.image
 
@@ -439,7 +442,10 @@ private fun DotPulse(color: Color) {
 }
 
 @Composable
-private fun PulseDot(alpha: Float, color: Color) {
+private fun PulseDot(
+  alpha: Float,
+  color: Color,
+) {
   Surface(
     modifier = Modifier.size(6.dp).alpha(alpha),
     shape = CircleShape,
@@ -448,7 +454,10 @@ private fun PulseDot(alpha: Float, color: Color) {
 }
 
 @Composable
-fun ChatCodeBlock(code: String, language: String?) {
+fun ChatCodeBlock(
+  code: String,
+  language: String?,
+) {
   androidx.compose.foundation.text.selection.SelectionContainer {
     Surface(
       shape = RoundedCornerShape(8.dp),
@@ -555,8 +564,8 @@ private fun extractInlineCanvasPreview(text: String?): ChatCanvasPreview? {
 }
 
 @Composable
-private fun bubbleStyle(role: String): ChatBubbleStyle {
-  return when (role) {
+private fun bubbleStyle(role: String): ChatBubbleStyle =
+  when (role) {
     "user" ->
       ChatBubbleStyle(
         alignEnd = true,
@@ -581,12 +590,10 @@ private fun bubbleStyle(role: String): ChatBubbleStyle {
         roleColor = mobileTextSecondary,
       )
   }
-}
 
-private fun roleLabel(role: String): String {
-  return when (role) {
+private fun roleLabel(role: String): String =
+  when (role) {
     "user" -> "You"
     "system" -> "System"
     else -> "OpenClaw"
   }
-}

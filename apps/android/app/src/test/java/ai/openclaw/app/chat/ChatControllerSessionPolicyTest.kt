@@ -4,7 +4,6 @@ import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewaySession
-import java.lang.reflect.Field
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -23,6 +22,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import java.lang.reflect.Field
 
 @RunWith(RobolectricTestRunner::class)
 class ChatControllerSessionPolicyTest {
@@ -53,40 +53,41 @@ class ChatControllerSessionPolicyTest {
   }
 
   @Test
-  fun ignoresStreamingEventsWithoutMatchingSessionKey() = runBlocking {
-    val controller = buildController()
-    controller.load("agent:main:chat-1")
+  fun ignoresStreamingEventsWithoutMatchingSessionKey() =
+    runBlocking {
+      val controller = buildController()
+      controller.load("agent:main:chat-1")
 
-    controller.handleGatewayEvent(
-      "chat",
-      """{"state":"delta","sessionKey":"agent:main:chat-2","message":{"role":"assistant","content":[{"type":"text","text":"leak"}]}}""",
-    )
-    assertNull(controller.streamingAssistantText.first())
+      controller.handleGatewayEvent(
+        "chat",
+        """{"state":"delta","sessionKey":"agent:main:chat-2","message":{"role":"assistant","content":[{"type":"text","text":"leak"}]}}""",
+      )
+      assertNull(controller.streamingAssistantText.first())
 
-    controller.handleGatewayEvent(
-      "chat",
-      """{"state":"delta","message":{"role":"assistant","content":[{"type":"text","text":"blank"}]}}""",
-    )
-    assertNull(controller.streamingAssistantText.first())
+      controller.handleGatewayEvent(
+        "chat",
+        """{"state":"delta","message":{"role":"assistant","content":[{"type":"text","text":"blank"}]}}""",
+      )
+      assertNull(controller.streamingAssistantText.first())
 
-    controller.handleGatewayEvent(
-      "agent",
-      """{"stream":"assistant","sessionKey":"agent:main:chat-2","data":{"text":"tool leak"}}""",
-    )
-    assertNull(controller.streamingAssistantText.first())
+      controller.handleGatewayEvent(
+        "agent",
+        """{"stream":"assistant","sessionKey":"agent:main:chat-2","data":{"text":"tool leak"}}""",
+      )
+      assertNull(controller.streamingAssistantText.first())
 
-    controller.handleGatewayEvent(
-      "agent",
-      """{"stream":"assistant","data":{"text":"blank tool leak"}}""",
-    )
-    assertNull(controller.streamingAssistantText.first())
+      controller.handleGatewayEvent(
+        "agent",
+        """{"stream":"assistant","data":{"text":"blank tool leak"}}""",
+      )
+      assertNull(controller.streamingAssistantText.first())
 
-    controller.handleGatewayEvent(
-      "agent",
-      """{"stream":"assistant","sessionKey":"agent:main:chat-1","data":{"text":"ok"}}""",
-    )
-    assertEquals("ok", controller.streamingAssistantText.first())
-  }
+      controller.handleGatewayEvent(
+        "agent",
+        """{"stream":"assistant","sessionKey":"agent:main:chat-1","data":{"text":"ok"}}""",
+      )
+      assertEquals("ok", controller.streamingAssistantText.first())
+    }
 
   @Test
   fun canDeleteSessionRejectsMainAliases() {
@@ -125,49 +126,51 @@ class ChatControllerSessionPolicyTest {
   }
 
   @Test
-  fun deleteSessionThroughGatewayUsesCanonicalDeleteTranscriptPayload() = runBlocking {
-    var requestedMethod: String? = null
-    var requestedParamsJson: String? = null
+  fun deleteSessionThroughGatewayUsesCanonicalDeleteTranscriptPayload() =
+    runBlocking {
+      var requestedMethod: String? = null
+      var requestedParamsJson: String? = null
 
-    val outcome =
-      deleteSessionThroughGateway(
-        request = { method, paramsJson ->
-          requestedMethod = method
-          requestedParamsJson = paramsJson
-          GatewaySession.RpcResult(
-            ok = true,
-            payloadJson = """{"ok":true,"deleted":true}""",
-            error = null,
-          )
-        },
-        sessionKey = "agent:ops:subagent:abc",
-      )
+      val outcome =
+        deleteSessionThroughGateway(
+          request = { method, paramsJson ->
+            requestedMethod = method
+            requestedParamsJson = paramsJson
+            GatewaySession.RpcResult(
+              ok = true,
+              payloadJson = """{"ok":true,"deleted":true}""",
+              error = null,
+            )
+          },
+          sessionKey = "agent:ops:subagent:abc",
+        )
 
-    assertTrue(outcome.deleted)
-    assertNull(outcome.errorText)
-    assertEquals("sessions.delete", requestedMethod)
-    val params = Json.parseToJsonElement(requestedParamsJson ?: error("missing params")).jsonObject
-    assertEquals("agent:ops:subagent:abc", params.getValue("key").jsonPrimitive.content)
-    assertTrue(params.getValue("deleteTranscript").jsonPrimitive.boolean)
-  }
+      assertTrue(outcome.deleted)
+      assertNull(outcome.errorText)
+      assertEquals("sessions.delete", requestedMethod)
+      val params = Json.parseToJsonElement(requestedParamsJson ?: error("missing params")).jsonObject
+      assertEquals("agent:ops:subagent:abc", params.getValue("key").jsonPrimitive.content)
+      assertTrue(params.getValue("deleteTranscript").jsonPrimitive.boolean)
+    }
 
   @Test
-  fun deleteSessionThroughGatewayReturnsGatewayErrorMessage() = runBlocking {
-    val outcome =
-      deleteSessionThroughGateway(
-        request = { _, _ ->
-          GatewaySession.RpcResult(
-            ok = false,
-            payloadJson = null,
-            error = GatewaySession.ErrorShape(code = "FORBIDDEN", message = "missing scope: operator.admin"),
-          )
-        },
-        sessionKey = "agent:ops:subagent:abc",
-      )
+  fun deleteSessionThroughGatewayReturnsGatewayErrorMessage() =
+    runBlocking {
+      val outcome =
+        deleteSessionThroughGateway(
+          request = { _, _ ->
+            GatewaySession.RpcResult(
+              ok = false,
+              payloadJson = null,
+              error = GatewaySession.ErrorShape(code = "FORBIDDEN", message = "missing scope: operator.admin"),
+            )
+          },
+          sessionKey = "agent:ops:subagent:abc",
+        )
 
-    assertFalse(outcome.deleted)
-    assertEquals("missing scope: operator.admin", outcome.errorText)
-  }
+      assertFalse(outcome.deleted)
+      assertEquals("missing scope: operator.admin", outcome.errorText)
+    }
 
   @Test
   fun resolveAuthoritativeCurrentSessionKeyFallsBackWhenCurrentMissing() {
@@ -236,16 +239,17 @@ class ChatControllerSessionPolicyTest {
   }
 
   @Test
-  fun switchSessionIsBlockedWhileRunIsPending() = runBlocking {
-    val controller = buildController()
-    controller.load("agent:main:chat-1")
-    mutableIntStateField(controller, "_pendingRunCount").value = 1
+  fun switchSessionIsBlockedWhileRunIsPending() =
+    runBlocking {
+      val controller = buildController()
+      controller.load("agent:main:chat-1")
+      mutableIntStateField(controller, "_pendingRunCount").value = 1
 
-    controller.switchSession("agent:main:chat-2")
+      controller.switchSession("agent:main:chat-2")
 
-    assertEquals("agent:main:chat-1", controller.sessionKey.first())
-    assertEquals("Wait for the current run to finish before changing chats.", controller.errorText.first())
-  }
+      assertEquals("agent:main:chat-1", controller.sessionKey.first())
+      assertEquals("Wait for the current run to finish before changing chats.", controller.errorText.first())
+    }
 
   private fun buildController(
     createSessionRequest: suspend (String) -> String? = { null },
@@ -273,7 +277,10 @@ class ChatControllerSessionPolicyTest {
   }
 
   @Suppress("UNCHECKED_CAST")
-  private fun mutableIntStateField(controller: ChatController, name: String): kotlinx.coroutines.flow.MutableStateFlow<Int> {
+  private fun mutableIntStateField(
+    controller: ChatController,
+    name: String,
+  ): kotlinx.coroutines.flow.MutableStateFlow<Int> {
     val field: Field = ChatController::class.java.getDeclaredField(name)
     field.isAccessible = true
     return field.get(controller) as kotlinx.coroutines.flow.MutableStateFlow<Int>

@@ -138,140 +138,150 @@ class SessionFiltersTest {
 
   @Test
   fun displaySessionNamePrefersUsefulDisplayNameWhenPresent() {
-    val entry = ChatSessionEntry(
-      key = "agent:main:subagent:abc",
-      updatedAtMs = null,
-      displayName = "Subagent: cron-config-check",
-    )
+    val entry =
+      ChatSessionEntry(
+        key = "agent:main:subagent:abc",
+        updatedAtMs = null,
+        displayName = "Subagent: cron-config-check",
+      )
 
     assertEquals("Subagent: cron-config-check", displaySessionName(entry))
   }
 
   @Test
   fun displaySessionNamePrefersHumanSubagentLabelFromGateway() {
-    val entry = ChatSessionEntry(
-      key = "agent:research:subagent:582844c3-0439-452c-9443-ff19a12e0761",
-      updatedAtMs = null,
-      displayName = "Subagent: 9443",
-      label = "Android session edge-case audit",
-    )
+    val entry =
+      ChatSessionEntry(
+        key = "agent:research:subagent:582844c3-0439-452c-9443-ff19a12e0761",
+        updatedAtMs = null,
+        displayName = "Subagent: 9443",
+        label = "Android session edge-case audit",
+      )
 
     assertEquals("Subagent: Android session edge-case audit", displaySessionName(entry))
   }
 
   @Test
   fun displaySessionNamePrefersDerivedTitleForTelegramThreadSessions() {
-    val entry = ChatSessionEntry(
-      key = "agent:main:telegram:direct:123456789:thread:99",
-      updatedAtMs = null,
-      displayName = "Dmitry Kuznetsov",
-      derivedTitle = "Новый тестовый чат",
-      channel = "telegram",
-      chatType = "direct",
-      topicId = "99",
-    )
+    val entry =
+      ChatSessionEntry(
+        key = "agent:main:telegram:direct:123456789:thread:99",
+        updatedAtMs = null,
+        displayName = "Dmitry Kuznetsov",
+        derivedTitle = "Новый тестовый чат",
+        channel = "telegram",
+        chatType = "direct",
+        topicId = "99",
+      )
 
     assertEquals("Новый тестовый чат", displaySessionName(entry))
   }
 
   @Test
   fun displaySessionNamePrefersSubjectForTelegramTopicSessionsWhenDerivedTitleMissing() {
-    val entry = ChatSessionEntry(
-      key = "agent:main:telegram:group:-100123456:topic:216303",
-      updatedAtMs = null,
-      displayName = "216303",
-      subject = "Android parity",
-      channel = "telegram",
-      chatType = "group",
-      topicId = "216303",
-    )
+    val entry =
+      ChatSessionEntry(
+        key = "agent:main:telegram:group:-100123456:topic:216303",
+        updatedAtMs = null,
+        displayName = "216303",
+        subject = "Android parity",
+        channel = "telegram",
+        chatType = "group",
+        topicId = "216303",
+      )
 
     assertEquals("Android parity", displaySessionName(entry))
   }
 
   @Test
   fun displaySessionNameIgnoresInboundMetadataSentinelTitles() {
-    val entry = ChatSessionEntry(
-      key = "agent:main:telegram:group:-100123456:topic:216303",
-      updatedAtMs = null,
-      displayName = "Conversation info (untrusted metadata):",
-      derivedTitle = "Sender (untrusted metadata):",
-      channel = "telegram",
-      chatType = "group",
-      topicId = "216303",
-    )
+    val entry =
+      ChatSessionEntry(
+        key = "agent:main:telegram:group:-100123456:topic:216303",
+        updatedAtMs = null,
+        displayName = "Conversation info (untrusted metadata):",
+        derivedTitle = "Sender (untrusted metadata):",
+        channel = "telegram",
+        chatType = "group",
+        topicId = "216303",
+      )
 
     assertEquals("Telegram topic: 216303", displaySessionName(entry))
   }
 
   @Test
   fun displaySessionNameIgnoresSystemPrefixedSessionNoise() {
-    val entry = ChatSessionEntry(
-      key = "agent:main:telegram:group:-100123456:topic:216303",
-      updatedAtMs = null,
-      displayName = "System: [2026-04-19 21:08:31]",
-      channel = "telegram",
-      chatType = "group",
-      topicId = "216303",
-    )
+    val entry =
+      ChatSessionEntry(
+        key = "agent:main:telegram:group:-100123456:topic:216303",
+        updatedAtMs = null,
+        displayName = "System: [2026-04-19 21:08:31]",
+        channel = "telegram",
+        chatType = "group",
+        topicId = "216303",
+      )
 
     assertEquals("Telegram topic: 216303", displaySessionName(entry))
   }
 
   @Test
   fun displaySessionNamePrefersStructuredTelegramFallbackOverBareNumericTitle() {
-    val entry = ChatSessionEntry(
-      key = "agent:main:telegram:group:-100123456:topic:216303",
-      updatedAtMs = null,
-      displayName = "216303",
-      channel = "telegram",
-      chatType = "group",
-      topicId = "216303",
-    )
+    val entry =
+      ChatSessionEntry(
+        key = "agent:main:telegram:group:-100123456:topic:216303",
+        updatedAtMs = null,
+        displayName = "216303",
+        channel = "telegram",
+        chatType = "group",
+        topicId = "216303",
+      )
 
     assertEquals("Telegram topic: 216303", displaySessionName(entry))
   }
 
   @Test
   fun displaySessionNamePrefersStructuredTelegramFallbackOverDirectPersonalName() {
-    val entry = ChatSessionEntry(
-      key = "agent:main:telegram:direct:139351986",
-      updatedAtMs = null,
-      displayName = "Dmitry Kuznetsov",
-      channel = "telegram",
-      chatType = "direct",
-    )
+    val entry =
+      ChatSessionEntry(
+        key = "agent:main:telegram:direct:139351986",
+        updatedAtMs = null,
+        displayName = "Dmitry Kuznetsov",
+        channel = "telegram",
+        chatType = "direct",
+      )
 
     assertEquals("Telegram: 139351986", displaySessionName(entry))
   }
 
   @Test
   fun displaySessionNameUsesTelegramThreadFallbackForAgentMainThreadKey() {
-    val entry = ChatSessionEntry(
-      key = "agent:main:main:thread:139351986:216303",
-      updatedAtMs = null,
-      displayName = "Dmitry Kuznetsov",
-      channel = "telegram",
-      chatType = "direct",
-      lastThreadId = "216303",
-      lastTo = "telegram:139351986",
-      lastChannel = "telegram",
-    )
+    val entry =
+      ChatSessionEntry(
+        key = "agent:main:main:thread:139351986:216303",
+        updatedAtMs = null,
+        displayName = "Dmitry Kuznetsov",
+        channel = "telegram",
+        chatType = "direct",
+        lastThreadId = "216303",
+        lastTo = "telegram:139351986",
+        lastChannel = "telegram",
+      )
 
     assertEquals("Telegram thread: 216303", displaySessionName(entry))
   }
 
   @Test
   fun displaySessionNameUsesLastChannelAndLastThreadFallbackWhenPrimaryFieldsMissing() {
-    val entry = ChatSessionEntry(
-      key = "agent:main:main:thread:139351986:213370",
-      updatedAtMs = null,
-      displayName = "213370",
-      chatType = "direct",
-      lastThreadId = "213370",
-      lastTo = "telegram:139351986",
-      lastChannel = "telegram",
-    )
+    val entry =
+      ChatSessionEntry(
+        key = "agent:main:main:thread:139351986:213370",
+        updatedAtMs = null,
+        displayName = "213370",
+        chatType = "direct",
+        lastThreadId = "213370",
+        lastTo = "telegram:139351986",
+        lastChannel = "telegram",
+      )
 
     assertEquals("Telegram thread: 213370", displaySessionName(entry))
   }
@@ -284,77 +294,84 @@ class SessionFiltersTest {
 
   @Test
   fun displaySessionNameIgnoresTechnicalDisplayNameAndFallsBackToFriendlyKey() {
-    val entry = ChatSessionEntry(
-      key = "telegram:g-agent-main-main-thread-216750",
-      updatedAtMs = null,
-      displayName = "telegram:g-agent-main-main-thr",
-    )
+    val entry =
+      ChatSessionEntry(
+        key = "telegram:g-agent-main-main-thread-216750",
+        updatedAtMs = null,
+        displayName = "telegram:g-agent-main-main-thr",
+      )
 
     assertEquals("Telegram: 216750", displaySessionName(entry))
   }
 
   @Test
   fun compactSessionDisplayNameKeepsSingleLineFriendlyDeviceMainFallback() {
-    val entry = ChatSessionEntry(
-      key = "agent:main:node-229e55ef9bfd",
-      updatedAtMs = null,
-      displayName = "42dcdbd4 (2026-04-22)",
-    )
+    val entry =
+      ChatSessionEntry(
+        key = "agent:main:node-229e55ef9bfd",
+        updatedAtMs = null,
+        displayName = "42dcdbd4 (2026-04-22)",
+      )
 
     assertEquals("Device main: 229e55ef9bfd", compactSessionDisplayName(entry))
   }
 
   @Test
   fun compactSessionDisplayNameAppendsDashboardSuffixForAgentSessions() {
-    val entry = ChatSessionEntry(
-      key = "agent:main:dashboard:a1b79437-c465-4ba2-8fa0-a52d900a6cdf",
-      updatedAtMs = null,
-      displayName = "DkMagic7",
-    )
+    val entry =
+      ChatSessionEntry(
+        key = "agent:main:dashboard:a1b79437-c465-4ba2-8fa0-a52d900a6cdf",
+        updatedAtMs = null,
+        displayName = "DkMagic7",
+      )
 
     assertEquals("DkMagic7: dashboard: 6cdf", compactSessionDisplayName(entry))
   }
 
   @Test
   fun compactSessionDisplayNameUsesStructuredTelegramIdentifierForAgentSessions() {
-    val entry = ChatSessionEntry(
-      key = "agent:main:telegram:group:topic-216303",
-      updatedAtMs = null,
-      displayName = "DkMagic7",
-    )
+    val entry =
+      ChatSessionEntry(
+        key = "agent:main:telegram:group:topic-216303",
+        updatedAtMs = null,
+        displayName = "DkMagic7",
+      )
 
     assertEquals("Telegram: 216303", compactSessionDisplayName(entry))
   }
 
   @Test
   fun displaySessionNameIgnoresHexDateFallbackTitleAndUsesFriendlySessionType() {
-    val entry = ChatSessionEntry(
-      key = "agent:main:telegram:slash:139351986",
-      updatedAtMs = null,
-      derivedTitle = "6c4082de (2026-04-22)",
-    )
+    val entry =
+      ChatSessionEntry(
+        key = "agent:main:telegram:slash:139351986",
+        updatedAtMs = null,
+        derivedTitle = "6c4082de (2026-04-22)",
+      )
 
     assertEquals("Telegram command: 139351986", displaySessionName(entry))
   }
 
   @Test
   fun displaySessionNameStripsLeadingCompactTimestampPrefix() {
-    val entry = ChatSessionEntry(
-      key = "agent:research:dashboard:4ba2",
-      updatedAtMs = null,
-      derivedTitle = "[Fri 2026-04-17 17:09 GMT+3] Короткая",
-    )
+    val entry =
+      ChatSessionEntry(
+        key = "agent:research:dashboard:4ba2",
+        updatedAtMs = null,
+        derivedTitle = "[Fri 2026-04-17 17:09 GMT+3] Короткая",
+      )
 
     assertEquals("Короткая", displaySessionName(entry))
   }
 
   @Test
   fun displaySessionNameMakesDeviceMainExplicitWhenDisplayNameExists() {
-    val entry = ChatSessionEntry(
-      key = "agent:main:node-94b77028da7f",
-      updatedAtMs = null,
-      displayName = "DkMagic7",
-    )
+    val entry =
+      ChatSessionEntry(
+        key = "agent:main:node-94b77028da7f",
+        updatedAtMs = null,
+        displayName = "DkMagic7",
+      )
 
     assertEquals("Device main: DkMagic7", displaySessionName(entry))
   }

@@ -2,9 +2,6 @@ package ai.openclaw.app.chat
 
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.ui.chat.resolveSessionAgentId
-import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -18,8 +15,10 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 
 class ChatController(
   private val scope: CoroutineScope,
@@ -394,7 +393,10 @@ class ChatController(
     }
   }
 
-  fun handleGatewayEvent(event: String, payloadJson: String?) {
+  fun handleGatewayEvent(
+    event: String,
+    payloadJson: String?,
+  ) {
     when (event) {
       "tick" -> {
         scope.launch { pollHealthIfNeeded(force = false) }
@@ -417,7 +419,10 @@ class ChatController(
     }
   }
 
-  private suspend fun bootstrap(forceHealth: Boolean, refreshSessions: Boolean) {
+  private suspend fun bootstrap(
+    forceHealth: Boolean,
+    refreshSessions: Boolean,
+  ) {
     _errorText.value = null
     _healthOk.value = false
     clearPendingRuns()
@@ -442,7 +447,10 @@ class ChatController(
       val history = parseHistory(historyJson, sessionKey = key, previousMessages = _messages.value)
       publishMessages(history.messages)
       _sessionId.value = history.sessionId
-      history.thinkingLevel?.trim()?.takeIf { it.isNotEmpty() }?.let { _thinkingLevel.value = it }
+      history.thinkingLevel
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+        ?.let { _thinkingLevel.value = it }
 
       pollHealthIfNeeded(force = forceHealth)
       if (_modelCatalog.value.isEmpty()) {
@@ -453,7 +461,10 @@ class ChatController(
     }
   }
 
-  private suspend fun fetchSessions(limit: Int?, reloadOnReconcile: Boolean = true) {
+  private suspend fun fetchSessions(
+    limit: Int?,
+    reloadOnReconcile: Boolean = true,
+  ) {
     try {
       val params =
         buildJsonObject {
@@ -582,7 +593,10 @@ class ChatController(
             val history = parseHistory(historyJson, sessionKey = _sessionKey.value, previousMessages = _messages.value)
             publishMessages(history.messages)
             _sessionId.value = history.sessionId
-            history.thinkingLevel?.trim()?.takeIf { it.isNotEmpty() }?.let { _thinkingLevel.value = it }
+            history.thinkingLevel
+              ?.trim()
+              ?.takeIf { it.isNotEmpty() }
+              ?.let { _thinkingLevel.value = it }
           } catch (_: Throwable) {
           }
         }
@@ -759,9 +773,10 @@ class ChatController(
           type = "tool_call",
           text = obj["text"].asStringOrNull(),
           toolName = obj["name"].asStringOrNull(),
-          toolCallId = obj["id"].asStringOrNull()
-            ?: obj["toolCallId"].asStringOrNull()
-            ?: obj["tool_call_id"].asStringOrNull(),
+          toolCallId =
+            obj["id"].asStringOrNull()
+              ?: obj["toolCallId"].asStringOrNull()
+              ?: obj["tool_call_id"].asStringOrNull(),
           toolArgumentsJson = renderJsonValue(obj["arguments"] ?: obj["args"] ?: obj["input"]),
         )
       "toolresult" -> {
@@ -771,9 +786,10 @@ class ChatController(
           type = "tool_result",
           text = rawText,
           toolName = obj["name"].asStringOrNull(),
-          toolCallId = obj["id"].asStringOrNull()
-            ?: obj["toolCallId"].asStringOrNull()
-            ?: obj["tool_call_id"].asStringOrNull(),
+          toolCallId =
+            obj["id"].asStringOrNull()
+              ?: obj["toolCallId"].asStringOrNull()
+              ?: obj["tool_call_id"].asStringOrNull(),
           canvasPreview = canvasPreview,
           rawText = rawText,
         )
@@ -865,15 +881,22 @@ class ChatController(
     }
   }
 
-  private fun parseRunId(resJson: String): String? {
-    return try {
-      json.parseToJsonElement(resJson).asObjectOrNull()?.get("runId").asStringOrNull()
+  private fun parseRunId(resJson: String): String? =
+    try {
+      json
+        .parseToJsonElement(resJson)
+        .asObjectOrNull()
+        ?.get("runId")
+        .asStringOrNull()
     } catch (_: Throwable) {
       null
     }
-  }
 
-  private fun handleCompactionEvent(runId: String?, data: JsonObject?, ts: Long) {
+  private fun handleCompactionEvent(
+    runId: String?,
+    data: JsonObject?,
+    ts: Long,
+  ) {
     val phase = data?.get("phase").asStringOrNull()
     val completed = data?.get("completed").asBooleanOrNull() == true
     cancelCompactionClear()
@@ -907,7 +930,11 @@ class ChatController(
     }
   }
 
-  private fun handleLifecycleEvent(runId: String?, data: JsonObject?, ts: Long) {
+  private fun handleLifecycleEvent(
+    runId: String?,
+    data: JsonObject?,
+    ts: Long,
+  ) {
     when (data?.get("phase").asStringOrNull()) {
       "end", "error" -> {
         val current = _compactionStatus.value
@@ -927,7 +954,11 @@ class ChatController(
     }
   }
 
-  private fun handleFallbackEvent(data: JsonObject?, ts: Long, cleared: Boolean) {
+  private fun handleFallbackEvent(
+    data: JsonObject?,
+    ts: Long,
+    cleared: Boolean,
+  ) {
     val selected =
       resolveModelLabel(
         provider = data?.get("selectedProvider").asStringOrNull() ?: data?.get("fromProvider").asStringOrNull(),
@@ -962,7 +993,10 @@ class ChatController(
     scheduleFallbackClear()
   }
 
-  private fun setCompactionComplete(runId: String?, completedAtMs: Long) {
+  private fun setCompactionComplete(
+    runId: String?,
+    completedAtMs: Long,
+  ) {
     _compactionStatus.value =
       ChatCompactionStatus(
         phase = ChatCompactionStatus.Phase.Complete,
@@ -1030,7 +1064,10 @@ class ChatController(
     }
   }
 
-  private fun resolveModelLabel(provider: String?, model: String?): String? {
+  private fun resolveModelLabel(
+    provider: String?,
+    model: String?,
+  ): String? {
     val modelValue = model?.trim().orEmpty()
     if (modelValue.isEmpty()) return null
     val providerValue = provider?.trim().orEmpty()
@@ -1050,9 +1087,12 @@ class ChatController(
     }
   }
 
-  private fun normalizeContentType(rawType: String): String {
-    return rawType.trim().replace("_", "").replace("-", "").lowercase()
-  }
+  private fun normalizeContentType(rawType: String): String =
+    rawType
+      .trim()
+      .replace("_", "")
+      .replace("-", "")
+      .lowercase()
 
   private fun normalizeThinking(raw: String): String {
     val key = raw.trim().lowercase()
@@ -1122,7 +1162,11 @@ internal suspend fun deleteSessionThroughGateway(
       DeleteSessionOutcome(deleted = false, errorText = "Chat session wasn't deleted.")
     }
   }
-  val message = response.error?.message?.trim().takeIf { !it.isNullOrEmpty() } ?: "Chat session wasn't deleted."
+  val message =
+    response.error
+      ?.message
+      ?.trim()
+      .takeIf { !it.isNullOrEmpty() } ?: "Chat session wasn't deleted."
   return DeleteSessionOutcome(deleted = false, errorText = message)
 }
 
@@ -1155,8 +1199,7 @@ internal fun resolveDeletionFallbackSessionKey(
       .filter { entry ->
         val key = entry.key.trim()
         key.isNotEmpty() && key != normalizedCurrent && resolveSessionAgentId(key, normalizedMain) == currentAgent
-      }
-      .sortedWith(
+      }.sortedWith(
         compareByDescending<ChatSessionEntry> { isMainSessionForAgent(it.key, currentAgent, normalizedMain) }
           .thenByDescending { it.updatedAtMs ?: 0L },
       )
@@ -1176,21 +1219,32 @@ private fun isMainSessionForAgent(
   return trimmed == "agent:$agentId:main"
 }
 
-internal fun parseSessionMutationKey(resJson: String?): String? {
-  return try {
-    resJson?.let { Json.parseToJsonElement(it).asObjectOrNull()?.get("key").asStringOrNull()?.trim() }
+internal fun parseSessionMutationKey(resJson: String?): String? =
+  try {
+    resJson?.let {
+      Json
+        .parseToJsonElement(it)
+        .asObjectOrNull()
+        ?.get("key")
+        .asStringOrNull()
+        ?.trim()
+    }
   } catch (_: Throwable) {
     null
   }
-}
 
-internal fun parseDeletedFlag(resJson: String?): Boolean {
-  return try {
-    resJson?.let { Json.parseToJsonElement(it).asObjectOrNull()?.get("deleted").asBooleanOrNull() == true } == true
+internal fun parseDeletedFlag(resJson: String?): Boolean =
+  try {
+    resJson?.let {
+      Json
+        .parseToJsonElement(it)
+        .asObjectOrNull()
+        ?.get("deleted")
+        .asBooleanOrNull() == true
+    } == true
   } catch (_: Throwable) {
     false
   }
-}
 
 internal fun resolveAuthoritativeCurrentSessionKey(
   currentSessionKey: String,
@@ -1200,7 +1254,13 @@ internal fun resolveAuthoritativeCurrentSessionKey(
   val normalizedMain = mainSessionKey.trim().ifEmpty { "main" }
   val normalizedCurrent =
     currentSessionKey.trim().let { key ->
-      if (key.isEmpty()) normalizedMain else if (key == "main" && normalizedMain != "main") normalizedMain else key
+      if (key.isEmpty()) {
+        normalizedMain
+      } else if (key == "main" && normalizedMain != "main") {
+        normalizedMain
+      } else {
+        key
+      }
     }
   if (sessions.any { it.key == normalizedCurrent }) {
     return normalizedCurrent
@@ -1212,7 +1272,10 @@ internal fun resolveAuthoritativeCurrentSessionKey(
   )
 }
 
-internal fun reconcileMessageIds(previous: List<ChatMessage>, incoming: List<ChatMessage>): List<ChatMessage> {
+internal fun reconcileMessageIds(
+  previous: List<ChatMessage>,
+  incoming: List<ChatMessage>,
+): List<ChatMessage> {
   if (previous.isEmpty() || incoming.isEmpty()) return incoming
 
   val idsByKey = LinkedHashMap<String, ArrayDeque<String>>()
@@ -1243,16 +1306,31 @@ internal fun messageIdentityKey(message: ChatMessage): String? {
       listOf(
         part.type.trim().lowercase(),
         part.text?.trim().orEmpty(),
-        part.mimeType?.trim()?.lowercase().orEmpty(),
+        part.mimeType
+          ?.trim()
+          ?.lowercase()
+          .orEmpty(),
         part.fileName?.trim().orEmpty(),
-        part.base64?.hashCode()?.toString().orEmpty(),
+        part.base64
+          ?.hashCode()
+          ?.toString()
+          .orEmpty(),
         part.thinking?.trim().orEmpty(),
         part.thinkingSignature?.trim().orEmpty(),
-        part.toolName?.trim()?.lowercase().orEmpty(),
+        part.toolName
+          ?.trim()
+          ?.lowercase()
+          .orEmpty(),
         part.toolCallId?.trim().orEmpty(),
         part.toolArgumentsJson?.trim().orEmpty(),
-        part.canvasPreview?.url?.trim().orEmpty(),
-        part.canvasPreview?.viewId?.trim().orEmpty(),
+        part.canvasPreview
+          ?.url
+          ?.trim()
+          .orEmpty(),
+        part.canvasPreview
+          ?.viewId
+          ?.trim()
+          .orEmpty(),
       ).joinToString(separator = "\u001F")
     }
 
@@ -1262,7 +1340,10 @@ internal fun messageIdentityKey(message: ChatMessage): String? {
     timestamp,
     message.sourceId?.trim().orEmpty(),
     message.toolCallId?.trim().orEmpty(),
-    message.toolName?.trim()?.lowercase().orEmpty(),
+    message.toolName
+      ?.trim()
+      ?.lowercase()
+      .orEmpty(),
     contentFingerprint,
   ).joinToString(separator = "|")
 }
@@ -1282,38 +1363,39 @@ internal fun buildTimeline(messages: List<ChatMessage>): List<ChatTimelineItem> 
     val role = message.role.trim().lowercase()
     val messageItem = ChatTimelineMessageItem(id = "message:${message.id}", message = message)
 
-    val contentToolBlocks = message.content.mapIndexedNotNull { index, part ->
-      when (part.type) {
-        "tool_call" -> {
-          val callId = part.toolCallId ?: message.toolCallId ?: "call:${message.id}:$index"
-          ChatTimelineToolItem(
-            id = "tool:$callId",
-            timestampMs = message.timestampMs,
-            toolCallId = callId,
-            toolName = part.toolName ?: message.toolName ?: "tool",
-            args = parseJsonObjectOrNull(part.toolArgumentsJson),
-            inputText = part.toolArgumentsJson,
-            sourceMessageIds = listOf(message.id),
-          )
+    val contentToolBlocks =
+      message.content.mapIndexedNotNull { index, part ->
+        when (part.type) {
+          "tool_call" -> {
+            val callId = part.toolCallId ?: message.toolCallId ?: "call:${message.id}:$index"
+            ChatTimelineToolItem(
+              id = "tool:$callId",
+              timestampMs = message.timestampMs,
+              toolCallId = callId,
+              toolName = part.toolName ?: message.toolName ?: "tool",
+              args = parseJsonObjectOrNull(part.toolArgumentsJson),
+              inputText = part.toolArgumentsJson,
+              sourceMessageIds = listOf(message.id),
+            )
+          }
+          "tool_result" -> {
+            val callId = part.toolCallId ?: message.toolCallId
+            val name = part.toolName ?: message.toolName ?: "tool"
+            ChatTimelineToolItem(
+              id = "tool:${callId ?: "${message.id}:$index"}",
+              timestampMs = message.timestampMs,
+              toolCallId = callId,
+              toolName = name,
+              outputText = part.text,
+              preview = part.canvasPreview,
+              isError = message.isError,
+              sourceMessageIds = listOf(message.id),
+              completedAtMs = message.timestampMs,
+            )
+          }
+          else -> null
         }
-        "tool_result" -> {
-          val callId = part.toolCallId ?: message.toolCallId
-          val name = part.toolName ?: message.toolName ?: "tool"
-          ChatTimelineToolItem(
-            id = "tool:${callId ?: "${message.id}:$index"}",
-            timestampMs = message.timestampMs,
-            toolCallId = callId,
-            toolName = name,
-            outputText = part.text,
-            preview = part.canvasPreview,
-            isError = message.isError,
-            sourceMessageIds = listOf(message.id),
-            completedAtMs = message.timestampMs,
-          )
-        }
-        else -> null
       }
-    }
 
     if (contentToolBlocks.isNotEmpty()) {
       items.add(messageItem)

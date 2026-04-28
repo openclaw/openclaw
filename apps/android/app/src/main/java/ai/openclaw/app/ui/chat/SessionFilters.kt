@@ -78,9 +78,7 @@ fun displaySessionName(entry: ChatSessionEntry): String {
   return enrichedAgentLabel ?: sanitizedDisplayName ?: friendlySessionName(entry.key)
 }
 
-fun compactSessionDisplayName(entry: ChatSessionEntry): String {
-  return displaySessionName(entry).trim().ifEmpty { entry.key.trim() }
-}
+fun compactSessionDisplayName(entry: ChatSessionEntry): String = displaySessionName(entry).trim().ifEmpty { entry.key.trim() }
 
 fun resolveSessionLabel(entry: ChatSessionEntry): String = compactSessionDisplayName(entry)
 
@@ -200,7 +198,8 @@ fun resolveSessionOptionGroups(
   return grouped.map { (agentId, entries) ->
     val visibleSessions =
       if (hideCronSessions) {
-        entries.filter { entry -> entry.key == current || !isCronSessionKey(entry.key) }
+        entries
+          .filter { entry -> entry.key == current || !isCronSessionKey(entry.key) }
           .ifEmpty { entries.take(1) }
       } else {
         entries
@@ -254,23 +253,22 @@ fun resolveVisibleSessionChoicesForCurrentAgent(
   mainSessionKey: String,
   hideCronSessions: Boolean,
   nowMs: Long = System.currentTimeMillis(),
-): List<ChatSessionEntry> {
-  return resolveCurrentSessionOptionGroup(
+): List<ChatSessionEntry> =
+  resolveCurrentSessionOptionGroup(
     currentSessionKey = currentSessionKey,
     sessions = sessions,
     mainSessionKey = mainSessionKey,
     hideCronSessions = hideCronSessions,
     nowMs = nowMs,
   )?.sessions.orEmpty()
-}
 
 fun resolveAgentChoices(
   currentSessionKey: String,
   sessions: List<ChatSessionEntry>,
   mainSessionKey: String,
   nowMs: Long = System.currentTimeMillis(),
-): List<ChatAgentChoice> {
-  return resolveSessionOptionGroups(
+): List<ChatAgentChoice> =
+  resolveSessionOptionGroups(
     currentSessionKey = currentSessionKey,
     sessions = sessions,
     mainSessionKey = mainSessionKey,
@@ -283,7 +281,6 @@ fun resolveAgentChoices(
       sessionKey = group.primarySessionKey,
     )
   }
-}
 
 fun countHiddenCronSessionChoices(
   currentSessionKey: String,
@@ -304,16 +301,22 @@ private fun pickPrimaryAgentSession(
 ): ChatSessionEntry {
   val mainKey = normalizeMainSessionKey(mainSessionKey)
   return entries.firstOrNull { agentId == "main" && normalizeRequestedSessionKey(it.key, mainKey) == mainKey }
-    ?: entries.firstOrNull { it.key.trim().lowercase(Locale.US).endsWith(":main") }
+    ?: entries.firstOrNull {
+      it.key
+        .trim()
+        .lowercase(Locale.US)
+        .endsWith(":main")
+    }
     ?: entries.firstOrNull { !isCronSessionKey(it.key) }
     ?: entries.first()
 }
 
-private fun normalizeMainSessionKey(mainSessionKey: String): String {
-  return mainSessionKey.trim().ifEmpty { "main" }
-}
+private fun normalizeMainSessionKey(mainSessionKey: String): String = mainSessionKey.trim().ifEmpty { "main" }
 
-private fun normalizeRequestedSessionKey(currentSessionKey: String, mainSessionKey: String): String {
+private fun normalizeRequestedSessionKey(
+  currentSessionKey: String,
+  mainSessionKey: String,
+): String {
   val current = currentSessionKey.trim()
   return if (current == "main" && mainSessionKey != "main") mainSessionKey else current
 }
@@ -353,23 +356,37 @@ private fun resolveThreadOrTopicSessionDisplayName(entry: ChatSessionEntry): Str
 private fun extractThreadOrTopicIdentifier(key: String): String? {
   val topicMatch = Regex(""":topic:([^:]+)$""").find(key)
   if (topicMatch != null) {
-    return topicMatch.groupValues.getOrNull(1)?.trim()?.takeIf { it.isNotEmpty() }
+    return topicMatch.groupValues
+      .getOrNull(1)
+      ?.trim()
+      ?.takeIf { it.isNotEmpty() }
   }
   val threadMatch = Regex(""":thread:([^:]+)$""").find(key)
   if (threadMatch != null) {
-    return threadMatch.groupValues.getOrNull(1)?.trim()?.takeIf { it.isNotEmpty() }
+    return threadMatch.groupValues
+      .getOrNull(1)
+      ?.trim()
+      ?.takeIf { it.isNotEmpty() }
   }
   return null
 }
 
 private fun extractAgentMainThreadIdentifier(key: String): String? {
   val match = Regex("""^agent:[^:]+:main:thread:[^:]+:([^:]+)$""").matchEntire(key)
-  return match?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.isNotEmpty() }
+  return match
+    ?.groupValues
+    ?.getOrNull(1)
+    ?.trim()
+    ?.takeIf { it.isNotEmpty() }
 }
 
 private fun extractChannelFromLastTo(value: String?): String? {
   val trimmed = value?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-  return trimmed.substringBefore(':', missingDelimiterValue = "").trim().lowercase(Locale.US).takeIf { it.isNotEmpty() }
+  return trimmed
+    .substringBefore(':', missingDelimiterValue = "")
+    .trim()
+    .lowercase(Locale.US)
+    .takeIf { it.isNotEmpty() }
 }
 
 private fun resolveStructuredThreadLabel(
@@ -380,26 +397,31 @@ private fun resolveStructuredThreadLabel(
   threadId: String,
 ): String? {
   if (channel != "telegram") return null
-  val kind = when {
-    key.contains(":topic:") || lastTo?.contains(":topic:") == true -> "topic"
-    key.contains(":thread:") || key.contains(":main:thread:") -> "thread"
-    else -> null
-  } ?: return null
+  val kind =
+    when {
+      key.contains(":topic:") || lastTo?.contains(":topic:") == true -> "topic"
+      key.contains(":thread:") || key.contains(":main:thread:") -> "thread"
+      else -> null
+    } ?: return null
   return "$channelLabel $kind: $threadId"
 }
 
 private fun resolvePreferredSubagentLabel(entry: ChatSessionEntry): String? {
   if (!entry.key.contains(":subagent:")) return null
 
-  val preferred = entry.label?.trim()?.takeIf { it.isNotEmpty() }
-    ?: entry.displayName?.trim()?.takeIf { it.isNotEmpty() && !looksLikeTechnicalSessionLabel(it) }
+  val preferred =
+    entry.label?.trim()?.takeIf { it.isNotEmpty() }
+      ?: entry.displayName?.trim()?.takeIf { it.isNotEmpty() && !looksLikeTechnicalSessionLabel(it) }
 
   if (preferred.isNullOrBlank()) return null
   if (preferred.startsWith("Subagent:", ignoreCase = true)) return preferred
   return "Subagent: $preferred"
 }
 
-private fun resolveAgentSessionDisplayName(entry: ChatSessionEntry, sanitizedDisplayName: String?): String? {
+private fun resolveAgentSessionDisplayName(
+  entry: ChatSessionEntry,
+  sanitizedDisplayName: String?,
+): String? {
   val key = entry.key.trim()
   if (key.isEmpty()) return sanitizedDisplayName
   if (!key.startsWith("agent:")) return sanitizedDisplayName
@@ -466,7 +488,12 @@ private fun shouldCompactTechnicalSubagentIdentifier(value: String): Boolean {
 private fun resolveAgentSpecialSessionName(key: String): String? {
   val nodeMatch = Regex("""^agent:[^:]+:node-([a-z0-9]+)$""", RegexOption.IGNORE_CASE).matchEntire(key)
   if (nodeMatch != null) {
-    val shortId = nodeMatch.groupValues.getOrNull(1)?.take(12)?.trim()?.takeIf { it.isNotEmpty() }
+    val shortId =
+      nodeMatch.groupValues
+        .getOrNull(1)
+        ?.take(12)
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
     return if (shortId != null) "Device main: $shortId" else "Device main"
   }
 
@@ -482,7 +509,10 @@ private fun resolveAgentSpecialSessionName(key: String): String? {
   return null
 }
 
-private fun resolveExplicitAgentMainLabel(key: String, sanitizedDisplayName: String?): String? {
+private fun resolveExplicitAgentMainLabel(
+  key: String,
+  sanitizedDisplayName: String?,
+): String? {
   val trimmedDisplayName = sanitizedDisplayName?.trim()?.takeIf { it.isNotEmpty() }
   val nodeMatch = Regex("""^agent:[^:]+:node-([a-z0-9]+)$""", RegexOption.IGNORE_CASE).matchEntire(key)
   if (nodeMatch != null) {
@@ -546,15 +576,20 @@ private fun extractPreferredIdentifier(raw: String): String? {
     }
   }
 
-  Regex("""\b\d{4,}\b""").findAll(trimmed).map { it.value }.lastOrNull()?.let { return it }
+  Regex("""\b\d{4,}\b""")
+    .findAll(trimmed)
+    .map { it.value }
+    .lastOrNull()
+    ?.let { return it }
   return extractTrailingIdentifier(trimmed)
 }
 
 private fun extractTrailingIdentifier(raw: String): String? {
-  val tokens = raw
-    .split('-', '_', ':', '/')
-    .map { it.trim() }
-    .filter { it.isNotEmpty() }
+  val tokens =
+    raw
+      .split('-', '_', ':', '/')
+      .map { it.trim() }
+      .filter { it.isNotEmpty() }
   if (tokens.isEmpty()) return null
   return tokens.lastOrNull { token -> token.any(Char::isDigit) } ?: tokens.last()
 }
@@ -654,10 +689,12 @@ private fun looksLikeInboundMetadataSentinel(value: String): Boolean {
 private fun stripLeadingCompactTimestampPrefix(value: String): String {
   val trimmed = value.trim()
   if (trimmed.isEmpty()) return trimmed
-  val stripped = trimmed.replaceFirst(
-    Regex("""^\[[A-Za-z]{3}\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+[A-Za-z0-9:+\-]+\]\s*"""),
-    "",
-  ).trim()
+  val stripped =
+    trimmed
+      .replaceFirst(
+        Regex("""^\[[A-Za-z]{3}\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+[A-Za-z0-9:+\-]+\]\s*"""),
+        "",
+      ).trim()
   return stripped.ifEmpty { trimmed }
 }
 
@@ -670,11 +707,14 @@ private fun resolveCronSessionName(key: String): String? {
         if (parts.size < 4 || parts[2] != "cron") {
           return null
         }
-        parts.drop(3).joinToString(":").substringBefore(":run:").substringBefore(":failure")
+        parts
+          .drop(3)
+          .joinToString(":")
+          .substringBefore(":run:")
+          .substringBefore(":failure")
       }
       else -> return null
-    }
-      .trim()
+    }.trim()
       .ifEmpty { return "Cron" }
 
   val words =

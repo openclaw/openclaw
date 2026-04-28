@@ -96,27 +96,28 @@ internal fun buildChatStatusNotices(
   }
 
   fallbackStatus?.let { status ->
-    val detail = buildString {
-      if (status.phase == ChatFallbackStatus.Phase.Cleared) {
-        append("Fallback cleared: ${status.selectedModel}")
-        status.previousModel?.takeIf { it.isNotBlank() }?.let {
-          append(" · was $it")
+    val detail =
+      buildString {
+        if (status.phase == ChatFallbackStatus.Phase.Cleared) {
+          append("Fallback cleared: ${status.selectedModel}")
+          status.previousModel?.takeIf { it.isNotBlank() }?.let {
+            append(" · was $it")
+          }
+        } else {
+          append("Fallback active: ${status.activeModel}")
+          if (status.selectedModel != status.activeModel) {
+            append(" · requested ${status.selectedModel}")
+          }
         }
-      } else {
-        append("Fallback active: ${status.activeModel}")
-        if (status.selectedModel != status.activeModel) {
-          append(" · requested ${status.selectedModel}")
+        status.reason?.takeIf { it.isNotBlank() }?.let {
+          append(" · ")
+          append(it)
+        }
+        status.attempts.take(2).takeIf { it.isNotEmpty() }?.let {
+          append(" · ")
+          append(it.joinToString(" | "))
         }
       }
-      status.reason?.takeIf { it.isNotBlank() }?.let {
-        append(" · ")
-        append(it)
-      }
-      status.attempts.take(2).takeIf { it.isNotEmpty() }?.let {
-        append(" · ")
-        append(it.joinToString(" | "))
-      }
-    }
     notices +=
       ChatStatusNotice(
         title = "Model fallback",
@@ -152,19 +153,19 @@ internal fun resolveChatMessageMeta(message: ChatMessage): ChatMessageMeta {
 }
 
 internal fun formatChatMessageMetaLine(meta: ChatMessageMeta): String? {
-  val parts = buildList {
-    meta.timestampLabel?.let(::add)
-    meta.sourceIdLabel?.let { add("source $it") }
-    meta.toolLabel?.let { add("tool $it") }
-  }
+  val parts =
+    buildList {
+      meta.timestampLabel?.let(::add)
+      meta.sourceIdLabel?.let { add("source $it") }
+      meta.toolLabel?.let { add("tool $it") }
+    }
   return parts.takeIf { it.isNotEmpty() }?.joinToString(" · ")
 }
 
-internal fun firstToolName(content: List<ChatMessageContent>): String? {
-  return content.firstNotNullOfOrNull { part ->
+internal fun firstToolName(content: List<ChatMessageContent>): String? =
+  content.firstNotNullOfOrNull { part ->
     part.toolName?.trim()?.takeIf { it.isNotEmpty() }
   }
-}
 
 internal fun shouldDisplayMessage(
   message: ChatMessage,
@@ -190,14 +191,13 @@ internal fun shouldDisplayMessage(
 internal fun shouldDisplayTimelineItem(
   item: ChatTimelineItem,
   uiState: ChatMessageUiState,
-): Boolean {
-  return when (item) {
+): Boolean =
+  when (item) {
     is ChatTimelineMessageItem -> shouldDisplayMessage(item.message, uiState)
     is ChatTimelineToolItem -> {
       uiState.showToolDetails && item.sourceMessageIds.none(uiState.hiddenMessageIds::contains)
     }
   }
-}
 
 internal fun requestDeleteMessage(
   uiState: ChatMessageUiState,
@@ -239,17 +239,11 @@ internal fun confirmDeleteMessage(
   return hideMessage(uiState.copy(pendingDeleteMessageId = null), trimmed)
 }
 
-internal fun clearHiddenMessages(uiState: ChatMessageUiState): ChatMessageUiState {
-  return uiState.copy(hiddenMessageIds = emptySet(), pendingDeleteMessageId = null)
-}
+internal fun clearHiddenMessages(uiState: ChatMessageUiState): ChatMessageUiState = uiState.copy(hiddenMessageIds = emptySet(), pendingDeleteMessageId = null)
 
-internal fun toggleShowReasoning(uiState: ChatMessageUiState): ChatMessageUiState {
-  return uiState.copy(showReasoning = !uiState.showReasoning)
-}
+internal fun toggleShowReasoning(uiState: ChatMessageUiState): ChatMessageUiState = uiState.copy(showReasoning = !uiState.showReasoning)
 
-internal fun toggleShowToolDetails(uiState: ChatMessageUiState): ChatMessageUiState {
-  return uiState.copy(showToolDetails = !uiState.showToolDetails)
-}
+internal fun toggleShowToolDetails(uiState: ChatMessageUiState): ChatMessageUiState = uiState.copy(showToolDetails = !uiState.showToolDetails)
 
 internal fun toggleExpandedMessage(
   uiState: ChatMessageUiState,
@@ -263,9 +257,12 @@ internal fun toggleExpandedMessage(
   )
 }
 
-internal fun normalizeChatContentType(type: String): String {
-  return type.trim().replace("_", "").replace("-", "").lowercase(Locale.US)
-}
+internal fun normalizeChatContentType(type: String): String =
+  type
+    .trim()
+    .replace("_", "")
+    .replace("-", "")
+    .lowercase(Locale.US)
 
 internal fun isToolLikeRole(role: String): Boolean {
   val normalized = role.trim().lowercase(Locale.US)
@@ -277,7 +274,11 @@ internal fun isTechnicalMessage(message: ChatMessage): Boolean {
   if (role == "system") return true
   if (isToolLikeRole(role)) return true
 
-  val sender = message.senderLabel?.trim().orEmpty().lowercase(Locale.US)
+  val sender =
+    message.senderLabel
+      ?.trim()
+      .orEmpty()
+      .lowercase(Locale.US)
   if (
     sender.contains("subagent") ||
     sender == "system" ||
@@ -287,7 +288,11 @@ internal fun isTechnicalMessage(message: ChatMessage): Boolean {
     return true
   }
 
-  val sourceId = message.sourceId?.trim().orEmpty().lowercase(Locale.US)
+  val sourceId =
+    message.sourceId
+      ?.trim()
+      .orEmpty()
+      .lowercase(Locale.US)
   if (
     sourceId.contains(":subagent:") ||
     sourceId.contains(":cron:") ||

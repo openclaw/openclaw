@@ -1,5 +1,23 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.chat.OutgoingAttachment
+import ai.openclaw.app.ui.mobileAccent
+import ai.openclaw.app.ui.mobileAccentSoft
+import ai.openclaw.app.ui.mobileBorder
+import ai.openclaw.app.ui.mobileBorderStrong
+import ai.openclaw.app.ui.mobileCallout
+import ai.openclaw.app.ui.mobileCaption1
+import ai.openclaw.app.ui.mobileCardSurface
+import ai.openclaw.app.ui.mobileDanger
+import ai.openclaw.app.ui.mobileDangerSoft
+import ai.openclaw.app.ui.mobileSuccess
+import ai.openclaw.app.ui.mobileSuccessSoft
+import ai.openclaw.app.ui.mobileText
+import ai.openclaw.app.ui.mobileTextSecondary
+import ai.openclaw.app.ui.mobileTextTertiary
+import ai.openclaw.app.ui.mobileWarning
+import ai.openclaw.app.ui.mobileWarningSoft
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -38,26 +56,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import ai.openclaw.app.MainViewModel
-import ai.openclaw.app.chat.ChatCompactionStatus
-import ai.openclaw.app.chat.ChatFallbackStatus
-import ai.openclaw.app.chat.OutgoingAttachment
-import ai.openclaw.app.ui.mobileAccent
-import ai.openclaw.app.ui.mobileAccentSoft
-import ai.openclaw.app.ui.mobileBorder
-import ai.openclaw.app.ui.mobileBorderStrong
-import ai.openclaw.app.ui.mobileCallout
-import ai.openclaw.app.ui.mobileCaption1
-import ai.openclaw.app.ui.mobileCardSurface
-import ai.openclaw.app.ui.mobileDanger
-import ai.openclaw.app.ui.mobileDangerSoft
-import ai.openclaw.app.ui.mobileSuccess
-import ai.openclaw.app.ui.mobileSuccessSoft
-import ai.openclaw.app.ui.mobileText
-import ai.openclaw.app.ui.mobileTextSecondary
-import ai.openclaw.app.ui.mobileTextTertiary
-import ai.openclaw.app.ui.mobileWarning
-import ai.openclaw.app.ui.mobileWarningSoft
 
 @Composable
 fun ChatSheetContent(
@@ -89,42 +87,49 @@ fun ChatSheetContent(
   val attachments = remember(currentSessionKey) { mutableStateListOf<PendingImageAttachment>() }
   var attachmentError by remember(currentSessionKey) { mutableStateOf<String?>(null) }
 
-  val activeSession = remember(sessions, currentSessionKey, mainSessionKey) {
-    sessions.firstOrNull { it.key == currentSessionKey }
-      ?: if (currentSessionKey == "main" && mainSessionKey != "main") {
-        sessions.firstOrNull { it.key == mainSessionKey }
-      } else {
-        null
-      }
-  }
-  val sessionChoices = remember(currentSessionKey, sessions, mainSessionKey, hideCronSessions) {
-    resolveVisibleSessionChoicesForCurrentAgent(
-      currentSessionKey = currentSessionKey,
-      sessions = sessions,
-      mainSessionKey = mainSessionKey,
-      hideCronSessions = hideCronSessions,
-    )
-  }
-  val hiddenCronCount = remember(currentSessionKey, sessions, mainSessionKey) {
-    countHiddenCronSessionChoices(
-      currentSessionKey = currentSessionKey,
-      sessions = sessions,
-      mainSessionKey = mainSessionKey,
-    )
-  }
-  val statusNotices = remember(compactionStatus, fallbackStatus) {
-    buildChatStatusNotices(
-      compactionStatus = compactionStatus,
-      fallbackStatus = fallbackStatus,
-    )
-  }
+  val activeSession =
+    remember(sessions, currentSessionKey, mainSessionKey) {
+      sessions.firstOrNull { it.key == currentSessionKey }
+        ?: if (currentSessionKey == "main" && mainSessionKey != "main") {
+          sessions.firstOrNull { it.key == mainSessionKey }
+        } else {
+          null
+        }
+    }
+  val sessionChoices =
+    remember(currentSessionKey, sessions, mainSessionKey, hideCronSessions) {
+      resolveVisibleSessionChoicesForCurrentAgent(
+        currentSessionKey = currentSessionKey,
+        sessions = sessions,
+        mainSessionKey = mainSessionKey,
+        hideCronSessions = hideCronSessions,
+      )
+    }
+  val hiddenCronCount =
+    remember(currentSessionKey, sessions, mainSessionKey) {
+      countHiddenCronSessionChoices(
+        currentSessionKey = currentSessionKey,
+        sessions = sessions,
+        mainSessionKey = mainSessionKey,
+      )
+    }
+  val statusNotices =
+    remember(compactionStatus, fallbackStatus) {
+      buildChatStatusNotices(
+        compactionStatus = compactionStatus,
+        fallbackStatus = fallbackStatus,
+      )
+    }
   val contextNotice = remember(activeSession) { computeContextUsageNotice(activeSession) }
-  val canDeleteCurrentSession = remember(currentSessionKey, mainSessionKey) {
-    ai.openclaw.app.chat.canDeleteSession(currentSessionKey, mainSessionKey)
-  }
-  val canMutateSessions = remember(pendingRunCount, sessionActionInFlight) {
-    pendingRunCount == 0 && !sessionActionInFlight
-  }
+  val canDeleteCurrentSession =
+    remember(currentSessionKey, mainSessionKey) {
+      ai.openclaw.app.chat
+        .canDeleteSession(currentSessionKey, mainSessionKey)
+    }
+  val canMutateSessions =
+    remember(pendingRunCount, sessionActionInFlight) {
+      pendingRunCount == 0 && !sessionActionInFlight
+    }
   var showDeleteSessionConfirm by remember(currentSessionKey) { mutableStateOf(false) }
 
   val picker =
@@ -454,9 +459,11 @@ private fun SessionChooserCard(
   onRefresh: () -> Unit,
 ) {
   var expanded by remember { mutableStateOf(false) }
-  val selected = remember(sessions, currentSessionKey) {
-    sessions.firstOrNull { it.key == currentSessionKey } ?: ai.openclaw.app.chat.ChatSessionEntry(key = currentSessionKey, updatedAtMs = null)
-  }
+  val selected =
+    remember(sessions, currentSessionKey) {
+      sessions.firstOrNull { it.key == currentSessionKey } ?: ai.openclaw.app.chat
+        .ChatSessionEntry(key = currentSessionKey, updatedAtMs = null)
+    }
 
   androidx.compose.foundation.layout.Box(modifier = Modifier.fillMaxWidth()) {
     Surface(
@@ -471,9 +478,10 @@ private fun SessionChooserCard(
       border = BorderStroke(1.dp, mobileAccent),
     ) {
       Row(
-        modifier = Modifier
-          .fillMaxWidth()
-          .padding(horizontal = 14.dp, vertical = 12.dp),
+        modifier =
+          Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 12.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
       ) {
