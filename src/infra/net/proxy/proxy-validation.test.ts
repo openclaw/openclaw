@@ -118,6 +118,55 @@ describe("proxy validation", () => {
     ]);
   });
 
+  it("passes denied checks when the proxy returns a deny HTTP status", async () => {
+    const result = await runProxyValidation({
+      config: {
+        enabled: true,
+        proxyUrl: "http://127.0.0.1:3128",
+      },
+      env: {},
+      allowedUrls: [],
+      deniedUrls: ["http://127.0.0.1/"],
+      fetchCheck: vi.fn().mockResolvedValue({ ok: false, status: 403 }),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.checks).toEqual([
+      {
+        kind: "denied",
+        url: "http://127.0.0.1/",
+        ok: true,
+        status: 403,
+      },
+    ]);
+  });
+
+  it("fails invalid custom denied URLs before probing", async () => {
+    const fetchCheck = vi.fn();
+
+    const result = await runProxyValidation({
+      config: {
+        enabled: true,
+        proxyUrl: "http://127.0.0.1:3128",
+      },
+      env: {},
+      allowedUrls: [],
+      deniedUrls: ["not a url"],
+      fetchCheck,
+    });
+
+    expect(fetchCheck).not.toHaveBeenCalled();
+    expect(result.ok).toBe(false);
+    expect(result.checks).toEqual([
+      {
+        kind: "denied",
+        url: "not a url",
+        ok: false,
+        error: "Invalid denied destination URL",
+      },
+    ]);
+  });
+
   it("fails validation when a denied destination succeeds", async () => {
     const result = await runProxyValidation({
       config: {

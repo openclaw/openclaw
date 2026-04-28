@@ -126,10 +126,64 @@ describe("proxy cli runtime", () => {
     });
     expect(process.stdout.write).toHaveBeenCalledWith(
       "Proxy validation: passed\n" +
-        "Effective proxy: http://config-proxy.example:3128 (config)\n" +
+        "Effective proxy: http://config-proxy.example:3128/ (config)\n" +
         "- PASS allowed https://example.com/ status=200\n",
     );
     expect(process.exitCode).toBeUndefined();
+  });
+
+  it("redacts proxy credentials in text output", async () => {
+    runProxyValidationMock.mockResolvedValueOnce({
+      ok: true,
+      config: {
+        enabled: true,
+        proxyUrl: "http://user:secret@proxy.example:3128",
+        source: "config",
+        errors: [],
+      },
+      checks: [],
+    });
+    const { runProxyValidateCommand } = await import("./proxy-cli.runtime.js");
+
+    await runProxyValidateCommand({});
+
+    expect(process.stdout.write).toHaveBeenCalledWith(
+      "Proxy validation: passed\n" +
+        "Effective proxy: http://redacted:redacted@proxy.example:3128/ (config)\n",
+    );
+  });
+
+  it("redacts proxy credentials in JSON output", async () => {
+    runProxyValidationMock.mockResolvedValueOnce({
+      ok: true,
+      config: {
+        enabled: true,
+        proxyUrl: "http://user:secret@proxy.example:3128",
+        source: "config",
+        errors: [],
+      },
+      checks: [],
+    });
+    const { runProxyValidateCommand } = await import("./proxy-cli.runtime.js");
+
+    await runProxyValidateCommand({ json: true });
+
+    expect(process.stdout.write).toHaveBeenCalledWith(
+      `${JSON.stringify(
+        {
+          ok: true,
+          config: {
+            enabled: true,
+            proxyUrl: "http://redacted:redacted@proxy.example:3128/",
+            source: "config",
+            errors: [],
+          },
+          checks: [],
+        },
+        null,
+        2,
+      )}\n`,
+    );
   });
 
   it("prints proxy validation JSON and sets exit code on failure", async () => {

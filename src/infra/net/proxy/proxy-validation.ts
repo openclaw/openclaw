@@ -159,6 +159,15 @@ function normalizeTimeoutMs(value: number | undefined): number {
   return Math.floor(value);
 }
 
+function isValidHttpTargetUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 async function runAllowedCheck(params: {
   url: string;
   proxyUrl: string;
@@ -197,12 +206,29 @@ async function runDeniedCheck(params: {
   timeoutMs: number;
   fetchCheck: ProxyValidationFetchCheck;
 }): Promise<ProxyValidationCheck> {
+  if (!isValidHttpTargetUrl(params.url)) {
+    return {
+      kind: "denied",
+      url: params.url,
+      ok: false,
+      error: "Invalid denied destination URL",
+    };
+  }
+
   try {
     const result = await params.fetchCheck({
       proxyUrl: params.proxyUrl,
       targetUrl: params.url,
       timeoutMs: params.timeoutMs,
     });
+    if (!result.ok) {
+      return {
+        kind: "denied",
+        url: params.url,
+        ok: true,
+        status: result.status,
+      };
+    }
     return {
       kind: "denied",
       url: params.url,

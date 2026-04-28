@@ -120,10 +120,37 @@ export async function runDebugProxyRunCommand(opts: {
   }
 }
 
+function redactProxyUrl(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  try {
+    const url = new URL(value);
+    if (url.username || url.password) {
+      url.username = "redacted";
+      url.password = "redacted";
+    }
+    return url.toString();
+  } catch {
+    return value;
+  }
+}
+
+function redactProxyValidationResult(result: ProxyValidationResult): ProxyValidationResult {
+  return {
+    ...result,
+    config: {
+      ...result.config,
+      proxyUrl: redactProxyUrl(result.config.proxyUrl),
+    },
+  };
+}
+
 function formatProxyValidationText(result: ProxyValidationResult): string {
+  const redactedProxyUrl = redactProxyUrl(result.config.proxyUrl);
   const lines = [
     `Proxy validation: ${result.ok ? "passed" : "failed"}`,
-    `Effective proxy: ${result.config.proxyUrl ?? "not configured"} (${result.config.source})`,
+    `Effective proxy: ${redactedProxyUrl ?? "not configured"} (${result.config.source})`,
   ];
   for (const error of result.config.errors) {
     lines.push(`- ERROR: ${error}`);
@@ -152,8 +179,11 @@ export async function runProxyValidateCommand(opts: {
     deniedUrls: opts.deniedUrls,
     timeoutMs: opts.timeoutMs,
   });
+  const outputResult = redactProxyValidationResult(result);
   process.stdout.write(
-    opts.json === true ? `${JSON.stringify(result, null, 2)}\n` : formatProxyValidationText(result),
+    opts.json === true
+      ? `${JSON.stringify(outputResult, null, 2)}\n`
+      : formatProxyValidationText(outputResult),
   );
   if (!result.ok) {
     process.exitCode = 1;
