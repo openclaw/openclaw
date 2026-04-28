@@ -150,8 +150,12 @@ export async function getStatusSummary(
   taskMaintenanceModule.configureTaskRegistryMaintenance({
     cronStorePath: resolveCronStorePath(cfg.cron?.store),
   });
-  const tasks = taskMaintenanceModule.getInspectableTaskRegistrySummary();
-  const taskAudit = taskMaintenanceModule.getInspectableTaskAuditSummary();
+  // Reconcile once and share the snapshot across both summary derivations.
+  // Each helper otherwise repeats the same listTaskRecords clone+sort, which
+  // doubles status latency on hosts with large task ledgers (#73531).
+  const reconciledTasks = taskMaintenanceModule.reconcileInspectableTasks();
+  const tasks = taskMaintenanceModule.getInspectableTaskRegistrySummary(reconciledTasks);
+  const taskAudit = taskMaintenanceModule.getInspectableTaskAuditSummary(reconciledTasks);
 
   const resolved = resolveConfiguredStatusModelRef({
     cfg,

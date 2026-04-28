@@ -877,12 +877,14 @@ export function getInspectableActiveTaskRestartBlockers(): ActiveTaskRestartBloc
   return blockers;
 }
 
-export function getInspectableTaskRegistrySummary(): TaskRegistrySummary {
-  return summarizeTaskRecords(reconcileInspectableTasks());
+export function getInspectableTaskRegistrySummary(
+  reconciledTasks?: TaskRecord[],
+): TaskRegistrySummary {
+  return summarizeTaskRecords(reconciledTasks ?? reconcileInspectableTasks());
 }
 
-export function getInspectableTaskAuditSummary(): TaskAuditSummary {
-  const tasks = reconcileInspectableTasks();
+export function getInspectableTaskAuditSummary(reconciledTasks?: TaskRecord[]): TaskAuditSummary {
+  const tasks = reconciledTasks ?? reconcileInspectableTasks();
   return summarizeTaskAuditFindings(listTaskAuditFindings({ tasks }));
 }
 
