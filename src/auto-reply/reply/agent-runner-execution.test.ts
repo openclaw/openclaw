@@ -190,6 +190,10 @@ vi.mock("./agent-runner-utils.js", () => ({
       agentDir: run.agentDir,
     }),
   ),
+  resolveAutoThreadingTargets: (sessionCtx: { MessageSid?: string; MessageSidFull?: string }) => {
+    const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
+    return { currentMessageId, implicitReplyToId: currentMessageId };
+  },
 }));
 
 vi.mock("./reply-delivery.js", () => ({
