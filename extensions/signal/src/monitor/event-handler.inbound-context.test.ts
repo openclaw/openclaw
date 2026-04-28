@@ -301,7 +301,41 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(capture.ctx?.MediaTypes).toEqual(["image/jpeg", "application/octet-stream"]);
   });
 
-  it("infers Signal voice attachment audio from filename when MIME is generic", async () => {
+  it("threads sniffed audio contentType for generic Signal voice attachments", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        },
+        ignoreAttachments: false,
+        fetchAttachment: async ({ attachment }) => ({
+          path: `/tmp/${String(attachment.id)}.dat`,
+          contentType: "audio/aac",
+        }),
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "",
+          attachments: [
+            { id: "voice1", contentType: "application/octet-stream", filename: "voice.aac" },
+          ],
+        },
+      }),
+    );
+
+    expect(capture.ctx).toBeTruthy();
+    expect(capture.ctx?.MediaPath).toBe("/tmp/voice1.dat");
+    expect(capture.ctx?.MediaType).toBe("audio/aac");
+    expect(capture.ctx?.MediaTypes).toEqual(["audio/aac"]);
+    expect(capture.ctx?.BodyForAgent).toBe("<media:audio>");
+  });
+
+  it("does not infer audio from an unverified Signal attachment filename", async () => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
         cfg: {
@@ -329,10 +363,9 @@ describe("signal createSignalEventHandler inbound context", () => {
     );
 
     expect(capture.ctx).toBeTruthy();
-    expect(capture.ctx?.MediaPath).toBe("/tmp/voice1.aac");
-    expect(capture.ctx?.MediaType).toBe("audio/aac");
-    expect(capture.ctx?.MediaTypes).toEqual(["audio/aac"]);
-    expect(capture.ctx?.BodyForAgent).toBe("<media:audio>");
+    expect(capture.ctx?.MediaType).toBe("application/octet-stream");
+    expect(capture.ctx?.MediaTypes).toEqual(["application/octet-stream"]);
+    expect(capture.ctx?.BodyForAgent).toBe("<media:document>");
   });
 
   it("drops own UUID inbound messages when only accountUuid is configured", async () => {

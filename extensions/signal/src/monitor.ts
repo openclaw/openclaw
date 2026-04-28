@@ -299,9 +299,10 @@ async function fetchAttachment(params: {
   }
   const buffer = Buffer.from(result.data, "base64");
   const originalFilename = normalizeOptionalString(attachment.filename ?? undefined);
-  const contentType =
-    normalizeOptionalString(attachment.contentType ?? undefined) ??
-    (await detectMime({ buffer, filePath: originalFilename }));
+  const contentType = await detectMime({
+    buffer,
+    headerMime: attachment.contentType ?? undefined,
+  });
   const saved = await saveMediaBuffer(
     buffer,
     contentType,

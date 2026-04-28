@@ -25,7 +25,7 @@ import {
   toInternalMessageReceivedContext,
   triggerInternalHook,
 } from "openclaw/plugin-sdk/hook-runtime";
-import { kindFromMime, mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-runtime";
+import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
@@ -83,26 +83,6 @@ function formatAttachmentSummaryPlaceholder(contentTypes: Array<string | undefin
     formatAttachmentKindCount(kind, count),
   );
   return `[${parts.join(" + ")} attached]`;
-}
-
-function resolveSignalAttachmentMediaType(params: {
-  attachmentContentType?: string | null;
-  attachmentFilename?: string | null;
-  fetchedContentType?: string;
-  fetchedPath: string;
-}): string | undefined {
-  const contentType =
-    normalizeOptionalString(params.fetchedContentType) ??
-    normalizeOptionalString(params.attachmentContentType);
-  const normalized = contentType?.split(";")[0]?.trim().toLowerCase();
-  if (normalized && normalized !== "application/octet-stream") {
-    return contentType;
-  }
-  return (
-    mimeTypeFromFilePath(
-      normalizeOptionalString(params.attachmentFilename) ?? params.fetchedPath,
-    ) ?? contentType
-  );
 }
 
 function resolveSignalInboundRoute(params: {
@@ -814,17 +794,13 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             maxBytes: deps.mediaMaxBytes,
           });
           if (fetched) {
-            const resolvedMediaType = resolveSignalAttachmentMediaType({
-              attachmentContentType: attachment.contentType,
-              attachmentFilename: attachment.filename,
-              fetchedContentType: fetched.contentType,
-              fetchedPath: fetched.path,
-            });
             mediaPaths.push(fetched.path);
-            mediaTypes.push(resolvedMediaType ?? "application/octet-stream");
+            mediaTypes.push(
+              fetched.contentType ?? attachment.contentType ?? "application/octet-stream",
+            );
             if (!mediaPath) {
               mediaPath = fetched.path;
-              mediaType = resolvedMediaType;
+              mediaType = fetched.contentType ?? attachment.contentType ?? undefined;
             }
           }
         } catch (err) {
