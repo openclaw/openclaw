@@ -55,6 +55,7 @@ import {
 } from "./subagent-registry-queries.js";
 import {
   createSubagentRunManager,
+  markSubagentRunPausedAfterYield,
   type RegisterSubagentRunParams,
 } from "./subagent-registry-run-manager.js";
 import {
@@ -578,6 +579,9 @@ function resumeSubagentRun(runId: string) {
   if (entry.cleanupCompletedAt) {
     return;
   }
+  if (entry.pauseReason === "sessions_yield") {
+    return;
+  }
   // Skip entries that have exhausted their retry budget or expired (#18264).
   if ((entry.announceRetryCount ?? 0) >= MAX_ANNOUNCE_RETRY_COUNT) {
     void finalizeResumedAnnounceGiveUp({
@@ -922,6 +926,19 @@ function ensureListener() {
           runId: evt.runId,
           endedAt,
         });
+        return;
+      }
+      if (evt.data?.yielded === true) {
+        if (
+          markSubagentRunPausedAfterYield({
+            entry,
+            endedAt,
+            startedAt:
+              typeof evt.data?.startedAt === "number" ? evt.data.startedAt : entry.startedAt,
+          })
+        ) {
+          persistSubagentRuns();
+        }
         return;
       }
       clearPendingLifecycleError(evt.runId);

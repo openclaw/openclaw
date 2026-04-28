@@ -36,6 +36,50 @@ function shouldDeleteAttachments(entry: SubagentRunRecord) {
   return entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
 }
 
+export function markSubagentRunPausedAfterYield(params: {
+  entry: SubagentRunRecord;
+  startedAt?: number;
+  endedAt?: number;
+  now?: number;
+}): boolean {
+  const { entry } = params;
+  let mutated = false;
+  if (typeof params.startedAt === "number" && entry.startedAt !== params.startedAt) {
+    entry.startedAt = params.startedAt;
+    if (typeof entry.sessionStartedAt !== "number") {
+      entry.sessionStartedAt = params.startedAt;
+    }
+    mutated = true;
+  }
+  const endedAt = typeof params.endedAt === "number" ? params.endedAt : (params.now ?? Date.now());
+  if (entry.endedAt !== endedAt) {
+    entry.endedAt = endedAt;
+    mutated = true;
+  }
+  if (entry.pauseReason !== "sessions_yield") {
+    entry.pauseReason = "sessions_yield";
+    mutated = true;
+  }
+  if (entry.outcome !== undefined) {
+    entry.outcome = undefined;
+    mutated = true;
+  }
+  if (entry.endedReason !== undefined) {
+    entry.endedReason = undefined;
+    mutated = true;
+  }
+  if (entry.cleanupHandled === true) {
+    entry.cleanupHandled = false;
+    mutated = true;
+  }
+  if (entry.frozenResultText !== undefined) {
+    entry.frozenResultText = undefined;
+    entry.frozenResultCapturedAt = undefined;
+    mutated = true;
+  }
+  return mutated;
+}
+
 export type RegisterSubagentRunParams = {
   runId: string;
   childSessionKey: string;
@@ -114,6 +158,18 @@ export function createSubagentRunManager(params: {
         return;
       }
       if (wait.status === "pending") {
+        return;
+      }
+      if (wait.yielded === true) {
+        if (
+          markSubagentRunPausedAfterYield({
+            entry,
+            startedAt: wait.startedAt,
+            endedAt: wait.endedAt,
+          })
+        ) {
+          params.persist();
+        }
         return;
       }
       if (wait.status === "error" && isRecoverableAgentWaitError(wait.error)) {
@@ -282,6 +338,7 @@ export function createSubagentRunManager(params: {
       accumulatedRuntimeMs,
       endedAt: undefined,
       endedReason: undefined,
+      pauseReason: undefined,
       endedHookEmittedAt: undefined,
       wakeOnDescendantSettle: undefined,
       outcome: undefined,

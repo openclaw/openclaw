@@ -1869,6 +1869,7 @@ function mapStopReason(reason: string | null) {
 }
 
 export const __testing = {
+  buildOpenAISdkClientOptions,
   buildOpenAISdkRequestOptions,
   createAzureOpenAIClient,
   createOpenAICompletionsClient,

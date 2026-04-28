@@ -2,18 +2,22 @@ import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  bundledDistPluginFile,
+  bundledPluginFile,
+  bundledPluginRoot,
+} from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
+import {
+  BUILD_STAMP_FILE,
+  RUNTIME_POSTBUILD_STAMP_FILE,
+} from "../../scripts/lib/local-build-metadata-paths.mjs";
 import {
   acquireRunNodeBuildLock,
   resolveBuildRequirement,
   resolveRuntimePostBuildRequirement,
   runNodeMain,
 } from "../../scripts/run-node.mjs";
-import {
-  bundledDistPluginFile,
-  bundledPluginFile,
-  bundledPluginRoot,
-} from "../../test/helpers/bundled-plugin-paths.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 
 const ROOT_SRC = "src/index.ts";
@@ -23,8 +27,8 @@ const ROOT_TSDOWN = "tsdown.config.ts";
 const GENERATED_A2UI_BUNDLE = "src/canvas-host/a2ui/a2ui.bundle.js";
 const GENERATED_A2UI_BUNDLE_HASH = "src/canvas-host/a2ui/.bundle.hash";
 const DIST_ENTRY = "dist/entry.js";
-const BUILD_STAMP = "dist/.buildstamp";
-const RUNTIME_POSTBUILD_STAMP = "dist/.runtime-postbuildstamp";
+const BUILD_STAMP = `dist/${BUILD_STAMP_FILE}`;
+const RUNTIME_POSTBUILD_STAMP = `dist/${RUNTIME_POSTBUILD_STAMP_FILE}`;
 const QA_LAB_PLUGIN_SDK_ENTRY = "dist/plugin-sdk/qa-lab.js";
 const QA_RUNTIME_PLUGIN_SDK_ENTRY = "dist/plugin-sdk/qa-runtime.js";
 const EXTENSION_SRC = bundledPluginFile("demo", "src/index.ts");

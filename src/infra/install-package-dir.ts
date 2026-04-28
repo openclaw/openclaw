@@ -258,7 +258,10 @@ export async function installPackageDir(params: {
           return await runCommandWithTimeout(
             // Plugins install into isolated directories, so omitting peer deps can strip
             // runtime requirements that npm would otherwise materialize for the package.
-            ["npm", "install", "--omit=dev", "--silent", "--ignore-scripts"],
+            // Verified on Blacksmith Ubuntu/Node 24/npm 11: `--silent` can make npm fail
+            // with empty stdout/stderr for bad specs like `workspace:^`; `--loglevel=error`
+            // stays quiet on success while preserving the actionable npm failure text.
+            ["npm", "install", "--omit=dev", "--loglevel=error", "--ignore-scripts"],
             {
               timeoutMs: Math.max(params.timeoutMs, 300_000),
               cwd: stageDir,

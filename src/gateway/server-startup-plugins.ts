@@ -155,17 +155,19 @@ export async function prepareGatewayPluginBootstrap(params: {
             : {}),
         }).config,
       });
+  const pluginsGloballyDisabled = gatewayPluginConfig.plugins?.enabled === false;
   const defaultAgentId = resolveDefaultAgentId(gatewayPluginConfig);
   const defaultWorkspaceDir = resolveAgentWorkspaceDir(gatewayPluginConfig, defaultAgentId);
-  const pluginLookUpTable = params.minimalTestGateway
-    ? undefined
-    : loadPluginLookUpTable({
-        config: gatewayPluginConfig,
-        workspaceDir: defaultWorkspaceDir,
-        env: process.env,
-        activationSourceConfig,
-        metadataSnapshot: params.pluginMetadataSnapshot,
-      });
+  const pluginLookUpTable =
+    params.minimalTestGateway || pluginsGloballyDisabled
+      ? undefined
+      : loadPluginLookUpTable({
+          config: gatewayPluginConfig,
+          workspaceDir: defaultWorkspaceDir,
+          env: process.env,
+          activationSourceConfig,
+          metadataSnapshot: params.pluginMetadataSnapshot,
+        });
   const deferredConfiguredChannelPluginIds = [
     ...(pluginLookUpTable?.startup.configuredDeferredChannelPluginIds ?? []),
   ];

@@ -1,6 +1,7 @@
 export {
   buildQaTarget,
   callGatewayFromCli,
+  type Command,
   createQaBusThread,
   defaultQaRuntimeModelForMode,
   definePluginEntry,

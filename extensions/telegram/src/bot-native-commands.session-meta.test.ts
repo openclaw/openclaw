@@ -450,6 +450,11 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     await handler(createTelegramPrivateCommandContext());
 
     expect(sessionMocks.recordSessionMetaFromInbound).toHaveBeenCalledTimes(1);
+    const dispatchCall = (
+      replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls as unknown as Array<
+        [{ ctx?: { CommandTargetSessionKey?: string } }]
+      >
+    )[0]?.[0];
     const call = (
       sessionMocks.recordSessionMetaFromInbound.mock.calls as unknown as Array<
         [{ sessionKey?: string; ctx?: { OriginatingChannel?: string; Provider?: string } }]
@@ -457,7 +462,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     )[0]?.[0];
     expect(call?.ctx?.OriginatingChannel).toBe("telegram");
     expect(call?.ctx?.Provider).toBe("telegram");
-    expect(call?.sessionKey).toBe("agent:main:telegram:slash:200");
+    expect(call?.sessionKey).toBe(dispatchCall?.ctx?.CommandTargetSessionKey);
   });
 
   it("uses the target session model when building native argument menus", async () => {
@@ -749,7 +754,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
         [{ sessionKey?: string }]
       >
     )[0]?.[0];
-    expect(sessionMetaCall?.sessionKey).toBe("agent:codex:telegram:slash:200");
+    expect(sessionMetaCall?.sessionKey).toBe(boundSessionKey);
   });
 
   it("routes Telegram native commands through topic-specific agent sessions", async () => {
@@ -772,6 +777,14 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(dispatchCall?.ctx?.CommandTargetSessionKey).toBe(
       "agent:zu:telegram:group:-1001234567890:topic:42",
     );
+    const sessionMetaCall = (
+      sessionMocks.recordSessionMetaFromInbound.mock.calls as unknown as Array<
+        [{ sessionKey?: string; ctx?: { From?: string; ChatType?: string } }]
+      >
+    )[0]?.[0];
+    expect(sessionMetaCall?.sessionKey).toBe("agent:zu:telegram:group:-1001234567890:topic:42");
+    expect(sessionMetaCall?.ctx?.From).toBe("telegram:group:-1001234567890:topic:42");
+    expect(sessionMetaCall?.ctx?.ChatType).toBe("group");
   });
 
   it("routes Telegram native commands through bound topic sessions", async () => {
@@ -798,6 +811,12 @@ describe("registerTelegramNativeCommands — session metadata", () => {
       >
     )[0]?.[0];
     expect(dispatchCall?.ctx?.CommandTargetSessionKey).toBe("agent:codex-acp:session-1");
+    const sessionMetaCall = (
+      sessionMocks.recordSessionMetaFromInbound.mock.calls as unknown as Array<
+        [{ sessionKey?: string }]
+      >
+    )[0]?.[0];
+    expect(sessionMetaCall?.sessionKey).toBe("agent:codex-acp:session-1");
     expect(sessionBindingMocks.touch).toHaveBeenCalledWith(
       "default:-1001234567890:topic:42",
       undefined,

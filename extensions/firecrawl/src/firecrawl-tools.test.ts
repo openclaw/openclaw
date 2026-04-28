@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/testing";
+import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_FIRECRAWL_BASE_URL,

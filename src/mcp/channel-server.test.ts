@@ -2,7 +2,6 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, test, vi } from "vitest";
 import { z } from "zod";
-import { GatewayClientRequestError } from "../gateway/client.js";
 import { shouldRetryInitialMcpGatewayConnect } from "./channel-bridge.js";
 import { createOpenClawChannelMcpServer, OpenClawChannelBridge } from "./channel-server.js";
 import { extractAttachmentsFromMessage } from "./channel-shared.js";
@@ -26,6 +25,7 @@ const ClaudePermissionNotificationSchema = z.object({
 async function connectMcpWithoutGateway(params?: { claudeChannelMode?: "auto" | "on" | "off" }) {
   const serverHarness = await createOpenClawChannelMcpServer({
     claudeChannelMode: params?.claudeChannelMode ?? "auto",
+    config: {} as never,
     verbose: false,
   });
   const client = new Client({ name: "mcp-test-client", version: "1.0.0" });
@@ -74,29 +74,20 @@ async function flushMcpNotifications() {
   await Promise.resolve();
 }
 
+function gatewayRequestError(retryable: boolean): Error {
+  return Object.assign(new Error(retryable ? "gateway busy" : "auth failed"), {
+    name: "GatewayClientRequestError",
+    retryable,
+  });
+}
+
 describe("openclaw channel mcp server", () => {
   test("keeps initial MCP gateway connection alive through transient connect errors", () => {
     expect(
       shouldRetryInitialMcpGatewayConnect(new Error("gateway request timeout for connect")),
     ).toBe(true);
-    expect(
-      shouldRetryInitialMcpGatewayConnect(
-        new GatewayClientRequestError({
-          code: "BUSY",
-          message: "gateway busy",
-          retryable: true,
-        }),
-      ),
-    ).toBe(true);
-    expect(
-      shouldRetryInitialMcpGatewayConnect(
-        new GatewayClientRequestError({
-          code: "UNAUTHORIZED",
-          message: "auth failed",
-          retryable: false,
-        }),
-      ),
-    ).toBe(false);
+    expect(shouldRetryInitialMcpGatewayConnect(gatewayRequestError(true))).toBe(true);
+    expect(shouldRetryInitialMcpGatewayConnect(gatewayRequestError(false))).toBe(false);
   });
 
   describe("gateway-backed flows", () => {

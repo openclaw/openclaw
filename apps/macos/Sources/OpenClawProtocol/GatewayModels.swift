@@ -13,6 +13,15 @@ public enum ErrorCode: String, Codable, Sendable {
     case unavailable = "UNAVAILABLE"
 }
 
+public enum NodePresenceAliveReason: String, Codable, Sendable {
+    case background = "background"
+    case silentPush = "silent_push"
+    case bgAppRefresh = "bg_app_refresh"
+    case significantLocation = "significant_location"
+    case manual = "manual"
+    case connect = "connect"
+}
+
 public struct ConnectParams: Codable, Sendable {
     public let minprotocol: Int
     public let maxprotocol: Int
@@ -1063,6 +1072,74 @@ public struct NodeEventParams: Codable, Sendable {
     }
 }
 
+public struct NodeEventResult: Codable, Sendable {
+    public let ok: Bool
+    public let event: String
+    public let handled: Bool
+    public let reason: String?
+
+    public init(
+        ok: Bool,
+        event: String,
+        handled: Bool,
+        reason: String?)
+    {
+        self.ok = ok
+        self.event = event
+        self.handled = handled
+        self.reason = reason
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case event
+        case handled
+        case reason
+    }
+}
+
+public struct NodePresenceAlivePayload: Codable, Sendable {
+    public let trigger: NodePresenceAliveReason
+    public let sentatms: Int?
+    public let displayname: String?
+    public let version: String?
+    public let platform: String?
+    public let devicefamily: String?
+    public let modelidentifier: String?
+    public let pushtransport: String?
+
+    public init(
+        trigger: NodePresenceAliveReason,
+        sentatms: Int?,
+        displayname: String?,
+        version: String?,
+        platform: String?,
+        devicefamily: String?,
+        modelidentifier: String?,
+        pushtransport: String?)
+    {
+        self.trigger = trigger
+        self.sentatms = sentatms
+        self.displayname = displayname
+        self.version = version
+        self.platform = platform
+        self.devicefamily = devicefamily
+        self.modelidentifier = modelidentifier
+        self.pushtransport = pushtransport
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case trigger
+        case sentatms = "sentAtMs"
+        case displayname = "displayName"
+        case version
+        case platform
+        case devicefamily = "deviceFamily"
+        case modelidentifier = "modelIdentifier"
+        case pushtransport = "pushTransport"
+    }
+}
+
 public struct NodePendingDrainParams: Codable, Sendable {
     public let maxitems: Int?
 
@@ -1878,6 +1955,58 @@ public struct SessionsPatchParams: Codable, Sendable {
         case subagentcontrolscope = "subagentControlScope"
         case sendpolicy = "sendPolicy"
         case groupactivation = "groupActivation"
+    }
+}
+
+public struct SessionsPluginPatchParams: Codable, Sendable {
+    public let key: String
+    public let pluginid: String
+    public let namespace: String
+    public let value: AnyCodable?
+    public let unset: Bool?
+
+    public init(
+        key: String,
+        pluginid: String,
+        namespace: String,
+        value: AnyCodable?,
+        unset: Bool?)
+    {
+        self.key = key
+        self.pluginid = pluginid
+        self.namespace = namespace
+        self.value = value
+        self.unset = unset
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case pluginid = "pluginId"
+        case namespace
+        case value
+        case unset
+    }
+}
+
+public struct SessionsPluginPatchResult: Codable, Sendable {
+    public let ok: Bool
+    public let key: String
+    public let value: AnyCodable?
+
+    public init(
+        ok: Bool,
+        key: String,
+        value: AnyCodable?)
+    {
+        self.ok = ok
+        self.key = key
+        self.value = value
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case key
+        case value
     }
 }
 
@@ -3133,7 +3262,19 @@ public struct ModelChoice: Codable, Sendable {
     }
 }
 
-public struct ModelsListParams: Codable, Sendable {}
+public struct ModelsListParams: Codable, Sendable {
+    public let view: AnyCodable?
+
+    public init(
+        view: AnyCodable?)
+    {
+        self.view = view
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case view
+    }
+}
 
 public struct ModelsListResult: Codable, Sendable {
     public let models: [ModelChoice]
@@ -3292,6 +3433,8 @@ public struct ToolCatalogEntry: Codable, Sendable {
     public let source: AnyCodable
     public let pluginid: String?
     public let optional: Bool?
+    public let risk: AnyCodable?
+    public let tags: [String]?
     public let defaultprofiles: [AnyCodable]
 
     public init(
@@ -3301,6 +3444,8 @@ public struct ToolCatalogEntry: Codable, Sendable {
         source: AnyCodable,
         pluginid: String?,
         optional: Bool?,
+        risk: AnyCodable?,
+        tags: [String]?,
         defaultprofiles: [AnyCodable])
     {
         self.id = id
@@ -3309,6 +3454,8 @@ public struct ToolCatalogEntry: Codable, Sendable {
         self.source = source
         self.pluginid = pluginid
         self.optional = optional
+        self.risk = risk
+        self.tags = tags
         self.defaultprofiles = defaultprofiles
     }
 
@@ -3319,6 +3466,8 @@ public struct ToolCatalogEntry: Codable, Sendable {
         case source
         case pluginid = "pluginId"
         case optional
+        case risk
+        case tags
         case defaultprofiles = "defaultProfiles"
     }
 }
@@ -3401,6 +3550,8 @@ public struct ToolsEffectiveEntry: Codable, Sendable {
     public let source: AnyCodable
     public let pluginid: String?
     public let channelid: String?
+    public let risk: AnyCodable?
+    public let tags: [String]?
 
     public init(
         id: String,
@@ -3409,7 +3560,9 @@ public struct ToolsEffectiveEntry: Codable, Sendable {
         rawdescription: String,
         source: AnyCodable,
         pluginid: String?,
-        channelid: String?)
+        channelid: String?,
+        risk: AnyCodable?,
+        tags: [String]?)
     {
         self.id = id
         self.label = label
@@ -3418,6 +3571,8 @@ public struct ToolsEffectiveEntry: Codable, Sendable {
         self.source = source
         self.pluginid = pluginid
         self.channelid = channelid
+        self.risk = risk
+        self.tags = tags
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -3428,6 +3583,8 @@ public struct ToolsEffectiveEntry: Codable, Sendable {
         case source
         case pluginid = "pluginId"
         case channelid = "channelId"
+        case risk
+        case tags
     }
 }
 
@@ -4212,6 +4369,72 @@ public struct PluginApprovalResolveParams: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case id
         case decision
+    }
+}
+
+public struct PluginControlUiDescriptor: Codable, Sendable {
+    public let id: String
+    public let pluginid: String
+    public let pluginname: String?
+    public let surface: AnyCodable
+    public let label: String
+    public let description: String?
+    public let placement: String?
+    public let schema: AnyCodable?
+    public let requiredscopes: [String]?
+
+    public init(
+        id: String,
+        pluginid: String,
+        pluginname: String?,
+        surface: AnyCodable,
+        label: String,
+        description: String?,
+        placement: String?,
+        schema: AnyCodable?,
+        requiredscopes: [String]?)
+    {
+        self.id = id
+        self.pluginid = pluginid
+        self.pluginname = pluginname
+        self.surface = surface
+        self.label = label
+        self.description = description
+        self.placement = placement
+        self.schema = schema
+        self.requiredscopes = requiredscopes
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case pluginid = "pluginId"
+        case pluginname = "pluginName"
+        case surface
+        case label
+        case description
+        case placement
+        case schema
+        case requiredscopes = "requiredScopes"
+    }
+}
+
+public struct PluginsUiDescriptorsParams: Codable, Sendable {}
+
+public struct PluginsUiDescriptorsResult: Codable, Sendable {
+    public let ok: Bool
+    public let descriptors: [PluginControlUiDescriptor]
+
+    public init(
+        ok: Bool,
+        descriptors: [PluginControlUiDescriptor])
+    {
+        self.ok = ok
+        self.descriptors = descriptors
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case descriptors
     }
 }
 

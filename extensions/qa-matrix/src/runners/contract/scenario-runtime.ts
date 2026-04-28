@@ -4,6 +4,24 @@ import {
   type MatrixQaScenarioDefinition,
 } from "./scenario-catalog.js";
 import {
+  runAllowBotsDefaultBlockScenario,
+  runAllowBotsMentionsDmUnmentionedScenario,
+  runAllowBotsMentionsMentionedRoomScenario,
+  runAllowBotsMentionsUnmentionedOpenRoomBlockScenario,
+  runAllowBotsRoomOverrideBlocksAccountTrueScenario,
+  runAllowBotsRoomOverrideEnablesAccountOffScenario,
+  runAllowBotsSelfSenderIgnoredScenario,
+  runAllowBotsTrueUnmentionedOpenRoomScenario,
+} from "./scenario-runtime-allowbots.js";
+import {
+  runApprovalChannelTargetBothScenario,
+  runApprovalDenyReactionScenario,
+  runApprovalExecMetadataChunkedScenario,
+  runApprovalExecMetadataSingleEventScenario,
+  runApprovalPluginMetadataSingleEventScenario,
+  runApprovalThreadTargetScenario,
+} from "./scenario-runtime-approval.js";
+import {
   runDmPerRoomSessionOverrideScenario,
   runDmSharedSessionNoticeScenario,
   runDmThreadReplyOverrideScenario,
@@ -157,6 +175,7 @@ async function runNoReplyScenario(params: {
     observedEvents: params.context.observedEvents,
     roomId: params.context.roomId,
     syncState: params.context.syncState,
+    syncStreams: params.context.syncStreams,
     sutUserId: params.context.sutUserId,
     timeoutMs,
     token: params.token,
@@ -268,6 +287,18 @@ export async function runMatrixQaScenario(
       return await runReactionNotAReplyScenario(context);
     case "matrix-reaction-redaction-observed":
       return await runReactionRedactionObservedScenario(context);
+    case "matrix-approval-exec-metadata-single-event":
+      return await runApprovalExecMetadataSingleEventScenario(context);
+    case "matrix-approval-exec-metadata-chunked":
+      return await runApprovalExecMetadataChunkedScenario(context);
+    case "matrix-approval-plugin-metadata-single-event":
+      return await runApprovalPluginMetadataSingleEventScenario(context);
+    case "matrix-approval-deny-reaction":
+      return await runApprovalDenyReactionScenario(context);
+    case "matrix-approval-thread-target":
+      return await runApprovalThreadTargetScenario(context);
+    case "matrix-approval-channel-target-both":
+      return await runApprovalChannelTargetBothScenario(context);
     case "matrix-restart-resume":
       return await runRestartResumeScenario(context);
     case "matrix-post-restart-room-continue":
@@ -293,6 +324,22 @@ export async function runMatrixQaScenario(
         token,
       });
     }
+    case "matrix-allowbots-default-block":
+      return await runAllowBotsDefaultBlockScenario(context);
+    case "matrix-allowbots-true-unmentioned-open-room":
+      return await runAllowBotsTrueUnmentionedOpenRoomScenario(context);
+    case "matrix-allowbots-mentions-mentioned-room":
+      return await runAllowBotsMentionsMentionedRoomScenario(context);
+    case "matrix-allowbots-mentions-unmentioned-open-room-block":
+      return await runAllowBotsMentionsUnmentionedOpenRoomBlockScenario(context);
+    case "matrix-allowbots-mentions-dm-unmentioned":
+      return await runAllowBotsMentionsDmUnmentionedScenario(context);
+    case "matrix-allowbots-room-override-blocks-account-true":
+      return await runAllowBotsRoomOverrideBlocksAccountTrueScenario(context);
+    case "matrix-allowbots-room-override-enables-account-off":
+      return await runAllowBotsRoomOverrideEnablesAccountOffScenario(context);
+    case "matrix-allowbots-self-sender-ignored":
+      return await runAllowBotsSelfSenderIgnoredScenario(context);
     case "matrix-mxid-prefixed-command-block": {
       const token = buildMatrixQaToken("MATRIX_QA_MXID_COMMAND");
       return await runNoReplyScenario({

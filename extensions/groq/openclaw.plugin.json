@@ -1,5 +1,8 @@
 {
   "id": "groq",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["groq"],
   "providerEndpoints": [

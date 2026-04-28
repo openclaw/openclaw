@@ -348,7 +348,6 @@ describe("openai transport stream", () => {
   });
 
   it("passes provider request timeouts to OpenAI SDK clients", () => {
-    const context = { systemPrompt: "system", messages: [], tools: [] } as never;
     const requestTimeoutMs = 900_000;
 
     const responsesModel = {
@@ -376,24 +375,9 @@ describe("openai transport stream", () => {
       reasoning: false,
     } satisfies Model<"openai-completions"> & { requestTimeoutMs: number };
 
-    expect(
-      (
-        __testing.createOpenAIResponsesClient(responsesModel, context, "test-key") as {
-          timeout: number;
-        }
-      ).timeout,
-    ).toBe(requestTimeoutMs);
-    expect(
-      (__testing.createAzureOpenAIClient(azureModel, context, "test-key") as { timeout: number })
-        .timeout,
-    ).toBe(requestTimeoutMs);
-    expect(
-      (
-        __testing.createOpenAICompletionsClient(completionsModel, context, "test-key") as {
-          timeout: number;
-        }
-      ).timeout,
-    ).toBe(requestTimeoutMs);
+    expect(__testing.buildOpenAISdkClientOptions(responsesModel).timeout).toBe(requestTimeoutMs);
+    expect(__testing.buildOpenAISdkClientOptions(azureModel).timeout).toBe(requestTimeoutMs);
+    expect(__testing.buildOpenAISdkClientOptions(completionsModel).timeout).toBe(requestTimeoutMs);
   });
 
   it("passes provider request timeouts to OpenAI SDK per-request options", () => {

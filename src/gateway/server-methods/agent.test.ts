@@ -833,6 +833,45 @@ describe("gateway agent handler", () => {
     resetTimeConfig();
   });
 
+  it("keeps model-run gateway prompts undecorated and forwards raw-run flags", async () => {
+    setupNewYorkTimeConfig("2026-01-29T01:30:00.000Z");
+    primeMainAgentRun({ cfg: mocks.loadConfigReturn });
+
+    await invokeAgent(
+      {
+        message: "Reply exactly: pong",
+        agentId: "main",
+        provider: "ollama",
+        model: "llama3.2:latest",
+        modelRun: true,
+        promptMode: "none",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-model-run-raw",
+      },
+      {
+        reqId: "model-run-raw",
+        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+      },
+    );
+
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+
+    const callArgs = mocks.agentCommand.mock.calls[0][0] as {
+      message?: string;
+      modelRun?: boolean;
+      promptMode?: string;
+    };
+    expect(callArgs).toEqual(
+      expect.objectContaining({
+        message: "Reply exactly: pong",
+        modelRun: true,
+        promptMode: "none",
+      }),
+    );
+
+    resetTimeConfig();
+  });
+
   it.each([
     {
       name: "passes senderIsOwner=false for write-scoped gateway callers",
@@ -962,6 +1001,60 @@ describe("gateway agent handler", () => {
       undefined,
       expect.objectContaining({
         message: expect.stringContaining("invalid agent params"),
+      }),
+    );
+  });
+
+  it.each(
+    (["channel", "replyChannel"] as const).flatMap((field) =>
+      (["heartbeat", "cron", "webhook"] as const).map((channel) => [field, channel] as const),
+    ),
+  )("accepts internal non-delivery %s hint %s", async (field, channel) => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "spawn from internal source",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        [field]: channel,
+        idempotencyKey: `internal-channel-${field}-${channel}`,
+      } as AgentParams,
+      { reqId: `internal-channel-${field}-${channel}-1`, respond },
+    );
+
+    const rejection = respond.mock.calls.find(
+      (call: unknown[]) =>
+        call[0] === false &&
+        typeof (call[2] as { message?: string } | undefined)?.message === "string" &&
+        (call[2] as { message: string }).message.includes("unknown channel"),
+    );
+    expect(rejection).toBeUndefined();
+  });
+
+  it.each(["channel", "replyChannel"] as const)("rejects unknown %s hints", async (field) => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "bogus channel",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        [field]: "not-a-real-channel",
+        idempotencyKey: `unknown-${field}`,
+      } as AgentParams,
+      { reqId: `unknown-${field}-1`, respond },
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("unknown channel: not-a-real-channel"),
       }),
     );
   });

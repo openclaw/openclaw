@@ -13,6 +13,7 @@ import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
 import { formatPluginLine } from "./plugins-list-format.js";
+import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
 export type PluginsListOptions = {
   json?: boolean;
@@ -258,24 +259,26 @@ export function registerPluginsCli(program: Command) {
         buildAllPluginInspectReports,
         buildPluginDiagnosticsReport,
         buildPluginInspectReport,
+        buildPluginSnapshotReport,
         formatPluginCompatibilityNotice,
       } = await import("../plugins/status.js");
       const { loadInstalledPluginIndexInstallRecords } =
         await import("../plugins/installed-plugin-index-records.js");
       const cfg = getRuntimeConfig();
       const installRecords = await loadInstalledPluginIndexInstallRecords();
-      const report = buildPluginDiagnosticsReport({
-        config: cfg,
-        ...(opts.json ? { logger: quietPluginJsonLogger } : {}),
-      });
+      const loggerParams = opts.json ? { logger: quietPluginJsonLogger } : {};
       if (opts.all) {
         if (id) {
           defaultRuntime.error("Pass either a plugin id or --all, not both.");
           return defaultRuntime.exit(1);
         }
+        const report = buildPluginDiagnosticsReport({
+          config: cfg,
+          ...loggerParams,
+        });
         const inspectAll = buildAllPluginInspectReports({
           config: cfg,
-          ...(opts.json ? { logger: quietPluginJsonLogger } : {}),
+          ...loggerParams,
           report,
         });
         const inspectAllWithInstall = inspectAll.map((inspect) => ({
@@ -341,10 +344,26 @@ export function registerPluginsCli(program: Command) {
         return defaultRuntime.exit(1);
       }
 
-      const inspect = buildPluginInspectReport({
-        id,
+      const snapshotReport = buildPluginSnapshotReport({
         config: cfg,
-        ...(opts.json ? { logger: quietPluginJsonLogger } : {}),
+        ...loggerParams,
+      });
+      const targetPlugin = snapshotReport.plugins.find(
+        (entry) => entry.id === id || entry.name === id,
+      );
+      if (!targetPlugin) {
+        defaultRuntime.error(`Plugin not found: ${id}`);
+        return defaultRuntime.exit(1);
+      }
+      const report = buildPluginDiagnosticsReport({
+        config: cfg,
+        ...loggerParams,
+        onlyPluginIds: [targetPlugin.id],
+      });
+      const inspect = buildPluginInspectReport({
+        id: targetPlugin.id,
+        config: cfg,
+        ...loggerParams,
         report,
       });
       if (!inspect) {
@@ -569,7 +588,7 @@ export function registerPluginsCli(program: Command) {
         withoutPluginInstallRecords,
         withPluginInstallRecords,
       } = await import("../plugins/installed-plugin-index-records.js");
-      const { buildPluginDiagnosticsReport } = await import("../plugins/status.js");
+      const { buildPluginSnapshotReport } = await import("../plugins/status.js");
       const {
         applyPluginUninstallDirectoryRemoval,
         formatUninstallActionLabels,
@@ -588,7 +607,7 @@ export function registerPluginsCli(program: Command) {
       const sourceConfig = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
       const installRecords = await loadInstalledPluginIndexInstallRecords();
       const cfg = withPluginInstallRecords(sourceConfig, installRecords);
-      const report = buildPluginDiagnosticsReport({ config: cfg });
+      const report = buildPluginSnapshotReport({ config: cfg });
       const extensionsDir = path.join(resolveStateDir(process.env, os.homedir), "extensions");
       const keepFiles = Boolean(opts.keepFiles || opts.keepConfig);
 
@@ -925,4 +944,6 @@ export function registerPluginsCli(program: Command) {
         defaultRuntime.log(`${theme.command(plugin.name)}${suffix}${desc}`);
       }
     });
+
+  applyParentDefaultHelpAction(plugins);
 }
