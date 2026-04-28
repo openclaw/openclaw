@@ -516,7 +516,7 @@ describe("prepareBundledPluginRuntimeRoot", () => {
     const wrapperContent = fs.readFileSync(stagedWrapperPath, "utf8");
     const specifierMatch = wrapperContent.match(/^export \* from ["']([^"']+)["']/m);
     expect(specifierMatch, "wrapper must contain an export * from <specifier> line").toBeTruthy();
-    const specifier = specifierMatch![1] as string;
+    const specifier = specifierMatch![1];
 
     // The specifier must resolve away from the wrapper itself: a self-import
     // is the exact bug the fix addresses.
