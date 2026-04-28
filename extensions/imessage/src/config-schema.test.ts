@@ -128,4 +128,12 @@ describe("imessage config schema", () => {
 
     expect(res.success).toBe(true);
   });
+
+  it("rejects invalid SecretRef shapes", () => {
+    const res = IMessageConfigSchema.safeParse({
+      allowFrom: [{ source: "bad", provider: "default", id: "X" }],
+      defaultTo: { source: "env", id: "MISSING_PROVIDER" },
+    });
+    expect(res.success).toBe(false);
+  });
 });

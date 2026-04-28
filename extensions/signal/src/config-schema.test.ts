@@ -131,4 +131,12 @@ describe("signal groups schema", () => {
       },
     });
   });
+
+  it("rejects invalid SecretRef shapes", () => {
+    const res = SignalConfigSchema.safeParse({
+      account: { source: "env", id: "SIGNAL_ACCOUNT" },
+      allowFrom: [{ source: "bad", provider: "default", id: "X" }],
+    });
+    expect(res.success).toBe(false);
+  });
 });
