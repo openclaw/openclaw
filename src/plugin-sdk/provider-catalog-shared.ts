@@ -56,6 +56,15 @@ function cloneManifestCatalogCost(cost: ModelCatalogCost): ModelDefinitionConfig
   };
 }
 
+function buildManifestCatalogModelInput(model: ModelCatalogModel): ModelDefinitionConfig["input"] {
+  if (model.input?.includes("document")) {
+    throw new Error(
+      `Manifest modelCatalog row ${model.id} uses unsupported runtime input document`,
+    );
+  }
+  return model.input ?? ["text"];
+}
+
 function buildManifestCatalogModel(model: ModelCatalogModel): ModelDefinitionConfig {
   if (model.contextWindow === undefined) {
     throw new Error(`Manifest modelCatalog row ${model.id} is missing contextWindow`);
@@ -63,14 +72,13 @@ function buildManifestCatalogModel(model: ModelCatalogModel): ModelDefinitionCon
   if (model.maxTokens === undefined) {
     throw new Error(`Manifest modelCatalog row ${model.id} is missing maxTokens`);
   }
-  const input = model.input?.filter((item) => item !== "document") ?? ["text"];
   return {
     id: model.id,
     name: model.name ?? model.id,
     ...(model.api ? { api: model.api } : {}),
     ...(model.baseUrl ? { baseUrl: model.baseUrl } : {}),
     reasoning: model.reasoning ?? false,
-    input: input.length > 0 ? input : ["text"],
+    input: buildManifestCatalogModelInput(model),
     cost: cloneManifestCatalogCost(model.cost ?? {}),
     contextWindow: model.contextWindow,
     ...(model.contextTokens !== undefined ? { contextTokens: model.contextTokens } : {}),
@@ -87,8 +95,11 @@ export function buildManifestModelProviderConfig(params: {
   if (!params.catalog) {
     throw new Error(`Missing modelCatalog.providers.${params.providerId}`);
   }
+  if (!params.catalog.baseUrl) {
+    throw new Error(`Missing modelCatalog.providers.${params.providerId}.baseUrl`);
+  }
   return {
-    baseUrl: params.catalog.baseUrl ?? "",
+    baseUrl: params.catalog.baseUrl,
     ...(params.catalog.api ? { api: params.catalog.api } : {}),
     ...(params.catalog.headers ? { headers: { ...params.catalog.headers } } : {}),
     models: params.catalog.models.map(buildManifestCatalogModel),

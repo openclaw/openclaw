@@ -172,6 +172,7 @@ describe("provider-catalog-shared manifest provider configs", () => {
       buildManifestModelProviderConfig({
         providerId: "example",
         catalog: {
+          baseUrl: "https://api.example.test/v1",
           models: [
             {
               id: "missing-context",
@@ -181,5 +182,39 @@ describe("provider-catalog-shared manifest provider configs", () => {
         },
       }),
     ).toThrow("missing contextWindow");
+  });
+
+  it("rejects catalog data that cannot become runtime provider config", () => {
+    expect(() =>
+      buildManifestModelProviderConfig({
+        providerId: "example",
+        catalog: {
+          models: [
+            {
+              id: "missing-base-url",
+              contextWindow: 1024,
+              maxTokens: 1024,
+            },
+          ],
+        },
+      }),
+    ).toThrow("providers.example.baseUrl");
+
+    expect(() =>
+      buildManifestModelProviderConfig({
+        providerId: "example",
+        catalog: {
+          baseUrl: "https://api.example.test/v1",
+          models: [
+            {
+              id: "document-model",
+              input: ["document"],
+              contextWindow: 1024,
+              maxTokens: 1024,
+            },
+          ],
+        },
+      }),
+    ).toThrow("unsupported runtime input document");
   });
 });
