@@ -148,6 +148,60 @@ describe("plugins cli uninstall", () => {
     });
   });
 
+  it("exits cleanly when confirmation input closes before an answer", async () => {
+    const baseConfig = {
+      plugins: {
+        entries: {
+          alpha: { enabled: true },
+        },
+        installs: {
+          alpha: {
+            source: "path",
+            sourcePath: ALPHA_INSTALL_PATH,
+            installPath: ALPHA_INSTALL_PATH,
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const promptClosedError = new Error("prompt closed");
+    promptClosedError.name = "PromptInputClosedError";
+
+    loadConfig.mockReturnValue(baseConfig);
+    setInstalledPluginIndexInstallRecords(baseConfig.plugins?.installs ?? {});
+    buildPluginDiagnosticsReport.mockReturnValue({
+      plugins: [{ id: "alpha", name: "alpha" }],
+      diagnostics: [],
+    });
+    planPluginUninstall.mockReturnValue({
+      ok: true,
+      config: { plugins: { entries: {}, installs: {} } } as OpenClawConfig,
+      actions: {
+        entry: true,
+        install: true,
+        allowlist: false,
+        denylist: false,
+        loadPath: false,
+        memorySlot: false,
+        contextEngineSlot: false,
+        directory: false,
+      },
+      directoryRemoval: null,
+    });
+    promptYesNo.mockRejectedValueOnce(promptClosedError);
+
+    await expect(runPluginsCommand(["plugins", "uninstall", "alpha"])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(runtimeErrors).toContain(
+      "Error: plugins uninstall requires confirmation input. Re-run in an interactive TTY or pass --force.",
+    );
+    expect(writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(refreshPluginRegistry).not.toHaveBeenCalled();
+    expect(applyPluginUninstallDirectoryRemoval).not.toHaveBeenCalled();
+  });
+
   it("restores install records when the config write rejects during uninstall", async () => {
     const installRecords = {
       alpha: {
