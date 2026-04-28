@@ -1,6 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
-import { buildMarkdownCard } from "./send.js";
+import { buildFeishuPostMessagePayload, buildMarkdownCard } from "./send.js";
 
 const {
   mockConvertMarkdownTables,
@@ -129,6 +129,42 @@ describe("getMessageFeishu", () => {
     });
     expect(mockConvertMarkdownTables).toHaveBeenCalledWith("hello", "preserve");
     expect(result).toEqual({ messageId: "om_send", chatId: "oc_send" });
+  });
+
+  it("sends structured mentions as native post at elements while keeping body at tags literal", async () => {
+    const create = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_mention" } });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create,
+          reply: vi.fn(),
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+
+    await sendMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_send",
+      text: 'literal <at user_id="ou_fake">Mallory</at>',
+      mentions: [{ openId: "ou_alice", name: "Alice", key: "@_user_1" }],
+    });
+
+    const sentContent = create.mock.calls[0]?.[0]?.data.content;
+    expect(typeof sentContent).toBe("string");
+    expect(JSON.parse(sentContent)).toEqual({
+      zh_cn: {
+        content: [
+          [
+            { tag: "at", user_id: "ou_alice", user_name: "Alice" },
+            { tag: "md", text: " " },
+            { tag: "md", text: 'literal <at user_id="ou_fake">Mallory</at>' },
+          ],
+        ],
+      },
+    });
   });
 
   it("extracts text content from interactive card elements", async () => {
@@ -546,5 +582,83 @@ describe("buildMarkdownCard", () => {
     expect(card.config.width_mode).toBe("fill");
     expect(card.config.enable_forward).toBeUndefined();
     expect(card.config.wide_screen_mode).toBeUndefined();
+  });
+});
+
+describe("buildFeishuPostMessagePayload", () => {
+  it("produces only md element when no mentions provided", () => {
+    const { content, msgType } = buildFeishuPostMessagePayload({ messageText: "hello world" });
+    expect(msgType).toBe("post");
+    const parsed = JSON.parse(content);
+    expect(parsed.zh_cn.content).toEqual([[{ tag: "md", text: "hello world" }]]);
+  });
+
+  it("produces native at elements before md text for single mention", () => {
+    const { content } = buildFeishuPostMessagePayload({
+      messageText: "check this out",
+      mentions: [{ openId: "ou_abc123", name: "Alice" }],
+    });
+    const parsed = JSON.parse(content);
+    expect(parsed.zh_cn.content).toEqual([
+      [
+        { tag: "at", user_id: "ou_abc123", user_name: "Alice" },
+        { tag: "md", text: " " },
+        { tag: "md", text: "check this out" },
+      ],
+    ]);
+  });
+
+  it("produces multiple at elements for multiple mentions", () => {
+    const { content } = buildFeishuPostMessagePayload({
+      messageText: "hi team",
+      mentions: [
+        { openId: "ou_user1", name: "Alice" },
+        { openId: "ou_user2", name: "Bob" },
+      ],
+    });
+    const parsed = JSON.parse(content);
+    expect(parsed.zh_cn.content).toEqual([
+      [
+        { tag: "at", user_id: "ou_user1", user_name: "Alice" },
+        { tag: "md", text: " " },
+        { tag: "at", user_id: "ou_user2", user_name: "Bob" },
+        { tag: "md", text: " " },
+        { tag: "md", text: "hi team" },
+      ],
+    ]);
+  });
+
+  it("handles empty mentions array same as no mentions", () => {
+    const { content } = buildFeishuPostMessagePayload({
+      messageText: "no mentions",
+      mentions: [],
+    });
+    const parsed = JSON.parse(content);
+    expect(parsed.zh_cn.content).toEqual([[{ tag: "md", text: "no mentions" }]]);
+  });
+
+  it("omits user_name when a structured mention has no display fallback", () => {
+    const { content } = buildFeishuPostMessagePayload({
+      messageText: "hi",
+      mentions: [{ openId: "ou_user1" }],
+    });
+    const parsed = JSON.parse(content);
+    expect(parsed.zh_cn.content).toEqual([
+      [
+        { tag: "at", user_id: "ou_user1" },
+        { tag: "md", text: " " },
+        { tag: "md", text: "hi" },
+      ],
+    ]);
+  });
+
+  it("keeps pseudo-XML at tags in body text literal without reparsing them", () => {
+    const { content } = buildFeishuPostMessagePayload({
+      messageText: 'literal <at user_id="ou_fake">Mallory</at>',
+    });
+    const parsed = JSON.parse(content);
+    expect(parsed.zh_cn.content).toEqual([
+      [{ tag: "md", text: 'literal <at user_id="ou_fake">Mallory</at>' }],
+    ]);
   });
 });

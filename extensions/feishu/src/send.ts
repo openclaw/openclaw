@@ -8,7 +8,7 @@ import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import type { MentionTarget } from "./mention-target.types.js";
-import { buildMentionedCardContent, buildMentionedMessage } from "./mention.js";
+import { buildMentionedCardContent } from "./mention.js";
 import { parsePostContent } from "./post.js";
 import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
@@ -518,22 +518,30 @@ export type SendFeishuMessageParams = {
   accountId?: string;
 };
 
-export function buildFeishuPostMessagePayload(params: { messageText: string }): {
+export function buildFeishuPostMessagePayload(params: {
+  messageText: string;
+  mentions?: Array<{ openId: string; name?: string }>;
+}): {
   content: string;
   msgType: string;
 } {
-  const { messageText } = params;
+  const { messageText, mentions } = params;
+  const elements: Array<Record<string, unknown>> = [];
+  if (mentions && mentions.length > 0) {
+    for (const m of mentions) {
+      elements.push({
+        tag: "at",
+        user_id: m.openId,
+        ...(m.name ? { user_name: m.name } : {}),
+      });
+      elements.push({ tag: "md", text: " " });
+    }
+  }
+  elements.push({ tag: "md", text: messageText });
   return {
     content: JSON.stringify({
       zh_cn: {
-        content: [
-          [
-            {
-              tag: "md",
-              text: messageText,
-            },
-          ],
-        ],
+        content: [elements],
       },
     }),
     msgType: "post",
@@ -550,14 +558,14 @@ export async function sendMessageFeishu(
     channel: "feishu",
   });
 
-  // Build message content (with @mention support)
-  let rawText = text ?? "";
-  if (mentions && mentions.length > 0) {
-    rawText = buildMentionedMessage(mentions, rawText);
-  }
+  // Structured mention targets become native post at elements; body text stays literal.
+  const rawText = text ?? "";
   const messageText = convertMarkdownTables(rawText, tableMode);
 
-  const { content, msgType } = buildFeishuPostMessagePayload({ messageText });
+  const { content, msgType } = buildFeishuPostMessagePayload({
+    messageText,
+    mentions: mentions?.map((m) => ({ openId: m.openId, name: m.name })),
+  });
 
   const directParams = { receiveId, receiveIdType, content, msgType };
   return sendReplyOrFallbackDirect(client, {
