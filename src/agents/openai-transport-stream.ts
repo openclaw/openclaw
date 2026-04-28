@@ -715,7 +715,7 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
           )) as unknown as AsyncIterable<unknown>;
         const retryRunner = getProviderRetryRunner(model.provider);
         const responseStream = retryRunner
-          ? await retryRunner(createStream, "responses")
+          ? await retryRunner(createStream, "responses", { signal: options?.signal })
           : await createStream();
         stream.push({ type: "start", partial: output as never });
         await processResponsesStream(responseStream, output, stream, model, {
@@ -874,7 +874,7 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
           )) as unknown as AsyncIterable<unknown>;
         const retryRunner = getProviderRetryRunner(model.provider);
         const responseStream = retryRunner
-          ? await retryRunner(createStream, "azure-responses")
+          ? await retryRunner(createStream, "azure-responses", { signal: options?.signal })
           : await createStream();
         stream.push({ type: "start", partial: output as never });
         await processResponsesStream(responseStream, output, stream, model);
@@ -1007,7 +1007,7 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           })) as unknown as AsyncIterable<ChatCompletionChunk>;
         const retryRunner = getProviderRetryRunner(model.provider);
         const responseStream = retryRunner
-          ? await retryRunner(createStream, "completions")
+          ? await retryRunner(createStream, "completions", { signal: options?.signal })
           : await createStream();
         stream.push({ type: "start", partial: output as never });
         await processOpenAICompletionsStream(responseStream, output, model, stream);

@@ -21,6 +21,13 @@ export type RetryOptions = RetryConfig & {
   shouldRetry?: (err: unknown, attempt: number) => boolean;
   retryAfterMs?: (err: unknown) => number | undefined;
   onRetry?: (info: RetryInfo) => void;
+  /**
+   * If provided, the retry loop wakes up early when the signal is aborted —
+   * during backoff sleep AND between attempts — and stops retrying. The
+   * most recent attempt's error is rethrown so callers can distinguish API
+   * failure from cancellation by checking `signal.aborted` after.
+   */
+  signal?: AbortSignal;
 };
 
 const DEFAULT_RETRY_CONFIG = {
@@ -68,6 +75,34 @@ function applyJitter(delayMs: number, jitter: number): number {
   return Math.max(0, Math.round(delayMs * (1 + offset)));
 }
 
+/**
+ * Sleep that wakes early on AbortSignal. Resolves when the timer fires,
+ * or rejects with the signal's reason as soon as the signal aborts.
+ *
+ * Used by the retry loop so cancellation interrupts backoff sleep
+ * instead of waiting for the full backoff interval.
+ */
+function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+  if (signal.aborted) {
+    return Promise.reject(signal.reason ?? new Error("aborted"));
+  }
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      reject(signal.reason ?? new Error("aborted"));
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 export async function retryAsync<T>(
   fn: () => Promise<T>,
   attemptsOrOptions: number | RetryOptions = 3,
@@ -102,14 +137,25 @@ export async function retryAsync<T>(
       : Number.POSITIVE_INFINITY;
   const jitter = resolved.jitter;
   const shouldRetry = options.shouldRetry ?? (() => true);
+  const signal = options.signal;
   let lastErr: unknown;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    // Honor cancellation between attempts so we don't issue a new request
+    // when the caller has already given up.
+    if (signal?.aborted) {
+      throw lastErr ?? signal.reason ?? new Error("aborted");
+    }
     try {
       return await fn();
     } catch (err) {
       lastErr = err;
       if (attempt >= maxAttempts || !shouldRetry(err, attempt)) {
+        break;
+      }
+      // If the request failed because the caller aborted, propagate
+      // immediately rather than burning attempts on a doomed request.
+      if (signal?.aborted) {
         break;
       }
 
@@ -130,7 +176,15 @@ export async function retryAsync<T>(
         label: options.label,
       });
       if (delay > 0) {
-        await sleep(delay);
+        try {
+          await abortableSleep(delay, signal);
+        } catch {
+          // Backoff was interrupted by abort. Stop retrying and rethrow
+          // the most recent attempt's error (the underlying API failure).
+          // Callers can check `signal.aborted` to distinguish cancel
+          // from genuine API failure.
+          break;
+        }
       }
     }
   }

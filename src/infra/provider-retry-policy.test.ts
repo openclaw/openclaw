@@ -167,3 +167,110 @@ describe("createProviderApiRetryRunner", () => {
     expect(PROVIDER_API_RETRY_DEFAULTS.jitter).toBe(0.15);
   });
 });
+
+describe("Retry-After header parsing", () => {
+  // Helper to construct a thrown error shaped like the SDK errors the runner inspects.
+  const errWithHeaders = (headers: Headers | Record<string, unknown>) =>
+    Object.assign(new Error("429 Too Many Requests"), { status: 429, headers });
+
+  it("honors Retry-After from a plain-object headers bag (lowercase key)", async () => {
+    let attempts = 0;
+    const runner = createProviderApiRetryRunner({ retry: ZERO_DELAY_RETRY });
+    const result = await runner(async () => {
+      attempts += 1;
+      if (attempts < 2) {
+        throw errWithHeaders({ "retry-after": "0" });
+      }
+      return "ok";
+    }, "test");
+    expect(result).toBe("ok");
+    expect(attempts).toBe(2);
+  });
+
+  it("honors Retry-After from a plain-object headers bag (Title-Case key)", async () => {
+    let attempts = 0;
+    const runner = createProviderApiRetryRunner({ retry: ZERO_DELAY_RETRY });
+    const result = await runner(async () => {
+      attempts += 1;
+      if (attempts < 2) {
+        throw errWithHeaders({ "Retry-After": "0" });
+      }
+      return "ok";
+    }, "test");
+    expect(result).toBe("ok");
+    expect(attempts).toBe(2);
+  });
+
+  it("honors Retry-After from a fetch Headers instance", async () => {
+    // Fetch's Headers class normalizes case internally and only exposes .get();
+    // bracket access returns undefined. The previous bracket-only reader silently
+    // dropped Retry-After here.
+    let attempts = 0;
+    const runner = createProviderApiRetryRunner({ retry: ZERO_DELAY_RETRY });
+    const headers = new Headers();
+    headers.set("Retry-After", "0");
+    const result = await runner(async () => {
+      attempts += 1;
+      if (attempts < 2) {
+        throw errWithHeaders(headers);
+      }
+      return "ok";
+    }, "test");
+    expect(result).toBe("ok");
+    expect(attempts).toBe(2);
+  });
+});
+
+describe("retry runner abort-signal awareness", () => {
+  it("interrupts backoff sleep when the signal is aborted", async () => {
+    // Use a long backoff so a non-abortable sleep would block far longer
+    // than this test's wall-clock budget.
+    const runner = createProviderApiRetryRunner({
+      retry: { attempts: 5, minDelayMs: 5_000, maxDelayMs: 10_000, jitter: 0 },
+    });
+    const controller = new AbortController();
+    let attempts = 0;
+    const start = Date.now();
+    const promise = runner(
+      async () => {
+        attempts += 1;
+        if (attempts === 1) {
+          // Schedule the abort to fire while we're in the backoff sleep.
+          setTimeout(() => controller.abort(), 50);
+        }
+        throw new Error("connect ECONNREFUSED 127.0.0.1:8000");
+      },
+      "test",
+      { signal: controller.signal },
+    );
+    await expect(promise).rejects.toThrow("ECONNREFUSED");
+    const elapsedMs = Date.now() - start;
+    // First attempt fails immediately; backoff would normally be 5_000ms.
+    // With the abort waking the sleep, total elapsed should be well under 1s.
+    expect(elapsedMs).toBeLessThan(1_000);
+    // Should have stopped after the first attempt (no second attempt issued
+    // because we aborted during backoff before the next iteration).
+    expect(attempts).toBe(1);
+  });
+
+  it("does not start a new attempt when signal is already aborted between attempts", async () => {
+    const runner = createProviderApiRetryRunner({
+      retry: { attempts: 5, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+    });
+    const controller = new AbortController();
+    let attempts = 0;
+    const promise = runner(
+      async () => {
+        attempts += 1;
+        controller.abort();
+        throw new Error("connect ECONNREFUSED 127.0.0.1:8000");
+      },
+      "test",
+      { signal: controller.signal },
+    );
+    await expect(promise).rejects.toThrow("ECONNREFUSED");
+    // Even with attempts: 5, abort during the first attempt should prevent
+    // any further attempts (we check signal.aborted at top of loop).
+    expect(attempts).toBe(1);
+  });
+});

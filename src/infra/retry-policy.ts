@@ -2,7 +2,33 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { formatErrorMessage } from "./errors.js";
 import { type RetryConfig, resolveRetryConfig, retryAsync } from "./retry.js";
 
-export type RetryRunner = <T>(fn: () => Promise<T>, label?: string) => Promise<T>;
+/**
+ * Optional behavior knobs at call time. `signal` makes backoff cancellable
+ * (interrupted sleeps reject; the most recent attempt's error is rethrown)
+ * so a request abort doesn't stall up to one backoff interval.
+ */
+export type RetryRunOptions = {
+  signal?: AbortSignal;
+};
+
+export type RetryRunner = <T>(
+  fn: () => Promise<T>,
+  labelOrOptions?: string | RetryRunOptions,
+  options?: RetryRunOptions,
+) => Promise<T>;
+
+function resolveRunnerOptions(
+  labelOrOptions?: string | RetryRunOptions,
+  options?: RetryRunOptions,
+): { label?: string; signal?: AbortSignal } {
+  if (typeof labelOrOptions === "string") {
+    return { label: labelOrOptions, signal: options?.signal };
+  }
+  if (labelOrOptions && typeof labelOrOptions === "object") {
+    return { label: undefined, signal: labelOrOptions.signal };
+  }
+  return { label: undefined, signal: options?.signal };
+}
 
 export const CHANNEL_API_RETRY_DEFAULTS = {
   attempts: 3,
@@ -63,10 +89,16 @@ export function createRateLimitRetryRunner(params: {
     ...params.configRetry,
     ...params.retry,
   });
-  return <T>(fn: () => Promise<T>, label?: string) =>
-    retryAsync(fn, {
+  return <T>(
+    fn: () => Promise<T>,
+    labelOrOptions?: string | RetryRunOptions,
+    runOptions?: RetryRunOptions,
+  ) => {
+    const { label, signal } = resolveRunnerOptions(labelOrOptions, runOptions);
+    return retryAsync(fn, {
       ...retryConfig,
       label,
+      signal,
       shouldRetry: params.shouldRetry,
       retryAfterMs: params.retryAfterMs,
       onRetry: params.verbose
@@ -79,6 +111,7 @@ export function createRateLimitRetryRunner(params: {
           }
         : undefined,
     });
+  };
 }
 
 // --- Provider (LLM) API retry ---
@@ -93,16 +126,35 @@ export const PROVIDER_API_RETRY_DEFAULTS: Required<RetryConfig> = {
 const PROVIDER_API_RETRY_RE =
   /429|timeout|connect|reset|closed|unavailable|temporarily|ECONNREFUSED|ETIMEDOUT|ENETUNREACH|502|503|504/i;
 
+function readRetryAfterHeader(headers: object): unknown {
+  // Headers can arrive in two shapes:
+  //  - fetch `Headers` instances (Web APIs, Node 18+, undici-based clients):
+  //    bracket access returns undefined; must call `.get("retry-after")`.
+  //  - plain objects (older OpenAI SDK error shapes, axios responses):
+  //    bracket access works but case may not be normalized.
+  // HTTP header names are case-insensitive; `Headers.get` handles that
+  // internally. For plain objects we probe common case variants.
+  const get = (headers as { get?: unknown }).get;
+  if (typeof get === "function") {
+    try {
+      return (headers as Headers).get("retry-after");
+    } catch {
+      // If the object exposes a `get` method that doesn't match the
+      // Headers signature, fall through to bracket access.
+    }
+  }
+  const bag = headers as Record<string, unknown>;
+  return bag["retry-after"] ?? bag["Retry-After"] ?? bag["RETRY-AFTER"];
+}
+
 function getProviderApiRetryAfterMs(err: unknown): number | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
   }
-  // OpenAI SDK errors expose headers with retry-after
-  const headers =
-    "headers" in err && err.headers && typeof err.headers === "object"
-      ? (err.headers as Record<string, unknown>)
-      : undefined;
-  const retryAfter = headers?.["retry-after"];
+  if (!("headers" in err) || !err.headers || typeof err.headers !== "object") {
+    return undefined;
+  }
+  const retryAfter = readRetryAfterHeader(err.headers);
   if (typeof retryAfter === "string") {
     const seconds = Number.parseFloat(retryAfter);
     if (Number.isFinite(seconds) && seconds > 0) {
@@ -133,10 +185,16 @@ export function createProviderApiRetryRunner(params: {
     ...params.retry,
   });
 
-  return <T>(fn: () => Promise<T>, label?: string) =>
-    retryAsync(fn, {
+  return <T>(
+    fn: () => Promise<T>,
+    labelOrOptions?: string | RetryRunOptions,
+    runOptions?: RetryRunOptions,
+  ) => {
+    const { label, signal } = resolveRunnerOptions(labelOrOptions, runOptions);
+    return retryAsync(fn, {
       ...retryConfig,
       label,
+      signal,
       shouldRetry: (err: unknown) => {
         if (isNonRetryableProviderError(err)) {
           return false;
@@ -151,6 +209,7 @@ export function createProviderApiRetryRunner(params: {
         );
       },
     });
+  };
 }
 
 // --- Channel API retry ---
@@ -174,10 +233,16 @@ export function createChannelApiRetryRunner(params: {
   });
   const shouldRetry = resolveChannelApiShouldRetry(params);
 
-  return <T>(fn: () => Promise<T>, label?: string) =>
-    retryAsync(fn, {
+  return <T>(
+    fn: () => Promise<T>,
+    labelOrOptions?: string | RetryRunOptions,
+    runOptions?: RetryRunOptions,
+  ) => {
+    const { label, signal } = resolveRunnerOptions(labelOrOptions, runOptions);
+    return retryAsync(fn, {
       ...retryConfig,
       label,
+      signal,
       shouldRetry,
       retryAfterMs: getChannelApiRetryAfterMs,
       onRetry: params.verbose
@@ -189,4 +254,5 @@ export function createChannelApiRetryRunner(params: {
           }
         : undefined,
     });
+  };
 }
