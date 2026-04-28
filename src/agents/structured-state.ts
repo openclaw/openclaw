@@ -9,7 +9,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("agent/structured-state");
@@ -34,7 +34,7 @@ export function resolveStructuredStateFilePath(
     return undefined;
   }
 
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const structuredStateFile =
     cfg.agents?.defaults?.compaction?.structuredStateFile ?? "structured_state.json";
 
@@ -127,7 +127,7 @@ export function createStructuredStateInjectionMessage(data: StructuredStateData)
  * Check if structured state preservation is enabled in config.
  */
 export function isStructuredStateEnabled(): boolean {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const structuredStateFile = cfg.agents?.defaults?.compaction?.structuredStateFile;
   return typeof structuredStateFile === "string" && structuredStateFile.length > 0;
 }

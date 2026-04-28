@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock dependencies
 vi.mock("../config/config.js", () => ({
-  loadConfig: vi.fn(() => ({})),
+  getRuntimeConfig: vi.fn(() => ({})),
 }));
 
 vi.mock("../logging/subsystem.js", () => ({
@@ -14,7 +14,7 @@ vi.mock("../logging/subsystem.js", () => ({
   }),
 }));
 
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import {
   createStructuredStateInjectionMessage,
   formatStructuredStateForContext,
@@ -23,14 +23,14 @@ import {
   resolveStructuredStateFilePath,
 } from "./structured-state.js";
 
-const mockLoadConfig = vi.mocked(loadConfig);
+const mockGetRuntimeConfig = vi.mocked(getRuntimeConfig);
 
 describe("structured-state", () => {
   const testDir = "/tmp/test-workspace";
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockLoadConfig.mockReturnValue({});
+    mockGetRuntimeConfig.mockReturnValue({});
   });
 
   afterEach(() => {
@@ -43,13 +43,13 @@ describe("structured-state", () => {
     });
 
     it("uses default filename when not configured", () => {
-      mockLoadConfig.mockReturnValue({});
+      mockGetRuntimeConfig.mockReturnValue({});
       const result = resolveStructuredStateFilePath(testDir);
       expect(result).toBe(path.resolve(testDir, "structured_state.json"));
     });
 
     it("uses configured filename", () => {
-      mockLoadConfig.mockReturnValue({
+      mockGetRuntimeConfig.mockReturnValue({
         agents: {
           defaults: {
             compaction: {
@@ -63,7 +63,7 @@ describe("structured-state", () => {
     });
 
     it("handles absolute paths", () => {
-      mockLoadConfig.mockReturnValue({
+      mockGetRuntimeConfig.mockReturnValue({
         agents: {
           defaults: {
             compaction: {
@@ -170,12 +170,12 @@ describe("structured-state", () => {
 
   describe("isStructuredStateEnabled", () => {
     it("returns false when not configured", () => {
-      mockLoadConfig.mockReturnValue({});
+      mockGetRuntimeConfig.mockReturnValue({});
       expect(isStructuredStateEnabled()).toBe(false);
     });
 
     it("returns false when empty string", () => {
-      mockLoadConfig.mockReturnValue({
+      mockGetRuntimeConfig.mockReturnValue({
         agents: {
           defaults: {
             compaction: {
@@ -188,7 +188,7 @@ describe("structured-state", () => {
     });
 
     it("returns true when configured", () => {
-      mockLoadConfig.mockReturnValue({
+      mockGetRuntimeConfig.mockReturnValue({
         agents: {
           defaults: {
             compaction: {
