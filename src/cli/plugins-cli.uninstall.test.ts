@@ -7,6 +7,7 @@ import {
   buildPluginSnapshotReport,
   loadConfig,
   planPluginUninstall,
+  PromptInputClosedError,
   promptYesNo,
   refreshPluginRegistry,
   replaceConfigFile,
@@ -163,9 +164,6 @@ describe("plugins cli uninstall", () => {
         },
       },
     } as OpenClawConfig;
-    const promptClosedError = new Error("prompt closed");
-    promptClosedError.name = "PromptInputClosedError";
-
     loadConfig.mockReturnValue(baseConfig);
     setInstalledPluginIndexInstallRecords(baseConfig.plugins?.installs ?? {});
     buildPluginDiagnosticsReport.mockReturnValue({
@@ -187,7 +185,7 @@ describe("plugins cli uninstall", () => {
       },
       directoryRemoval: null,
     });
-    promptYesNo.mockRejectedValueOnce(promptClosedError);
+    promptYesNo.mockRejectedValueOnce(new PromptInputClosedError());
 
     await expect(runPluginsCommand(["plugins", "uninstall", "alpha"])).rejects.toThrow(
       "__exit__:1",
