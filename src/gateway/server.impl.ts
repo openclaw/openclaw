@@ -898,7 +898,9 @@ export async function startGatewayServer(
     );
     clearFallbackGatewayContextForServer =
       typeof fallbackGatewayContextCleanup === "function"
-        ? fallbackGatewayContextCleanup
+        ? () => {
+            fallbackGatewayContextCleanup();
+          }
         : () => {};
 
     if (!minimalTestGateway) {
