@@ -236,9 +236,6 @@ async function resolveWorkflowFile(candidate: string, cwd: string) {
 }
 
 function looksLikeWorkflowFileCandidate(candidate: string) {
-  if (/\s/.test(candidate)) {
-    return false;
-  }
   const ext = path.extname(candidate).toLowerCase();
   return [".lobster", ".yaml", ".yml", ".json"].includes(ext);
 }
@@ -247,6 +244,16 @@ async function detectWorkflowFile(candidate: string, cwd: string) {
   const trimmed = candidate.trim();
   if (!trimmed || trimmed.includes("|") || !looksLikeWorkflowFileCandidate(trimmed)) {
     return null;
+  }
+  if (/\s/.test(trimmed)) {
+    try {
+      return await resolveWorkflowFile(trimmed, cwd);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+      return null;
+    }
   }
   return await resolveWorkflowFile(trimmed, cwd);
 }
