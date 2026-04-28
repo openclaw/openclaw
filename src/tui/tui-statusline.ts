@@ -7,7 +7,9 @@
  * - Command spawning from tui-local-shell.ts
  */
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
+
+export type SpawnFn = typeof nodeSpawn;
 
 export type StatusLineOptions = {
   /** Shell command to execute */
@@ -20,6 +22,8 @@ export type StatusLineOptions = {
   onOutput: (output: string) => void;
   /** Environment variables to inject */
   env?: Record<string, string>;
+  /** Spawn function override; defaults to node:child_process spawn (used in tests). */
+  spawnCommand?: SpawnFn;
 };
 
 export type StatusLineHandle = {
@@ -31,10 +35,36 @@ const MAX_OUTPUT_BYTES = 4096;
 const MIN_REFRESH_MS = 500;
 const DEFAULT_REFRESH_MS = 1000;
 const DEFAULT_TIMEOUT_MS = 500;
+/** Grace period after SIGTERM before escalating to SIGKILL. */
+const KILL_GRACE_MS = 200;
+
+/**
+ * Send SIGTERM, then escalate to SIGKILL after a short grace period
+ * if the child is still running. Children that trap SIGTERM cannot
+ * silently leak past stop() or the timeout path.
+ */
+function killChild(child: ChildProcess): void {
+  try {
+    child.kill("SIGTERM");
+  } catch {
+    /* already exited */
+  }
+  const sigkillTimer = setTimeout(() => {
+    if (child.exitCode === null && child.signalCode === null) {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        /* already exited */
+      }
+    }
+  }, KILL_GRACE_MS);
+  sigkillTimer.unref?.();
+}
 
 export function createStatusLine(opts: StatusLineOptions): StatusLineHandle {
   const refreshInterval = Math.max(opts.refreshInterval ?? DEFAULT_REFRESH_MS, MIN_REFRESH_MS);
   const timeout = opts.timeout ?? DEFAULT_TIMEOUT_MS;
+  const spawn: SpawnFn = opts.spawnCommand ?? nodeSpawn;
 
   let timer: NodeJS.Timeout | null = null;
   let executing = false;
@@ -68,7 +98,7 @@ export function createStatusLine(opts: StatusLineOptions): StatusLineHandle {
     const killTimer = setTimeout(() => {
       if (!killed) {
         killed = true;
-        child.kill("SIGTERM");
+        killChild(child);
       }
     }, timeout);
 
@@ -118,7 +148,7 @@ export function createStatusLine(opts: StatusLineOptions): StatusLineHandle {
         timer = null;
       }
       if (currentChild) {
-        currentChild.kill("SIGTERM");
+        killChild(currentChild);
         currentChild = null;
       }
     },

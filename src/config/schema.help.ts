@@ -1042,6 +1042,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Display name shown for the assistant in UI views, chat chrome, and status contexts. Keep this stable so operators can reliably identify which assistant persona is active.",
   "ui.assistant.avatar":
     "Assistant avatar image source used in UI surfaces (URL, path, or data URI depending on runtime support). Use trusted assets and consistent branding dimensions for clean rendering.",
+  "ui.statusLine":
+    "Optional persistent status line that runs an external shell command on a timer and renders its stdout below the editor. SECURITY: the configured command runs automatically on TUI startup with shell:true under the user's environment — only configure trusted, locally-authored scripts. Prefer absolute paths; avoid invoking commands fetched from the network or sourced from untrusted config sharing.",
+  "ui.statusLine.command":
+    "Absolute path or shell command line executed on each refresh tick. Auto-runs at TUI startup with no per-session prompt — treat this as equivalent to placing the command in your shell init. Output is captured from stdout (4 KB cap) and rendered as ANSI text; stderr is ignored.",
+  "ui.statusLine.refreshInterval":
+    "Milliseconds between refresh ticks (default: 1000, minimum: 500). Shorter intervals produce more responsive status output but increase CPU and process-spawn overhead; longer intervals reduce load.",
+  "ui.statusLine.timeout":
+    "Per-tick execution timeout in milliseconds (default: 500). When exceeded, the runner sends SIGTERM and escalates to SIGKILL after a short grace period to prevent leaked or hung child processes from accumulating across ticks.",
   plugins:
     "Plugin system controls for enabling extensions, constraining load scope, configuring entries, and tracking installs. Keep plugin policy explicit and least-privilege in production environments.",
   "plugins.enabled":

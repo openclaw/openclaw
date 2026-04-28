@@ -39,6 +39,34 @@ Use `--password` if your Gateway uses password auth.
 - Status line: connection/run state (connecting, running, streaming, idle, error).
 - Footer: connection state + agent + session + model + think/fast/verbose/trace/reasoning + token counts + deliver.
 - Input: text editor with autocomplete.
+- Optional configurable status line below the editor (see "Configurable status line" below). Empty when unset.
+
+## Configurable status line
+
+When `ui.statusLine.command` is set in your OpenClaw config, the TUI runs that command on a timer (default: every 1000 ms) and renders its stdout as ANSI text below the editor. Output is capped at 4 KB; stderr is ignored. Empty stdout clears the line; non-zero exits keep the previous output.
+
+**Security model — this is a trusted-local-command feature.** The configured command is launched automatically on TUI startup with `shell: true` under your user's environment, with no per-session prompt (unlike the `!` shell escape). Treat it as equivalent to a line in your shell init:
+
+- Only point it at scripts you wrote or audited yourself.
+- Prefer absolute paths to a script you own.
+- Do not paste shared OpenClaw config snippets that include `ui.statusLine.command` without reading the script first.
+- Avoid invoking commands that touch network-fetched code or read secrets to stdout.
+
+The runner kills slow ticks via SIGTERM and escalates to SIGKILL after a short grace period, so a script that ignores SIGTERM cannot leak processes across ticks.
+
+Example config:
+
+```json5
+{
+  ui: {
+    statusLine: {
+      command: "/Users/me/.config/openclaw/status.sh",
+      refreshInterval: 1000,
+      timeout: 500,
+    },
+  },
+}
+```
 
 ## Mental model: agents + sessions
 

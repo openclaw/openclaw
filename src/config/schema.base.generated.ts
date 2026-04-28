@@ -758,6 +758,35 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Assistant display identity settings for name and avatar shown in UI surfaces. Keep these values aligned with your operator-facing persona and support expectations.",
           },
+          statusLine: {
+            type: "object",
+            properties: {
+              command: {
+                type: "string",
+                title: "Status Line Command Path",
+                description:
+                  "Absolute path or shell command line executed on each refresh tick. Auto-runs at TUI startup with no per-session prompt — treat this as equivalent to placing the command in your shell init. Output is captured from stdout (4 KB cap) and rendered as ANSI text; stderr is ignored.",
+              },
+              refreshInterval: {
+                type: "number",
+                minimum: 500,
+                title: "Status Line Refresh Interval (ms)",
+                description:
+                  "Milliseconds between refresh ticks (default: 1000, minimum: 500). Shorter intervals produce more responsive status output but increase CPU and process-spawn overhead; longer intervals reduce load.",
+              },
+              timeout: {
+                type: "number",
+                minimum: 100,
+                title: "Status Line Command Timeout (ms)",
+                description:
+                  "Per-tick execution timeout in milliseconds (default: 500). When exceeded, the runner sends SIGTERM and escalates to SIGKILL after a short grace period to prevent leaked or hung child processes from accumulating across ticks.",
+              },
+            },
+            additionalProperties: false,
+            title: "Status Line Command",
+            description:
+              "Optional persistent status line that runs an external shell command on a timer and renders its stdout below the editor. SECURITY: the configured command runs automatically on TUI startup with shell:true under the user's environment — only configure trusted, locally-authored scripts. Prefer absolute paths; avoid invoking commands fetched from the network or sourced from untrusted config sharing.",
+          },
         },
         additionalProperties: false,
         title: "UI",
@@ -25720,6 +25749,26 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Assistant Avatar",
       help: "Assistant avatar image source used in UI surfaces (URL, path, or data URI depending on runtime support). Use trusted assets and consistent branding dimensions for clean rendering.",
       tags: ["advanced"],
+    },
+    "ui.statusLine": {
+      label: "Status Line Command",
+      help: "Optional persistent status line that runs an external shell command on a timer and renders its stdout below the editor. SECURITY: the configured command runs automatically on TUI startup with shell:true under the user's environment — only configure trusted, locally-authored scripts. Prefer absolute paths; avoid invoking commands fetched from the network or sourced from untrusted config sharing.",
+      tags: ["advanced"],
+    },
+    "ui.statusLine.command": {
+      label: "Status Line Command Path",
+      help: "Absolute path or shell command line executed on each refresh tick. Auto-runs at TUI startup with no per-session prompt — treat this as equivalent to placing the command in your shell init. Output is captured from stdout (4 KB cap) and rendered as ANSI text; stderr is ignored.",
+      tags: ["advanced"],
+    },
+    "ui.statusLine.refreshInterval": {
+      label: "Status Line Refresh Interval (ms)",
+      help: "Milliseconds between refresh ticks (default: 1000, minimum: 500). Shorter intervals produce more responsive status output but increase CPU and process-spawn overhead; longer intervals reduce load.",
+      tags: ["performance"],
+    },
+    "ui.statusLine.timeout": {
+      label: "Status Line Command Timeout (ms)",
+      help: "Per-tick execution timeout in milliseconds (default: 500). When exceeded, the runner sends SIGTERM and escalates to SIGKILL after a short grace period to prevent leaked or hung child processes from accumulating across ticks.",
+      tags: ["performance"],
     },
     "browser.evaluateEnabled": {
       label: "Browser Evaluate Enabled",
