@@ -1081,6 +1081,38 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(payload.text).toContain("/new");
   });
 
+  it("surfaces explicit timeout guidance when the run times out", async () => {
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+      throw new Error("Request timed out");
+    });
+
+    const { run } = createMinimalRun();
+    const res = await run();
+
+    expect(res).toMatchObject({
+      text: expect.stringContaining("timed out before reply"),
+    });
+    expect(res).toMatchObject({
+      text: expect.stringContaining("run has ended"),
+    });
+  });
+
+  it("does not label non-timeout network errors as slow model timeouts", async () => {
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+      throw new Error("Network error: ECONNREFUSED");
+    });
+
+    const { run } = createMinimalRun();
+    const res = await run();
+
+    expect(res).toMatchObject({
+      text: expect.not.stringContaining("timed out before reply"),
+    });
+    expect(res).toMatchObject({
+      text: expect.stringContaining("Something went wrong"),
+    });
+  });
+
   it("returns friendly message for role ordering errors thrown as exceptions", async () => {
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
       throw new Error("400 Incorrect role information");

@@ -9,6 +9,7 @@ vi.mock("../../agents/agent-scope.js", async () => {
     ...actual,
     resolveAgentDir: vi.fn(() => "/tmp/agent"),
     resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
+    resolveEffectiveModelFallbacks: vi.fn(() => undefined),
     resolveSessionAgentId: vi.fn(() => "main"),
     resolveAgentSkillsFilter: vi.fn(() => undefined),
   };
