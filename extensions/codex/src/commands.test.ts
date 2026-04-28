@@ -509,6 +509,47 @@ describe("codex command", () => {
     expect(safeCodexControlRequest).not.toHaveBeenCalled();
   });
 
+  it("keeps diagnostics confirmation scoped to account and channel identity", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({ schemaVersion: 1, threadId: "thread-account", cwd: "/repo" }),
+    );
+    const safeCodexControlRequest = vi.fn(async () => ({
+      ok: true as const,
+      value: { threadId: "thread-account" },
+    }));
+    const deps = createDeps({ safeCodexControlRequest });
+
+    const request = await handleCodexCommand(
+      createContext("diagnostics", sessionFile, {
+        accountId: "account-1",
+        channelId: "channel-1",
+        messageThreadId: "thread-1",
+        threadParentId: "parent-1",
+        sessionKey: "session-key-1",
+      }),
+      { deps },
+    );
+    const token = readDiagnosticsConfirmationToken(request);
+
+    await expect(
+      handleCodexCommand(
+        createContext(`diagnostics confirm ${token}`, sessionFile, {
+          accountId: "account-2",
+          channelId: "channel-1",
+          messageThreadId: "thread-1",
+          threadParentId: "parent-1",
+          sessionKey: "session-key-1",
+        }),
+        { deps },
+      ),
+    ).resolves.toEqual({
+      text: "This Codex diagnostics confirmation belongs to a different account.",
+    });
+    expect(safeCodexControlRequest).not.toHaveBeenCalled();
+  });
+
   it("bounds diagnostics notes before upload", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await fs.writeFile(

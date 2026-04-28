@@ -126,8 +126,13 @@ type PendingCodexDiagnosticsConfirmation = {
   token: string;
   threadId: string;
   note?: string;
-  senderId?: string;
+  senderId: string;
   channel: string;
+  accountId?: string;
+  channelId?: string;
+  messageThreadId?: string;
+  threadParentId?: string;
+  sessionKey?: string;
   createdAt: number;
 };
 
@@ -592,6 +597,7 @@ async function requestCodexDiagnosticsFeedbackApproval(
     note: reason,
     senderId: ctx.senderId,
     channel: ctx.channel,
+    ...readCodexDiagnosticsConfirmationScope(ctx),
     now,
   });
   const displayThreadId = formatCodexThreadIdForDisplay(binding.threadId);
@@ -642,6 +648,10 @@ async function confirmCodexDiagnosticsFeedback(
   if (pending.channel !== ctx.channel) {
     return "This Codex diagnostics confirmation belongs to a different channel.";
   }
+  const scopeMismatch = readCodexDiagnosticsScopeMismatch(pending, ctx);
+  if (scopeMismatch) {
+    return scopeMismatch.confirmMessage;
+  }
   const sessionFile = await resolveControlSessionFile(ctx);
   if (!sessionFile) {
     return "Cannot send Codex diagnostics because this command did not include an OpenClaw session file.";
@@ -668,6 +678,10 @@ function cancelCodexDiagnosticsFeedback(ctx: PluginCommandContext, token: string
   }
   if (pending.channel !== ctx.channel) {
     return "This Codex diagnostics confirmation belongs to a different channel.";
+  }
+  const scopeMismatch = readCodexDiagnosticsScopeMismatch(pending, ctx);
+  if (scopeMismatch) {
+    return scopeMismatch.cancelMessage;
   }
   pendingCodexDiagnosticsConfirmations.delete(token);
   return "Codex diagnostics upload canceled.";
@@ -757,8 +771,13 @@ function parseDiagnosticsArgs(args: string): ParsedDiagnosticsArgs {
 function createCodexDiagnosticsConfirmation(params: {
   threadId: string;
   note?: string;
-  senderId?: string;
+  senderId: string;
   channel: string;
+  accountId?: string;
+  channelId?: string;
+  messageThreadId?: string;
+  threadParentId?: string;
+  sessionKey?: string;
   now: number;
 }): string {
   prunePendingCodexDiagnosticsConfirmations(params.now);
@@ -776,9 +795,77 @@ function createCodexDiagnosticsConfirmation(params: {
     note: params.note,
     senderId: params.senderId,
     channel: params.channel,
+    accountId: params.accountId,
+    channelId: params.channelId,
+    messageThreadId: params.messageThreadId,
+    threadParentId: params.threadParentId,
+    sessionKey: params.sessionKey,
     createdAt: params.now,
   });
   return token;
+}
+
+function readCodexDiagnosticsConfirmationScope(ctx: PluginCommandContext): {
+  accountId?: string;
+  channelId?: string;
+  messageThreadId?: string;
+  threadParentId?: string;
+  sessionKey?: string;
+} {
+  return {
+    accountId: normalizeOptionalString(ctx.accountId),
+    channelId: normalizeOptionalString(ctx.channelId),
+    messageThreadId:
+      typeof ctx.messageThreadId === "string" || typeof ctx.messageThreadId === "number"
+        ? normalizeOptionalString(String(ctx.messageThreadId))
+        : undefined,
+    threadParentId: normalizeOptionalString(ctx.threadParentId),
+    sessionKey: normalizeOptionalString(ctx.sessionKey),
+  };
+}
+
+function readCodexDiagnosticsScopeMismatch(
+  pending: PendingCodexDiagnosticsConfirmation,
+  ctx: PluginCommandContext,
+):
+  | {
+      confirmMessage: string;
+      cancelMessage: string;
+    }
+  | undefined {
+  const current = readCodexDiagnosticsConfirmationScope(ctx);
+  if (pending.accountId !== current.accountId) {
+    return {
+      confirmMessage: "This Codex diagnostics confirmation belongs to a different account.",
+      cancelMessage: "This Codex diagnostics confirmation belongs to a different account.",
+    };
+  }
+  if (pending.channelId !== current.channelId) {
+    return {
+      confirmMessage:
+        "This Codex diagnostics confirmation belongs to a different channel instance.",
+      cancelMessage: "This Codex diagnostics confirmation belongs to a different channel instance.",
+    };
+  }
+  if (pending.messageThreadId !== current.messageThreadId) {
+    return {
+      confirmMessage: "This Codex diagnostics confirmation belongs to a different thread.",
+      cancelMessage: "This Codex diagnostics confirmation belongs to a different thread.",
+    };
+  }
+  if (pending.threadParentId !== current.threadParentId) {
+    return {
+      confirmMessage: "This Codex diagnostics confirmation belongs to a different parent thread.",
+      cancelMessage: "This Codex diagnostics confirmation belongs to a different parent thread.",
+    };
+  }
+  if (pending.sessionKey !== current.sessionKey) {
+    return {
+      confirmMessage: "This Codex diagnostics confirmation belongs to a different session.",
+      cancelMessage: "This Codex diagnostics confirmation belongs to a different session.",
+    };
+  }
+  return undefined;
 }
 
 function readPendingCodexDiagnosticsConfirmation(
