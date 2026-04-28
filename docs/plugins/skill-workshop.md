@@ -517,6 +517,14 @@ For `replace`:
 All writes are atomic and refresh the in-memory skills snapshot immediately, so
 the new or updated skill can become visible without a Gateway restart.
 
+Path validation uses defense-in-depth:
+
+- lexical containment checks to reject obvious escapes early
+- realpath-aware containment checks against existing ancestors before first write
+- support-file and `SKILL.md` targets are both validated under the skill root
+
+This prevents symlink-based root escapes and missing-target first-write bypasses.
+
 ## Safety model
 
 Skill Workshop has a safety scanner on generated `SKILL.md` content and support
@@ -548,6 +556,10 @@ Quarantined proposals:
 
 To recover from a quarantined proposal, create a new safe proposal with the
 unsafe content removed. Do not edit the store JSON by hand.
+
+Apply-time writes also enforce stale-write protection: proposal content is
+revalidated immediately before disk commit, and the write is rejected if the
+workspace changed between prepare and apply.
 
 ## Prompt guidance
 
@@ -587,6 +599,11 @@ The reviewer:
 - writes nothing directly
 - can only emit a proposal that goes through the normal scanner and
   approval/quarantine path
+
+Prompt economics are also enforced before queue/apply when runtime config is
+available. This uses the same core skills prompt-limit semantics exposed through
+the plugin SDK seam, so saved workspace skills and runtime prompt visibility
+stay in parity.
 
 If the reviewer fails, times out, or returns invalid JSON, the plugin logs a
 warning/debug message and skips that review pass.
