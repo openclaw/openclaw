@@ -71,7 +71,10 @@ export function createDoctorPrompter(params: {
       );
     },
     confirmRuntimeRepair: async (p) => {
-      if (shouldAutoApproveDoctorFix(repairMode, { blockDuringUpdate: true })) {
+      // Only auto-approve when initialValue is not explicitly false.
+      // initialValue: false signals a potentially destructive action (e.g. archiving
+      // orphan transcripts) that must not be silently applied by --fix.
+      if (shouldAutoApproveDoctorFix(repairMode, { blockDuringUpdate: true }) && p.initialValue !== false) {
         return true;
       }
       if (repairMode.nonInteractive) {

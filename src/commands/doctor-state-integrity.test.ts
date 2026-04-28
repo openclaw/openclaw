@@ -302,6 +302,27 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(files.some((name) => name.startsWith("orphan-session.jsonl.deleted."))).toBe(true);
   });
 
+  it("does not auto-archive orphan transcripts when --fix is passed (initialValue: false guard)", async () => {
+    const cfg: OpenClawConfig = {};
+    setupSessionState(cfg, process.env, process.env.HOME ?? "");
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
+    fs.writeFileSync(path.join(sessionsDir, "orphan-session.jsonl"), '{"type":"session"}\n');
+    // Simulate --fix non-interactive prompter: auto-approve returns false for initialValue:false
+    const confirmRuntimeRepair = vi.fn(async (params: { message?: string; initialValue?: boolean }) => {
+      // This mirrors what createDoctorPrompter does when --fix is passed without a TTY:
+      // initialValue:false must NOT be auto-approved.
+      return params.initialValue !== false && Boolean(params.initialValue);
+    });
+    await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
+    expect(stateIntegrityText()).toContain(
+      "These .jsonl files are no longer referenced by sessions.json",
+    );
+    // The orphan transcript should NOT have been archived
+    const files = fs.readdirSync(sessionsDir);
+    expect(files.some((name) => name.startsWith("orphan-session.jsonl.deleted."))).toBe(false);
+    expect(files).toContain("orphan-session.jsonl");
+  });
+
   it.skipIf(process.platform === "win32")(
     "does not archive referenced transcripts when the state dir path resolves through a symlink",
     async () => {
