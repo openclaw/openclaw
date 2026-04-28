@@ -506,6 +506,59 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(prompt).not.toContain("Hidden from the prompt");
     expect(prompt).not.toContain(path.join(hiddenSkillDir, "SKILL.md"));
   });
+
+  it("hides MCP-backed skills from the prompt until readiness marks them callable", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "mcp-memory");
+
+    await writeSkill({
+      dir: skillDir,
+      name: "mcp-memory",
+      description: "Use memory MCP",
+      metadata: JSON.stringify({ openclaw: { mcp: { server: "memory" } } }),
+    });
+
+    const prompt = buildWorkspaceSkillsPrompt(workspaceDir, resolveTestSkillDirs(workspaceDir));
+
+    expect(prompt).not.toContain("mcp-memory");
+    expect(prompt).not.toContain("Use memory MCP");
+  });
+
+  it("shows MCP-backed skills when the readiness file verifies a callable owner", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "mcp-supabase");
+    const readinessDir = path.join(workspaceDir, "config");
+
+    await writeSkill({
+      dir: skillDir,
+      name: "mcp-supabase",
+      description: "Use Supabase MCP",
+      metadata: JSON.stringify({ openclaw: { mcp: { server: "supabase" } } }),
+    });
+    await fs.mkdir(readinessDir, { recursive: true });
+    await fs.writeFile(
+      path.join(readinessDir, "mcp-readiness.json"),
+      JSON.stringify({
+        skills: {
+          "mcp-supabase": {
+            declared: true,
+            callable: true,
+            owner: "rex",
+            last_verified_at: "2026-04-27T05:56:00Z",
+          },
+        },
+      }),
+    );
+
+    const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
+      ...resolveTestSkillDirs(workspaceDir),
+      agentId: "rex",
+    });
+
+    expect(prompt).toContain("mcp-supabase");
+    expect(prompt).toContain("Use Supabase MCP");
+    expect(prompt).toContain(path.join(skillDir, "SKILL.md"));
+  });
 });
 
 describe("applySkillEnvOverrides", () => {

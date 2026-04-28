@@ -98,6 +98,93 @@ function isSkillVisibleInAvailableSkillsPrompt(entry: SkillEntry): boolean {
   return entry.skill.disableModelInvocation !== true;
 }
 
+type McpReadinessRecord = {
+  declared?: boolean;
+  callable?: boolean;
+  owner?: string;
+  last_verified_at?: string;
+};
+
+type McpReadinessFile = {
+  generated_at?: string;
+  skills?: Record<string, McpReadinessRecord>;
+  servers?: Record<string, McpReadinessRecord>;
+};
+
+function readMcpReadinessFile(filePath: string): McpReadinessFile | undefined {
+  try {
+    const raw = fs.readFileSync(filePath, "utf-8");
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") {
+      return undefined;
+    }
+    return parsed as McpReadinessFile;
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveMcpReadinessFiles(workspaceDir: string): string[] {
+  const candidates = [
+    path.join(workspaceDir, "config", "mcp-readiness.json"),
+    path.join(CONFIG_DIR, "mcp-readiness.json"),
+  ];
+  return candidates.filter((candidate, index, all) => all.indexOf(candidate) === index);
+}
+
+function isMcpReadinessOwnerAllowed(
+  owner: string | undefined,
+  agentId: string | undefined,
+): boolean {
+  const normalizedOwner = owner?.trim().toLowerCase();
+  if (!normalizedOwner) {
+    return true;
+  }
+  if (["shared", "fleet", "all", "global"].includes(normalizedOwner)) {
+    return true;
+  }
+  return Boolean(agentId && normalizedOwner === agentId.trim().toLowerCase());
+}
+
+function isMcpReadinessRecordCallable(
+  record: McpReadinessRecord | undefined,
+  agentId: string | undefined,
+): boolean {
+  return (
+    record?.declared === true &&
+    record.callable === true &&
+    isMcpReadinessOwnerAllowed(record.owner, agentId)
+  );
+}
+
+function isMcpSkillRuntimeReady(params: {
+  entry: SkillEntry;
+  workspaceDir: string;
+  agentId?: string;
+}): boolean {
+  const mcp = params.entry.metadata?.mcp;
+  if (!mcp) {
+    return true;
+  }
+
+  for (const filePath of resolveMcpReadinessFiles(params.workspaceDir)) {
+    const readiness = readMcpReadinessFile(filePath);
+    if (!readiness) {
+      continue;
+    }
+    const skillRecord = readiness.skills?.[params.entry.skill.name];
+    if (isMcpReadinessRecordCallable(skillRecord, params.agentId)) {
+      return true;
+    }
+    const serverRecord = readiness.servers?.[mcp.server];
+    if (isMcpReadinessRecordCallable(serverRecord, params.agentId)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function filterSkillEntries(
   entries: SkillEntry[],
   config?: OpenClawConfig,
@@ -781,7 +868,11 @@ function resolveWorkspaceSkillPromptState(
     effectiveSkillFilter,
     opts?.eligibility,
   );
-  const promptEntries = eligible.filter((entry) => isSkillVisibleInAvailableSkillsPrompt(entry));
+  const promptEntries = eligible.filter(
+    (entry) =>
+      isSkillVisibleInAvailableSkillsPrompt(entry) &&
+      isMcpSkillRuntimeReady({ entry, workspaceDir, agentId: opts?.agentId }),
+  );
   const remoteNote = opts?.eligibility?.remote?.note?.trim();
   const resolvedSkills = promptEntries.map((entry) => entry.skill);
   // Derive prompt-facing skills with compacted paths (e.g. ~/...) once.

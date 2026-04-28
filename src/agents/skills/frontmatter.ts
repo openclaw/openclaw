@@ -194,12 +194,21 @@ export function resolveOpenClawMetadata(
   const requires = resolveOpenClawManifestRequires(metadataObj);
   const install = resolveOpenClawManifestInstall(metadataObj, parseInstallSpec);
   const osRaw = resolveOpenClawManifestOs(metadataObj);
+  const mcpRaw =
+    typeof metadataObj.mcp === "object" && metadataObj.mcp !== null
+      ? (metadataObj.mcp as Record<string, unknown>)
+      : undefined;
+  const mcpServer = readStringValue(mcpRaw?.server);
+  const mcpTools = normalizeStringList(mcpRaw?.tools);
   return {
     always: typeof metadataObj.always === "boolean" ? metadataObj.always : undefined,
     emoji: readStringValue(metadataObj.emoji),
     homepage: readStringValue(metadataObj.homepage),
     skillKey: readStringValue(metadataObj.skillKey),
     primaryEnv: readStringValue(metadataObj.primaryEnv),
+    mcp: mcpServer
+      ? { server: mcpServer, ...(mcpTools.length > 0 ? { tools: mcpTools } : {}) }
+      : undefined,
     os: osRaw.length > 0 ? osRaw : undefined,
     requires: requires,
     install: install.length > 0 ? install : undefined,
