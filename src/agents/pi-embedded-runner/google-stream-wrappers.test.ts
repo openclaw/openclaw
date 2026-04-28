@@ -209,6 +209,28 @@ describe("sanitizeGoogleThinkingPayload \u2014 inject thinkingBudget=0 on thinki
     expect(payload.config).not.toHaveProperty("thinkingConfig");
   });
 
+  it("does NOT inject thinkingBudget for prefixed Gemma 4 IDs (Codex P2)", () => {
+    // Codex P2 on PR #72868: bare `startsWith("gemma-4")` missed prefixed
+    // IDs like `google/gemma-4-27b-it`. The fix routes through the shared
+    // regex helper so any of these forms short-circuits correctly.
+    for (const modelId of [
+      "google/gemma-4-27b-it",
+      "vendor:gemma-4",
+      "some-prefix_gemma-4_27b",
+      "google/gemma_4-27b-it",
+    ]) {
+      const payload: { config: Record<string, unknown> } = { config: {} };
+      sanitizeGoogleThinkingPayload({
+        payload,
+        modelId,
+        thinkingLevel: "off",
+      });
+      expect(payload.config, `prefixed Gemma id should not get thinkingBudget: ${modelId}`).not.toHaveProperty(
+        "thinkingConfig",
+      );
+    }
+  });
+
   it("does NOT inject thinkingBudget when thinkingLevel is not off", () => {
     const payload: { config: Record<string, unknown> } = { config: {} };
     sanitizeGoogleThinkingPayload({

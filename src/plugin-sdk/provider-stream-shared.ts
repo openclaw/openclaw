@@ -1,6 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import { streamWithPayloadPatch } from "../agents/pi-embedded-runner/stream-payload-utils.js";
+import { isGemma4ModelId } from "../shared/google-models.js";
 import { visitObjectContentBlocks } from "../shared/message-content-blocks.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { ProviderWrapStreamFnContext } from "./plugin-entry.js";
@@ -360,8 +361,17 @@ export function stripInvalidGoogleThinkingBudget(params: {
   return true;
 }
 
+/**
+ * Match Gemma 4 IDs whether bare (`gemma-4-27b-it`) or prefixed by a
+ * provider/scope segment (`google/gemma-4-27b-it`, `vendor:gemma-4...`).
+ * Wraps the shared regex helper so the local file keeps a single name and
+ * older bare-prefix call sites don't slip through (Codex P2 on PR #72868
+ * — prefixed IDs were silently mismatched and routed through the wrong
+ * thinkingBudget=0 fast path, sanitizing Gemma off-mode payloads into an
+ * invalid shape).
+ */
 function isGemma4Model(modelId: string): boolean {
-  return normalizeLowercaseStringOrEmpty(modelId).startsWith("gemma-4");
+  return isGemma4ModelId(modelId);
 }
 
 function mapThinkLevelToGemma4ThinkingLevel(
