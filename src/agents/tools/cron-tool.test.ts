@@ -63,6 +63,10 @@ describe("cron tool", () => {
 
     expect(tool.description).toContain("local wall-clock time");
     expect(tool.description).toContain("do not convert the requested local time to UTC first");
+    expect(tool.description).toContain("Gateway host local timezone");
+    expect(tool.description).toContain(
+      'For schedule.kind="at", ISO timestamps without an explicit timezone are treated as UTC.',
+    );
     expect(tool.description).toContain('"expr": "0 18 * * *"');
     expect(tool.description).toContain('"tz": "Asia/Shanghai"');
   });

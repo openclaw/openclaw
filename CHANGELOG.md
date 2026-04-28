@@ -66,6 +66,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Gateway/nodes: allow Windows companion nodes to use safe declared commands such as canvas, camera list, location, device info, and screen snapshot by default while keeping dangerous media commands opt-in. (#71884) Thanks @shanselman.
+- Agents/cron: clarify agent-tool and CLI cron timezone guidance so supplied `tz` values use local wall-clock cron fields and omitted cron `tz` falls back to the Gateway host local timezone. Fixes #53669; carries forward #46177. (#73372) Thanks @chen-zhang-cs-code and @maranello-o.
 
 ## 2026.4.27
 

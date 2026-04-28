@@ -91,11 +91,13 @@ describe("CronToolSchema", () => {
     for (const prop of [jobExpr, patchExpr]) {
       expect(prop?.description).toMatch(/wall-clock time/i);
       expect(prop?.description).toMatch(/do not convert/i);
+      expect(prop?.description).toContain("Gateway host local timezone");
       expect(prop?.description).toContain("0 18 * * *");
       expect(prop?.description).toContain("Asia/Shanghai");
     }
     for (const prop of [jobTz, patchTz]) {
       expect(prop?.description).toMatch(/wall-clock fields/i);
+      expect(prop?.description).toContain("Gateway host local timezone");
       expect(prop?.description).toContain("Asia/Shanghai");
     }
   });
