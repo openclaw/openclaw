@@ -38,6 +38,7 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
 
 describe("active-memory plugin", () => {
   const hooks: Record<string, Function> = {};
+  const hookOptions: Record<string, Record<string, unknown> | undefined> = {};
   const registeredCommands: Record<string, any> = {};
   const runEmbeddedPiAgent = vi.fn();
   let stateDir = "";
@@ -105,8 +106,9 @@ describe("active-memory plugin", () => {
     registerCommand: vi.fn((command) => {
       registeredCommands[command.name] = command;
     }),
-    on: vi.fn((hookName: string, handler: Function) => {
+    on: vi.fn((hookName: string, handler: Function, opts?: Record<string, unknown>) => {
       hooks[hookName] = handler;
+      hookOptions[hookName] = opts;
     }),
   };
   const getActiveMemoryLines = (sessionKey: string): string[] => {
@@ -159,6 +161,9 @@ describe("active-memory plugin", () => {
     for (const key of Object.keys(hooks)) {
       delete hooks[key];
     }
+    for (const key of Object.keys(hookOptions)) {
+      delete hookOptions[key];
+    }
     for (const key of Object.keys(registeredCommands)) {
       delete registeredCommands[key];
     }
@@ -179,7 +184,10 @@ describe("active-memory plugin", () => {
   });
 
   it("registers a before_prompt_build hook", () => {
-    expect(api.on).toHaveBeenCalledWith("before_prompt_build", expect.any(Function));
+    expect(api.on).toHaveBeenCalledWith("before_prompt_build", expect.any(Function), {
+      timeoutMs: 150_000,
+    });
+    expect(hookOptions.before_prompt_build?.timeoutMs).toBe(150_000);
   });
 
   it("runs recall without recording shared auth-profile failures", async () => {
@@ -567,7 +575,7 @@ describe("active-memory plugin", () => {
       agents: ["main"],
       allowedChatTypes: ["explicit"],
     };
-    await plugin.register(api as unknown as OpenClawPluginApi);
+    plugin.register(api as unknown as OpenClawPluginApi);
 
     const result = await hooks.before_prompt_build(
       { prompt: "what should i work on next?", messages: [] },
@@ -591,7 +599,7 @@ describe("active-memory plugin", () => {
       agents: ["main"],
       allowedChatTypes: ["explicit"],
     };
-    await plugin.register(api as unknown as OpenClawPluginApi);
+    plugin.register(api as unknown as OpenClawPluginApi);
 
     const result = await hooks.before_prompt_build(
       { prompt: "what should i work on next?", messages: [] },
@@ -2012,6 +2020,7 @@ describe("active-memory plugin", () => {
 
   it("does not cache timeout results", async () => {
     __testing.setMinimumTimeoutMsForTests(1);
+    __testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
       agents: ["main"],
       timeoutMs: 1,
@@ -2096,6 +2105,7 @@ describe("active-memory plugin", () => {
 
   it("ignores late subagent payloads once the active-memory timeout signal has fired", async () => {
     __testing.setMinimumTimeoutMsForTests(1);
+    __testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
       agents: ["main"],
       timeoutMs: 1,
@@ -2134,10 +2144,44 @@ describe("active-memory plugin", () => {
     ).toBe(true);
   });
 
+  it("does not spend the model timeout budget on active-memory subagent setup", async () => {
+    const CONFIGURED_TIMEOUT_MS = 10;
+    __testing.setMinimumTimeoutMsForTests(1);
+    __testing.setSetupGraceTimeoutMsForTests(100);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: CONFIGURED_TIMEOUT_MS,
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    runEmbeddedPiAgent.mockImplementationOnce(async () => {
+      await new Promise((resolve) => setTimeout(resolve, CONFIGURED_TIMEOUT_MS + 30));
+      return { payloads: [{ text: "remember the ramen place" }] };
+    });
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order? setup grace", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:setup-grace",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(result?.prependContext).toContain("remember the ramen place");
+    expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.timeoutMs).toBe(CONFIGURED_TIMEOUT_MS);
+    const infoLines = vi
+      .mocked(api.logger.info)
+      .mock.calls.map((call: unknown[]) => String(call[0]));
+    expect(infoLines.some((line: string) => line.includes("status=timeout"))).toBe(false);
+  });
+
   it("returns timeout within a hard deadline even when the subagent never checks the abort signal", async () => {
     const CONFIGURED_TIMEOUT_MS = 200;
     const MARGIN_MS = 500;
     __testing.setMinimumTimeoutMsForTests(1);
+    __testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
       agents: ["main"],
       timeoutMs: CONFIGURED_TIMEOUT_MS,

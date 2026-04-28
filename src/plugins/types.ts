@@ -2063,6 +2063,12 @@ export type OpenClawPluginDefinition = {
   name?: string;
   description?: string;
   version?: string;
+  /**
+   * @deprecated Declare exclusive plugin kind in `openclaw.plugin.json` via
+   * manifest `kind`. Runtime-exported `kind` is kept as a compatibility
+   * fallback for older plugins and may require loading plugin runtime on
+   * metadata-only command paths.
+   */
   kind?: PluginKind | PluginKind[];
   configSchema?: OpenClawPluginConfigSchema;
   reload?: OpenClawPluginReloadRegistration;
@@ -2412,7 +2418,7 @@ export type OpenClawPluginApi = {
   on: <K extends PluginHookName>(
     hookName: K,
     handler: PluginHookHandlerMap[K],
-    opts?: { priority?: number },
+    opts?: { priority?: number; timeoutMs?: number },
   ) => void;
 };
 
