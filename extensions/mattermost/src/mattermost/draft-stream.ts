@@ -31,6 +31,23 @@ export function normalizeMattermostDraftText(text: string, maxChars: number): st
   return `${trimmed.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`;
 }
 
+/**
+ * Creates a no-op draft stream that satisfies the MattermostDraftStream interface
+ * but never creates or updates any posts. Used when draftPreview is disabled.
+ */
+export function createMattermostNoopDraftStream(): MattermostDraftStream {
+  return {
+    update: () => {},
+    flush: async () => {},
+    postId: () => undefined,
+    clear: async () => {},
+    discardPending: async () => {},
+    seal: async () => {},
+    stop: async () => {},
+    forceNewMessage: () => {},
+  };
+}
+
 export function buildMattermostToolStatusText(params: { name?: string; phase?: string }): string {
   const tool = params.name?.trim() ? ` \`${params.name.trim()}\`` : " tool";
   return `Running${tool}…`;

@@ -251,3 +251,18 @@ describe("buildMattermostToolStatusText", () => {
     expect(buildMattermostToolStatusText({ name: "exec" })).toBe("Running `exec`…");
   });
 });
+
+describe("createMattermostNoopDraftStream", () => {
+  it("never calls the API (draftPreview disabled)", async () => {
+    const { createMattermostNoopDraftStream } = await import("./draft-stream.js");
+    const noop = createMattermostNoopDraftStream();
+
+    noop.update("Hello");
+    await noop.flush();
+    noop.update("World");
+    await noop.flush();
+    await noop.stop();
+
+    expect(noop.postId()).toBeUndefined();
+  });
+});

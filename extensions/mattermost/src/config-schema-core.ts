@@ -99,6 +99,14 @@ const MattermostAccountSchemaBase = z
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+    /** Streaming behavior configuration. */
+    streaming: z
+      .object({
+        /** Enable draft-preview streaming (create placeholder + update in place). Defaults to true. */
+        draftPreview: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     replyToMode: z.enum(["off", "first", "all", "batched"]).optional(),
     responsePrefix: z.string().optional(),
     actions: z

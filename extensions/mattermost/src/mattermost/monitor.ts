@@ -17,7 +17,7 @@ import {
   type MattermostPost,
   type MattermostUser,
 } from "./client.js";
-import { buildMattermostToolStatusText, createMattermostDraftStream } from "./draft-stream.js";
+import { buildMattermostToolStatusText, createMattermostDraftStream, createMattermostNoopDraftStream } from "./draft-stream.js";
 import {
   computeInteractionCallbackUrl,
   createMattermostInteractionHandler,
@@ -1632,14 +1632,17 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             },
           },
         });
-        const draftStream = createMattermostDraftStream({
-          client,
-          channelId,
-          rootId: effectiveReplyToId,
-          throttleMs: 1200,
-          log: logVerboseMessage,
-          warn: logVerboseMessage,
-        });
+        const draftPreviewEnabled = account.config.streaming?.draftPreview !== false;
+        const draftStream = draftPreviewEnabled
+          ? createMattermostDraftStream({
+              client,
+              channelId,
+              rootId: effectiveReplyToId,
+              throttleMs: 1200,
+              log: logVerboseMessage,
+              warn: logVerboseMessage,
+            })
+          : createMattermostNoopDraftStream();
         let lastPartialText = "";
         const previewState: MattermostDraftPreviewState = {
           finalizedViaPreviewPost: false,
