@@ -33,6 +33,13 @@ type RunResult = Awaited<ReturnType<(typeof import("../pi-embedded.js"))["runEmb
 
 const NESTED_LOG_PREFIX = "[agent:nested]";
 
+type AgentCommandDeliveryStatus = {
+  requested: true;
+  attempted: boolean;
+  succeeded: boolean | "partial";
+  error?: true;
+};
+
 function formatNestedLogPrefix(opts: AgentCommandOpts, sessionKey?: string): string {
   const parts = [NESTED_LOG_PREFIX];
   const session = sessionKey ?? opts.sessionKey ?? opts.sessionId;
@@ -283,27 +290,31 @@ export async function deliverAgentCommandResult(params: {
       runtime.log(message);
     }
   };
+  let strictPreDeliveryError: unknown;
+  let preDeliveryError = false;
+  const handlePreDeliveryError = (err: unknown) => {
+    preDeliveryError = true;
+    if (!bestEffortDeliver) {
+      if (opts.json) {
+        strictPreDeliveryError = err;
+        return;
+      }
+      throw err;
+    }
+    logDeliveryError(err);
+  };
 
   if (deliver) {
     if (isInternalMessageChannel(deliveryChannel)) {
       const err = new Error(
         "delivery channel is required: pass --channel/--reply-channel or use a main session with a previous channel",
       );
-      if (!bestEffortDeliver) {
-        throw err;
-      }
-      logDeliveryError(err);
+      handlePreDeliveryError(err);
     } else if (!isDeliveryChannelKnown) {
       const err = new Error(`Unknown channel: ${deliveryChannel}`);
-      if (!bestEffortDeliver) {
-        throw err;
-      }
-      logDeliveryError(err);
+      handlePreDeliveryError(err);
     } else if (resolvedTarget && !resolvedTarget.ok) {
-      if (!bestEffortDeliver) {
-        throw resolvedTarget.error;
-      }
-      logDeliveryError(resolvedTarget.error);
+      handlePreDeliveryError(resolvedTarget.error);
     }
   }
 
@@ -336,21 +347,50 @@ export async function deliverAgentCommandResult(params: {
   const outboundPayloadPlan = createOutboundPayloadPlan(mediaNormalizedReplyPayloads);
   const normalizedPayloads = projectOutboundPayloadPlanForJson(outboundPayloadPlan);
   const resultMeta = mergeResultMetaOverrides(result.meta, opts.resultMetaOverrides);
-  if (opts.json) {
-    writeRuntimeJson(
-      runtime,
-      buildOutboundResultEnvelope({
-        payloads: normalizedPayloads,
+  const emitJsonEnvelope = (
+    jsonPayloads: typeof normalizedPayloads,
+    deliveryStatus?: AgentCommandDeliveryStatus,
+  ) => {
+    if (!opts.json) {
+      return;
+    }
+    writeRuntimeJson(runtime, {
+      ...buildOutboundResultEnvelope({
+        payloads: jsonPayloads,
         meta: resultMeta,
       }),
-    );
-    if (!deliver) {
-      return { payloads: normalizedPayloads, meta: resultMeta };
-    }
+      ...(deliveryStatus ? { deliveryStatus } : {}),
+    });
+  };
+
+  if (strictPreDeliveryError) {
+    emitJsonEnvelope(normalizedPayloads, {
+      requested: true,
+      attempted: false,
+      succeeded: false,
+      error: true,
+    });
+    throw strictPreDeliveryError;
   }
 
   if (!payloads || payloads.length === 0) {
-    runtime.log("No reply from agent.");
+    if (deliver) {
+      const status = {
+        requested: true as const,
+        attempted: false,
+        succeeded: false as const,
+        ...(preDeliveryError ? { error: true as const } : {}),
+      };
+      emitJsonEnvelope([], status);
+      if (!opts.json) {
+        runtime.log("No reply from agent.");
+      }
+      return { payloads: [], meta: resultMeta, deliveryStatus: status };
+    }
+    emitJsonEnvelope(normalizedPayloads);
+    if (!opts.json) {
+      runtime.log("No reply from agent.");
+    }
     return { payloads: [], meta: resultMeta };
   }
 
@@ -369,29 +409,103 @@ export async function deliverAgentCommandResult(params: {
     }
     runtime.log(output);
   };
+
   if (!deliver) {
     for (const payload of deliveryPayloads) {
       logPayload(payload);
     }
+    emitJsonEnvelope(normalizedPayloads);
+    return { payloads: normalizedPayloads, meta: resultMeta };
   }
-  if (deliver && deliveryChannel && !isInternalMessageChannel(deliveryChannel)) {
+
+  let deliveryAttempted = false;
+  let deliverySucceeded: boolean | "partial" = false;
+  let deliveryThrewError = false;
+  let hadPartialFailure = false;
+  let deliveryResultCount = 0;
+
+  if (
+    deliveryChannel &&
+    !isInternalMessageChannel(deliveryChannel) &&
+    deliveryPayloads.length > 0
+  ) {
     if (deliveryTarget) {
-      await deliverOutboundPayloads({
-        cfg,
-        channel: deliveryChannel,
-        to: deliveryTarget,
-        accountId: resolvedAccountId,
-        payloads: deliveryPayloads,
-        session: outboundSession,
-        replyToId: resolvedReplyToId ?? null,
-        threadId: resolvedThreadTarget ?? null,
-        bestEffort: bestEffortDeliver,
-        onError: (err) => logDeliveryError(err),
-        onPayload: logPayload,
-        deps: createOutboundSendDeps(deps),
-      });
+      deliveryAttempted = true;
+      try {
+        const results = await deliverOutboundPayloads({
+          cfg,
+          channel: deliveryChannel,
+          to: deliveryTarget,
+          accountId: resolvedAccountId,
+          payloads: deliveryPayloads,
+          session: outboundSession,
+          replyToId: resolvedReplyToId ?? null,
+          threadId: resolvedThreadTarget ?? null,
+          bestEffort: bestEffortDeliver,
+          onError: (err) => {
+            hadPartialFailure = true;
+            logDeliveryError(err);
+          },
+          onDeliveryResult: () => {
+            deliveryResultCount += 1;
+          },
+          onPayload: logPayload,
+          deps: createOutboundSendDeps(deps),
+        });
+        deliverySucceeded = results.length > 0 ? (hadPartialFailure ? "partial" : true) : false;
+      } catch (err) {
+        deliveryThrewError = true;
+        if (!bestEffortDeliver) {
+          // Emit JSON before re-throwing so --json callers always get structured output.
+          const status = {
+            requested: true as const,
+            attempted: true,
+            succeeded: deliveryResultCount > 0 ? ("partial" as const) : (false as const),
+            error: true as const,
+          };
+          emitJsonEnvelope(normalizedPayloads, status);
+          throw err;
+        }
+        logDeliveryError(err);
+      }
     }
   }
 
-  return { payloads: normalizedPayloads, meta: resultMeta };
+  const deliveryStatus = {
+    requested: true as const,
+    attempted: deliveryAttempted,
+    succeeded: deliverySucceeded,
+    ...(deliveryThrewError || (preDeliveryError && !deliverySucceeded)
+      ? { error: true as const }
+      : {}),
+  };
+
+  // Log when delivery was requested but didn't succeed. This catches silent
+  // failures caused by stale delivery context (e.g., after model fallback or
+  // error recovery) where the response is written to the session transcript
+  // but never actually sent to the external channel.
+  if (deliveryPayloads.length > 0 && !deliverySucceeded && !opts.json) {
+    const reason = !deliveryChannel
+      ? "no delivery channel resolved"
+      : isInternalMessageChannel(deliveryChannel)
+        ? "channel resolved to internal"
+        : !deliveryTarget
+          ? "no delivery target resolved"
+          : deliveryThrewError
+            ? "delivery threw an error"
+            : "delivery returned zero results";
+    runtime.log(
+      `[delivery] delivery requested but not completed: ${reason} ` +
+        `(session=${effectiveSessionKey ?? "unknown"} channel=${deliveryChannel ?? "none"} ` +
+        `target=${deliveryTarget ?? "none"} payloads=${payloads.length})`,
+    );
+  }
+
+  emitJsonEnvelope(normalizedPayloads, deliveryStatus);
+
+  return {
+    payloads: normalizedPayloads,
+    meta: resultMeta,
+    deliveryStatus,
+  };
 }
