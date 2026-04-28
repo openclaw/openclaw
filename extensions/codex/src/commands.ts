@@ -28,9 +28,9 @@ export function createCodexDiagnosticsCommand(options: {
 }): OpenClawPluginCommandDefinition {
   return {
     name: "diagnostics",
-    description: "Send Codex diagnostics feedback for the current thread",
+    description: "Inspect Codex diagnostics for the current thread",
     agentPromptGuidance: [
-      "When a Codex harness run misbehaves, `/diagnostics [note]` sends the current Codex thread's feedback bundle to OpenAI and returns a `codex resume <thread-id>` CLI inspection hint.",
+      "When a Codex harness run misbehaves, `/diagnostics [note]` detects the current attached Codex runtime thread, asks before uploading the feedback bundle to OpenAI, and returns a `codex resume <thread-id>` CLI inspection hint after upload.",
     ],
     acceptsArgs: true,
     requireAuth: true,

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
+import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import type { CodexComputerUseStatus } from "./app-server/computer-use.js";
@@ -52,6 +52,20 @@ function createDeps(overrides: Partial<CodexCommandDeps> = {}): Partial<CodexCom
     safeCodexControlRequest: vi.fn(),
     ...overrides,
   };
+}
+
+function readDiagnosticsConfirmationToken(
+  result: PluginCommandResult,
+  commandPrefix = "/codex diagnostics",
+): string {
+  const text = result.text ?? "";
+  const token = new RegExp(`${escapeRegExp(commandPrefix)} confirm ([a-f0-9]{12})`).exec(text)?.[1];
+  expect(token).toBeTruthy();
+  return token as string;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 describe("codex command", () => {
@@ -338,7 +352,7 @@ describe("codex command", () => {
     });
   });
 
-  it("sends diagnostics feedback for the attached Codex thread", async () => {
+  it("asks before sending diagnostics feedback for the attached Codex thread", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await fs.writeFile(
       `${sessionFile}.codex-app-server.json`,
@@ -348,14 +362,55 @@ describe("codex command", () => {
       ok: true as const,
       value: { threadId: "thread-123" },
     }));
+    const deps = createDeps({ safeCodexControlRequest });
+
+    const request = await handleCodexCommand(
+      createContext("diagnostics tool loop repro", sessionFile, {
+        senderId: "user-1",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+      }),
+      { deps },
+    );
+
+    const token = readDiagnosticsConfirmationToken(request);
+    expect(request.text).toBe(
+      [
+        "OpenClaw diagnostics found an attached Codex runtime thread.",
+        "Codex diagnostics can send this thread's feedback bundle to OpenAI servers.",
+        "Thread: thread-123",
+        "Note: tool loop repro",
+        "Included: Codex logs and spawned Codex subthreads when available.",
+        `To send: /codex diagnostics confirm ${token}`,
+        `To cancel: /codex diagnostics cancel ${token}`,
+        "This request expires in 5 minutes.",
+      ].join("\n"),
+    );
+    expect(request.interactive).toMatchObject({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Send diagnostics",
+              value: `/codex diagnostics confirm ${token}`,
+              style: "danger",
+            },
+            { label: "Cancel", value: `/codex diagnostics cancel ${token}` },
+          ],
+        },
+      ],
+    });
+    expect(safeCodexControlRequest).not.toHaveBeenCalled();
 
     await expect(
       handleCodexCommand(
-        createContext("diagnostics tool loop repro", sessionFile, {
+        createContext(`diagnostics confirm ${token}`, sessionFile, {
+          senderId: "user-1",
           sessionId: "session-1",
           sessionKey: "agent:main:session-1",
         }),
-        { deps: createDeps({ safeCodexControlRequest }) },
+        { deps },
       ),
     ).resolves.toEqual({
       text: [
@@ -380,7 +435,7 @@ describe("codex command", () => {
     );
   });
 
-  it("registers top-level diagnostics as a Codex feedback command", async () => {
+  it("registers top-level diagnostics as a Codex feedback confirmation command", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await fs.writeFile(
       `${sessionFile}.codex-app-server.json`,
@@ -390,14 +445,27 @@ describe("codex command", () => {
       ok: true as const,
       value: { threadId: "thread-456" },
     }));
+    const deps = createDeps({ safeCodexControlRequest });
     const command = createCodexDiagnosticsCommand({
-      deps: createDeps({ safeCodexControlRequest }),
+      deps,
     });
+
+    const request = await command.handler(
+      createContext("bad branch choice", sessionFile, {
+        commandBody: "/diagnostics bad branch choice",
+        senderId: "user-1",
+      }),
+    );
+    const token = readDiagnosticsConfirmationToken(request, "/diagnostics");
+
+    expect(request.text).toContain(`To send: /diagnostics confirm ${token}`);
+    expect(safeCodexControlRequest).not.toHaveBeenCalled();
 
     await expect(
       command.handler(
-        createContext("bad branch choice", sessionFile, {
-          commandBody: "/diagnostics bad branch choice",
+        createContext(`confirm ${token}`, sessionFile, {
+          commandBody: `/diagnostics confirm ${token}`,
+          senderId: "user-1",
         }),
       ),
     ).resolves.toEqual({
@@ -419,6 +487,35 @@ describe("codex command", () => {
     );
   });
 
+  it("keeps diagnostics confirmation scoped to the requesting sender", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({ schemaVersion: 1, threadId: "thread-sender", cwd: "/repo" }),
+    );
+    const safeCodexControlRequest = vi.fn(async () => ({
+      ok: true as const,
+      value: { threadId: "thread-sender" },
+    }));
+    const deps = createDeps({ safeCodexControlRequest });
+
+    const request = await handleCodexCommand(
+      createContext("diagnostics", sessionFile, { senderId: "user-1" }),
+      { deps },
+    );
+    const token = readDiagnosticsConfirmationToken(request);
+
+    await expect(
+      handleCodexCommand(
+        createContext(`diagnostics confirm ${token}`, sessionFile, { senderId: "user-2" }),
+        { deps },
+      ),
+    ).resolves.toEqual({
+      text: "Only the user who requested these Codex diagnostics can confirm the upload.",
+    });
+    expect(safeCodexControlRequest).not.toHaveBeenCalled();
+  });
+
   it("bounds diagnostics notes before upload", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await fs.writeFile(
@@ -430,10 +527,13 @@ describe("codex command", () => {
       value: { threadId: "thread-789" },
     }));
     const note = "x".repeat(2050);
+    const deps = createDeps({ safeCodexControlRequest });
 
-    await handleCodexCommand(createContext(`diagnostics ${note}`, sessionFile), {
-      deps: createDeps({ safeCodexControlRequest }),
+    const request = await handleCodexCommand(createContext(`diagnostics ${note}`, sessionFile), {
+      deps,
     });
+    const token = readDiagnosticsConfirmationToken(request);
+    await handleCodexCommand(createContext(`diagnostics confirm ${token}`, sessionFile), { deps });
 
     expect(safeCodexControlRequest).toHaveBeenCalledWith(
       undefined,
@@ -456,8 +556,12 @@ describe("codex command", () => {
     }));
     const deps = createDeps({ safeCodexControlRequest });
 
+    const request = await handleCodexCommand(createContext("diagnostics first", sessionFile), {
+      deps,
+    });
+    const token = readDiagnosticsConfirmationToken(request);
     await expect(
-      handleCodexCommand(createContext("diagnostics first", sessionFile), { deps }),
+      handleCodexCommand(createContext(`diagnostics confirm ${token}`, sessionFile), { deps }),
     ).resolves.toEqual({
       text: [
         "Codex diagnostics sent for thread thread-cooldown.",
@@ -485,8 +589,12 @@ describe("codex command", () => {
       `${sessionFile}.codex-app-server.json`,
       JSON.stringify({ schemaVersion: 1, threadId: "thread-global-1", cwd: "/repo" }),
     );
+    const request = await handleCodexCommand(createContext("diagnostics first", sessionFile), {
+      deps,
+    });
+    const token = readDiagnosticsConfirmationToken(request);
     await expect(
-      handleCodexCommand(createContext("diagnostics first", sessionFile), { deps }),
+      handleCodexCommand(createContext(`diagnostics confirm ${token}`, sessionFile), { deps }),
     ).resolves.toEqual({
       text: [
         "Codex diagnostics sent for thread thread-global-1.",
@@ -518,11 +626,12 @@ describe("codex command", () => {
       ok: false as const,
       error: "bad\n\u009b\u202e; echo pwn",
     }));
+    const deps = createDeps({ safeCodexControlRequest });
 
+    const request = await handleCodexCommand(createContext("diagnostics", sessionFile), { deps });
+    const token = readDiagnosticsConfirmationToken(request);
     await expect(
-      handleCodexCommand(createContext("diagnostics", sessionFile), {
-        deps: createDeps({ safeCodexControlRequest }),
-      }),
+      handleCodexCommand(createContext(`diagnostics confirm ${token}`, sessionFile), { deps }),
     ).resolves.toEqual({
       text: [
         "Could not send Codex diagnostics for thread thread-error: bad???; echo pwn",
@@ -545,11 +654,12 @@ describe("codex command", () => {
       ok: true as const,
       value: { threadId: "thread-123'\n\u009b\u202e; echo bad" },
     }));
+    const deps = createDeps({ safeCodexControlRequest });
 
+    const request = await handleCodexCommand(createContext("diagnostics", sessionFile), { deps });
+    const token = readDiagnosticsConfirmationToken(request);
     await expect(
-      handleCodexCommand(createContext("diagnostics", sessionFile), {
-        deps: createDeps({ safeCodexControlRequest }),
-      }),
+      handleCodexCommand(createContext(`diagnostics confirm ${token}`, sessionFile), { deps }),
     ).resolves.toEqual({
       text: [
         "Codex diagnostics sent for thread thread-123'???; echo bad.",

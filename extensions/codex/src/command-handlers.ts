@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { CODEX_CONTROL_METHODS, type CodexControlMethod } from "./app-server/capabilities.js";
 import {
@@ -116,17 +117,35 @@ type ParsedComputerUseArgs = {
   help?: boolean;
 };
 
+type ParsedDiagnosticsArgs =
+  | { action: "request"; note: string }
+  | { action: "confirm"; token: string }
+  | { action: "cancel"; token: string };
+
+type PendingCodexDiagnosticsConfirmation = {
+  token: string;
+  threadId: string;
+  note?: string;
+  senderId?: string;
+  channel: string;
+  createdAt: number;
+};
+
 const CODEX_DIAGNOSTICS_SOURCE = "openclaw-diagnostics";
 const CODEX_DIAGNOSTICS_REASON_MAX_CHARS = 2048;
 const CODEX_DIAGNOSTICS_COOLDOWN_MS = 60_000;
 const CODEX_DIAGNOSTICS_ERROR_MAX_CHARS = 500;
 const CODEX_DIAGNOSTICS_COOLDOWN_MAX_THREADS = 100;
+const CODEX_DIAGNOSTICS_CONFIRMATION_TTL_MS = 5 * 60_000;
+const CODEX_DIAGNOSTICS_CONFIRMATION_MAX_REQUESTS = 100;
 
 const lastCodexDiagnosticsUploadByThread = new Map<string, number>();
+const pendingCodexDiagnosticsConfirmations = new Map<string, PendingCodexDiagnosticsConfirmation>();
 let lastCodexDiagnosticsUploadAt: number | undefined;
 
 export function resetCodexDiagnosticsFeedbackStateForTests(): void {
   lastCodexDiagnosticsUploadByThread.clear();
+  pendingCodexDiagnosticsConfirmations.clear();
   lastCodexDiagnosticsUploadAt = undefined;
 }
 
@@ -203,9 +222,13 @@ export async function handleCodexSubcommand(
     };
   }
   if (normalized === "diagnostics") {
-    return {
-      text: await sendCodexDiagnosticsFeedback(deps, ctx, options.pluginConfig, rest.join(" ")),
-    };
+    return await handleCodexDiagnosticsFeedback(
+      deps,
+      ctx,
+      options.pluginConfig,
+      rest.join(" "),
+      "/codex diagnostics",
+    );
   }
   if (normalized === "computer-use" || normalized === "computeruse") {
     return {
@@ -251,9 +274,13 @@ export async function handleCodexDiagnosticsCommand(
   options: { pluginConfig?: unknown; deps?: Partial<CodexCommandDeps> },
 ): Promise<PluginCommandResult> {
   const deps: CodexCommandDeps = { ...defaultCodexCommandDeps, ...options.deps };
-  return {
-    text: await sendCodexDiagnosticsFeedback(deps, ctx, options.pluginConfig, ctx.args ?? ""),
-  };
+  return await handleCodexDiagnosticsFeedback(
+    deps,
+    ctx,
+    options.pluginConfig,
+    ctx.args ?? "",
+    "/diagnostics",
+  );
 }
 
 async function handleComputerUseCommand(
@@ -513,6 +540,139 @@ async function resolveControlSessionFile(ctx: PluginCommandContext): Promise<str
   return readCodexConversationBindingData(binding)?.sessionFile ?? ctx.sessionFile;
 }
 
+async function handleCodexDiagnosticsFeedback(
+  deps: CodexCommandDeps,
+  ctx: PluginCommandContext,
+  pluginConfig: unknown,
+  args: string,
+  commandPrefix: string,
+): Promise<PluginCommandResult> {
+  const parsed = parseDiagnosticsArgs(args);
+  if (parsed.action === "confirm") {
+    return {
+      text: await confirmCodexDiagnosticsFeedback(deps, ctx, pluginConfig, parsed.token),
+    };
+  }
+  if (parsed.action === "cancel") {
+    return { text: cancelCodexDiagnosticsFeedback(ctx, parsed.token) };
+  }
+  return await requestCodexDiagnosticsFeedbackApproval(
+    deps,
+    ctx,
+    pluginConfig,
+    parsed.note,
+    commandPrefix,
+  );
+}
+
+async function requestCodexDiagnosticsFeedbackApproval(
+  deps: CodexCommandDeps,
+  ctx: PluginCommandContext,
+  pluginConfig: unknown,
+  note: string,
+  commandPrefix: string,
+): Promise<PluginCommandResult> {
+  const sessionFile = await resolveControlSessionFile(ctx);
+  if (!sessionFile) {
+    return {
+      text: "Cannot send Codex diagnostics because this command did not include an OpenClaw session file.",
+    };
+  }
+  const binding = await deps.readCodexAppServerBinding(sessionFile);
+  if (!binding?.threadId) {
+    return {
+      text: [
+        "No Codex thread is attached to this OpenClaw session yet.",
+        "Use /codex threads to find a thread, then /codex resume <thread-id> before sending diagnostics.",
+      ].join("\n"),
+    };
+  }
+  const now = Date.now();
+  const cooldownMessage = readCodexDiagnosticsCooldownMessage(binding.threadId, now);
+  if (cooldownMessage) {
+    return { text: cooldownMessage };
+  }
+  const reason = normalizeDiagnosticsReason(note);
+  const token = createCodexDiagnosticsConfirmation({
+    threadId: binding.threadId,
+    note: reason,
+    senderId: ctx.senderId,
+    channel: ctx.channel,
+    now,
+  });
+  const displayThreadId = formatCodexThreadIdForDisplay(binding.threadId);
+  const confirmCommand = `${commandPrefix} confirm ${token}`;
+  const cancelCommand = `${commandPrefix} cancel ${token}`;
+  const lines = [
+    "OpenClaw diagnostics found an attached Codex runtime thread.",
+    "Codex diagnostics can send this thread's feedback bundle to OpenAI servers.",
+    `Thread: ${displayThreadId}`,
+    ...(reason ? [`Note: ${reason}`] : []),
+    "Included: Codex logs and spawned Codex subthreads when available.",
+    `To send: ${confirmCommand}`,
+    `To cancel: ${cancelCommand}`,
+    "This request expires in 5 minutes.",
+  ];
+  return {
+    text: lines.join("\n"),
+    interactive: {
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            { label: "Send diagnostics", value: confirmCommand, style: "danger" },
+            { label: "Cancel", value: cancelCommand, style: "secondary" },
+          ],
+        },
+      ],
+    },
+  };
+}
+
+async function confirmCodexDiagnosticsFeedback(
+  deps: CodexCommandDeps,
+  ctx: PluginCommandContext,
+  pluginConfig: unknown,
+  token: string,
+): Promise<string> {
+  const pending = readPendingCodexDiagnosticsConfirmation(token, Date.now());
+  if (!pending) {
+    return "No pending Codex diagnostics confirmation was found. Run /diagnostics again to create a fresh request.";
+  }
+  if (pending.senderId && pending.senderId !== ctx.senderId) {
+    return "Only the user who requested these Codex diagnostics can confirm the upload.";
+  }
+  if (pending.channel !== ctx.channel) {
+    return "This Codex diagnostics confirmation belongs to a different channel.";
+  }
+  const sessionFile = await resolveControlSessionFile(ctx);
+  if (!sessionFile) {
+    return "Cannot send Codex diagnostics because this command did not include an OpenClaw session file.";
+  }
+  const binding = await deps.readCodexAppServerBinding(sessionFile);
+  if (binding?.threadId !== pending.threadId) {
+    pendingCodexDiagnosticsConfirmations.delete(token);
+    return "The attached Codex thread changed before confirmation. Run /diagnostics again for the current thread.";
+  }
+  pendingCodexDiagnosticsConfirmations.delete(token);
+  return await sendCodexDiagnosticsFeedback(deps, ctx, pluginConfig, pending.note ?? "");
+}
+
+function cancelCodexDiagnosticsFeedback(ctx: PluginCommandContext, token: string): string {
+  const pending = readPendingCodexDiagnosticsConfirmation(token, Date.now());
+  if (!pending) {
+    return "No pending Codex diagnostics confirmation was found.";
+  }
+  if (pending.senderId && pending.senderId !== ctx.senderId) {
+    return "Only the user who requested these Codex diagnostics can cancel the upload.";
+  }
+  if (pending.channel !== ctx.channel) {
+    return "This Codex diagnostics confirmation belongs to a different channel.";
+  }
+  pendingCodexDiagnosticsConfirmations.delete(token);
+  return "Codex diagnostics upload canceled.";
+}
+
 async function sendCodexDiagnosticsFeedback(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
@@ -582,6 +742,61 @@ function normalizeDiagnosticsReason(note: string): string | undefined {
   return normalized ? normalized.slice(0, CODEX_DIAGNOSTICS_REASON_MAX_CHARS) : undefined;
 }
 
+function parseDiagnosticsArgs(args: string): ParsedDiagnosticsArgs {
+  const [action, token] = splitArgs(args);
+  const normalizedAction = action?.toLowerCase();
+  if ((normalizedAction === "confirm" || normalizedAction === "--confirm") && token) {
+    return { action: "confirm", token };
+  }
+  if ((normalizedAction === "cancel" || normalizedAction === "--cancel") && token) {
+    return { action: "cancel", token };
+  }
+  return { action: "request", note: args };
+}
+
+function createCodexDiagnosticsConfirmation(params: {
+  threadId: string;
+  note?: string;
+  senderId?: string;
+  channel: string;
+  now: number;
+}): string {
+  prunePendingCodexDiagnosticsConfirmations(params.now);
+  while (pendingCodexDiagnosticsConfirmations.size >= CODEX_DIAGNOSTICS_CONFIRMATION_MAX_REQUESTS) {
+    const oldestToken = pendingCodexDiagnosticsConfirmations.keys().next().value;
+    if (typeof oldestToken !== "string") {
+      break;
+    }
+    pendingCodexDiagnosticsConfirmations.delete(oldestToken);
+  }
+  const token = crypto.randomBytes(6).toString("hex");
+  pendingCodexDiagnosticsConfirmations.set(token, {
+    token,
+    threadId: params.threadId,
+    note: params.note,
+    senderId: params.senderId,
+    channel: params.channel,
+    createdAt: params.now,
+  });
+  return token;
+}
+
+function readPendingCodexDiagnosticsConfirmation(
+  token: string,
+  now: number,
+): PendingCodexDiagnosticsConfirmation | undefined {
+  prunePendingCodexDiagnosticsConfirmations(now);
+  return pendingCodexDiagnosticsConfirmations.get(token);
+}
+
+function prunePendingCodexDiagnosticsConfirmations(now: number): void {
+  for (const [token, pending] of pendingCodexDiagnosticsConfirmations) {
+    if (now - pending.createdAt >= CODEX_DIAGNOSTICS_CONFIRMATION_TTL_MS) {
+      pendingCodexDiagnosticsConfirmations.delete(token);
+    }
+  }
+}
+
 function buildDiagnosticsTags(ctx: PluginCommandContext): Record<string, string> {
   const tags: Record<string, string> = {
     source: CODEX_DIAGNOSTICS_SOURCE,
@@ -620,6 +835,22 @@ function readCodexDiagnosticsCooldownMs(threadId: string, now: number): number {
     lastCodexDiagnosticsUploadByThread.delete(threadId);
   }
   return remainingMs;
+}
+
+function readCodexDiagnosticsCooldownMessage(threadId: string, now: number): string | undefined {
+  const cooldownMs = readCodexDiagnosticsCooldownMs(threadId, now);
+  if (cooldownMs > 0) {
+    return `Codex diagnostics were already sent for this thread recently. Try again in ${Math.ceil(
+      cooldownMs / 1000,
+    )}s.`;
+  }
+  const globalCooldownMs = readCodexDiagnosticsGlobalCooldownMs(now);
+  if (globalCooldownMs > 0) {
+    return `Codex diagnostics were already sent recently. Try again in ${Math.ceil(
+      globalCooldownMs / 1000,
+    )}s.`;
+  }
+  return undefined;
 }
 
 function readCodexDiagnosticsGlobalCooldownMs(now: number): number {

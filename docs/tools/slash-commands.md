@@ -222,7 +222,7 @@ Bundled plugins can add more slash commands. Current bundled commands in this re
 - `/voice status|list [limit]|set <voiceId|name>` manages Talk voice config. On Discord, the native command name is `/talkvoice`.
 - `/card ...` sends LINE rich card presets. See [LINE](/channels/line).
 - `/codex status|models|threads|resume|compact|review|diagnostics|account|mcp|skills` inspects and controls the bundled Codex app-server harness. See [Codex harness](/plugins/codex-harness).
-- `/diagnostics [note]` sends Codex feedback for the current attached Codex thread and returns the matching `codex resume <thread-id>` CLI inspection command.
+- `/diagnostics [note]` asks before sending Codex feedback for the current attached Codex thread and returns the matching `codex resume <thread-id>` CLI inspection command after confirmed upload.
 - QQBot-only commands:
   - `/bot-ping`
   - `/bot-version`
