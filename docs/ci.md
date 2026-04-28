@@ -230,13 +230,18 @@ or overlapping changed hunks.
 The `CodeQL` workflow is intentionally a narrow first-pass security scanner,
 not the full repository sweep. Daily and manual runs scan Actions workflow code
 plus the highest-risk JavaScript/TypeScript auth, secrets, sandbox, cron, and
-gateway surfaces with high-precision security queries. macOS remains a manual
-security shard so its runtime and alert quality can be tracked separately.
+gateway surfaces with high-precision security queries.
 
 The `CodeQL Android Critical Security` workflow is the scheduled Android
 security shard. It builds the Android app manually for CodeQL on the smallest
 Blacksmith Linux runner label accepted by workflow sanity and uploads results
 under the `/codeql-critical-security/android` category.
+
+The `CodeQL macOS Critical Security` workflow is the weekly/manual macOS
+security shard. It builds the macOS app manually for CodeQL on Blacksmith macOS,
+filters dependency build results out of the uploaded SARIF, and uploads results
+under the `/codeql-critical-security/macos` category. Keep it outside the daily
+default workflow because the macOS build dominates runtime even when clean.
 
 The `CodeQL Critical Quality` workflow is the matching non-security shard. It
 runs only error-severity, non-security JavaScript/TypeScript quality queries
