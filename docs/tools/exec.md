@@ -44,6 +44,7 @@ Notes:
 - Host execution (`gateway`/`node`) rejects `env.PATH` and loader overrides (`LD_*`/`DYLD_*`) to
   prevent binary hijacking or injected code.
 - OpenClaw sets `OPENCLAW_SHELL=exec` in the spawned command environment (including PTY and sandbox execution) so shell/profile rules can detect exec-tool context.
+- When available, OpenClaw also sets `OPENCLAW_SESSION_KEY` (e.g., `agent:it:main`) and `OPENCLAW_AGENT_ID` (e.g., `it`) so scripts can identify the calling session and agent without relying on model parameter passing.
 - Important: sandboxing is **off by default**. If sandboxing is off, implicit `host=auto`
   resolves to `gateway`. Explicit `host=sandbox` still fails closed instead of silently
   running on the gateway host. Enable sandboxing or use `host=gateway` with approvals.
