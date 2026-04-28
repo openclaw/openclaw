@@ -649,6 +649,35 @@ function appendMessageToolReadHint(
   return description;
 }
 
+function validateChannelSupportsMessageAction(
+  params: MessageToolDiscoveryParams & {
+    action: ChannelMessageActionName;
+    requestedChannel?: unknown;
+  },
+) {
+  if (params.action === "send" || params.action === "broadcast") {
+    return;
+  }
+  const requestedChannel =
+    typeof params.requestedChannel === "string"
+      ? normalizeMessageChannel(params.requestedChannel)
+      : undefined;
+  const channel = requestedChannel ?? normalizeMessageChannel(params.currentChannelProvider);
+  if (!channel) {
+    return;
+  }
+  const supported = listChannelSupportedActions(buildMessageActionDiscoveryInput(params, channel));
+  if (supported.length === 0 || supported.includes(params.action)) {
+    return;
+  }
+  const supportedList = ["send", "broadcast", ...supported].toSorted().join(", ");
+  throw new Error(
+    `message action "${params.action}" is not supported by channel "${channel}". ` +
+      `Supported actions for this channel: ${supportedList}. ` +
+      "Choose a supported action or pass channel for a configured provider that supports it.",
+  );
+}
+
 export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
   const loadConfigForTool = options?.getRuntimeConfig ?? getRuntimeConfig;
   const getScopedSecretTargetsForTool =
@@ -765,6 +794,22 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       if (accountId) {
         params.accountId = accountId;
       }
+
+      validateChannelSupportsMessageAction({
+        cfg,
+        action,
+        requestedChannel: params.channel,
+        currentChannelProvider: options?.currentChannelProvider,
+        currentChannelId: options?.currentChannelId,
+        currentThreadTs: options?.currentThreadTs,
+        currentMessageId: options?.currentMessageId,
+        currentAccountId: accountId,
+        sessionKey: options?.agentSessionKey,
+        sessionId: options?.sessionId,
+        agentId: resolvedAgentId,
+        requesterSenderId: options?.requesterSenderId,
+        senderIsOwner: options?.senderIsOwner,
+      });
 
       const gatewayResolved = resolveGatewayOptions({
         gatewayUrl: readStringParam(params, "gatewayUrl", { trim: false }),

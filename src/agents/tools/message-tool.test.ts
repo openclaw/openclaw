@@ -972,6 +972,31 @@ describe("message tool description", () => {
 
     expect(tool.description).toContain("Supports actions: send, broadcast.");
   });
+
+  it("rejects unsupported channel actions before dispatch", async () => {
+    const signalPlugin = createChannelPlugin({
+      id: "signal",
+      label: "Signal",
+      docsPath: "/channels/signal",
+      blurb: "Signal test plugin.",
+      actions: ["send", "react"],
+    });
+
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "signal", source: "test", plugin: signalPlugin }]),
+    );
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "signal",
+      runMessageAction: mocks.runMessageAction as never,
+    });
+
+    await expect(tool.execute("1", { action: "read", threadId: "thread-1" })).rejects.toThrow(
+      /message action "read" is not supported by channel "signal".*Supported actions.*react/i,
+    );
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+  });
 });
 
 describe("message tool reasoning tag sanitization", () => {

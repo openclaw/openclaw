@@ -629,6 +629,22 @@ describe("createOpenClawCodingTools", () => {
     }
   });
 
+  it("returns actionable guidance for missing read paths", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-missing-read-"));
+    try {
+      const tools = createOpenClawCodingTools({ workspaceDir: tmpDir });
+      const { readTool } = expectReadWriteEditTools(tools);
+
+      await expect(
+        readTool?.execute("tool-missing-read", {
+          path: "does-not-exist.txt",
+        }),
+      ).rejects.toThrow(/read: file not found: does-not-exist\.txt.*Verify the exact path/i);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects legacy alias parameters", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-alias-"));
     try {
