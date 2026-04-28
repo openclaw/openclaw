@@ -261,7 +261,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       runBeforeAgentStart: vi.fn(async () => ({ prependContext: "legacy hook context" })),
       runLlmInput,
     });
-    const seen: { prompt?: string; messages?: unknown[] } = {};
+    const seen: { prompt?: string; messages?: unknown[]; systemPrompt?: string } = {};
 
     const result = await createContextEngineAttemptRunner({
       contextEngine: createTestContextEngine({

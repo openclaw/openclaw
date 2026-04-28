@@ -22,6 +22,10 @@ export type OpenClawSkillMetadata = {
   primaryEnv?: string;
   emoji?: string;
   homepage?: string;
+  mcp?: {
+    server: string;
+    tools?: string[];
+  };
   os?: string[];
   requires?: {
     bins?: string[];

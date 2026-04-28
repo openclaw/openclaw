@@ -147,6 +147,10 @@ export const sharedVitestConfig = {
         find: "openclaw/plugin-sdk",
         replacement: path.join(repoRoot, "src", "plugin-sdk", "index.ts"),
       },
+      {
+        find: "@openclaw/qa-channel/api.js",
+        replacement: path.join(repoRoot, "extensions", "qa-channel", "api.ts"),
+      },
     ],
   },
   test: {
