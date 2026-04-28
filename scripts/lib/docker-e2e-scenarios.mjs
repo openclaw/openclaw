@@ -177,6 +177,7 @@ const bundledPluginInstallUninstallLanes = Array.from(
       {
         estimateSeconds: 280,
         resources: ["npm"],
+        stateScenario: "empty",
         weight: 1,
       },
     ),
@@ -253,6 +254,7 @@ export const mainLanes = [
     { resources: ["npm"], weight: 3 },
   ),
   npmLane("doctor-switch", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:doctor-switch", {
+    stateScenario: "empty",
     weight: 3,
   }),
   npmLane(
@@ -285,7 +287,9 @@ export const mainLanes = [
   npmLane("plugin-update", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugin-update"),
   serviceLane("config-reload", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:config-reload"),
   ...bundledScenarioLanes,
-  lane("openai-image-auth", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openai-image-auth"),
+  lane("openai-image-auth", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openai-image-auth", {
+    stateScenario: "empty",
+  }),
   lane(
     "crestodian-first-run",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:crestodian-first-run",
@@ -484,6 +488,7 @@ const releasePathPackageUpdateCoreLanes = [
     { resources: ["service"], stateScenario: "empty", weight: 3 },
   ),
   npmLane("doctor-switch", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:doctor-switch", {
+    stateScenario: "empty",
     weight: 3,
   }),
   npmLane(

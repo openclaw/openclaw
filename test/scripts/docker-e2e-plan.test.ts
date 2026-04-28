@@ -161,6 +161,10 @@ describe("scripts/lib/docker-e2e-plan", () => {
           stateScenario: "empty",
         }),
         expect.objectContaining({
+          name: "doctor-switch",
+          stateScenario: "empty",
+        }),
+        expect.objectContaining({
           name: "update-channel-switch",
           stateScenario: "update-stable",
         }),
@@ -313,7 +317,14 @@ describe("scripts/lib/docker-e2e-plan", () => {
 
   it("surfaces Docker lane test-state scenarios in plan JSON", () => {
     const plan = planFor({
-      selectedLaneNames: ["onboard", "agents-delete-shared-workspace", "update-channel-switch"],
+      selectedLaneNames: [
+        "onboard",
+        "agents-delete-shared-workspace",
+        "doctor-switch",
+        "openai-image-auth",
+        "bundled-plugin-install-uninstall-0",
+        "update-channel-switch",
+      ],
     });
 
     expect(plan.lanes).toEqual([
@@ -323,6 +334,18 @@ describe("scripts/lib/docker-e2e-plan", () => {
       }),
       expect.objectContaining({
         name: "agents-delete-shared-workspace",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "doctor-switch",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "openai-image-auth",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "bundled-plugin-install-uninstall-0",
         stateScenario: "empty",
       }),
       expect.objectContaining({

@@ -6,8 +6,12 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-bundled-plugin-install-uninstall-e2e" OPENCLAW_BUNDLED_PLUGIN_INSTALL_UNINSTALL_E2E_IMAGE)"
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" bundled-plugin-install-uninstall
+OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 bundled-plugin-install-uninstall empty)"
 
-DOCKER_ENV_ARGS=(-e COREPACK_ENABLE_DOWNLOAD_PROMPT=0)
+DOCKER_ENV_ARGS=(
+  -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+  -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64"
+)
 for env_name in \
   OPENCLAW_BUNDLED_PLUGIN_SWEEP_TOTAL \
   OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX \
@@ -34,8 +38,7 @@ else
 fi
 export OPENCLAW_ENTRY
 
-home_dir=$(mktemp -d "/tmp/openclaw-bundled-plugin-sweep.XXXXXX")
-export HOME="$home_dir"
+eval "$(printf "%s" "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}" | base64 -d)"
 
 node - <<'NODE' > /tmp/bundled-plugin-sweep-ids
 const fs = require("node:fs");
