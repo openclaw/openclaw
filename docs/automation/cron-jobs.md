@@ -102,6 +102,8 @@ This fires ~5–6 times per month instead of 0–1 times per month. OpenClaw use
 
     Isolated cron runs also dispose any bundled MCP runtime instances created for the job through the shared runtime-cleanup path. This matches how main-session and custom-session MCP clients are torn down, so isolated cron jobs do not leak stdio child processes or long-lived MCP connections across runs.
 
+    When isolated direct delivery also needs `deleteAfterRun` cleanup, OpenClaw waits for active subagents under that run to finish before deleting the cron session.
+
   </Accordion>
   <Accordion title="Subagent and Discord delivery">
     When isolated cron runs orchestrate subagents, delivery also prefers the final descendant output over stale parent interim text. If descendants are still running, OpenClaw suppresses that partial parent update instead of announcing it.

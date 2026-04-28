@@ -1081,6 +1081,95 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
   });
 
+  it("waits for active descendants before deleteAfterRun cleanup after structured direct delivery", async () => {
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({ synthesizedText: "HEARTBEAT_OK" });
+    params.agentSessionKey = "agent:main:cron:test-job";
+    params.runSessionKey = "agent:main:cron:test-job:run:test-session-id";
+    params.deliveryPayloadHasStructuredContent = true;
+    params.deliveryPayloads = [
+      { text: "HEARTBEAT_OK", mediaUrl: "https://example.com/img.png" },
+    ] as never;
+    (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
+    const activeCounts = [1, 0];
+    vi.mocked(countActiveDescendantRuns).mockImplementation((sessionKey) =>
+      sessionKey === params.runSessionKey ? (activeCounts.shift() ?? 0) : 0,
+    );
+    vi.mocked(waitForDescendantSubagentSummary).mockImplementation(async () => {
+      expect(callGateway).not.toHaveBeenCalledWith(
+        expect.objectContaining({ method: "sessions.delete" }),
+      );
+      return undefined;
+    });
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result).toBeUndefined();
+    expect(state.delivered).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(countActiveDescendantRuns).toHaveBeenCalledWith(params.runSessionKey);
+    expect(countActiveDescendantRuns).not.toHaveBeenCalledWith(params.agentSessionKey);
+    expect(waitForDescendantSubagentSummary).toHaveBeenCalledWith({
+      sessionKey: params.runSessionKey,
+      timeoutMs: 30_000,
+      observedActiveDescendants: true,
+    });
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "sessions.delete",
+      params: {
+        key: "agent:main:cron:test-job",
+        deleteTranscript: true,
+        emitLifecycleHooks: false,
+      },
+      timeoutMs: 10_000,
+    });
+  });
+
+  it("defers direct cron session cleanup when descendants drain after the first cleanup wait", async () => {
+    vi.useFakeTimers();
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({ synthesizedText: "HEARTBEAT_OK" });
+    params.runSessionKey = "agent:main:cron:test-job:run:test-session-id";
+    params.deliveryPayloadHasStructuredContent = true;
+    params.deliveryPayloads = [
+      { text: "HEARTBEAT_OK", mediaUrl: "https://example.com/img.png" },
+    ] as never;
+    (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
+    vi.mocked(countActiveDescendantRuns)
+      .mockReturnValueOnce(1)
+      .mockReturnValueOnce(1)
+      .mockReturnValue(0);
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result).toBeUndefined();
+    expect(state.delivered).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(waitForDescendantSubagentSummary).toHaveBeenCalledWith({
+      sessionKey: params.runSessionKey,
+      timeoutMs: 30_000,
+      observedActiveDescendants: true,
+    });
+    expect(callGateway).not.toHaveBeenCalledWith(
+      expect.objectContaining({ method: "sessions.delete" }),
+    );
+    expect(retireSessionMcpRuntime).not.toHaveBeenCalled();
+
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "sessions.delete",
+      params: {
+        key: "agent:main",
+        deleteTranscript: true,
+        emitLifecycleHooks: false,
+      },
+      timeoutMs: 10_000,
+    });
+  });
+
   it("suppresses NO_REPLY payload with surrounding whitespace", async () => {
     vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
