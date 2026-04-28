@@ -1,7 +1,8 @@
 import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
+import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { pipeline } from "node:stream/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runPluginCommandWithTimeout } from "openclaw/plugin-sdk/run-command";
@@ -17,6 +18,27 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtim
 // archives are well under 50 MiB; cap at 256 MiB for headroom.
 const SIGNAL_CLI_DOWNLOAD_MAX_BYTES = 256 * 1024 * 1024;
 const SIGNAL_CLI_DOWNLOAD_TIMEOUT_MS = 5 * 60_000;
+const SIGNAL_CLI_RELEASE_API_TIMEOUT_MS = 30_000;
+
+function isNodeReadableStream(value: unknown): value is NodeJS.ReadableStream {
+  return Boolean(value && typeof (value as NodeJS.ReadableStream).pipe === "function");
+}
+
+function makeSizeCapTransform(maxBytes: number): Transform {
+  let received = 0;
+  return new Transform({
+    transform(chunk: Buffer, _enc, cb) {
+      received += chunk.byteLength;
+      if (received > maxBytes) {
+        cb(
+          new Error(`signal-cli archive exceeded the ${maxBytes}-byte download cap mid-stream.`),
+        );
+        return;
+      }
+      cb(null, chunk);
+    },
+  });
+}
 
 export type ReleaseAsset = {
   name?: string;
@@ -103,11 +125,11 @@ export function pickAsset(
 }
 
 async function downloadToFile(url: string, dest: string): Promise<void> {
-  // SSRF-guarded download with a hard timeout, redirect/proxy support, and
-  // a download size cap. Replaces the previous raw `node:https` request which
-  // had none of these (#54153). The `fetchWithSsrFGuard` helper transparently
-  // honors HTTP_PROXY/HTTPS_PROXY env, validates redirect targets against the
-  // SSRF policy, and routes through the runtime dispatcher.
+  // SSRF-guarded download with a hard timeout, redirect/proxy support, and a
+  // download size cap. Replaces the previous raw `node:https` request which
+  // had none of these (#54153). Stream cancellation and reader-lock release
+  // are delegated to `Readable.fromWeb()` + `pipeline()`, matching the sibling
+  // skills installer.
   const { response, release } = await fetchWithSsrFGuard({
     url,
     timeoutMs: SIGNAL_CLI_DOWNLOAD_TIMEOUT_MS,
@@ -116,61 +138,21 @@ async function downloadToFile(url: string, dest: string): Promise<void> {
     if (!response.ok || !response.body) {
       throw new Error(`HTTP ${response.status} downloading file`);
     }
-    const declaredLength = Number(response.headers.get("content-length") ?? "");
-    if (Number.isFinite(declaredLength) && declaredLength > SIGNAL_CLI_DOWNLOAD_MAX_BYTES) {
-      throw new Error(
-        `signal-cli archive exceeds the ${SIGNAL_CLI_DOWNLOAD_MAX_BYTES}-byte download cap (declared ${declaredLength}).`,
-      );
+    const rawLength = response.headers.get("content-length");
+    if (rawLength !== null) {
+      const declaredLength = Number(rawLength);
+      if (Number.isFinite(declaredLength) && declaredLength > SIGNAL_CLI_DOWNLOAD_MAX_BYTES) {
+        throw new Error(
+          `signal-cli archive exceeds the ${SIGNAL_CLI_DOWNLOAD_MAX_BYTES}-byte download cap (declared ${declaredLength}).`,
+        );
+      }
     }
     const out = createWriteStream(dest);
-    let received = 0;
-    const counter = new Readable({
-      read() {},
-    });
-    const reader = response.body.getReader();
-    // Always release the reader lock and cancel the underlying body, even on
-    // size-cap aborts or read-loop errors, so the connection is returned to
-    // the dispatcher and we do not leak a half-consumed stream (Greptile P1).
-    const releaseReader = async (cause?: Error) => {
-      try {
-        if (cause) {
-          await reader.cancel(cause).catch(() => {});
-        }
-      } finally {
-        try {
-          reader.releaseLock();
-        } catch {
-          // Already released — no-op.
-        }
-      }
-    };
-    void (async () => {
-      try {
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) {
-            counter.push(null);
-            await releaseReader();
-            return;
-          }
-          received += value.byteLength;
-          if (received > SIGNAL_CLI_DOWNLOAD_MAX_BYTES) {
-            const capError = new Error(
-              `signal-cli archive exceeded the ${SIGNAL_CLI_DOWNLOAD_MAX_BYTES}-byte download cap mid-stream.`,
-            );
-            counter.destroy(capError);
-            await releaseReader(capError);
-            return;
-          }
-          counter.push(value);
-        }
-      } catch (err) {
-        const wrappedErr = err instanceof Error ? err : new Error(String(err));
-        counter.destroy(wrappedErr);
-        await releaseReader(wrappedErr);
-      }
-    })();
-    await pipeline(counter, out);
+    const body = response.body as unknown;
+    const readable = isNodeReadableStream(body)
+      ? body
+      : Readable.fromWeb(body as NodeReadableStream);
+    await pipeline(readable, makeSizeCapTransform(SIGNAL_CLI_DOWNLOAD_MAX_BYTES), out);
   } finally {
     await release();
   }
@@ -278,21 +260,28 @@ async function installSignalCliViaBrew(runtime: RuntimeEnv): Promise<SignalInsta
 
 async function installSignalCliFromRelease(runtime: RuntimeEnv): Promise<SignalInstallResult> {
   const apiUrl = "https://api.github.com/repos/AsamK/signal-cli/releases/latest";
-  const response = await fetch(apiUrl, {
-    headers: {
-      "User-Agent": "openclaw",
-      Accept: "application/vnd.github+json",
+  const { response, release } = await fetchWithSsrFGuard({
+    url: apiUrl,
+    timeoutMs: SIGNAL_CLI_RELEASE_API_TIMEOUT_MS,
+    init: {
+      headers: {
+        "User-Agent": "openclaw",
+        Accept: "application/vnd.github+json",
+      },
     },
   });
-
-  if (!response.ok) {
-    return {
-      ok: false,
-      error: `Failed to fetch release info (${response.status})`,
-    };
+  let payload: ReleaseResponse;
+  try {
+    if (!response.ok) {
+      return {
+        ok: false,
+        error: `Failed to fetch release info (${response.status})`,
+      };
+    }
+    payload = (await response.json()) as ReleaseResponse;
+  } finally {
+    await release();
   }
-
-  const payload = (await response.json()) as ReleaseResponse;
   const version = payload.tag_name?.replace(/^v/, "") ?? "unknown";
   const assets = payload.assets ?? [];
   const asset = pickAsset(assets, process.platform, process.arch);
