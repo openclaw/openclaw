@@ -7,7 +7,6 @@ import {
   OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH,
   writeOfficialChannelCatalog,
 } from "../scripts/write-official-channel-catalog.mjs";
-import { bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { describePluginInstallSource } from "../src/plugins/install-source-info.js";
 import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "./helpers/temp-repo.js";
 
