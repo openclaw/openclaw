@@ -84,4 +84,16 @@ describe("resolveFollowupDeliveryPayloads", () => {
       }),
     ).toEqual([{ text: "Setup complete! Here is the summary..." }]);
   });
+
+  it("keeps final text when sent target metadata exists but followup origin target is missing", () => {
+    expect(
+      resolveFollowupDeliveryPayloads({
+        cfg: baseConfig,
+        payloads: [{ text: "hello world!" }],
+        messageProvider: "slack",
+        sentTexts: ["hello world!"],
+        sentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
+      }),
+    ).toEqual([{ text: "hello world!" }]);
+  });
 });

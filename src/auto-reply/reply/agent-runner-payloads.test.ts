@@ -570,4 +570,27 @@ describe("buildReplyPayloads media filter integration", () => {
     });
     expect(replyPayloads).toHaveLength(0);
   });
+
+  it("suppresses exact short duplicate text without substring-matching unrelated short text", async () => {
+    const { replyPayloads: dropped } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "ok" }],
+      messageProvider: "telegram",
+      originatingTo: "268300329",
+      messagingToolSentTexts: ["ok"],
+      messagingToolSentTargets: [{ tool: "telegram", provider: "telegram", to: "268300329" }],
+    });
+    expect(dropped).toHaveLength(0);
+
+    const { replyPayloads: kept } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "okay" }],
+      messageProvider: "telegram",
+      originatingTo: "268300329",
+      messagingToolSentTexts: ["ok"],
+      messagingToolSentTargets: [{ tool: "telegram", provider: "telegram", to: "268300329" }],
+    });
+    expect(kept).toHaveLength(1);
+    expect(kept[0]?.text).toBe("okay");
+  });
 });

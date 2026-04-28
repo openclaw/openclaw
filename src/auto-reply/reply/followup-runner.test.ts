@@ -1692,6 +1692,32 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     );
     expect(onBlockReply).not.toHaveBeenCalled();
   });
+
+  it("falls back to the run account when routing followups without originating account metadata", async () => {
+    const queued = baseQueuedRun("discord");
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [{ text: "hello world!" }] },
+      queued: {
+        ...queued,
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        originatingAccountId: undefined,
+        run: {
+          ...queued.run,
+          agentAccountId: "work",
+        },
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        to: "channel:C1",
+        accountId: "work",
+      }),
+    );
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
 });
 
 describe("createFollowupRunner typing cleanup", () => {
