@@ -343,7 +343,7 @@ describe("searchMemoryWiki", () => {
           id: "entity.body.only",
           title: "Body only match",
         },
-        body: "# Body only match\n\n" + `${"sentinel radix omega status alpha beta\n".repeat(20)}`,
+        body: `# Body only match\n\n${"sentinel radix omega status alpha beta\n".repeat(20)}`,
       }),
       "utf8",
     );
