@@ -758,19 +758,17 @@ Common forms:
 - `/codex mcp` lists Codex app-server MCP server status.
 - `/codex skills` lists Codex app-server skills.
 
-The plugin also registers `/diagnostics [note]` as the short form for the Codex
-diagnostics add-on. When the current OpenClaw session is attached to a Codex
-runtime thread, the command shows the Codex thread id and asks for confirmation
-before calling Codex app-server `feedback/upload`. The confirmed upload asks
+Core OpenClaw also exposes `/diagnostics [note]` as the general Gateway
+diagnostics command. It shows the sensitive-data preamble, links to
+[Diagnostics Export](/gateway/diagnostics), and prints the local Gateway export
+command. When the active OpenClaw session is using the Codex harness, the same
+command adds the Codex feedback confirmation flow.
+
+The confirmed Codex upload calls Codex app-server `feedback/upload` and asks
 app-server to include logs for that thread and spawned Codex subthreads when
 available. The upload goes through Codex's normal feedback path to OpenAI
 servers; if Codex feedback is disabled in that app-server, the command returns
 the app-server error.
-
-This is separate from the existing Gateway diagnostics export. For a local,
-shareable OpenClaw support bundle, run `openclaw gateway diagnostics export`.
-The Codex step adds the native Codex thread id and optional OpenAI feedback
-upload when the active chat is attached to the Codex runtime.
 
 `/codex resume` writes the same sidecar binding file that the harness uses for
 normal turns. On the next message, OpenClaw resumes that Codex thread, passes the

@@ -4,7 +4,7 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createCodexAppServerAgentHarness } from "./harness.js";
 import { buildCodexMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { buildCodexProvider } from "./provider.js";
-import { createCodexCommand, createCodexDiagnosticsCommand } from "./src/commands.js";
+import { createCodexCommand } from "./src/commands.js";
 import {
   handleCodexConversationBindingResolved,
   handleCodexConversationInboundClaim,
@@ -29,7 +29,6 @@ export default definePluginEntry({
       buildCodexMediaUnderstandingProvider({ pluginConfig: api.pluginConfig }),
     );
     api.registerCommand(createCodexCommand({ pluginConfig: api.pluginConfig }));
-    api.registerCommand(createCodexDiagnosticsCommand({ pluginConfig: api.pluginConfig }));
     api.on("inbound_claim", (event, ctx) =>
       handleCodexConversationInboundClaim(event, ctx, {
         pluginConfig: resolveCurrentPluginConfig(),

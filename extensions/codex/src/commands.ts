@@ -22,34 +22,10 @@ export function createCodexCommand(options: {
   };
 }
 
-export function createCodexDiagnosticsCommand(options: {
-  pluginConfig?: unknown;
-  deps?: Partial<CodexCommandDeps>;
-}): OpenClawPluginCommandDefinition {
-  return {
-    name: "diagnostics",
-    description: "Inspect Codex diagnostics for the current thread",
-    agentPromptGuidance: [
-      "When a Codex harness run misbehaves, `/diagnostics [note]` should be treated as an add-on to OpenClaw Gateway diagnostics: it reminds users about `openclaw gateway diagnostics export`, detects the current attached Codex runtime thread, asks before uploading the Codex feedback bundle to OpenAI, and returns a `codex resume <thread-id>` CLI inspection hint after upload.",
-    ],
-    acceptsArgs: true,
-    requireAuth: true,
-    handler: (ctx) => handleCodexDiagnosticsPluginCommand(ctx, options),
-  };
-}
-
 export async function handleCodexCommand(
   ctx: PluginCommandContext,
   options: { pluginConfig?: unknown; deps?: Partial<CodexCommandDeps> } = {},
 ): Promise<PluginCommandResult> {
   const { handleCodexSubcommand } = await import("./command-handlers.js");
   return await handleCodexSubcommand(ctx, options);
-}
-
-export async function handleCodexDiagnosticsPluginCommand(
-  ctx: PluginCommandContext,
-  options: { pluginConfig?: unknown; deps?: Partial<CodexCommandDeps> } = {},
-): Promise<PluginCommandResult> {
-  const { handleCodexDiagnosticsCommand } = await import("./command-handlers.js");
-  return await handleCodexDiagnosticsCommand(ctx, options);
 }

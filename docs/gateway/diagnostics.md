@@ -7,9 +7,13 @@ read_when:
   - Reviewing what diagnostics data is recorded or redacted
 ---
 
-OpenClaw can create a local diagnostics zip that is safe to attach to bug
-reports. It combines sanitized Gateway status, health, logs, config shape, and
-recent payload-free stability events.
+OpenClaw can create a local diagnostics zip for bug reports. It combines
+sanitized Gateway status, health, logs, config shape, and recent payload-free
+stability events.
+
+Treat diagnostics bundles like secrets until you have reviewed them. They are
+designed to omit or redact payloads and credentials, but they still summarize
+local Gateway logs and host-level runtime state.
 
 ## Quick start
 
@@ -28,6 +32,18 @@ For automation:
 ```bash
 openclaw gateway diagnostics export --json
 ```
+
+## Chat command
+
+Use `/diagnostics [note]` in chat to get the same privacy preamble and the local
+Gateway export command. The chat command does not silently export logs. The
+Gateway diagnostics export should run through an explicit exec approval every
+time; do not approve it through an allow-all rule.
+
+When the active OpenClaw session is using the native OpenAI Codex harness,
+`/diagnostics [note]` also offers an OpenAI feedback upload for the attached
+Codex runtime thread. That upload is separate from the local Gateway zip and is
+sent only after you confirm the per-request prompt.
 
 ## What the export contains
 

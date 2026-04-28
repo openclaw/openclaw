@@ -11,7 +11,7 @@ import {
   resetCodexDiagnosticsFeedbackStateForTests,
   type CodexCommandDeps,
 } from "./command-handlers.js";
-import { createCodexDiagnosticsCommand, handleCodexCommand } from "./commands.js";
+import { handleCodexCommand } from "./commands.js";
 
 let tempDir: string;
 
@@ -376,8 +376,7 @@ describe("codex command", () => {
     const token = readDiagnosticsConfirmationToken(request);
     expect(request.text).toBe(
       [
-        "OpenClaw diagnostics found an attached Codex runtime thread.",
-        "For the local Gateway support bundle, run: openclaw gateway diagnostics export",
+        "Codex runtime thread detected.",
         "Codex diagnostics can send this thread's feedback bundle to OpenAI servers.",
         "Thread: thread-123",
         "Note: tool loop repro",
@@ -433,58 +432,6 @@ describe("codex command", () => {
           channel: "test",
         },
       },
-    );
-  });
-
-  it("registers top-level diagnostics as a Codex feedback confirmation command", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-456", cwd: "/repo" }),
-    );
-    const safeCodexControlRequest = vi.fn(async () => ({
-      ok: true as const,
-      value: { threadId: "thread-456" },
-    }));
-    const deps = createDeps({ safeCodexControlRequest });
-    const command = createCodexDiagnosticsCommand({
-      deps,
-    });
-
-    const request = await command.handler(
-      createContext("bad branch choice", sessionFile, {
-        commandBody: "/diagnostics bad branch choice",
-        senderId: "user-1",
-      }),
-    );
-    const token = readDiagnosticsConfirmationToken(request, "/diagnostics");
-
-    expect(request.text).toContain(`To send: /diagnostics confirm ${token}`);
-    expect(safeCodexControlRequest).not.toHaveBeenCalled();
-
-    await expect(
-      command.handler(
-        createContext(`confirm ${token}`, sessionFile, {
-          commandBody: `/diagnostics confirm ${token}`,
-          senderId: "user-1",
-        }),
-      ),
-    ).resolves.toEqual({
-      text: [
-        "Codex diagnostics sent for thread thread-456.",
-        "Inspect locally: codex resume 'thread-456'",
-        "Included Codex logs and spawned Codex subthreads when available.",
-      ].join("\n"),
-    });
-    expect(command.name).toBe("diagnostics");
-    expect(safeCodexControlRequest).toHaveBeenCalledWith(
-      undefined,
-      CODEX_CONTROL_METHODS.feedback,
-      expect.objectContaining({
-        reason: "bad branch choice",
-        threadId: "thread-456",
-        includeLogs: true,
-      }),
     );
   });
 

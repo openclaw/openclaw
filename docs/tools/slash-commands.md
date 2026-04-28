@@ -150,6 +150,7 @@ Current source-of-truth:
     - `/commands` shows the generated command catalog.
     - `/tools [compact|verbose]` shows what the current agent can use right now.
     - `/status` shows execution/runtime status, including `Execution`/`Runtime` labels and provider usage/quota when available.
+    - `/diagnostics [note]` shows the sensitive diagnostics preamble, links to [Diagnostics Export](/gateway/diagnostics), and gives the local Gateway export command. When the active session uses the OpenAI Codex harness, it also asks before sending Codex feedback to OpenAI servers.
     - `/crestodian <request>` runs the Crestodian setup and repair helper from an owner DM.
     - `/tasks` lists active/recent background tasks for the current session.
     - `/context [list|detail|json]` explains how context is assembled.
@@ -222,7 +223,6 @@ Bundled plugins can add more slash commands. Current bundled commands in this re
 - `/voice status|list [limit]|set <voiceId|name>` manages Talk voice config. On Discord, the native command name is `/talkvoice`.
 - `/card ...` sends LINE rich card presets. See [LINE](/channels/line).
 - `/codex status|models|threads|resume|compact|review|diagnostics|account|mcp|skills` inspects and controls the bundled Codex app-server harness. See [Codex harness](/plugins/codex-harness).
-- `/diagnostics [note]` reminds you about `openclaw gateway diagnostics export`; when a Codex runtime thread is attached, it also asks before sending Codex feedback and returns the matching `codex resume <thread-id>` CLI inspection command after confirmed upload.
 - QQBot-only commands:
   - `/bot-ping`
   - `/bot-version`

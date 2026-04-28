@@ -269,20 +269,6 @@ export async function handleCodexSubcommand(
   return { text: `Unknown Codex command: ${subcommand}\n\n${buildHelp()}` };
 }
 
-export async function handleCodexDiagnosticsCommand(
-  ctx: PluginCommandContext,
-  options: { pluginConfig?: unknown; deps?: Partial<CodexCommandDeps> },
-): Promise<PluginCommandResult> {
-  const deps: CodexCommandDeps = { ...defaultCodexCommandDeps, ...options.deps };
-  return await handleCodexDiagnosticsFeedback(
-    deps,
-    ctx,
-    options.pluginConfig,
-    ctx.args ?? "",
-    "/diagnostics",
-  );
-}
-
 async function handleComputerUseCommand(
   deps: CodexCommandDeps,
   pluginConfig: unknown,
@@ -604,8 +590,7 @@ async function requestCodexDiagnosticsFeedbackApproval(
   const confirmCommand = `${commandPrefix} confirm ${token}`;
   const cancelCommand = `${commandPrefix} cancel ${token}`;
   const lines = [
-    "OpenClaw diagnostics found an attached Codex runtime thread.",
-    "For the local Gateway support bundle, run: openclaw gateway diagnostics export",
+    "Codex runtime thread detected.",
     "Codex diagnostics can send this thread's feedback bundle to OpenAI servers.",
     `Thread: ${displayThreadId}`,
     ...(reason ? [`Note: ${reason}`] : []),
