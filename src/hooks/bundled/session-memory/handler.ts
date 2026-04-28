@@ -225,26 +225,18 @@ const saveSessionToMemory: HookHandler = async (event) => {
     let synthesisSucceeded = false;
 
     if (synthesisEnabled && sessionContent && cfg) {
-      const isTestEnv =
-        process.env.OPENCLAW_TEST_FAST === "1" ||
-        process.env.VITEST === "true" ||
-        process.env.VITEST === "1" ||
-        process.env.NODE_ENV === "test";
-
-      if (!isTestEnv) {
-        log.debug("Running LLM synthesis on session content");
-        const synthesized = await synthesizeSessionContent({
-          sessionContent,
-          cfg,
-          sessionKey: displaySessionKey,
-        });
-        if (synthesized) {
-          outputContent = synthesized;
-          synthesisSucceeded = true;
-          log.debug("Synthesis complete", { length: synthesized.length });
-        } else {
-          log.debug("Synthesis returned empty or failed, using raw content");
-        }
+      log.debug("Running LLM synthesis on session content");
+      const synthesized = await synthesizeSessionContent({
+        sessionContent,
+        cfg,
+        sessionKey: displaySessionKey,
+      });
+      if (synthesized) {
+        outputContent = synthesized;
+        synthesisSucceeded = true;
+        log.debug("Synthesis complete", { length: synthesized.length });
+      } else {
+        log.debug("Synthesis returned empty or failed, using raw content");
       }
     }
 

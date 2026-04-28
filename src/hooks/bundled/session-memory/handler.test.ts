@@ -1,11 +1,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { writeWorkspaceFile } from "../../../test-helpers/workspace.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { createHookEvent } from "../../hooks.js";
+import { synthesizeSessionContent } from "../../session-synthesizer.js";
 import {
   findPreviousSessionFile,
   getRecentSessionContent,
@@ -37,6 +38,12 @@ async function createCaseWorkspace(prefix = "case"): Promise<string> {
 beforeAll(async () => {
   ({ default: handler } = await import("./handler.js"));
   suiteWorkspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-memory-"));
+});
+
+beforeEach(() => {
+  vi.mocked(synthesizeSessionContent)
+    .mockReset()
+    .mockResolvedValue("- Discussed simple math operations\n- Confirmed 2+2 = 4");
 });
 
 afterAll(async () => {
@@ -708,9 +715,7 @@ describe("session-memory hook", () => {
     expect(canonicalContent).toContain("---"); // separator between sessions
   });
 
-  it("uses synthesis when enabled in config (test env skips LLM call)", async () => {
-    // In test env, synthesis is skipped (isTestEnv check), so the raw content is used.
-    // This test verifies the code path doesn't crash and falls back gracefully.
+  it("uses synthesis when enabled in config", async () => {
     const sessionContent = createMockSessionContent([
       { role: "user", content: "Synthesized session test" },
       { role: "assistant", content: "This should be synthesized" },
@@ -720,8 +725,28 @@ describe("session-memory hook", () => {
       cfg: (tempDir) => makeSessionMemoryConfigWithSynthesis(tempDir),
     });
 
-    // In test env, synthesis LLM call is skipped, so raw content is preserved
-    expect(memoryContent).toContain("Synthesized session test");
+    expect(synthesizeSessionContent).toHaveBeenCalledOnce();
+    expect(memoryContent).toContain("## Summary");
+    expect(memoryContent).toContain("- Discussed simple math operations");
+    expect(memoryContent).not.toContain("Synthesized session test");
+  });
+
+  it("falls back to raw content when synthesis produces no summary", async () => {
+    vi.mocked(synthesizeSessionContent).mockResolvedValueOnce(null);
+
+    const sessionContent = createMockSessionContent([
+      { role: "user", content: "Keep the original transcript" },
+      { role: "assistant", content: "No durable summary was produced" },
+    ]);
+    const { memoryContent } = await runNewWithPreviousSession({
+      sessionContent,
+      cfg: (tempDir) => makeSessionMemoryConfigWithSynthesis(tempDir),
+    });
+
+    expect(synthesizeSessionContent).toHaveBeenCalledOnce();
+    expect(memoryContent).toContain("## Conversation Summary");
+    expect(memoryContent).toContain("user: Keep the original transcript");
+    expect(memoryContent).toContain("assistant: No durable summary was produced");
   });
 
   it("uses raw content by default (synthesis disabled)", async () => {
@@ -732,6 +757,7 @@ describe("session-memory hook", () => {
     const { memoryContent } = await runNewWithPreviousSession({ sessionContent });
 
     // Default behavior: raw messages in "Conversation Summary" section
+    expect(synthesizeSessionContent).not.toHaveBeenCalled();
     expect(memoryContent).toContain("## Conversation Summary");
     expect(memoryContent).toContain("user: Raw content test");
     expect(memoryContent).toContain("assistant: Should not be synthesized");
