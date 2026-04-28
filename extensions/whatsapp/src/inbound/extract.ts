@@ -439,11 +439,28 @@ export function describeReplyContext(
   };
 }
 
+function hasInteractiveResponseContent(message: proto.IMessage | undefined): boolean {
+  if (!message) {
+    return false;
+  }
+  // Button/list/template/interactive selections that the existing four
+  // extractors do not cover. Treat any presence of these keys as user
+  // content — Baileys never delivers these as receipts or protocol
+  // envelopes, only as explicit user choices.
+  return Boolean(
+    message.buttonsResponseMessage ||
+    message.listResponseMessage ||
+    message.templateButtonReplyMessage ||
+    message.interactiveResponseMessage,
+  );
+}
+
 /**
  * Fast O(1) check that a Baileys message carries user-visible inbound content
- * (text, media, contact, location). Returns false for protocol/receipt/typing
- * notifications that arrive on the same `messages.upsert` stream as real
- * messages but should not trigger pairing access-control side effects.
+ * (text, media, contact, location, button/list selection). Returns false for
+ * protocol/receipt/typing notifications that arrive on the same
+ * `messages.upsert` stream as real messages but should not trigger pairing
+ * access-control side effects.
  */
 export function hasInboundUserContent(rawMessage: proto.IMessage | undefined): boolean {
   if (!rawMessage) {
@@ -460,6 +477,16 @@ export function hasInboundUserContent(rawMessage: proto.IMessage | undefined): b
   }
   if (extractLocationData(rawMessage)) {
     return true;
+  }
+  if (hasInteractiveResponseContent(rawMessage)) {
+    return true;
+  }
+  // Walk wrappers (ephemeral, viewOnce, etc.) — interactive responses
+  // can arrive nested.
+  for (const candidate of buildMessageChain(rawMessage)) {
+    if (candidate !== rawMessage && hasInteractiveResponseContent(candidate)) {
+      return true;
+    }
   }
   return false;
 }

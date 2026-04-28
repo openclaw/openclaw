@@ -169,6 +169,65 @@ describe("hasInboundUserContent", () => {
     ).toBe(true);
   });
 
+  it("returns true for buttons response (user button click)", () => {
+    expect(
+      hasInboundUserContent({
+        buttonsResponseMessage: {
+          selectedButtonId: "yes",
+          selectedDisplayText: "Yes",
+        },
+      } as proto.IMessage),
+    ).toBe(true);
+  });
+
+  it("returns true for list response (user list selection)", () => {
+    expect(
+      hasInboundUserContent({
+        listResponseMessage: {
+          title: "Option A",
+          singleSelectReply: { selectedRowId: "a" },
+        } as unknown as proto.Message.IListResponseMessage,
+      } as proto.IMessage),
+    ).toBe(true);
+  });
+
+  it("returns true for template button reply", () => {
+    expect(
+      hasInboundUserContent({
+        templateButtonReplyMessage: {
+          selectedId: "btn-1",
+          selectedDisplayText: "Click",
+        } as unknown as proto.Message.ITemplateButtonReplyMessage,
+      } as proto.IMessage),
+    ).toBe(true);
+  });
+
+  it("returns true for interactive response", () => {
+    expect(
+      hasInboundUserContent({
+        interactiveResponseMessage: {
+          body: { text: "x" },
+          nativeFlowResponseMessage: { name: "n", paramsJson: "{}" },
+        } as unknown as proto.Message.IInteractiveResponseMessage,
+      } as proto.IMessage),
+    ).toBe(true);
+  });
+
+  it("returns true for buttons response wrapped in ephemeralMessage (regression for #73797 + greptile review)", () => {
+    expect(
+      hasInboundUserContent({
+        ephemeralMessage: {
+          message: {
+            buttonsResponseMessage: {
+              selectedButtonId: "ok",
+              selectedDisplayText: "OK",
+            },
+          },
+        },
+      } as proto.IMessage),
+    ).toBe(true);
+  });
+
   it("returns false for undefined message (regression for #73797)", () => {
     expect(hasInboundUserContent(undefined)).toBe(false);
   });
