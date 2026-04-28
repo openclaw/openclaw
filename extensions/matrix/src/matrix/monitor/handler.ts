@@ -8,8 +8,18 @@ import {
   resolveSessionStoreEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  completeWithPreparedSimpleCompletionModel,
+  prepareSimpleCompletionModelForAgent,
+} from "../../../../../src/agents/simple-completion-runtime.js";
+import type { GetReplyOptions } from "../../../../../src/auto-reply/get-reply-options.types.js";
+import { getReplyFromConfig } from "../../../../../src/auto-reply/reply/get-reply.js";
+import type { GetReplyFromConfig } from "../../../../../src/auto-reply/reply/get-reply.types.js";
 import type {
   CoreConfig,
+  MatrixFreshnessFinalAction,
+  MatrixFreshnessMode,
+  MatrixFreshnessScope,
   MatrixRoomConfig,
   MatrixStreamingMode,
   ReplyToMode,
@@ -42,9 +52,24 @@ import {
   type MatrixResolvedAllowlistEntry,
 } from "./config.js";
 import type { MatrixInboundEventDeduper } from "./inbound-dedupe.js";
+import {
+  createMatrixLatestVisibleTracker,
+  evaluateMatrixFreshnessObservation,
+  resolveMatrixDraftFreshnessScope,
+  resolveMatrixFreshnessProtectedEventIds,
+} from "./latest-visible.js";
 import { resolveMatrixLocation, type MatrixLocationPayload } from "./location.js";
 import { downloadMatrixMedia } from "./media.js";
 import { resolveMentions, stripMatrixMentionPrefix } from "./mentions.js";
+import {
+  findParticipationMentionedAgents,
+  parseParticipationDirective,
+  parseParticipationDirectiveWithAiOverride,
+  resolveParticipationDecision,
+  type ParticipationDirective,
+  type ParticipationParseStrategy,
+} from "./participation-policy.js";
+import type { MatrixParticipationStateStore } from "./participation-state.js";
 import { deliverMatrixReplies } from "./replies.js";
 import { createMatrixReplyContextResolver } from "./reply-context.js";
 import { createRoomHistoryTracker } from "./room-history.js";
@@ -177,11 +202,33 @@ export type MatrixMonitorHandlerParams = {
   textLimit: number;
   mediaMaxBytes: number;
   historyLimit: number;
+  participationEnabled?: boolean;
+  participationMinRoomMembers?: number;
+  participationMinAgentMembers?: number;
+  participationStrategy?: ParticipationParseStrategy;
+  participationModel?: string;
+  participationPersistence?: "off" | "explicit" | "always";
+  participationStateStore?: Pick<
+    MatrixParticipationStateStore,
+    "storagePath" | "getRoomPolicy" | "applyDirective"
+  >;
+  freshnessEnabled?: boolean;
+  freshnessMinRoomMembers?: number;
+  freshnessMinAgentMembers?: number;
+  freshnessMode?: MatrixFreshnessMode;
+  freshnessScope?: MatrixFreshnessScope;
+  draftHoldbackMs?: number;
+  freshnessAllowedFinalActions?: MatrixFreshnessFinalAction[];
+  freshnessModel?: string;
+  aiDeterminesFinalAction?: boolean;
+  freshnessFinalAction?: MatrixFreshnessFinalAction;
   startupMs: number;
   startupGraceMs: number;
   dropPreStartupMessages: boolean;
   inboundDeduper?: Pick<MatrixInboundEventDeduper, "claimEvent" | "commitEvent" | "releaseEvent">;
   directTracker: {
+    getJoinedMembers?: (roomId: string) => Promise<string[] | null>;
+    getJoinedMemberCount?: (roomId: string) => Promise<number | null>;
     isDirectMessage: (params: {
       roomId: string;
       senderId: string;
@@ -191,7 +238,11 @@ export type MatrixMonitorHandlerParams = {
   getRoomInfo: (
     roomId: string,
     opts?: { includeAliases?: boolean },
-  ) => Promise<{ name?: string; canonicalAlias?: string; altAliases: string[] }>;
+  ) => Promise<{
+    name?: string;
+    canonicalAlias?: string;
+    altAliases: string[];
+  }>;
   getMemberDisplayName: (roomId: string, userId: string) => Promise<string>;
   needsRoomAliasesForConfig: boolean;
   resolveLiveUserAllowlist?: typeof resolveMatrixMonitorLiveUserAllowlist;
@@ -215,6 +266,382 @@ function resolveMatrixMentionPrecheckText(params: {
     }
   }
   return "";
+}
+
+type MatrixDraftFreshnessSnapshot = {
+  hadVisibleRoomHistoryAtTrigger: boolean;
+  visibleRoomHistoryCountAtTrigger: number;
+};
+
+type MatrixDraftFreshnessState = MatrixDraftFreshnessSnapshot & {
+  roomChangedSinceDraftStart: boolean;
+  visibleRoomHistoryCountAtDelivery: number;
+};
+
+function computeMatrixDraftFreshnessState(params: {
+  snapshot: MatrixDraftFreshnessSnapshot;
+  latestVisibleRoomHistoryCount: number;
+  roomHistoryEventsAfterTrigger?: number;
+}): MatrixDraftFreshnessState {
+  return {
+    ...params.snapshot,
+    visibleRoomHistoryCountAtDelivery: params.latestVisibleRoomHistoryCount,
+    roomChangedSinceDraftStart:
+      params.latestVisibleRoomHistoryCount > params.snapshot.visibleRoomHistoryCountAtTrigger ||
+      (params.roomHistoryEventsAfterTrigger ?? 0) > 0,
+  };
+}
+
+const MATRIX_DEFAULT_ALLOWED_FINAL_FRESHNESS_ACTIONS: MatrixFreshnessFinalAction[] = [
+  "revise",
+  "send-as-is",
+  "suppress",
+];
+
+const MATRIX_FRESHNESS_RERUN_BODY_NOTE = `[System note]
+New visible room activity arrived after an earlier draft was generated for this same inbound turn. Re-evaluate against the refreshed chat history before replying. If another visible answer already satisfies the user's need, returning NO_REPLY is allowed.`;
+
+const MATRIX_FINAL_FRESHNESS_REVISE_BODY_NOTE = `[System note]
+New visible room activity arrived after the earlier final draft was generated for this same inbound turn. A final-action decision already determined that you should still reply, but the reply may need revision. Re-evaluate against the refreshed chat history and produce a visible reply. Do not return NO_REPLY.`;
+
+type MatrixFinalFreshnessAiDecision = {
+  action?: string;
+  deliveryAction?: string;
+  reason?: string;
+  decision?: string;
+};
+
+function resolveMatrixBodyForAgentBase(ctx: {
+  BodyForAgent?: string;
+  CommandBody?: string;
+  RawBody?: string;
+  Body?: string;
+}): string {
+  return (
+    normalizeOptionalString(ctx.BodyForAgent) ??
+    normalizeOptionalString(ctx.CommandBody) ??
+    normalizeOptionalString(ctx.RawBody) ??
+    normalizeOptionalString(ctx.Body) ??
+    ""
+  );
+}
+
+function buildMatrixFreshnessRerunBodyForAgent(ctx: {
+  BodyForAgent?: string;
+  CommandBody?: string;
+  RawBody?: string;
+  Body?: string;
+}): string {
+  return [MATRIX_FRESHNESS_RERUN_BODY_NOTE, resolveMatrixBodyForAgentBase(ctx)]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function buildMatrixFinalFreshnessReviseBodyForAgent(ctx: {
+  BodyForAgent?: string;
+  CommandBody?: string;
+  RawBody?: string;
+  Body?: string;
+}): string {
+  return [MATRIX_FINAL_FRESHNESS_REVISE_BODY_NOTE, resolveMatrixBodyForAgentBase(ctx)]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function sanitizeMatrixFinalFreshnessActions(
+  actions?: readonly MatrixFreshnessFinalAction[],
+): MatrixFreshnessFinalAction[] | undefined {
+  if (!actions?.length) {
+    return undefined;
+  }
+  const out: MatrixFreshnessFinalAction[] = [];
+  for (const action of actions) {
+    if (
+      (action === "revise" || action === "send-as-is" || action === "suppress") &&
+      !out.includes(action)
+    ) {
+      out.push(action);
+    }
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+function extractMatrixFinalFreshnessJsonObject(
+  text: string,
+): MatrixFinalFreshnessAiDecision | undefined {
+  const trimmed = text.trim();
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim();
+  for (const candidate of [fenced, trimmed].filter((value): value is string => Boolean(value))) {
+    try {
+      return JSON.parse(candidate) as MatrixFinalFreshnessAiDecision;
+    } catch {}
+    const start = candidate.indexOf("{");
+    const end = candidate.lastIndexOf("}");
+    if (start >= 0 && end > start) {
+      try {
+        return JSON.parse(candidate.slice(start, end + 1)) as MatrixFinalFreshnessAiDecision;
+      } catch {}
+    }
+  }
+  return undefined;
+}
+
+function resolveMatrixFinalFreshnessActionFromAiResult(params: {
+  result: MatrixFinalFreshnessAiDecision | undefined;
+  allowedActions?: readonly MatrixFreshnessFinalAction[];
+}): MatrixFreshnessFinalAction | undefined {
+  const rawAction =
+    normalizeOptionalString(params.result?.deliveryAction) ??
+    normalizeOptionalString(params.result?.action);
+  if (!rawAction) {
+    return undefined;
+  }
+  const normalizedAction =
+    rawAction === "send_as_is" ? "send-as-is" : (rawAction as MatrixFreshnessFinalAction);
+  if (
+    normalizedAction !== "revise" &&
+    normalizedAction !== "send-as-is" &&
+    normalizedAction !== "suppress"
+  ) {
+    return undefined;
+  }
+  if (params.allowedActions && !params.allowedActions.includes(normalizedAction)) {
+    return undefined;
+  }
+  return normalizedAction;
+}
+
+async function chooseMatrixFinalFreshnessAction(params: {
+  cfg: CoreConfig;
+  agentId: string;
+  aiDeterminesFinalAction: boolean;
+  modelRef?: string;
+  allowedActions: readonly MatrixFreshnessFinalAction[];
+  currentReply: ReplyPayload;
+  triggerBodyForAgent: string;
+  latestPendingHistory: readonly HistoryEntry[];
+  logVerboseMessage: (message: string) => void;
+}): Promise<MatrixFreshnessFinalAction | undefined> {
+  if (!params.aiDeterminesFinalAction && params.allowedActions.length === 1) {
+    return params.allowedActions[0];
+  }
+  try {
+    const prepared = await prepareSimpleCompletionModelForAgent({
+      cfg: params.cfg as never,
+      agentId: params.agentId,
+      modelRef: params.modelRef,
+    });
+    if ("error" in prepared) {
+      params.logVerboseMessage(`matrix final freshness ai chooser unavailable: ${prepared.error}`);
+      return undefined;
+    }
+    const promptSchema = params.aiDeterminesFinalAction
+      ? '{"deliveryAction":"revise|send-as-is|suppress","reason":"string","decision":"string"}'
+      : '{"action":"revise|send-as-is|suppress","reason":"string"}';
+    const systemPrompt = params.aiDeterminesFinalAction
+      ? `You decide how a Matrix bot should handle a final reply after newer visible room activity arrived just before send. Return JSON only. Schema: ${promptSchema}. Think from first principles about whether the bot should still reply, whether the current draft can stand, or whether the reply should be withheld. Then map that judgment to deliveryAction. Action meanings: revise = the bot should still send a visible reply, but the draft should be rewritten. send-as-is = the current draft should be sent unchanged. suppress = do not send a reply. Revise must never mean suppress or NO_REPLY.`
+      : `You decide how a Matrix bot should handle a final reply after newer visible room activity arrived just before send. Return JSON only. Schema: ${promptSchema}. Choose only from allowedActions. Action meanings: revise = the bot should still send a visible reply, but the draft should be rewritten. send-as-is = the current draft should be sent unchanged. suppress = do not send a reply. Revise must never mean suppress or NO_REPLY.`;
+    const completion = await completeWithPreparedSimpleCompletionModel({
+      model: prepared.model as never,
+      auth: prepared.auth as never,
+      context: [
+        { role: "system", content: systemPrompt },
+        {
+          role: "user",
+          content: JSON.stringify({
+            triggerBodyForAgent: params.triggerBodyForAgent,
+            currentReply: {
+              text: params.currentReply.text,
+              hasMedia:
+                Boolean(params.currentReply.mediaUrl) ||
+                (params.currentReply.mediaUrls?.length ?? 0) > 0,
+              replyToId: params.currentReply.replyToId,
+            },
+            latestPendingHistory: params.latestPendingHistory.slice(-8),
+            ...(params.aiDeterminesFinalAction
+              ? {}
+              : { allowedActions: [...params.allowedActions] }),
+          }),
+        },
+      ] as never,
+      options: { maxTokens: 220 } as never,
+    } as never);
+    return resolveMatrixFinalFreshnessActionFromAiResult({
+      result: extractMatrixFinalFreshnessJsonObject((completion as { text?: string }).text ?? ""),
+      allowedActions: params.aiDeterminesFinalAction ? undefined : params.allowedActions,
+    });
+  } catch (err) {
+    params.logVerboseMessage(`matrix final freshness ai chooser failed: ${String(err)}`);
+    return undefined;
+  }
+}
+
+function createMatrixFreshnessAwareReplyResolver(params: {
+  baseResolver: GetReplyFromConfig;
+  snapshot: MatrixDraftFreshnessSnapshot;
+  freshnessMode: MatrixFreshnessMode;
+  freshnessScope: MatrixFreshnessScope;
+  threadId?: string;
+  replyToEventId?: string;
+  selfUserId?: string;
+  getIgnoredEventIds?: () => string[];
+  getLatestPendingHistory: () => HistoryEntry[];
+  getRoomHistoryAfterTrigger?: () => HistoryEntry[];
+  getLatestPendingEvents?: () => MatrixRawEvent[];
+  updateLatestState: (state: MatrixDraftFreshnessState) => void;
+  logVerboseMessage: (message: string) => void;
+  logFreshnessDecision: (payload: Record<string, unknown>) => void;
+}): GetReplyFromConfig {
+  return async (ctx, opts, configOverride) => {
+    let streamedBlockReply = false;
+    let streamedToolResult = false;
+    const firstPassOpts: GetReplyOptions = {
+      ...opts,
+      onBlockReply: async (payload, context) => {
+        streamedBlockReply = true;
+        await opts?.onBlockReply?.(payload, context);
+      },
+      onToolResult: async (payload) => {
+        streamedToolResult = true;
+        await opts?.onToolResult?.(payload);
+      },
+    };
+
+    const initialReply = await params.baseResolver(ctx, firstPassOpts, configOverride);
+    const latestPendingHistory = params.getLatestPendingHistory();
+    const roomHistoryAfterTrigger = params.getRoomHistoryAfterTrigger?.() ?? [];
+    const latestPendingEvents = params.getLatestPendingEvents?.() ?? [];
+    const latestVisibleRoomHistoryCount =
+      params.snapshot.visibleRoomHistoryCountAtTrigger + roomHistoryAfterTrigger.length;
+    let latestState = computeMatrixDraftFreshnessState({
+      snapshot: params.snapshot,
+      latestVisibleRoomHistoryCount,
+      roomHistoryEventsAfterTrigger: roomHistoryAfterTrigger.length,
+    });
+    if (params.freshnessScope === "thread-aware") {
+      const draftScope = resolveMatrixDraftFreshnessScope({
+        threadId: params.threadId,
+      });
+      const protectedEventIds = resolveMatrixFreshnessProtectedEventIds({
+        threadId: params.threadId,
+        replyToEventId: params.replyToEventId,
+      });
+      const ignoredEventIds = params.getIgnoredEventIds?.() ?? [];
+      const significantObservations = latestPendingEvents
+        .map((event) =>
+          evaluateMatrixFreshnessObservation({
+            draftScope,
+            event,
+            selfUserId: params.selfUserId,
+            ignoredEventIds,
+            protectedEventIds,
+          }),
+        )
+        .filter((decision) => decision.action !== "ignore");
+      latestState = {
+        ...latestState,
+        roomChangedSinceDraftStart: significantObservations.length > 0,
+        visibleRoomHistoryCountAtDelivery:
+          significantObservations.length > 0
+            ? params.snapshot.visibleRoomHistoryCountAtTrigger + significantObservations.length
+            : latestVisibleRoomHistoryCount,
+      };
+    }
+    params.updateLatestState(latestState);
+
+    if (!latestState.roomChangedSinceDraftStart) {
+      return initialReply;
+    }
+    const baseFreshnessPayload = {
+      stage: "reply-resolver",
+      roomChanged: latestState.roomChangedSinceDraftStart,
+      visibleRoomHistoryCountAtTrigger: latestState.visibleRoomHistoryCountAtTrigger,
+      visibleRoomHistoryCountAtDelivery: latestState.visibleRoomHistoryCountAtDelivery,
+    };
+    if (params.freshnessMode === "send-as-is") {
+      params.logVerboseMessage("matrix leaving stale visible reply unchanged after room change");
+      params.logFreshnessDecision({
+        ...baseFreshnessPayload,
+        action: "send-as-is",
+      });
+      return initialReply;
+    }
+    if (params.freshnessMode === "suppress") {
+      if (streamedBlockReply || streamedToolResult) {
+        params.logVerboseMessage(
+          "matrix freshness suppression skipped because streamed block/tool output already started",
+        );
+        params.logFreshnessDecision({
+          ...baseFreshnessPayload,
+          action: "send-as-is",
+          reason: "visible-output-started",
+        });
+        return initialReply;
+      }
+      params.logVerboseMessage("matrix suppressing stale visible reply after room change");
+      params.logFreshnessDecision({
+        ...baseFreshnessPayload,
+        action: "suppress",
+      });
+      return { text: "NO_REPLY" };
+    }
+    if (streamedBlockReply || streamedToolResult) {
+      params.logVerboseMessage(
+        "matrix freshness recomposition skipped because streamed block/tool output already started",
+      );
+      params.logFreshnessDecision({
+        ...baseFreshnessPayload,
+        action: "send-as-is",
+        reason: "visible-output-started",
+      });
+      return initialReply;
+    }
+
+    params.logVerboseMessage("matrix recomposing stale visible reply with refreshed room history");
+    params.logFreshnessDecision({ ...baseFreshnessPayload, action: "revise" });
+    return params.baseResolver(
+      {
+        ...ctx,
+        BodyForAgent: buildMatrixFreshnessRerunBodyForAgent(ctx),
+        InboundHistory: latestPendingHistory.length > 0 ? latestPendingHistory : undefined,
+      },
+      opts,
+      configOverride,
+    );
+  };
+}
+
+function sanitizeParticipationDirectiveForLog(directive: ParticipationDirective | undefined):
+  | {
+      mode: ParticipationDirective["mode"];
+      persistence?: ParticipationDirective["persistence"];
+      includeAgentIds?: string[];
+      excludeAgentIds?: string[];
+      clearsStoredPolicy?: boolean;
+      hasSourceText: boolean;
+      sourceTextLength: number;
+    }
+  | undefined {
+  if (!directive) {
+    return undefined;
+  }
+  return {
+    mode: directive.mode,
+    ...(directive.persistence ? { persistence: directive.persistence } : {}),
+    ...(directive.includeAgentIds ? { includeAgentIds: [...directive.includeAgentIds] } : {}),
+    ...(directive.excludeAgentIds ? { excludeAgentIds: [...directive.excludeAgentIds] } : {}),
+    ...(directive.clearsStoredPolicy ? { clearsStoredPolicy: true } : {}),
+    hasSourceText: directive.sourceText.length > 0,
+    sourceTextLength: directive.sourceText.length,
+  };
+}
+
+function formatParticipationLogPayload(payload: Record<string, unknown>): string {
+  try {
+    return JSON.stringify(payload);
+  } catch {
+    return JSON.stringify({ serializationError: true });
+  }
 }
 
 function hasBundledMatrixReplacementRelation(event: MatrixRawEvent) {
@@ -354,6 +781,31 @@ function resolveMatrixAllowBotsMode(value?: boolean | "mentions"): MatrixAllowBo
   return "off";
 }
 
+function isMatrixRoomControlEnabledForThresholds(params: {
+  enabled: boolean;
+  roomMemberCount: number | null;
+  agentMemberCount: number | null;
+  minRoomMembers?: number;
+  minAgentMembers?: number;
+}): boolean {
+  if (!params.enabled) {
+    return false;
+  }
+  const minRoomMembers = Math.max(0, params.minRoomMembers ?? 0);
+  if (minRoomMembers > 0) {
+    if (params.roomMemberCount === null || params.roomMemberCount < minRoomMembers) {
+      return false;
+    }
+  }
+  const minAgentMembers = Math.max(0, params.minAgentMembers ?? 0);
+  if (minAgentMembers > 0) {
+    if (params.agentMemberCount === null || params.agentMemberCount < minAgentMembers) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParams) {
   const {
     client,
@@ -380,6 +832,23 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     textLimit,
     mediaMaxBytes,
     historyLimit,
+    participationEnabled = true,
+    participationMinRoomMembers = 0,
+    participationMinAgentMembers = 0,
+    participationStrategy = "ai-first",
+    participationModel,
+    participationPersistence: _participationPersistence = "always",
+    participationStateStore,
+    freshnessEnabled = true,
+    freshnessMinRoomMembers = 0,
+    freshnessMinAgentMembers = 0,
+    freshnessMode = "auto",
+    freshnessScope: _freshnessScope = "room",
+    draftHoldbackMs = 0,
+    freshnessAllowedFinalActions,
+    freshnessModel,
+    aiDeterminesFinalAction = false,
+    freshnessFinalAction,
     startupMs,
     startupGraceMs,
     dropPreStartupMessages,
@@ -390,6 +859,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     needsRoomAliasesForConfig,
     resolveLiveUserAllowlist = resolveMatrixMonitorLiveUserAllowlist,
   } = params;
+  const resolvedFreshnessAllowedFinalActions =
+    sanitizeMatrixFinalFreshnessActions(
+      freshnessAllowedFinalActions ?? (freshnessFinalAction ? [freshnessFinalAction] : undefined),
+    ) ?? MATRIX_DEFAULT_ALLOWED_FINAL_FRESHNESS_ACTIONS;
   const contextVisibilityMode = resolveChannelContextVisibilityMode({
     cfg,
     channel: "matrix",
@@ -436,7 +909,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     logVerboseMessage,
   });
   const roomHistoryTracker = createRoomHistoryTracker();
+  const latestVisibleTracker = createMatrixLatestVisibleTracker();
   const roomIngressTails = new Map<string, Promise<void>>();
+  const activeRoomRunControllers = new Map<string, AbortController>();
   const sharedDmContextNoticeRooms = new Set<string>();
 
   const readStoreAllowFrom = async (): Promise<string[]> => {
@@ -502,6 +977,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     let claimedInboundEvent = false;
     let draftStreamRef: MatrixDraftStreamHandle | undefined;
     let draftConsumed = false;
+    let currentRoomRunAbortController: AbortController | undefined;
     try {
       const eventType = event.type;
       if (eventType === EventType.RoomMessageEncrypted) {
@@ -610,6 +1086,24 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         const isDirectMessage = params.isDirectMessage;
         const isRoom = !isDirectMessage;
         const { locationPayload, selfUserId } = params;
+        let joinedMembersForControl: string[] | null | undefined;
+        const getJoinedMembersForControl = async (): Promise<string[] | null> => {
+          if (!isRoom) {
+            return null;
+          }
+          if (joinedMembersForControl !== undefined) {
+            return joinedMembersForControl;
+          }
+          if (directTracker.getJoinedMembers) {
+            joinedMembersForControl = await directTracker.getJoinedMembers(roomId);
+            return joinedMembersForControl;
+          }
+          const count = directTracker.getJoinedMemberCount
+            ? await directTracker.getJoinedMemberCount(roomId)
+            : null;
+          joinedMembersForControl = count === null ? null : [];
+          return joinedMembersForControl;
+        };
         if (isRoom && groupPolicy === "disabled") {
           await commitInboundEventIfClaimed();
           return undefined;
@@ -673,7 +1167,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         };
         const storeAllowFrom = isDirectMessage ? await readStoreAllowFrom() : [];
         const roomUsers = roomConfig?.users ?? [];
-        const liveCfg = core.config.current() as CoreConfig;
+        const liveCfg = core.config.loadConfig() as CoreConfig;
         const liveAccountAllowlists = resolveMatrixAccountAllowlistConfig({
           cfg: liveCfg,
           accountId,
@@ -968,7 +1462,289 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           commandAuthorized &&
           hasControlCommandInMessage;
         const canDetectMention = agentMentionRegexes.length > 0 || hasExplicitMention;
-        if (isRoom && shouldRequireMention && !wasMentioned && !shouldBypassMention) {
+        const availableParticipationAgents = (
+          (
+            cfg as {
+              agents?: {
+                list?: Array<{
+                  id?: unknown;
+                  groupChat?: { mentionPatterns?: unknown };
+                }>;
+              };
+            }
+          ).agents?.list ?? []
+        )
+          .map((entry) => ({
+            agentId: typeof entry.id === "string" ? entry.id : "",
+            aliases: Array.isArray(entry.groupChat?.mentionPatterns)
+              ? entry.groupChat.mentionPatterns.filter(
+                  (value): value is string => typeof value === "string",
+                )
+              : [],
+          }))
+          .filter((entry) => entry.agentId);
+        const explicitlyMentionedParticipationAgents =
+          hasExplicitMention && !/@room/i.test(mentionPrecheckText)
+            ? findParticipationMentionedAgents({
+                text: mentionPrecheckText,
+                availableAgents: availableParticipationAgents,
+              })
+            : [];
+        const recentParticipationHistory =
+          isRoom && historyLimit > 0
+            ? roomHistoryTracker.getPendingHistory(_route.agentId, roomId, historyLimit).slice(-6)
+            : [];
+        const joinedMembersForControls =
+          isRoom &&
+          (participationMinRoomMembers > 0 ||
+            participationMinAgentMembers > 0 ||
+            freshnessMinRoomMembers > 0 ||
+            freshnessMinAgentMembers > 0)
+            ? await getJoinedMembersForControl()
+            : null;
+        const roomMemberCountForControls = joinedMembersForControls?.length ?? null;
+        const agentMemberCountForControls = joinedMembersForControls
+          ? joinedMembersForControls.filter((memberId) => configuredBotUserIds.has(memberId)).length
+          : null;
+        const effectiveParticipationEnabled = isRoom
+          ? isMatrixRoomControlEnabledForThresholds({
+              enabled: participationEnabled,
+              roomMemberCount: roomMemberCountForControls,
+              agentMemberCount: agentMemberCountForControls,
+              minRoomMembers: participationMinRoomMembers,
+              minAgentMembers: participationMinAgentMembers,
+            })
+          : participationEnabled;
+        const effectiveFreshnessEnabled = isRoom
+          ? isMatrixRoomControlEnabledForThresholds({
+              enabled: freshnessEnabled,
+              roomMemberCount: roomMemberCountForControls,
+              agentMemberCount: agentMemberCountForControls,
+              minRoomMembers: freshnessMinRoomMembers,
+              minAgentMembers: freshnessMinAgentMembers,
+            })
+          : freshnessEnabled;
+        if (
+          isRoom &&
+          (effectiveParticipationEnabled !== participationEnabled ||
+            effectiveFreshnessEnabled !== freshnessEnabled)
+        ) {
+          logger.info(
+            `matrix room controls threshold decision ${formatParticipationLogPayload({
+              roomId,
+              eventId: _messageId,
+              agentId: _route.agentId,
+              roomMemberCount: roomMemberCountForControls,
+              agentMemberCount: agentMemberCountForControls,
+              participationEnabled,
+              effectiveParticipationEnabled,
+              participationMinRoomMembers,
+              participationMinAgentMembers,
+              freshnessEnabled,
+              effectiveFreshnessEnabled,
+              freshnessMinRoomMembers,
+              freshnessMinAgentMembers,
+            })}`,
+          );
+        }
+        const participationDirectivesAllowedFromSender = !isConfiguredBotSender;
+        const usesAiParticipation =
+          participationStrategy === "ai-first" ||
+          participationStrategy === "ai-delivery-gate" ||
+          participationStrategy === "deterministic-then-ai";
+        const usesDeterministicParticipation =
+          participationStrategy === "deterministic" ||
+          participationStrategy === "deterministic-then-ai";
+        const deterministicParticipationDirective =
+          isRoom &&
+          effectiveParticipationEnabled &&
+          participationDirectivesAllowedFromSender &&
+          usesDeterministicParticipation
+            ? parseParticipationDirective({
+                text: mentionPrecheckText,
+                availableAgents: availableParticipationAgents,
+                explicitMentionOnly: explicitlyMentionedParticipationAgents.length > 0,
+              })
+            : undefined;
+        const applyParticipationDirectiveToStore = async (directive?: ParticipationDirective) => {
+          if (
+            !(isRoom && directive && _participationPersistence !== "off" && participationStateStore)
+          ) {
+            return;
+          }
+          const stateAction =
+            directive.mode === "open" || directive.clearsStoredPolicy
+              ? "clear"
+              : directive.persistence === "room"
+                ? "persist"
+                : "skip-message-scope";
+          try {
+            await participationStateStore.applyDirective({
+              roomId,
+              directive,
+              senderId,
+            });
+            logger.info(
+              `matrix participation state write ${formatParticipationLogPayload({
+                roomId,
+                eventId: _messageId,
+                agentId: _route.agentId,
+                strategy: participationStrategy,
+                persistenceMode: _participationPersistence,
+                stateAction,
+                stateWritePath: participationStateStore.storagePath,
+                directive: sanitizeParticipationDirectiveForLog(directive),
+              })}`,
+            );
+          } catch (err) {
+            logVerboseMessage(
+              `matrix: failed updating participation state room=${roomId} (${String(err)})`,
+            );
+            logger.warn(
+              `matrix participation state write failed ${formatParticipationLogPayload({
+                roomId,
+                eventId: _messageId,
+                agentId: _route.agentId,
+                strategy: participationStrategy,
+                persistenceMode: _participationPersistence,
+                stateAction,
+                stateWritePath: participationStateStore.storagePath,
+                directive: sanitizeParticipationDirectiveForLog(directive),
+                error: String(err),
+              })}`,
+            );
+          }
+        };
+        const storedParticipationDirectivePromise =
+          isRoom &&
+          effectiveParticipationEnabled &&
+          _participationPersistence !== "off" &&
+          participationStateStore
+            ? participationStateStore.getRoomPolicy({ roomId })
+            : Promise.resolve(undefined);
+        let aiParticipationAbortSignal: AbortSignal | undefined;
+        const resolveAiParticipationDecision = async () => {
+          const storedDirective = await storedParticipationDirectivePromise;
+          const aiDirective =
+            isRoom &&
+            effectiveParticipationEnabled &&
+            participationDirectivesAllowedFromSender &&
+            usesAiParticipation
+              ? await parseParticipationDirectiveWithAiOverride({
+                  text: mentionPrecheckText,
+                  availableAgents: availableParticipationAgents,
+                  strategy: participationStrategy,
+                  cfg: cfg as never,
+                  agentId: _route.agentId,
+                  modelRef: participationModel,
+                  abortSignal: aiParticipationAbortSignal,
+                  explicitMentionedAgentIds: explicitlyMentionedParticipationAgents,
+                  recentHistory: recentParticipationHistory,
+                  log: logVerboseMessage,
+                })
+              : undefined;
+          await applyParticipationDirectiveToStore(aiDirective);
+          if (aiDirective) {
+            const changed =
+              JSON.stringify(aiDirective) !== JSON.stringify(deterministicParticipationDirective);
+            if (changed) {
+              logVerboseMessage(
+                `matrix: ai participation override applied room=${roomId} mode=${aiDirective.mode} persistence=${aiDirective.persistence}`,
+              );
+            }
+          }
+          return {
+            directive: aiDirective,
+            decision:
+              isRoom && effectiveParticipationEnabled
+                ? resolveParticipationDecision({
+                    agentId: _route.agentId,
+                    availableAgents: availableParticipationAgents,
+                    currentDirective: aiDirective,
+                    storedDirective,
+                  })
+                : {
+                    shouldSuppress: false,
+                    matchedAgentIds: [],
+                    currentDirective: undefined,
+                    storedDirective: undefined,
+                  },
+          };
+        };
+        let aiParticipationDecisionPromise:
+          | ReturnType<typeof resolveAiParticipationDecision>
+          | undefined;
+        const getAiParticipationDecision = () => {
+          if (!usesAiParticipation) {
+            return Promise.resolve(undefined);
+          }
+          aiParticipationDecisionPromise ??= resolveAiParticipationDecision();
+          return aiParticipationDecisionPromise;
+        };
+        const currentParticipationDirective =
+          participationStrategy === "deterministic" ||
+          participationStrategy === "deterministic-then-ai"
+            ? deterministicParticipationDirective
+            : participationStrategy === "ai-first"
+              ? (await getAiParticipationDecision())?.directive
+              : undefined;
+        const storedParticipationDirective = await storedParticipationDirectivePromise;
+        const participationDecision =
+          isRoom && effectiveParticipationEnabled
+            ? resolveParticipationDecision({
+                agentId: _route.agentId,
+                availableAgents: availableParticipationAgents,
+                currentDirective: currentParticipationDirective,
+                storedDirective: storedParticipationDirective,
+              })
+            : {
+                shouldSuppress: false,
+                matchedAgentIds: [],
+                currentDirective: undefined,
+                storedDirective: undefined,
+              };
+        if (participationStrategy !== "ai-delivery-gate") {
+          await applyParticipationDirectiveToStore(currentParticipationDirective);
+        }
+        if (isRoom && effectiveParticipationEnabled) {
+          logger.info(
+            `matrix participation decision ${formatParticipationLogPayload({
+              roomId,
+              eventId: _messageId,
+              agentId: _route.agentId,
+              strategy: participationStrategy,
+              persistenceMode: _participationPersistence,
+              stateWritePath: participationStateStore?.storagePath,
+              deterministicDirective: sanitizeParticipationDirectiveForLog(
+                deterministicParticipationDirective,
+              ),
+              currentDirective: sanitizeParticipationDirectiveForLog(
+                participationDecision.currentDirective,
+              ),
+              storedDirective: sanitizeParticipationDirectiveForLog(
+                participationDecision.storedDirective,
+              ),
+              allowed: !participationDecision.shouldSuppress,
+              suppressed: participationDecision.shouldSuppress,
+              matchedAgentIds: participationDecision.matchedAgentIds,
+            })}`,
+          );
+        }
+        const deliveryGateParticipationResolver =
+          participationStrategy === "ai-delivery-gate" ||
+          (participationStrategy === "deterministic-then-ai" &&
+            !participationDecision.shouldSuppress)
+            ? getAiParticipationDecision
+            : undefined;
+        const preDispatchSuppressedByParticipation =
+          isRoom &&
+          participationDecision.shouldSuppress &&
+          participationStrategy !== "ai-delivery-gate" &&
+          participationStrategy !== "deterministic-then-ai";
+        if (preDispatchSuppressedByParticipation) {
+          if (effectiveFreshnessEnabled && _freshnessScope === "thread-aware") {
+            latestVisibleTracker.recordPending(roomId, event);
+          }
           const pendingHistoryBody = pendingHistoryText || pendingHistoryPollText;
           if (historyLimit > 0 && pendingHistoryBody) {
             const pendingEntry: HistoryEntry = {
@@ -979,7 +1755,66 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             };
             roomHistoryTracker.recordPending(roomId, pendingEntry);
           }
-          logger.info("skipping room message", { roomId, reason: "no-mention" });
+          const participationDirective =
+            participationDecision.currentDirective ?? participationDecision.storedDirective;
+          logger.info(
+            `skipping room message (reason=participation-policy room=${roomId} agent=${_route.agentId} mode=${participationDirective?.mode ?? "none"} persistence=${participationDirective?.persistence ?? "none"} matched=${participationDecision.matchedAgentIds.join(",") || "-"})`,
+          );
+          await commitInboundEventIfClaimed();
+          return undefined;
+        }
+        if (
+          isRoom &&
+          participationDecision.shouldSuppress &&
+          participationStrategy === "deterministic-then-ai"
+        ) {
+          const aiGateResult = await getAiParticipationDecision();
+          if (aiGateResult?.decision.shouldSuppress !== false) {
+            if (effectiveFreshnessEnabled && _freshnessScope === "thread-aware") {
+              latestVisibleTracker.recordPending(roomId, event);
+            }
+            const pendingHistoryBody = pendingHistoryText || pendingHistoryPollText;
+            if (historyLimit > 0 && pendingHistoryBody) {
+              const pendingEntry: HistoryEntry = {
+                sender: senderId,
+                body: pendingHistoryBody,
+                timestamp: eventTs ?? undefined,
+                messageId: _messageId,
+              };
+              roomHistoryTracker.recordPending(roomId, pendingEntry);
+            }
+            const participationDirective =
+              aiGateResult?.decision.currentDirective ??
+              aiGateResult?.decision.storedDirective ??
+              participationDecision.currentDirective ??
+              participationDecision.storedDirective;
+            logger.info(
+              `skipping room message (reason=participation-policy room=${roomId} agent=${_route.agentId} mode=${participationDirective?.mode ?? "none"} persistence=${participationDirective?.persistence ?? "none"} matched=${aiGateResult?.decision.matchedAgentIds.join(",") || participationDecision.matchedAgentIds.join(",") || "-"})`,
+            );
+            await commitInboundEventIfClaimed();
+            return undefined;
+          }
+          logVerboseMessage(
+            `matrix: deterministic participation suppressed agent=${_route.agentId}, ai final gate allowed late dispatch room=${roomId}`,
+          );
+        }
+        if (isRoom && shouldRequireMention && !wasMentioned && !shouldBypassMention) {
+          if (effectiveFreshnessEnabled && _freshnessScope === "thread-aware") {
+            latestVisibleTracker.recordPending(roomId, event);
+          }
+          const pendingHistoryBody = pendingHistoryText || pendingHistoryPollText;
+          if (historyLimit > 0 && pendingHistoryBody) {
+            const pendingEntry: HistoryEntry = {
+              sender: senderId,
+              body: pendingHistoryBody,
+              timestamp: eventTs ?? undefined,
+              messageId: _messageId,
+            };
+            roomHistoryTracker.recordPending(roomId, pendingEntry);
+          }
+          logger.info(
+            `skipping room message (reason=no-mention room=${roomId} agent=${_route.agentId})`,
+          );
           await commitInboundEventIfClaimed();
           return undefined;
         }
@@ -1093,7 +1928,15 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 messageId: _messageId,
               })
             : undefined;
+        const latestVisibleTriggerSnapshot =
+          isRoom && effectiveFreshnessEnabled && _freshnessScope === "thread-aware"
+            ? latestVisibleTracker.prepareTrigger(_route.agentId, roomId, event)
+            : undefined;
         const inboundHistory = preparedTrigger?.history;
+        const draftFreshnessSnapshot: MatrixDraftFreshnessSnapshot = {
+          hadVisibleRoomHistoryAtTrigger: Boolean(inboundHistory?.length),
+          visibleRoomHistoryCountAtTrigger: inboundHistory?.length ?? 0,
+        };
         const triggerSnapshot = preparedTrigger;
 
         return {
@@ -1102,23 +1945,32 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           roomConfig,
           isDirectMessage,
           isRoom,
+          selfUserId,
           shouldRequireMention,
           wasMentioned,
           shouldBypassMention,
           canDetectMention,
           commandAuthorized,
           inboundHistory,
+          draftFreshnessSnapshot,
+          latestVisibleTriggerSnapshot,
           senderName,
           bodyText,
           commandBodyText,
           media,
           locationPayload,
           messageId: _messageId,
+          deliveryGateParticipationResolver,
+          setDeliveryGateParticipationAbortSignal: (signal?: AbortSignal) => {
+            aiParticipationAbortSignal = signal;
+          },
           triggerSnapshot,
           threadRootId: _threadRootId,
           thread,
           effectiveGroupAllowFrom,
           effectiveRoomUsers,
+          effectiveParticipationEnabled,
+          effectiveFreshnessEnabled,
         };
       };
       const ingressResult =
@@ -1156,28 +2008,39 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         roomConfig,
         isDirectMessage,
         isRoom,
+        selfUserId,
         shouldRequireMention,
         wasMentioned,
         shouldBypassMention,
         canDetectMention,
         commandAuthorized,
         inboundHistory,
+        draftFreshnessSnapshot,
+        latestVisibleTriggerSnapshot,
         senderName,
         bodyText,
         commandBodyText,
         media,
         locationPayload,
         messageId: _messageId,
+        deliveryGateParticipationResolver,
+        setDeliveryGateParticipationAbortSignal,
         triggerSnapshot,
         threadRootId: _threadRootId,
         thread,
         effectiveGroupAllowFrom,
         effectiveRoomUsers,
+        effectiveParticipationEnabled,
+        effectiveFreshnessEnabled,
       } = resolvedIngressResult;
 
       // Keep the per-room ingress gate focused on ordering-sensitive state updates.
       // Prompt/session enrichment below can run concurrently after the history snapshot is fixed.
       const replyToEventId = resolveMatrixReplyToEventId(event.content as RoomMessageEventContent);
+      let latestDraftFreshnessState = computeMatrixDraftFreshnessState({
+        snapshot: draftFreshnessSnapshot,
+        latestVisibleRoomHistoryCount: draftFreshnessSnapshot.visibleRoomHistoryCountAtTrigger,
+      });
       const threadTarget = thread.threadId;
       const isRoomContextSenderAllowed = (contextSenderId?: string): boolean => {
         if (!isRoom || !contextSenderId) {
@@ -1230,7 +2093,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         replyToEventId === _threadRootId &&
         threadContextBlockedByPolicy
       ) {
-        replyContext = await resolveReplyContext({ roomId, eventId: replyToEventId });
+        replyContext = await resolveReplyContext({
+          roomId,
+          eventId: replyToEventId,
+        });
       } else {
         replyContext = replyToEventId
           ? await resolveReplyContext({ roomId, eventId: replyToEventId })
@@ -1356,8 +2222,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           });
       }
 
-      const preview = bodyText.slice(0, 200).replace(/\n/g, "\\n");
-      logVerboseMessage(`matrix inbound: room=${roomId} from=${senderId} preview="${preview}"`);
+      logVerboseMessage(
+        `matrix inbound: room=${roomId} from=${senderId} bodyLength=${bodyText.length}`,
+      );
 
       const replyTarget = ctxPayload.To;
       if (!replyTarget) {
@@ -1404,6 +2271,106 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           });
       }
 
+      const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+      const getLatestPendingHistoryExcludingCurrentTrigger = () => {
+        const latestPendingHistory = roomHistoryTracker.getPendingHistory(
+          _route.agentId,
+          roomId,
+          historyLimit,
+        );
+        if (!_messageId) {
+          return latestPendingHistory;
+        }
+        return latestPendingHistory.filter((entry) => entry.messageId !== _messageId);
+      };
+      const getRoomHistoryAfterCurrentTrigger = () =>
+        triggerSnapshot
+          ? roomHistoryTracker.getHistoryAfterSnapshot(roomId, triggerSnapshot, historyLimit)
+          : [];
+      const getLatestPendingEventsAfterCurrentTrigger = () => {
+        const latestPendingEvents = latestVisibleTriggerSnapshot
+          ? latestVisibleTracker.getEventsAfterSnapshot(roomId, latestVisibleTriggerSnapshot)
+          : latestVisibleTracker.getPendingEvents(_route.agentId, roomId);
+        if (!_messageId) {
+          return latestPendingEvents;
+        }
+        return latestPendingEvents.filter((pendingEvent) => pendingEvent.event_id !== _messageId);
+      };
+      const effectiveDraftHoldbackMs = Math.max(0, draftHoldbackMs ?? 0);
+      const logFreshnessDecision = (payload: Record<string, unknown>) => {
+        logger.info(
+          `matrix freshness decision ${formatParticipationLogPayload({
+            roomId,
+            eventId: _messageId,
+            agentId: _route.agentId,
+            enabled: effectiveFreshnessEnabled,
+            mode: freshnessMode,
+            scope: _freshnessScope,
+            historyLimit,
+            draftHoldbackMs: effectiveDraftHoldbackMs,
+            allowedFinalActions: resolvedFreshnessAllowedFinalActions,
+            aiDeterminesFinalAction,
+            configuredFinalAction: freshnessFinalAction,
+            ...payload,
+          })}`,
+        );
+      };
+      const computePreDraftRoomChanged = () => {
+        if (!(isRoom && historyLimit > 0 && effectiveFreshnessEnabled)) {
+          return false;
+        }
+        if (_freshnessScope === "thread-aware") {
+          const latestPendingEvents = getLatestPendingEventsAfterCurrentTrigger();
+          const draftScope = resolveMatrixDraftFreshnessScope({
+            threadId: typeof threadTarget === "string" ? threadTarget : undefined,
+          });
+          const protectedEventIds = resolveMatrixFreshnessProtectedEventIds({
+            threadId: typeof threadTarget === "string" ? threadTarget : undefined,
+            replyToEventId,
+          });
+          return latestPendingEvents
+            .map((pendingEvent) =>
+              evaluateMatrixFreshnessObservation({
+                draftScope,
+                event: pendingEvent,
+                selfUserId,
+                protectedEventIds,
+              }),
+            )
+            .some((decision) => decision.action !== "ignore");
+        }
+        const roomHistoryAfterTrigger = getRoomHistoryAfterCurrentTrigger();
+        return computeMatrixDraftFreshnessState({
+          snapshot: draftFreshnessSnapshot,
+          latestVisibleRoomHistoryCount:
+            draftFreshnessSnapshot.visibleRoomHistoryCountAtTrigger +
+            roomHistoryAfterTrigger.length,
+          roomHistoryEventsAfterTrigger: roomHistoryAfterTrigger.length,
+        }).roomChangedSinceDraftStart;
+      };
+      if (isRoom && effectiveDraftHoldbackMs > 0) {
+        await sleep(effectiveDraftHoldbackMs);
+        const preDraftRoomChanged = computePreDraftRoomChanged();
+        if (preDraftRoomChanged && freshnessMode === "send-as-is") {
+          logFreshnessDecision({
+            stage: "pre-draft-holdback",
+            action: "send-as-is",
+            roomChanged: true,
+          });
+        } else if (preDraftRoomChanged) {
+          logVerboseMessage(
+            `matrix suppressing turn before draft start after holdback room=${roomId}`,
+          );
+          logFreshnessDecision({
+            stage: "pre-draft-holdback",
+            action: "suppress",
+            roomChanged: true,
+          });
+          await commitInboundEventIfClaimed();
+          return;
+        }
+      }
+
       const tableMode = core.channel.text.resolveMarkdownTableMode({
         cfg,
         channel: "matrix",
@@ -1413,12 +2380,67 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       let finalReplyDeliveryFailed = false;
       let nonFinalReplyDeliveryFailed = false;
       let retryableReplyDeliveryFailed = false;
+      let participationDeliverySuppressed = false;
+      const shouldDeliverByParticipationGate = async () => {
+        if (!deliveryGateParticipationResolver) {
+          return true;
+        }
+        const gate = await deliveryGateParticipationResolver();
+        if (!gate?.decision.shouldSuppress) {
+          return true;
+        }
+        participationDeliverySuppressed = true;
+        const participationDirective =
+          gate.decision.currentDirective ?? gate.decision.storedDirective ?? gate.directive;
+        logger.info(
+          `suppressing matrix reply delivery (reason=participation-delivery-gate room=${roomId} agent=${_route.agentId} mode=${participationDirective?.mode ?? "none"} persistence=${participationDirective?.persistence ?? "none"} matched=${gate.decision.matchedAgentIds.join(",") || "-"}) ${formatParticipationLogPayload(
+            {
+              roomId,
+              eventId: _messageId,
+              agentId: _route.agentId,
+              strategy: participationStrategy,
+              persistenceMode: _participationPersistence,
+              stateWritePath: participationStateStore?.storagePath,
+              directive: sanitizeParticipationDirectiveForLog(participationDirective),
+              allowed: false,
+              suppressed: true,
+              matchedAgentIds: gate.decision.matchedAgentIds,
+            },
+          )}`,
+        );
+        return false;
+      };
       const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
         cfg,
         agentId: _route.agentId,
         channel: "matrix",
         accountId: _route.accountId,
       });
+      const isSteerCommand = /^\/steer(?:\s|$)/i.test(commandBodyText.trim());
+      if (
+        isRoom &&
+        effectiveParticipationEnabled &&
+        !configuredBotUserIds.has(senderId) &&
+        !isSteerCommand
+      ) {
+        const previousController = activeRoomRunControllers.get(roomId);
+        if (previousController && !previousController.signal.aborted) {
+          previousController.abort();
+          logVerboseMessage(
+            `matrix: aborted prior room run after newer human message room=${roomId}`,
+          );
+        }
+        currentRoomRunAbortController = new AbortController();
+        activeRoomRunControllers.set(roomId, currentRoomRunAbortController);
+      }
+      if (deliveryGateParticipationResolver) {
+        setDeliveryGateParticipationAbortSignal(currentRoomRunAbortController?.signal);
+        void deliveryGateParticipationResolver().catch((err) => {
+          logVerboseMessage(
+            `matrix: speculative participation delivery gate failed room=${roomId} agent=${_route.agentId} error=${String(err)}`,
+          );
+        });
+      }
       const typingCallbacks = createTypingCallbacks({
         start: async () => {
           const { sendTypingMatrix } = await loadMatrixSendModule();
@@ -1541,11 +2563,198 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         latestDraftFullText = "";
       };
 
+      const refreshDraftFreshnessState = () => {
+        if (!(isRoom && historyLimit > 0 && effectiveFreshnessEnabled)) {
+          latestDraftFreshnessState = computeMatrixDraftFreshnessState({
+            snapshot: draftFreshnessSnapshot,
+            latestVisibleRoomHistoryCount: draftFreshnessSnapshot.visibleRoomHistoryCountAtTrigger,
+          });
+          return;
+        }
+        const roomHistoryAfterTrigger = getRoomHistoryAfterCurrentTrigger();
+        const latestVisibleRoomHistoryCount =
+          draftFreshnessSnapshot.visibleRoomHistoryCountAtTrigger + roomHistoryAfterTrigger.length;
+        if (_freshnessScope === "thread-aware") {
+          const latestPendingEvents = getLatestPendingEventsAfterCurrentTrigger();
+          const draftScope = resolveMatrixDraftFreshnessScope({
+            threadId: typeof threadTarget === "string" ? threadTarget : undefined,
+          });
+          const protectedEventIds = resolveMatrixFreshnessProtectedEventIds({
+            threadId: typeof threadTarget === "string" ? threadTarget : undefined,
+            replyToEventId,
+          });
+          const draftEventId = draftStream?.eventId();
+          const ignoredEventIds = draftEventId ? [draftEventId] : [];
+          const significantObservations = latestPendingEvents
+            .map((pendingEvent) =>
+              evaluateMatrixFreshnessObservation({
+                draftScope,
+                event: pendingEvent,
+                selfUserId,
+                ignoredEventIds,
+                protectedEventIds,
+              }),
+            )
+            .filter((decision) => decision.action !== "ignore");
+          latestDraftFreshnessState = {
+            ...computeMatrixDraftFreshnessState({
+              snapshot: draftFreshnessSnapshot,
+              latestVisibleRoomHistoryCount,
+              roomHistoryEventsAfterTrigger: roomHistoryAfterTrigger.length,
+            }),
+            roomChangedSinceDraftStart: significantObservations.length > 0,
+            visibleRoomHistoryCountAtDelivery:
+              significantObservations.length > 0
+                ? draftFreshnessSnapshot.visibleRoomHistoryCountAtTrigger +
+                  significantObservations.length
+                : latestVisibleRoomHistoryCount,
+          };
+          return;
+        }
+        latestDraftFreshnessState = computeMatrixDraftFreshnessState({
+          snapshot: draftFreshnessSnapshot,
+          latestVisibleRoomHistoryCount,
+          roomHistoryEventsAfterTrigger: roomHistoryAfterTrigger.length,
+        });
+      };
+
+      let visibleReplyOutputStarted = false;
+      let finalFreshnessRecheckDone = false;
+      const reviseFinalReplyWithFreshness = async (): Promise<ReplyPayload | undefined> => {
+        const rerunResult = await getReplyFromConfig(
+          {
+            ...ctxPayload,
+            BodyForAgent: buildMatrixFinalFreshnessReviseBodyForAgent(
+              ctxPayload as Record<string, unknown>,
+            ),
+            InboundHistory:
+              isRoom && historyLimit > 0
+                ? getLatestPendingHistoryExcludingCurrentTrigger()
+                : undefined,
+          },
+          {
+            skillFilter: roomConfig?.skills,
+            disableBlockStreaming: true,
+            onModelSelected,
+          },
+        );
+        if (!rerunResult || Array.isArray(rerunResult)) {
+          return undefined;
+        }
+        const revisedPayload = rerunResult as ReplyPayload;
+        if ((revisedPayload.text ?? "") === "NO_REPLY") {
+          return undefined;
+        }
+        return revisedPayload;
+      };
+
+      const replyResolver =
+        isRoom && historyLimit > 0 && effectiveFreshnessEnabled
+          ? createMatrixFreshnessAwareReplyResolver({
+              baseResolver: getReplyFromConfig,
+              snapshot: draftFreshnessSnapshot,
+              freshnessMode: freshnessMode as MatrixFreshnessMode,
+              freshnessScope: _freshnessScope,
+              threadId: typeof threadTarget === "string" ? threadTarget : undefined,
+              replyToEventId,
+              selfUserId,
+              getIgnoredEventIds: () => {
+                const draftEventId = draftStream?.eventId();
+                return draftEventId ? [draftEventId] : [];
+              },
+              getLatestPendingHistory: getLatestPendingHistoryExcludingCurrentTrigger,
+              getRoomHistoryAfterTrigger: getRoomHistoryAfterCurrentTrigger,
+              getLatestPendingEvents:
+                _freshnessScope === "thread-aware"
+                  ? getLatestPendingEventsAfterCurrentTrigger
+                  : undefined,
+              updateLatestState: (state) => {
+                latestDraftFreshnessState = state;
+              },
+              logVerboseMessage,
+              logFreshnessDecision,
+            })
+          : undefined;
+
       const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
         core.channel.reply.createReplyDispatcherWithTyping({
           ...prefixOptions,
           humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, _route.agentId),
           deliver: async (payload: ReplyPayload, info: { kind: string }) => {
+            if (info.kind === "block" || info.kind === "tool") {
+              visibleReplyOutputStarted = true;
+            }
+            refreshDraftFreshnessState();
+            if (
+              info.kind === "final" &&
+              isRoom &&
+              historyLimit > 0 &&
+              effectiveFreshnessEnabled &&
+              latestDraftFreshnessState.roomChangedSinceDraftStart &&
+              !visibleReplyOutputStarted &&
+              !finalFreshnessRecheckDone
+            ) {
+              finalFreshnessRecheckDone = true;
+              const decidedFinalAction = await chooseMatrixFinalFreshnessAction({
+                cfg,
+                agentId: _route.agentId,
+                aiDeterminesFinalAction,
+                modelRef: freshnessModel,
+                allowedActions: resolvedFreshnessAllowedFinalActions,
+                currentReply: payload,
+                triggerBodyForAgent: resolveMatrixBodyForAgentBase(
+                  ctxPayload as Record<string, unknown>,
+                ),
+                latestPendingHistory: getLatestPendingHistoryExcludingCurrentTrigger(),
+                logVerboseMessage,
+              });
+              logFreshnessDecision({
+                stage: "final-pre-send",
+                action: decidedFinalAction ?? "send-as-is",
+                reason: decidedFinalAction ? undefined : "no-final-action-decision",
+                roomChanged: latestDraftFreshnessState.roomChangedSinceDraftStart,
+                visibleRoomHistoryCountAtTrigger:
+                  latestDraftFreshnessState.visibleRoomHistoryCountAtTrigger,
+                visibleRoomHistoryCountAtDelivery:
+                  latestDraftFreshnessState.visibleRoomHistoryCountAtDelivery,
+              });
+              if (!decidedFinalAction) {
+                logVerboseMessage(
+                  "matrix leaving final reply unchanged after pre-send freshness recheck (no AI final-action decision)",
+                );
+              } else if (decidedFinalAction === "send-as-is") {
+                logVerboseMessage(
+                  "matrix leaving final reply unchanged after pre-send freshness recheck",
+                );
+              } else if (decidedFinalAction === "suppress") {
+                logVerboseMessage(
+                  "matrix suppressing final reply after pre-send freshness recheck",
+                );
+                return;
+              } else {
+                logVerboseMessage("matrix revising final reply after pre-send freshness recheck");
+                const revisedPayload = await reviseFinalReplyWithFreshness();
+                if (!revisedPayload) {
+                  logVerboseMessage(
+                    "matrix final freshness revise produced no visible reply; keeping original final reply",
+                  );
+                } else {
+                  payload = revisedPayload;
+                  refreshDraftFreshnessState();
+                }
+              }
+            }
+            if (latestDraftFreshnessState.roomChangedSinceDraftStart) {
+              logVerboseMessage(
+                "matrix draft freshness detected room change during reply: trigger=" +
+                  String(latestDraftFreshnessState.visibleRoomHistoryCountAtTrigger) +
+                  " delivery=" +
+                  String(latestDraftFreshnessState.visibleRoomHistoryCountAtDelivery),
+              );
+            }
+            if (!(await shouldDeliverByParticipationGate())) {
+              return;
+            }
             if (draftStream && info.kind !== "tool" && !payload.isCompactionNotice) {
               const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
 
@@ -1665,7 +2874,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 await deliverMatrixReplies({
                   cfg,
                   replies: [
-                    { ...payload, text: reusesDraftAsFinalText ? undefined : payload.text },
+                    {
+                      ...payload,
+                      text: reusesDraftAsFinalText ? undefined : payload.text,
+                    },
                   ],
                   roomId,
                   client,
@@ -1760,6 +2972,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               ctx: ctxPayload,
               cfg,
               dispatcher,
+              ...(replyResolver ? { replyResolver } : {}),
               replyOptions: {
                 ...replyOptions,
                 skillFilter: roomConfig?.skills,
@@ -1791,6 +3004,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                     }
                   : undefined,
                 onModelSelected,
+                abortSignal: currentRoomRunAbortController?.signal,
               },
             });
           } finally {
@@ -1809,6 +3023,16 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         logVerboseMessage(
           `matrix: final reply delivery failed room=${roomId} id=${_messageId}; keeping replay committed`,
         );
+        await commitInboundEventIfClaimed();
+        return;
+      }
+      if (participationDeliverySuppressed) {
+        if (isRoom && triggerSnapshot) {
+          roomHistoryTracker.consumeHistory(_route.agentId, roomId, triggerSnapshot, _messageId);
+        }
+        if (isRoom && latestVisibleTriggerSnapshot) {
+          latestVisibleTracker.consume(_route.agentId, roomId, latestVisibleTriggerSnapshot);
+        }
         await commitInboundEventIfClaimed();
         return;
       }
@@ -1832,6 +3056,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       if (isRoom && triggerSnapshot) {
         roomHistoryTracker.consumeHistory(_route.agentId, roomId, triggerSnapshot, _messageId);
       }
+      if (isRoom && latestVisibleTriggerSnapshot) {
+        latestVisibleTracker.consume(_route.agentId, roomId, latestVisibleTriggerSnapshot);
+      }
       if (!queuedFinal) {
         await commitInboundEventIfClaimed();
         return;
@@ -1851,6 +3078,12 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         if (draftEventId && !draftConsumed) {
           await redactMatrixDraftEvent(client, roomId, draftEventId);
         }
+      }
+      if (
+        currentRoomRunAbortController &&
+        activeRoomRunControllers.get(roomId) === currentRoomRunAbortController
+      ) {
+        activeRoomRunControllers.delete(roomId);
       }
       if (claimedInboundEvent && inboundDeduper && eventId) {
         inboundDeduper.releaseEvent({ roomId, eventId });

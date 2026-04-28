@@ -31,6 +31,39 @@ const matrixThreadBindingsSchema = z
   })
   .optional();
 
+const matrixParticipationSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    strategy: z
+      .enum(["ai-first", "deterministic", "ai-delivery-gate", "deterministic-then-ai"])
+      .optional(),
+    model: z.string().min(1).optional(),
+    minRoomMembers: z.number().int().nonnegative().optional(),
+    minAgentMembers: z.number().int().nonnegative().optional(),
+    persistence: z.enum(["off", "explicit", "always"]).optional(),
+  })
+  .strict()
+  .optional();
+
+const matrixFreshnessSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    mode: z.enum(["revise", "suppress", "auto", "send-as-is"]).optional(),
+    scope: z.enum(["room", "thread-aware"]).optional(),
+    draftHoldbackMs: z.number().int().nonnegative().optional(),
+    model: z.string().min(1).optional(),
+    minRoomMembers: z.number().int().nonnegative().optional(),
+    minAgentMembers: z.number().int().nonnegative().optional(),
+    allowedFinalActions: z
+      .array(z.enum(["revise", "suppress", "send-as-is"]))
+      .min(1)
+      .optional(),
+    aiDeterminesFinalAction: z.boolean().optional(),
+    finalAction: z.enum(["revise", "suppress", "send-as-is"]).optional(),
+  })
+  .strict()
+  .optional();
+
 const matrixExecApprovalsSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -96,6 +129,8 @@ export const MatrixConfigSchema = z.object({
     .optional(),
   reactionNotifications: z.enum(["off", "own"]).optional(),
   threadBindings: matrixThreadBindingsSchema,
+  participation: matrixParticipationSchema,
+  freshness: matrixFreshnessSchema,
   startupVerification: z.enum(["off", "if-unverified"]).optional(),
   startupVerificationCooldownHours: z.number().optional(),
   mediaMaxMb: z.number().optional(),

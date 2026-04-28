@@ -1,8 +1,14 @@
 import { vi } from "vitest";
 import type { RuntimeEnv, RuntimeLogger } from "../../runtime-api.js";
 import type { MatrixRoomConfig, MatrixStreamingMode, ReplyToMode } from "../../types.js";
+import type {
+  MatrixFreshnessFinalAction,
+  MatrixFreshnessMode,
+  MatrixFreshnessScope,
+} from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
 import { createMatrixRoomMessageHandler, type MatrixMonitorHandlerParams } from "./handler.js";
+import type { ParticipationParseStrategy } from "./participation-policy.js";
 import { EventType, type MatrixRawEvent, type RoomMessageEventContent } from "./types.js";
 
 const DEFAULT_ROUTE = {
@@ -46,6 +52,23 @@ type MatrixHandlerTestHarnessOptions = {
   needsRoomAliasesForConfig?: boolean;
   isDirectMessage?: boolean;
   historyLimit?: number;
+  freshnessEnabled?: boolean;
+  freshnessMinRoomMembers?: number;
+  freshnessMinAgentMembers?: number;
+  freshnessMode?: MatrixFreshnessMode;
+  freshnessScope?: MatrixFreshnessScope;
+  draftHoldbackMs?: number;
+  freshnessAllowedFinalActions?: MatrixFreshnessFinalAction[];
+  freshnessModel?: string;
+  aiDeterminesFinalAction?: boolean;
+  freshnessFinalAction?: MatrixFreshnessFinalAction;
+  participationEnabled?: boolean;
+  participationMinRoomMembers?: number;
+  participationMinAgentMembers?: number;
+  participationStrategy?: ParticipationParseStrategy;
+  participationModel?: string;
+  participationPersistence?: "off" | "explicit" | "always";
+  participationStateStore?: MatrixMonitorHandlerParams["participationStateStore"];
   readAllowFromStore?: MatrixMonitorHandlerParams["core"]["channel"]["pairing"]["readAllowFromStore"];
   upsertPairingRequest?: MatrixMonitorHandlerParams["core"]["channel"]["pairing"]["upsertPairingRequest"];
   buildPairingReply?: () => string;
@@ -128,7 +151,7 @@ export function createMatrixHandlerTestHarness(
     } as never,
     core: {
       config: {
-        current: () => cfgForHandler,
+        loadConfig: () => cfgForHandler,
       },
       channel: {
         pairing: {
@@ -233,11 +256,26 @@ export function createMatrixHandlerTestHarness(
     dmPolicy: options.dmPolicy ?? "open",
     textLimit: options.textLimit ?? 8_000,
     mediaMaxBytes: options.mediaMaxBytes ?? 10_000_000,
+    participationEnabled: options.participationEnabled ?? false,
+    participationMinRoomMembers: options.participationMinRoomMembers,
+    participationMinAgentMembers: options.participationMinAgentMembers,
+    participationStrategy: options.participationStrategy ?? "ai-first",
+    participationModel: options.participationModel,
+    participationPersistence: options.participationPersistence ?? "always",
+    participationStateStore: options.participationStateStore,
     startupMs: options.startupMs ?? 0,
     startupGraceMs: options.startupGraceMs ?? 0,
     dropPreStartupMessages: options.dropPreStartupMessages ?? true,
     inboundDeduper: options.inboundDeduper,
     directTracker: {
+      getJoinedMembers: async () =>
+        options.client?.getJoinedRoomMembers
+          ? await options.client.getJoinedRoomMembers("!room:example.org")
+          : ["@bot:example.org", "@alice:example.org"],
+      getJoinedMemberCount: async () =>
+        options.client?.getJoinedRoomMembers
+          ? (await options.client.getJoinedRoomMembers("!room:example.org")).length
+          : 2,
       isDirectMessage: async () => options.isDirectMessage ?? true,
     },
     getRoomInfo: options.getRoomInfo ?? (async () => ({ altAliases: [] })),
@@ -245,6 +283,16 @@ export function createMatrixHandlerTestHarness(
     needsRoomAliasesForConfig: options.needsRoomAliasesForConfig ?? false,
     resolveLiveUserAllowlist: options.resolveLiveUserAllowlist,
     historyLimit: options.historyLimit ?? 0,
+    freshnessEnabled: options.freshnessEnabled,
+    freshnessMinRoomMembers: options.freshnessMinRoomMembers,
+    freshnessMinAgentMembers: options.freshnessMinAgentMembers,
+    freshnessMode: options.freshnessMode,
+    freshnessScope: options.freshnessScope,
+    draftHoldbackMs: options.draftHoldbackMs,
+    freshnessAllowedFinalActions: options.freshnessAllowedFinalActions,
+    freshnessModel: options.freshnessModel,
+    aiDeterminesFinalAction: options.aiDeterminesFinalAction,
+    freshnessFinalAction: options.freshnessFinalAction,
   });
 
   return {

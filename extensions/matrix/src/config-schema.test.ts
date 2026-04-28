@@ -5,7 +5,11 @@ describe("MatrixConfigSchema SecretInput", () => {
   it("accepts SecretRef accessToken at top-level", () => {
     const result = MatrixConfigSchema.safeParse({
       homeserver: "https://matrix.example.org",
-      accessToken: { source: "env", provider: "default", id: "MATRIX_ACCESS_TOKEN" },
+      accessToken: {
+        source: "env",
+        provider: "default",
+        id: "MATRIX_ACCESS_TOKEN",
+      },
     });
     expect(result.success).toBe(true);
   });
@@ -84,6 +88,24 @@ describe("MatrixConfigSchema SecretInput", () => {
       homeserver: "https://matrix.example.org",
       accessToken: "token",
       streaming: "quiet",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts a Matrix freshness model override", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      participation: {
+        minRoomMembers: 3,
+        minAgentMembers: 2,
+      },
+      freshness: {
+        model: "openai-codex/gpt-5.4-mini",
+        aiDeterminesFinalAction: true,
+        minRoomMembers: 3,
+        minAgentMembers: 2,
+      },
     });
     expect(result.success).toBe(true);
   });

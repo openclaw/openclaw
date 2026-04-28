@@ -84,7 +84,10 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
       if (!normalized) {
         throw new Error("membership unavailable");
       }
-      rememberBounded(joinedMembersCache, roomId, { members: normalized, ts: now });
+      rememberBounded(joinedMembersCache, roomId, {
+        members: normalized,
+        ts: now,
+      });
       return normalized;
     } catch (err) {
       log(`matrix: dm member lookup failed room=${roomId} (${String(err)})`);
@@ -191,6 +194,11 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
         ts: Date.now(),
       });
       log(`matrix: remembered invite candidate room=${roomId} sender=${normalizedRemoteUserId}`);
+    },
+    getJoinedMembers: resolveJoinedMembers,
+    getJoinedMemberCount: async (roomId: string): Promise<number | null> => {
+      const members = await resolveJoinedMembers(roomId);
+      return members ? members.length : null;
     },
     isDirectMessage: async (params: DirectMessageCheck): Promise<boolean> => {
       const { roomId, senderId } = params;

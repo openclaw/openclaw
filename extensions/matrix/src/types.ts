@@ -60,6 +60,48 @@ export type MatrixActionConfig = {
   verification?: boolean;
 };
 
+export type MatrixParticipationStrategy =
+  | "ai-first"
+  | "deterministic"
+  | "ai-delivery-gate"
+  | "deterministic-then-ai";
+export type MatrixParticipationPersistenceMode = "off" | "explicit" | "always";
+
+export type MatrixParticipationConfig = {
+  /** Enable Matrix group participation control. Default: true. */
+  enabled?: boolean;
+  /** Parser strategy. ai-first does not silently fall back to deterministic decisions. */
+  strategy?: MatrixParticipationStrategy;
+  /** Optional model override for ai-first participation parsing. */
+  model?: string;
+  /** Only enable participation control when joined room members are at least this count. */
+  minRoomMembers?: number;
+  /** Only enable participation control when joined configured-agent members are at least this count. */
+  minAgentMembers?: number;
+  /** Room-policy persistence behavior. Default: always. */
+  persistence?: MatrixParticipationPersistenceMode;
+};
+
+export type MatrixFreshnessMode = "revise" | "suppress" | "auto" | "send-as-is";
+export type MatrixFreshnessScope = "room" | "thread-aware";
+export type MatrixFreshnessFinalAction = "revise" | "suppress" | "send-as-is";
+
+export type MatrixFreshnessConfig = {
+  enabled?: boolean;
+  mode?: MatrixFreshnessMode;
+  scope?: MatrixFreshnessScope;
+  draftHoldbackMs?: number;
+  /** Optional model override for AI final-action freshness decisions. */
+  model?: string;
+  /** Only enable freshness control when joined room members are at least this count. */
+  minRoomMembers?: number;
+  /** Only enable freshness control when joined configured-agent members are at least this count. */
+  minAgentMembers?: number;
+  allowedFinalActions?: MatrixFreshnessFinalAction[];
+  aiDeterminesFinalAction?: boolean;
+  finalAction?: MatrixFreshnessFinalAction;
+};
+
 export type MatrixThreadBindingsConfig = {
   enabled?: boolean;
   idleHours?: number;
@@ -162,6 +204,10 @@ export type MatrixConfig = {
   reactionNotifications?: "off" | "own";
   /** Thread/session binding behavior for Matrix room threads. */
   threadBindings?: MatrixThreadBindingsConfig;
+  /** Group participation control for multi-agent Matrix rooms. */
+  participation?: MatrixParticipationConfig;
+  /** Final-reply freshness control for Matrix rooms. */
+  freshness?: MatrixFreshnessConfig;
   /** Whether Matrix should auto-request self verification on startup when unverified. */
   startupVerification?: "off" | "if-unverified";
   /** Cooldown window for automatic startup verification requests. Default: 24 hours. */

@@ -15,6 +15,7 @@ import {
   createMatrixRoomMessageEvent,
   createMatrixTextMessageEvent,
 } from "./handler.test-helpers.js";
+import type { ParticipationDirective } from "./participation-policy.js";
 import type { MatrixRawEvent } from "./types.js";
 import { EventType } from "./types.js";
 
@@ -22,7 +23,10 @@ const sendMessageMatrixMock = vi.hoisted(() =>
   vi.fn(async (..._args: unknown[]) => ({ messageId: "evt", roomId: "!room" })),
 );
 const sendSingleTextMessageMatrixMock = vi.hoisted(() =>
-  vi.fn(async (..._args: unknown[]) => ({ messageId: "$draft1", roomId: "!room" })),
+  vi.fn(async (..._args: unknown[]) => ({
+    messageId: "$draft1",
+    roomId: "!room",
+  })),
 );
 const editMessageMatrixMock = vi.hoisted(() => vi.fn(async () => "$edited"));
 const prepareMatrixSingleTextMock = vi.hoisted(() =>
@@ -51,6 +55,30 @@ const deliverMatrixRepliesMock = vi.hoisted(() => vi.fn(async () => true));
 
 vi.mock("./replies.js", () => ({
   deliverMatrixReplies: deliverMatrixRepliesMock,
+}));
+
+const simpleCompletionTextMock = vi.hoisted(() =>
+  vi.fn(() => '{"action":"none","persistence":"message"}'),
+);
+const simpleCompletionWaitMock = vi.hoisted(() => vi.fn(async (_params?: unknown) => {}));
+const completeWithPreparedSimpleCompletionModelMock = vi.hoisted(() =>
+  vi.fn(async (params?: unknown) => {
+    await simpleCompletionWaitMock(params);
+    return { text: simpleCompletionTextMock() };
+  }),
+);
+const prepareSimpleCompletionModelForAgentMock = vi.hoisted(() =>
+  vi.fn(async () => ({ model: {}, auth: {} })),
+);
+
+vi.mock("openclaw/plugin-sdk/simple-completion-runtime", () => ({
+  prepareSimpleCompletionModelForAgent: prepareSimpleCompletionModelForAgentMock,
+  completeWithPreparedSimpleCompletionModel: completeWithPreparedSimpleCompletionModelMock,
+}));
+
+vi.mock("../../../../../src/agents/simple-completion-runtime.js", () => ({
+  prepareSimpleCompletionModelForAgent: prepareSimpleCompletionModelForAgentMock,
+  completeWithPreparedSimpleCompletionModel: completeWithPreparedSimpleCompletionModelMock,
 }));
 
 function writeMatrixSessionMeta(
@@ -92,6 +120,9 @@ function writeMatrixSessionMeta(
 beforeEach(() => {
   sessionBindingTesting.resetSessionBindingAdaptersForTests();
   installMatrixMonitorTestRuntime();
+  simpleCompletionTextMock.mockReset().mockReturnValue('{"action":"none","persistence":"message"}');
+  simpleCompletionWaitMock.mockReset().mockResolvedValue(undefined);
+  completeWithPreparedSimpleCompletionModelMock.mockClear();
   prepareMatrixSingleTextMock.mockReset().mockImplementation((text: string) => {
     const trimmedText = text.trim();
     return {
@@ -119,13 +150,491 @@ function createReactionHarness(params?: {
     allowFrom: params?.allowFrom,
     readAllowFromStore: vi.fn(async () => params?.storeAllowFrom ?? []),
     client: {
-      getEvent: async () => ({ sender: params?.targetSender ?? "@bot:example.org" }),
+      getEvent: async () => ({
+        sender: params?.targetSender ?? "@bot:example.org",
+      }),
       ...params?.client,
     },
     isDirectMessage: params?.isDirectMessage,
     getMemberDisplayName: async () => params?.senderName ?? "sender",
   });
 }
+
+function createInMemoryParticipationStateStore() {
+  const policies = new Map<string, ParticipationDirective>();
+
+  return {
+    storagePath: "/tmp/matrix-participation-state-test.json",
+    getRoomPolicy: vi.fn(async ({ roomId }: { roomId: string }) => {
+      const directive = policies.get(roomId);
+      if (!directive) {
+        return undefined;
+      }
+      return {
+        ...directive,
+        ...(directive.includeAgentIds ? { includeAgentIds: [...directive.includeAgentIds] } : {}),
+        ...(directive.excludeAgentIds ? { excludeAgentIds: [...directive.excludeAgentIds] } : {}),
+      };
+    }),
+    applyDirective: vi.fn(
+      async ({ roomId, directive }: { roomId: string; directive?: ParticipationDirective }) => {
+        if (!directive) {
+          return;
+        }
+        if (directive.mode === "open" || directive.clearsStoredPolicy) {
+          policies.delete(roomId);
+          return;
+        }
+        if (directive.persistence !== "room") {
+          return;
+        }
+        policies.set(roomId, {
+          ...directive,
+          ...(directive.includeAgentIds ? { includeAgentIds: [...directive.includeAgentIds] } : {}),
+          ...(directive.excludeAgentIds ? { excludeAgentIds: [...directive.excludeAgentIds] } : {}),
+        });
+      },
+    ),
+  };
+}
+
+describe("matrix monitor handler participation policy", () => {
+  it("suppresses replies for non-targeted agents on natural-language subset directives", async () => {
+    const dispatchReplyFromConfig = vi.fn(async () => ({
+      queuedFinal: true,
+      counts: { final: 1, block: 0, tool: 0 },
+    }));
+
+    const { handler } = createMatrixHandlerTestHarness({
+      cfg: {
+        agents: {
+          list: [
+            { id: "alpha", groupChat: { mentionPatterns: ["Alpha"] } },
+            { id: "gamma", groupChat: { mentionPatterns: ["Gamma"] } },
+          ],
+        },
+      },
+      resolveAgentRoute: vi.fn(() => ({
+        agentId: "gamma",
+        channel: "matrix",
+        accountId: "ops",
+        sessionKey: "agent:gamma:main",
+        mainSessionKey: "agent:gamma:main",
+        matchedBy: "binding.account" as const,
+      })),
+      isDirectMessage: false,
+      dispatchReplyFromConfig,
+      participationEnabled: true,
+      participationStrategy: "deterministic",
+      mentionRegexes: [/alpha/i, /gamma/i],
+      getRoomInfo: async () => ({ name: "Team", altAliases: [] }),
+    });
+
+    await handler(
+      "!team:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$event-participation-1",
+        body: "Alpha only, take this one.",
+      }),
+    );
+
+    expect(dispatchReplyFromConfig).not.toHaveBeenCalled();
+  });
+
+  it("disables participation below the configured agent-member threshold", async () => {
+    const dispatchReplyFromConfig = vi.fn(async () => ({
+      queuedFinal: true,
+      counts: { final: 1, block: 0, tool: 0 },
+    }));
+
+    const { handler } = createMatrixHandlerTestHarness({
+      cfg: {
+        agents: {
+          list: [
+            { id: "alpha", groupChat: { mentionPatterns: ["Alpha"] } },
+            { id: "gamma", groupChat: { mentionPatterns: ["Gamma"] } },
+          ],
+        },
+      },
+      client: {
+        getJoinedRoomMembers: async () => ["@bot:example.org", "@alice:example.org"],
+      },
+      configuredBotUserIds: new Set(["@bot:example.org"]),
+      resolveAgentRoute: vi.fn(() => ({
+        agentId: "gamma",
+        channel: "matrix",
+        accountId: "ops",
+        sessionKey: "agent:gamma:main",
+        mainSessionKey: "agent:gamma:main",
+        matchedBy: "binding.account" as const,
+      })),
+      isDirectMessage: false,
+      dispatchReplyFromConfig,
+      participationEnabled: true,
+      participationMinAgentMembers: 2,
+      participationStrategy: "deterministic",
+      mentionRegexes: [/alpha/i, /gamma/i],
+      getRoomInfo: async () => ({ name: "Team", altAliases: [] }),
+      roomsConfig: { "*": { requireMention: false } as never },
+    });
+
+    await handler(
+      "!team:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$event-participation-min-agent-members",
+        body: "Alpha only, take this one.",
+      }),
+    );
+
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows replies for targeted agents on natural-language subset directives", async () => {
+    const dispatchReplyFromConfig = vi.fn(async () => ({
+      queuedFinal: true,
+      counts: { final: 1, block: 0, tool: 0 },
+    }));
+
+    const { handler } = createMatrixHandlerTestHarness({
+      cfg: {
+        agents: {
+          list: [{ id: "alpha", groupChat: { mentionPatterns: ["Alpha"] } }],
+        },
+      },
+      resolveAgentRoute: vi.fn(() => ({
+        agentId: "alpha",
+        channel: "matrix",
+        accountId: "ops",
+        sessionKey: "agent:alpha:main",
+        mainSessionKey: "agent:alpha:main",
+        matchedBy: "binding.account" as const,
+      })),
+      isDirectMessage: false,
+      dispatchReplyFromConfig,
+      participationEnabled: true,
+      participationStrategy: "deterministic",
+      mentionRegexes: [/alpha/i],
+      getRoomInfo: async () => ({ name: "Team", altAliases: [] }),
+      roomsConfig: { "*": { requireMention: false } as never },
+    });
+
+    await handler(
+      "!team:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$event-participation-2",
+        body: "Alpha only, take this one.",
+      }),
+    );
+
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies stored room policy on later turns when persistence is explicit", async () => {
+    const dispatchReplyFromConfig = vi.fn(async () => ({
+      queuedFinal: true,
+      counts: { final: 1, block: 0, tool: 0 },
+    }));
+    const participationStateStore = createInMemoryParticipationStateStore();
+
+    const { handler } = createMatrixHandlerTestHarness({
+      cfg: {
+        agents: {
+          list: [
+            { id: "alpha", groupChat: { mentionPatterns: ["Alpha"] } },
+            { id: "gamma", groupChat: { mentionPatterns: ["Gamma"] } },
+          ],
+        },
+      },
+      resolveAgentRoute: vi.fn(() => ({
+        agentId: "gamma",
+        channel: "matrix",
+        accountId: "ops",
+        sessionKey: "agent:gamma:main",
+        mainSessionKey: "agent:gamma:main",
+        matchedBy: "binding.account" as const,
+      })),
+      isDirectMessage: false,
+      dispatchReplyFromConfig,
+      participationEnabled: true,
+      participationStrategy: "deterministic",
+      participationPersistence: "explicit",
+      participationStateStore,
+      mentionRegexes: [/alpha/i, /gamma/i],
+      getRoomInfo: async () => ({ name: "Team", altAliases: [] }),
+    });
+
+    await handler(
+      "!team:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$event-participation-persist-1",
+        body: "Alpha only until I say otherwise.",
+      }),
+    );
+    await handler(
+      "!team:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$event-participation-persist-2",
+        body: "@room what do you think?",
+        mentions: { room: true },
+      }),
+    );
+
+    expect(dispatchReplyFromConfig).not.toHaveBeenCalled();
+    expect(participationStateStore.applyDirective).toHaveBeenCalledTimes(1);
+    expect(participationStateStore.applyDirective).toHaveBeenCalledWith({
+      roomId: "!team:example.org",
+      senderId: "@user:example.org",
+      directive: expect.objectContaining({
+        mode: "subset_only",
+        includeAgentIds: ["alpha"],
+        persistence: "room",
+      }),
+    });
+    expect(participationStateStore.getRoomPolicy).toHaveBeenNthCalledWith(2, {
+      roomId: "!team:example.org",
+    });
+  });
+
+  it("ai-delivery-gate drafts immediately but suppresses final delivery when AI excludes the agent", async () => {
+    simpleCompletionTextMock.mockReturnValue(
+      '{"action":"subset_only","includeAgentIds":["alpha"],"persistence":"message"}',
+    );
+    let releaseAi!: () => void;
+    const aiStarted = new Promise<void>((resolve) => {
+      simpleCompletionWaitMock.mockImplementationOnce(async () => {
+        resolve();
+        await new Promise<void>((release) => {
+          releaseAi = release;
+        });
+      });
+    });
+    deliverMatrixRepliesMock.mockReset().mockResolvedValue(true);
+    let capturedDeliver:
+      | ((payload: { text?: string }, info: { kind: string }) => Promise<void>)
+      | undefined;
+    const dispatchReplyFromConfig = vi.fn(async () => {
+      expect(prepareSimpleCompletionModelForAgentMock).toHaveBeenCalled();
+      await capturedDeliver?.({ text: "GAMMA-SHOULD-NOT-DELIVER" }, { kind: "final" });
+      return { queuedFinal: true, counts: { final: 1, block: 0, tool: 0 } };
+    });
+
+    const { handler } = createMatrixHandlerTestHarness({
+      cfg: {
+        agents: {
+          list: [
+            { id: "alpha", groupChat: { mentionPatterns: ["Alpha"] } },
+            { id: "gamma", groupChat: { mentionPatterns: ["Gamma"] } },
+          ],
+        },
+      },
+      resolveAgentRoute: vi.fn(() => ({
+        agentId: "gamma",
+        channel: "matrix",
+        accountId: "ops",
+        sessionKey: "agent:gamma:main",
+        mainSessionKey: "agent:gamma:main",
+        matchedBy: "binding.account" as const,
+      })),
+      isDirectMessage: false,
+      dispatchReplyFromConfig,
+      participationEnabled: true,
+      participationStrategy: "ai-delivery-gate",
+      mentionRegexes: [/gamma/i],
+      getRoomInfo: async () => ({ name: "Team", altAliases: [] }),
+      roomsConfig: { "*": { requireMention: false } as never },
+      createReplyDispatcherWithTyping: (params?: Record<string, unknown>) => {
+        capturedDeliver = params?.deliver as typeof capturedDeliver;
+        return {
+          dispatcher: {},
+          replyOptions: {},
+          markDispatchIdle: () => {},
+          markRunComplete: () => {},
+        };
+      },
+    });
+
+    const handlerPromise = handler(
+      "!team:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$event-participation-ai-delivery-gate-1",
+        body: "Alpha only, take this one.",
+      }),
+    );
+
+    await aiStarted;
+    await Promise.resolve();
+
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
+
+    releaseAi();
+    await handlerPromise;
+
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(prepareSimpleCompletionModelForAgentMock).toHaveBeenCalledTimes(1);
+    expect(completeWithPreparedSimpleCompletionModelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.objectContaining({
+          signal: expect.any(AbortSignal),
+        }),
+      }),
+    );
+    expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
+  });
+
+  it("aborts the prior active room run when a newer human message arrives under participation control", async () => {
+    let firstAbortSignal: AbortSignal | undefined;
+    let releaseFirst!: () => void;
+    const firstDispatchDone = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const dispatchReplyFromConfig = vi
+      .fn()
+      .mockImplementationOnce(async (params: { replyOptions?: { abortSignal?: AbortSignal } }) => {
+        firstAbortSignal = params.replyOptions?.abortSignal;
+        await firstDispatchDone;
+        return {
+          queuedFinal: false,
+          counts: { final: 0, block: 0, tool: 0 },
+        };
+      })
+      .mockResolvedValue({
+        queuedFinal: false,
+        counts: { final: 0, block: 0, tool: 0 },
+      });
+
+    const { handler } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      dispatchReplyFromConfig,
+      participationEnabled: true,
+      participationStrategy: "ai-delivery-gate",
+      mentionRegexes: [/bot:/i],
+      roomsConfig: { "*": { requireMention: false } as never },
+    });
+
+    const firstRun = handler(
+      "!team:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$event-participation-abort-1",
+        body: "bot: start this draft",
+      }),
+    );
+    await vi.waitFor(() => expect(firstAbortSignal).toBeDefined());
+    expect(firstAbortSignal?.aborted).toBe(false);
+
+    await handler(
+      "!team:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$event-participation-abort-2",
+        body: "new instruction supersedes prior draft",
+      }),
+    );
+
+    expect(firstAbortSignal?.aborted).toBe(true);
+    releaseFirst();
+    await firstRun;
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not abort the prior active room run when the newer message is /steer", async () => {
+    let firstAbortSignal: AbortSignal | undefined;
+    let releaseFirst!: () => void;
+    const firstDispatchDone = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const dispatchReplyFromConfig = vi
+      .fn()
+      .mockImplementationOnce(async (params: { replyOptions?: { abortSignal?: AbortSignal } }) => {
+        firstAbortSignal = params.replyOptions?.abortSignal;
+        await firstDispatchDone;
+        return {
+          queuedFinal: false,
+          counts: { final: 0, block: 0, tool: 0 },
+        };
+      })
+      .mockResolvedValue({
+        queuedFinal: false,
+        counts: { final: 0, block: 0, tool: 0 },
+      });
+
+    const { handler } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      dispatchReplyFromConfig,
+      participationEnabled: true,
+      participationStrategy: "ai-delivery-gate",
+      mentionRegexes: [/bot:/i],
+      roomsConfig: { "*": { requireMention: false } as never },
+    });
+
+    const firstRun = handler(
+      "!team:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$event-participation-steer-1",
+        body: "bot: start this draft",
+      }),
+    );
+    await vi.waitFor(() => expect(firstAbortSignal).toBeDefined());
+
+    await handler(
+      "!team:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$event-participation-steer-2",
+        body: "/steer refine instead of kill",
+      }),
+    );
+
+    expect(firstAbortSignal?.aborted).toBe(false);
+    releaseFirst();
+    await firstRun;
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(2);
+  });
+
+  it("deterministic-then-ai late-dispatches an agent that deterministic first suppressed", async () => {
+    simpleCompletionTextMock.mockReturnValue(
+      '{"action":"subset_only","includeAgentIds":["gamma"],"persistence":"message"}',
+    );
+    const dispatchReplyFromConfig = vi.fn(async () => ({
+      queuedFinal: true,
+      counts: { final: 1, block: 0, tool: 0 },
+    }));
+
+    const { handler } = createMatrixHandlerTestHarness({
+      cfg: {
+        agents: {
+          list: [
+            { id: "alpha", groupChat: { mentionPatterns: ["Alpha"] } },
+            { id: "gamma", groupChat: { mentionPatterns: ["Gamma"] } },
+          ],
+        },
+      },
+      resolveAgentRoute: vi.fn(() => ({
+        agentId: "gamma",
+        channel: "matrix",
+        accountId: "ops",
+        sessionKey: "agent:gamma:main",
+        mainSessionKey: "agent:gamma:main",
+        matchedBy: "binding.account" as const,
+      })),
+      isDirectMessage: false,
+      dispatchReplyFromConfig,
+      participationEnabled: true,
+      participationStrategy: "deterministic-then-ai",
+      mentionRegexes: [/gamma/i],
+      getRoomInfo: async () => ({ name: "Team", altAliases: [] }),
+      roomsConfig: { "*": { requireMention: false } as never },
+    });
+
+    await handler(
+      "!team:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$event-participation-deterministic-then-ai-1",
+        body: "Alpha only, take this one.",
+      }),
+    );
+
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("matrix monitor handler pairing account scope", () => {
   it("caches account-scoped allowFrom store reads on hot path", async () => {
@@ -229,7 +738,10 @@ describe("matrix monitor handler pairing account scope", () => {
 
   it("uses account-scoped pairing store reads and upserts for dm pairing", async () => {
     const readAllowFromStore = vi.fn(async () => [] as string[]);
-    const upsertPairingRequest = vi.fn(async () => ({ code: "ABCDEFGH", created: false }));
+    const upsertPairingRequest = vi.fn(async () => ({
+      code: "ABCDEFGH",
+      created: false,
+    }));
 
     const { handler } = createMatrixHandlerTestHarness({
       readAllowFromStore,
@@ -1398,7 +1910,10 @@ describe("matrix monitor handler pairing account scope", () => {
         channel: {
           pairing: {
             readAllowFromStore: async () => [] as string[],
-            upsertPairingRequest: async () => ({ code: "ABCDEFGH", created: false }),
+            upsertPairingRequest: async () => ({
+              code: "ABCDEFGH",
+              created: false,
+            }),
             buildPairingReply: () => "pairing",
           },
           commands: {
@@ -2373,7 +2888,9 @@ describe("matrix monitor handler durable inbound dedupe", () => {
         dispatcher: {
           markComplete: () => {},
           waitForIdle: async () => {
-            params?.onError?.(new MatrixRetryableInboundError("retry send"), { kind: "final" });
+            params?.onError?.(new MatrixRetryableInboundError("retry send"), {
+              kind: "final",
+            });
           },
         },
         replyOptions: {},
@@ -2419,7 +2936,9 @@ describe("matrix monitor handler durable inbound dedupe", () => {
           dispatcher: {
             markComplete: () => {},
             waitForIdle: async () => {
-              params?.onError?.(new MatrixRetryableInboundError("retry send"), { kind });
+              params?.onError?.(new MatrixRetryableInboundError("retry send"), {
+                kind,
+              });
             },
           },
           replyOptions: {},
@@ -2482,6 +3001,279 @@ describe("matrix monitor handler durable inbound dedupe", () => {
 
     expect(callOrder).toEqual(["claim", "record", "dispatch", "commit"]);
     expect(inboundDeduper.releaseEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe("matrix monitor handler freshness", () => {
+  it("does not treat the current thread-aware trigger event as post-trigger activity", async () => {
+    deliverMatrixRepliesMock.mockReset().mockResolvedValue(true);
+    let capturedDeliver:
+      | ((payload: { text?: string }, info: { kind: string }) => Promise<void>)
+      | undefined;
+    const dispatchReplyFromConfig = vi.fn(async () => {
+      await capturedDeliver?.({ text: "VISIBLE" }, { kind: "final" });
+      return { queuedFinal: true, counts: { final: 1, block: 0, tool: 0 } };
+    });
+
+    const { handler } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      historyLimit: 10,
+      freshnessScope: "thread-aware",
+      freshnessFinalAction: "suppress",
+      dispatchReplyFromConfig,
+      roomsConfig: { "*": { requireMention: false } as never },
+      createReplyDispatcherWithTyping: (params?: Record<string, unknown>) => {
+        capturedDeliver = params?.deliver as typeof capturedDeliver;
+        return {
+          dispatcher: {},
+          replyOptions: {},
+          markDispatchIdle: () => {},
+          markRunComplete: () => {},
+        };
+      },
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$thread-aware-current-trigger",
+        body: "please reply",
+      }),
+    );
+
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("detects room-scope post-trigger activity when the visible history window is saturated", async () => {
+    deliverMatrixRepliesMock.mockReset().mockResolvedValue(true);
+    let capturedDeliver:
+      | ((payload: { text?: string }, info: { kind: string }) => Promise<void>)
+      | undefined;
+    let handler!: ReturnType<typeof createMatrixRoomMessageHandler>;
+    const dispatchReplyFromConfig = vi.fn(async () => {
+      await handler(
+        "!room:example.org",
+        createMatrixTextMessageEvent({
+          eventId: "$freshness-late-room-message",
+          body: "late room activity",
+        }),
+      );
+      await capturedDeliver?.({ text: "STALE" }, { kind: "final" });
+      return { queuedFinal: true, counts: { final: 1, block: 0, tool: 0 } };
+    });
+
+    ({ handler } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      historyLimit: 2,
+      freshnessScope: "room",
+      freshnessFinalAction: "suppress",
+      mentionRegexes: [/bot:/i],
+      dispatchReplyFromConfig,
+      createReplyDispatcherWithTyping: (params?: Record<string, unknown>) => {
+        capturedDeliver = params?.deliver as typeof capturedDeliver;
+        return {
+          dispatcher: {},
+          replyOptions: {},
+          markDispatchIdle: () => {},
+          markRunComplete: () => {},
+        };
+      },
+    }));
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$freshness-history-1",
+        body: "history one",
+      }),
+    );
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$freshness-history-2",
+        body: "history two",
+      }),
+    );
+
+    expect(dispatchReplyFromConfig).not.toHaveBeenCalled();
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$freshness-saturated-trigger",
+        body: "bot: reply after saturated history",
+      }),
+    );
+
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
+  });
+
+  it("disables freshness below the configured room-member threshold", async () => {
+    deliverMatrixRepliesMock.mockReset().mockResolvedValue(true);
+    let capturedDeliver:
+      | ((payload: { text?: string }, info: { kind: string }) => Promise<void>)
+      | undefined;
+    let handler!: ReturnType<typeof createMatrixRoomMessageHandler>;
+    const dispatchReplyFromConfig = vi.fn(async () => {
+      await handler(
+        "!room:example.org",
+        createMatrixTextMessageEvent({
+          eventId: "$freshness-threshold-late-room-message",
+          body: "late room activity",
+        }),
+      );
+      await capturedDeliver?.({ text: "THRESHOLD ALLOWS" }, { kind: "final" });
+      return { queuedFinal: true, counts: { final: 1, block: 0, tool: 0 } };
+    });
+
+    ({ handler } = createMatrixHandlerTestHarness({
+      client: {
+        getJoinedRoomMembers: async () => ["@bot:example.org", "@alice:example.org"],
+      },
+      isDirectMessage: false,
+      historyLimit: 10,
+      freshnessScope: "room",
+      freshnessFinalAction: "suppress",
+      freshnessMinRoomMembers: 3,
+      mentionRegexes: [/bot:/i],
+      dispatchReplyFromConfig,
+      createReplyDispatcherWithTyping: (params?: Record<string, unknown>) => {
+        capturedDeliver = params?.deliver as typeof capturedDeliver;
+        return {
+          dispatcher: {},
+          replyOptions: {},
+          markDispatchIdle: () => {},
+          markRunComplete: () => {},
+        };
+      },
+    }));
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$freshness-threshold-trigger",
+        body: "bot: reply despite stale room when below threshold",
+      }),
+    );
+
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables freshness below the configured agent-member threshold", async () => {
+    deliverMatrixRepliesMock.mockReset().mockResolvedValue(true);
+    let capturedDeliver:
+      | ((payload: { text?: string }, info: { kind: string }) => Promise<void>)
+      | undefined;
+    let handler!: ReturnType<typeof createMatrixRoomMessageHandler>;
+    const dispatchReplyFromConfig = vi.fn(async () => {
+      await handler(
+        "!room:example.org",
+        createMatrixTextMessageEvent({
+          eventId: "$freshness-agent-threshold-late-room-message",
+          body: "late room activity",
+        }),
+      );
+      await capturedDeliver?.({ text: "AGENT THRESHOLD ALLOWS" }, { kind: "final" });
+      return { queuedFinal: true, counts: { final: 1, block: 0, tool: 0 } };
+    });
+
+    ({ handler } = createMatrixHandlerTestHarness({
+      client: {
+        getJoinedRoomMembers: async () => [
+          "@bot:example.org",
+          "@alice:example.org",
+          "@bob:example.org",
+        ],
+      },
+      configuredBotUserIds: new Set(["@bot:example.org"]),
+      isDirectMessage: false,
+      historyLimit: 10,
+      freshnessScope: "room",
+      freshnessFinalAction: "suppress",
+      freshnessMinAgentMembers: 2,
+      mentionRegexes: [/bot:/i],
+      dispatchReplyFromConfig,
+      createReplyDispatcherWithTyping: (params?: Record<string, unknown>) => {
+        capturedDeliver = params?.deliver as typeof capturedDeliver;
+        return {
+          dispatcher: {},
+          replyOptions: {},
+          markDispatchIdle: () => {},
+          markRunComplete: () => {},
+        };
+      },
+    }));
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$freshness-agent-threshold-trigger",
+        body: "bot: reply despite stale room when below agent threshold",
+      }),
+    );
+
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes the configured freshness model to the AI final-action chooser", async () => {
+    deliverMatrixRepliesMock.mockReset().mockResolvedValue(true);
+    prepareSimpleCompletionModelForAgentMock.mockClear();
+    simpleCompletionTextMock.mockReturnValueOnce(
+      '{"deliveryAction":"send-as-is","reason":"fresh enough","decision":"send"}',
+    );
+
+    let capturedDeliver:
+      | ((payload: { text?: string }, info: { kind: string }) => Promise<void>)
+      | undefined;
+    let handler!: ReturnType<typeof createMatrixRoomMessageHandler>;
+    const dispatchReplyFromConfig = vi.fn(async () => {
+      await handler(
+        "!room:example.org",
+        createMatrixTextMessageEvent({
+          eventId: "$freshness-model-late-room-message",
+          body: "late room activity",
+        }),
+      );
+      await capturedDeliver?.({ text: "FRESHNESS MODEL TEST" }, { kind: "final" });
+      return { queuedFinal: true, counts: { final: 1, block: 0, tool: 0 } };
+    });
+
+    ({ handler } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      historyLimit: 10,
+      freshnessScope: "room",
+      freshnessAllowedFinalActions: ["revise", "send-as-is", "suppress"],
+      freshnessModel: "openai-codex/gpt-5.4-mini",
+      aiDeterminesFinalAction: true,
+      mentionRegexes: [/bot:/i],
+      dispatchReplyFromConfig,
+      createReplyDispatcherWithTyping: (params?: Record<string, unknown>) => {
+        capturedDeliver = params?.deliver as typeof capturedDeliver;
+        return {
+          dispatcher: {},
+          replyOptions: {},
+          markDispatchIdle: () => {},
+          markRunComplete: () => {},
+        };
+      },
+    }));
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$freshness-model-trigger",
+        body: "bot: reply and test model override",
+      }),
+    );
+
+    expect(prepareSimpleCompletionModelForAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({ modelRef: "openai-codex/gpt-5.4-mini" }),
+    );
+    expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -2566,7 +3358,10 @@ describe("matrix monitor handler draft streaming", () => {
         return { queuedFinal: true, counts: { final: 1, block: 0, tool: 0 } };
       }) as never,
       withReplyDispatcher: async <T>(params: {
-        dispatcher: { markComplete?: () => void; waitForIdle?: () => Promise<void> };
+        dispatcher: {
+          markComplete?: () => void;
+          waitForIdle?: () => Promise<void>;
+        };
         run: () => Promise<T>;
         onSettled?: () => void | Promise<void>;
       }) => {
@@ -2599,7 +3394,9 @@ describe("matrix monitor handler draft streaming", () => {
   }
 
   it("finalizes a single quiet-preview block in place when block streaming is enabled", async () => {
-    const { dispatch, redactEventMock } = createStreamingHarness({ blockStreamingEnabled: true });
+    const { dispatch, redactEventMock } = createStreamingHarness({
+      blockStreamingEnabled: true,
+    });
     const { deliver, opts, finish } = await dispatch();
 
     opts.onPartialReply?.({ text: "Single block" });
@@ -2688,7 +3485,9 @@ describe("matrix monitor handler draft streaming", () => {
   });
 
   it("preserves completed blocks by rotating to a new quiet preview", async () => {
-    const { dispatch, redactEventMock } = createStreamingHarness({ blockStreamingEnabled: true });
+    const { dispatch, redactEventMock } = createStreamingHarness({
+      blockStreamingEnabled: true,
+    });
     const { deliver, opts, finish } = await dispatch();
 
     opts.onPartialReply?.({ text: "Block one" });
@@ -2736,7 +3535,9 @@ describe("matrix monitor handler draft streaming", () => {
   });
 
   it("queues late partials behind block-boundary rotation", async () => {
-    const { dispatch, redactEventMock } = createStreamingHarness({ blockStreamingEnabled: true });
+    const { dispatch, redactEventMock } = createStreamingHarness({
+      blockStreamingEnabled: true,
+    });
     const { deliver, opts, finish } = await dispatch();
 
     opts.onPartialReply?.({ text: "Alpha" });
@@ -2769,7 +3570,9 @@ describe("matrix monitor handler draft streaming", () => {
   });
 
   it("keeps delayed same-message block boundaries at the emitted block length", async () => {
-    const { dispatch, redactEventMock } = createStreamingHarness({ blockStreamingEnabled: true });
+    const { dispatch, redactEventMock } = createStreamingHarness({
+      blockStreamingEnabled: true,
+    });
     const { deliver, opts, finish } = await dispatch();
 
     opts.onPartialReply?.({ text: "Alpha" });
@@ -2883,7 +3686,10 @@ describe("matrix monitor handler draft streaming", () => {
 
     // Block 2: partial text starts fresh (no stale offset).
     sendSingleTextMessageMatrixMock.mockClear();
-    sendSingleTextMessageMatrixMock.mockResolvedValue({ messageId: "$draft2", roomId: "!room" });
+    sendSingleTextMessageMatrixMock.mockResolvedValue({
+      messageId: "$draft2",
+      roomId: "!room",
+    });
 
     opts.onPartialReply?.({ text: "Block two" });
     await vi.waitFor(() => {
@@ -2897,7 +3703,9 @@ describe("matrix monitor handler draft streaming", () => {
   });
 
   it("preserves queued block boundaries across assistant message start", async () => {
-    const { dispatch, redactEventMock } = createStreamingHarness({ blockStreamingEnabled: true });
+    const { dispatch, redactEventMock } = createStreamingHarness({
+      blockStreamingEnabled: true,
+    });
     const { deliver, opts, finish } = await dispatch();
 
     opts.onPartialReply?.({ text: "Alpha" });
@@ -2947,7 +3755,9 @@ describe("matrix monitor handler draft streaming", () => {
   });
 
   it("queues late block boundaries against the source assistant message", async () => {
-    const { dispatch, redactEventMock } = createStreamingHarness({ blockStreamingEnabled: true });
+    const { dispatch, redactEventMock } = createStreamingHarness({
+      blockStreamingEnabled: true,
+    });
     const { deliver, opts, finish } = await dispatch();
 
     opts.onAssistantMessageStart?.();
@@ -2998,7 +3808,9 @@ describe("matrix monitor handler draft streaming", () => {
   });
 
   it("keeps queued block boundaries ordered while Matrix deliveries drain", async () => {
-    const { dispatch } = createStreamingHarness({ blockStreamingEnabled: true });
+    const { dispatch } = createStreamingHarness({
+      blockStreamingEnabled: true,
+    });
     const { deliver, opts, finish } = await dispatch();
 
     opts.onPartialReply?.({ text: "Alpha" });
@@ -3091,7 +3903,10 @@ describe("matrix monitor handler draft streaming", () => {
           throw new Error("model timeout");
         }) as never,
         withReplyDispatcher: async <T>(params: {
-          dispatcher: { markComplete?: () => void; waitForIdle?: () => Promise<void> };
+          dispatcher: {
+            markComplete?: () => void;
+            waitForIdle?: () => Promise<void>;
+          };
           run: () => Promise<T>;
           onSettled?: () => void | Promise<void>;
         }) => {
@@ -3148,7 +3963,10 @@ describe("matrix monitor handler draft streaming", () => {
         throw new Error("model timeout");
       }) as never,
       withReplyDispatcher: async <T>(params: {
-        dispatcher: { markComplete?: () => void; waitForIdle?: () => Promise<void> };
+        dispatcher: {
+          markComplete?: () => void;
+          waitForIdle?: () => Promise<void>;
+        };
         run: () => Promise<T>;
         onSettled?: () => void | Promise<void>;
       }) => {
@@ -3167,7 +3985,9 @@ describe("matrix monitor handler draft streaming", () => {
   });
 
   it("keeps shutdown cleanup for empty final payloads that send nothing", async () => {
-    const { dispatch, redactEventMock } = createStreamingHarness({ streaming: "partial" });
+    const { dispatch, redactEventMock } = createStreamingHarness({
+      streaming: "partial",
+    });
     const { deliver, opts, finish } = await dispatch();
 
     opts.onPartialReply?.({ text: "Partial reply" });
@@ -3207,7 +4027,9 @@ describe("matrix monitor handler draft streaming", () => {
   });
 
   it("redacts stale draft when payload reply target mismatches", async () => {
-    const { dispatch, redactEventMock } = createStreamingHarness({ replyToMode: "first" });
+    const { dispatch, redactEventMock } = createStreamingHarness({
+      replyToMode: "first",
+    });
     const { deliver, opts, finish } = await dispatch();
 
     // Simulate streaming: partial reply creates draft message.
@@ -3229,7 +4051,9 @@ describe("matrix monitor handler draft streaming", () => {
   });
 
   it("redacts stale draft when final payload intentionally drops reply threading", async () => {
-    const { dispatch, redactEventMock } = createStreamingHarness({ replyToMode: "first" });
+    const { dispatch, redactEventMock } = createStreamingHarness({
+      replyToMode: "first",
+    });
     const { deliver, opts, finish } = await dispatch();
 
     // A tool payload can consume the first reply slot upstream while draft
@@ -3287,7 +4111,9 @@ describe("matrix monitor handler draft streaming", () => {
     const { dispatch, redactEventMock } = createStreamingHarness();
     const { deliver, finish } = await dispatch();
 
-    await deliver({ text: "Something failed", isError: true } as never, { kind: "final" });
+    await deliver({ text: "Something failed", isError: true } as never, {
+      kind: "final",
+    });
 
     expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
     expect(editMessageMatrixMock).not.toHaveBeenCalled();
@@ -3306,7 +4132,9 @@ describe("matrix monitor handler draft streaming", () => {
     });
 
     deliverMatrixRepliesMock.mockClear();
-    await deliver({ text: "Something failed", isError: true } as never, { kind: "final" });
+    await deliver({ text: "Something failed", isError: true } as never, {
+      kind: "final",
+    });
 
     expect(editMessageMatrixMock).not.toHaveBeenCalled();
     expect(redactEventMock).toHaveBeenCalledWith("!room:example.org", "$draft1");
@@ -3315,7 +4143,9 @@ describe("matrix monitor handler draft streaming", () => {
   });
 
   it("finalizes partial drafts before reusing unchanged media captions", async () => {
-    const { dispatch, redactEventMock } = createStreamingHarness({ streaming: "partial" });
+    const { dispatch, redactEventMock } = createStreamingHarness({
+      streaming: "partial",
+    });
     const { deliver, opts, finish } = await dispatch();
 
     opts.onPartialReply?.({ text: "@room screenshot ready" });
@@ -3354,7 +4184,9 @@ describe("matrix monitor handler draft streaming", () => {
   });
 
   it("finalizes quiet drafts before reusing unchanged media captions", async () => {
-    const { dispatch, redactEventMock } = createStreamingHarness({ streaming: "quiet" });
+    const { dispatch, redactEventMock } = createStreamingHarness({
+      streaming: "quiet",
+    });
     const { deliver, opts, finish } = await dispatch();
 
     opts.onPartialReply?.({ text: "@room screenshot ready" });
@@ -3432,7 +4264,10 @@ describe("matrix monitor handler block streaming config", () => {
       dispatchReplyFromConfig: vi.fn(
         async (args: { replyOptions?: { disableBlockStreaming?: boolean } }) => {
           capturedDisableBlockStreaming = args.replyOptions?.disableBlockStreaming;
-          return { queuedFinal: false, counts: { final: 0, block: 0, tool: 0 } };
+          return {
+            queuedFinal: false,
+            counts: { final: 0, block: 0, tool: 0 },
+          };
         },
       ) as never,
     });
@@ -3453,7 +4288,10 @@ describe("matrix monitor handler block streaming config", () => {
       dispatchReplyFromConfig: vi.fn(
         async (args: { replyOptions?: { disableBlockStreaming?: boolean } }) => {
           capturedDisableBlockStreaming = args.replyOptions?.disableBlockStreaming;
-          return { queuedFinal: false, counts: { final: 0, block: 0, tool: 0 } };
+          return {
+            queuedFinal: false,
+            counts: { final: 0, block: 0, tool: 0 },
+          };
         },
       ) as never,
     });
@@ -3474,7 +4312,10 @@ describe("matrix monitor handler block streaming config", () => {
       dispatchReplyFromConfig: vi.fn(
         async (args: { replyOptions?: { disableBlockStreaming?: boolean } }) => {
           capturedDisableBlockStreaming = args.replyOptions?.disableBlockStreaming;
-          return { queuedFinal: false, counts: { final: 0, block: 0, tool: 0 } };
+          return {
+            queuedFinal: false,
+            counts: { final: 0, block: 0, tool: 0 },
+          };
         },
       ) as never,
     });
@@ -3496,7 +4337,10 @@ describe("matrix monitor handler block streaming config", () => {
       dispatchReplyFromConfig: vi.fn(
         async (args: { replyOptions?: { disableBlockStreaming?: boolean } }) => {
           capturedDisableBlockStreaming = args.replyOptions?.disableBlockStreaming;
-          return { queuedFinal: false, counts: { final: 0, block: 0, tool: 0 } };
+          return {
+            queuedFinal: false,
+            counts: { final: 0, block: 0, tool: 0 },
+          };
         },
       ) as never,
     });
@@ -3518,7 +4362,10 @@ describe("matrix monitor handler block streaming config", () => {
       dispatchReplyFromConfig: vi.fn(
         async (args: { replyOptions?: { disableBlockStreaming?: boolean } }) => {
           capturedDisableBlockStreaming = args.replyOptions?.disableBlockStreaming;
-          return { queuedFinal: false, counts: { final: 0, block: 0, tool: 0 } };
+          return {
+            queuedFinal: false,
+            counts: { final: 0, block: 0, tool: 0 },
+          };
         },
       ) as never,
     });

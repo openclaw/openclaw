@@ -7425,6 +7425,88 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           },
           additionalProperties: false,
         },
+        participation: {
+          type: "object",
+          properties: {
+            enabled: {
+              type: "boolean",
+            },
+            strategy: {
+              type: "string",
+              enum: ["ai-first", "deterministic", "ai-delivery-gate", "deterministic-then-ai"],
+            },
+            model: {
+              type: "string",
+              minLength: 1,
+            },
+            minRoomMembers: {
+              type: "integer",
+              minimum: 0,
+              maximum: 9007199254740991,
+            },
+            minAgentMembers: {
+              type: "integer",
+              minimum: 0,
+              maximum: 9007199254740991,
+            },
+            persistence: {
+              type: "string",
+              enum: ["off", "explicit", "always"],
+            },
+          },
+          additionalProperties: false,
+        },
+        freshness: {
+          type: "object",
+          properties: {
+            enabled: {
+              type: "boolean",
+            },
+            mode: {
+              type: "string",
+              enum: ["revise", "suppress", "auto", "send-as-is"],
+            },
+            scope: {
+              type: "string",
+              enum: ["room", "thread-aware"],
+            },
+            draftHoldbackMs: {
+              type: "integer",
+              minimum: 0,
+              maximum: 9007199254740991,
+            },
+            model: {
+              type: "string",
+              minLength: 1,
+            },
+            minRoomMembers: {
+              type: "integer",
+              minimum: 0,
+              maximum: 9007199254740991,
+            },
+            minAgentMembers: {
+              type: "integer",
+              minimum: 0,
+              maximum: 9007199254740991,
+            },
+            allowedFinalActions: {
+              minItems: 1,
+              type: "array",
+              items: {
+                type: "string",
+                enum: ["revise", "suppress", "send-as-is"],
+              },
+            },
+            aiDeterminesFinalAction: {
+              type: "boolean",
+            },
+            finalAction: {
+              type: "string",
+              enum: ["revise", "suppress", "send-as-is"],
+            },
+          },
+          additionalProperties: false,
+        },
         startupVerification: {
           type: "string",
           enum: ["off", "if-unverified"],
@@ -10010,9 +10092,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   type: "string",
                   enum: ["off", "partial"],
                 },
-                c2cStreamApi: {
-                  type: "boolean",
-                },
               },
               required: ["mode"],
               additionalProperties: {},
@@ -10252,9 +10331,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                         default: "partial",
                         type: "string",
                         enum: ["off", "partial"],
-                      },
-                      c2cStreamApi: {
-                        type: "boolean",
                       },
                     },
                     required: ["mode"],

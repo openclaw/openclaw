@@ -42,6 +42,7 @@ import {
   createMatrixInboundEventDeduper,
   type MatrixInboundEventDeduper,
 } from "./inbound-dedupe.js";
+import { createMatrixParticipationStateStore } from "./participation-state.js";
 import { shouldPromoteRecentInviteRoom } from "./recent-invite.js";
 import { createMatrixRoomInfoResolver } from "./room-info.js";
 import { runMatrixStartupMaintenance } from "./startup.js";
@@ -242,6 +243,37 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     cfg.messages as { groupChat?: { historyLimit?: number } } | undefined
   )?.groupChat?.historyLimit;
   const historyLimit = Math.max(0, accountConfig.historyLimit ?? globalGroupChatHistoryLimit ?? 0);
+  const participationEnabled = accountConfig.participation?.enabled !== false;
+  const participationStrategy = accountConfig.participation?.strategy ?? "ai-first";
+  const participationModel = accountConfig.participation?.model?.trim() || undefined;
+  const participationMinRoomMembers = Math.max(0, accountConfig.participation?.minRoomMembers ?? 0);
+  const participationMinAgentMembers = Math.max(
+    0,
+    accountConfig.participation?.minAgentMembers ?? 0,
+  );
+  const participationPersistence = accountConfig.participation?.persistence ?? "always";
+  const freshnessEnabled = accountConfig.freshness?.enabled !== false;
+  const freshnessMode = accountConfig.freshness?.mode ?? "auto";
+  const freshnessScope = accountConfig.freshness?.scope ?? "room";
+  const draftHoldbackMs = Math.max(0, accountConfig.freshness?.draftHoldbackMs ?? 0);
+  const freshnessModel = accountConfig.freshness?.model?.trim() || undefined;
+  const freshnessMinRoomMembers = Math.max(0, accountConfig.freshness?.minRoomMembers ?? 0);
+  const freshnessMinAgentMembers = Math.max(0, accountConfig.freshness?.minAgentMembers ?? 0);
+  const freshnessAllowedFinalActions = Array.from(
+    new Set(
+      (
+        accountConfig.freshness?.allowedFinalActions ??
+        (accountConfig.freshness?.finalAction
+          ? [accountConfig.freshness.finalAction]
+          : ["revise", "send-as-is", "suppress"])
+      ).filter(
+        (action): action is "revise" | "send-as-is" | "suppress" =>
+          action === "revise" || action === "send-as-is" || action === "suppress",
+      ),
+    ),
+  );
+  const aiDeterminesFinalAction = accountConfig.freshness?.aiDeterminesFinalAction === true;
+  const freshnessFinalAction = accountConfig.freshness?.finalAction;
   const mediaMaxMb = opts.mediaMaxMb ?? accountConfig.mediaMaxMb ?? DEFAULT_MEDIA_MAX_MB;
   const mediaMaxBytes = Math.max(1, mediaMaxMb) * 1024 * 1024;
   const streaming: "partial" | "quiet" | "off" =
@@ -281,6 +313,62 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       auth,
       env: process.env,
     });
+    const participationStateDir = (
+      core as {
+        state?: { resolveStateDir?: () => string };
+      }
+    ).state?.resolveStateDir?.();
+    const participationStateStore =
+      participationEnabled && participationPersistence !== "off" && participationStateDir
+        ? createMatrixParticipationStateStore({
+            auth,
+            env: process.env,
+            stateDir: participationStateDir,
+          })
+        : undefined;
+    if (participationStateStore) {
+      logger.info(
+        `matrix participation state store initialized ${JSON.stringify({
+          accountId: effectiveAccountId,
+          userId: auth.userId,
+          strategy: participationStrategy,
+          minRoomMembers: participationMinRoomMembers,
+          minAgentMembers: participationMinAgentMembers,
+          persistenceMode: participationPersistence,
+          stateWritePath: participationStateStore.storagePath,
+          legacyMergePath: participationStateStore.legacyStoragePath,
+        })}`,
+      );
+    } else if (participationEnabled && participationPersistence !== "off") {
+      logger.warn(
+        `matrix participation persistence unavailable ${JSON.stringify({
+          accountId: effectiveAccountId,
+          userId: auth.userId,
+          strategy: participationStrategy,
+          minRoomMembers: participationMinRoomMembers,
+          minAgentMembers: participationMinAgentMembers,
+          persistenceMode: participationPersistence,
+          reason: participationStateDir ? "state-store-not-created" : "missing-state-dir",
+        })}`,
+      );
+    }
+    logger.info(
+      `matrix freshness config resolved ${JSON.stringify({
+        accountId: effectiveAccountId,
+        userId: auth.userId,
+        enabled: freshnessEnabled,
+        mode: freshnessMode,
+        scope: freshnessScope,
+        historyLimit,
+        draftHoldbackMs,
+        model: freshnessModel,
+        minRoomMembers: freshnessMinRoomMembers,
+        minAgentMembers: freshnessMinAgentMembers,
+        allowedFinalActions: freshnessAllowedFinalActions,
+        aiDeterminesFinalAction,
+        finalAction: freshnessFinalAction,
+      })}`,
+    );
     syncLifecycle = createMatrixMonitorSyncLifecycle({
       client,
       statusController,
@@ -346,6 +434,23 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       textLimit,
       mediaMaxBytes,
       historyLimit,
+      participationEnabled,
+      participationMinRoomMembers,
+      participationMinAgentMembers,
+      participationStrategy,
+      participationModel,
+      participationPersistence,
+      participationStateStore,
+      freshnessEnabled,
+      freshnessMinRoomMembers,
+      freshnessMinAgentMembers,
+      freshnessMode,
+      freshnessScope,
+      draftHoldbackMs,
+      freshnessModel,
+      freshnessAllowedFinalActions,
+      aiDeterminesFinalAction,
+      freshnessFinalAction,
       startupMs,
       startupGraceMs,
       dropPreStartupMessages,

@@ -64,14 +64,23 @@ export type RoomHistoryTracker = {
     snapshot: HistorySnapshotToken,
     messageId?: string,
   ) => void;
-};
 
-export type RoomHistoryTrackerTestApi = RoomHistoryTracker & {
   /**
-   * Test-only helper for inspecting pending room history directly.
+   * Inspect pending room history for policy/context consumers without mutating watermarks.
    */
   getPendingHistory: (agentId: string, roomId: string, limit: number) => HistoryEntry[];
 
+  /**
+   * Inspect entries appended after a prepared trigger snapshot without mutating watermarks.
+   */
+  getHistoryAfterSnapshot: (
+    roomId: string,
+    snapshot: HistorySnapshotToken,
+    limit: number,
+  ) => HistoryEntry[];
+};
+
+export type RoomHistoryTrackerTestApi = RoomHistoryTracker & {
   /**
    * Test-only helper for manually appending a trigger entry and snapshot index.
    */
@@ -217,6 +226,17 @@ function createRoomHistoryTrackerInternal(
       return computePendingHistory(queue, agentId, roomId, limit);
     },
 
+    getHistoryAfterSnapshot(roomId, snapshot, limit) {
+      const queue = roomQueues.get(roomId);
+      if (!queue || queue.generation !== snapshot.queueGeneration || limit <= 0) {
+        return [];
+      }
+      const startAbs = Math.max(snapshot.snapshotIdx, queue.baseIndex);
+      const startRel = startAbs - queue.baseIndex;
+      const available = queue.entries.slice(startRel);
+      return available.length > limit ? available.slice(-limit) : available;
+    },
+
     recordTrigger(roomId, entry) {
       const queue = getOrCreateQueue(roomId);
       return appendToQueue(queue, entry);
@@ -283,6 +303,8 @@ export function createRoomHistoryTracker(
     recordPending: tracker.recordPending,
     prepareTrigger: tracker.prepareTrigger,
     consumeHistory: tracker.consumeHistory,
+    getPendingHistory: tracker.getPendingHistory,
+    getHistoryAfterSnapshot: tracker.getHistoryAfterSnapshot,
   };
 }
 
