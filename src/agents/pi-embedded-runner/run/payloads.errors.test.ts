@@ -290,14 +290,23 @@ describe("buildEmbeddedRunPayloads", () => {
     });
   });
 
-  it("suppresses mutating tool errors when suppressToolErrorWarnings is enabled", () => {
+  it("suppresses non-mutating tool errors when suppressToolErrorWarnings is enabled", () => {
     expectNoPayloads({
-      lastToolError: { toolName: "exec", error: "command not found" },
+      lastToolError: { toolName: "browser", error: "connection timeout" },
       suppressToolErrorWarnings: true,
     });
   });
 
   it.each([
+    {
+      name: "still shows unresolved mutating tool errors when suppressToolErrorWarnings is enabled",
+      payload: {
+        lastToolError: { toolName: "write", error: "connection timeout" },
+        suppressToolErrorWarnings: true,
+      },
+      title: "Write",
+      absentDetail: "connection timeout",
+    },
     {
       name: "still shows mutating tool errors when messages.suppressToolErrors is enabled",
       payload: {
@@ -326,6 +335,21 @@ describe("buildEmbeddedRunPayloads", () => {
   ])("$name", ({ payload, title, absentDetail }) => {
     const payloads = buildPayloads(payload);
     expectSingleToolErrorPayload(payloads, { title, absentDetail });
+  });
+
+  it("keeps unresolved mutating tool errors visible with success text under explicit warning suppression", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Done."],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: { toolName: "write", error: "file missing" },
+      suppressToolErrorWarnings: true,
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]?.text).toBe("Done.");
+    expect(payloads[1]?.isError).toBe(true);
+    expect(payloads[1]?.text).toContain("Write");
+    expect(payloads[1]?.text).not.toContain("missing");
   });
 
   it("shows mutating tool errors when assistant output claims success", () => {
@@ -394,6 +418,18 @@ describe("buildEmbeddedRunPayloads", () => {
       assistantTexts: [text],
       lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
       lastToolError: { toolName: "edit", error: "file missing" },
+    });
+
+    expectSinglePayloadSummary(payloads, { text });
+  });
+
+  it("lets explicit warning suppression defer acknowledged mutating failures", () => {
+    const text = "I hit an error while trying to update the file and left it unchanged.";
+    const payloads = buildPayloads({
+      assistantTexts: [text],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: { toolName: "edit", error: "file missing" },
+      suppressToolErrorWarnings: true,
     });
 
     expectSinglePayloadSummary(payloads, { text });

@@ -265,7 +265,7 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 
 </ParamField>
 <ParamField path="suppressToolErrorWarnings" type="boolean">
-  When true, suppresses tool error warning payloads during heartbeat runs.
+  When true, suppresses non-mutating tool error warning payloads during heartbeat runs. Unresolved mutating failures such as write, edit, and message sends remain visible unless the assistant explicitly acknowledges the failed action.
 
 </ParamField>
 <ParamField path="activeHours" type="object">

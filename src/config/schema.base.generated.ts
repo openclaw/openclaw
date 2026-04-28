@@ -5448,7 +5448,8 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   suppressToolErrorWarnings: {
                     type: "boolean",
                     title: "Heartbeat Suppress Tool Error Warnings",
-                    description: "Suppress tool error warning payloads during heartbeat runs.",
+                    description:
+                      "Suppress non-mutating tool error warning payloads during heartbeat runs.",
                   },
                   timeoutSeconds: {
                     type: "integer",
@@ -7175,7 +7176,8 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     suppressToolErrorWarnings: {
                       type: "boolean",
                       title: "Heartbeat Suppress Tool Error Warnings",
-                      description: "Suppress tool error warning payloads during heartbeat runs.",
+                      description:
+                        "Suppress non-mutating tool error warning payloads during heartbeat runs.",
                     },
                     timeoutSeconds: {
                       type: "integer",
@@ -27160,7 +27162,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "agents.defaults.heartbeat.suppressToolErrorWarnings": {
       label: "Heartbeat Suppress Tool Error Warnings",
-      help: "Suppress tool error warning payloads during heartbeat runs.",
+      help: "Suppress non-mutating tool error warning payloads during heartbeat runs.",
       tags: ["automation"],
     },
     "agents.list.*.heartbeat.suppressToolErrorWarnings": {
@@ -28301,7 +28303,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "agents.list[].heartbeat.suppressToolErrorWarnings": {
       label: "Agent Heartbeat Suppress Tool Error Warnings",
-      help: "Suppress tool error warning payloads during heartbeat runs.",
+      help: "Suppress non-mutating tool error warning payloads during heartbeat runs.",
       tags: ["automation"],
     },
     "agents.list[].heartbeat.timeoutSeconds": {
