@@ -25,6 +25,8 @@ export type FollowupRun = {
   prompt: string;
   /** User-visible prompt body persisted to transcript; excludes runtime-only prompt context. */
   transcriptPrompt?: string;
+  /** The user's original input text before channel context and metadata. Threaded to plugin hooks. */
+  rawBody?: string;
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;
   summaryLine?: string;

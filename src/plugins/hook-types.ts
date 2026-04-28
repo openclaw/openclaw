@@ -272,6 +272,16 @@ export type PluginHookAgentEndEvent = {
   success: boolean;
   error?: string;
   durationMs?: number;
+  /**
+   * The user's original input text before channel structural context
+   * (sender labels, message annotations), buildInboundUserContextPrefix()
+   * metadata, and before_prompt_build hook injections.
+   *
+   * Undefined when the run originates from CLI, heartbeat, cron, or
+   * other non-channel sources. Plugins should fall back to extracting
+   * from messages content when absent.
+   */
+  rawBody?: string;
 };
 
 export type PluginHookBeforeAgentFinalizeEvent = {

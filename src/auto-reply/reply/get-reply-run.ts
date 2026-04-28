@@ -403,7 +403,8 @@ export async function runPreparedReply(
     directChatContext || groupChatContext ? "none" : "generic";
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   // Use CommandBody/RawBody for bare reset detection (clean message without structural context).
-  const rawBodyTrimmed = (ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "").trim();
+  const rawBodyForHooks = ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "";
+  const rawBodyTrimmed = rawBodyForHooks.trim();
   const baseBodyTrimmedRaw = baseBody.trim();
   const normalizedCommandBody = command.commandBodyNormalized.trim();
   const softResetTriggered = command.softResetTriggered === true;
@@ -776,6 +777,7 @@ export async function runPreparedReply(
   const followupRun = {
     prompt: queuedBody,
     transcriptPrompt: transcriptCommandBody,
+    rawBody: rawBodyForHooks,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
     enqueuedAt: Date.now(),
@@ -880,6 +882,7 @@ export async function runPreparedReply(
   return runReplyAgent({
     commandBody: prefixedCommandBody,
     transcriptCommandBody,
+    rawBody: rawBodyForHooks,
     followupRun,
     queueKey,
     resolvedQueue,

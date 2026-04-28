@@ -398,6 +398,7 @@ export async function runEmbeddedPiAgent(
       const hookSelection = await resolveHookModelSelection({
         prompt: params.prompt,
         attachments: buildBeforeModelResolveAttachments(params.images),
+        rawBody: params.rawBody,
         provider,
         modelId,
         hookRunner,
@@ -926,6 +927,7 @@ export async function runEmbeddedPiAgent(
             skillsSnapshot: params.skillsSnapshot,
             prompt,
             transcriptPrompt: params.transcriptPrompt,
+            rawBody: params.rawBody,
             images: params.images,
             imageOrder: params.imageOrder,
             clientTools: params.clientTools,
