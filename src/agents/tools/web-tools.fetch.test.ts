@@ -9,9 +9,10 @@ const { extractReadableContentMock, resolveWebFetchDefinitionMock } = vi.hoisted
   resolveWebFetchDefinitionMock: vi.fn(),
 }));
 
-vi.mock("./web-fetch-utils.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("./web-fetch-utils.js")>("./web-fetch-utils.js");
+vi.mock("../../web-fetch/content-extractors.runtime.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../web-fetch/content-extractors.runtime.js")
+  >("../../web-fetch/content-extractors.runtime.js");
   return {
     ...actual,
     extractReadableContent: extractReadableContentMock,
@@ -228,6 +229,83 @@ describe("web_fetch extraction fallbacks", () => {
 
     expect(details.text?.length).toBeLessThanOrEqual(100);
     expect(details.truncated).toBe(true);
+  });
+
+  it("decodes response bytes with a charset from Content-Type", async () => {
+    installMockFetch((input: RequestInfo | URL) => {
+      const response = new Response(new Uint8Array([0x63, 0x61, 0x66, 0xe9]), {
+        status: 200,
+        headers: { "content-type": "text/plain; charset=iso-8859-1" },
+      });
+      Object.defineProperty(response, "url", { value: resolveRequestUrl(input) });
+      return Promise.resolve(response);
+    });
+
+    const tool = createFetchTool({ firecrawl: { enabled: false } });
+    const result = await executeFetch(tool, {
+      url: "https://example.com/latin1",
+      extractMode: "text",
+    });
+    const details = result?.details as { text?: string };
+
+    expect(details.text).toContain("café");
+    expect(details.text).not.toContain("caf�");
+  });
+
+  it("decodes HTML using a meta http-equiv charset before extraction", async () => {
+    const encoder = new TextEncoder();
+    const japanese = new Uint8Array([0x93, 0xfa, 0x96, 0x7b, 0x8c, 0xea]);
+    const responseBytes = new Uint8Array([
+      ...encoder.encode(
+        '<!doctype html><html><head><meta http-equiv="Content-Type" content="text/html; charset=Shift_JIS"><title>',
+      ),
+      ...japanese,
+      ...encoder.encode("</title></head><body><p>"),
+      ...japanese,
+      ...encoder.encode("</p></body></html>"),
+    ]);
+    installMockFetch((input: RequestInfo | URL) => {
+      const response = new Response(responseBytes, {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      });
+      Object.defineProperty(response, "url", { value: resolveRequestUrl(input) });
+      return Promise.resolve(response);
+    });
+
+    const tool = createFetchTool({ firecrawl: { enabled: false } });
+    const result = await executeFetch(tool, {
+      url: "https://example.com/shift-jis",
+      extractMode: "text",
+    });
+    const details = result?.details as { text?: string; title?: string };
+    const output = `${details.title ?? ""}\n${details.text ?? ""}`;
+
+    expect(output).toContain("日本語");
+    expect(output).not.toContain("�");
+  });
+
+  it("ignores charset text in unrelated meta content", async () => {
+    const body =
+      '<!doctype html><html><head><meta name="description" content="charset=Shift_JIS"><title>日本語</title></head><body>日本語</body></html>';
+    installMockFetch((input: RequestInfo | URL) => {
+      const response = new Response(new TextEncoder().encode(body), {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      });
+      Object.defineProperty(response, "url", { value: resolveRequestUrl(input) });
+      return Promise.resolve(response);
+    });
+
+    const tool = createFetchTool({ firecrawl: { enabled: false } });
+    const result = await executeFetch(tool, {
+      url: "https://example.com/content-only-charset",
+      extractMode: "text",
+    });
+    const details = result?.details as { text?: string; title?: string };
+    const output = `${details.title ?? ""}\n${details.text ?? ""}`;
+
+    expect(output).toContain("日本語");
   });
 
   it("caps response bytes and does not hang on endless streams", async () => {

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import type { Bot } from "grammy";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../../test/helpers/import-fresh.js";
 import {
   getTelegramSendTestMocks,
   importTelegramSendModule,
@@ -489,6 +489,31 @@ describe("sendMessageTelegram", () => {
         }),
       );
     }
+  });
+
+  it("normalizes full Telegram bot endpoint apiRoot before send clients reach grammY", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            foo: {
+              apiRoot: "https://api.telegram.org/bot123456:ABC/",
+            },
+          },
+        },
+      },
+    };
+    loadConfig.mockReturnValue(cfg);
+    botApi.sendMessage.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+
+    await sendMessageTelegram("123", "hi", { cfg, token: "tok", accountId: "foo" });
+
+    expect(botCtorSpy).toHaveBeenCalledWith(
+      "tok",
+      expect.objectContaining({
+        client: expect.objectContaining({ apiRoot: "https://api.telegram.org" }),
+      }),
+    );
   });
 
   it("falls back to plain text when Telegram rejects HTML and preserves send params", async () => {
@@ -2162,6 +2187,34 @@ describe("shared send behaviors", () => {
     for (const testCase of cases) {
       await testCase.run();
     }
+  });
+
+  it("uses native reply parameters for direct quote sends without trimming the quote", async () => {
+    const chatId = "123";
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 56,
+      chat: { id: chatId },
+    });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    await sendMessageTelegram(chatId, "reply text", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+      replyToMessageId: 100,
+      quoteText: " quoted text\n",
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(chatId, "reply text", {
+      parse_mode: "HTML",
+      reply_parameters: {
+        message_id: 100,
+        quote: " quoted text\n",
+        allow_sending_without_reply: true,
+      },
+    });
   });
 
   it("omits invalid reply_to_message_id values before calling Telegram", async () => {

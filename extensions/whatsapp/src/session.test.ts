@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { enqueueCredsSave } from "./creds-persistence.js";
 import { baileys, getLastSocket, resetBaileysMocks, resetLoadConfigMock } from "./test-helpers.js";
 
 const useMultiFileAuthStateMock = vi.mocked(baileys.useMultiFileAuthState);
@@ -14,6 +15,7 @@ let logWebSelfId: typeof import("./session.js").logWebSelfId;
 let waitForWaConnection: typeof import("./session.js").waitForWaConnection;
 let waitForCredsSaveQueue: typeof import("./session.js").waitForCredsSaveQueue;
 let writeCredsJsonAtomically: typeof import("./session.js").writeCredsJsonAtomically;
+let DEFAULT_WHATSAPP_SOCKET_TIMING: typeof import("./socket-timing.js").DEFAULT_WHATSAPP_SOCKET_TIMING;
 
 async function flushCredsUpdate() {
   await new Promise<void>((resolve) => setImmediate(resolve));
@@ -147,6 +149,7 @@ describe("web session", () => {
       waitForCredsSaveQueue,
       writeCredsJsonAtomically,
     } = await import("./session.js"));
+    ({ DEFAULT_WHATSAPP_SOCKET_TIMING } = await import("./socket-timing.js"));
   });
 
   beforeEach(() => {
@@ -170,7 +173,10 @@ describe("web session", () => {
     await createWaSocket(true, false, { authDir });
     const makeWASocket = baileys.makeWASocket as ReturnType<typeof vi.fn>;
     expect(makeWASocket).toHaveBeenCalledWith(
-      expect.objectContaining({ printQRInTerminal: false }),
+      expect.objectContaining({
+        printQRInTerminal: false,
+        ...DEFAULT_WHATSAPP_SOCKET_TIMING,
+      }),
     );
     const passed = makeWASocket.mock.calls[0][0];
     const passedLogger = (passed as { logger?: { level?: string; trace?: unknown } }).logger;
@@ -184,6 +190,22 @@ describe("web session", () => {
       0o600,
     );
     openMock.restore();
+  });
+
+  it("passes explicit Baileys socket timing overrides", async () => {
+    await createWaSocket(false, false, {
+      keepAliveIntervalMs: 10_000,
+      connectTimeoutMs: 90_000,
+      defaultQueryTimeoutMs: 120_000,
+    });
+
+    expect(baileys.makeWASocket).toHaveBeenCalledWith(
+      expect.objectContaining({
+        keepAliveIntervalMs: 10_000,
+        connectTimeoutMs: 90_000,
+        defaultQueryTimeoutMs: 120_000,
+      }),
+    );
   });
 
   it("uses ambient env proxy agent when HTTPS_PROXY is configured", async () => {
@@ -201,6 +223,33 @@ describe("web session", () => {
     expect(typeof (passed.fetchAgent as { dispatch?: unknown } | undefined)?.dispatch).toBe(
       "function",
     );
+  });
+
+  it("uses lowercase HTTPS proxy before uppercase for WA WebSocket connection", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://upper-proxy.test:8080");
+    vi.stubEnv("https_proxy", "http://lower-proxy.test:8080");
+
+    await createWaSocket(false, false);
+
+    const passed = (baileys.makeWASocket as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+      agent?: { proxy?: URL };
+    };
+    expect(passed.agent).toBeDefined();
+    expect(passed.agent?.proxy?.href).toContain("lower-proxy.test");
+  });
+
+  it("skips WA WebSocket env proxy agent when NO_PROXY covers WhatsApp Web", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
+    vi.stubEnv("NO_PROXY", "mmg.whatsapp.net");
+
+    await createWaSocket(false, false);
+
+    const passed = (baileys.makeWASocket as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+      agent?: unknown;
+      fetchAgent?: unknown;
+    };
+    expect(passed.agent).toBeUndefined();
+    expect(passed.fetchAgent).toBeDefined();
   });
 
   it("does not create a proxy agent when no env proxy is configured", async () => {
@@ -340,10 +389,13 @@ describe("web session", () => {
     sock.ev.emit("creds.update", {});
     sock.ev.emit("creds.update", {});
 
-    await flushCredsUpdate();
-    expect(inFlight).toBe(1);
-
-    (release as (() => void) | null)?.();
+    try {
+      await vi.waitFor(() => {
+        expect(inFlight).toBe(1);
+      });
+    } finally {
+      (release as (() => void) | null)?.();
+    }
 
     await waitForCredsSaveQueue(authDir);
 
@@ -367,43 +419,42 @@ describe("web session", () => {
 
     const authDirA = createTempAuthDir("openclaw-wa-a");
     const authDirB = createTempAuthDir("openclaw-wa-b");
-    const openMock = mockFsOpenForCredsWrites({
-      onTempWrite: async (filePath) => {
-        if (filePath.startsWith(authDirA)) {
-          inFlightA += 1;
-          await gateA;
-          inFlightA -= 1;
-          return;
-        }
-        if (filePath.startsWith(authDirB)) {
-          inFlightB += 1;
-          await gateB;
-          inFlightB -= 1;
-        }
+    const onError = vi.fn();
+
+    enqueueCredsSave(
+      authDirA,
+      async () => {
+        inFlightA += 1;
+        await gateA;
+        inFlightA -= 1;
       },
-    });
+      onError,
+    );
+    enqueueCredsSave(
+      authDirB,
+      async () => {
+        inFlightB += 1;
+        await gateB;
+        inFlightB -= 1;
+      },
+      onError,
+    );
 
-    await createWaSocket(false, false, { authDir: authDirA });
-    const sockA = getLastSocket();
-    await createWaSocket(false, false, { authDir: authDirB });
-    const sockB = getLastSocket();
+    try {
+      await vi.waitFor(() => {
+        expect(inFlightA).toBe(1);
+        expect(inFlightB).toBe(1);
+      });
+    } finally {
+      (releaseA as (() => void) | null)?.();
+      (releaseB as (() => void) | null)?.();
+    }
 
-    sockA.ev.emit("creds.update", {});
-    sockB.ev.emit("creds.update", {});
-
-    await flushCredsUpdate();
-
-    expect(openMock.tempHandles).toHaveLength(2);
-    expect(inFlightA).toBe(1);
-    expect(inFlightB).toBe(1);
-
-    (releaseA as (() => void) | null)?.();
-    (releaseB as (() => void) | null)?.();
     await Promise.all([waitForCredsSaveQueue(authDirA), waitForCredsSaveQueue(authDirB)]);
 
     expect(inFlightA).toBe(0);
     expect(inFlightB).toBe(0);
-    openMock.restore();
+    expect(onError).not.toHaveBeenCalled();
   });
 
   it("rotates creds backup when creds.json is valid JSON", async () => {

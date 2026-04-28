@@ -328,6 +328,32 @@ describe("buildQaRuntimeEnv", () => {
     expect(__testing.isRetryableGatewayCallError("permission denied")).toBe(false);
   });
 
+  it("waits for a fresh in-process restart boundary after the current log offset", async () => {
+    let logs = "old restart mode: in-process restart\n";
+    const offset = logs.length;
+    const wait = __testing.waitForQaGatewayRestartBoundary({
+      logs: () => logs,
+      offset,
+      pollMs: 1,
+      timeoutMs: 100,
+    });
+
+    logs += "signal SIGUSR1 received\nrestart mode: in-process restart\n";
+
+    await expect(wait).resolves.toBeUndefined();
+  });
+
+  it("times out when a SIGUSR1 restart never reaches the boundary", async () => {
+    await expect(
+      __testing.waitForQaGatewayRestartBoundary({
+        logs: () => "signal SIGUSR1 received\n",
+        offset: 0,
+        pollMs: 1,
+        timeoutMs: 1,
+      }),
+    ).rejects.toThrow("qa gateway child did not reach restart boundary");
+  });
+
   it("stages a live Anthropic setup-token profile for isolated QA workers", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "qa-setup-token-state-"));
     cleanups.push(async () => {
@@ -888,6 +914,57 @@ describe("qa bundled plugin dir", () => {
         ),
       ),
     ).resolves.toBeTruthy();
+  });
+
+  it("skips transient runtime dependency artifacts while staging built bundled plugins", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-runtime-deps-"));
+    cleanups.push(async () => {
+      await rm(repoRoot, { recursive: true, force: true });
+    });
+    await writeFile(
+      path.join(repoRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", type: "module" }, null, 2),
+      "utf8",
+    );
+    const pluginDir = path.join(repoRoot, "dist", "extensions", "qa-channel");
+    await mkdir(path.join(pluginDir, ".openclaw-runtime-deps-copy-active", "node_modules"), {
+      recursive: true,
+    });
+    await writeFile(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({ name: "@openclaw/qa-channel", type: "module" }, null, 2),
+      "utf8",
+    );
+    await writeFile(path.join(pluginDir, "index.js"), "export const ok = true;\n", "utf8");
+    await writeFile(path.join(pluginDir, ".openclaw-runtime-deps.json"), "{}\n", "utf8");
+    await writeFile(path.join(pluginDir, ".openclaw-runtime-deps-stamp.json"), "{}\n", "utf8");
+    await writeFile(
+      path.join(pluginDir, ".openclaw-runtime-deps-copy-active", "node_modules", "transient.js"),
+      "export {};\n",
+      "utf8",
+    );
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-runtime-deps-target-"));
+    cleanups.push(async () => {
+      await rm(tempRoot, { recursive: true, force: true });
+    });
+
+    const { bundledPluginsDir } = await __testing.createQaBundledPluginsDir({
+      repoRoot,
+      tempRoot,
+      allowedPluginIds: ["qa-channel"],
+    });
+
+    const stagedPluginDir = path.join(bundledPluginsDir, "qa-channel");
+    await expect(readFile(path.join(stagedPluginDir, "index.js"), "utf8")).resolves.toContain("ok");
+    await expect(lstat(path.join(stagedPluginDir, ".openclaw-runtime-deps.json"))).rejects.toThrow(
+      /ENOENT/u,
+    );
+    await expect(
+      lstat(path.join(stagedPluginDir, ".openclaw-runtime-deps-stamp.json")),
+    ).rejects.toThrow(/ENOENT/u);
+    await expect(
+      lstat(path.join(stagedPluginDir, ".openclaw-runtime-deps-copy-active")),
+    ).rejects.toThrow(/ENOENT/u);
   });
 
   it("preserves dist-runtime-only root chunks when dist also exists", async () => {

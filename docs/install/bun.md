@@ -35,7 +35,7 @@ Bun is an optional local runtime for running TypeScript directly (`bun run ...`,
   </Step>
 </Steps>
 
-## Lifecycle Scripts
+## Lifecycle scripts
 
 Bun blocks dependency lifecycle scripts unless explicitly trusted. For this repo, the commonly blocked scripts are not required:
 
@@ -51,3 +51,9 @@ bun pm trust @whiskeysockets/baileys protobufjs
 ## Caveats
 
 Some scripts still hardcode pnpm (for example `docs:build`, `ui:*`, `protocol:check`). Run those via pnpm for now.
+
+## Related
+
+- [Install overview](/install)
+- [Node.js](/install/node)
+- [Updating](/install/updating)

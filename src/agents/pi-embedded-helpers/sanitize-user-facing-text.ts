@@ -1,3 +1,4 @@
+import { stripInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
 import {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
@@ -156,6 +157,10 @@ export function formatTransportErrorCopy(raw: string): string | undefined {
     lower.includes("network request failed")
   ) {
     return "LLM request failed: network connection error.";
+  }
+
+  if (raw.includes("网络错误") || raw.includes("网络异常") || raw.includes("连接错误")) {
+    return "LLM request failed: provider reported a network error.";
   }
 
   return undefined;
@@ -365,7 +370,7 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
     return raw;
   }
   const errorContext = opts?.errorContext ?? false;
-  const stripped = stripInternalRuntimeContext(stripFinalTagsFromText(raw));
+  const stripped = stripInboundMetadata(stripInternalRuntimeContext(stripFinalTagsFromText(raw)));
   const trimmed = stripped.trim();
   if (!trimmed) {
     return "";

@@ -1,24 +1,35 @@
-import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import {
+  chunkMarkdownTextWithMode,
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+  type ChunkMode,
+} from "openclaw/plugin-sdk/reply-chunking";
 import {
   deliverTextOrMediaReply,
   resolveSendableOutboundReplyParts,
+  type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
-import type { ChunkMode } from "openclaw/plugin-sdk/reply-runtime";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-reference";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
 import { SLACK_TEXT_LIMIT } from "../limits.js";
 import { resolveSlackReplyBlocks } from "../reply-blocks.js";
-import {
-  chunkMarkdownTextWithMode,
-  createReplyReferencePlanner,
-  isSilentReplyText,
-  SILENT_REPLY_TOKEN,
-} from "./reply.runtime.js";
 import { sendMessageSlack, type SlackSendIdentity } from "./send.runtime.js";
 
 export function readSlackReplyBlocks(payload: ReplyPayload) {
   return resolveSlackReplyBlocks(payload);
+}
+
+export function resolveDeliveredSlackReplyThreadTs(params: {
+  replyToMode: "off" | "first" | "all" | "batched";
+  payloadReplyToId?: string;
+  replyThreadTs?: string;
+}): string | undefined {
+  // Keep reply tags opt-in: when replyToMode is off, explicit reply tags
+  // must not force threading.
+  const inlineReplyToId = params.replyToMode === "off" ? undefined : params.payloadReplyToId;
+  return inlineReplyToId ?? params.replyThreadTs;
 }
 
 export async function deliverReplies(params: {
@@ -34,10 +45,11 @@ export async function deliverReplies(params: {
   identity?: SlackSendIdentity;
 }) {
   for (const payload of params.replies) {
-    // Keep reply tags opt-in: when replyToMode is off, explicit reply tags
-    // must not force threading.
-    const inlineReplyToId = params.replyToMode === "off" ? undefined : payload.replyToId;
-    const threadTs = inlineReplyToId ?? params.replyThreadTs;
+    const threadTs = resolveDeliveredSlackReplyThreadTs({
+      replyToMode: params.replyToMode,
+      payloadReplyToId: payload.replyToId,
+      replyThreadTs: params.replyThreadTs,
+    });
     const reply = resolveSendableOutboundReplyParts(payload);
     const slackBlocks = readSlackReplyBlocks(payload);
     if (!reply.hasContent && !slackBlocks?.length) {

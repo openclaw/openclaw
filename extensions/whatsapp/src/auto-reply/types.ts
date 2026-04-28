@@ -1,5 +1,6 @@
 import type { WebInboundMessage } from "../inbound/types.js";
 import type { ReconnectPolicy } from "../reconnect.js";
+import type { WhatsAppSocketTimingOptions } from "../socket-timing.js";
 
 export type WebChannelHealthState =
   | "starting"
@@ -32,6 +33,7 @@ export type WebChannelStatus = {
 
 export type WebMonitorTuning = {
   reconnect?: Partial<ReconnectPolicy>;
+  socketTiming?: WhatsAppSocketTimingOptions;
   heartbeatSeconds?: number;
   messageTimeoutMs?: number;
   watchdogCheckMs?: number;

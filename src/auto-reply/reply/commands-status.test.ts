@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
-import { withTempHome } from "../../../test/helpers/temp-home.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
 import {
@@ -489,7 +489,7 @@ describe("buildStatusReply subagent summary", () => {
         ...baseCfg,
         agents: {
           defaults: {
-            embeddedHarness: { runtime: "codex" },
+            agentRuntime: { id: "codex" },
           },
         },
       },
@@ -515,7 +515,10 @@ describe("buildStatusReply subagent summary", () => {
       activeModelAuthOverride: "api-key",
     });
 
-    expect(normalizeTestText(text)).toContain("Fast · codex");
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Runtime: OpenAI Codex");
+    expect(normalized).toContain("Fast");
+    expect(normalized).not.toContain("Fast · codex");
   });
 
   it("keeps /status on a session-pinned PI harness after config changes", async () => {
@@ -526,7 +529,7 @@ describe("buildStatusReply subagent summary", () => {
         ...baseCfg,
         agents: {
           defaults: {
-            embeddedHarness: { runtime: "codex" },
+            agentRuntime: { id: "codex" },
           },
         },
       },

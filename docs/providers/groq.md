@@ -53,7 +53,7 @@ to Groq through its OpenAI-compatible API.
 }
 ```
 
-## Available models
+## Built-in catalog
 
 Groq's model catalog changes frequently. Run `openclaw models list | grep groq`
 to see currently available models, or check
@@ -70,6 +70,14 @@ to see currently available models, or check
 Use `openclaw models list --provider groq` for the most up-to-date list of
 models available on your account.
 </Tip>
+
+## Reasoning models
+
+OpenClaw maps its shared `/think` levels to Groq's model-specific
+`reasoning_effort` values. For `qwen/qwen3-32b`, disabled thinking sends
+`none` and enabled thinking sends `default`. For Groq GPT-OSS reasoning models,
+OpenClaw sends `low`, `medium`, or `high`; disabled thinking omits
+`reasoning_effort` because those models do not support a disabled value.
 
 ## Audio transcription
 

@@ -1,8 +1,17 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../../test/helpers/import-fresh.ts";
+
+vi.mock("../../plugins/bundled-dir.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../plugins/bundled-dir.js")>();
+  return {
+    ...actual,
+    resolveBundledPluginsDir: (env: NodeJS.ProcessEnv = process.env) =>
+      env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? actual.resolveBundledPluginsDir(env),
+  };
+});
 
 const tempDirs: string[] = [];
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;

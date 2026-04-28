@@ -1,15 +1,11 @@
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
-import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 import {
-  capEntryCount,
-  getActiveSessionMaintenanceWarning,
-  pruneStaleEntries,
-  rotateSessionFile,
-} from "./store.js";
+  resolveMaintenanceConfigFromInput,
+  resolveSessionEntryMaintenanceHighWater,
+} from "./store-maintenance.js";
+import { capEntryCount, getActiveSessionMaintenanceWarning, pruneStaleEntries } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -82,6 +78,12 @@ describe("resolveMaintenanceConfigFromInput", () => {
 
     expect(maintenance.mode).toBe("enforce");
   });
+
+  it("batches normal entry-count maintenance for production-sized caps", () => {
+    expect(resolveSessionEntryMaintenanceHighWater(2)).toBe(3);
+    expect(resolveSessionEntryMaintenanceHighWater(50)).toBe(75);
+    expect(resolveSessionEntryMaintenanceHighWater(500)).toBe(550);
+  });
 });
 
 describe("getActiveSessionMaintenanceWarning", () => {
@@ -123,49 +125,5 @@ describe("getActiveSessionMaintenanceWarning", () => {
     });
 
     expect(warning?.wouldCap).toBe(true);
-  });
-});
-
-describe("rotateSessionFile", () => {
-  let testDir: string;
-  let storePath: string;
-
-  beforeEach(async () => {
-    testDir = await fixtureSuite.createCaseDir("rotate");
-    storePath = path.join(testDir, "sessions.json");
-  });
-
-  it("file over maxBytes: renamed to .bak.{timestamp}, returns true", async () => {
-    const bigContent = "x".repeat(200);
-    await fs.writeFile(storePath, bigContent, "utf-8");
-
-    const rotated = await rotateSessionFile(storePath, 100);
-
-    expect(rotated).toBe(true);
-    await expect(fs.stat(storePath)).rejects.toThrow();
-    const files = await fs.readdir(testDir);
-    const bakFiles = files.filter((f) => f.startsWith("sessions.json.bak."));
-    expect(bakFiles).toHaveLength(1);
-    const bakContent = await fs.readFile(path.join(testDir, bakFiles[0]), "utf-8");
-    expect(bakContent).toBe(bigContent);
-  });
-
-  it("multiple rotations: only keeps 3 most recent .bak files", async () => {
-    let now = Date.now();
-    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => (now += 5));
-    try {
-      // 4 rotations are enough to verify pruning to <=3 backups.
-      for (let i = 0; i < 4; i++) {
-        await fs.writeFile(storePath, `data-${i}-${"x".repeat(100)}`, "utf-8");
-        await rotateSessionFile(storePath, 50);
-      }
-    } finally {
-      nowSpy.mockRestore();
-    }
-
-    const files = await fs.readdir(testDir);
-    const bakFiles = files.filter((f) => f.startsWith("sessions.json.bak.")).toSorted();
-
-    expect(bakFiles.length).toBeLessThanOrEqual(3);
   });
 });

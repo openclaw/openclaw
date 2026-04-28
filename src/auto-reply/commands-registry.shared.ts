@@ -191,6 +191,32 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
       tier: "essential",
     }),
     defineChatCommand({
+      key: "diagnostics",
+      nativeName: "diagnostics",
+      description: "Explain Gateway diagnostics and Codex feedback upload options.",
+      textAlias: "/diagnostics",
+      acceptsArgs: true,
+      category: "status",
+      tier: "standard",
+      args: [
+        {
+          name: "note",
+          description: "Optional note for Codex feedback upload",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+    }),
+    defineChatCommand({
+      key: "crestodian",
+      description: "Run the Crestodian setup and repair helper.",
+      textAlias: "/crestodian",
+      acceptsArgs: true,
+      scope: "text",
+      category: "management",
+      tier: "essential",
+    }),
+    defineChatCommand({
       key: "tasks",
       nativeName: "tasks",
       description: "List background tasks for this session.",
@@ -703,9 +729,9 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
       args: [
         {
           name: "level",
-          description: "off, minimal, low, medium, high, xhigh",
+          description: "Thinking level",
           type: "string",
-          choices: ({ provider, model }) => listThinkingLevels(provider, model),
+          choices: ({ provider, model, catalog }) => listThinkingLevels(provider, model, catalog),
         },
       ],
       argsMenu: "auto",
@@ -848,7 +874,7 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
     defineChatCommand({
       key: "models",
       nativeName: "models",
-      description: "List model providers/models or add a model.",
+      description: "List model providers/models.",
       textAlias: "/models",
       tier: "standard",
       argsParsing: "none",

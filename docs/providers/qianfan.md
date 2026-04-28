@@ -37,7 +37,7 @@ endpoint and API key. It is OpenAI-compatible, so most OpenAI SDKs work by switc
   </Step>
 </Steps>
 
-## Available models
+## Built-in catalog
 
 | Model ref                            | Input       | Context | Max output | Reasoning | Notes         |
 | ------------------------------------ | ----------- | ------- | ---------- | --------- | ------------- |
@@ -110,6 +110,7 @@ The default bundled model ref is `qianfan/deepseek-v3.2`. You only need to overr
     - Ensure your API key starts with `bce-v3/ALTAK-` and has Qianfan API access enabled in the Baidu Cloud console.
     - If models are not listed, confirm your account has the Qianfan service activated.
     - The default base URL is `https://qianfan.baidubce.com/v2`. Only change it if you use a custom endpoint or proxy.
+
   </Accordion>
 </AccordionGroup>
 

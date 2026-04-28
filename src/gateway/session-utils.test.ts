@@ -5,11 +5,15 @@ import { afterEach, describe, expect, test } from "vitest";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
+  buildGatewaySessionRow,
   capArrayByJsonBytes,
   classifySessionKey,
   deriveSessionTitle,
+  getSessionDefaults,
   listAgentsForGateway,
   listSessionsFromStore,
   loadSessionEntry,
@@ -67,6 +71,7 @@ function createModelDefaultsConfig(params: {
 describe("gateway session utils", () => {
   afterEach(() => {
     resetConfigRuntimeState();
+    resetPluginRuntimeStateForTest();
   });
 
   test("capArrayByJsonBytes trims from the front", () => {
@@ -86,6 +91,192 @@ describe("gateway session utils", () => {
       id: "dev",
     });
     expect(parseGroupKey("foo:bar")).toBeNull();
+  });
+
+  test("session defaults include provider-owned thinking options", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.providers.push({
+      pluginId: "test",
+      source: "test",
+      provider: {
+        id: "openai-codex",
+        label: "OpenAI Codex",
+        auth: [],
+        resolveThinkingProfile: ({ modelId }) => ({
+          levels: [
+            { id: "off" },
+            { id: "minimal" },
+            { id: "low" },
+            { id: "medium" },
+            { id: "adaptive" },
+            { id: "high" },
+            ...(modelId === "gpt-5.5" ? [{ id: "xhigh" as const }] : []),
+            { id: "max", label: "maximum" },
+          ],
+          defaultLevel: "adaptive",
+        }),
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    const defaults = getSessionDefaults(
+      createModelDefaultsConfig({ primary: "openai-codex/gpt-5.5" }),
+    );
+
+    expect(defaults).toMatchObject({
+      modelProvider: "openai-codex",
+      model: "gpt-5.5",
+      thinkingDefault: "adaptive",
+    });
+    expect(defaults.thinkingLevels).toEqual(
+      expect.arrayContaining([
+        { id: "adaptive", label: "adaptive" },
+        { id: "xhigh", label: "xhigh" },
+        { id: "max", label: "maximum" },
+      ]),
+    );
+    expect(defaults.thinkingOptions).toEqual(
+      expect.arrayContaining(["adaptive", "xhigh", "maximum"]),
+    );
+  });
+
+  test("session defaults and rows use catalog reasoning metadata for provider thinking options", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.providers.push({
+      pluginId: "ollama",
+      source: "test",
+      provider: {
+        id: "ollama",
+        label: "Ollama",
+        auth: [],
+        resolveThinkingProfile: ({ reasoning }) => ({
+          levels:
+            reasoning === true
+              ? [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }]
+              : [{ id: "off" }],
+          defaultLevel: reasoning === true ? "medium" : "off",
+        }),
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    const cfg = createModelDefaultsConfig({ primary: "ollama/qwen3:0.6b" });
+    const catalog = [
+      {
+        provider: "ollama",
+        id: "qwen3:0.6b",
+        name: "qwen3:0.6b",
+        reasoning: true,
+      },
+    ];
+
+    const defaults = getSessionDefaults(cfg, catalog);
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "main",
+      modelCatalog: catalog,
+    });
+
+    expect(defaults.thinkingLevels?.map((level) => level.id)).toEqual([
+      "off",
+      "low",
+      "medium",
+      "high",
+      "max",
+    ]);
+    expect(row.thinkingLevels?.map((level) => level.id)).toEqual([
+      "off",
+      "low",
+      "medium",
+      "high",
+      "max",
+    ]);
+    expect(defaults.thinkingDefault).toBe("medium");
+    expect(row.thinkingDefault).toBe("medium");
+  });
+
+  test("session defaults use configured thinking default", () => {
+    const defaults = getSessionDefaults({
+      agents: {
+        defaults: {
+          model: { primary: "openai-codex/gpt-5.5" },
+          thinkingDefault: "high",
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(defaults).toMatchObject({
+      modelProvider: "openai-codex",
+      model: "gpt-5.5",
+      thinkingDefault: "high",
+    });
+  });
+
+  test("session rows use per-agent thinking default from config", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai-codex/gpt-5.5" },
+          thinkingDefault: "low",
+          models: {
+            "openai-codex/gpt-5.5": {
+              params: { thinking: "max" },
+            },
+          },
+        },
+        list: [
+          {
+            id: "alpha",
+            default: true,
+            thinkingDefault: "high",
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "agent:alpha:main",
+    });
+
+    expect(row).toMatchObject({
+      modelProvider: "openai-codex",
+      model: "gpt-5.5",
+      thinkingDefault: "high",
+    });
+  });
+
+  test("session rows prefer per-model thinking over global default", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai-codex/gpt-5.5" },
+          thinkingDefault: "low",
+          models: {
+            "openai-codex/gpt-5.5": {
+              params: { thinking: "max" },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "main",
+    });
+
+    expect(row).toMatchObject({
+      modelProvider: "openai-codex",
+      model: "gpt-5.5",
+      thinkingDefault: "max",
+    });
   });
 
   test("classifySessionKey respects chat type + prefixes", () => {
@@ -1127,5 +1318,67 @@ describe("resolveGatewayModelSupportsImages", () => {
         ],
       }),
     ).resolves.toBe(true);
+  });
+
+  test("matches catalog model ids case-insensitively for explicit providers", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "Qwen/Qwen3.5-35B-A3B",
+        provider: "modelscope",
+        loadGatewayModelCatalog: async () => [
+          {
+            id: "qwen/qwen3.5-35b-a3b",
+            name: "Qwen3.5 35B",
+            provider: "modelscope",
+            input: ["text", "image"],
+          },
+        ],
+      }),
+    ).resolves.toBe(true);
+  });
+
+  test("does not borrow image support from another provider when provider is explicit", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "gpt-4",
+        provider: "openai",
+        loadGatewayModelCatalog: async () => [
+          { id: "gpt-4", name: "GPT-4", provider: "other", input: ["text", "image"] },
+        ],
+      }),
+    ).resolves.toBe(false);
+  });
+
+  test("uses a unique providerless catalog match", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "Qwen/Qwen3.5-35B-A3B",
+        loadGatewayModelCatalog: async () => [
+          {
+            id: "qwen/qwen3.5-35b-a3b",
+            name: "Qwen3.5 35B",
+            provider: "modelscope",
+            input: ["text", "image"],
+          },
+        ],
+      }),
+    ).resolves.toBe(true);
+  });
+
+  test("fails closed on ambiguous providerless catalog matches", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "shared-vision",
+        loadGatewayModelCatalog: async () => [
+          { id: "shared-vision", name: "Shared Vision", provider: "first", input: ["text"] },
+          {
+            id: "shared-vision",
+            name: "Shared Vision",
+            provider: "second",
+            input: ["text", "image"],
+          },
+        ],
+      }),
+    ).resolves.toBe(false);
   });
 });

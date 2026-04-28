@@ -6,8 +6,6 @@ read_when:
 title: "Device model database"
 ---
 
-# Device model database (friendly names)
-
 The macOS companion app shows friendly Apple device model names in the **Instances** UI by mapping Apple model identifiers (e.g. `iPad16,6`, `Mac16,6`) to human-readable names.
 
 The mapping is vendored as JSON under:
@@ -45,3 +43,8 @@ curl -fsSL "https://raw.githubusercontent.com/kyle-seongwoo-jun/apple-device-ide
 ```bash
 swift build --package-path apps/macos
 ```
+
+## Related
+
+- [Nodes](/nodes)
+- [Node troubleshooting](/nodes/troubleshooting)

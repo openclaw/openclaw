@@ -4,12 +4,56 @@
     "target": "OpenClaw"
   },
   {
+    "source": "OpenAI",
+    "target": "OpenAI"
+  },
+  {
+    "source": "OpenAI provider",
+    "target": "OpenAI provider"
+  },
+  {
+    "source": "Azure Speech",
+    "target": "Azure Speech"
+  },
+  {
+    "source": "Azure Speech provider",
+    "target": "Azure Speech provider"
+  },
+  {
+    "source": "Status",
+    "target": "Status"
+  },
+  {
     "source": "Gateway",
     "target": "Gateway 网关"
   },
   {
     "source": "Pi",
     "target": "Pi"
+  },
+  {
+    "source": "Agent runtimes",
+    "target": "Agent Runtimes"
+  },
+  {
+    "source": "Agent Runtimes",
+    "target": "Agent Runtimes"
+  },
+  {
+    "source": "Codex harness",
+    "target": "Codex harness"
+  },
+  {
+    "source": "Agent harness plugins",
+    "target": "Agent harness plugins"
+  },
+  {
+    "source": "Agent loop",
+    "target": "Agent loop"
+  },
+  {
+    "source": "Models",
+    "target": "Models"
   },
   {
     "source": "Skills",
@@ -52,12 +96,20 @@
     "target": "Chutes"
   },
   {
+    "source": "DeepInfra",
+    "target": "DeepInfra"
+  },
+  {
     "source": "Qwen",
     "target": "Qwen"
   },
   {
     "source": "Feishu",
     "target": "Feishu"
+  },
+  {
+    "source": "Yuanbao",
+    "target": "腾讯元宝"
   },
   {
     "source": "WeChat",
@@ -74,6 +126,10 @@
   {
     "source": "BytePlus (International)",
     "target": "BytePlus（国际版）"
+  },
+  {
+    "source": "Volcengine TTS HTTP API",
+    "target": "Volcengine TTS HTTP API"
   },
   {
     "source": "Amazon Bedrock Mantle",
@@ -296,6 +352,10 @@
     "target": "Ollama Web 搜索"
   },
   {
+    "source": "Memory LanceDB",
+    "target": "Memory LanceDB"
+  },
+  {
     "source": "onboarding",
     "target": "新手引导"
   },
@@ -324,11 +384,27 @@
     "target": "环境变量"
   },
   {
+    "source": "Google Meet Plugin",
+    "target": "Google Meet 插件"
+  },
+  {
     "source": "Plugin SDK",
     "target": "插件 SDK"
   },
   {
+    "source": "Plugins",
+    "target": "插件"
+  },
+  {
+    "source": "Building plugins",
+    "target": "构建插件"
+  },
+  {
     "source": "Plugin SDK Overview",
+    "target": "插件 SDK 概览"
+  },
+  {
+    "source": "Plugin SDK overview",
     "target": "插件 SDK 概览"
   },
   {
@@ -338,6 +414,22 @@
   {
     "source": "Plugin Entry Points",
     "target": "插件入口点"
+  },
+  {
+    "source": "Plugin entry points",
+    "target": "插件入口点"
+  },
+  {
+    "source": "Plugin hooks",
+    "target": "插件钩子"
+  },
+  {
+    "source": "Internal hooks",
+    "target": "内部钩子"
+  },
+  {
+    "source": "Plugin architecture internals",
+    "target": "插件架构内部机制"
   },
   {
     "source": "Entry Points",
@@ -358,6 +450,38 @@
   {
     "source": "Setup",
     "target": "设置"
+  },
+  {
+    "source": "Migrate",
+    "target": "迁移"
+  },
+  {
+    "source": "Migrating",
+    "target": "迁移"
+  },
+  {
+    "source": "Migrating from Hermes",
+    "target": "从 Hermes 迁移"
+  },
+  {
+    "source": "Migrating from Claude",
+    "target": "从 Claude 迁移"
+  },
+  {
+    "source": "Agent workspace",
+    "target": "Agent 工作区"
+  },
+  {
+    "source": "Migration",
+    "target": "迁移"
+  },
+  {
+    "source": "Hermes",
+    "target": "Hermes"
+  },
+  {
+    "source": "Archive-only",
+    "target": "仅归档"
   },
   {
     "source": "Channel Plugin SDK",
@@ -392,12 +516,28 @@
     "target": "QA 重构"
   },
   {
+    "source": "Matrix QA",
+    "target": "Matrix QA"
+  },
+  {
+    "source": "QA overview",
+    "target": "QA overview"
+  },
+  {
+    "source": "QA channel",
+    "target": "QA channel"
+  },
+  {
     "source": "Rich Output Protocol",
     "target": "富输出协议"
   },
   {
     "source": "Tencent Cloud (TokenHub)",
     "target": "腾讯云（TokenHub）"
+  },
+  {
+    "source": "Codex Harness Context Engine Port",
+    "target": "Codex Harness Context Engine Port"
   },
   {
     "source": "/gateway/configuration#strict-validation",

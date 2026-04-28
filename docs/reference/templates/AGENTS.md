@@ -94,7 +94,7 @@ In group chats where you receive every message, be **smart about when to contrib
 - Correcting important misinformation
 - Summarizing when asked
 
-**Stay silent (HEARTBEAT_OK) when:**
+**Stay silent when:**
 
 - It's just casual banter between humans
 - Someone already answered the question
@@ -219,3 +219,7 @@ The goal: Be helpful without being annoying. Check in a few times a day, do usef
 ## Make It Yours
 
 This is a starting point. Add your own conventions, style, and rules as you figure out what works.
+
+## Related
+
+- [Default AGENTS.md](/reference/AGENTS.default)

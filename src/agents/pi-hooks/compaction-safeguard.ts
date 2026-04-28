@@ -28,7 +28,9 @@ import {
   summarizeInStages,
 } from "../compaction.js";
 import { collectTextContentBlocks } from "../content-blocks.js";
+import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "../copilot-dynamic-headers.js";
 import { isTimeoutError } from "../failover-error.js";
+import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
 import { repairToolUseResultPairing } from "../session-transcript-repair.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
 import {
@@ -66,9 +68,36 @@ const DEFAULT_QUALITY_GUARD_MAX_RETRIES = 1;
 const MAX_RECENT_TURNS_PRESERVE = 12;
 const MAX_QUALITY_GUARD_MAX_RETRIES = 3;
 const MAX_RECENT_TURN_TEXT_CHARS = 600;
+const PREVIOUS_SUMMARY_REDISTILL_PREFIX =
+  "Previous compaction summary to re-distill with the current conversation. " +
+  "Prune stale, duplicate, or superseded details instead of preserving it verbatim.";
 const compactionSafeguardDeps = {
   summarizeInStages,
 };
+
+function buildPreviousSummaryMessage(previousSummary: string): AgentMessage {
+  return {
+    role: "user",
+    content: [
+      {
+        type: "text",
+        text: `<previous-compaction-summary>\n${PREVIOUS_SUMMARY_REDISTILL_PREFIX}\n\n${previousSummary.trim()}\n</previous-compaction-summary>`,
+      },
+    ],
+    timestamp: 0,
+  } as AgentMessage;
+}
+
+function prependPreviousSummaryForRedistill(params: {
+  messages: AgentMessage[];
+  previousSummary?: string;
+}): AgentMessage[] {
+  const previousSummary = params.previousSummary?.trim();
+  if (!previousSummary) {
+    return params.messages;
+  }
+  return [buildPreviousSummaryMessage(previousSummary), ...params.messages];
+}
 
 /**
  * Attempt provider-based summarization. Returns the summary string on success,
@@ -124,8 +153,12 @@ async function summarizeViaLLM(params: {
   summarizationInstructions?: Parameters<typeof summarizeInStages>[0]["summarizationInstructions"];
   previousSummary?: string;
 }): Promise<string> {
-  return compactionSafeguardDeps.summarizeInStages({
+  const messages = prependPreviousSummaryForRedistill({
     messages: params.messages,
+    previousSummary: params.previousSummary,
+  });
+  return compactionSafeguardDeps.summarizeInStages({
+    messages,
     model: params.model,
     apiKey: params.apiKey,
     headers: params.headers,
@@ -135,7 +168,7 @@ async function summarizeViaLLM(params: {
     contextWindow: params.contextWindow,
     customInstructions: params.customInstructions,
     summarizationInstructions: params.summarizationInstructions,
-    previousSummary: params.previousSummary,
+    previousSummary: undefined,
   });
 }
 
@@ -234,6 +267,26 @@ async function resolveModelAuth(
     };
   }
   return { ok: true, apiKey: requestAuth.apiKey, headers: requestAuth.headers };
+}
+
+function buildCompactionSummaryHeaders(params: {
+  model: NonNullable<ExtensionContext["model"]>;
+  messages: AgentMessage[];
+  headers?: Record<string, string>;
+}): Record<string, string> | undefined {
+  if (params.model.provider !== "github-copilot") {
+    return params.headers;
+  }
+  const messages = params.messages as unknown as Parameters<
+    typeof buildCopilotDynamicHeaders
+  >[0]["messages"];
+  return {
+    ...buildCopilotDynamicHeaders({
+      messages,
+      hasImages: hasCopilotVisionInput(messages),
+    }),
+    ...params.headers,
+  };
 }
 
 function clampNonNegativeInt(value: unknown, fallback: number): number {
@@ -724,10 +777,15 @@ async function readWorkspaceContextForSummary(): Promise<string> {
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
     const { preparation, customInstructions: eventInstructions, signal } = event;
-    const hasRealSummarizable = preparation.messagesToSummarize.some((message, index, messages) =>
+    const rawTurnPrefixMessages = preparation.turnPrefixMessages ?? [];
+    const baseMessagesToSummarize = stripRuntimeContextCustomMessages(
+      preparation.messagesToSummarize,
+    );
+    const baseTurnPrefixMessages = stripRuntimeContextCustomMessages(rawTurnPrefixMessages);
+    const hasRealSummarizable = baseMessagesToSummarize.some((message, index, messages) =>
       isRealConversationMessage(message, messages, index),
     );
-    const hasRealTurnPrefix = preparation.turnPrefixMessages.some((message, index, messages) =>
+    const hasRealTurnPrefix = baseTurnPrefixMessages.some((message, index, messages) =>
       isRealConversationMessage(message, messages, index),
     );
     setCompactionSafeguardCancelReason(ctx.sessionManager, undefined);
@@ -759,8 +817,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
     const fileOpsSummary = formatFileOperations(readFiles, modifiedFiles);
     const toolFailures = collectToolFailures([
-      ...preparation.messagesToSummarize,
-      ...preparation.turnPrefixMessages,
+      ...baseMessagesToSummarize,
+      ...baseTurnPrefixMessages,
     ]);
     const toolFailureSection = formatToolFailuresSection(toolFailures);
 
@@ -777,10 +835,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     };
     const identifierPolicy = runtime?.identifierPolicy ?? "strict";
     const providerId = runtime?.provider;
-    const turnPrefixMessages = preparation.turnPrefixMessages ?? [];
+    const turnPrefixMessages = baseTurnPrefixMessages;
     const recentTurnsPreserve = resolveRecentTurnsPreserve(runtime?.recentTurnsPreserve);
     const { preservedMessages: providerPreservedMessages } = splitPreservedRecentTurns({
-      messages: preparation.messagesToSummarize,
+      messages: baseMessagesToSummarize,
       recentTurnsPreserve,
     });
     const preservedTurnsSection = formatPreservedTurnsSection(providerPreservedMessages);
@@ -802,10 +860,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         try {
           // Give the provider ALL messages — no pruning, no chunking, no split-turn splitting.
           // The provider handles its own context management.
-          const allMessages = [
-            ...preparation.messagesToSummarize,
-            ...(preparation.turnPrefixMessages ?? []),
-          ];
+          const allMessages = [...baseMessagesToSummarize, ...turnPrefixMessages];
           const providerResult = await tryProviderSummarize(compactionProvider, {
             messages: allMessages,
             signal,
@@ -880,12 +935,17 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       return { cancel: true };
     }
     const apiKey = authResult.apiKey ?? "";
-    const headers = authResult.headers;
+    const authHeaders = authResult.headers;
 
     try {
       const modelContextWindow = resolveContextWindowTokens(model);
       const contextWindowTokens = runtime?.contextWindowTokens ?? modelContextWindow;
-      let messagesToSummarize = preparation.messagesToSummarize;
+      let messagesToSummarize = baseMessagesToSummarize;
+      const headers = buildCompactionSummaryHeaders({
+        model,
+        messages: messagesToSummarize,
+        headers: authHeaders,
+      });
       const qualityGuardEnabled = runtime?.qualityGuardEnabled ?? false;
       const qualityGuardMaxRetries = resolveQualityGuardMaxRetries(runtime?.qualityGuardMaxRetries);
 
@@ -1140,6 +1200,7 @@ export const __testing = {
   formatSplitTurnContextSection,
   buildCompactionStructureInstructions,
   buildStructuredFallbackSummary,
+  prependPreviousSummaryForRedistill,
   appendSummarySection,
   resolveRecentTurnsPreserve,
   resolveQualityGuardMaxRetries,

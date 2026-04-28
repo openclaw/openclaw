@@ -3,13 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProviderExternalAuthProfile } from "../plugins/provider-external-auth.types.js";
+import { AUTH_STORE_VERSION, log } from "./auth-profiles/constants.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
   loadAuthProfileStoreForRuntime,
   saveAuthProfileStore,
-} from "./auth-profiles.js";
-import { AUTH_STORE_VERSION, log } from "./auth-profiles/constants.js";
+} from "./auth-profiles/store.js";
 import type { AuthProfileCredential } from "./auth-profiles/types.js";
 
 const resolveExternalAuthProfilesWithPluginsMock = vi.hoisted(() =>
@@ -21,6 +21,7 @@ vi.mock("../plugins/provider-runtime.js", () => ({
 }));
 
 vi.mock("./cli-credentials.js", () => ({
+  readClaudeCliCredentialsCached: () => null,
   readCodexCliCredentialsCached: () => {
     const codexHome = process.env.CODEX_HOME;
     if (!codexHome) {
@@ -53,7 +54,6 @@ vi.mock("./cli-credentials.js", () => ({
   },
   readMiniMaxCliCredentialsCached: () => null,
   resetCliCredentialCachesForTest: vi.fn(),
-  writeCodexCliCredentials: vi.fn(() => false),
 }));
 
 describe("ensureAuthProfileStore", () => {
@@ -671,6 +671,27 @@ describe("ensureAuthProfileStore", () => {
         key: "sk-ant-legacy",
       });
     });
+  });
+
+  it("does not load legacy flat auth-profiles.json entries at runtime", () => {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-flat-profiles-"));
+    try {
+      const authPath = path.join(agentDir, "auth-profiles.json");
+      const legacyFlatStore = {
+        "ollama-windows": {
+          apiKey: "ollama-local",
+          baseUrl: "http://10.0.2.2:11434/v1",
+        },
+      };
+      fs.writeFileSync(authPath, `${JSON.stringify(legacyFlatStore)}\n`, "utf8");
+
+      const store = ensureAuthProfileStore(agentDir);
+
+      expect(store.profiles["ollama-windows:default"]).toBeUndefined();
+      expect(JSON.parse(fs.readFileSync(authPath, "utf8"))).toEqual(legacyFlatStore);
+    } finally {
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
   });
 
   it("merges legacy oauth.json into auth-profiles.json", () => {
