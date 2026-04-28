@@ -9,10 +9,10 @@ import { createSubsystemLogger } from "./subsystem.js";
 
 const logPathTracker = createSuiteLogPathTracker("openclaw-subsystem-log-");
 
-function installConsoleMethodSpy(method: "warn" | "error") {
+function installConsoleMethodSpy(method: "log" | "warn" | "error") {
   const spy = vi.fn();
   loggingState.rawConsole = {
-    log: vi.fn(),
+    log: method === "log" ? spy : vi.fn(),
     info: vi.fn(),
     warn: method === "warn" ? spy : vi.fn(),
     error: method === "error" ? spy : vi.fn(),
@@ -29,6 +29,7 @@ afterEach(() => {
   setLoggerOverride(null);
   loggingState.rawConsole = null;
   resetLogger();
+  vi.unstubAllEnvs();
   vi.useRealTimers();
 });
 
@@ -231,6 +232,36 @@ describe("createSubsystemLogger().isEnabled", () => {
     const written = String(error.mock.calls[0]?.[0] ?? "");
     expect(written).not.toContain("abcdefghijklmnopqrstuvwxyz");
     expect(written).toContain("Bearer ");
+  });
+
+  it("redacts before colorizing subsystem console messages so ANSI reset codes survive", () => {
+    vi.stubEnv("FORCE_COLOR", "1");
+    setLoggerOverride({ level: "silent", consoleLevel: "info" });
+    const logSpy = installConsoleMethodSpy("log");
+    const log = createSubsystemLogger("gateway/auth");
+    const secret = "sk-abcdefghijklmnopqrstuvwxyz123456";
+
+    log.info(`provider API_KEY=${secret}`);
+
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    const written = String(logSpy.mock.calls[0]?.[0] ?? "");
+    expect(written).not.toContain(secret);
+    expect(written).toContain("API_KEY=***");
+    expect(written.endsWith("\u001B[39m")).toBe(true);
+  });
+
+  it("redacts sensitive tokens from raw subsystem console output", () => {
+    setLoggerOverride({ level: "silent", consoleLevel: "info" });
+    const logSpy = installConsoleMethodSpy("log");
+    const log = createSubsystemLogger("gateway/auth");
+    const secret = "sk-rawtokenabcdefghijklmnopqrstuvwxyz123456";
+
+    log.raw(`raw token ${secret}`);
+
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    const written = String(logSpy.mock.calls[0]?.[0] ?? "");
+    expect(written).not.toContain(secret);
+    expect(written).toContain("sk-raw…3456");
   });
 
   it("keeps long-lived subsystem loggers on the current-day rolling file", () => {
