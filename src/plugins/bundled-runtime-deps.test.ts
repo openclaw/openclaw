@@ -215,33 +215,14 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
     ).toThrow("Unable to resolve a safe npm executable on Windows");
   });
 
-  it("uses a Node-adjacent npm binary on POSIX when npm-cli.js is unavailable", () => {
-    const execPath = "/opt/node/bin/node";
-    const npmBinPath = "/opt/node/bin/npm";
-    const runner = resolveBundledRuntimeDepsNpmRunner({
-      env: {
-        PATH: "/repo/evil/bin:/usr/bin:/bin",
-      },
-      execPath,
-      existsSync: (candidate) => candidate === npmBinPath,
-      npmArgs: ["install", "acpx@0.5.3"],
-      platform: "linux",
-    });
-
-    expect(runner).toEqual({
-      command: npmBinPath,
-      args: ["install", "acpx@0.5.3"],
-    });
-  });
-
-  it("refuses POSIX PATH fallback when no safe npm executable is available", () => {
+  it("refuses POSIX npm shim fallback when npm-cli.js is unavailable", () => {
     expect(() =>
       resolveBundledRuntimeDepsNpmRunner({
         env: {
           PATH: "/repo/evil/bin:/usr/bin:/bin",
         },
         execPath: "/opt/node/bin/node",
-        existsSync: () => false,
+        existsSync: (candidate) => candidate === "/opt/node/bin/npm",
         npmArgs: ["install"],
         platform: "linux",
       }),

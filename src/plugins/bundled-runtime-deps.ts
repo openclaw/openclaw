@@ -1325,19 +1325,6 @@ export function resolveBundledRuntimeDepsNpmRunner(params: {
     throw new Error("Unable to resolve a safe npm executable on Windows");
   }
 
-  const npmBinCandidates = [
-    pathImpl.resolve(nodeDir, "npm"),
-    pathImpl.resolve(nodeDir, "../bin/npm"),
-  ];
-  const npmBinPath = npmBinCandidates.find(
-    (candidate) => pathImpl.isAbsolute(candidate) && existsSync(candidate),
-  );
-  if (npmBinPath) {
-    return {
-      command: npmBinPath,
-      args: params.npmArgs,
-    };
-  }
   throw new Error("Unable to resolve a safe npm executable");
 }
 type BundledPluginRuntimeDepsManifest = {
