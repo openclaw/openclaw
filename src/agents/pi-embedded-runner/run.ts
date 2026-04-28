@@ -76,6 +76,7 @@ import {
   parseImageSizeError,
   pickFallbackThinkingLevel,
 } from "../pi-embedded-helpers.js";
+import { appendRawStream } from "../pi-embedded-subscribe.raw-stream.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
@@ -186,6 +187,10 @@ function normalizeEmbeddedRunAttemptResult(
 ): EmbeddedRunAttemptForRunner {
   const raw = attempt as EmbeddedRunAttemptForRunner & {
     assistantTexts?: EmbeddedRunAttemptForRunner["assistantTexts"] | null;
+    assistantOutputs?: EmbeddedRunAttemptForRunner["assistantOutputs"] | null;
+    deliveredCommentarySegmentIds?:
+      | EmbeddedRunAttemptForRunner["deliveredCommentarySegmentIds"]
+      | null;
     toolMetas?: EmbeddedRunAttemptForRunner["toolMetas"] | null;
     messagesSnapshot?: EmbeddedRunAttemptForRunner["messagesSnapshot"] | null;
     messagingToolSentTexts?: EmbeddedRunAttemptForRunner["messagingToolSentTexts"] | null;
@@ -196,6 +201,8 @@ function normalizeEmbeddedRunAttemptResult(
   return {
     ...attempt,
     assistantTexts: raw.assistantTexts ?? [],
+    assistantOutputs: raw.assistantOutputs ?? [],
+    deliveredCommentarySegmentIds: raw.deliveredCommentarySegmentIds ?? [],
     toolMetas: raw.toolMetas ?? [],
     messagesSnapshot: raw.messagesSnapshot ?? [],
     messagingToolSentTexts: raw.messagingToolSentTexts ?? [],
@@ -952,6 +959,17 @@ export async function runEmbeddedPiAgent(
             startupStagesEmitted = true;
           }
 
+          appendRawStream({
+            ts: Date.now(),
+            event: "embedded_runner_commentary_options",
+            runId: params.runId,
+            sessionId: activeSessionId,
+            hasOnCommentaryReply: typeof params.onCommentaryReply === "function",
+            blockReplyTimeoutMs: params.blockReplyTimeoutMs,
+            messageChannel: params.messageChannel,
+            messageProvider: params.messageProvider,
+          });
+
           const rawAttempt = await runEmbeddedAttemptWithBackend({
             sessionId: activeSessionId,
             sessionKey: resolvedSessionKey,
@@ -1033,9 +1051,11 @@ export async function runEmbeddedPiAgent(
             onPartialReply: params.onPartialReply,
             onAssistantMessageStart: params.onAssistantMessageStart,
             onBlockReply: params.onBlockReply,
+            onCommentaryReply: params.onCommentaryReply,
             onBlockReplyFlush: params.onBlockReplyFlush,
             blockReplyBreak: params.blockReplyBreak,
             blockReplyChunking: params.blockReplyChunking,
+            blockReplyTimeoutMs: params.blockReplyTimeoutMs,
             onReasoningStream: params.onReasoningStream,
             onReasoningEnd: params.onReasoningEnd,
             onToolResult: params.onToolResult,
@@ -1961,6 +1981,10 @@ export async function runEmbeddedPiAgent(
 
           const payloads = buildEmbeddedRunPayloads({
             assistantTexts: attempt.assistantTexts,
+            assistantOutputs: attempt.assistantOutputs,
+            deliveredCommentarySegmentIds: attempt.deliveredCommentarySegmentIds,
+            deliveredCommentarySegmentTexts: attempt.deliveredCommentarySegmentTexts,
+            deliveredCommentarySegmentTextLengths: attempt.deliveredCommentarySegmentTextLengths,
             toolMetas: attempt.toolMetas,
             lastAssistant: attempt.lastAssistant,
             lastToolError: attempt.lastToolError,

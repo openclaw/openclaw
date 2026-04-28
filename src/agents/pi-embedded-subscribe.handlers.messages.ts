@@ -17,6 +17,12 @@ import {
 } from "../shared/chat-message-content.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
+  extractAssistantOutputCandidates,
+  resolveAssistantCommentaryDeltaText,
+  type AssistantOutputCandidate,
+  type AssistantOutputEntry,
+} from "./pi-embedded-commentary.js";
+import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
 } from "./pi-embedded-helpers.js";
@@ -49,6 +55,136 @@ function isTranscriptOnlyOpenClawAssistantMessage(message: AgentMessage | undefi
   const provider = normalizeOptionalString(message.provider) ?? "";
   const model = normalizeOptionalString(message.model) ?? "";
   return provider === "openclaw" && (model === "delivery-mirror" || model === "gateway-injected");
+}
+
+function extractAssistantOutputsForMessage(ctx: EmbeddedPiSubscribeContext, msg: AgentMessage) {
+  const messageRecord =
+    msg && typeof msg === "object" ? (msg as unknown as Record<string, unknown>) : undefined;
+  const fallbackMessageStableId =
+    typeof messageRecord?.id === "string" && messageRecord.id.trim().length > 0
+      ? undefined
+      : typeof ctx.resolveCurrentAssistantFallbackMessageId === "function"
+        ? ctx.resolveCurrentAssistantFallbackMessageId()
+        : undefined;
+  return extractAssistantOutputCandidates(msg, { fallbackMessageStableId });
+}
+
+function recordAssistantOutputSegment(
+  ctx: EmbeddedPiSubscribeContext,
+  segment: AssistantOutputEntry,
+) {
+  if (!Array.isArray(ctx.state.assistantOutputs)) {
+    return segment;
+  }
+  const existingSegment = ctx.state.assistantOutputs.find(
+    (entry) => entry.segmentId === segment.segmentId,
+  );
+  if (existingSegment) {
+    existingSegment.text = segment.text;
+    existingSegment.phase = segment.phase;
+    return existingSegment;
+  }
+  ctx.state.assistantOutputs.push(segment);
+  return segment;
+}
+
+function queueCommentarySegmentIfNeeded(
+  ctx: EmbeddedPiSubscribeContext,
+  segment: AssistantOutputEntry,
+) {
+  const appendCommentaryRawStream = (reason: string, extra?: Record<string, unknown>) => {
+    appendRawStream({
+      ts: Date.now(),
+      event: "assistant_commentary_queue",
+      runId: ctx.params.runId,
+      sessionId: (ctx.params.session as { id?: string }).id,
+      reason,
+      segmentId: segment.segmentId,
+      phase: segment.phase,
+      textLength: segment.text.length,
+      ...extra,
+    });
+  };
+  if (segment.phase !== "commentary") {
+    appendCommentaryRawStream("skip_non_commentary");
+    return;
+  }
+  if (typeof ctx.queueCommentaryDelivery !== "function") {
+    appendCommentaryRawStream("skip_no_queue");
+    return;
+  }
+  if (ctx.params.silentExpected) {
+    appendCommentaryRawStream("skip_silent_expected");
+    return;
+  }
+  if (
+    ctx.state.pendingCommentarySegmentIds instanceof Set &&
+    ctx.state.pendingCommentarySegmentIds.has(segment.segmentId)
+  ) {
+    appendCommentaryRawStream("skip_pending");
+    return;
+  }
+  const deliveredText =
+    ctx.state.deliveredCommentarySegmentTexts instanceof Map
+      ? ctx.state.deliveredCommentarySegmentTexts.get(segment.segmentId)
+      : undefined;
+  const deliveredTextLength =
+    ctx.state.deliveredCommentarySegmentTextLengths instanceof Map
+      ? ctx.state.deliveredCommentarySegmentTextLengths.get(segment.segmentId)
+      : undefined;
+  const unsentText = resolveAssistantCommentaryDeltaText({
+    currentText: segment.text,
+    deliveredText,
+    deliveredTextLength,
+  });
+  if (!unsentText) {
+    appendCommentaryRawStream("skip_no_unsent_text", {
+      deliveredTextLength,
+      storedDeliveredTextLength: deliveredText?.length,
+    });
+    return;
+  }
+  appendCommentaryRawStream("queue", {
+    deliveredTextLength,
+    storedDeliveredTextLength: deliveredText?.length,
+    unsentTextLength: unsentText.length,
+  });
+  ctx.queueCommentaryDelivery(
+    {
+      ...segment,
+      text: unsentText,
+    },
+    {
+      allowRedelivery: Boolean(deliveredText),
+      deliveredText: segment.text,
+    },
+  );
+}
+
+function queueNonTerminalCommentarySegments(
+  ctx: EmbeddedPiSubscribeContext,
+  segments: AssistantOutputCandidate[],
+) {
+  for (const segment of segments) {
+    if (segment.phase !== "commentary" || segment.isTerminal) {
+      continue;
+    }
+    const { isTerminal: _isTerminal, ...commentarySegment } = segment;
+    queueCommentarySegmentIfNeeded(ctx, recordAssistantOutputSegment(ctx, commentarySegment));
+  }
+}
+
+function queueCommentarySegments(
+  ctx: EmbeddedPiSubscribeContext,
+  segments: AssistantOutputCandidate[],
+) {
+  for (const segment of segments) {
+    if (segment.phase !== "commentary") {
+      continue;
+    }
+    const { isTerminal: _isTerminal, ...commentarySegment } = segment;
+    queueCommentarySegmentIfNeeded(ctx, recordAssistantOutputSegment(ctx, commentarySegment));
+  }
 }
 
 function isOpenAiResponsesAssistantMessage(message: AgentMessage | undefined): boolean {
@@ -406,10 +542,6 @@ export function handleMessageUpdate(
   }
 
   ctx.noteLastAssistant(msg);
-  const suppressVisibleAssistantOutput = shouldSuppressAssistantVisibleOutput(msg);
-  if (suppressVisibleAssistantOutput) {
-    return;
-  }
   const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);
 
   const assistantEvent = evt.assistantMessageEvent;
@@ -457,6 +589,24 @@ export function handleMessageUpdate(
     return;
   }
 
+  const partialAssistant =
+    assistantRecord?.partial && typeof assistantRecord.partial === "object"
+      ? (assistantRecord.partial as AssistantMessage)
+      : msg;
+  const deliveryPhase = resolveAssistantMessagePhase(partialAssistant);
+  const assistantOutputSegments = extractAssistantOutputsForMessage(ctx, msg);
+  const commentaryOutputSegments = assistantOutputSegments.filter(
+    (segment) => segment.phase === "commentary",
+  );
+  const containsOnlyCommentaryOutput =
+    commentaryOutputSegments.length > 0 &&
+    assistantOutputSegments.every((segment) => segment.phase === "commentary");
+  if (evtType === "text_end") {
+    queueCommentarySegments(ctx, commentaryOutputSegments);
+  } else {
+    queueNonTerminalCommentarySegments(ctx, commentaryOutputSegments);
+  }
+
   if (evtType !== "text_delta" && evtType !== "text_start" && evtType !== "text_end") {
     return;
   }
@@ -481,11 +631,6 @@ export function handleMessageUpdate(
     accumulatedText: ctx.state.deltaBuffer,
   });
 
-  const partialAssistant =
-    assistantRecord?.partial && typeof assistantRecord.partial === "object"
-      ? (assistantRecord.partial as AssistantMessage)
-      : msg;
-  const deliveryPhase = resolveAssistantMessagePhase(partialAssistant);
   const streamItemId = resolveAssistantStreamItemId({
     contentIndex: assistantRecord?.contentIndex,
     message: partialAssistant,
@@ -505,6 +650,9 @@ export function handleMessageUpdate(
     ctx.state.lastAssistantStreamItemId = streamItemId;
   }
   if (deliveryPhase === "commentary") {
+    return;
+  }
+  if (containsOnlyCommentaryOutput) {
     return;
   }
   if (isPhasePendingOpenAiResponsesTextItem) {
@@ -667,6 +815,10 @@ export function handleMessageEnd(
   ctx.noteLastAssistant(assistantMessage);
   ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
   ctx.commitAssistantUsage();
+  for (const segment of extractAssistantOutputsForMessage(ctx, assistantMessage)) {
+    const { isTerminal: _isTerminal, ...finalizedSegment } = segment;
+    queueCommentarySegmentIfNeeded(ctx, recordAssistantOutputSegment(ctx, finalizedSegment));
+  }
   if (suppressVisibleAssistantOutput) {
     return;
   }

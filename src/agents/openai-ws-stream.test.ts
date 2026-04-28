@@ -2178,6 +2178,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
     const events: Array<{
       type?: string;
       delta?: string;
+      content?: string;
       partial?: { phase?: string; content?: unknown[] };
     }> = [];
     const done = (async () => {
@@ -2651,6 +2652,10 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(deltas).toHaveLength(1);
     expect(deltas[0]).toMatchObject({ delta: "Buffered final text" });
     expect(deltas[0]?.partial?.phase).toBe("commentary");
+    const ends = events.filter((event) => event.type === "text_end");
+    expect(ends).toHaveLength(1);
+    expect(ends[0]).toMatchObject({ content: "Buffered final text" });
+    expect(ends[0]?.partial?.phase).toBe("commentary");
   });
 
   it("falls back to HTTP when WebSocket connect fails (session pre-broken via flag)", async () => {

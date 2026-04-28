@@ -4,6 +4,7 @@ import type { ReasoningLevel } from "../auto-reply/thinking.js";
 import type { InlineCodeState } from "../markdown/code-spans.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import type { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
+import type { AssistantOutputEntry } from "./pi-embedded-commentary.js";
 import type { MessagingToolSend } from "./pi-embedded-messaging.types.js";
 import type { BlockReplyPayload } from "./pi-embedded-payloads.js";
 import type { EmbeddedRunReplayState } from "./pi-embedded-runner/replay-state.js";
@@ -28,6 +29,7 @@ export type ToolCallSummary = {
 
 export type EmbeddedPiSubscribeState = {
   assistantTexts: string[];
+  assistantOutputs: AssistantOutputEntry[];
   toolMetas: Array<{ toolName?: string; meta?: string }>;
   toolMetaById: Map<string, ToolCallSummary>;
   toolSummaryById: Set<string>;
@@ -72,6 +74,8 @@ export type EmbeddedPiSubscribeState = {
   lastReasoningSent?: string;
   pendingAssistantUsage?: NormalizedUsage;
   assistantUsageCommitted: boolean;
+  currentAssistantFallbackMessageId?: string;
+  nextAssistantFallbackMessageId: number;
 
   compactionInFlight: boolean;
   lastCompactionTokensAfter?: number;
@@ -103,6 +107,13 @@ export type EmbeddedPiSubscribeState = {
   >;
   deterministicApprovalPromptPending: boolean;
   deterministicApprovalPromptSent: boolean;
+  deliveredCommentarySegmentIds: Set<string>;
+  deliveredCommentarySegmentTexts: Map<string, string>;
+  deliveredCommentarySegmentTextLengths: Map<string, number>;
+  pendingCommentarySegmentIds: Set<string>;
+  commentaryAbortControllers: Set<AbortController>;
+  commentaryGeneration: number;
+  commentaryQueueVersion: number;
   lastAssistant?: AgentMessage;
 };
 
@@ -167,6 +178,14 @@ export type EmbeddedPiSubscribeContext = {
   getCompactionCount: () => number;
   getLastCompactionTokensAfter: () => number | undefined;
   emitBlockReply: (payload: BlockReplyPayload) => void;
+  resolveCurrentAssistantFallbackMessageId: () => string;
+  queueCommentaryDelivery: (
+    segment: AssistantOutputEntry,
+    options?: { allowRedelivery?: boolean; deliveredText?: string },
+  ) => void;
+  waitForCommentaryDeliveryRound: () => Promise<boolean>;
+  waitForCommentaryDelivery: () => Promise<void>;
+  abortCommentaryDelivery: (reason?: unknown) => void;
 };
 
 /**

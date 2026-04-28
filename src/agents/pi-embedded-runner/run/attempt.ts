@@ -9,6 +9,8 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
+import { COMMENTARY_REPLY_TIMEOUT_MS } from "../../../auto-reply/types.js";
+import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import {
@@ -328,6 +330,8 @@ import {
   resolveRuntimeContextPromptParts,
 } from "./runtime-context-prompt.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
+
+const MAX_COMMENTARY_DELIVERY_TIMEOUT_MULTIPLIER = 4;
 
 export {
   appendAttemptCacheTtlIfNeeded,
@@ -2097,6 +2101,7 @@ export async function runEmbeddedAttempt(
           session: activeSession,
           runId: params.runId,
           initialReplayState: params.initialReplayState,
+          abortSignal: runAbortController.signal,
           hookRunner: getGlobalHookRunner() ?? undefined,
           verboseLevel: params.verboseLevel,
           reasoningMode: params.reasoningLevel ?? "off",
@@ -2108,9 +2113,11 @@ export async function runEmbeddedAttempt(
           onReasoningStream: params.onReasoningStream,
           onReasoningEnd: params.onReasoningEnd,
           onBlockReply: params.onBlockReply,
+          onCommentaryReply: params.onCommentaryReply,
           onBlockReplyFlush: params.onBlockReplyFlush,
           blockReplyBreak: params.blockReplyBreak,
           blockReplyChunking: params.blockReplyChunking,
+          blockReplyTimeoutMs: params.blockReplyTimeoutMs,
           onPartialReply: params.onPartialReply,
           onAssistantMessageStart: params.onAssistantMessageStart,
           onAgentEvent: params.onAgentEvent,
@@ -2132,9 +2139,16 @@ export async function runEmbeddedAttempt(
 
       const {
         assistantTexts,
+        assistantOutputs,
         toolMetas,
         unsubscribe,
         waitForCompactionRetry,
+        waitForCommentaryDeliveryRound,
+        abortCommentaryDelivery,
+        getPendingCommentaryDeliveryCount,
+        deliveredCommentarySegmentIds,
+        getDeliveredCommentarySegmentTexts,
+        getDeliveredCommentarySegmentTextLengths,
         isCompactionInFlight,
         getItemLifecycle,
         getMessagingToolSentTexts,
@@ -2182,6 +2196,69 @@ export async function runEmbeddedAttempt(
 
       let abortWarnTimer: NodeJS.Timeout | undefined;
       const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
+      const commentaryDeliveryTimeoutMs = Math.max(
+        1,
+        params.blockReplyTimeoutMs ?? COMMENTARY_REPLY_TIMEOUT_MS,
+      );
+      const maxCommentaryDeliveryWaitMs = Math.max(
+        commentaryDeliveryTimeoutMs,
+        COMMENTARY_REPLY_TIMEOUT_MS * MAX_COMMENTARY_DELIVERY_TIMEOUT_MULTIPLIER,
+      );
+      const waitForCommentaryDeliveryBounded = async () => {
+        if (!params.onCommentaryReply) {
+          return;
+        }
+        while (true) {
+          const pendingCount = Math.max(
+            1,
+            Math.min(
+              MAX_COMMENTARY_DELIVERY_TIMEOUT_MULTIPLIER,
+              getPendingCommentaryDeliveryCount(),
+            ),
+          );
+          const roundTimeoutMs = Math.min(
+            maxCommentaryDeliveryWaitMs,
+            commentaryDeliveryTimeoutMs * pendingCount,
+          );
+          let timer: NodeJS.Timeout | undefined;
+          const timeoutError = new Error(`commentary delivery timed out after ${roundTimeoutMs}ms`);
+          timeoutError.name = "AbortError";
+          const timeoutPromise = new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(timeoutError), roundTimeoutMs);
+          });
+          try {
+            const didDrain = await abortable(
+              Promise.race([waitForCommentaryDeliveryRound(), timeoutPromise]),
+            );
+            if (didDrain) {
+              return;
+            }
+          } catch (err) {
+            abortCommentaryDelivery(err);
+            if (err === timeoutError) {
+              if (!isProbeSession) {
+                log.warn(
+                  `commentary delivery wait timed out: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${roundTimeoutMs} pendingCount=${pendingCount}`,
+                );
+              }
+              return;
+            }
+            if (isRunnerAbortError(err)) {
+              if (!isProbeSession) {
+                log.debug(
+                  `commentary delivery wait aborted: runId=${params.runId} sessionId=${params.sessionId}`,
+                );
+              }
+              return;
+            }
+            throw err;
+          } finally {
+            if (timer) {
+              clearTimeout(timer);
+            }
+          }
+        }
+      };
       const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
       let abortTimer: NodeJS.Timeout | undefined;
       let compactionGraceUsed = false;
@@ -2889,6 +2966,7 @@ export async function runEmbeddedAttempt(
         }
         messagesSnapshot = snapshotSelection.messagesSnapshot;
         sessionIdUsed = snapshotSelection.sessionIdUsed;
+        await waitForCommentaryDeliveryBounded();
 
         lastAssistant = messagesSnapshot
           .slice()
@@ -3271,6 +3349,10 @@ export async function runEmbeddedAttempt(
         finalPromptText,
         messagesSnapshot,
         assistantTexts,
+        assistantOutputs,
+        deliveredCommentarySegmentIds: deliveredCommentarySegmentIds(),
+        deliveredCommentarySegmentTexts: getDeliveredCommentarySegmentTexts(),
+        deliveredCommentarySegmentTextLengths: getDeliveredCommentarySegmentTextLengths(),
         toolMetas: toolMetasNormalized,
         lastAssistant,
         currentAttemptAssistant,

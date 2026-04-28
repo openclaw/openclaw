@@ -271,6 +271,73 @@ describe("deliverWebReply", () => {
     expect(vi.mocked(msg.reply).mock.calls[0]?.[0]).toBe("Before\n\nAfter\n");
   });
 
+  it("aborts before sending when delivery is already aborted", async () => {
+    const msg = makeMsg();
+    const abortController = new AbortController();
+    abortController.abort();
+
+    await expect(
+      deliverWebReply({
+        replyResult: { text: "hi" },
+        msg,
+        maxMediaBytes: 1024 * 1024,
+        textLimit: 200,
+        replyLogger,
+        skipLog: true,
+        abortSignal: abortController.signal,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+
+    expect(msg.reply).not.toHaveBeenCalled();
+    expect(msg.sendMedia).not.toHaveBeenCalled();
+  });
+
+  it("bounds stalled text delivery by timeout", async () => {
+    const msg = makeMsg();
+    (
+      msg.reply as unknown as { mockImplementationOnce: (fn: () => Promise<never>) => void }
+    ).mockImplementationOnce(() => new Promise<never>(() => {}));
+
+    await expect(
+      deliverWebReply({
+        replyResult: { text: "hi" },
+        msg,
+        maxMediaBytes: 1024 * 1024,
+        textLimit: 200,
+        replyLogger,
+        skipLog: true,
+        timeoutMs: 1,
+      }),
+    ).rejects.toThrow("Timed out sending WhatsApp text reply");
+
+    expect(msg.reply).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds stalled media preparation by timeout without sending media", async () => {
+    const msg = makeMsg();
+    (
+      loadWebMedia as unknown as { mockImplementationOnce: (fn: () => Promise<never>) => void }
+    ).mockImplementationOnce(() => new Promise<never>(() => {}));
+
+    await expect(
+      deliverWebReply({
+        replyResult: { mediaUrls: ["http://example.com/img.jpg"] },
+        msg,
+        maxMediaBytes: 1024 * 1024,
+        textLimit: 200,
+        replyLogger,
+        skipLog: true,
+        timeoutMs: 1,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(msg.sendMedia).not.toHaveBeenCalled();
+    expect(replyLogger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ mediaUrl: "http://example.com/img.jpg" }),
+      "failed to send web media reply",
+    );
+  });
+
   it("keeps quote threading on every text chunk for a threaded reply", async () => {
     const msg = makeMsg();
     cacheInboundMessageMeta("work", "15551234567@s.whatsapp.net", "reply-1", {
@@ -507,6 +574,57 @@ describe("deliverWebReply", () => {
       expect.objectContaining({ mediaUrl: "http://example.com/img.jpg" }),
       "failed to send web media reply",
     );
+  });
+
+  it("bounds a stalled first-media fallback reply by timeout", async () => {
+    const msg = makeMsg();
+    mockLoadedImageMedia();
+    mockFirstSendMediaFailure(msg, "boom");
+    (
+      msg.reply as unknown as { mockImplementationOnce: (fn: () => Promise<never>) => void }
+    ).mockImplementationOnce(() => new Promise<never>(() => {}));
+
+    await expect(
+      deliverWebReply({
+        replyResult: { text: "caption", mediaUrl: "http://example.com/img.jpg" },
+        msg,
+        maxMediaBytes: 1024 * 1024,
+        textLimit: 20,
+        replyLogger,
+        skipLog: true,
+        timeoutMs: 1,
+      }),
+    ).rejects.toThrow("Timed out sending WhatsApp media:fallback-text reply");
+
+    expect(msg.sendMedia).toHaveBeenCalledTimes(1);
+    expect(msg.reply).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not send first-media fallback text after delivery aborts", async () => {
+    const msg = makeMsg();
+    const abortController = new AbortController();
+    mockLoadedImageMedia();
+    (
+      msg.sendMedia as unknown as { mockImplementationOnce: (fn: () => Promise<never>) => void }
+    ).mockImplementationOnce(async () => {
+      abortController.abort();
+      throw new Error("boom");
+    });
+
+    await expect(
+      deliverWebReply({
+        replyResult: { text: "caption", mediaUrl: "http://example.com/img.jpg" },
+        msg,
+        maxMediaBytes: 1024 * 1024,
+        textLimit: 20,
+        replyLogger,
+        skipLog: true,
+        abortSignal: abortController.signal,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+
+    expect(msg.sendMedia).toHaveBeenCalledTimes(1);
+    expect(msg.reply).not.toHaveBeenCalled();
   });
 
   it("still attempts later media after the first media fails", async () => {

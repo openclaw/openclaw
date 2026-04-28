@@ -1007,16 +1007,17 @@ export function createOpenAIWebSocketStreamFn(
         const outputItemPhaseById = new Map<string, OpenAIResponsesAssistantPhase | undefined>();
         const outputTextByPart = new Map<string, string>();
         const emittedTextByPart = new Map<string, string>();
+        const completedTextParts = new Set<string>();
+        const startedTextParts = new Set<string>();
+        const endedTextParts = new Set<string>();
         const getOutputTextKey = (itemId: string, contentIndex: number) =>
           `${itemId}:${contentIndex}`;
-        const emitTextDelta = (params: {
+        const buildTextPartial = (params: {
           fullText: string;
-          deltaText: string;
           itemId?: string;
           contentIndex?: number;
         }) => {
           const resolvedItemId = params.itemId;
-          const contentIndex = params.contentIndex ?? 0;
           const itemPhase = resolvedItemId
             ? normalizeAssistantPhase(outputItemPhaseById.get(resolvedItemId))
             : undefined;
@@ -1041,30 +1042,65 @@ export function createOpenAIWebSocketStreamFn(
           const partialMsg: AssistantMessageWithPhase = itemPhase
             ? ({ ...partialBase, phase: itemPhase } as AssistantMessageWithPhase)
             : partialBase;
+          return partialMsg;
+        };
+        const emitTextStartIfNeeded = (params: { itemId: string; contentIndex: number }) => {
+          const key = getOutputTextKey(params.itemId, params.contentIndex);
+          if (startedTextParts.has(key)) {
+            return;
+          }
+          startedTextParts.add(key);
           eventStream.push({
-            type: "text_delta",
-            contentIndex,
-            delta: params.deltaText,
-            partial: partialMsg,
+            type: "text_start",
+            contentIndex: params.contentIndex,
+            partial: buildTextPartial({
+              fullText: "",
+              itemId: params.itemId,
+              contentIndex: params.contentIndex,
+            }),
           });
         };
-        const emitBufferedTextDelta = (params: { itemId: string; contentIndex: number }) => {
+        const emitBufferedTextDelta = (params: {
+          itemId: string;
+          contentIndex: number;
+          final?: boolean;
+        }) => {
           const key = getOutputTextKey(params.itemId, params.contentIndex);
           const fullText = outputTextByPart.get(key) ?? "";
           const emittedText = emittedTextByPart.get(key) ?? "";
-          if (!fullText || fullText === emittedText) {
+          if (!fullText) {
             return;
           }
-          const deltaText = fullText.startsWith(emittedText)
-            ? fullText.slice(emittedText.length)
-            : fullText;
-          emittedTextByPart.set(key, fullText);
-          emitTextDelta({
-            fullText,
-            deltaText,
-            itemId: params.itemId,
-            contentIndex: params.contentIndex,
-          });
+          emitTextStartIfNeeded(params);
+          if (fullText !== emittedText) {
+            const deltaText = fullText.startsWith(emittedText)
+              ? fullText.slice(emittedText.length)
+              : fullText;
+            emittedTextByPart.set(key, fullText);
+            eventStream.push({
+              type: "text_delta",
+              contentIndex: params.contentIndex,
+              delta: deltaText,
+              partial: buildTextPartial({
+                fullText,
+                itemId: params.itemId,
+                contentIndex: params.contentIndex,
+              }),
+            });
+          }
+          if (params.final && !endedTextParts.has(key)) {
+            endedTextParts.add(key);
+            eventStream.push({
+              type: "text_end",
+              contentIndex: params.contentIndex,
+              content: fullText,
+              partial: buildTextPartial({
+                fullText,
+                itemId: params.itemId,
+                contentIndex: params.contentIndex,
+              }),
+            });
+          }
         };
         const capturedContextLength = context.messages.length;
         let sawWsOutput = false;
@@ -1138,9 +1174,13 @@ export function createOpenAIWebSocketStreamFn(
                     for (const key of outputTextByPart.keys()) {
                       if (key.startsWith(`${event.item.id}:`)) {
                         const [, contentIndexText] = key.split(":");
+                        const contentIndex = Number.parseInt(contentIndexText ?? "0", 10) || 0;
                         emitBufferedTextDelta({
                           itemId: event.item.id,
-                          contentIndex: Number.parseInt(contentIndexText ?? "0", 10) || 0,
+                          contentIndex,
+                          final:
+                            event.type === "response.output_item.done" ||
+                            completedTextParts.has(getOutputTextKey(event.item.id, contentIndex)),
                         });
                       }
                     }
@@ -1167,10 +1207,12 @@ export function createOpenAIWebSocketStreamFn(
                 if (event.text && event.text !== outputTextByPart.get(key)) {
                   outputTextByPart.set(key, event.text);
                 }
+                completedTextParts.add(key);
                 if (outputItemPhaseById.get(event.item_id) !== undefined) {
                   emitBufferedTextDelta({
                     itemId: event.item_id,
                     contentIndex: event.content_index,
+                    final: true,
                   });
                 }
                 return;

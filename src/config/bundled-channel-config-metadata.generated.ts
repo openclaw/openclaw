@@ -15815,6 +15815,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         blockStreaming: {
           type: "boolean",
         },
+        commentaryDelivery: {
+          type: "string",
+          enum: ["off", "live"],
+        },
         blockStreamingCoalesce: {
           type: "object",
           properties: {
@@ -16103,6 +16107,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               },
               blockStreaming: {
                 type: "boolean",
+              },
+              commentaryDelivery: {
+                type: "string",
+                enum: ["off", "live"],
               },
               blockStreamingCoalesce: {
                 type: "object",

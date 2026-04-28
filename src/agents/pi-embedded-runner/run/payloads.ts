@@ -12,6 +12,10 @@ import {
   normalizeOptionalString,
 } from "../../../shared/string-coerce.js";
 import {
+  resolveAssistantCommentaryDeltaText,
+  type AssistantOutputEntry,
+} from "../../pi-embedded-commentary.js";
+import {
   BILLING_ERROR_USER_MESSAGE,
   formatAssistantErrorText,
   formatRawAssistantErrorForUi,
@@ -168,6 +172,10 @@ function resolveToolErrorWarningPolicy(params: {
 
 export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
+  assistantOutputs?: AssistantOutputEntry[];
+  deliveredCommentarySegmentIds?: string[];
+  deliveredCommentarySegmentTexts?: ReadonlyMap<string, string>;
+  deliveredCommentarySegmentTextLengths?: ReadonlyMap<string, number>;
   toolMetas: ToolMetaEntry[];
   lastAssistant: AssistantMessage | undefined;
   lastToolError?: ToolErrorSummary;
@@ -338,14 +346,40 @@ export function buildEmbeddedRunPayloads(params: {
     : null;
   const rawAnswerHasMedia =
     (rawAnswerDirectiveState?.mediaUrls?.length ?? 0) > 0 || rawAnswerDirectiveState?.audioAsVoice;
-  const assistantTextsHaveMedia = params.assistantTexts.some((text) => {
+  const hasAuthoritativeAssistantOutputs = Boolean(params.assistantOutputs?.length);
+  const deliveredCommentarySegmentIds = new Set(params.deliveredCommentarySegmentIds ?? []);
+  const resolvedAssistantTexts = (() => {
+    if (params.assistantOutputs && params.assistantOutputs.length > 0) {
+      return params.assistantOutputs
+        .map((segment): string | null => {
+          if (segment.phase !== "commentary") {
+            return segment.text;
+          }
+          const deliveredText = params.deliveredCommentarySegmentTexts?.get(segment.segmentId);
+          if (deliveredText) {
+            return resolveAssistantCommentaryDeltaText({
+              currentText: segment.text,
+              deliveredText,
+              deliveredTextLength: params.deliveredCommentarySegmentTextLengths?.get(
+                segment.segmentId,
+              ),
+            });
+          }
+          return deliveredCommentarySegmentIds.has(segment.segmentId) ? null : segment.text;
+        })
+        .filter((text): text is string => Boolean(text));
+    }
+    return params.assistantTexts;
+  })();
+  const assistantTextsHaveMedia = resolvedAssistantTexts.some((text) => {
     const parsed = parseReplyDirectives(text);
     return (parsed.mediaUrls?.length ?? 0) > 0 || parsed.audioAsVoice;
   });
-  const nonEmptyAssistantTexts = params.assistantTexts.filter((text) => text.trim().length > 0);
+  const nonEmptyAssistantTexts = resolvedAssistantTexts.filter((text) => text.trim().length > 0);
   const normalizedAssistantTexts = normalizeTextForComparison(nonEmptyAssistantTexts.join("\n\n"));
   const normalizedRawAnswerText = normalizeTextForComparison(rawAnswerDirectiveState?.text ?? "");
   const shouldPreferRawAnswerText =
+    !hasAuthoritativeAssistantOutputs &&
     rawAnswerHasMedia &&
     (!nonEmptyAssistantTexts.length ||
       (!assistantTextsHaveMedia &&
@@ -358,7 +392,7 @@ export function buildEmbeddedRunPayloads(params: {
         ? [fallbackRawAnswerText]
         : hasAssistantTextPayload
           ? nonEmptyAssistantTexts
-          : fallbackAnswerText
+          : !hasAuthoritativeAssistantOutputs && fallbackAnswerText
             ? [fallbackAnswerText]
             : []
       ).filter((text) => !shouldSuppressRawErrorText(text));

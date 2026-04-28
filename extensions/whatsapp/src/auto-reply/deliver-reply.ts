@@ -45,6 +45,8 @@ export async function deliverWebReply(params: {
   connectionId?: string;
   skipLog?: boolean;
   tableMode?: MarkdownTableMode;
+  abortSignal?: AbortSignal;
+  timeoutMs?: number;
 }): Promise<WhatsAppReplyDeliveryResult> {
   const { replyResult, msg, maxMediaBytes, textLimit, replyLogger, connectionId, skipLog } = params;
   const replyStarted = Date.now();
@@ -79,6 +81,69 @@ export async function deliverWebReply(params: {
   const textChunks = chunkMarkdownTextWithMode(convertedText, textLimit, chunkMode);
   const mediaList = normalizedReply.mediaUrls ?? [];
 
+  const createDeliveryAbortError = (message: string) => {
+    const error = new Error(message);
+    error.name = "AbortError";
+    return error;
+  };
+
+  const throwIfDeliveryAborted = () => {
+    if (params.abortSignal?.aborted) {
+      throw createDeliveryAbortError("WhatsApp reply delivery aborted");
+    }
+  };
+
+  const runWithDeliveryBounds = async <T>(
+    operation: (abortSignal: AbortSignal) => Promise<T>,
+    label: string,
+  ) => {
+    throwIfDeliveryAborted();
+    const operationAbortController = new AbortController();
+    const abortOperation = (reason: Error) => {
+      if (!operationAbortController.signal.aborted) {
+        operationAbortController.abort(reason);
+      }
+    };
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let abortListener: (() => void) | undefined;
+    const bounds: Promise<never>[] = [];
+    if (params.abortSignal) {
+      bounds.push(
+        new Promise<never>((_, reject) => {
+          abortListener = () => {
+            const error = createDeliveryAbortError("WhatsApp reply delivery aborted");
+            abortOperation(error);
+            reject(error);
+          };
+          params.abortSignal?.addEventListener("abort", abortListener, { once: true });
+        }),
+      );
+    }
+    if (params.timeoutMs && params.timeoutMs > 0) {
+      bounds.push(
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => {
+            const error = new Error(
+              `Timed out sending WhatsApp ${label} reply after ${params.timeoutMs}ms`,
+            );
+            abortOperation(error);
+            reject(error);
+          }, params.timeoutMs);
+        }),
+      );
+    }
+    try {
+      return await Promise.race([operation(operationAbortController.signal), ...bounds]);
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      if (abortListener) {
+        params.abortSignal?.removeEventListener("abort", abortListener);
+      }
+    }
+  };
+
   const getQuote = () => {
     if (!replyResult.replyToId) {
       return undefined;
@@ -97,15 +162,20 @@ export async function deliverWebReply(params: {
   };
 
   const sendWithRetry = async <T>(fn: () => Promise<T>, label: string, maxAttempts = 3) => {
-    return await sendWhatsAppOutboundWithRetry({
-      send: fn,
-      maxAttempts,
-      onRetry: ({ attempt, maxAttempts: retryMaxAttempts, backoffMs, errorText }) => {
-        logVerbose(
-          `Retrying ${label} to ${msg.from} after failure (${attempt}/${retryMaxAttempts - 1}) in ${backoffMs}ms: ${errorText}`,
-        );
-      },
-    });
+    return await runWithDeliveryBounds(
+      (abortSignal) =>
+        sendWhatsAppOutboundWithRetry<T>({
+          send: fn,
+          abortSignal,
+          maxAttempts,
+          onRetry: ({ attempt, maxAttempts: retryMaxAttempts, backoffMs, errorText }) => {
+            logVerbose(
+              `Retrying ${label} to ${msg.from} after failure (${attempt}/${retryMaxAttempts - 1}) in ${backoffMs}ms: ${errorText}`,
+            );
+          },
+        }),
+      label,
+    );
   };
 
   // Text-only replies
@@ -150,12 +220,16 @@ export async function deliverWebReply(params: {
     mediaUrls: mediaList,
     caption: leadingCaption,
     send: async ({ mediaUrl, caption }) => {
-      const media = await prepareWhatsAppOutboundMedia(
-        await loadWebMedia(mediaUrl, {
-          maxBytes: maxMediaBytes,
-          localRoots: params.mediaLocalRoots,
-        }),
-        mediaUrl,
+      const media = await runWithDeliveryBounds(
+        async () =>
+          await prepareWhatsAppOutboundMedia(
+            await loadWebMedia(mediaUrl, {
+              maxBytes: maxMediaBytes,
+              localRoots: params.mediaLocalRoots,
+            }),
+            mediaUrl,
+          ),
+        "media:load",
       );
       if (shouldLogVerbose()) {
         logVerbose(

@@ -324,6 +324,8 @@ export function createFollowupRunner(params: {
                 imageOrder: queuedImageOrder,
                 allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
                 blockReplyBreak: run.blockReplyBreak,
+                onCommentaryReply: opts?.onCommentaryReply,
+                blockReplyTimeoutMs: opts?.blockReplyTimeoutMs,
                 bootstrapPromptWarningSignaturesSeen,
                 bootstrapPromptWarningSignature:
                   bootstrapPromptWarningSignaturesSeen[

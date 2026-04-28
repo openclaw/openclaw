@@ -65,6 +65,108 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expectSinglePayloadText(payloads, "Done.");
   });
 
+  it("omits already delivered commentary from final payloads", () => {
+    const payloads = buildPayloads({
+      assistantOutputs: [
+        {
+          segmentId: "c1",
+          phase: "commentary",
+          text: "Checking the repo state.",
+        },
+      ],
+      deliveredCommentarySegmentIds: ["c1"],
+    });
+
+    expect(payloads).toEqual([]);
+  });
+
+  it("does not fall back to raw assistant text when authoritative outputs were already delivered", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Checking the repo state."],
+      assistantOutputs: [
+        {
+          segmentId: "c1",
+          phase: "commentary",
+          text: "Checking the repo state.",
+        },
+      ],
+      deliveredCommentarySegmentIds: ["c1"],
+      deliveredCommentarySegmentTexts: new Map([["c1", "Checking the repo state."]]),
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "Checking the repo state.",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "c1",
+              phase: "commentary",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+
+    expect(payloads).toEqual([]);
+  });
+
+  it("keeps undelivered commentary suffixes in final payloads", () => {
+    const payloads = buildPayloads({
+      assistantOutputs: [
+        {
+          segmentId: "c1",
+          phase: "commentary",
+          text: "Checking the repo state.",
+        },
+      ],
+      deliveredCommentarySegmentIds: ["c1"],
+      deliveredCommentarySegmentTexts: new Map([["c1", "Checking"]]),
+    });
+
+    expectSinglePayloadText(payloads, "the repo state.");
+  });
+
+  it("does not drop unknown text when delivered commentary snapshots are truncated", () => {
+    const deliveredPrefix = "a".repeat(8_000);
+    const payloads = buildPayloads({
+      assistantOutputs: [
+        {
+          segmentId: "c1",
+          phase: "commentary",
+          text: `${deliveredPrefix} changed before the stored full length.`,
+        },
+      ],
+      deliveredCommentarySegmentIds: ["c1"],
+      deliveredCommentarySegmentTexts: new Map([["c1", deliveredPrefix]]),
+      deliveredCommentarySegmentTextLengths: new Map([["c1", 15_000]]),
+    });
+
+    expectSinglePayloadText(payloads, "changed before the stored full length.");
+  });
+
+  it("preserves final answer segments when commentary was already delivered", () => {
+    const payloads = buildPayloads({
+      assistantOutputs: [
+        {
+          segmentId: "c1",
+          phase: "commentary",
+          text: "Checking the repo state.",
+        },
+        {
+          segmentId: "f1",
+          phase: "final_answer",
+          text: "Done.",
+        },
+      ],
+      deliveredCommentarySegmentIds: ["c1"],
+      deliveredCommentarySegmentTexts: new Map([["c1", "Checking the repo state."]]),
+    });
+
+    expectSinglePayloadText(payloads, "Done.");
+  });
+
   it("falls back to final-answer assistant text when streamed text only contains blanks", () => {
     const payloads = buildPayloads({
       assistantTexts: ["   "],

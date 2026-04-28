@@ -1638,6 +1638,34 @@ describe("createFollowupRunner typing cleanup", () => {
 });
 
 describe("createFollowupRunner agentDir forwarding", () => {
+  it("passes queued run commentary delivery callbacks to runEmbeddedPiAgent", async () => {
+    runEmbeddedPiAgentMock.mockClear();
+    const onCommentaryReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      opts: {
+        onCommentaryReply,
+        blockReplyTimeoutMs: 1234,
+      },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-6",
+    });
+
+    await runner(createQueuedRun());
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
+      onCommentaryReply?: unknown;
+      blockReplyTimeoutMs?: number;
+    };
+    expect(call?.onCommentaryReply).toBe(onCommentaryReply);
+    expect(call?.blockReplyTimeoutMs).toBe(1234);
+  });
+
   it("passes queued run agentDir to runEmbeddedPiAgent", async () => {
     runEmbeddedPiAgentMock.mockClear();
     const onBlockReply = vi.fn(async () => {});

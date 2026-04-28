@@ -1468,6 +1468,8 @@ export async function runAgentTurnWithFallback(params: {
                       }
                     : undefined,
                 onReasoningEnd: params.opts?.onReasoningEnd,
+                onCommentaryReply: params.opts?.onCommentaryReply,
+                blockReplyTimeoutMs: params.opts?.blockReplyTimeoutMs,
                 onAgentEvent: async (evt) => {
                   lifecycleBackstop.note(evt);
                   if (evt.stream.startsWith("codex_app_server.")) {
