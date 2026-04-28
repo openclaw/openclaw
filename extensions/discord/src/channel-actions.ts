@@ -161,6 +161,7 @@ function describeDiscordMessageTool({
 
 export const discordMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: describeDiscordMessageTool,
+  resolveExecutionMode: () => "gateway",
   extractToolSend: ({ args }) => {
     const action = normalizeOptionalString(args.action) ?? "";
     if (action === "sendMessage") {

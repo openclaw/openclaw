@@ -139,6 +139,7 @@ function resolveRuntimeDiscordMessageActions() {
 }
 
 const discordMessageActions = {
+  resolveExecutionMode: discordMessageActionsImpl.resolveExecutionMode,
   describeMessageTool: (
     ctx: Parameters<NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>>[0],
   ): ChannelMessageToolDiscovery | null =>
