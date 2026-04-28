@@ -166,5 +166,21 @@ export async function maybeHandleResetCommand(
     previousSessionEntry: params.previousSessionEntry,
     workspaceDir: params.workspaceDir,
   });
+
+  // Bare `/reset` or `/new` (no tail) must not fall through to model execution:
+  // the reset hooks have already cleared the body, so a downstream provider
+  // call would receive empty input (e.g. OpenAI Responses API rejects this
+  // with "One of input/previous_response_id/prompt/conversation_id must be
+  // provided"). Stop command processing and emit a simple acknowledgement.
+  // See https://github.com/openclaw/openclaw/issues/73367.
+  if (!resetTail) {
+    return {
+      shouldContinue: false,
+      reply: {
+        text: commandAction === "reset" ? "✅ Session reset." : "✅ New session started.",
+      },
+    };
+  }
+
   return null;
 }
