@@ -4,11 +4,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { cleanupTrackedTempDirs } from "../plugins/test-helpers/fs-fixtures.js";
 
-vi.mock("../plugins/bundled-dir.js", () => ({
-  resolveBundledPluginsDir: (env: NodeJS.ProcessEnv = process.env) =>
-    env.OPENCLAW_BUNDLED_PLUGINS_DIR,
-  setBundledPluginsDirOverrideForTest: () => {},
-}));
+vi.mock("../plugins/bundled-dir.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/bundled-dir.js")>();
+  return {
+    ...actual,
+    resolveBundledPluginsDir: (env: NodeJS.ProcessEnv = process.env) =>
+      env.OPENCLAW_BUNDLED_PLUGINS_DIR,
+  };
+});
 
 const tempDirs: string[] = [];
 
