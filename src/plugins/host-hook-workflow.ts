@@ -213,9 +213,6 @@ export async function schedulePluginSessionTurn(params: {
   if (!sessionKey || !message) {
     return undefined;
   }
-  if (params.schedule.payload !== undefined && !isPluginJsonValue(params.schedule.payload)) {
-    return undefined;
-  }
   const schedule = resolveSchedule(params.schedule);
   if (!schedule) {
     return undefined;
@@ -235,10 +232,6 @@ export async function schedulePluginSessionTurn(params: {
         payload: {
           kind: "agentTurn",
           message,
-          pluginId: params.pluginId,
-          ...(params.schedule.payload !== undefined
-            ? { pluginPayload: params.schedule.payload }
-            : {}),
         },
         ...(params.schedule.agentId ? { agentId: params.schedule.agentId } : {}),
         deleteAfterRun: params.schedule.deleteAfterRun ?? schedule.kind === "at",
