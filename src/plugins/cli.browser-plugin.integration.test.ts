@@ -20,6 +20,7 @@ describe("registerPluginCliCommands browser plugin integration", () => {
   beforeEach(() => {
     bundledFixture = createBundledBrowserPluginFixture();
     vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", bundledFixture.rootDir);
+    vi.stubEnv("OPENCLAW_TRUST_BUNDLED_PLUGINS_DIR_FOR_TEST", "1");
     resetPluginState();
   });
 
@@ -41,6 +42,7 @@ describe("registerPluginCliCommands browser plugin integration", () => {
       env: {
         ...process.env,
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+        OPENCLAW_TRUST_BUNDLED_PLUGINS_DIR_FOR_TEST: "1",
         OPENCLAW_BUNDLED_PLUGINS_DIR:
           bundledFixture?.rootDir ?? path.join(process.cwd(), "extensions"),
       } as NodeJS.ProcessEnv,
@@ -65,6 +67,7 @@ describe("registerPluginCliCommands browser plugin integration", () => {
       env: {
         ...process.env,
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+        OPENCLAW_TRUST_BUNDLED_PLUGINS_DIR_FOR_TEST: "1",
         OPENCLAW_BUNDLED_PLUGINS_DIR:
           bundledFixture?.rootDir ?? path.join(process.cwd(), "extensions"),
       } as NodeJS.ProcessEnv,
