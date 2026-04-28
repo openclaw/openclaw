@@ -284,6 +284,87 @@ describe("buildGatewayInstallPlan", () => {
     );
   });
 
+  it("includes env SecretRef values from config into the service environment", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: isolatedPlanEnv({
+        DISCORD_BOT_TOKEN: "discord-test-token",
+      }),
+      port: 3000,
+      runtime: "node",
+      config: {
+        channels: {
+          discord: {
+            token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.DISCORD_BOT_TOKEN).toBe("discord-test-token");
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
+  });
+
+  it("does not embed gateway auth SecretRef values into the service environment", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: isolatedPlanEnv({
+        OPENCLAW_GATEWAY_TOKEN: "gateway-test-token",
+      }),
+      port: 3000,
+      runtime: "node",
+      config: {
+        gateway: {
+          auth: {
+            token: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
+  });
+
+  it("does not inline config env SecretRef values already backed by state-dir dotenv", async () => {
+    await writeStateDirDotEnv("DISCORD_BOT_TOKEN=discord-dotenv-token\n", {
+      stateDir: path.join(isolatedHome, ".openclaw"),
+    });
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: isolatedPlanEnv({
+        DISCORD_BOT_TOKEN: "discord-shell-token",
+      }),
+      port: 3000,
+      runtime: "node",
+      config: {
+        channels: {
+          discord: {
+            token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.DISCORD_BOT_TOKEN).toBeUndefined();
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe("DISCORD_BOT_TOKEN");
+  });
+
   it("skips auth-profile store load when no auth-profile source exists", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {

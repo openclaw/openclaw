@@ -87,6 +87,10 @@ async function normalizeSentMediaUrlsForDedupe(params: {
   return normalizedUrls;
 }
 
+function shouldKeepPayloadDuringSilentTurn(payload: ReplyPayload): boolean {
+  return payload.audioAsVoice === true && resolveSendableOutboundReplyParts(payload).hasMedia;
+}
+
 export async function buildReplyPayloads(params: {
   payloads: ReplyPayload[];
   isHeartbeat: boolean;
@@ -165,7 +169,9 @@ export async function buildReplyPayloads(params: {
       }),
     )
   ).filter(isRenderablePayload);
-  const silentFilteredPayloads = params.silentExpected ? [] : replyTaggedPayloads;
+  const silentFilteredPayloads = params.silentExpected
+    ? replyTaggedPayloads.filter(shouldKeepPayloadDuringSilentTurn)
+    : replyTaggedPayloads;
 
   // Drop final payloads only when block streaming succeeded end-to-end.
   // If streaming aborted (e.g., timeout), fall back to final payloads.

@@ -54,6 +54,7 @@ describe("unit-fast vitest lane", () => {
     expect(config.test?.include).toContain("src/video-generation/provider-registry.test.ts");
     expect(config.test?.include).toContain("src/plugin-sdk/provider-entry.test.ts");
     expect(config.test?.include).toContain("src/security/dangerous-config-flags.test.ts");
+    expect(config.test?.include).toContain("src/security/context-visibility.test.ts");
     expect(config.test?.include).toContain("src/security/safe-regex.test.ts");
   });
 
