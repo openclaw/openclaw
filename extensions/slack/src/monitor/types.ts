@@ -60,6 +60,14 @@ export type SlackChannelIdChangedEvent = {
   event_ts?: string;
 };
 
+export type SlackAppHomeOpenedEvent = {
+  type: "app_home_opened";
+  user?: string;
+  channel?: string;
+  tab?: "home" | "messages";
+  event_ts?: string;
+};
+
 export type SlackPinEvent = {
   type: "pin_added" | "pin_removed";
   channel_id?: string;
