@@ -22198,6 +22198,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       type: "string",
                     },
                   },
+                  allowLoopback: {
+                    type: "boolean",
+                  },
                 },
                 required: ["userHeader"],
                 additionalProperties: false,
