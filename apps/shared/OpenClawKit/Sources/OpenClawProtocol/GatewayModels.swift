@@ -13,6 +13,15 @@ public enum ErrorCode: String, Codable, Sendable {
     case unavailable = "UNAVAILABLE"
 }
 
+public enum NodePresenceAliveReason: String, Codable, Sendable {
+    case background = "background"
+    case silentPush = "silent_push"
+    case bgAppRefresh = "bg_app_refresh"
+    case significantLocation = "significant_location"
+    case manual = "manual"
+    case connect = "connect"
+}
+
 public struct ConnectParams: Codable, Sendable {
     public let minprotocol: Int
     public let maxprotocol: Int
