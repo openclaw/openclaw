@@ -14,15 +14,39 @@
 
 import { describe, it, expect } from "vitest";
 
-/** Mirrors the repair regex from monitor.ts middleware */
-const REPAIR_REGEX = /\\([^"\\\//bfnrtu])/g;
+// ── Mirror `repairJsonEscapes` from monitor.ts ─────────────────────────────
+const VALID_JSON_ESCAPE_CHARS = new Set(['"', "\\", "/", "b", "f", "n", "r", "t", "u"]);
 
-/** Emulates the two-pass parse logic from the fixed middleware */
+function repairJsonEscapes(raw: string): string {
+  let fixed = "";
+  for (let i = 0; i < raw.length; i += 1) {
+    const ch = raw[i];
+    if (ch !== "\\") {
+      fixed += ch;
+      continue;
+    }
+
+    let runEnd = i;
+    while (raw[runEnd] === "\\") {
+      runEnd += 1;
+    }
+    const runLength = runEnd - i;
+    fixed += "\\".repeat(runLength);
+    const next = raw[runEnd];
+    if (runLength % 2 === 1 && next !== undefined && !VALID_JSON_ESCAPE_CHARS.has(next)) {
+      fixed += "\\";
+    }
+    i = runEnd - 1;
+  }
+  return fixed;
+}
+
+/** Emulate the two-pass middleware. Returns parsed body + which pass was used. */
 function twoPassParse(raw: string): { body: unknown; path: "first_pass" | "repaired" } {
   try {
     return { body: JSON.parse(raw), path: "first_pass" };
   } catch {
-    const fixed = raw.replace(REPAIR_REGEX, "\\\\$1");
+    const fixed = repairJsonEscapes(raw);
     return { body: JSON.parse(fixed), path: "repaired" }; // throws if still invalid
   }
 }
@@ -62,6 +86,15 @@ const GOOD_MESSAGE_PAYLOAD = JSON.stringify({
 /** Payload with valid JSON escape sequences — must NOT be double-escaped */
 const VALID_ESCAPES_PAYLOAD = String.raw`{"text": "line1\nline2\ttab\"quote\\backslash"}`;
 
+/**
+ * The edge case: a valid \\q sequence (JSON for literal \q)
+ * mixed with a separate invalid escape in the same payload.
+ */
+const MIXED_VALID_AND_INVALID_ESCAPES = String.raw`{
+  "path": "C:\\q",
+  "team": "Test\Project"
+}`;
+
 // ────────────────────────────────────────────────────────────
 // Tests
 // ────────────────────────────────────────────────────────────
@@ -100,5 +133,13 @@ describe("msteams JSON repair middleware", () => {
   it("completely malformed JSON is re-thrown (caller returns HTTP 200 to prevent backoff)", () => {
     const garbage = "{ not valid json at all ??? }";
     expect(() => twoPassParse(garbage)).toThrow(SyntaxError);
+  });
+
+  it("preserves valid escaped backslashes while repairing another field", () => {
+    const { body, path } = twoPassParse(MIXED_VALID_AND_INVALID_ESCAPES);
+    expect(path).toBe("repaired");
+    const obj = body as Record<string, string>;
+    expect(obj["path"]).toBe("C:\\q");
+    expect(obj["team"]).toBe("Test\\Project");
   });
 });

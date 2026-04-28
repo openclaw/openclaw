@@ -44,6 +44,20 @@ export type MonitorMSTeamsResult = {
 
 const MSTEAMS_WEBHOOK_MAX_BODY_BYTES = DEFAULT_WEBHOOK_MAX_BODY_BYTES;
 
+/**
+ * Attempt to repair a JSON string that contains invalid bare-backslash escape
+ * sequences such as \p, \q, \c (not defined by RFC 8259).
+ *
+ * The repair walks each consecutive run of backslashes. Even-length runs are
+ * already made of valid `\\` pairs. Odd-length runs contain one trailing escape
+ * opener; when that opener is followed by a non-JSON escape character, we add
+ * one backslash so the character is preserved literally.
+ *
+ * Examples:
+ *   "\\q"  (valid JSON: literal \q)   → unchanged
+ *   "\q"   (invalid JSON: bare \q)    → "\\q"
+ *   "\\\q" (valid \\ + invalid \q)   → "\\\\q"
+ */
 const VALID_JSON_ESCAPE_CHARS = new Set(['"', "\\", "/", "b", "f", "n", "r", "t", "u"]);
 
 function repairJsonEscapes(raw: string): string {
