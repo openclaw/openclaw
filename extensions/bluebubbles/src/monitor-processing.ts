@@ -1166,14 +1166,12 @@ async function processMessageAfterDedupe(
             mediaTypes.push(saved.contentType);
           }
         } catch (err) {
+          const safeGuid = sanitizeForLog(attachment.guid, 80);
+          const safeErr = sanitizeForLog(err);
           runtime.error?.(
-            `[bluebubbles] attachment download failed guid=${attachment.guid} err=${String(err)}`,
+            `[bluebubbles] attachment download failed guid=${safeGuid} err=${safeErr}`,
           );
-          logVerbose(
-            core,
-            runtime,
-            `attachment download failed guid=${attachment.guid} err=${String(err)}`,
-          );
+          logVerbose(core, runtime, `attachment download failed guid=${safeGuid} err=${safeErr}`);
         }
       }
     }
@@ -1214,7 +1212,13 @@ async function processMessageAfterDedupe(
     }
 
     // Fallback: fetch the quoted message from BlueBubbles API when cache missed body.
-    if (!replyToBody && baseUrl && password) {
+    // Validate replyToId shape before issuing an outbound API call so a webhook
+    // payload with an oversized / pathological replyToId cannot drive arbitrary
+    // outbound load. Real BlueBubbles GUIDs are alnum + `-` + `:` and short
+    // numeric ids are 1-6 digits; 128 chars is comfortable headroom.
+    const replyToIdValid =
+      replyToId.length > 0 && replyToId.length <= 128 && /^[A-Za-z0-9._:-]+$/.test(replyToId);
+    if (!replyToBody && baseUrl && password && replyToIdValid) {
       try {
         const fetched = await fetchBlueBubblesMessageByGuid(replyToId, {
           cfg: config,
@@ -1229,11 +1233,14 @@ async function processMessageAfterDedupe(
             replyToSender = fetched.sender;
           }
           if (core.logging.shouldLogVerbose()) {
-            const preview = (fetched.text ?? "").replace(/\s+/g, " ").slice(0, 120);
+            const preview = sanitizeForLog(
+              (fetched.text ?? "").replace(/\s+/g, " ").slice(0, 120),
+              120,
+            );
             logVerbose(
               core,
               runtime,
-              `reply-context API fallback replyToId=${replyToId} sender=${replyToSender ?? ""} body="${preview}"`,
+              `reply-context API fallback replyToId=${sanitizeForLog(replyToId, 80)} sender=${sanitizeForLog(replyToSender ?? "", 80)} body="${preview}"`,
             );
           }
         }
