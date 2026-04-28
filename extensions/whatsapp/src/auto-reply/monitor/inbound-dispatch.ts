@@ -345,15 +345,6 @@ export async function dispatchWhatsAppBufferedReply(params: {
   const disableBlockStreaming = resolveWhatsAppDisableBlockStreaming(params.cfg);
   const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.route.accountId });
   const commentaryDelivery = account.commentaryDelivery ?? "off";
-  params.replyLogger.info(
-    {
-      accountId: account.accountId,
-      routeAccountId: params.route.accountId,
-      commentaryDelivery,
-      liveCommentary: commentaryDelivery === "live",
-    },
-    "resolved WhatsApp commentary delivery",
-  );
   let didSendReply = false;
   let didLogHeartbeatStrip = false;
 

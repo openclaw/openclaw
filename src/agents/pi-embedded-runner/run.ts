@@ -76,7 +76,6 @@ import {
   parseImageSizeError,
   pickFallbackThinkingLevel,
 } from "../pi-embedded-helpers.js";
-import { appendRawStream } from "../pi-embedded-subscribe.raw-stream.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
@@ -958,17 +957,6 @@ export async function runEmbeddedPiAgent(
             emitStartupStageSummary("attempt-dispatch");
             startupStagesEmitted = true;
           }
-
-          appendRawStream({
-            ts: Date.now(),
-            event: "embedded_runner_commentary_options",
-            runId: params.runId,
-            sessionId: activeSessionId,
-            hasOnCommentaryReply: typeof params.onCommentaryReply === "function",
-            blockReplyTimeoutMs: params.blockReplyTimeoutMs,
-            messageChannel: params.messageChannel,
-            messageProvider: params.messageProvider,
-          });
 
           const rawAttempt = await runEmbeddedAttemptWithBackend({
             sessionId: activeSessionId,
