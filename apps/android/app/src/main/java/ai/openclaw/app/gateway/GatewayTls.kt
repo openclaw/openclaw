@@ -94,7 +94,7 @@ fun buildGatewayTlsConfig(
   context.init(null, arrayOf(trustManager), SecureRandom())
   val verifier =
     if (expected != null || params.allowTOFU || params.disableTlsVerification) {
-      // When pinning or disabling verification, we intentionally ignore hostname mismatch (service discovery often yields IPs).
+      // When pinning or disabling validation, we intentionally ignore hostname mismatch (service discovery often yields IPs).
       HostnameVerifier { _, _ -> true }
     } else {
       HttpsURLConnection.getDefaultHostnameVerifier()

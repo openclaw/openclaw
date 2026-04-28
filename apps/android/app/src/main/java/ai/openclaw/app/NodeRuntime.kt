@@ -509,7 +509,7 @@ class NodeRuntime(
     _isConnected.value = operatorConnected
     val operator = operatorStatusText.trim()
     val node = nodeStatusText.trim()
-    _statusText.value =
+    val baseText =
       when {
         operatorConnected && _nodeConnected.value -> "Connected"
         operatorConnected && !_nodeConnected.value -> "Connected (node offline)"
@@ -522,6 +522,8 @@ class NodeRuntime(
         operator.isNotBlank() && operator != "Offline" -> operator
         else -> node
       }
+
+    _statusText.value = baseText
     updateHomeCanvasState()
   }
 

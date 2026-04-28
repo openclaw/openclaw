@@ -102,6 +102,11 @@ class SecurePrefs(
   private val _gatewayBearerToken = MutableStateFlow("")
   val gatewayBearerToken: StateFlow<String> = _gatewayBearerToken
 
+  private val _gatewayBasicAuthUser = MutableStateFlow("")
+  val gatewayBasicAuthUser: StateFlow<String> = _gatewayBasicAuthUser
+
+  private val _gatewayBasicAuthPassword = MutableStateFlow("")
+  val gatewayBasicAuthPassword: StateFlow<String> = _gatewayBasicAuthPassword
   private val _onboardingCompleted =
     MutableStateFlow(plainPrefs.getBoolean("onboarding.completed", false))
   val onboardingCompleted: StateFlow<Boolean> = _onboardingCompleted
@@ -436,7 +441,9 @@ class SecurePrefs(
 
   fun saveGatewayBearerToken(bearerToken: String) {
     val key = "gateway.bearerToken.${_instanceId.value}"
-    securePrefs.edit { putString(key, bearerToken.trim()) }
+    val trimmed = bearerToken.trim()
+    securePrefs.edit { putString(key, trimmed) }
+    _gatewayBearerToken.value = trimmed
   }
 
   fun loadGatewayBasicAuthUser(): String? {
@@ -447,7 +454,9 @@ class SecurePrefs(
 
   fun saveGatewayBasicAuthUser(user: String) {
     val key = "gateway.basicAuthUser.${_instanceId.value}"
-    securePrefs.edit { putString(key, user.trim()) }
+    val trimmed = user.trim()
+    securePrefs.edit { putString(key, trimmed) }
+    _gatewayBasicAuthUser.value = trimmed
   }
 
   fun loadGatewayBasicAuthPassword(): String? {
@@ -458,7 +467,9 @@ class SecurePrefs(
 
   fun saveGatewayBasicAuthPassword(password: String) {
     val key = "gateway.basicAuthPassword.${_instanceId.value}"
-    securePrefs.edit { putString(key, password.trim()) }
+    val trimmed = password.trim()
+    securePrefs.edit { putString(key, trimmed) }
+    _gatewayBasicAuthPassword.value = trimmed
   }
 
   fun clearGatewaySetupAuth() {

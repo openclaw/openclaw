@@ -114,6 +114,51 @@ fun CanvasScreen(
             )
           }
 
+          override fun shouldInterceptRequest(
+            view: WebView,
+            request: WebResourceRequest,
+          ): android.webkit.WebResourceResponse? {
+            val urlStr = request.url.toString()
+            if (!urlStr.startsWith("http")) return super.shouldInterceptRequest(view, request)
+
+            val headers = viewModel.canvas.getAuthHeaders()
+            if (headers.isEmpty()) return super.shouldInterceptRequest(view, request)
+
+            return try {
+              val conn = java.net.URL(urlStr).openConnection() as java.net.HttpURLConnection
+              conn.requestMethod = request.method
+              request.requestHeaders.forEach { (key, value) ->
+                conn.setRequestProperty(key, value)
+              }
+              headers.forEach { (key, value) ->
+                conn.setRequestProperty(key, value)
+              }
+              val inputStream = if (conn.responseCode >= 400) conn.errorStream else conn.inputStream
+              var mimeType = conn.contentType
+              var encoding = "utf-8"
+              if (mimeType != null && mimeType.contains(";")) {
+                val parts = mimeType.split(";")
+                mimeType = parts[0].trim()
+                for (i in 1 until parts.size) {
+                  val p = parts[i].trim()
+                  if (p.startsWith("charset=")) {
+                    encoding = p.substring("charset=".length)
+                  }
+                }
+              }
+              android.webkit.WebResourceResponse(
+                mimeType,
+                encoding,
+                conn.responseCode,
+                conn.responseMessage,
+                conn.headerFields.mapValues { it.value.joinToString(",") },
+                inputStream,
+              )
+            } catch (e: Exception) {
+              null
+            }
+          }
+
           override fun onPageFinished(
             view: WebView,
             url: String?,

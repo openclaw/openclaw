@@ -81,6 +81,21 @@ class CanvasController {
     this.basicAuthPassword = basicPass
   }
 
+  fun getAuthHeaders(): Map<String, String> {
+    val headers = mutableMapOf<String, String>()
+    bearerToken?.trim()?.takeIf { it.isNotEmpty() }?.let {
+      headers["Authorization"] = "Bearer $it"
+    }
+    val user = basicAuthUser
+    val pass = basicAuthPassword
+    if (!user.isNullOrEmpty() && !pass.isNullOrEmpty()) {
+      val creds = "$user:$pass"
+      val basic = android.util.Base64.encodeToString(creds.toByteArray(), android.util.Base64.NO_WRAP)
+      headers["Authorization"] = "Basic $basic"
+    }
+    return headers
+  }
+
   fun navigate(url: String) {
     val trimmed = url.trim()
     this.url = if (trimmed.isBlank() || trimmed == "/") null else trimmed
@@ -137,19 +152,7 @@ class CanvasController {
         if (BuildConfig.DEBUG) {
           Log.d("OpenClawCanvas", "load url: $currentUrl")
         }
-        val headers = mutableMapOf<String, String>()
-        bearerToken?.trim()?.takeIf { it.isNotEmpty() }?.let {
-          headers["Authorization"] = "Bearer $it"
-        }
-        val user = basicAuthUser
-        val pass = basicAuthPassword
-        if (!user.isNullOrEmpty() && !pass.isNullOrEmpty()) {
-          val creds = "$user:$pass"
-          val basic = android.util.Base64.encodeToString(creds.toByteArray(), android.util.Base64.NO_WRAP)
-          // If both are somehow specified, Basic auth will overwrite Bearer in this map,
-          // as WebView loadUrl only accepts a Map<String, String> (single value per header).
-          headers["Authorization"] = "Basic $basic"
-        }
+        val headers = getAuthHeaders()
 
         if (headers.isNotEmpty()) {
           wv.loadUrl(currentUrl, headers)

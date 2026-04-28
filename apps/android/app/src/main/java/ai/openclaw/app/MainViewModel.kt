@@ -101,6 +101,9 @@ class MainViewModel(
   val manualDisableTlsVerification: StateFlow<Boolean> = prefs.manualDisableTlsVerification
   val gatewayToken: StateFlow<String> = prefs.gatewayToken
   val gatewayBootstrapToken: StateFlow<String> = prefs.gatewayBootstrapToken
+  val gatewayBearerToken: StateFlow<String> = prefs.gatewayBearerToken
+  val gatewayBasicAuthUser: StateFlow<String> = prefs.gatewayBasicAuthUser
+  val gatewayBasicAuthPassword: StateFlow<String> = prefs.gatewayBasicAuthPassword
   val onboardingCompleted: StateFlow<Boolean> = prefs.onboardingCompleted
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
   val speakerEnabled: StateFlow<Boolean> = prefs.speakerEnabled
@@ -217,6 +220,18 @@ class MainViewModel(
 
   fun setGatewayPassword(value: String) {
     prefs.setGatewayPassword(value)
+  }
+
+  fun setGatewayBearerToken(value: String) {
+    prefs.setGatewayBearerToken(value)
+  }
+
+  fun setGatewayBasicAuthUser(value: String) {
+    prefs.setGatewayBasicAuthUser(value)
+  }
+
+  fun setGatewayBasicAuthPassword(value: String) {
+    prefs.setGatewayBasicAuthPassword(value)
   }
 
   fun resetGatewaySetupAuth() {

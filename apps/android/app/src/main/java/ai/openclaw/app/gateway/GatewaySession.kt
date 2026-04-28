@@ -364,12 +364,12 @@ class GatewaySession(
       val url = buildGatewayWebSocketUrl(endpoint.host, endpoint.port, tls != null)
       val requestBuilder = Request.Builder().url(url)
       bearerToken?.trim()?.takeIf { it.isNotEmpty() }?.let {
-        requestBuilder.addHeader("Authorization", "Bearer $it")
+        requestBuilder.header("Authorization", "Bearer $it")
       }
       if (!basicAuthUser.isNullOrEmpty() && !basicAuthPassword.isNullOrEmpty()) {
         val creds = "$basicAuthUser:$basicAuthPassword"
         val basic = java.util.Base64.getEncoder().encodeToString(creds.toByteArray())
-        requestBuilder.addHeader("Authorization", "Basic $basic")
+        requestBuilder.header("Authorization", "Basic $basic")
       }
       val request = requestBuilder.build()
       socket = client.newWebSocket(request, Listener())
