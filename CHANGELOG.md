@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Installer: warn before redirecting an unwritable npm global prefix to `~/.npm-global` and remind users to avoid `sudo npm i -g` afterward because sudo ignores the user prefix. Fixes #44365; carries forward #50479. Thanks @Sayeem3051.
 - CLI/plugins: use plugin metadata snapshots for install slot selection and add opt-in plugin lifecycle timing traces, so plugin install avoids runtime-loading the plugin registry for metadata-only decisions. Thanks @shakkernerd.
 - fix(plugins): restrict bundled plugin dir resolution to trusted package roots. (#73275) Thanks @pgondhi987.
 - fix(security): prevent workspace PATH injection via service env and trash helpers. (#73264) Thanks @pgondhi987.
