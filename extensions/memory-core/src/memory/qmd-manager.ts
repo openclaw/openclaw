@@ -329,7 +329,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private closed = false;
   private readonly closeSignal: Promise<void>;
   private resolveCloseSignal!: () => void;
-  private db: SqliteDatabase | null = null;
+  private db: import("node:sqlite").DatabaseSync | null = null;
   private lastUpdateAt: number | null = null;
   private lastEmbedAt: number | null = null;
   private embedBackoffUntil: number | null = null;
