@@ -6,7 +6,7 @@ export const SLACK_SOCKET_RECONNECT_POLICY = {
   maxMs: 30_000,
   factor: 1.8,
   jitter: 0.25,
-  maxAttempts: 12,
+  maxAttempts: 0,
 } as const;
 
 export type SlackSocketDisconnectEvent = "disconnect" | "unable_to_socket_mode_start" | "error";
