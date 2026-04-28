@@ -119,9 +119,13 @@ function readCallOptions(
   return isRecord(call) ? call : {};
 }
 
-function firstWsClientOptions(): { agent?: unknown; wsConfig?: unknown } {
+function firstWsClientOptions(): {
+  agent?: unknown;
+  wsConfig?: unknown;
+  onError?: unknown;
+} {
   const options = readCallOptions(wsClientCtorMock, 0);
-  return { agent: options.agent, wsConfig: options.wsConfig };
+  return { agent: options.agent, wsConfig: options.wsConfig, onError: options.onError };
 }
 
 beforeAll(async () => {
@@ -349,6 +353,19 @@ describe("createFeishuWSClient proxy handling", () => {
     await createFeishuWSClient(baseAccount);
 
     const options = firstWsClientOptions();
+    expect(options.wsConfig).toEqual({
+      PingInterval: 30,
+      PingTimeout: 3,
+    });
+  });
+
+  it("passes lifecycle callbacks while preserving heartbeat wsConfig defaults", async () => {
+    const onError = vi.fn();
+
+    await createFeishuWSClient(baseAccount, { onError });
+
+    const options = firstWsClientOptions();
+    expect(options.onError).toBe(onError);
     expect(options.wsConfig).toEqual({
       PingInterval: 30,
       PingTimeout: 3,

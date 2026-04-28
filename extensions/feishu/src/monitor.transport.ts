@@ -124,8 +124,9 @@ function cleanupFeishuWsClient(params: {
   accountId: string;
   wsClient?: Lark.WSClient;
   error: (message: string) => void;
+  clearIdentity: boolean;
 }): void {
-  const { accountId, wsClient, error } = params;
+  const { accountId, wsClient, error, clearIdentity } = params;
   if (wsClient) {
     try {
       wsClient.close();
@@ -136,27 +137,43 @@ function cleanupFeishuWsClient(params: {
     }
   }
   wsClients.delete(accountId);
-  botOpenIds.delete(accountId);
-  botNames.delete(accountId);
+  if (clearIdentity) {
+    botOpenIds.delete(accountId);
+    botNames.delete(accountId);
+  }
 }
 
-function waitForFeishuWsAbort(abortSignal?: AbortSignal): Promise<void> {
-  if (abortSignal?.aborted) {
-    return Promise.resolve();
+function waitForFeishuWsCycleEnd(params: {
+  abortSignal?: AbortSignal;
+  terminalError: Promise<Error>;
+}): Promise<"abort" | Error> {
+  if (params.abortSignal?.aborted) {
+    return Promise.resolve("abort");
   }
+
   return new Promise((resolve) => {
-    if (!abortSignal) {
-      // No external lifecycle owner was provided, so keep the SDK-managed connection alive.
+    let settled = false;
+    let handleAbort: (() => void) | undefined;
+
+    const finish = (result: "abort" | Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (handleAbort) {
+        params.abortSignal?.removeEventListener("abort", handleAbort);
+      }
+      resolve(result);
+    };
+
+    handleAbort = () => finish("abort");
+    params.abortSignal?.addEventListener("abort", handleAbort, { once: true });
+    if (params.abortSignal?.aborted) {
+      finish("abort");
       return;
     }
-    const handleAbort = () => {
-      abortSignal.removeEventListener("abort", handleAbort);
-      resolve();
-    };
-    abortSignal.addEventListener("abort", handleAbort, { once: true });
-    if (abortSignal.aborted) {
-      handleAbort();
-    }
+
+    void params.terminalError.then(finish);
   });
 }
 
@@ -178,22 +195,45 @@ export async function monitorWebSocket({
 
     let wsClient: Lark.WSClient | undefined;
     try {
+      let reportTerminalError: (err: Error) => void = () => {};
+      const terminalError = new Promise<Error>((resolve) => {
+        reportTerminalError = resolve;
+      });
       log(`feishu[${accountId}]: starting WebSocket connection...`);
-      wsClient = await createFeishuWSClient(account);
+      wsClient = await createFeishuWSClient(account, {
+        onError: reportTerminalError,
+      });
       if (abortSignal?.aborted) {
-        cleanupFeishuWsClient({ accountId, wsClient, error });
+        cleanupFeishuWsClient({ accountId, wsClient, error, clearIdentity: true });
         break;
       }
       wsClients.set(accountId, wsClient);
       await wsClient.start({ eventDispatcher });
       attempt = 0;
       log(`feishu[${accountId}]: WebSocket client started`);
-      await waitForFeishuWsAbort(abortSignal);
-      log(`feishu[${accountId}]: abort signal received, stopping`);
-      cleanupFeishuWsClient({ accountId, wsClient, error });
-      return;
+      const cycleEnd = await waitForFeishuWsCycleEnd({ abortSignal, terminalError });
+      if (cycleEnd === "abort") {
+        log(`feishu[${accountId}]: abort signal received, stopping`);
+        cleanupFeishuWsClient({ accountId, wsClient, error, clearIdentity: true });
+        return;
+      }
+
+      cleanupFeishuWsClient({ accountId, wsClient, error, clearIdentity: false });
+      if (abortSignal?.aborted) {
+        break;
+      }
+
+      attempt += 1;
+      const delayMs = getFeishuWsReconnectDelayMs(attempt);
+      error(
+        `feishu[${accountId}]: WebSocket connection ended, recreating client in ${delayMs}ms: ${formatFeishuWsErrorForLog(cycleEnd)}`,
+      );
+      const shouldRetry = await waitForAbortableDelay(delayMs, abortSignal);
+      if (!shouldRetry) {
+        break;
+      }
     } catch (err) {
-      cleanupFeishuWsClient({ accountId, wsClient, error });
+      cleanupFeishuWsClient({ accountId, wsClient, error, clearIdentity: false });
       if (abortSignal?.aborted) {
         break;
       }
@@ -209,6 +249,7 @@ export async function monitorWebSocket({
       }
     }
   }
+  cleanupFeishuWsClient({ accountId, wsClient: undefined, error, clearIdentity: true });
 }
 
 export async function monitorWebhook({
