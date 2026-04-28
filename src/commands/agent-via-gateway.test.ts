@@ -117,11 +117,7 @@ describe("agentCliCommand", () => {
       await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
 
       expect(callGateway).toHaveBeenCalledTimes(1);
-      expect(callGateway.mock.calls[0]?.[0]).toMatchObject({
-        params: {
-          cleanupBundleMcpOnRunEnd: true,
-        },
-      });
+      expect(callGateway.mock.calls[0]?.[0]?.params).not.toHaveProperty("cleanupBundleMcpOnRunEnd");
       expect(agentCommand).not.toHaveBeenCalled();
       expect(runtime.log).toHaveBeenCalledWith("hello");
     });

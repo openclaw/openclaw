@@ -158,7 +158,6 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
           bestEffortDeliver: opts.bestEffortDeliver,
           timeout: timeoutSeconds,
           lane: opts.lane,
-          cleanupBundleMcpOnRunEnd: true,
           extraSystemPrompt: opts.extraSystemPrompt,
           idempotencyKey,
         },
