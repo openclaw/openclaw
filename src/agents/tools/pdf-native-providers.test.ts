@@ -142,6 +142,25 @@ describe("native PDF provider API calls", () => {
     expect(body.contents[0].parts[1].text).toBe("Summarize this");
   });
 
+  it("geminiAnalyzePdf strips Google model prefixes before building the URL", async () => {
+    const fetchMock = mockFetchResponse({
+      ok: true,
+      json: async () => ({
+        candidates: [{ content: { parts: [{ text: "Gemini PDF analysis" }] } }],
+      }),
+    });
+
+    await pdfNativeProviders.geminiAnalyzePdf(
+      makeGeminiAnalyzeParams({
+        modelId: "google/gemini-2.5-pro",
+      }),
+    );
+
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toContain("/v1beta/models/gemini-2.5-pro:generateContent");
+    expect(url).not.toContain("google/gemini");
+  });
+
   it("geminiAnalyzePdf throws on API error", async () => {
     mockFetchResponse({
       ok: false,

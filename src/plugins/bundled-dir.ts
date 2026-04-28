@@ -46,6 +46,22 @@ function hasUsableBundledPluginTree(pluginsDir: string): boolean {
   }
 }
 
+function hasBundledPluginOverrideEntries(pluginsDir: string): boolean {
+  if (!fs.existsSync(pluginsDir)) {
+    return false;
+  }
+  try {
+    return fs.readdirSync(pluginsDir, { withFileTypes: true }).some((entry) => {
+      if (entry.name === ".DS_Store") {
+        return false;
+      }
+      return entry.isDirectory() || entry.isFile() || entry.isSymbolicLink();
+    });
+  } catch {
+    return false;
+  }
+}
+
 function safeRealpathSync(targetPath: string): string | null {
   try {
     return fs.realpathSync.native(targetPath);
@@ -70,6 +86,15 @@ function trustedBundledPluginRootsForPackageRoot(packageRoot: string): string[] 
   return roots;
 }
 
+function isBareExtensionsOverride(resolvedOverride: string): boolean {
+  const parentDir = path.dirname(resolvedOverride);
+  if (path.basename(resolvedOverride) !== "extensions") {
+    return false;
+  }
+  const parentName = path.basename(parentDir);
+  return parentName !== "dist" && parentName !== "dist-runtime";
+}
+
 function resolveTrustedExistingOverride(resolvedOverride: string): string | null {
   const realOverride = safeRealpathSync(resolvedOverride);
   if (!realOverride) {
@@ -82,10 +107,16 @@ function resolveTrustedExistingOverride(resolvedOverride: string): string | null
     .flatMap((packageRoot) => trustedBundledPluginRootsForPackageRoot(packageRoot))
     .map((trustedRoot) => safeRealpathSync(trustedRoot))
     .filter((entry): entry is string => Boolean(entry));
-  if (!trustedRoots.some((trustedRoot) => pathContains(trustedRoot, realOverride))) {
+  const isTrustedPackageRootOverride = trustedRoots.some((trustedRoot) =>
+    pathContains(trustedRoot, realOverride),
+  );
+  if (isTrustedPackageRootOverride && hasUsableBundledPluginTree(realOverride)) {
+    return realOverride;
+  }
+  if (isBareExtensionsOverride(realOverride) && hasUsableBundledPluginTree(realOverride)) {
     return null;
   }
-  if (!hasUsableBundledPluginTree(realOverride)) {
+  if (!hasBundledPluginOverrideEntries(realOverride)) {
     return null;
   }
   return realOverride;

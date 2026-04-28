@@ -209,6 +209,59 @@ describe("google transport stream", () => {
     });
   });
 
+  it("strips Google provider prefixes before building the Generative AI URL", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([
+        {
+          candidates: [
+            {
+              content: { parts: [{ text: "ok" }] },
+              finishReason: "STOP",
+            },
+          ],
+        },
+      ]),
+    );
+
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        buildGeminiModel({ id: "google/gemini-2.5-pro" }),
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as unknown as Parameters<typeof streamFn>[1],
+        { apiKey: "gemini-api-key" } as Parameters<typeof streamFn>[2],
+      ),
+    );
+
+    await stream.result();
+
+    expect(guardedFetchMock.mock.calls[0]?.[0]).toBe(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse",
+    );
+  });
+
+  it("rejects pathful Google model ids before building the Generative AI URL", async () => {
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        buildGeminiModel({ id: "google/../v1beta/models/gemini-2.5-pro" }),
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as unknown as Parameters<typeof streamFn>[1],
+        { apiKey: "gemini-api-key" } as Parameters<typeof streamFn>[2],
+      ),
+    );
+
+    const result = await stream.result();
+
+    expect(guardedFetchMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorMessage: "Invalid Google model id",
+    });
+  });
+
   it("uses bearer auth when the Google api key is an OAuth JSON payload", async () => {
     guardedFetchMock.mockResolvedValueOnce(buildSseResponse([]));
 

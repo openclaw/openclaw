@@ -60,6 +60,8 @@ const ORIGIN_PRIORITY: Record<PluginOrigin, number> = {
 
 const EXTERNAL_CATALOG_PRIORITY = ORIGIN_PRIORITY.bundled + 1;
 const FALLBACK_CATALOG_PRIORITY = EXTERNAL_CATALOG_PRIORITY + 1;
+const EXPLICIT_EXTERNAL_CATALOG_PRIORITY = ORIGIN_PRIORITY.global + 0.25;
+const EXPLICIT_FALLBACK_CATALOG_PRIORITY = ORIGIN_PRIORITY.global + 0.5;
 
 type ExternalCatalogEntry = {
   name?: string;
@@ -345,7 +347,10 @@ export function listChannelPluginCatalogEntries(
   }
 
   for (const entry of loadOfficialCatalogEntries(options)) {
-    const priority = FALLBACK_CATALOG_PRIORITY;
+    const priority =
+      options.officialCatalogPaths && options.officialCatalogPaths.length > 0
+        ? EXPLICIT_FALLBACK_CATALOG_PRIORITY
+        : FALLBACK_CATALOG_PRIORITY;
     const existing = resolved.get(entry.id);
     if (!existing || priority < existing.priority) {
       resolved.set(entry.id, { entry, priority });
@@ -356,9 +361,13 @@ export function listChannelPluginCatalogEntries(
     .map((entry) => buildExternalCatalogEntry(entry))
     .filter((entry): entry is ChannelPluginCatalogEntry => Boolean(entry));
   for (const entry of externalEntries) {
-    // External catalogs are the supported override seam for shipped fallback
-    // metadata, but discovered plugins should still win when they are present.
-    const priority = EXTERNAL_CATALOG_PRIORITY;
+    // Explicit catalogs are the supported override seam for shipped fallback
+    // metadata. Installed/config/workspace/global plugins still win, but
+    // caller-provided catalogs can replace bundled source metadata.
+    const priority =
+      options.catalogPaths && options.catalogPaths.length > 0
+        ? EXPLICIT_EXTERNAL_CATALOG_PRIORITY
+        : EXTERNAL_CATALOG_PRIORITY;
     const existing = resolved.get(entry.id);
     if (!existing || priority < existing.priority) {
       resolved.set(entry.id, { entry, priority });

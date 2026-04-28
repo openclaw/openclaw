@@ -6,6 +6,7 @@
 import { normalizeProviderTransportWithPlugin } from "../../plugins/provider-runtime.js";
 import { isRecord } from "../../utils.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
+import { normalizeStaticProviderModelId } from "../model-ref-shared.js";
 
 type PdfInput = {
   base64: string;
@@ -153,7 +154,8 @@ export async function geminiAnalyzePdf(params: {
     /\/v1beta$/i,
     "",
   );
-  const url = `${baseUrl}/v1beta/models/${encodeURIComponent(params.modelId)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const modelId = normalizeStaticProviderModelId("google", params.modelId);
+  const url = `${baseUrl}/v1beta/models/${encodeURIComponent(modelId)}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
   const res = await fetch(url, {
     method: "POST",
