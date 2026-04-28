@@ -4,7 +4,7 @@ import type { OpenAICodexConnectStatus } from "../types.ts";
 const CODEX_CALLBACK_MARKER = "codex_oauth";
 type CodexCompletionMode = "manual_input" | "browser_callback";
 
-type CodexConnectState = {
+export type CodexConnectState = {
   client: { request: <T = unknown>(method: string, params?: unknown) => Promise<T> } | null;
   connected: boolean;
   basePath: string;

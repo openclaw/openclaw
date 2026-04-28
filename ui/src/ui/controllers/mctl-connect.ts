@@ -3,7 +3,7 @@ import type { MctlConnectStatus } from "../types.ts";
 
 const MCTL_CALLBACK_MARKER = "mctl_oauth";
 
-type MctlConnectState = {
+export type MctlConnectState = {
   client: { request: <T = unknown>(method: string, params?: unknown) => Promise<T> } | null;
   connected: boolean;
   basePath: string;

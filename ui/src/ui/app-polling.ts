@@ -1,3 +1,4 @@
+import type { OpenClawApp } from "./app.ts";
 import type { DebugState } from "./controllers/debug.ts";
 import { loadDebug } from "./controllers/debug.ts";
 import type { LogsState } from "./controllers/logs.ts";

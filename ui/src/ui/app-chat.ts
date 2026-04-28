@@ -323,18 +323,20 @@ export async function handleSendChat(
     (isMctlConnectAlias(message)
       ? {
           command: {
+            key: "connect",
             name: "connect",
             description: "Start a connector flow",
-            executeLocal: true,
+            executeLocal: true as const,
           },
           args: "mctl",
         }
       : isCodexConnectAlias(message)
         ? {
             command: {
+              key: "connect",
               name: "connect",
               description: "Start a connector flow",
-              executeLocal: true,
+              executeLocal: true as const,
             },
             args: "codex",
           }

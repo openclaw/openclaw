@@ -1,11 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
-import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles.js";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
+import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles.js";
 import { buildAuthProfileId } from "../agents/auth-profiles/identity.js";
 import { setAuthProfileOrder, upsertAuthProfile } from "../agents/auth-profiles/profiles.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
+import { normalizeProviderIdForAuth } from "../agents/provider-id.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {

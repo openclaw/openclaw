@@ -321,7 +321,16 @@ export function registerControlUiAndPairingSuite(): void {
     });
   });
 
-  test("trusted-proxy owner role augments paired control ui device with owner scopes", async () => {
+  // Skipped because upstream commit dc2c3a4920 ("harden WS pairing locality")
+  // now rejects trusted-proxy auth coming from a loopback remoteAddress with
+  // `trusted_proxy_loopback_source`, and our test server always binds to
+  // 127.0.0.1 — so the end-to-end flow this test used to exercise is no
+  // longer reachable from a unit/integration runner. The actual invariants
+  // (x-mctl-team-role: owner → augmented scopes including MCTL_OWNER_SCOPE →
+  // canManageOpenAICodex true and teamRole "owner") are now covered by
+  // trusted-proxy-scopes.test.ts at the buildTrustedProxyScopes /
+  // canManageOpenAICodex / resolveTrustedProxyTeamRole boundary.
+  test.skip("trusted-proxy owner role augments paired control ui device with owner scopes", async () => {
     testState.gatewayAuth = {
       mode: "trusted-proxy",
       trustedProxy: {
@@ -351,7 +360,7 @@ export function registerControlUiAndPairingSuite(): void {
           clientId: CONTROL_UI_CLIENT.id,
           clientMode: CONTROL_UI_CLIENT.mode,
           identityPath: seeded.identityPath,
-          nonce: String(challengeNonce),
+          nonce: challengeNonce,
         });
 
         const res = await connectReq(ws, {

@@ -6,6 +6,8 @@ import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import { detectPackageManager as detectPackageManagerImpl } from "./detect-package-manager.js";
 import { channelToNpmTag, type UpdateChannel } from "./update-channels.js";
 
+export { compareSemverStrings };
+
 export type PackageManager = "pnpm" | "bun" | "npm" | "unknown";
 
 export type GitUpdateStatus = {

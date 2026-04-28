@@ -60,7 +60,6 @@ import {
   mintCanvasCapabilityToken,
 } from "../../canvas-capability.js";
 import { normalizeDeviceMetadataForAuth } from "../../device-auth.js";
-import { ADMIN_SCOPE } from "../../method-scopes.js";
 import {
   ADMIN_SCOPE,
   APPROVALS_SCOPE,
@@ -135,7 +134,7 @@ import {
 } from "./handshake-auth-helpers.js";
 import { isUnauthorizedRoleError, UnauthorizedFloodGuard } from "./unauthorized-flood-guard.js";
 
-function buildTrustedProxyScopes(authResult: GatewayAuthResult): string[] {
+export function buildTrustedProxyScopes(authResult: GatewayAuthResult): string[] {
   if (authResult.method !== "trusted-proxy") {
     return [];
   }
