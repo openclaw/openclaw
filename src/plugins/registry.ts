@@ -2405,7 +2405,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   : emitPluginAgentEvent({
                       pluginId: record.id,
                       pluginName: record.name,
-                      origin: record.origin,
                       event,
                     }),
               setRunContext: (patch) => setPluginRunContext({ pluginId: record.id, patch }),
