@@ -1,4 +1,13 @@
-import type { AgentHarness } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type {
+  AgentHarness,
+  AgentHarnessAttemptParams,
+  AgentHarnessAttemptResult,
+  AgentHarnessCompactParams,
+  AgentHarnessCompactResult,
+  AgentHarnessResetParams,
+  AgentHarnessSupport,
+  AgentHarnessSupportContext,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import type {
   CodexAppServerListModelsOptions,
   CodexAppServerModel,
@@ -8,6 +17,45 @@ import type {
 const DEFAULT_CODEX_HARNESS_PROVIDER_IDS = new Set(["codex"]);
 
 export type { CodexAppServerListModelsOptions, CodexAppServerModel, CodexAppServerModelListResult };
+
+export type CodexAppServerHarnessV2PreparedRun = {
+  harnessId: string;
+  label: string;
+  pluginId?: string;
+  params: AgentHarnessAttemptParams;
+  lifecycleState: "prepared";
+};
+
+export type CodexAppServerHarnessV2Session = {
+  harnessId: string;
+  label: string;
+  pluginId?: string;
+  params: AgentHarnessAttemptParams;
+  lifecycleState: "started";
+};
+
+export type CodexAppServerHarnessV2 = {
+  id: string;
+  label: string;
+  pluginId?: string;
+  supports(ctx: AgentHarnessSupportContext): AgentHarnessSupport;
+  prepare(params: AgentHarnessAttemptParams): Promise<CodexAppServerHarnessV2PreparedRun>;
+  start(prepared: CodexAppServerHarnessV2PreparedRun): Promise<CodexAppServerHarnessV2Session>;
+  send(session: CodexAppServerHarnessV2Session): Promise<AgentHarnessAttemptResult>;
+  resolveOutcome(
+    session: CodexAppServerHarnessV2Session,
+    result: AgentHarnessAttemptResult,
+  ): Promise<AgentHarnessAttemptResult>;
+  cleanup(params: {
+    prepared?: CodexAppServerHarnessV2PreparedRun;
+    session?: CodexAppServerHarnessV2Session;
+    result?: AgentHarnessAttemptResult;
+    error?: unknown;
+  }): Promise<void>;
+  compact?(params: AgentHarnessCompactParams): Promise<AgentHarnessCompactResult | undefined>;
+  reset?(params: AgentHarnessResetParams): Promise<void> | void;
+  dispose?(): Promise<void> | void;
+};
 
 export function createCodexAppServerAgentHarness(options?: {
   id?: string;
@@ -52,5 +100,46 @@ export function createCodexAppServerAgentHarness(options?: {
         await import("./src/app-server/shared-client.js");
       await clearSharedCodexAppServerClientAndWait();
     },
+  };
+}
+
+export function createCodexAppServerAgentHarnessV2(
+  harness: AgentHarness,
+  options?: { pluginConfig?: unknown },
+): CodexAppServerHarnessV2 {
+  return {
+    id: harness.id,
+    label: harness.label,
+    pluginId: harness.pluginId,
+    supports: (ctx) => harness.supports(ctx),
+    prepare: async (params) => ({
+      harnessId: harness.id,
+      label: harness.label,
+      pluginId: harness.pluginId,
+      params,
+      lifecycleState: "prepared",
+    }),
+    start: async (prepared) => ({
+      harnessId: prepared.harnessId,
+      label: prepared.label,
+      pluginId: prepared.pluginId,
+      params: prepared.params,
+      lifecycleState: "started",
+    }),
+    send: async (session) => {
+      const { runCodexAppServerAttempt } = await import("./src/app-server/run-attempt.js");
+      return runCodexAppServerAttempt(session.params, { pluginConfig: options?.pluginConfig });
+    },
+    resolveOutcome: async (session, result) => ({
+      ...result,
+      agentHarnessId: session.harnessId,
+    }),
+    cleanup: async (_params) => {
+      // Codex app-server attempt cleanup is owned by runCodexAppServerAttempt.
+      // This hook remains per-attempt no-op to preserve V1 adapter parity.
+    },
+    compact: harness.compact ? (params) => harness.compact!(params) : undefined,
+    reset: harness.reset ? (params) => harness.reset!(params) : undefined,
+    dispose: harness.dispose ? () => harness.dispose!() : undefined,
   };
 }
