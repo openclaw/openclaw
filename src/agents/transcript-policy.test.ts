@@ -535,3 +535,38 @@ describe("resolveTranscriptPolicy", () => {
     });
   });
 });
+
+// ─── Tests for allowSyntheticToolResults default change ───
+describe("allowSyntheticToolResults default", () => {
+  it("DEFAULT_TRANSCRIPT_POLICY has allowSyntheticToolResults=true", () => {
+    // When no provider-specific override exists, the default policy applies.
+    // Verify the default enables synthetic tool results for all providers.
+    const policy = resolveTranscriptPolicy({});
+    expect(policy.allowSyntheticToolResults).toBe(true);
+  });
+
+  it("still enables for Google (explicit override unchanged)", () => {
+    const policy = resolveTranscriptPolicy({ modelApi: "google-genai" });
+    expect(policy.allowSyntheticToolResults).toBe(true);
+  });
+
+  it("still enables for Anthropic (explicit override unchanged)", () => {
+    const policy = resolveTranscriptPolicy({ modelApi: "anthropic-messages" });
+    expect(policy.allowSyntheticToolResults).toBe(true);
+  });
+
+  it("now enables for OpenAI-compatible (was previously false)", () => {
+    const policy = resolveTranscriptPolicy({ modelApi: "openai-responses" });
+    expect(policy.allowSyntheticToolResults).toBe(true);
+  });
+
+  it("now enables for Bedrock Anthropic", () => {
+    const policy = resolveTranscriptPolicy({ modelApi: "bedrock-converse-stream" });
+    expect(policy.allowSyntheticToolResults).toBe(true);
+  });
+
+  it("now enables for unknown/custom providers (was previously false)", () => {
+    const policy = resolveTranscriptPolicy({ provider: "my-custom-provider" });
+    expect(policy.allowSyntheticToolResults).toBe(true);
+  });
+});

@@ -244,19 +244,19 @@ export function withToolCallTimeout<T>(
     const controller = new AbortController();
 
     const cleanup = () => {
-      if (timeoutId) clearTimeout(timeoutId);
-      if (parentSignal) parentSignal.removeEventListener("abort", onParentAbort);
+      if (timeoutId) { clearTimeout(timeoutId); }
+      if (parentSignal) { parentSignal.removeEventListener("abort", onParentAbort); }
     };
 
     const finishOk = (value: T) => {
-      if (settled) return;
+      if (settled) { return; }
       settled = true;
       cleanup();
       resolve(value);
     };
 
     const finishErr = (err: Error) => {
-      if (settled) return;
+      if (settled) { return; }
       settled = true;
       cleanup();
       reject(err);
@@ -325,7 +325,7 @@ export function toToolDefinitions(
             executeParams = hookOutcome.params;
           }
           const rawResult = await withToolCallTimeout(
-            (sig) => tool.execute(toolCallId, executeParams, sig ?? signal, onUpdate),
+            (_sig) => tool.execute(toolCallId, executeParams, _sig ?? signal, onUpdate),
             timeoutMs,
             normalizedName,
             signal,
