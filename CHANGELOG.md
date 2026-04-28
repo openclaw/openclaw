@@ -29,6 +29,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- TUI/Crestodian: surface the planner's `/audit`, `/doctor`, `/health`, and `/setup` commands as first-class slash commands in the chat TUI (routing through the existing Crestodian handoff or directly when already in the Crestodian backend), accept slash-prefixed forms in `parseCrestodianOperation`, and stop the Node 25 "Detected unsettled top-level await" warning from scribbling over the input prompt by removing the literal top-level await from `openclaw.mjs` and adding a defensive warning-filter clause. Thanks @Karth.
 - Cron/providers: preflight local Ollama and OpenAI-compatible provider endpoints before isolated cron agent turns, record unreachable local providers as skipped runs, and cache dead-endpoint probes so many jobs do not hammer the same stopped local server. Fixes #58584. Thanks @jpeghead.
 - Doctor/channels: suppress disabled bundled-plugin blocker warnings when a trusted external plugin owns the configured channel, so Lark/Feishu installs no longer get Feishu repair noise after switching to `openclaw-lark`. Fixes #56794. Thanks @wuji-tech-dev.
 - CLI/status: show skipped fast-path memory checks as `not checked` and report active custom memory plugin runtime status from `status --json --all` without requiring built-in `agents.defaults.memorySearch`, so plugins such as memory-lancedb-pro and memory-cms no longer look unavailable when their own runtime is healthy. Fixes #56968. Thanks @Tony-ooo and @aderius.

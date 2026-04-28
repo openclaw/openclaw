@@ -43,6 +43,11 @@ describe("warning filter", () => {
         name: "ExperimentalWarning",
         message: "SQLite is an experimental feature and might change at any time",
       },
+      {
+        name: "Warning",
+        message:
+          "Detected unsettled top-level await at file:///opt/homebrew/lib/node_modules/openclaw/openclaw.mjs:233",
+      },
     ];
 
     for (const warning of ignoredWarnings) {
@@ -109,12 +114,20 @@ describe("warning filter", () => {
       emitWarning(new Error("SQLite is an experimental feature and might change at any time"), {
         type: "ExperimentalWarning",
       });
+      emitWarning("Detected unsettled top-level await at file:///tmp/openclaw.mjs:233", {
+        type: "Warning",
+      });
       await flushWarnings();
       expect(seenWarnings.find((warning) => warning.code === "DEP0060")).toBeUndefined();
       expect(seenWarnings.find((warning) => warning.code === "DEP0040")).toBeUndefined();
       expect(
         seenWarnings.find((warning) =>
           warning.message.includes("SQLite is an experimental feature"),
+        ),
+      ).toBeUndefined();
+      expect(
+        seenWarnings.find((warning) =>
+          warning.message.includes("Detected unsettled top-level await"),
         ),
       ).toBeUndefined();
 

@@ -6,6 +6,7 @@ import {
   normalizeUsageDisplay,
   resolveResponseUsageMode,
 } from "../auto-reply/thinking.js";
+import { CRESTODIAN_TUI_CONNECTION_URL } from "../crestodian/tui-connection-id.js";
 import type { SessionsPatchResult } from "../gateway/protocol/index.js";
 import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -371,6 +372,22 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           ...(args ? { crestodianMessage: args } : {}),
         });
         break;
+      case "audit":
+      case "doctor":
+      case "health":
+      case "setup": {
+        const planner = `${name}${args ? ` ${args}` : ""}`;
+        if (client.connection?.url === CRESTODIAN_TUI_CONNECTION_URL) {
+          await sendMessage(planner);
+        } else {
+          chatLog.addSystem(`returning to Crestodian to run: ${planner}`);
+          requestExit({
+            exitReason: "return-to-crestodian",
+            crestodianMessage: planner,
+          });
+        }
+        break;
+      }
       case "session":
         if (!args) {
           await openSessionSelector();

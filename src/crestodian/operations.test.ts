@@ -205,6 +205,15 @@ describe("parseCrestodianOperation", () => {
     expect(parseCrestodianOperation("doctor fix")).toEqual({ kind: "doctor-fix" });
   });
 
+  it("accepts slash-prefixed forms for TUI shortcuts", () => {
+    expect(parseCrestodianOperation("/audit")).toEqual({ kind: "audit" });
+    expect(parseCrestodianOperation("/doctor")).toEqual({ kind: "doctor" });
+    expect(parseCrestodianOperation("/doctor fix")).toEqual({ kind: "doctor-fix" });
+    expect(parseCrestodianOperation("/health")).toEqual({ kind: "health" });
+    expect(parseCrestodianOperation("/setup")).toEqual({ kind: "setup" });
+    expect(parseCrestodianOperation("/status")).toEqual({ kind: "status" });
+  });
+
   it("parses agent creation requests", () => {
     expect(
       parseCrestodianOperation("create agent Work workspace /tmp/work model openai/gpt-5.2"),

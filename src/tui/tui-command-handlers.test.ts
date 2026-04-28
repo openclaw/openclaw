@@ -28,6 +28,7 @@ function createHarness(params?: {
   activeChatRunId?: string | null;
   pendingOptimisticUserMessage?: boolean;
   opts?: { local?: boolean };
+  connectionUrl?: string;
 }) {
   const sendChat = params?.sendChat ?? vi.fn().mockResolvedValue({ runId: "r1" });
   const getGatewayStatus = params?.getGatewayStatus ?? vi.fn().mockResolvedValue({});
@@ -61,8 +62,15 @@ function createHarness(params?: {
     sessionInfo: {},
   };
 
+  const connectionUrl = params?.connectionUrl ?? "ws://gateway.local";
   const { handleCommand } = createCommandHandlers({
-    client: { sendChat, getGatewayStatus, patchSession, resetSession } as never,
+    client: {
+      sendChat,
+      getGatewayStatus,
+      patchSession,
+      resetSession,
+      connection: { url: connectionUrl },
+    } as never,
     chatLog: { addUser, addSystem } as never,
     tui: { requestRender } as never,
     opts: params?.opts ?? {},
@@ -431,5 +439,46 @@ describe("tui command handlers", () => {
     expect(addSystem).toHaveBeenCalledWith("activation set to always");
     expect(applySessionInfoFromPatch).toHaveBeenCalledWith({ groupActivation: "always" });
     expect(refreshSessionInfo).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns to Crestodian for /audit on a non-Crestodian backend", async () => {
+    const { handleCommand, addSystem, requestExit, sendChat } = createHarness();
+
+    await handleCommand("/audit");
+
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith("returning to Crestodian to run: audit");
+    expect(requestExit).toHaveBeenCalledWith({
+      exitReason: "return-to-crestodian",
+      crestodianMessage: "audit",
+    });
+  });
+
+  it("forwards extra args to Crestodian for /doctor fix", async () => {
+    const { handleCommand, requestExit } = createHarness();
+
+    await handleCommand("/doctor fix");
+
+    expect(requestExit).toHaveBeenCalledWith({
+      exitReason: "return-to-crestodian",
+      crestodianMessage: "doctor fix",
+    });
+  });
+
+  it("sends /audit through the chat path when already in the Crestodian backend", async () => {
+    const { handleCommand, sendChat, requestExit, addUser } = createHarness({
+      connectionUrl: "crestodian local",
+    });
+
+    await handleCommand("/audit");
+
+    expect(requestExit).not.toHaveBeenCalled();
+    expect(addUser).toHaveBeenCalledWith("audit");
+    expect(sendChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        message: "audit",
+      }),
+    );
   });
 });

@@ -25,6 +25,13 @@ export function shouldIgnoreWarning(warning: ProcessWarning): boolean {
   ) {
     return true;
   }
+  // Node 25 prints "Detected unsettled top-level await" at process exit when
+  // a long-running entry (chat TUI, gateway) is interrupted while the launcher's
+  // dynamic import await is still pending. The launcher is structured to avoid
+  // top-level await, but suppress the warning defensively for older installs.
+  if (warning.message?.includes("Detected unsettled top-level await")) {
+    return true;
+  }
   return false;
 }
 

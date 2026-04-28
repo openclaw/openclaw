@@ -224,17 +224,26 @@ const tryOutputBrowserHelp = () => {
   return true;
 };
 
-if (!isHelpFastPathDisabled() && (await tryOutputBareRootHelp())) {
-  // OK
-} else if (!isHelpFastPathDisabled() && tryOutputBrowserHelp()) {
-  // OK
-} else {
+// Wrapped in an async IIFE so this module has no actual top-level await.
+// Node 25's "Detected unsettled top-level await" detector otherwise flags
+// the entry import chain whenever the launched runtime is interrupted
+// (e.g. SIGINT in the chat TUI), and the warning scribbles over the prompt.
+void (async () => {
+  if (!isHelpFastPathDisabled() && (await tryOutputBareRootHelp())) {
+    return;
+  }
+  if (!isHelpFastPathDisabled() && tryOutputBrowserHelp()) {
+    return;
+  }
   await installProcessWarningFilter();
   if (await tryImport("./dist/entry.js")) {
-    // OK
-  } else if (await tryImport("./dist/entry.mjs")) {
-    // OK
-  } else {
-    throw new Error(await buildMissingEntryErrorMessage());
+    return;
   }
-}
+  if (await tryImport("./dist/entry.mjs")) {
+    return;
+  }
+  throw new Error(await buildMissingEntryErrorMessage());
+})().catch((err) => {
+  process.stderr.write(`${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`);
+  process.exit(1);
+});

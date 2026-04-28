@@ -100,7 +100,10 @@ const CLAUDE_CLI_DEFAULT_MODEL_REF = "claude-cli/claude-opus-4-7";
 const CODEX_CLI_DEFAULT_MODEL_REF = "codex-cli/gpt-5.5";
 
 export function parseCrestodianOperation(input: string): CrestodianOperation {
-  const trimmed = input.trim();
+  // Accept slash-prefixed forms (/audit, /doctor, /health, /setup, /status, ...)
+  // so the TUI's slash commands route to the same Crestodian operations as the
+  // natural-language phrases.
+  const trimmed = input.trim().replace(/^\/+/, "").trim();
   const lower = trimmed.toLowerCase();
   if (!trimmed) {
     return {

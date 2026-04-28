@@ -38,6 +38,22 @@ describe("getSlashCommands", () => {
     expect(gatewayStatus?.description).toBe("Show gateway status summary");
     expect(crestodian?.description).toBe("Return to Crestodian");
   });
+
+  it("exposes Crestodian operations as slash commands for autocomplete", () => {
+    const commands = getSlashCommands();
+    expect(commands.find((command) => command.name === "audit")?.description).toBe(
+      "Show Crestodian audit log",
+    );
+    expect(commands.find((command) => command.name === "doctor")?.description).toBe(
+      "Diagnose issues (Crestodian)",
+    );
+    expect(commands.find((command) => command.name === "health")?.description).toBe(
+      "Check system health (Crestodian)",
+    );
+    expect(commands.find((command) => command.name === "setup")?.description).toBe(
+      "Initialize OpenClaw configuration",
+    );
+  });
 });
 
 describe("helpText", () => {
@@ -48,5 +64,13 @@ describe("helpText", () => {
     expect(output).toContain("/gateway-status");
     expect(output).toContain("/gwstatus");
     expect(output).toContain("/crestodian [request]");
+  });
+
+  it("lists Crestodian shortcut slash commands", () => {
+    const output = helpText();
+    expect(output).toContain("/audit");
+    expect(output).toContain("/doctor");
+    expect(output).toContain("/health");
+    expect(output).toContain("/setup");
   });
 });

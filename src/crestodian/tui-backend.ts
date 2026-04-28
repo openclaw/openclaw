@@ -20,6 +20,7 @@ import {
   type CrestodianOperation,
 } from "./operations.js";
 import { formatCrestodianStartupMessage, loadCrestodianOverview } from "./overview.js";
+import { CRESTODIAN_TUI_CONNECTION_URL } from "./tui-connection-id.js";
 
 type RunTui = typeof defaultRunTui;
 
@@ -86,7 +87,7 @@ function splitModelRef(ref: string | undefined): { provider?: string; model?: st
 }
 
 class CrestodianTuiBackend implements TuiBackend {
-  readonly connection = { url: "crestodian local" };
+  readonly connection = { url: CRESTODIAN_TUI_CONNECTION_URL };
 
   onEvent?: (evt: TuiEvent) => void;
   onConnected?: () => void;
