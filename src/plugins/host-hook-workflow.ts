@@ -197,6 +197,16 @@ function resolveSchedule(params: PluginSessionTurnScheduleParams) {
   return { kind: "at", at: at.toISOString() };
 }
 
+function resolveSessionTurnDeliveryMode(deliveryMode: unknown): "none" | "announce" | undefined {
+  if (deliveryMode === undefined) {
+    return undefined;
+  }
+  if (deliveryMode === "none" || deliveryMode === "announce") {
+    return deliveryMode;
+  }
+  return undefined;
+}
+
 function extractCronJobId(value: unknown): string | undefined {
   if (!value || typeof value !== "object") {
     return undefined;
@@ -228,6 +238,12 @@ export async function schedulePluginSessionTurn(params: {
   if (!schedule) {
     return undefined;
   }
+  const rawDeliveryMode = (params.schedule as { deliveryMode?: unknown }).deliveryMode;
+  const deliveryMode = resolveSessionTurnDeliveryMode(rawDeliveryMode);
+  if (rawDeliveryMode !== undefined && !deliveryMode) {
+    log.warn("plugin session turn scheduling failed: unsupported deliveryMode");
+    return undefined;
+  }
   const name =
     normalizeOptionalString(params.schedule.name) ??
     `plugin:${params.pluginId}:${sessionKey}:${randomUUID()}`;
@@ -246,9 +262,7 @@ export async function schedulePluginSessionTurn(params: {
         },
         ...(params.schedule.agentId ? { agentId: params.schedule.agentId } : {}),
         deleteAfterRun: params.schedule.deleteAfterRun ?? schedule.kind === "at",
-        ...(params.schedule.deliveryMode
-          ? { delivery: { mode: params.schedule.deliveryMode } }
-          : {}),
+        ...(deliveryMode ? { delivery: { mode: deliveryMode } } : {}),
       },
       { scopes: [ADMIN_SCOPE] },
     );
