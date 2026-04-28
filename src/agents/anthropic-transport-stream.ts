@@ -15,6 +15,7 @@ import {
   resolveAnthropicPayloadPolicy,
 } from "./anthropic-payload-policy.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
+import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 import {
@@ -189,6 +190,31 @@ function adjustMaxTokensForThinking(params: {
 
 function isAnthropicOAuthToken(apiKey: string): boolean {
   return apiKey.includes("sk-ant-oat");
+}
+
+// Gates the implicit `anthropic-beta` header on the API-key transport
+// path. The OAuth-token branch retains the beta bundle unconditionally;
+// see the OAuth-branch comment in createAnthropicTransportClient for the
+// trade-off behind that scope.
+function isDirectAnthropicModel(
+  model: Pick<AnthropicTransportModel, "provider" | "baseUrl">,
+): boolean {
+  const provider = normalizeLowercaseStringOrEmpty(model.provider);
+  if (provider !== "anthropic") {
+    return false;
+  }
+  // No explicit baseUrl → SDK default lands on api.anthropic.com.
+  if (typeof model.baseUrl !== "string" || !model.baseUrl.trim()) {
+    return true;
+  }
+  // Reuse the canonical endpoint classifier from provider-attribution
+  // instead of inlining URL parsing or substring matching. Handles
+  // schemeless candidates, manifest-driven hostname matches, and avoids
+  // false positives where "api.anthropic.com" appears in a path or query
+  // of an unrelated host. Malformed baseUrls resolve to
+  // `endpointClass: "invalid"` and are NOT treated as direct Anthropic —
+  // the beta header is suppressed defensively.
+  return resolveProviderEndpoint(model.baseUrl).endpointClass === "anthropic-public";
 }
 
 function toClaudeCodeName(name: string): string {
@@ -577,6 +603,12 @@ function createAnthropicTransportClient(params: {
     betaFeatures.push("interleaved-thinking-2025-05-14");
   }
   if (isAnthropicOAuthToken(apiKey)) {
+    // OAuth-token transport keeps the default beta bundle even when
+    // `model.baseUrl` is custom: `sk-ant-oat-…` tokens are Anthropic-issued,
+    // so deployments routing them through a foreign backend are uncommon
+    // enough that we leave the existing behaviour rather than silently
+    // suppressing headers. Gate this branch with `isDirectAnthropicModel(model)`
+    // too if maintainers prefer parity with the API-key path below.
     return {
       client: createAnthropicMessagesClient({
         apiKey: null,
@@ -598,6 +630,7 @@ function createAnthropicTransportClient(params: {
       isOAuthToken: true,
     };
   }
+  const defaultBetaHeader = isDirectAnthropicModel(model) ? betaFeatures.join(",") : undefined;
   return {
     client: createAnthropicMessagesClient({
       apiKey,
@@ -606,7 +639,7 @@ function createAnthropicTransportClient(params: {
         {
           accept: "application/json",
           "anthropic-dangerous-direct-browser-access": "true",
-          "anthropic-beta": betaFeatures.join(","),
+          ...(defaultBetaHeader ? { "anthropic-beta": defaultBetaHeader } : {}),
         },
         model.headers,
         options?.headers,

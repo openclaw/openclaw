@@ -40,6 +40,8 @@ function makeAnthropicTransportModel(
   params: {
     id?: string;
     name?: string;
+    provider?: string;
+    baseUrl?: string;
     reasoning?: boolean;
     maxTokens?: number;
     headers?: Record<string, string>;
@@ -51,8 +53,8 @@ function makeAnthropicTransportModel(
       id: params.id ?? "claude-sonnet-4-6",
       name: params.name ?? "Claude Sonnet 4.6",
       api: "anthropic-messages",
-      provider: "anthropic",
-      baseUrl: "https://api.anthropic.com",
+      provider: params.provider ?? "anthropic",
+      baseUrl: params.baseUrl ?? "https://api.anthropic.com",
       reasoning: params.reasoning ?? true,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -133,6 +135,94 @@ describe("anthropic transport stream", () => {
       model: "claude-sonnet-4-6",
       stream: true,
     });
+    const headers = new Headers(latestAnthropicRequest().init?.headers);
+    expect(headers.get("anthropic-beta")).toBe("fine-grained-tool-streaming-2025-05-14");
+  });
+
+  it("does not add Anthropic beta headers for custom anthropic-compatible providers by default", async () => {
+    const model = makeAnthropicTransportModel({
+      provider: "custom-anthropic-compat",
+      baseUrl: "https://custom-proxy.example",
+    });
+
+    await runTransportStream(
+      model,
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(guardedFetchMock).toHaveBeenCalledWith(
+      "https://custom-proxy.example/v1/messages",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
+    const headers = new Headers(latestAnthropicRequest().init?.headers);
+    expect(headers.get("anthropic-beta")).toBeNull();
+  });
+
+  it("treats schemeless api.anthropic.com baseUrls as direct Anthropic (beta header added)", async () => {
+    const model = makeAnthropicTransportModel({
+      provider: "anthropic",
+      baseUrl: "api.anthropic.com",
+    });
+
+    await runTransportStream(
+      model,
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    const headers = new Headers(latestAnthropicRequest().init?.headers);
+    expect(headers.get("anthropic-beta")).toBe("fine-grained-tool-streaming-2025-05-14");
+  });
+
+  it("does not add Anthropic beta headers when api.anthropic.com appears only in the path of a foreign host", async () => {
+    const model = makeAnthropicTransportModel({
+      provider: "anthropic",
+      baseUrl: "https://attacker.example/api.anthropic.com",
+    });
+
+    await runTransportStream(
+      model,
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    const headers = new Headers(latestAnthropicRequest().init?.headers);
+    expect(headers.get("anthropic-beta")).toBeNull();
+  });
+
+  it("does not add Anthropic beta headers when baseUrl is malformed", async () => {
+    const model = makeAnthropicTransportModel({
+      provider: "anthropic",
+      baseUrl: "not a url at all",
+    });
+
+    await runTransportStream(
+      model,
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    const headers = new Headers(latestAnthropicRequest().init?.headers);
+    expect(headers.get("anthropic-beta")).toBeNull();
   });
 
   it("ignores non-positive runtime maxTokens overrides and falls back to the model limit", async () => {
