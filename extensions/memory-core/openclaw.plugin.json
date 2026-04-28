@@ -1,6 +1,7 @@
 {
   "id": "memory-core",
   "kind": "memory",
+  "enabledByDefault": true,
   "contracts": {
     "memoryEmbeddingProviders": ["local"]
   },
