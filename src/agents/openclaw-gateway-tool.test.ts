@@ -654,6 +654,97 @@ describe("gateway tool", () => {
     );
   });
 
+  it("allows config.patch to enable cache trace when content capture is disabled", async () => {
+    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
+      if (method === "config.get") {
+        return { hash: "hash-1", config: {} };
+      }
+      return { ok: true };
+    });
+    const tool = requireGatewayTool("agent:main:whatsapp:dm:+15555550123");
+
+    const raw = `{
+      diagnostics: {
+        cacheTrace: {
+          enabled: true,
+          includeMessages: false,
+          includePrompt: false,
+          includeSystem: false,
+        },
+      },
+    }`;
+    await tool.execute("call-safe-cache-trace", {
+      action: "config.patch",
+      raw,
+    });
+
+    expect(callGatewayTool).toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.objectContaining({ raw: raw.trim() }),
+    );
+  });
+
+  it("rejects config.patch that enables cache trace without disabling content capture", async () => {
+    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
+      if (method === "config.get") {
+        return { hash: "hash-1", config: {} };
+      }
+      return { ok: true };
+    });
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-unsafe-cache-trace", {
+        action: "config.patch",
+        raw: "{ diagnostics: { cacheTrace: { enabled: true } } }",
+      }),
+    ).rejects.toThrow(
+      "gateway config.patch cannot change protected config paths: diagnostics.cacheTrace.enabled",
+    );
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
+  });
+
+  it("rejects config.patch that enables cache trace content capture", async () => {
+    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          hash: "hash-1",
+          config: {
+            diagnostics: {
+              cacheTrace: {
+                enabled: true,
+                includeMessages: false,
+                includePrompt: false,
+                includeSystem: false,
+              },
+            },
+          },
+        };
+      }
+      return { ok: true };
+    });
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-cache-trace-content", {
+        action: "config.patch",
+        raw: "{ diagnostics: { cacheTrace: { includePrompt: true } } }",
+      }),
+    ).rejects.toThrow(
+      "gateway config.patch cannot change protected config paths: diagnostics.cacheTrace.includePrompt",
+    );
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
+  });
+
   it("allows config.patch on allowlisted paths when a dangerous flag is already enabled", async () => {
     vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
       if (method === "config.get") {

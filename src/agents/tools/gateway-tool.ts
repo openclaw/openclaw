@@ -289,6 +289,46 @@ function isAllowedGatewayConfigPath(path: string): boolean {
   });
 }
 
+function readDottedConfigValue(config: Record<string, unknown>, path: string): unknown {
+  let value: unknown = config;
+  for (const segment of path.split(".")) {
+    if (!isPlainObject(value)) {
+      return undefined;
+    }
+    value = value[segment];
+  }
+  return value;
+}
+
+function isSafeCacheTraceMutation(path: string, nextConfig: Record<string, unknown>): boolean {
+  const cacheTrace = readDottedConfigValue(nextConfig, "diagnostics.cacheTrace");
+  if (!isPlainObject(cacheTrace)) {
+    return false;
+  }
+
+  const contentCaptureDisabled =
+    cacheTrace.includeMessages === false &&
+    cacheTrace.includePrompt === false &&
+    cacheTrace.includeSystem === false;
+  if (!contentCaptureDisabled) {
+    return false;
+  }
+
+  if (path === "diagnostics.cacheTrace.enabled") {
+    return true;
+  }
+
+  return (
+    path === "diagnostics.cacheTrace.includeMessages" ||
+    path === "diagnostics.cacheTrace.includePrompt" ||
+    path === "diagnostics.cacheTrace.includeSystem"
+  );
+}
+
+function isAllowedGatewayConfigChange(path: string, nextConfig: Record<string, unknown>): boolean {
+  return isAllowedGatewayConfigPath(path) || isSafeCacheTraceMutation(path, nextConfig);
+}
+
 function assertGatewayConfigMutationAllowed(params: {
   action: "config.apply" | "config.patch";
   currentConfig: Record<string, unknown>;
@@ -302,7 +342,9 @@ function assertGatewayConfigMutationAllowed(params: {
           mergeObjectArraysById: true,
         }) as Record<string, unknown>);
   const changedPaths = [...collectChangedConfigPaths(params.currentConfig, nextConfig)].toSorted();
-  const disallowedPaths = changedPaths.filter((path) => !isAllowedGatewayConfigPath(path));
+  const disallowedPaths = changedPaths.filter(
+    (path) => !isAllowedGatewayConfigChange(path, nextConfig),
+  );
   if (disallowedPaths.length > 0) {
     throw new Error(
       `gateway ${params.action} cannot change protected config paths: ${disallowedPaths.join(", ")}`,
