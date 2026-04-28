@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import {
@@ -13,14 +14,16 @@ import type { SkillEntry, SkillSnapshot } from "./types.js";
 
 const log = createSubsystemLogger("env-overrides");
 
-type EnvUpdate = { key: string };
+type EnvUpdate = { key: string; value: string };
 export type SkillEnvOverrideHandle = (() => void) & {
   readonly env: Readonly<Record<string, string>>;
 };
 type SkillConfig = NonNullable<ReturnType<typeof resolveSkillConfig>>;
 type ActiveSkillEnvEntry = {
-  value: string;
   count: number;
+};
+type SkillEnvOverlayStore = {
+  overrides: ReadonlyMap<symbol, Readonly<Record<string, string>>>;
 };
 
 /**
@@ -30,20 +33,23 @@ type ActiveSkillEnvEntry = {
  * @see https://github.com/openclaw/openclaw/issues/36280
  */
 const activeSkillEnvEntries = new Map<string, ActiveSkillEnvEntry>();
+const skillEnvOverlayStorage = new AsyncLocalStorage<SkillEnvOverlayStore>();
 
 /** Returns a snapshot of env var keys currently injected by skill overrides. */
 export function getActiveSkillEnvKeys(): ReadonlySet<string> {
   return new Set(activeSkillEnvEntries.keys());
 }
 
-/** Returns request-scoped skill env values for child processes. */
+/** Returns the current async run's request-scoped skill env values for child processes. */
 export function getActiveSkillEnvValues(): Readonly<Record<string, string>> {
-  return Object.fromEntries(
-    [...activeSkillEnvEntries.entries()].map(([key, entry]) => [key, entry.value]),
-  );
+  const store = skillEnvOverlayStorage.getStore();
+  if (!store) {
+    return {};
+  }
+  return Object.freeze(Object.assign({}, ...store.overrides.values()));
 }
 
-function acquireActiveSkillEnvKey(key: string, value: string): boolean {
+function acquireActiveSkillEnvKey(key: string): boolean {
   const active = activeSkillEnvEntries.get(key);
   if (active) {
     active.count += 1;
@@ -53,7 +59,6 @@ function acquireActiveSkillEnvKey(key: string, value: string): boolean {
     return false;
   }
   activeSkillEnvEntries.set(key, {
-    value,
     count: 1,
   });
   return true;
@@ -197,19 +202,33 @@ function applySkillConfigEnvOverrides(params: {
   }
 
   for (const [envKey, envValue] of Object.entries(sanitized.allowed)) {
-    if (!acquireActiveSkillEnvKey(envKey, envValue)) {
+    if (!acquireActiveSkillEnvKey(envKey)) {
       continue;
     }
-    updates.push({ key: envKey });
+    updates.push({ key: envKey, value: envValue });
   }
 }
 
 function createEnvReverter(updates: EnvUpdate[]): SkillEnvOverrideHandle {
-  const env = Object.freeze(getActiveSkillEnvValues());
+  const env = Object.freeze(
+    Object.fromEntries(updates.map((update) => [update.key, update.value])),
+  );
+  const overlayId = Symbol("skill-env-overlay");
+  const currentStore = skillEnvOverlayStorage.getStore();
+  const overrides = new Map(currentStore?.overrides);
+  overrides.set(overlayId, env);
+  skillEnvOverlayStorage.enterWith({ overrides });
   const restore = (() => {
     for (const update of updates) {
       releaseActiveSkillEnvKey(update.key);
     }
+    const activeStore = skillEnvOverlayStorage.getStore();
+    if (!activeStore?.overrides.has(overlayId)) {
+      return;
+    }
+    const remainingOverrides = new Map(activeStore.overrides);
+    remainingOverrides.delete(overlayId);
+    skillEnvOverlayStorage.enterWith({ overrides: remainingOverrides });
   }) as SkillEnvOverrideHandle;
   Object.defineProperty(restore, "env", {
     enumerable: true,

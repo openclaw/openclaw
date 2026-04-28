@@ -564,6 +564,52 @@ describe("applySkillEnvOverrides", () => {
     });
   });
 
+  it("snapshots only the current handle's env values", async () => {
+    const firstEntries = envSkillEntries("first-env-skill", {
+      primaryEnv: "FIRST_ENV_KEY",
+      requires: { env: ["FIRST_ENV_KEY"] },
+    });
+    const secondEntries = envSkillEntries("second-env-skill", {
+      primaryEnv: "SECOND_ENV_KEY",
+      requires: { env: ["SECOND_ENV_KEY"] },
+    });
+
+    withClearedEnv(["FIRST_ENV_KEY", "SECOND_ENV_KEY"], () => {
+      const firstRestore = applySkillEnvOverrides({
+        skills: firstEntries,
+        config: {
+          skills: {
+            entries: {
+              "first-env-skill": { apiKey: "first-secret" }, // pragma: allowlist secret
+            },
+          },
+        },
+      });
+      const secondRestore = applySkillEnvOverrides({
+        skills: secondEntries,
+        config: {
+          skills: {
+            entries: {
+              "second-env-skill": { apiKey: "second-secret" }, // pragma: allowlist secret
+            },
+          },
+        },
+      });
+
+      try {
+        expect(firstRestore.env).toEqual({ FIRST_ENV_KEY: "first-secret" });
+        expect(secondRestore.env).toEqual({ SECOND_ENV_KEY: "second-secret" });
+        expect(getActiveSkillEnvValues()).toMatchObject({
+          FIRST_ENV_KEY: "first-secret",
+          SECOND_ENV_KEY: "second-secret",
+        });
+      } finally {
+        firstRestore();
+        secondRestore();
+      }
+    });
+  });
+
   it("applies env overrides from snapshots", async () => {
     const snapshot = envSkillSnapshot("env-skill", {
       primaryEnv: "ENV_KEY",
