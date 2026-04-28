@@ -296,6 +296,20 @@ describe("channelsStatusCommand option validation", () => {
     mocks.withProgress.mockClear();
   });
 
+  it("preserves the longer default timeout for probe mode", async () => {
+    mocks.callGateway.mockResolvedValue({});
+    const { runtime } = createCapturingTestRuntime();
+
+    await channelsStatusCommand({ probe: true }, runtime as never);
+
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({ probe: true, timeoutMs: 30_000 }),
+        timeoutMs: 30_000,
+      }),
+    );
+  });
+
   it("throws for invalid timeout values before probing the gateway", async () => {
     const { runtime } = createCapturingTestRuntime();
 

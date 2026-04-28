@@ -33,6 +33,7 @@ export type ChannelsStatusOptions = {
 };
 
 const DEFAULT_CHANNELS_STATUS_TIMEOUT_MS = 10_000;
+const DEFAULT_CHANNELS_STATUS_PROBE_TIMEOUT_MS = 30_000;
 
 function redactGatewayUrlSecretsInText(text: string): string {
   return text.replace(/\b(?:wss?|https?):\/\/[^\s"'<>]+/gi, (rawUrl) => {
@@ -169,9 +170,11 @@ export async function channelsStatusCommand(
   opts: ChannelsStatusOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const timeoutMs = parseTimeoutMsWithFallback(opts.timeout, DEFAULT_CHANNELS_STATUS_TIMEOUT_MS, {
-    invalidType: "error",
-  });
+  const timeoutMs = parseTimeoutMsWithFallback(
+    opts.timeout,
+    opts.probe ? DEFAULT_CHANNELS_STATUS_PROBE_TIMEOUT_MS : DEFAULT_CHANNELS_STATUS_TIMEOUT_MS,
+    { invalidType: "error" },
+  );
   const statusLabel = opts.probe ? "Checking channel status (probe)…" : "Checking channel status…";
   const shouldLogStatus = opts.json !== true && !process.stderr.isTTY;
   if (shouldLogStatus) {
