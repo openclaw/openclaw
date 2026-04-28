@@ -2430,14 +2430,19 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerRuntimeLifecycle: (lifecycle) => registerRuntimeLifecycle(record, lifecycle),
               registerAgentEventSubscription: (subscription) =>
                 registerAgentEventSubscription(record, subscription),
-              emitAgentEvent: (event) =>
-                registryParams.activateGlobalSideEffects === false
-                  ? { emitted: false, reason: "global side effects disabled" }
-                  : emitPluginAgentEvent({
-                      pluginId: record.id,
-                      pluginName: record.name,
-                      event,
-                    }),
+              emitAgentEvent: (event) => {
+                if (registryParams.activateGlobalSideEffects === false) {
+                  return { emitted: false, reason: "global side effects disabled" };
+                }
+                if (!shouldCommitWorkflowSideEffect()) {
+                  return { emitted: false, reason: "plugin is not loaded" };
+                }
+                return emitPluginAgentEvent({
+                  pluginId: record.id,
+                  pluginName: record.name,
+                  event,
+                });
+              },
               setRunContext: (patch) => setPluginRunContext({ pluginId: record.id, patch }),
               getRunContext: (get) => getPluginRunContext({ pluginId: record.id, get }),
               clearRunContext: (params) =>
@@ -2460,7 +2465,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               sendSessionAttachment: (params) =>
                 registryParams.activateGlobalSideEffects === false
                   ? Promise.resolve({ ok: false, error: "global side effects disabled" })
-                  : sendPluginSessionAttachment({ ...params, origin: record.origin }),
+                  : shouldCommitWorkflowSideEffect()
+                    ? sendPluginSessionAttachment({ ...params, origin: record.origin })
+                    : Promise.resolve({ ok: false, error: "plugin is not loaded" }),
               registerSessionAction: (action) => registerSessionAction(record, action),
               registerMemoryCapability: (capability) => {
                 if (!hasKind(record.kind, "memory")) {
