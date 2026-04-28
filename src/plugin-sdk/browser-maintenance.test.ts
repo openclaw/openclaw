@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import os from "node:os";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const closeTrackedBrowserTabsForSessionsImpl = vi.hoisted(() => vi.fn());
@@ -14,9 +16,12 @@ vi.mock("../process/exec.js", () => ({
 
 describe("browser maintenance", () => {
   beforeEach(() => {
+    vi.restoreAllMocks();
     closeTrackedBrowserTabsForSessionsImpl.mockReset();
     loadBundledPluginPublicSurfaceModuleSync.mockReset();
     runExec.mockReset();
+    vi.spyOn(Date, "now").mockReturnValue(123);
+    vi.spyOn(os, "homedir").mockReturnValue("/home/test");
     loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({
       closeTrackedBrowserTabsForSessions: closeTrackedBrowserTabsForSessionsImpl,
     });
@@ -46,17 +51,17 @@ describe("browser maintenance", () => {
     });
   });
 
-  it("uses the local trash command before falling back", async () => {
-    runExec.mockResolvedValue({
-      stdout: "",
-      stderr: "",
-      code: 0,
-      signal: null,
-    });
+  it("moves paths to the user trash without invoking a PATH-resolved command", async () => {
+    const mkdirSync = vi.spyOn(fs, "mkdirSync").mockImplementation(() => undefined);
+    const existsSync = vi.spyOn(fs, "existsSync").mockReturnValue(false);
+    const renameSync = vi.spyOn(fs, "renameSync").mockImplementation(() => undefined);
 
     const { movePathToTrash } = await import("./browser-maintenance.js");
 
-    await expect(movePathToTrash("/tmp/demo")).resolves.toBe("/tmp/demo");
-    expect(runExec).toHaveBeenCalledWith("trash", ["/tmp/demo"], { timeoutMs: 10_000 });
+    await expect(movePathToTrash("/tmp/demo")).resolves.toBe("/home/test/.Trash/demo-123");
+    expect(runExec).not.toHaveBeenCalled();
+    expect(mkdirSync).toHaveBeenCalledWith("/home/test/.Trash", { recursive: true });
+    expect(existsSync).toHaveBeenCalledWith("/home/test/.Trash/demo-123");
+    expect(renameSync).toHaveBeenCalledWith("/tmp/demo", "/home/test/.Trash/demo-123");
   });
 });

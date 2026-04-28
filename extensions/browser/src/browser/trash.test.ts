@@ -16,28 +16,34 @@ describe("browser trash", () => {
     vi.spyOn(os, "homedir").mockReturnValue("/home/test");
   });
 
-  it("returns the target path when trash exits successfully", async () => {
+  it("moves paths to the user trash without invoking a PATH-resolved command", async () => {
     const { movePathToTrash } = await import("./trash.js");
-    runExec.mockResolvedValue(undefined);
-    const mkdirSync = vi.spyOn(fs, "mkdirSync");
-    const renameSync = vi.spyOn(fs, "renameSync");
-
-    await expect(movePathToTrash("/tmp/demo")).resolves.toBe("/tmp/demo");
-    expect(runExec).toHaveBeenCalledWith("trash", ["/tmp/demo"], { timeoutMs: 10_000 });
-    expect(mkdirSync).not.toHaveBeenCalled();
-    expect(renameSync).not.toHaveBeenCalled();
-  });
-
-  it("falls back to rename when trash exits non-zero", async () => {
-    const { movePathToTrash } = await import("./trash.js");
-    runExec.mockRejectedValue(new Error("permission denied"));
     const mkdirSync = vi.spyOn(fs, "mkdirSync").mockImplementation(() => undefined);
     const existsSync = vi.spyOn(fs, "existsSync").mockReturnValue(false);
     const renameSync = vi.spyOn(fs, "renameSync").mockImplementation(() => undefined);
 
     await expect(movePathToTrash("/tmp/demo")).resolves.toBe("/home/test/.Trash/demo-123");
+    expect(runExec).not.toHaveBeenCalled();
     expect(mkdirSync).toHaveBeenCalledWith("/home/test/.Trash", { recursive: true });
     expect(existsSync).toHaveBeenCalledWith("/home/test/.Trash/demo-123");
     expect(renameSync).toHaveBeenCalledWith("/tmp/demo", "/home/test/.Trash/demo-123");
+  });
+
+  it("adds a secure suffix when the first trash destination already exists", async () => {
+    const { movePathToTrash } = await import("./trash.js");
+    const mkdirSync = vi.spyOn(fs, "mkdirSync").mockImplementation(() => undefined);
+    const existsSync = vi.spyOn(fs, "existsSync").mockReturnValue(true);
+    const renameSync = vi.spyOn(fs, "renameSync").mockImplementation(() => undefined);
+
+    await expect(movePathToTrash("/tmp/demo")).resolves.toMatch(
+      /^\/home\/test\/\.Trash\/demo-123-[A-Za-z0-9_-]+$/,
+    );
+    expect(runExec).not.toHaveBeenCalled();
+    expect(mkdirSync).toHaveBeenCalledWith("/home/test/.Trash", { recursive: true });
+    expect(existsSync).toHaveBeenCalledWith("/home/test/.Trash/demo-123");
+    expect(renameSync).toHaveBeenCalledWith(
+      "/tmp/demo",
+      expect.stringMatching(/^\/home\/test\/\.Trash\/demo-123-[A-Za-z0-9_-]+$/),
+    );
   });
 });
