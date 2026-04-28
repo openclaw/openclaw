@@ -58,6 +58,19 @@ describe("cron tool", () => {
     return call.params;
   }
 
+  it("tells models to keep cron expressions in local wall-clock time for tz", () => {
+    const tool = createTestCronTool();
+
+    expect(tool.description).toContain("local wall-clock time");
+    expect(tool.description).toContain("do not convert the requested local time to UTC first");
+    expect(tool.description).toContain("Gateway host local timezone");
+    expect(tool.description).toContain(
+      'For schedule.kind="at", ISO timestamps without an explicit timezone are treated as UTC.',
+    );
+    expect(tool.description).toContain('"expr": "0 18 * * *"');
+    expect(tool.description).toContain('"tz": "Asia/Shanghai"');
+  });
+
   function buildReminderAgentTurnJob(overrides: Record<string, unknown> = {}): {
     name: string;
     schedule: { at: string };
@@ -116,6 +129,25 @@ describe("cron tool", () => {
     const call = readGatewayCall();
     const payload = call.params as { sessionKey?: string } | undefined;
     return payload?.sessionKey;
+  }
+
+  async function executeAddAndReadAgentId(params: {
+    callId: string;
+    agentSessionKey: string;
+    agentId?: unknown;
+    includeAgentId?: boolean;
+  }): Promise<unknown> {
+    const tool = createTestCronTool({ agentSessionKey: params.agentSessionKey });
+    await tool.execute(params.callId, {
+      action: "add",
+      job: {
+        name: "reminder",
+        schedule: { at: new Date(123).toISOString() },
+        payload: { kind: "agentTurn", message: "hello" },
+        ...(params.includeAgentId ? { agentId: params.agentId } : {}),
+      },
+    });
+    return readGatewayCall().params?.agentId;
   }
 
   async function executeAddWithContextMessages(callId: string, contextMessages: number) {
@@ -250,6 +282,26 @@ describe("cron tool", () => {
       params?: { agentId?: unknown };
     };
     expect(call?.params?.agentId).toBeNull();
+  });
+
+  it("infers session agentId when job.agentId is omitted", async () => {
+    await expect(
+      executeAddAndReadAgentId({
+        callId: "call-omitted-agent-id",
+        agentSessionKey: "agent:agent-123:telegram:direct:channing",
+      }),
+    ).resolves.toBe("agent-123");
+  });
+
+  it("infers session agentId when job.agentId is undefined", async () => {
+    await expect(
+      executeAddAndReadAgentId({
+        callId: "call-undefined-agent-id",
+        agentSessionKey: "agent:agent-123:telegram:direct:channing",
+        includeAgentId: true,
+        agentId: undefined,
+      }),
+    ).resolves.toBe("agent-123");
   });
 
   it("passes through failureAlert=false for add", async () => {

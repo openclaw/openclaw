@@ -130,6 +130,7 @@ export type EmbeddedPiRunMeta = {
   livenessState?: EmbeddedRunLivenessState;
   agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";
   terminalReplyKind?: "silent-empty";
+  yielded?: boolean;
   error?: {
     kind:
       | "context_overflow"

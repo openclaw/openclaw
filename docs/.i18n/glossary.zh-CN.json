@@ -96,12 +96,20 @@
     "target": "Chutes"
   },
   {
+    "source": "DeepInfra",
+    "target": "DeepInfra"
+  },
+  {
     "source": "Qwen",
     "target": "Qwen"
   },
   {
     "source": "Feishu",
     "target": "Feishu"
+  },
+  {
+    "source": "Yuanbao",
+    "target": "腾讯元宝"
   },
   {
     "source": "WeChat",
@@ -342,6 +350,10 @@
   {
     "source": "Ollama Web Search",
     "target": "Ollama Web 搜索"
+  },
+  {
+    "source": "Memory LanceDB",
+    "target": "Memory LanceDB"
   },
   {
     "source": "onboarding",

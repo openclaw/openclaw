@@ -112,6 +112,7 @@ Not every agent run creates a task. Heartbeat turns and normal interactive chat 
     - Heartbeat turns — main-session; see [Heartbeat](/gateway/heartbeat)
     - Normal interactive chat turns
     - Direct `/command` responses
+
   </Accordion>
 </AccordionGroup>
 

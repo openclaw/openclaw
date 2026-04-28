@@ -3,6 +3,7 @@ import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import {
   CUSTOM_PROXY_MODELS_CONFIG,
   installModelsConfigTestHooks,
@@ -133,6 +134,46 @@ describe("models-config write serialization", () => {
           providerDiscoveryTimeoutMs: 5000,
         }),
       );
+    });
+  });
+
+  it("keeps the ready cache warm after models.json is written", async () => {
+    await withModelsTempHome(async () => {
+      await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
+      await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
+
+      expect(planOpenClawModelsJsonMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("invalidates the ready cache when models.json changes externally", async () => {
+    await withModelsTempHome(async () => {
+      await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
+      await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
+
+      const modelPath = path.join(resolveOpenClawAgentDir(), "models.json");
+      await fs.writeFile(modelPath, `${JSON.stringify({ external: true })}\n`, "utf8");
+      const externalMtime = new Date(Date.now() + 2000);
+      await fs.utimes(modelPath, externalMtime, externalMtime);
+      await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
+
+      expect(planOpenClawModelsJsonMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("keeps distinct config fingerprints cached without evicting each other", async () => {
+    await withModelsTempHome(async () => {
+      planOpenClawModelsJsonMock.mockImplementation(async () => ({ action: "noop" }));
+      const first = structuredClone(CUSTOM_PROXY_MODELS_CONFIG);
+      const second = structuredClone(CUSTOM_PROXY_MODELS_CONFIG);
+      first.agents = { defaults: { model: "openai/gpt-5.4" } };
+      second.agents = { defaults: { model: "anthropic/claude-sonnet-4-5" } };
+
+      await ensureOpenClawModelsJson(first);
+      await ensureOpenClawModelsJson(second);
+      await ensureOpenClawModelsJson(first);
+
+      expect(planOpenClawModelsJsonMock).toHaveBeenCalledTimes(2);
     });
   });
 

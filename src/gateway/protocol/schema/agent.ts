@@ -152,6 +152,8 @@ export const AgentParamsSchema = Type.Object(
     timeout: Type.Optional(Type.Integer({ minimum: 0 })),
     bestEffortDeliver: Type.Optional(Type.Boolean()),
     lane: Type.Optional(Type.String()),
+    // Backward-compatible no-op. Older CLI clients sent this field on gateway
+    // agent requests; the gateway accepts but intentionally ignores it.
     cleanupBundleMcpOnRunEnd: Type.Optional(Type.Boolean()),
     modelRun: Type.Optional(Type.Boolean()),
     promptMode: Type.Optional(

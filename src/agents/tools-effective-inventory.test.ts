@@ -1,4 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { createOpenClawCodingTools } from "./pi-tools.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -49,6 +51,8 @@ vi.mock("./pi-tools.js", () => ({
 
 vi.mock("../plugins/tools.js", () => ({
   getPluginToolMeta: (tool: { name: string }) => effectiveInventoryState.pluginMeta[tool.name],
+  buildPluginToolMetadataKey: (pluginId: string, toolName: string) =>
+    JSON.stringify([pluginId, toolName]),
 }));
 
 vi.mock("./channel-tools.js", () => ({
@@ -101,6 +105,7 @@ describe("resolveEffectiveToolInventory", () => {
     effectiveInventoryState.createToolsMock = vi.fn<typeof createOpenClawCodingTools>(
       (_options) => effectiveInventoryState.tools,
     );
+    setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
   it("groups core, plugin, and channel tools from the effective runtime set", async () => {
@@ -188,6 +193,74 @@ describe("resolveEffectiveToolInventory", () => {
     const labels = result.groups.flatMap((group) => group.tools.map((tool) => tool.label));
 
     expect(labels).toEqual(["Lookup (docs)", "Lookup (jira)"]);
+  });
+
+  it("projects plugin tool metadata into the effective inventory", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.toolMetadata = [
+      {
+        pluginId: "docs",
+        pluginName: "Docs",
+        source: "fixture",
+        metadata: {
+          toolName: "docs_lookup",
+          displayName: "Docs Search",
+          description: "Curated docs lookup.",
+          risk: "low",
+          tags: ["docs", "fixture"],
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+    const { resolveEffectiveToolInventory } = await loadHarness({
+      tools: [mockTool({ name: "docs_lookup", label: "Lookup", description: "Search docs" })],
+      pluginMeta: { docs_lookup: { pluginId: "docs" } },
+    });
+
+    const result = resolveEffectiveToolInventory({ cfg: {} });
+
+    expect(result.groups[0]?.tools[0]).toEqual({
+      id: "docs_lookup",
+      label: "Docs Search",
+      description: "Curated docs lookup.",
+      rawDescription: "Curated docs lookup.",
+      source: "plugin",
+      pluginId: "docs",
+      risk: "low",
+      tags: ["docs", "fixture"],
+    });
+  });
+
+  it("does not let one plugin project metadata onto another plugin tool", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.toolMetadata = [
+      {
+        pluginId: "spoofing-plugin",
+        pluginName: "Spoofing Plugin",
+        source: "fixture",
+        metadata: {
+          toolName: "docs_lookup",
+          displayName: "Spoofed Docs Search",
+          risk: "high",
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+    const { resolveEffectiveToolInventory } = await loadHarness({
+      tools: [mockTool({ name: "docs_lookup", label: "Lookup", description: "Search docs" })],
+      pluginMeta: { docs_lookup: { pluginId: "docs" } },
+    });
+
+    const result = resolveEffectiveToolInventory({ cfg: {} });
+
+    expect(result.groups[0]?.tools[0]).toEqual({
+      id: "docs_lookup",
+      label: "Lookup",
+      description: "Search docs",
+      rawDescription: "Search docs",
+      source: "plugin",
+      pluginId: "docs",
+    });
   });
 
   it("prefers displaySummary over raw description", async () => {

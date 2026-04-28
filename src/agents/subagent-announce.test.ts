@@ -468,7 +468,7 @@ describe("subagent announce seam flow", () => {
       expect.objectContaining({
         deliver: true,
         channel: "telegram",
-        accountId: "bot:123",
+        accountId: "bot-123",
         to: "-1001234567890",
       }),
     );

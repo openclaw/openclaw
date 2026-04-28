@@ -3,6 +3,11 @@ import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import type { CompactionStatus, FallbackStatus } from "../app-tool-stream.ts";
 import {
+  getChatAttachmentPreviewUrl,
+  registerChatAttachmentPayload,
+  releaseChatAttachmentPayload,
+} from "../chat/attachment-payload-store.ts";
+import {
   CHAT_ATTACHMENT_ACCEPT,
   isSupportedChatAttachmentFile,
 } from "../chat/attachment-support.ts";
@@ -205,12 +210,13 @@ function generateAttachmentId(): string {
 }
 
 function chatAttachmentFromFile(file: File, dataUrl: string): ChatAttachment {
-  return {
+  const attachment = {
     id: generateAttachmentId(),
-    dataUrl,
     mimeType: file.type || "application/octet-stream",
     fileName: file.name || undefined,
+    sizeBytes: file.size,
   };
+  return registerChatAttachmentPayload({ attachment, dataUrl, file });
 }
 
 function isImageAttachment(att: ChatAttachment): boolean {
@@ -318,8 +324,8 @@ function renderAttachmentPreview(props: ChatProps): TemplateResult | typeof noth
               .filter(Boolean)
               .join(" ")}
           >
-            ${isImageAttachment(att)
-              ? html`<img src=${att.dataUrl} alt="Attachment preview" />`
+            ${isImageAttachment(att) && getChatAttachmentPreviewUrl(att)
+              ? html`<img src=${getChatAttachmentPreviewUrl(att)!} alt="Attachment preview" />`
               : html`
                   <div class="chat-attachment-file" title=${att.fileName ?? "Attached file"}>
                     <span class="chat-attachment-file__icon">${icons.paperclip}</span>
@@ -334,6 +340,7 @@ function renderAttachmentPreview(props: ChatProps): TemplateResult | typeof noth
               aria-label="Remove attachment"
               @click=${() => {
                 const next = (props.attachments ?? []).filter((a) => a.id !== att.id);
+                releaseChatAttachmentPayload(att.id);
                 props.onAttachmentsChange?.(next);
               }}
             >

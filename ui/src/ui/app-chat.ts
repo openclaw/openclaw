@@ -2,6 +2,12 @@ import { setLastActiveSessionKey } from "./app-last-active-session.ts";
 import { scheduleChatScroll, resetChatScroll } from "./app-scroll.ts";
 import { resetToolStream } from "./app-tool-stream.ts";
 import {
+  cloneChatAttachmentsMetadata,
+  discardChatAttachmentDataUrls,
+  getChatAttachmentDataUrl,
+  releaseChatAttachmentPayloads,
+} from "./chat/attachment-payload-store.ts";
+import {
   handleChatDraftChange,
   handleChatInputHistoryKey,
   navigateChatInputHistory,
@@ -66,6 +72,11 @@ export type ChatHost = ChatInputHistoryState & {
   onSlashAction?: (action: string) => void;
 };
 
+export type ChatSendOptions = {
+  confirmReset?: boolean;
+  restoreDraft?: boolean;
+};
+
 export const CHAT_SESSIONS_ACTIVE_MINUTES = 120;
 export {
   handleChatDraftChange,
@@ -109,6 +120,16 @@ function isChatResetCommand(text: string) {
   return normalized.startsWith("/new ") || normalized.startsWith("/reset ");
 }
 
+function confirmChatResetCommand(text: string) {
+  if (!isChatResetCommand(text)) {
+    return true;
+  }
+  if (typeof globalThis.confirm !== "function") {
+    return false;
+  }
+  return globalThis.confirm("Start a new session? This will reset the current chat.");
+}
+
 function isBtwCommand(text: string) {
   return /^\/btw(?::|\s|$)/i.test(text.trim());
 }
@@ -147,7 +168,7 @@ function enqueueChatMessage(
       id: generateUUID(),
       text: trimmed,
       createdAt: Date.now(),
-      attachments: hasAttachments ? attachments?.map((att) => ({ ...att })) : undefined,
+      attachments: hasAttachments ? cloneChatAttachmentsMetadata(attachments ?? []) : undefined,
       refreshSessions,
       localCommandArgs: localCommand?.args,
       localCommandName: localCommand?.name,
@@ -173,7 +194,7 @@ function enqueuePendingRunMessage(
       text: trimmed,
       createdAt: Date.now(),
       kind: "steered",
-      attachments: hasAttachments ? attachments?.map((att) => ({ ...att })) : undefined,
+      attachments: hasAttachments ? cloneChatAttachmentsMetadata(attachments ?? []) : undefined,
       pendingRunId,
     },
   ];
@@ -223,16 +244,21 @@ async function sendChatMessageNow(
   if (ok && opts?.refreshSessions && runId) {
     host.refreshSessionsAfterChat.add(runId);
   }
+  if (ok) {
+    discardChatAttachmentDataUrls(opts?.attachments);
+  }
   return ok;
 }
 
 function attachmentSubmitSignature(attachment: ChatAttachment): string {
+  const dataUrl = getChatAttachmentDataUrl(attachment);
   return JSON.stringify([
     attachment.id,
     attachment.mimeType,
     attachment.fileName ?? "",
-    attachment.dataUrl.length,
-    attachment.dataUrl.slice(0, 64),
+    attachment.sizeBytes ?? 0,
+    dataUrl?.length ?? 0,
+    dataUrl?.slice(0, 64) ?? "",
   ]);
 }
 
@@ -300,6 +326,7 @@ async function sendDetachedBtwMessage(
       host as unknown as Parameters<typeof setLastActiveSessionKey>[0],
       host.sessionKey,
     );
+    releaseChatAttachmentPayloads(opts?.attachments);
   }
   return ok;
 }
@@ -334,6 +361,7 @@ export async function steerQueuedChatMessage(host: ChatHost, id: string) {
     host.chatQueue = host.chatQueue.map((entry) => (entry.id === id ? item : entry));
     return;
   }
+  releaseChatAttachmentPayloads(attachments);
   setLastActiveSessionKey(
     host as unknown as Parameters<typeof setLastActiveSessionKey>[0],
     host.sessionKey,
@@ -374,20 +402,28 @@ async function flushChatQueue(host: ChatHost) {
 }
 
 export function removeQueuedMessage(host: ChatHost, id: string) {
+  const removed = host.chatQueue.filter((item) => item.id === id);
   host.chatQueue = host.chatQueue.filter((item) => item.id !== id);
+  for (const item of removed) {
+    releaseChatAttachmentPayloads(item.attachments);
+  }
 }
 
 export function clearPendingQueueItemsForRun(host: ChatHost, runId: string | undefined) {
   if (!runId) {
     return;
   }
+  const removed = host.chatQueue.filter((item) => item.pendingRunId === runId);
   host.chatQueue = host.chatQueue.filter((item) => item.pendingRunId !== runId);
+  for (const item of removed) {
+    releaseChatAttachmentPayloads(item.attachments);
+  }
 }
 
 export async function handleSendChat(
   host: ChatHost,
   messageOverride?: string,
-  opts?: { restoreDraft?: boolean },
+  opts?: ChatSendOptions,
 ) {
   if (!host.connected) {
     return;
@@ -399,6 +435,10 @@ export async function handleSendChat(
   const hasAttachments = attachmentsToSend.length > 0;
 
   if (!message && !hasAttachments) {
+    return;
+  }
+
+  if (messageOverride != null && opts?.confirmReset && !confirmChatResetCommand(message)) {
     return;
   }
 

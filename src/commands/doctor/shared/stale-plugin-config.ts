@@ -74,6 +74,9 @@ export function isStalePluginAutoRepairBlocked(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
 ): boolean {
+  if (cfg.plugins?.enabled === false) {
+    return false;
+  }
   return collectPluginRegistryState(cfg, env).hasDiscoveryErrors;
 }
 
@@ -81,6 +84,9 @@ export function scanStalePluginConfig(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
 ): StalePluginConfigHit[] {
+  if (cfg.plugins?.enabled === false) {
+    return [];
+  }
   return scanStalePluginConfigWithState(cfg, collectPluginRegistryState(cfg, env));
 }
 
@@ -268,6 +274,9 @@ export function maybeRepairStalePluginConfig(
   config: OpenClawConfig;
   changes: string[];
 } {
+  if (cfg.plugins?.enabled === false) {
+    return { config: cfg, changes: [] };
+  }
   const registryState = collectPluginRegistryState(cfg, env);
   if (registryState.hasDiscoveryErrors) {
     return { config: cfg, changes: [] };

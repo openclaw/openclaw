@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createRunningTaskRun } from "./task-executor.js";
 import {
   createManagedTaskFlow,
@@ -22,19 +22,24 @@ const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 async function withTaskFlowMaintenanceStateDir(
   run: (root: string) => Promise<void>,
 ): Promise<void> {
-  await withTempDir({ prefix: "openclaw-task-flow-maintenance-" }, async (root) => {
-    process.env.OPENCLAW_STATE_DIR = root;
-    resetTaskRegistryDeliveryRuntimeForTests();
-    resetTaskRegistryForTests();
-    resetTaskFlowRegistryForTests();
-    try {
-      await run(root);
-    } finally {
+  await withOpenClawTestState(
+    {
+      layout: "state-only",
+      prefix: "openclaw-task-flow-maintenance-",
+    },
+    async (state) => {
       resetTaskRegistryDeliveryRuntimeForTests();
       resetTaskRegistryForTests();
       resetTaskFlowRegistryForTests();
-    }
-  });
+      try {
+        await run(state.stateDir);
+      } finally {
+        resetTaskRegistryDeliveryRuntimeForTests();
+        resetTaskRegistryForTests();
+        resetTaskFlowRegistryForTests();
+      }
+    },
+  );
 }
 
 describe("task-flow-registry maintenance", () => {
