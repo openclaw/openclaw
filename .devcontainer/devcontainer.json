@@ -4,7 +4,7 @@
   "features": {
     "ghcr.io/devcontainers-extra/features/zsh:2": {}
   },
-  "postCreateCommand": "npm install -g pnpm && pnpm install",
+  "postCreateCommand": "pnpm install --frozen-lockfile",
   "customizations": {
     "vscode": {
       "extensions": [
