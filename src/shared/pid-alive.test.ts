@@ -1,3 +1,4 @@
+import childProcess from "node:child_process";
 import fsSync from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { getProcessStartTime, isPidAlive } from "./pid-alive.js";
@@ -65,15 +66,23 @@ describe("isPidAlive", () => {
     });
   });
 
-  it("handles macOS zombie detection without crashing", async () => {
-    if (process.platform !== "darwin") {
-      return;
-    }
-    // On macOS, verify that isPidAlive works and doesn't throw
-    // Real zombie processes are hard to create in tests, so we just
-    // verify the code path executes without error
-    expect(() => isPidAlive(process.pid)).not.toThrow();
-    expect(typeof isPidAlive(process.pid)).toBe("boolean");
+  it("returns false for zombie processes on macOS", async () => {
+    const spawnSyncSpy = vi.spyOn(childProcess, "spawnSync").mockReturnValue({
+      stdout: "Zs\n",
+      status: 0,
+      error: undefined,
+    } as never);
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    await withProcessPlatform("darwin", async () => {
+      expect(isPidAlive(42)).toBe(false);
+    });
+
+    expect(killSpy).toHaveBeenCalledWith(42, 0);
+    expect(spawnSyncSpy).toHaveBeenCalledWith("ps", ["-o", "state=", "-p", "42"], {
+      encoding: "utf8",
+      timeout: 1000,
+    });
   });
 
   it("treats unreadable linux proc status as non-zombie when kill succeeds", async () => {
