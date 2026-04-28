@@ -1,5 +1,8 @@
 {
   "id": "auto-recall",
+  "activation": {
+    "onStartup": false
+  },
   "name": "Auto Recall",
   "description": "Triggers configurable recall backends from user questions and injects relevant memory into prompt context.",
   "enabledByDefault": false,

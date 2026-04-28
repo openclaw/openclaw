@@ -153,22 +153,20 @@ export function normalizeTriggers(raw = {}) {
 }
 
 function compileWordRegex(items) {
-  if (!items.length) return null;
+  if (!items.length) {
+    return null;
+  }
   return new RegExp(
     `(^|\\P{L})(${items
       .map(escapeRegex)
-      .sort((a, b) => b.length - a.length)
+      .toSorted((a, b) => b.length - a.length)
       .join("|")})(?=\\P{L}|$)`,
     "iu",
   );
 }
 
 function tokenize(text) {
-  return (
-    String(text || "")
-      .toLowerCase()
-      .match(/[\p{L}]+/gu) || []
-  );
+  return (text == null ? "" : String(text)).toLowerCase().match(/[\p{L}]+/gu) || [];
 }
 
 /**
@@ -211,7 +209,9 @@ export function defaultTriggerSnapshot() {
 }
 
 export async function loadTriggerSnapshot(customPath, previousRaw = null) {
-  if (!customPath) return defaultTriggerSnapshot();
+  if (!customPath) {
+    return defaultTriggerSnapshot();
+  }
   const raw = JSON.parse(await fs.readFile(customPath, "utf8"));
   const compiled = compileTriggers(raw);
   const stat = await fs.stat(customPath);
@@ -232,7 +232,9 @@ export async function loadTriggerSnapshot(customPath, previousRaw = null) {
  * @returns {object} Per-category count deltas.
  */
 export function diffTriggers(oldRaw, newRaw) {
-  if (!oldRaw) return {};
+  if (!oldRaw) {
+    return {};
+  }
   const added = {};
   const removed = {};
   for (const key of Object.keys(DEFAULT_TRIGGERS)) {
@@ -240,8 +242,12 @@ export function diffTriggers(oldRaw, newRaw) {
     const newSet = new Set(newRaw[key] || []);
     const add = [...newSet].filter((item) => !oldSet.has(item));
     const rem = [...oldSet].filter((item) => !newSet.has(item));
-    if (add.length) added[key] = add;
-    if (rem.length) removed[key] = rem;
+    if (add.length) {
+      added[key] = add;
+    }
+    if (rem.length) {
+      removed[key] = rem;
+    }
   }
   return {
     ...(Object.keys(added).length ? { added } : {}),
@@ -256,7 +262,7 @@ export function diffTriggers(oldRaw, newRaw) {
  * @returns {boolean} True when text is internal prompt content.
  */
 export function isInternalPrompt(text, snapshot = defaultTriggerSnapshot()) {
-  const value = String(text || "").trim();
+  const value = (text == null ? "" : String(text)).trim();
   return snapshot.internalPromptPatterns.some((pattern) => pattern.test(value));
 }
 
@@ -267,26 +273,38 @@ export function isInternalPrompt(text, snapshot = defaultTriggerSnapshot()) {
  * @returns {{match: boolean, patternId?: string, matchedText?: string, reason?: string}} Trigger decision.
  */
 export function getRecallTrigger(text, snapshot = defaultTriggerSnapshot()) {
-  const value = String(text || "");
-  if (!value.trim()) return { match: false };
-  if (isInternalPrompt(value, snapshot)) return { match: false, reason: "internal_prompt" };
+  const value = text == null ? "" : String(text);
+  if (!value.trim()) {
+    return { match: false };
+  }
+  if (isInternalPrompt(value, snapshot)) {
+    return { match: false, reason: "internal_prompt" };
+  }
 
   for (const [patternId, re] of [
     ["memory_keyword", snapshot.memoryKeywordRe],
     ["past_reference", snapshot.pastReferenceRe],
     ["named_entity", snapshot.namedEntityRe],
   ]) {
-    if (!re) continue;
+    if (!re) {
+      continue;
+    }
     const matched = value.match(re);
-    if (matched) return { match: true, patternId, matchedText: matched[2] || matched[0] };
+    if (matched) {
+      return { match: true, patternId, matchedText: matched[2] || matched[0] };
+    }
   }
 
   const words = tokenize(value);
   const hasQuestion = words.some((word) => snapshot.questionWords.has(word));
   const hasPastVerb = words.some((word) => snapshot.pastVerbs.has(word));
-  if (hasQuestion && hasPastVerb) return { match: true, patternId: "past_tense_question" };
+  if (hasQuestion && hasPastVerb) {
+    return { match: true, patternId: "past_tense_question" };
+  }
 
-  if (snapshot.whitelistRe?.test(value)) return { match: false, reason: "whitelisted_term" };
+  if (snapshot.whitelistRe?.test(value)) {
+    return { match: false, reason: "whitelisted_term" };
+  }
   return { match: false };
 }
 
@@ -301,7 +319,9 @@ export function createTriggerManager({ customPath, reloadSignal = "SIGUSR2", log
   let reloading = Promise.resolve();
 
   async function reload(reason = "manual") {
-    if (!customPath || disposed) return snapshot;
+    if (!customPath || disposed) {
+      return snapshot;
+    }
     reloading = reloading.then(async () => {
       try {
         const next = await loadTriggerSnapshot(customPath, snapshot.raw);
@@ -342,14 +362,18 @@ export function createTriggerManager({ customPath, reloadSignal = "SIGUSR2", log
       });
     }
   }
-  if (customPath) void reload("startup");
+  if (customPath) {
+    void reload("startup");
+  }
 
   return {
     getSnapshot: () => snapshot,
     reload,
     dispose() {
       disposed = true;
-      if (signalRegistered && typeof process?.off === "function") process.off(signalName, onSignal);
+      if (signalRegistered && typeof process?.off === "function") {
+        process.off(signalName, onSignal);
+      }
     },
   };
 }

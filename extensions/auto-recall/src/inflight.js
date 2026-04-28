@@ -7,7 +7,9 @@ export class InflightDeduper {
   }
 
   run(key, fn) {
-    if (this.map.has(key)) return { promise: this.map.get(key), hit: true };
+    if (this.map.has(key)) {
+      return { promise: this.map.get(key), hit: true };
+    }
     const promise = Promise.resolve()
       .then(fn)
       .finally(() => {

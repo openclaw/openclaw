@@ -2,7 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 function bounded(value, max = 1000) {
-  if (typeof value !== "string") return value;
+  if (typeof value !== "string") {
+    return value;
+  }
   return value.length > max
     ? `${value.slice(0, max)}…[truncated ${value.length - max} chars]`
     : value;
@@ -11,7 +13,9 @@ function bounded(value, max = 1000) {
 const DIAGNOSTIC_LOG_FIELDS = new Set(["code", "httpStatus", "latencyMs", "reason", "signal"]);
 
 function sanitizeDiagnostics(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
   return Object.fromEntries(
     Object.entries(value)
       .filter(([key]) => DIAGNOSTIC_LOG_FIELDS.has(String(key)))
@@ -20,11 +24,17 @@ function sanitizeDiagnostics(value) {
 }
 
 function sanitize(value) {
-  if (!value || typeof value !== "object") return bounded(value);
-  if (Array.isArray(value)) return value.slice(0, 20).map(sanitize);
+  if (!value || typeof value !== "object") {
+    return bounded(value);
+  }
+  if (Array.isArray(value)) {
+    return value.slice(0, 20).map(sanitize);
+  }
   return Object.fromEntries(
     Object.entries(value).map(([key, item]) => {
-      if (String(key) === "diagnostics") return [key, sanitizeDiagnostics(item)];
+      if (String(key) === "diagnostics") {
+        return [key, sanitizeDiagnostics(item)];
+      }
       return [key, sanitize(item)];
     }),
   );
@@ -55,8 +65,11 @@ export function createLogger({ logPath, consoleLogger = console } = {}) {
         }
       }
     }
-    if (level === "warn") consoleLogger?.warn?.(entry);
-    else consoleLogger?.info?.(entry);
+    if (level === "warn") {
+      consoleLogger?.warn?.(entry);
+    } else {
+      consoleLogger?.info?.(entry);
+    }
   }
 
   return {

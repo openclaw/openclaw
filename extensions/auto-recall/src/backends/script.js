@@ -2,9 +2,12 @@ import { spawn } from "node:child_process";
 import { configHash } from "../cache.js";
 
 function toSources(value) {
-  if (!value) return [];
-  if (Array.isArray(value))
+  if (!value) {
+    return [];
+  }
+  if (Array.isArray(value)) {
     return value.map((item) => (typeof item === "string" ? { title: item } : item)).filter(Boolean);
+  }
   return String(value)
     .split(/\r?\n/)
     .map((line) => line.replace(/^\s*-\s*/, "").trim())
@@ -28,8 +31,10 @@ function int(value, fallback, min = 0, max = Number.MAX_SAFE_INTEGER) {
  * @returns {object} Normalized recall result.
  */
 export function parseScriptOutput(stdout, protocol = "json") {
-  const text = String(stdout || "").trim();
-  if (!text) return { status: "not_found", confidence: 0 };
+  const text = (stdout == null ? "" : String(stdout)).trim();
+  if (!text) {
+    return { status: "not_found", confidence: 0 };
+  }
   if (protocol === "json") {
     try {
       const obj = JSON.parse(text);
@@ -63,7 +68,7 @@ export function parseScriptOutput(stdout, protocol = "json") {
   const confidenceMatch = text.match(/^CONFIDENCE:\s*([0-9]*\.?[0-9]+)/im);
   const sourcesMatch = text.match(/^SOURCES:\s*([\s\S]*)$/im);
   const answer = answerMatch?.[1]?.trim();
-  const confidence = confidenceMatch ? Number(confidenceMatch[1]) : NaN;
+  const confidence = confidenceMatch ? Number(confidenceMatch[1]) : Number.NaN;
   if (!answer || !Number.isFinite(confidence)) {
     return {
       status: "error",
@@ -85,9 +90,12 @@ function appendLimited(target, chunk, maxBytes) {
  */
 export class ScriptBackend {
   constructor(config = {}) {
-    if (!config.command) throw new Error("script backend requires command");
-    if (config.args && !Array.isArray(config.args))
+    if (!config.command) {
+      throw new Error("script backend requires command");
+    }
+    if (config.args && !Array.isArray(config.args)) {
       throw new Error("script backend args must be an array");
+    }
     this.name = config.name || "script";
     this.kind = "script";
     this.config = {
@@ -114,12 +122,13 @@ export class ScriptBackend {
         .replaceAll("{query}", request.text)
         .replaceAll("{normalizedQuery}", request.normalizedText),
     );
-    if (this.config.queryMode === "arg")
+    if (this.config.queryMode === "arg") {
       args.push(
         String(this.config.queryArg)
           .replaceAll("{query}", request.text)
           .replaceAll("{normalizedQuery}", request.normalizedText),
       );
+    }
 
     if (request.signal?.aborted) {
       return {
@@ -143,14 +152,16 @@ export class ScriptBackend {
       });
 
       const finish = (result) => {
-        if (done) return;
+        if (done) {
+          return;
+        }
         done = true;
         clearTimeout(timer);
         request.signal?.removeEventListener?.("abort", onAbort);
         resolve({
           ...result,
           diagnostics: {
-            ...(result.diagnostics || {}),
+            ...result.diagnostics,
             stderr: stderr.toString("utf8").slice(0, this.config.maxStderrBytes),
             latencyMs: Date.now() - started,
           },
@@ -206,14 +217,17 @@ export class ScriptBackend {
         }),
       );
       child.on("close", (code, signal) => {
-        if (done) return;
-        if (code !== 0)
+        if (done) {
+          return;
+        }
+        if (code !== 0) {
           return finish({
             status: "error",
             confidence: 0,
             diagnostics: { reason: "exit", code, signal },
             cache: { cacheable: false },
           });
+        }
         const parsed = parseScriptOutput(stdout.toString("utf8"), this.config.protocol);
         finish(parsed);
       });
@@ -221,8 +235,11 @@ export class ScriptBackend {
         onAbort();
         return;
       }
-      if (this.config.queryMode === "stdin") child.stdin.end(request.text);
-      else child.stdin.end();
+      if (this.config.queryMode === "stdin") {
+        child.stdin.end(request.text);
+      } else {
+        child.stdin.end();
+      }
     });
   }
 }

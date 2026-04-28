@@ -426,7 +426,10 @@ test("ScriptBackend uses argv/stdin protocols and does not invoke a shell", asyn
 test("ScriptBackend handles missing timeout and fast-exit stdin safely", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "auto-recall-script-edge-"));
   const okScript = path.join(tmp, "ok.mjs");
-  await fs.writeFile(okScript, "console.log(JSON.stringify({answer:'no timeout',confidence:.9}))\n");
+  await fs.writeFile(
+    okScript,
+    "console.log(JSON.stringify({answer:'no timeout',confidence:.9}))\n",
+  );
   const noTimeoutBackend = new ScriptBackend({
     command: process.execPath,
     args: [okScript],

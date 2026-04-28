@@ -23,15 +23,21 @@ function timeoutSignal(parent, timeoutMs) {
     controller.abort(signal?.reason || new Error("aborted"));
   };
   if (parent) {
-    if (parent.aborted) abort();
-    else parent.addEventListener("abort", abort, { once: true });
+    if (parent.aborted) {
+      abort();
+    } else {
+      parent.addEventListener("abort", abort, { once: true });
+    }
   }
-  if (timeoutMs > 0)
+  if (timeoutMs > 0) {
     timer = setTimeout(() => controller.abort(new Error("timeout")), timeoutMs).unref?.();
+  }
   return {
     signal: controller.signal,
     cleanup: () => {
-      if (timer) clearTimeout(timer);
+      if (timer) {
+        clearTimeout(timer);
+      }
       parent?.removeEventListener?.("abort", abort);
     },
   };
@@ -41,14 +47,18 @@ async function readBounded(response, maxBytes) {
   const reader = response.body?.getReader?.();
   if (!reader) {
     const text = await response.text();
-    if (Buffer.byteLength(text) > maxBytes) throw new Error("response_too_large");
+    if (Buffer.byteLength(text) > maxBytes) {
+      throw new Error("response_too_large");
+    }
     return text;
   }
   const chunks = [];
   let size = 0;
   while (true) {
     const { done, value } = await reader.read();
-    if (done) break;
+    if (done) {
+      break;
+    }
     size += value.byteLength;
     if (size > maxBytes) {
       await reader.cancel().catch(() => {});
@@ -60,15 +70,21 @@ async function readBounded(response, maxBytes) {
 }
 
 function getPath(obj, path) {
-  if (!path) return undefined;
+  if (!path) {
+    return undefined;
+  }
   return String(path)
     .split(".")
     .reduce((cur, key) => (cur == null ? undefined : cur[key]), obj);
 }
 
 function normalizeSource(source) {
-  if (typeof source === "string") return { title: source };
-  if (!source || typeof source !== "object") return undefined;
+  if (typeof source === "string") {
+    return { title: source };
+  }
+  if (!source || typeof source !== "object") {
+    return undefined;
+  }
   return {
     id: source.id != null ? String(source.id) : undefined,
     title: source.title != null ? String(source.title) : undefined,
@@ -103,9 +119,15 @@ export function mapJsonToResult(json, mapping = {}) {
 }
 
 function buildBody(mode, request, template = {}) {
-  if (mode === "text") return request.text;
-  if (mode === "query") return JSON.stringify({ query: request.text });
-  if (mode === "normalizedQuery") return JSON.stringify({ query: request.normalizedText });
+  if (mode === "text") {
+    return request.text;
+  }
+  if (mode === "query") {
+    return JSON.stringify({ query: request.text });
+  }
+  if (mode === "normalizedQuery") {
+    return JSON.stringify({ query: request.normalizedText });
+  }
   return JSON.stringify({
     ...template.static,
     query: request.text,
@@ -127,7 +149,9 @@ function defaultContentType(mode) {
  */
 export class HttpBackend {
   constructor(config = {}) {
-    if (!config.url) throw new Error("http backend requires url");
+    if (!config.url) {
+      throw new Error("http backend requires url");
+    }
     this.name = config.name || "http";
     this.kind = "http";
     this.config = {
@@ -146,7 +170,9 @@ export class HttpBackend {
   }
 
   hostAllowed() {
-    if (!this.config.allowedHosts.length) return true;
+    if (!this.config.allowedHosts.length) {
+      return true;
+    }
     try {
       return this.config.allowedHosts.includes(new URL(this.config.url).hostname.toLowerCase());
     } catch {
@@ -178,8 +204,9 @@ export class HttpBackend {
         signal,
         redirect: this.config.allowedHosts.length ? "manual" : "follow",
       };
-      if (!/^(GET|HEAD)$/i.test(this.config.method))
+      if (!/^(GET|HEAD)$/i.test(this.config.method)) {
         init.body = buildBody(this.config.requestMode, request, this.config.bodyTemplate);
+      }
       const response = await fetch(this.config.url, init);
       if (
         this.config.allowedHosts.length &&
@@ -231,7 +258,7 @@ export class HttpBackend {
       return {
         ...result,
         diagnostics: {
-          ...(result.diagnostics || {}),
+          ...result.diagnostics,
           httpStatus: response.status,
           latencyMs: Date.now() - started,
         },
@@ -254,8 +281,9 @@ export class HttpBackend {
   async healthCheck(signal) {
     const started = Date.now();
     try {
-      if (!this.hostAllowed())
+      if (!this.hostAllowed()) {
         return { ok: false, reason: "url_not_allowed", latencyMs: Date.now() - started };
+      }
       const response = await fetch(this.config.url, {
         method: "HEAD",
         signal,

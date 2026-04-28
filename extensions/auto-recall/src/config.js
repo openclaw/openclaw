@@ -120,11 +120,16 @@ export function createBackends(config, logger) {
   const backends = [];
   for (const [index, backend] of config.backends.entries()) {
     try {
-      if (!backend || typeof backend !== "object")
+      if (!backend || typeof backend !== "object") {
         throw new Error(`backend ${index} must be an object`);
-      if (backend.type === "http") backends.push(new HttpBackend(backend));
-      else if (backend.type === "script") backends.push(new ScriptBackend(backend));
-      else throw new Error(`unsupported backend type: ${backend.type}`);
+      }
+      if (backend.type === "http") {
+        backends.push(new HttpBackend(backend));
+      } else if (backend.type === "script") {
+        backends.push(new ScriptBackend(backend));
+      } else {
+        throw new Error(`unsupported backend type: ${backend.type}`);
+      }
     } catch (error) {
       logger?.warn?.({
         event: "backend_config_failed",
@@ -143,11 +148,21 @@ export function createBackends(config, logger) {
  * @returns {string|null} `direct`, `group`, or null when unknown/unsupported.
  */
 export function deriveChatType(ctx = {}, event = {}) {
-  if (typeof ctx.chatType === "string") return ctx.chatType;
-  if (typeof event.chatType === "string") return event.chatType;
+  if (typeof ctx.chatType === "string") {
+    return ctx.chatType;
+  }
+  if (typeof event.chatType === "string") {
+    return event.chatType;
+  }
   const key = ctx.sessionKey || event.sessionKey || event?.metadata?.sessionKey || "";
-  if (/:group:/i.test(key)) return "group";
-  if (/:direct:/i.test(key)) return "direct";
-  if (ctx.messageProvider && ctx.messageProvider !== "telegram") return null;
+  if (/:group:/i.test(key)) {
+    return "group";
+  }
+  if (/:direct:/i.test(key)) {
+    return "direct";
+  }
+  if (ctx.messageProvider && ctx.messageProvider !== "telegram") {
+    return null;
+  }
   return null;
 }

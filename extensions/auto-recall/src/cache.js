@@ -6,10 +6,14 @@ import { createHash } from "node:crypto";
  * @returns {string} Stable JSON representation.
  */
 export function stableJson(value) {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(stableJson).join(",")}]`;
+  }
   return `{${Object.keys(value)
-    .sort()
+    .toSorted()
     .map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`)
     .join(",")}}`;
 }
@@ -39,7 +43,7 @@ export function configHash(value) {
  * @returns {string} Normalized cache key text.
  */
 export function normalizeCacheText(text) {
-  return String(text || "")
+  return (text == null ? "" : String(text))
     .toLowerCase()
     .replace(/```json[\s\S]*?```/gi, " ")
     .replace(/\[(mon|tue|wed|thu|fri|sat|sun) \d{4}-\d{2}-\d{2} \d{2}:\d{2} utc\]/gi, " ")
@@ -85,14 +89,20 @@ export class RecallCache {
   }
 
   ttlFor(status, override) {
-    if (Number.isFinite(override)) return Math.max(0, Number(override));
+    if (Number.isFinite(override)) {
+      return Math.max(0, Number(override));
+    }
     return Math.max(0, Number(this.ttls[status] ?? 0));
   }
 
   get(key, now = Date.now()) {
-    if (!this.enabled) return undefined;
+    if (!this.enabled) {
+      return undefined;
+    }
     const entry = this.map.get(key);
-    if (!entry) return undefined;
+    if (!entry) {
+      return undefined;
+    }
     if (entry.expiresAt <= now) {
       this.map.delete(key);
       return undefined;
@@ -102,7 +112,9 @@ export class RecallCache {
   }
 
   set(key, value, ttlMs, now = Date.now()) {
-    if (!this.enabled || !key || ttlMs <= 0) return false;
+    if (!this.enabled || !key || ttlMs <= 0) {
+      return false;
+    }
     this.map.set(key, { value, expiresAt: now + ttlMs, lastAccess: now });
     this.sweep(now);
     return true;
@@ -110,7 +122,9 @@ export class RecallCache {
 
   sweep(now = Date.now()) {
     for (const [key, entry] of this.map) {
-      if (entry.expiresAt <= now) this.map.delete(key);
+      if (entry.expiresAt <= now) {
+        this.map.delete(key);
+      }
     }
     while (this.map.size > this.maxEntries) {
       let oldestKey;
@@ -121,7 +135,9 @@ export class RecallCache {
           oldestKey = key;
         }
       }
-      if (!oldestKey) break;
+      if (!oldestKey) {
+        break;
+      }
       this.map.delete(oldestKey);
     }
   }

@@ -5,7 +5,7 @@
  */
 export function isEnvelopeDateLine(line) {
   return /^\[(Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\]/i.test(
-    String(line || "").trim(),
+    (line == null ? "" : String(line)).trim(),
   );
 }
 
@@ -15,7 +15,9 @@ export function isEnvelopeDateLine(line) {
  * @returns {string} User-visible text.
  */
 export function stripEnvelope(text) {
-  if (!text) return "";
+  if (!text) {
+    return "";
+  }
   const lines = String(text).split("\n");
   const body = [];
   let state = "normal";
@@ -25,7 +27,9 @@ export function stripEnvelope(text) {
     const trimmed = line.trim();
 
     if (state === "json_fence") {
-      if (trimmed === "```") state = "normal";
+      if (trimmed === "```") {
+        state = "normal";
+      }
       continue;
     }
 
@@ -43,7 +47,9 @@ export function stripEnvelope(text) {
     }
 
     if (state === "queued_header") {
-      if (!trimmed || trimmed === "---" || /^Queued #\d+/i.test(trimmed)) continue;
+      if (!trimmed || trimmed === "---" || /^Queued #\d+/i.test(trimmed)) {
+        continue;
+      }
       state = "normal";
       i -= 1;
       continue;
@@ -57,20 +63,28 @@ export function stripEnvelope(text) {
       state = "metadata_header";
       continue;
     }
-    if (/^\[media attached/i.test(trimmed)) continue;
+    if (/^\[media attached/i.test(trimmed)) {
+      continue;
+    }
     if (/^\[Queued (?:announce )?messages while agent was busy\]/i.test(trimmed)) {
       state = "queued_header";
       continue;
     }
-    if (/^\[(?:Subagent Context|Internal task completion event)\]/i.test(trimmed)) continue;
-    if (/^System:\s*\[.*\]\s*Telegram reaction added:/i.test(trimmed)) continue;
+    if (/^\[(?:Subagent Context|Internal task completion event)\]/i.test(trimmed)) {
+      continue;
+    }
+    if (/^System:\s*\[.*\]\s*Telegram reaction added:/i.test(trimmed)) {
+      continue;
+    }
 
     if (isEnvelopeDateLine(trimmed)) {
       const rest = trimmed.replace(
         /^\[(Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\]\s*/i,
         "",
       );
-      if (/^\[(Subagent Context|Internal task completion event)\]/i.test(rest)) continue;
+      if (/^\[(Subagent Context|Internal task completion event)\]/i.test(rest)) {
+        continue;
+      }
     }
 
     body.push(line);
@@ -85,7 +99,7 @@ export function stripEnvelope(text) {
  * @returns {boolean} True for synthetic/internal envelopes.
  */
 export function isSyntheticOrInternalEnvelope(text) {
-  const value = String(text || "").trim();
+  const value = (text == null ? "" : String(text)).trim();
   return (
     /^\[Queued announce messages while agent was busy\]/i.test(value) ||
     /^\[(Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\] \[Subagent Context\]/i.test(

@@ -28,12 +28,16 @@ function providerFor(ctx = {}, event = {}) {
 
 function eligible(ctx, event, cfg) {
   const agentId = ctx?.agentId || event?.agentId || event?.metadata?.agentId;
-  if (cfg.agents.length && (!agentId || !cfg.agents.includes(agentId)))
+  if (cfg.agents.length && (!agentId || !cfg.agents.includes(agentId))) {
     return { ok: false, reason: "agent" };
-  if (ctx?.trigger && ctx.trigger !== "user") return { ok: false, reason: "trigger" };
+  }
+  if (ctx?.trigger && ctx.trigger !== "user") {
+    return { ok: false, reason: "trigger" };
+  }
   const chatType = deriveChatType(ctx, event);
-  if (!chatType || !cfg.allowedChatTypes.includes(chatType))
+  if (!chatType || !cfg.allowedChatTypes.includes(chatType)) {
     return { ok: false, reason: "chat_type", chatType };
+  }
   return {
     ok: true,
     agentId,
@@ -68,9 +72,12 @@ function timeoutController(parents, ms) {
 }
 
 function shouldCache(result) {
-  if (result?.cache?.cacheable === false) return false;
-  if (result?.diagnostics?.reason === "timeout" || result?.diagnostics?.reason === "aborted")
+  if (result?.cache?.cacheable === false) {
     return false;
+  }
+  if (result?.diagnostics?.reason === "timeout" || result?.diagnostics?.reason === "aborted") {
+    return false;
+  }
   return ["ok", "not_found", "degraded", "error"].includes(result?.status);
 }
 
@@ -90,19 +97,23 @@ async function runBackendChain({ backends, request, cache, inflight, logger }) {
         status: cached.status,
         confidence: cached.confidence,
       });
-      if (cached.status === "ok" && Number(cached.confidence) >= request.minConfidence)
+      if (cached.status === "ok" && Number(cached.confidence) >= request.minConfidence) {
         return { result: cached, backend, cached: true };
+      }
       if (
         cached.status === "degraded" &&
         request.allowDegraded &&
         Number(cached.confidence) >= request.minConfidence
-      )
+      ) {
         return { result: cached, backend, cached: true };
+      }
       continue;
     }
 
     const { promise, hit } = inflight.run(cacheProbeKey, async () => backend.query(request));
-    if (hit) logger.info({ event: "inflight_hit", backend: backend.name });
+    if (hit) {
+      logger.info({ event: "inflight_hit", backend: backend.name });
+    }
     const result = await promise;
     const fullCacheKey = cacheKeyFor({
       backend,
@@ -122,22 +133,29 @@ async function runBackendChain({ backends, request, cache, inflight, logger }) {
 
     if (shouldCache(result)) {
       const ttl = cache.ttlFor(result.status, result.cache?.ttlMs);
-      if (cache.set(fullCacheKey, result, ttl))
+      if (cache.set(fullCacheKey, result, ttl)) {
         logger.info({
           event: "cache_set",
           backend: backend.name,
           status: result.status,
           ttlMs: ttl,
         });
-      if (fullCacheKey !== cacheProbeKey) cache.set(cacheProbeKey, result, ttl);
+      }
+      if (fullCacheKey !== cacheProbeKey) {
+        cache.set(cacheProbeKey, result, ttl);
+      }
     }
 
-    if (result.status === "ok" && Number(result.confidence) >= request.minConfidence)
+    if (result.status === "ok" && Number(result.confidence) >= request.minConfidence) {
       return { result, backend };
-    if (result.status === "degraded" && Number(result.confidence) >= request.minConfidence)
+    }
+    if (result.status === "degraded" && Number(result.confidence) >= request.minConfidence) {
       degradedCandidates.push({ result, backend });
+    }
   }
-  if (request.allowDegraded && degradedCandidates.length) return degradedCandidates[0];
+  if (request.allowDegraded && degradedCandidates.length) {
+    return degradedCandidates[0];
+  }
   return {
     result: degradedCandidates[0]?.result || { status: "not_found", confidence: 0 },
     backend: degradedCandidates[0]?.backend,
@@ -152,21 +170,31 @@ async function runBackendChain({ backends, request, cache, inflight, logger }) {
 export function createBeforePromptBuildHandler(runtime) {
   return async function beforePromptBuild(event = {}, ctx = {}) {
     const { cfg, backends, triggers, cache, inflight, logger } = runtime;
-    if (runtime.disposed || runtime.signal?.aborted) return undefined;
-    if (!cfg.enabled || !backends.length) return undefined;
+    if (runtime.disposed || runtime.signal?.aborted) {
+      return undefined;
+    }
+    if (!cfg.enabled || !backends.length) {
+      return undefined;
+    }
     const ok = eligible(ctx, event, cfg);
-    if (!ok.ok) return undefined;
+    if (!ok.ok) {
+      return undefined;
+    }
 
     const original = event.prompt || event.text || event.message || "";
-    if (!original || hasActiveMemoryMarker(original) || isSyntheticOrInternalEnvelope(original))
+    if (!original || hasActiveMemoryMarker(original) || isSyntheticOrInternalEnvelope(original)) {
       return undefined;
+    }
     const text = stripEnvelope(original).slice(0, cfg.recallMaxChars);
-    if (text.length < cfg.recallMinChars || isInternalPrompt(text, triggers.getSnapshot()))
+    if (text.length < cfg.recallMinChars || isInternalPrompt(text, triggers.getSnapshot())) {
       return undefined;
+    }
 
     const triggerSnapshot = triggers.getSnapshot();
     const trigger = getRecallTrigger(text, triggerSnapshot);
-    if (!trigger.match) return undefined;
+    if (!trigger.match) {
+      return undefined;
+    }
 
     const parentSignal = ctx?.signal || event?.signal;
     const { signal, cleanup } = timeoutController([runtime.signal, parentSignal], cfg.timeoutMs);
@@ -195,11 +223,19 @@ export function createBeforePromptBuildHandler(runtime) {
         inflight,
         logger,
       });
-      if (!result || result.status === "not_found" || result.status === "error") return undefined;
-      if (result.status === "degraded" && !cfg.allowDegraded) return undefined;
-      if (Number(result.confidence) < cfg.minConfidence) return undefined;
+      if (!result || result.status === "not_found" || result.status === "error") {
+        return undefined;
+      }
+      if (result.status === "degraded" && !cfg.allowDegraded) {
+        return undefined;
+      }
+      if (Number(result.confidence) < cfg.minConfidence) {
+        return undefined;
+      }
       const injection = buildInjection(result, cfg.injection);
-      if (!injection) return undefined;
+      if (!injection) {
+        return undefined;
+      }
       logger.info({
         event: "injected",
         backend: backend?.name,
@@ -270,7 +306,9 @@ export const plugin = {
     }
     const unsubscribe = api.on("before_prompt_build", createBeforePromptBuildHandler(runtime));
     return () => {
-      if (typeof unsubscribe === "function") unsubscribe();
+      if (typeof unsubscribe === "function") {
+        unsubscribe();
+      }
       void runtime.dispose();
     };
   },

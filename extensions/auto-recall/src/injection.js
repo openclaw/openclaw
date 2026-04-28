@@ -5,15 +5,16 @@
  */
 export function hasActiveMemoryMarker(text) {
   return /<active_memory(?:_plugin)?>[\s\S]*?<\/active_memory(?:_plugin)?>/i.test(
-    String(text || ""),
+    text == null ? "" : String(text),
   );
 }
 
 function formatSources(sources = []) {
   const lines = [];
   for (const source of sources.slice(0, 8)) {
-    if (typeof source === "string") lines.push(`- ${escapeMemoryText(source)}`);
-    else if (source?.title || source?.uri || source?.id || source?.excerpt) {
+    if (typeof source === "string") {
+      lines.push(`- ${escapeMemoryText(source)}`);
+    } else if (source?.title || source?.uri || source?.id || source?.excerpt) {
       const label = escapeMemoryText(source.title || source.uri || source.id || "source");
       const suffix = source.score !== undefined ? ` (${Number(source.score).toFixed(3)})` : "";
       lines.push(
@@ -25,9 +26,7 @@ function formatSources(sources = []) {
 }
 
 function escapeMemoryText(value) {
-  return String(value || "")
-    .replaceAll("<", "‹")
-    .replaceAll(">", "›");
+  return (value == null ? "" : String(value)).replaceAll("<", "‹").replaceAll(">", "›");
 }
 
 /**
@@ -41,14 +40,19 @@ export function buildInjection(
   { maxLength = 2000, tag = "active_memory", includeSources = true } = {},
 ) {
   const answer = escapeMemoryText(result?.answer).trim();
-  if (!answer) return "";
+  if (!answer) {
+    return "";
+  }
   const confidence = Number.isFinite(Number(result.confidence))
     ? Number(result.confidence).toFixed(2)
     : "0.00";
   const sourceLines = includeSources ? formatSources(result.sources) : [];
   let body = `Recall confidence: ${confidence}\n\n${answer}`;
-  if (sourceLines.length) body += `\n\nSources:\n${sourceLines.join("\n")}`;
-  if (body.length > maxLength)
+  if (sourceLines.length) {
+    body += `\n\nSources:\n${sourceLines.join("\n")}`;
+  }
+  if (body.length > maxLength) {
     body = `${body.slice(0, Math.max(0, maxLength - 30)).trimEnd()}\n…[recall truncated]`;
+  }
   return `<${tag}>\n${body}\n</${tag}>`;
 }
