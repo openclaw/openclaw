@@ -1,6 +1,7 @@
 import {
   resolveExecApprovalCommandDisplay,
   sanitizeExecApprovalDisplayText,
+  sanitizeExecApprovalWarningText,
 } from "../../infra/exec-approval-command-display.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import {
@@ -239,7 +240,7 @@ export function createExecApprovalHandlers(
         host: host || null,
         security: p.security ?? null,
         ask: p.ask ?? null,
-        warningText: warningText ? sanitizeExecApprovalDisplayText(warningText) : null,
+        warningText: warningText ? sanitizeExecApprovalWarningText(warningText) : null,
         allowedDecisions: resolveExecApprovalAllowedDecisions({ ask: p.ask ?? null }),
         agentId: effectiveAgentId ?? null,
         resolvedPath: p.resolvedPath ?? null,
