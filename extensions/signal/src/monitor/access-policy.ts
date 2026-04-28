@@ -16,12 +16,35 @@ export async function resolveSignalAccessState(params: {
   allowFrom: string[];
   groupAllowFrom: string[];
   sender: SignalSender;
+  /**
+   * Signal group id (base64). When the access decision is being made for a
+   * group message, the configured `groupAllowFrom` list should be matched
+   * against the group id directly, not against the sender's phone/UUID —
+   * `groupAllowFrom` is documented as a list of group ids, but
+   * `isSignalSenderAllowed` parses each entry as a phone/UUID identity and
+   * always returned `false` when the list contained only base64 group ids.
+   * Passing `groupId` through here lets the access callback honor both
+   * shapes (#53308).
+   */
+  groupId?: string;
 }) {
   const storeAllowFrom = await readStoreAllowFromForDmPolicy({
     provider: "signal",
     accountId: params.accountId,
     dmPolicy: params.dmPolicy,
   });
+  // Allow either a sender-identity match (legacy behavior, still valid for
+  // DM allowFrom and for any operator whose groupAllowFrom mixes phone/UUIDs
+  // and group ids) or a direct group-id match against the entries.
+  const isSenderOrGroupAllowed = (allowEntries: string[]) => {
+    if (isSignalSenderAllowed(params.sender, allowEntries)) {
+      return true;
+    }
+    if (params.groupId && allowEntries.includes(params.groupId)) {
+      return true;
+    }
+    return false;
+  };
   const resolveAccessDecision = (isGroup: boolean) =>
     resolveDmGroupAccessWithLists({
       isGroup,
@@ -30,7 +53,7 @@ export async function resolveSignalAccessState(params: {
       allowFrom: params.allowFrom,
       groupAllowFrom: params.groupAllowFrom,
       storeAllowFrom,
-      isSenderAllowed: (allowEntries) => isSignalSenderAllowed(params.sender, allowEntries),
+      isSenderAllowed: isSenderOrGroupAllowed,
     });
   const dmAccess = resolveAccessDecision(false);
   return {

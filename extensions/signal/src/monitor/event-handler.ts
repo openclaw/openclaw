@@ -547,6 +547,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         allowFrom: deps.allowFrom,
         groupAllowFrom: deps.groupAllowFrom,
         sender,
+        // Wire the inbound message's groupId so configured `groupAllowFrom`
+        // entries that list group ids (the documented format) match (#53308).
+        groupId,
       });
     const quoteText = normalizeOptionalString(dataMessage?.quote?.text) ?? "";
     const { contextVisibilityMode, quoteSenderAllowed, visibleQuoteText, visibleQuoteSender } =
