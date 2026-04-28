@@ -131,20 +131,17 @@ export async function resolveSandboxContext(params: {
   sessionKey?: string;
   workspaceDir?: string;
 }): Promise<SandboxContext | null> {
-  const rawSessionKey = params.sessionKey?.trim();
-  if (!rawSessionKey) {
+  const resolved = resolveSandboxSession(params);
+  if (!resolved) {
     return null;
   }
 
-  const runtime = resolveSandboxRuntimeStatus({
-    cfg: params.config,
-    sessionKey: rawSessionKey,
-  });
+  const { rawSessionKey, cfg, runtime } = resolved;
+
+  // Explicit defense-in-depth guard
   if (!runtime.sandboxed) {
     return null;
   }
-
-  const cfg = resolveSandboxConfigForAgent(params.config, runtime.agentId);
 
   if (cfg.prune.idleHours !== 0 || cfg.prune.maxAgeDays !== 0) {
     await (await import("./prune.js")).maybePruneSandboxes(cfg);
