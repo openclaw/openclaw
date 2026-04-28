@@ -4,14 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       profile:
-        description: CodeQL profile to run
+        description: CodeQL security profile to run
         required: false
         default: all
         type: choice
         options:
           - all
           - security
-          - quality
           - android-security
           - macos-security
   schedule:
@@ -63,28 +62,6 @@ jobs:
         uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
         with:
           category: "/codeql-critical-security/${{ matrix.language }}"
-
-  critical-quality:
-    name: Critical Quality (javascript-typescript)
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'quality' }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
-    timeout-minutes: 25
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-        with:
-          submodules: false
-
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
-        with:
-          languages: javascript-typescript
-          config-file: ./.github/codeql/codeql-javascript-typescript-critical-quality.yml
-
-      - name: Analyze
-        uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
-        with:
-          category: "/codeql-critical-quality/javascript-typescript"
 
   android-security:
     name: Critical Security (android)

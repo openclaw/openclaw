@@ -223,15 +223,21 @@ listed PRs when `apply=true`. Before mutating GitHub, it verifies that the
 landed PR is merged and that each duplicate has either a shared referenced issue
 or overlapping changed hunks.
 
-The `CodeQL` workflow is intentionally a narrow first-pass scanner, not the
-full repository sweep. Daily and manual runs scan Actions workflow code plus the
-highest-risk JavaScript/TypeScript auth, secrets, sandbox, cron, and gateway
-surfaces. The critical security lane uses high-precision security queries, and
-the separate critical quality lane runs only error-severity non-security
-queries over the same narrow JavaScript/TypeScript surface. Swift, Android,
-Python, UI, and bundled-plugin CodeQL expansion should be added back as scoped
-or sharded follow-up work only after the narrow profile has stable runtime and
-signal.
+The `CodeQL` workflow is intentionally a narrow first-pass security scanner,
+not the full repository sweep. Daily and manual runs scan Actions workflow code
+plus the highest-risk JavaScript/TypeScript auth, secrets, sandbox, cron, and
+gateway surfaces with high-precision security queries. Android and macOS remain
+manual security shards so their runtime and alert quality can be tracked
+separately.
+
+The `CodeQL Critical Quality` workflow is the matching non-security shard. It
+runs only error-severity, non-security JavaScript/TypeScript quality queries
+over the same narrow auth, secrets, sandbox, cron, and gateway surface. Keep it
+separate from the security workflow so quality findings can be scheduled,
+measured, disabled, or expanded without obscuring security signal. Swift,
+Android, Python, UI, and bundled-plugin CodeQL expansion should be added back as
+scoped or sharded follow-up work only after the narrow profiles have stable
+runtime and signal.
 
 The `Docs Agent` workflow is an event-driven Codex maintenance lane for keeping
 existing docs aligned with recently landed changes. It has no pure schedule: a
