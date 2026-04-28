@@ -1710,7 +1710,6 @@ jobs:
       docker_lanes: ${{ needs.preflight.outputs.plugin_prerelease_docker_lanes }}
       include_live_suites: false
       live_models_only: false
-    secrets: inherit
 
   plugin-prerelease-suite:
     permissions:

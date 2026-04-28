@@ -103,7 +103,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(dockerSuite).toMatchObject({
       if: "needs.preflight.outputs.run_plugin_prerelease_suite == 'true'",
       needs: ["preflight"],
-      secrets: "inherit",
       uses: "./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml",
       with: {
         docker_lanes: "${{ needs.preflight.outputs.plugin_prerelease_docker_lanes }}",
@@ -115,6 +114,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
         ref: "${{ needs.preflight.outputs.plugin_prerelease_ref }}",
       },
     });
+    expect(dockerSuite.secrets).toBeUndefined();
     expect(suite.needs).toEqual([
       "preflight",
       "plugin-prerelease-static-shard",
