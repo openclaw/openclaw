@@ -23,6 +23,7 @@ import {
 } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { parseGeminiAuth } from "./gemini-auth.js";
+import { normalizeGoogleModelId } from "./model-id.js";
 import { normalizeGoogleApiBaseUrl } from "./provider-policy.js";
 import {
   isGoogleGemini25ThinkingBudgetModel,
