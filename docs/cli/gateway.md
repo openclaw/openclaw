@@ -282,6 +282,7 @@ openclaw gateway status --require-rpc
     - `gateway status` resolves configured auth SecretRefs for probe auth when possible.
     - If a required auth SecretRef is unresolved in this command path, `gateway status --json` reports `rpc.authWarning` when probe connectivity/auth fails; pass `--token`/`--password` explicitly or resolve the secret source first.
     - If the probe succeeds, unresolved auth-ref warnings are suppressed to avoid false positives.
+    - When probing is enabled, JSON output includes `gateway.version` when the running Gateway reports it; `--require-rpc` can fall back to the `status.runtimeVersion` RPC payload if the follow-up handshake probe cannot provide version metadata.
     - Use `--require-rpc` in scripts and automation when a listening service is not enough and you need read-scope RPC calls to be healthy too.
     - `--deep` adds a best-effort scan for extra launchd/systemd/schtasks installs. When multiple gateway-like services are detected, human output prints cleanup hints and warns that most setups should run one gateway per machine.
     - Human output includes the resolved file log path plus the CLI-vs-service config paths/validity snapshot to help diagnose profile or state-dir drift.

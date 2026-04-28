@@ -233,6 +233,42 @@ describe("probeGatewayStatus", () => {
     });
   });
 
+  it("prefers read-probe handshake metadata over status.runtimeVersion", async () => {
+    callGatewayMock.mockReset();
+    probeGatewayMock.mockReset();
+    callGatewayMock.mockResolvedValueOnce({ runtimeVersion: "2026.4.23", status: "ok" });
+    probeGatewayMock.mockResolvedValueOnce({
+      ok: true,
+      auth: {
+        role: "operator",
+        scopes: ["operator.read"],
+        capability: "read_only",
+      },
+      server: {
+        version: "2026.4.24",
+      },
+    });
+
+    const result = await probeGatewayStatus({
+      url: "ws://127.0.0.1:19191",
+      token: "temp-token",
+      timeoutMs: 5_000,
+      requireRpc: true,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      kind: "read",
+      capability: "read_only",
+      auth: {
+        role: "operator",
+        scopes: ["operator.read"],
+        capability: "read_only",
+      },
+      version: "2026.4.24",
+    });
+  });
+
   it("surfaces probe close details when the handshake fails", async () => {
     callGatewayMock.mockReset();
     probeGatewayMock.mockReset();

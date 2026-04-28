@@ -94,7 +94,7 @@ export async function probeGatewayStatus(opts: {
     if ("server" in result) {
       version = result.server?.version ?? null;
     } else if ("authProbe" in result) {
-      version = statusRuntimeVersion ?? result.authProbe?.server?.version ?? null;
+      version = result.authProbe?.server?.version ?? statusRuntimeVersion ?? null;
     }
     if (result.ok) {
       return {
