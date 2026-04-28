@@ -17,11 +17,18 @@ export function refreshBundledPluginRuntimeMirrorRoot(params: {
   sourceRoot: string;
   targetRoot: string;
   tempDirParent?: string;
+  /**
+   * Optional pre-computed source fingerprint. If provided, skips the expensive
+   * fingerprint computation inside the lock. This allows the caller to compute
+   * the fingerprint before acquiring the lock, dramatically reducing lock hold time
+   * on slow filesystems (e.g. overlayfs in Docker Desktop + WSL).
+   */
+  precomputedSourceFingerprint?: string;
 }): boolean {
   if (path.resolve(params.sourceRoot) === path.resolve(params.targetRoot)) {
     return false;
   }
-  const metadata = createBundledRuntimeMirrorMetadata(params);
+  const metadata = createBundledRuntimeMirrorMetadata(params, params.precomputedSourceFingerprint);
   if (isBundledRuntimeMirrorRootFresh(params.targetRoot, metadata)) {
     return false;
   }
@@ -75,15 +82,19 @@ export function copyBundledPluginRuntimeRoot(sourceRoot: string, targetRoot: str
   }
 }
 
-function createBundledRuntimeMirrorMetadata(params: {
-  pluginId: string;
-  sourceRoot: string;
-}): BundledRuntimeMirrorMetadata {
+function createBundledRuntimeMirrorMetadata(
+  params: {
+    pluginId: string;
+    sourceRoot: string;
+  },
+  precomputedSourceFingerprint?: string,
+): BundledRuntimeMirrorMetadata {
   return {
     version: BUNDLED_RUNTIME_MIRROR_METADATA_VERSION,
     pluginId: params.pluginId,
     sourceRoot: resolveBundledRuntimeMirrorSourceRootId(params.sourceRoot),
-    sourceFingerprint: fingerprintBundledRuntimeMirrorSourceRoot(params.sourceRoot),
+    sourceFingerprint:
+      precomputedSourceFingerprint ?? fingerprintBundledRuntimeMirrorSourceRoot(params.sourceRoot),
   };
 }
 
@@ -216,4 +227,19 @@ function shouldIgnoreBundledRuntimeMirrorEntry(name: string): boolean {
 
 function sanitizeBundledRuntimeMirrorTempId(pluginId: string): string {
   return pluginId.replaceAll(/[^a-zA-Z0-9._-]/g, "_");
+}
+
+/**
+ * Pre-compute the bundled runtime mirror metadata (including the expensive fingerprint)
+ * OUTSIDE the mirror lock. The caller can then pass the pre-computed fingerprint to
+ * `refreshBundledPluginRuntimeMirrorRoot` to avoid recomputing it inside the lock,
+ * dramatically reducing lock hold time on slow filesystems.
+ */
+export function precomputeBundledRuntimeMirrorMetadata(params: {
+  pluginId: string;
+  sourceRoot: string;
+}): { sourceRoot: string; sourceFingerprint: string } {
+  const resolvedSourceRoot = resolveBundledRuntimeMirrorSourceRootId(params.sourceRoot);
+  const sourceFingerprint = fingerprintBundledRuntimeMirrorSourceRoot(params.sourceRoot);
+  return { sourceRoot: resolvedSourceRoot, sourceFingerprint };
 }

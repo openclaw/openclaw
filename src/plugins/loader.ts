@@ -45,6 +45,7 @@ import {
 } from "./bundled-runtime-deps.js";
 import {
   copyBundledPluginRuntimeRoot,
+  precomputeBundledRuntimeMirrorMetadata,
   refreshBundledPluginRuntimeMirrorRoot,
 } from "./bundled-runtime-mirror.js";
 import {
@@ -703,6 +704,15 @@ function mirrorBundledPluginRuntimeRoot(params: {
   pluginRoot: string;
   installRoot: string;
 }): string {
+  // Compute fingerprint BEFORE acquiring the lock to minimize lock hold time.
+  // On slow filesystems (e.g. overlayfs in Docker Desktop + WSL), the fingerprint
+  // computation can take minutes; doing it inside the lock would block all other
+  // processes that need the mirror.
+  const precomputedMetadata = precomputeBundledRuntimeMirrorMetadata({
+    pluginId: params.pluginId,
+    sourceRoot: params.pluginRoot,
+  });
+
   return withBundledRuntimeDepsFilesystemLock(
     params.installRoot,
     BUNDLED_RUNTIME_MIRROR_LOCK_DIR,
@@ -728,11 +738,14 @@ function mirrorBundledPluginRuntimeRoot(params: {
       if (path.resolve(mirrorRoot) === path.resolve(params.pluginRoot)) {
         return mirrorRoot;
       }
+      // Pass the pre-computed fingerprint so refreshBundledPluginRuntimeMirrorRoot
+      // skips the expensive fingerprint recomputation inside the lock.
       refreshBundledPluginRuntimeMirrorRoot({
         pluginId: params.pluginId,
         sourceRoot: params.pluginRoot,
         targetRoot: mirrorRoot,
         tempDirParent: mirrorParent,
+        precomputedSourceFingerprint: precomputedMetadata.sourceFingerprint,
       });
       return mirrorRoot;
     },
@@ -841,11 +854,18 @@ function mirrorCanonicalBundledRuntimeDistRoot(params: {
     return;
   }
   const targetCanonicalPluginRoot = path.join(targetCanonicalDistRoot, "extensions", pluginId);
+  // Pre-compute fingerprint outside any lock context to avoid slow filesystem
+  // operations while holding the mirror lock (caller holds it for this whole function).
+  const precomputedMetadata = precomputeBundledRuntimeMirrorMetadata({
+    pluginId,
+    sourceRoot: sourceCanonicalPluginRoot,
+  });
   refreshBundledPluginRuntimeMirrorRoot({
     pluginId,
     sourceRoot: sourceCanonicalPluginRoot,
     targetRoot: targetCanonicalPluginRoot,
     tempDirParent: path.dirname(targetCanonicalPluginRoot),
+    precomputedSourceFingerprint: precomputedMetadata.sourceFingerprint,
   });
 }
 
