@@ -270,6 +270,8 @@ export function installSessionToolResultGuard(
   opts?: {
     /** Optional session key for transcript update broadcasts. */
     sessionKey?: string;
+    /** Whether guarded appendMessage should broadcast transcript updates. Defaults to true. */
+    emitTranscriptUpdates?: boolean;
     /**
      * Optional transform applied to any message before persistence.
      */
@@ -455,7 +457,7 @@ export function installSessionToolResultGuard(
     const sessionFile = (
       sessionManager as { getSessionFile?: () => string | null }
     ).getSessionFile?.();
-    if (sessionFile) {
+    if (sessionFile && opts?.emitTranscriptUpdates !== false) {
       emitSessionTranscriptUpdate({
         sessionFile,
         sessionKey: opts?.sessionKey,

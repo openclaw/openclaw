@@ -379,8 +379,29 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
     expect(result.ok).toBe(true);
     if (result.ok) {
+      expect(emitSpy).toHaveBeenCalledTimes(1);
       expect(emitSpy).toHaveBeenCalledWith(result.sessionFile);
     }
+    emitSpy.mockRestore();
+  });
+
+  it("can suppress transcript update events for exact assistant appends", async () => {
+    writeTranscriptStore();
+    const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
+
+    const result = await appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      updateMode: "none",
+      message: makeAssistantMessage({
+        text: "Done.",
+        provider: "openclaw",
+        model: "delivery-mirror",
+      }),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(emitSpy).not.toHaveBeenCalled();
     emitSpy.mockRestore();
   });
 });
@@ -569,7 +590,7 @@ describe("transcript message redaction via guardSessionManager", () => {
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(emitSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
+      expect(emitSpy).toHaveBeenCalledTimes(1);
       const lastCallArg = emitSpy.mock.lastCall?.[0];
       const lastCall = typeof lastCallArg === "object" ? lastCallArg : undefined;
       expect(lastCall?.sessionFile).toBe(result.sessionFile);

@@ -280,12 +280,10 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   const sessionManager = guardSessionManager(SessionManager.open(sessionFile), {
     agentId: params.agentId,
     sessionKey: params.sessionKey,
+    emitTranscriptUpdates: (params.updateMode ?? "inline") === "inline",
   });
   const messageId = sessionManager.appendMessage(message);
 
-  // guardSessionManager's appendMessage emits emitSessionTranscriptUpdate automatically
-  // via SessionManager.getSessionFile(), so only the file-only and none modes need
-  // explicit handling here.
   switch (params.updateMode ?? "inline") {
     case "file-only":
       emitSessionTranscriptUpdate(sessionFile);
