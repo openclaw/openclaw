@@ -1,5 +1,5 @@
 import { resolveBundledPluginCompatibleLoadValues } from "./activation-context.js";
-import { hashJson } from "./installed-plugin-index-hash.js";
+import { hashString } from "./installed-plugin-index-hash.js";
 import type { PluginLoadOptions } from "./loader.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
@@ -194,11 +194,37 @@ export function resolveBundledWebProviderResolutionConfig(params: {
 const webProviderConfigFingerprintCache = new WeakMap<object, string>();
 
 /**
+ * Recursively serialize a value with sorted object keys so semantically equal
+ * configs that differ only in insertion order produce the same hash. Greptile
+ * P2 review on #73847 flagged that a plain `JSON.stringify` is
+ * insertion-order sensitive — config-merge utilities and dynamic plugin
+ * registration can produce equal-content configs in different key orders, and
+ * each variant would otherwise miss the cache.
+ */
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableStringify(entry)).join(",")}]`;
+  }
+  const entries = Object.entries(value as Record<string, unknown>).toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  );
+  return `{${entries
+    .map(([key, val]) => `${JSON.stringify(key)}:${stableStringify(val)}`)
+    .join(",")}}`;
+}
+
+/**
  * Stable hash of the `OpenClawConfig` subset that affects which web providers
  * resolve. Currently `plugins.entries` (enabled state, allowlist, per-plugin
  * config) is the only field consumed by `loadPluginManifestRegistryForPluginRegistry`
  * and the bundled-runtime resolution path. Returns "" when no config is
  * supplied so the JSON.stringify cache key stays stable for both shapes.
+ *
+ * Uses `stableStringify` (sorted keys) before hashing so equal-content configs
+ * with different property insertion order share a fingerprint.
  */
 export function fingerprintWebProviderResolutionConfig(
   config?: PluginLoadOptions["config"],
@@ -213,7 +239,7 @@ export function fingerprintWebProviderResolutionConfig(
   const subset = {
     plugins: (config as { plugins?: unknown }).plugins ?? null,
   };
-  const hash = hashJson(subset);
+  const hash = hashString(stableStringify(subset));
   webProviderConfigFingerprintCache.set(config as unknown as object, hash);
   return hash;
 }

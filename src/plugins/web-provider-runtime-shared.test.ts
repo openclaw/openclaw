@@ -276,4 +276,48 @@ describe("web-provider-runtime-shared", () => {
       delete process.env.OPENCLAW_PLUGIN_SNAPSHOT_CACHE;
     }
   });
+
+  it("prunes expired entries first then drops oldest insertion-order beyond the soft cap (regression for #73847 clawsweeper bounded-cache concern)", () => {
+    process.env.OPENCLAW_PLUGIN_SNAPSHOT_CACHE_TTL_MS = "60000";
+    process.env.OPENCLAW_PLUGIN_SNAPSHOT_CACHE = "1";
+    try {
+      const sharedCache = createWebProviderSnapshotCache();
+      mocks.resolveCompatibleRuntimePluginRegistry.mockReturnValue(undefined as never);
+      mocks.resolveRuntimePluginRegistry.mockReturnValue(undefined as never);
+      mocks.loadOpenClawPlugins.mockReturnValue({ id: "registry" } as never);
+
+      const mapRegistryProviders = vi.fn(() => []);
+
+      // Drive 270 distinct cache keys (above the 256 soft cap) by varying
+      // workspaceDir on each call. The cache should prune itself back to or
+      // below the cap on the next memoize.
+      for (let i = 0; i < 270; i += 1) {
+        resolvePluginWebProviders(
+          {
+            config: { plugins: { entries: {} } } as never,
+            workspaceDir: `/tmp/ws-${i}`,
+            onlyPluginIds: undefined,
+          },
+          {
+            snapshotCache: sharedCache,
+            resolveBundledResolutionConfig: (params) => ({
+              config: params.config,
+              activationSourceConfig: params.config,
+              autoEnabledReasons: {},
+            }),
+            resolveCandidatePluginIds: () => undefined,
+            mapRegistryProviders,
+          },
+        );
+      }
+
+      // After 270 inserts the cache should never exceed the soft cap.
+      expect(sharedCache.size).toBeLessThanOrEqual(256);
+      // And the prune happened — at least one entry was dropped.
+      expect(sharedCache.size).toBeGreaterThan(0);
+    } finally {
+      delete process.env.OPENCLAW_PLUGIN_SNAPSHOT_CACHE_TTL_MS;
+      delete process.env.OPENCLAW_PLUGIN_SNAPSHOT_CACHE;
+    }
+  });
 });

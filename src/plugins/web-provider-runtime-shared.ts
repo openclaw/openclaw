@@ -96,6 +96,40 @@ export function createWebProviderSnapshotCache<TEntry>(): WebProviderSnapshotCac
   return new Map<string, WebProviderSnapshotCacheEntry<TEntry>>();
 }
 
+/**
+ * Soft cap on snapshot-cache size. Without the per-config WeakMap GC the cache
+ * grows by one entry per distinct (workspace × allowlist × scope × env ×
+ * config-fingerprint) combination, which is bounded in practice but can drift
+ * under config-edit churn. When the cache exceeds the cap, drop expired
+ * entries first; if still over, drop the oldest insertion-order entries down
+ * to the cap so total footprint stays predictable.
+ */
+const SNAPSHOT_CACHE_SOFT_CAP = 256;
+
+function pruneSnapshotCache<TEntry>(cache: WebProviderSnapshotCache<TEntry>): void {
+  if (cache.size <= SNAPSHOT_CACHE_SOFT_CAP) {
+    return;
+  }
+  const now = Date.now();
+  for (const [key, entry] of cache) {
+    if (entry.expiresAt <= now) {
+      cache.delete(key);
+    }
+  }
+  if (cache.size <= SNAPSHOT_CACHE_SOFT_CAP) {
+    return;
+  }
+  const keysToDrop = cache.size - SNAPSHOT_CACHE_SOFT_CAP;
+  let dropped = 0;
+  for (const key of cache.keys()) {
+    if (dropped >= keysToDrop) {
+      break;
+    }
+    cache.delete(key);
+    dropped += 1;
+  }
+}
+
 function resolveWebProviderLoadOptions<TEntry>(
   params: ResolvePluginWebProvidersParams,
   deps: ResolveWebProviderRuntimeDeps<TEntry>,
@@ -216,6 +250,7 @@ export function resolvePluginWebProviders<TEntry>(
       expiresAt: Date.now() + ttlMs,
       providers,
     });
+    pruneSnapshotCache(deps.snapshotCache);
   };
 
   const loadOptions = resolveWebProviderLoadOptions(params, deps);
