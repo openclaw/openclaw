@@ -405,6 +405,11 @@ dependency installs use the matching `dangerouslyForceUnsafeInstall` request
 override instead, while `openclaw skills install` remains the separate ClawHub
 skill download/install flow.
 
+For a ClawHub-hosted plugin release that is scan-held in the registry, publishers
+should use the ClawHub dashboard or `clawhub package rescan <name>` to request a
+fresh registry scan. The unsafe-install override is local to OpenClaw
+install/update flows and does not request or bypass ClawHub registry rescans.
+
 Compatible bundles participate in the same plugin list/inspect/enable/disable
 flow. Current runtime support includes bundle skills, Claude command-skills,
 Claude `settings.json` defaults, Claude `.lsp.json` and manifest-declared
