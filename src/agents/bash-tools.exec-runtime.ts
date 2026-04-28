@@ -389,6 +389,14 @@ function joinExecFailureOutput(aggregated: string, reason: string) {
   return aggregated ? `${aggregated}\n\n${reason}` : reason;
 }
 
+export function formatExecRunningUpdateText(params: {
+  warnings: readonly string[];
+  tailText: string;
+}) {
+  const warningText = params.warnings.length ? `${params.warnings.join("\n")}\n\n` : "";
+  return warningText + (params.tailText || "(no output)");
+}
+
 function classifyExecFailureKind(params: {
   exitReason: TerminationReason;
   exitCode: number;
@@ -573,7 +581,6 @@ export async function runExecProcess(opts: {
       return;
     }
     const tailText = session.tail || session.aggregated;
-    const warningText = opts.warnings.length ? `${opts.warnings.join("\n")}\n\n` : "";
     // Note: opts.onUpdate() is provided by pi-agent-core's agent-loop and
     // internally pushes Promise.resolve(emit(event)) into an updateEvents
     // array.  Because emit → processEvents is async, any failure (e.g.
@@ -584,7 +591,9 @@ export async function runExecProcess(opts: {
     // signal (Layer 2) — both of which prevent this call from ever being
     // reached after the agent run has ended.
     opts.onUpdate({
-      content: [{ type: "text", text: warningText + (tailText || "") }],
+      content: [
+        { type: "text", text: formatExecRunningUpdateText({ warnings: opts.warnings, tailText }) },
+      ],
       details: {
         status: "running",
         sessionId,

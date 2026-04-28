@@ -14,6 +14,7 @@ vi.mock("../infra/system-events.js", () => ({
 let buildExecExitOutcome: typeof import("./bash-tools.exec-runtime.js").buildExecExitOutcome;
 let detectCursorKeyMode: typeof import("./bash-tools.exec-runtime.js").detectCursorKeyMode;
 let emitExecSystemEvent: typeof import("./bash-tools.exec-runtime.js").emitExecSystemEvent;
+let formatExecRunningUpdateText: typeof import("./bash-tools.exec-runtime.js").formatExecRunningUpdateText;
 let formatExecFailureReason: typeof import("./bash-tools.exec-runtime.js").formatExecFailureReason;
 let resolveExecTarget: typeof import("./bash-tools.exec-runtime.js").resolveExecTarget;
 
@@ -22,6 +23,7 @@ beforeAll(async () => {
     buildExecExitOutcome,
     detectCursorKeyMode,
     emitExecSystemEvent,
+    formatExecRunningUpdateText,
     formatExecFailureReason,
     resolveExecTarget,
   } = await import("./bash-tools.exec-runtime.js"));
@@ -356,6 +358,24 @@ describe("emitExecSystemEvent", () => {
 
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
     expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("formatExecRunningUpdateText", () => {
+  it("uses a non-empty placeholder when running exec output is empty", () => {
+    expect(formatExecRunningUpdateText({ warnings: [], tailText: "" })).toBe("(no output)");
+  });
+
+  it("preserves warnings before the no-output placeholder", () => {
+    expect(formatExecRunningUpdateText({ warnings: ["Careful."], tailText: "" })).toBe(
+      "Careful.\n\n(no output)",
+    );
+  });
+
+  it("preserves non-empty output text", () => {
+    expect(formatExecRunningUpdateText({ warnings: ["Careful."], tailText: "done" })).toBe(
+      "Careful.\n\ndone",
+    );
   });
 });
 
