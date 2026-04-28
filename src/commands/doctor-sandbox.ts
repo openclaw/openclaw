@@ -4,6 +4,7 @@ import {
   DEFAULT_SANDBOX_BROWSER_IMAGE,
   DEFAULT_SANDBOX_COMMON_IMAGE,
   DEFAULT_SANDBOX_IMAGE,
+  isDockerDaemonUnavailable,
   resolveSandboxScope,
 } from "../agents/sandbox.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -86,13 +87,7 @@ async function dockerImageExists(image: string): Promise<boolean> {
       return false;
     }
     const lower = stderr.toLowerCase();
-    if (
-      lower.includes("cannot connect to the docker daemon") ||
-      lower.includes("no such file or directory") ||
-      lower.includes("dial unix") ||
-      lower.includes("docker daemon is not running") ||
-      lower.includes("connection refused")
-    ) {
+    if (isDockerDaemonUnavailable(stderr)) {
       return false;
     }
     throw error;
