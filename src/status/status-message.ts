@@ -402,6 +402,12 @@ const formatCacheLine = (
   return `🗄️ Cache: ${hitRate}% hit · ${cachedLabel} cached, ${newLabel} new`;
 };
 
+const hasCostUsage = (input?: number, output?: number, cacheRead?: number, cacheWrite?: number) =>
+  typeof input === "number" ||
+  typeof output === "number" ||
+  typeof cacheRead === "number" ||
+  typeof cacheWrite === "number";
+
 const formatMediaUnderstandingLine = (decisions?: ReadonlyArray<MediaUnderstandingDecision>) => {
   if (!decisions || decisions.length === 0) {
     return null;
@@ -826,13 +832,15 @@ export function buildStatusMessage(args: StatusArgs): string {
         allowPluginNormalization: false,
       })
     : undefined;
-  const hasUsage = typeof inputTokens === "number" || typeof outputTokens === "number";
+  const hasUsage = hasCostUsage(inputTokens, outputTokens, cacheRead, cacheWrite);
   const cost =
     showCost && hasUsage
       ? estimateUsageCost({
           usage: {
             input: inputTokens ?? undefined,
             output: outputTokens ?? undefined,
+            cacheRead: cacheRead ?? undefined,
+            cacheWrite: cacheWrite ?? undefined,
           },
           cost: costConfig,
         })
