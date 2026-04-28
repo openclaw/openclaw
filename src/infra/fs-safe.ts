@@ -728,20 +728,30 @@ export async function writeFileWithinRoot(params: {
     relativePath: params.relativePath,
   });
 
-  const identity = await runPinnedWriteHelper({
-    rootPath: pinned.rootReal,
-    relativeParentPath: pinned.relativeParentPath,
-    basename: pinned.basename,
-    mkdir: params.mkdir !== false,
-    mode: pinned.mode,
-    input: {
-      kind: "buffer",
-      data: params.data,
-      encoding: params.encoding,
-    },
-  }).catch((error) => {
+  let identity: Awaited<ReturnType<typeof runPinnedWriteHelper>>;
+  try {
+    identity = await runPinnedWriteHelper({
+      rootPath: pinned.rootReal,
+      relativeParentPath: pinned.relativeParentPath,
+      basename: pinned.basename,
+      mkdir: params.mkdir !== false,
+      mode: pinned.mode,
+      input: {
+        kind: "buffer",
+        data: params.data,
+        encoding: params.encoding,
+      },
+    });
+  } catch (error) {
+    if (isPinnedPathHelperSpawnError(error)) {
+      // python3 missing from PATH (e.g. node:*-slim Docker base images). Mirror
+      // the remove/mkdir fallback so writes still succeed instead of surfacing
+      // the misleading "path is not a regular file under root" error (#72362).
+      await writeFileWithinRootLegacy(params);
+      return;
+    }
     throw normalizePinnedWriteError(error);
-  });
+  }
 
   try {
     await verifyAtomicWriteResult({
@@ -785,19 +795,40 @@ export async function copyFileWithinRoot(params: {
       relativePath: params.relativePath,
     });
     const sourceStream = source.handle.createReadStream();
-    const identity = await runPinnedWriteHelper({
-      rootPath: pinned.rootReal,
-      relativeParentPath: pinned.relativeParentPath,
-      basename: pinned.basename,
-      mkdir: params.mkdir !== false,
-      mode: pinned.mode,
-      input: {
-        kind: "stream",
-        stream: sourceStream,
-      },
-    }).catch((error) => {
+    let identity: Awaited<ReturnType<typeof runPinnedWriteHelper>>;
+    try {
+      identity = await runPinnedWriteHelper({
+        rootPath: pinned.rootReal,
+        relativeParentPath: pinned.relativeParentPath,
+        basename: pinned.basename,
+        mkdir: params.mkdir !== false,
+        mode: pinned.mode,
+        input: {
+          kind: "stream",
+          stream: sourceStream,
+        },
+      });
+    } catch (error) {
+      if (isPinnedPathHelperSpawnError(error)) {
+        // python3 missing from PATH (e.g. node:*-slim Docker base images). Fall
+        // back to the legacy copy path so files still land in the root instead
+        // of failing with the misleading invalid-path message (#72362). The
+        // pinned helper consumes the source stream during pipeline cleanup even
+        // when spawn fails, so re-open the source before handing it to the
+        // legacy copier; the outer finally closes the original handle.
+        sourceStream.destroy();
+        const reopened = await openVerifiedLocalFile(params.sourcePath, {
+          rejectHardlinks: params.rejectSourceHardlinks,
+        });
+        try {
+          await copyFileWithinRootLegacy(params, reopened);
+        } finally {
+          await reopened.handle.close().catch(() => {});
+        }
+        return;
+      }
       throw normalizePinnedWriteError(error);
-    });
+    }
     try {
       await verifyAtomicWriteResult({
         rootDir: params.rootDir,

@@ -8,6 +8,7 @@ import {
 } from "../test-utils/symlink-rebind-race.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import * as pinnedPathHelperModule from "./fs-pinned-path-helper.js";
+import * as pinnedWriteHelperModule from "./fs-pinned-write-helper.js";
 import {
   __setFsSafeTestHooksForTest,
   appendFileWithinRoot,
@@ -30,6 +31,7 @@ const tempDirs = createTrackedTempDirs();
 afterEach(async () => {
   __setFsSafeTestHooksForTest(undefined);
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
   await tempDirs.cleanup();
 });
 
@@ -481,6 +483,74 @@ describe("fs-safe", () => {
 
       await expect(fs.stat(path.join(root, "nested", "deeper"))).resolves.toMatchObject({
         isDirectory: expect.any(Function),
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "falls back to legacy write when the pinned write helper cannot spawn (#72362)",
+    async () => {
+      const error = new Error("spawn missing python ENOENT") as NodeJS.ErrnoException;
+      error.code = "ENOENT";
+      error.syscall = "spawn python3";
+      vi.spyOn(pinnedWriteHelperModule, "runPinnedWriteHelper").mockRejectedValue(error);
+
+      const root = await tempDirs.make("openclaw-fs-safe-root-");
+
+      await writeFileWithinRoot({
+        rootDir: root,
+        relativePath: "nested/out.txt",
+        data: "hello world",
+      });
+
+      await expect(fs.readFile(path.join(root, "nested", "out.txt"), "utf-8")).resolves.toBe(
+        "hello world",
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "falls back to legacy copy when the pinned write helper cannot spawn (#72362)",
+    async () => {
+      const error = new Error("spawn missing python ENOENT") as NodeJS.ErrnoException;
+      error.code = "ENOENT";
+      error.syscall = "spawn python3";
+      vi.spyOn(pinnedWriteHelperModule, "runPinnedWriteHelper").mockRejectedValue(error);
+
+      const root = await tempDirs.make("openclaw-fs-safe-root-");
+      const sourceDir = await tempDirs.make("openclaw-fs-safe-source-");
+      const sourcePath = path.join(sourceDir, "in.bin");
+      const payload = Buffer.from("hello-from-fallback");
+      await fs.writeFile(sourcePath, payload);
+
+      await copyFileWithinRoot({
+        sourcePath,
+        rootDir: root,
+        relativePath: "nested/in.bin",
+      });
+
+      await expect(fs.readFile(path.join(root, "nested", "in.bin"))).resolves.toEqual(payload);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "still surfaces non-spawn pinned write errors as invalid-path (no fallback masking)",
+    async () => {
+      vi.spyOn(pinnedWriteHelperModule, "runPinnedWriteHelper").mockRejectedValue(
+        new Error("pinned helper said the path was invalid"),
+      );
+
+      const root = await tempDirs.make("openclaw-fs-safe-root-");
+
+      await expect(
+        writeFileWithinRoot({
+          rootDir: root,
+          relativePath: "nested/out.txt",
+          data: "should not be written",
+        }),
+      ).rejects.toMatchObject({
+        code: "invalid-path",
+        message: expect.stringContaining("path is not a regular file under root"),
       });
     },
   );
