@@ -272,7 +272,7 @@ export async function readDockerPort(containerName: string, port: number) {
   return Number.isFinite(mapped) ? mapped : null;
 }
 
-function isDockerDaemonUnavailable(stderr: string): boolean {
+export function isDockerDaemonUnavailable(stderr: string): boolean {
   const lower = stderr.toLowerCase();
   return (
     lower.includes("cannot connect to the docker daemon") ||

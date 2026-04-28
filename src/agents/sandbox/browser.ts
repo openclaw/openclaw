@@ -26,12 +26,15 @@ import {
   buildSandboxCreateArgs,
   dockerContainerState,
   execDocker,
+  execDockerRaw,
+  isDockerDaemonUnavailable,
   readDockerContainerEnvVar,
   readDockerContainerLabel,
   readDockerNetworkDriver,
   readDockerNetworkGateway,
   readDockerPort,
 } from "./docker.js";
+import type { ExecDockerRawOptions } from "./docker.js";
 import {
   buildNoVncObserverTokenUrl,
   consumeNoVncObserverToken,
@@ -123,16 +126,11 @@ function buildSandboxBrowserResolvedConfig(params: {
   };
 }
 
-function isDockerDaemonUnavailableBrowser(stderr: string): boolean {
-  const lower = stderr.toLowerCase();
-  return (
-    lower.includes("cannot connect to the docker daemon") ||
-    lower.includes("no such file or directory") ||
-    lower.includes("dial unix") ||
-    lower.includes("docker daemon is not running") ||
-    lower.includes("connection refused")
-  );
-}
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
+import type { SandboxBrowserConfig, SandboxConfig } from "./types.js";
 
 async function ensureSandboxBrowserImage(image: string) {
   const result = await execDocker(["image", "inspect", image], {
@@ -144,7 +142,7 @@ async function ensureSandboxBrowserImage(image: string) {
   const stderr = result.stderr.trim();
   // When Docker daemon is unavailable, silently return instead of throwing.
   // This allows sandbox.mode="off" sessions to start without Docker errors.
-  if (isDockerDaemonUnavailableBrowser(stderr)) {
+  if (isDockerDaemonUnavailable(stderr)) {
     return;
   }
   throw new Error(
