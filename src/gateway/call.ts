@@ -517,6 +517,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
   await new Promise<void>((r) => setImmediate(r));
   return await new Promise<T>((resolve, reject) => {
     let settled = false;
+    let helloOkSeen = false;
     let ignoreClose = false;
     const stop = (err?: Error, value?: T) => {
       if (settled) {
@@ -553,6 +554,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       minProtocol: opts.minProtocol ?? PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
       onHelloOk: async (hello) => {
+        helloOkSeen = true;
         try {
           ensureGatewaySupportsRequiredMethods({
             requiredMethods: opts.requiredMethods,
@@ -572,6 +574,12 @@ async function executeGatewayRequestWithScopes<T>(params: {
       },
       onClose: (code, reason) => {
         if (settled || ignoreClose) {
+          return;
+        }
+        // Some gateway / ws stacks can emit a transient 1000 close during the initial
+        // pre-hello handshake while the client reconnects immediately. Don't fail one-shot
+        // CLI calls on that specific transient close.
+        if (!helloOkSeen && code === 1000 && reason.length === 0) {
           return;
         }
         ignoreClose = true;

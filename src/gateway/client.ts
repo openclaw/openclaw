@@ -122,6 +122,18 @@ export class GatewayClientRequestError extends Error {
   }
 }
 
+class GatewayClientCloseError extends Error {
+  readonly closeCode: number;
+  readonly closeReason: string;
+
+  constructor(code: number, reason: string) {
+    super(`gateway closed (${code}): ${reason}`);
+    this.name = "GatewayClientCloseError";
+    this.closeCode = code;
+    this.closeReason = reason;
+  }
+}
+
 export type GatewayClientOptions = {
   url?: string; // ws://127.0.0.1:18789
   connectChallengeTimeoutMs?: number;
@@ -361,7 +373,7 @@ export class GatewayClient {
           );
         }
       }
-      this.flushPendingErrors(new Error(`gateway closed (${code}): ${reasonText}`));
+      this.flushPendingErrors(new GatewayClientCloseError(code, reasonText));
       if (this.shouldPauseReconnectAfterAuthFailure(connectErrorDetailCode)) {
         this.opts.onReconnectPaused?.({
           code,
@@ -598,6 +610,14 @@ export class GatewayClient {
           this.pendingDeviceTokenRetry = true;
           this.deviceTokenRetryBudgetUsed = true;
           this.backoffMs = Math.min(this.backoffMs, 250);
+        }
+        const isTransientPreHelloClose =
+          this.pendingConnectErrorDetailCode == null &&
+          err instanceof GatewayClientCloseError &&
+          err.closeCode === 1000 &&
+          err.closeReason.length === 0;
+        if (isTransientPreHelloClose) {
+          return;
         }
         this.opts.onConnectError?.(err instanceof Error ? err : new Error(String(err)));
         const msg = `gateway connect failed: ${String(err)}`;
