@@ -1822,7 +1822,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record: PluginRecord,
     hookName: K,
     handler: PluginHookHandlerMap[K],
-    opts?: { priority?: number },
+    opts?: { priority?: number; timeoutMs?: number },
     policy?: PluginTypedHookPolicy,
   ) => {
     if (!isPluginHookName(hookName)) {
@@ -1884,6 +1884,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       hookName,
       handler: effectiveHandler,
       priority: opts?.priority,
+      ...(opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
       source: record.source,
     } as TypedPluginHookRegistration);
   };
