@@ -236,6 +236,10 @@ function normalizeProviderFilter(filter?: string[]): string[] {
   return Array.from(normalized).toSorted();
 }
 
+function sortedCwOverrides(overrides: Record<string, number>): Record<string, number> {
+  return Object.fromEntries(Object.entries(overrides).sort(([a], [b]) => a.localeCompare(b)));
+}
+
 function buildCacheKey(params: {
   region: string;
   providerFilter: string[];
@@ -244,7 +248,10 @@ function buildCacheKey(params: {
   defaultMaxTokens: number;
   modelCwOverrides: Record<string, number>;
 }): string {
-  return JSON.stringify(params);
+  return JSON.stringify({
+    ...params,
+    modelCwOverrides: sortedCwOverrides(params.modelCwOverrides),
+  });
 }
 
 function includesTextModalities(modalities?: Array<string>): boolean {

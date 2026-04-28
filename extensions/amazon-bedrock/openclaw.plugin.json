@@ -24,7 +24,12 @@
           },
           "refreshInterval": { "type": "integer", "minimum": 0 },
           "defaultContextWindow": { "type": "integer", "minimum": 1 },
-          "defaultMaxTokens": { "type": "integer", "minimum": 1 }
+          "defaultMaxTokens": { "type": "integer", "minimum": 1 },
+          "modelContextWindowOverrides": {
+            "type": "object",
+            "additionalProperties": { "type": "integer", "minimum": 1 },
+            "description": "Regex pattern to context window overrides for Bedrock models not covered by the built-in lookup table."
+          }
         }
       },
       "guardrail": {
@@ -71,6 +76,10 @@
     "discovery.defaultMaxTokens": {
       "label": "Default Max Tokens",
       "help": "Fallback max output tokens to assign to discovered Bedrock models."
+    },
+    "discovery.modelContextWindowOverrides": {
+      "label": "Context Window Overrides",
+      "help": "Regex pattern to context window mapping for Bedrock models not yet in the built-in table. First matching pattern wins; built-in entries always take precedence."
     },
     "guardrail": {
       "label": "Guardrail",
