@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { ExtensionFactory, SessionManager } from "@mariozechner/pi-coding-agent";
+import type {
+  ExtensionFactory,
+  ModelRegistry,
+  SessionManager,
+} from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
@@ -15,6 +19,8 @@ import { makeToolPrunablePredicate } from "../pi-hooks/context-pruning/tools.js"
 import { ensurePiCompactionReserveTokens } from "../pi-settings.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "./cache-ttl.js";
+import { resolveEmbeddedCompactionTarget } from "./compaction-runtime-context.js";
+import { log } from "./logger.js";
 
 type PiToolResultEvent = {
   threadId?: string;
@@ -132,23 +138,62 @@ function resolveCompactionMode(cfg?: OpenClawConfig): "default" | "safeguard" {
   return compaction?.mode === "safeguard" ? "safeguard" : "default";
 }
 
+function hasCompactionModelOverride(cfg?: OpenClawConfig): boolean {
+  return Boolean(cfg?.agents?.defaults?.compaction?.model?.trim());
+}
+
+export function resolveSafeguardRuntimeTarget(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+  modelId: string;
+  model: ProviderRuntimeModel | undefined;
+  modelRegistry?: ModelRegistry;
+}): { provider: string; modelId: string; model: ProviderRuntimeModel | undefined } {
+  const resolved = resolveEmbeddedCompactionTarget({
+    config: params.cfg,
+    provider: params.provider,
+    modelId: params.modelId,
+  });
+  const provider = resolved.provider ?? params.provider;
+  const modelId = resolved.model ?? params.modelId;
+  if (
+    !hasCompactionModelOverride(params.cfg) ||
+    (provider === params.provider && modelId === params.modelId)
+  ) {
+    return { provider, modelId, model: params.model };
+  }
+
+  const model = params.modelRegistry?.find(provider, modelId) as
+    | ProviderRuntimeModel
+    | null
+    | undefined;
+  if (!model) {
+    log.warn(
+      `Configured safeguard compaction model "${provider}/${modelId}" was not found in the model registry; falling back to the session model.`,
+    );
+  }
+  return { provider, modelId, model: model ?? undefined };
+}
+
 export function buildEmbeddedExtensionFactories(params: {
   cfg: OpenClawConfig | undefined;
   sessionManager: SessionManager;
   provider: string;
   modelId: string;
   model: ProviderRuntimeModel | undefined;
+  modelRegistry?: ModelRegistry;
 }): ExtensionFactory[] {
   const factories: ExtensionFactory[] = [];
   if (resolveCompactionMode(params.cfg) === "safeguard") {
     const compactionCfg = params.cfg?.agents?.defaults?.compaction;
     const qualityGuardCfg = compactionCfg?.qualityGuard;
+    const runtimeTarget = resolveSafeguardRuntimeTarget(params);
     const contextWindowInfo = resolveContextWindowInfo({
       cfg: params.cfg,
-      provider: params.provider,
-      modelId: params.modelId,
-      modelContextTokens: params.model?.contextTokens,
-      modelContextWindow: params.model?.contextWindow,
+      provider: runtimeTarget.provider,
+      modelId: runtimeTarget.modelId,
+      modelContextTokens: runtimeTarget.model?.contextTokens,
+      modelContextWindow: runtimeTarget.model?.contextWindow,
       defaultTokens: DEFAULT_CONTEXT_TOKENS,
     });
     setCompactionSafeguardRuntime(params.sessionManager, {
@@ -159,7 +204,7 @@ export function buildEmbeddedExtensionFactories(params: {
       customInstructions: compactionCfg?.customInstructions,
       qualityGuardEnabled: qualityGuardCfg?.enabled ?? true,
       qualityGuardMaxRetries: qualityGuardCfg?.maxRetries,
-      model: params.model,
+      model: runtimeTarget.model,
       recentTurnsPreserve: compactionCfg?.recentTurnsPreserve,
       provider: compactionCfg?.provider,
     });

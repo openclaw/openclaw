@@ -912,7 +912,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     // -----------------------------------------------------------------------
     // LLM path — resolve model + auth, prune, chunk, quality guard.
     // -----------------------------------------------------------------------
-    const model = ctx.model ?? runtime?.model;
+    const model = runtime?.model ?? ctx.model;
     if (!model) {
       if (!ctx.model && !runtime?.model && !missedModelWarningSessions.has(ctx.sessionManager)) {
         missedModelWarningSessions.add(ctx.sessionManager);

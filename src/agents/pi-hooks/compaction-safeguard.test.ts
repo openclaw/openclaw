@@ -137,11 +137,12 @@ const createCompactionEvent = (params: { messageText: string; tokensBefore: numb
 
 const createCompactionContext = (params: {
   sessionManager: ExtensionContext["sessionManager"];
+  model?: ExtensionContext["model"];
   getApiKeyAndHeadersMock?: ReturnType<typeof vi.fn>;
   getApiKeyMock?: ReturnType<typeof vi.fn>;
 }) =>
   ({
-    model: undefined,
+    model: params.model,
     sessionManager: params.sessionManager,
     modelRegistry: {
       getApiKeyAndHeaders:
@@ -1851,6 +1852,84 @@ describe("compaction-safeguard recent-turn preservation", () => {
 });
 
 describe("compaction-safeguard extension model fallback", () => {
+  it("uses configured compaction model for safeguard auto-compaction when ctx.model is the session model", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue(
+      buildStructuredFallbackSummary("configured model summary"),
+    );
+
+    const sessionManager = stubSessionManager();
+    const sessionModel = createAnthropicModelFixture({
+      id: "claude-opus-4-7",
+      name: "Claude Opus 4.7",
+    });
+    const compactionModel = createAnthropicModelFixture({
+      id: "claude-sonnet-4-6",
+      name: "Claude Sonnet 4.6",
+      contextWindow: 200_000,
+    });
+    const modelRegistry = {
+      find: vi.fn((provider: string, modelId: string) =>
+        provider === "anthropic" && modelId === "claude-sonnet-4-6" ? compactionModel : null,
+      ),
+    };
+
+    const extensionParams = {
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              mode: "safeguard",
+              model: "anthropic/claude-sonnet-4-6",
+              recentTurnsPreserve: 0,
+              qualityGuard: {
+                enabled: false,
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      sessionManager,
+      provider: "anthropic",
+      modelId: "claude-opus-4-7",
+      model: sessionModel,
+      modelRegistry,
+    } as Parameters<typeof buildEmbeddedExtensionFactories>[0] & {
+      modelRegistry: typeof modelRegistry;
+    };
+
+    const factories = buildEmbeddedExtensionFactories(extensionParams);
+    expect(factories).toContain(compactionSafeguardExtension);
+
+    const compactionHandler = createCompactionHandler();
+    const getApiKeyAndHeadersMock = vi.fn().mockResolvedValue({
+      ok: true,
+      apiKey: "test-key",
+    });
+    const mockContext = createCompactionContext({
+      sessionManager,
+      model: sessionModel,
+      getApiKeyAndHeadersMock,
+    });
+    const mockEvent = createCompactionEvent({
+      messageText: "summarize me",
+      tokensBefore: 1000,
+    });
+    (mockEvent.preparation as { settings?: { reserveTokens: number } }).settings = {
+      reserveTokens: 4000,
+    };
+
+    const result = (await compactionHandler(mockEvent, mockContext)) as { cancel?: boolean };
+
+    expect(result.cancel).not.toBe(true);
+    expect(modelRegistry.find).toHaveBeenCalledWith("anthropic", "claude-sonnet-4-6");
+    expect(getApiKeyAndHeadersMock).toHaveBeenCalledWith(compactionModel);
+    expect(mockSummarizeInStages.mock.calls.at(-1)?.[0]?.model).toMatchObject({
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    });
+  });
+
   it("uses runtime.model when ctx.model is undefined (compact.ts workflow)", async () => {
     // This test verifies the root-cause fix: when extensionRunner.initialize() is not called
     // (as happens in compact.ts), ctx.model is undefined but runtime.model is available.

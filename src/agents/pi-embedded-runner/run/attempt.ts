@@ -1327,6 +1327,7 @@ export async function runEmbeddedAttempt(
         provider: params.provider,
         modelId: params.modelId,
         model: params.model,
+        modelRegistry: params.modelRegistry,
       });
       const resourceLoader = new DefaultResourceLoader({
         cwd: resolvedWorkspace,
