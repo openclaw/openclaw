@@ -16,10 +16,10 @@ function collectIssues(
   fn({
     policy,
     allowFrom,
-    ctx: { addIssue: (issue: unknown) => issues.push(issue) },
+    ctx: { value: undefined, issues: [], addIssue: (issue: unknown) => issues.push(issue) },
     path: ["allowFrom"],
     message: "test validation error",
-  } as Parameters<typeof fn>[0]);
+  } as unknown as Parameters<typeof fn>[0]);
   return issues;
 }
 
