@@ -49,4 +49,27 @@ struct ModelCatalogLoaderTests {
         let choices = try await ModelCatalogLoader.load(from: tmp.path)
         #expect(choices.isEmpty)
     }
+
+    @Test
+    func `load rejects executable catalog expressions`() async throws {
+        let src = """
+        export const MODELS = {
+          openai: {
+            "gpt-4o": { name: (() => { throw new Error("nope") })(), contextWindow: 128000 },
+          },
+        };
+        """
+
+        let tmp = FileManager().temporaryDirectory
+            .appendingPathComponent("models-\(UUID().uuidString).ts")
+        defer { try? FileManager().removeItem(at: tmp) }
+        try src.write(to: tmp, atomically: true, encoding: .utf8)
+
+        do {
+            _ = try await ModelCatalogLoader.load(from: tmp.path)
+            Issue.record("expected executable catalog expression rejection")
+        } catch {
+            #expect(String(describing: error).isEmpty == false)
+        }
+    }
 }
