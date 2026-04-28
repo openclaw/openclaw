@@ -9,6 +9,7 @@ Docs: https://docs.openclaw.ai
 - Channels: add Yuanbao channel docs entrance so the Tencent Yuanbao bot appears in the channel listing and sidebar navigation. (#73443) Thanks @loongfay.
 - Active Memory: add optional per-conversation `allowedChatIds` and `deniedChatIds` filters so operators can enable recall only for selected direct, group, or channel conversations while keeping broad sessions skipped. (#67977) Thanks @quengh.
 - Active Memory: return bounded partial recall summaries when the hidden memory sub-agent times out, including the default temporary-transcript path, so useful recovered context is not discarded. (#73219) Thanks @joeykrug.
+- Control UI/WebChat: show a persistent compact context usage indicator from fresh session token data before the high-pressure warning state, while keeping the existing compaction prompt threshold. Fixes #46398; refs #45048 and #50071. Thanks @walterwkchoy, @AxelrodAI, and @Brissux.
 
 ### Fixes
 
