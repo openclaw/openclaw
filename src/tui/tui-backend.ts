@@ -83,6 +83,15 @@ export type TuiModelChoice = {
   reasoning?: boolean;
 };
 
+export type TuiSessionMessageSubscriptionResult = {
+  subscribed: boolean;
+  key: string;
+};
+
+export type TuiSessionMessageSubscriptionOptions = {
+  key: string;
+};
+
 export type TuiBackend = {
   connection: {
     url: string;
@@ -100,6 +109,12 @@ export type TuiBackend = {
     sessionKey: string;
     runId: string;
   }) => Promise<{ ok: boolean; aborted: boolean }>;
+  subscribeSessionMessages: (
+    opts: TuiSessionMessageSubscriptionOptions,
+  ) => Promise<TuiSessionMessageSubscriptionResult>;
+  unsubscribeSessionMessages: (
+    opts: TuiSessionMessageSubscriptionOptions,
+  ) => Promise<TuiSessionMessageSubscriptionResult>;
   loadHistory: (opts: { sessionKey: string; limit?: number }) => Promise<unknown>;
   listSessions: (opts?: SessionsListParams) => Promise<TuiSessionList>;
   listAgents: () => Promise<TuiAgentsList>;

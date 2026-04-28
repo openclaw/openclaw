@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { getSlashCommands, parseCommand } from "./commands.js";
 import {
   createBackspaceDeduper,
+  createTuiSessionMessageSubscriptionController,
   drainAndStopTuiSafely,
   isIgnorableTuiStopError,
   resolveCodexCliBin,
@@ -176,6 +177,80 @@ describe("resolveGatewayDisconnectState", () => {
     expect(state.connectionStatus).toBe("gateway disconnected: network timeout");
     expect(state.activityStatus).toBe("idle");
     expect(state.pairingHint).toBeUndefined();
+  });
+});
+
+describe("createTuiSessionMessageSubscriptionController", () => {
+  const createClient = () => ({
+    subscribeSessionMessages: vi.fn(async ({ key }: { key: string }) => ({
+      subscribed: true,
+      key,
+    })),
+    unsubscribeSessionMessages: vi.fn(async ({ key }: { key: string }) => ({
+      subscribed: false,
+      key,
+    })),
+  });
+
+  it("subscribes once to the active session", async () => {
+    const client = createClient();
+    const controller = createTuiSessionMessageSubscriptionController({
+      client,
+      getSessionKey: () => "agent:main:main",
+    });
+
+    await controller.syncActiveSessionSubscription();
+    await controller.syncActiveSessionSubscription();
+
+    expect(client.subscribeSessionMessages).toHaveBeenCalledTimes(1);
+    expect(client.subscribeSessionMessages).toHaveBeenCalledWith({ key: "agent:main:main" });
+    expect(client.unsubscribeSessionMessages).not.toHaveBeenCalled();
+    expect(controller.getActiveSubscriptionKey()).toBe("agent:main:main");
+  });
+
+  it("unsubscribes the stale session before subscribing the next session", async () => {
+    const client = createClient();
+    let sessionKey = "agent:main:main";
+    const controller = createTuiSessionMessageSubscriptionController({
+      client,
+      getSessionKey: () => sessionKey,
+    });
+
+    await controller.syncActiveSessionSubscription();
+    sessionKey = "agent:main:other";
+    await controller.syncActiveSessionSubscription();
+
+    expect(client.unsubscribeSessionMessages).toHaveBeenCalledWith({ key: "agent:main:main" });
+    expect(client.subscribeSessionMessages).toHaveBeenLastCalledWith({ key: "agent:main:other" });
+    expect(controller.getActiveSubscriptionKey()).toBe("agent:main:other");
+  });
+
+  it("resubscribes the same session after reconnect", async () => {
+    const client = createClient();
+    const controller = createTuiSessionMessageSubscriptionController({
+      client,
+      getSessionKey: () => "agent:main:main",
+    });
+
+    await controller.syncActiveSessionSubscription();
+    controller.markDisconnected();
+    await controller.syncActiveSessionSubscription();
+
+    expect(client.subscribeSessionMessages).toHaveBeenCalledTimes(2);
+  });
+
+  it("unsubscribes the active session on stop", async () => {
+    const client = createClient();
+    const controller = createTuiSessionMessageSubscriptionController({
+      client,
+      getSessionKey: () => "agent:main:main",
+    });
+
+    await controller.syncActiveSessionSubscription();
+    await controller.unsubscribeActiveSession();
+
+    expect(client.unsubscribeSessionMessages).toHaveBeenCalledWith({ key: "agent:main:main" });
+    expect(controller.getActiveSubscriptionKey()).toBeNull();
   });
 });
 

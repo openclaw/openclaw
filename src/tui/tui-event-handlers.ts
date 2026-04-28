@@ -514,9 +514,32 @@ export function createEventHandlers(context: EventHandlerContext) {
     tui.requestRender();
   };
 
+  const handleSessionMessageEvent = (payload: unknown) => {
+    if (!payload || typeof payload !== "object") {
+      return;
+    }
+    const evt = payload as { sessionKey?: unknown };
+    syncSessionKey();
+    if (
+      !isSameSessionKey(
+        typeof evt.sessionKey === "string" ? evt.sessionKey : undefined,
+        state.currentSessionKey,
+      )
+    ) {
+      return;
+    }
+    void refreshSessionInfo?.();
+    if (state.activeChatRunId) {
+      pendingHistoryRefresh = true;
+      return;
+    }
+    pendingHistoryRefresh = false;
+    void loadHistory?.();
+  };
+
   const dispose = () => {
     clearStreamingWatchdog();
   };
 
-  return { handleChatEvent, handleAgentEvent, handleBtwEvent, dispose };
+  return { handleChatEvent, handleAgentEvent, handleBtwEvent, handleSessionMessageEvent, dispose };
 }

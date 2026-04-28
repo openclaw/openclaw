@@ -191,6 +191,14 @@ export class EmbeddedTuiBackend implements TuiBackend {
     return { ok: true, aborted: true };
   }
 
+  async subscribeSessionMessages(opts: Parameters<TuiBackend["subscribeSessionMessages"]>[0]) {
+    return { subscribed: false, key: opts.key };
+  }
+
+  async unsubscribeSessionMessages(opts: Parameters<TuiBackend["unsubscribeSessionMessages"]>[0]) {
+    return { subscribed: false, key: opts.key };
+  }
+
   async loadHistory(opts: { sessionKey: string; limit?: number }) {
     const { cfg, storePath, entry } = loadSessionEntry(opts.sessionKey);
     const sessionId = entry?.sessionId;

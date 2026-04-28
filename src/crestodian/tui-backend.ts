@@ -138,6 +138,14 @@ class CrestodianTuiBackend implements TuiBackend {
     return { ok: true, aborted: false };
   }
 
+  async subscribeSessionMessages(opts: Parameters<TuiBackend["subscribeSessionMessages"]>[0]) {
+    return { subscribed: false, key: opts.key };
+  }
+
+  async unsubscribeSessionMessages(opts: Parameters<TuiBackend["unsubscribeSessionMessages"]>[0]) {
+    return { subscribed: false, key: opts.key };
+  }
+
   async loadHistory(): Promise<{
     sessionId: string;
     messages: CrestodianHistoryMessage[];

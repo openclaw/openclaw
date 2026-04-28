@@ -76,6 +76,77 @@ type RunTuiOptions = TuiOptions & {
   title?: string;
 };
 
+export function createTuiSessionMessageSubscriptionController(params: {
+  client: Pick<TuiBackend, "subscribeSessionMessages" | "unsubscribeSessionMessages">;
+  getSessionKey: () => string;
+  onError?: (message: string) => void;
+}) {
+  let activeKey: string | null = null;
+  let generation = 0;
+
+  const report = (action: string, key: string, err: unknown) => {
+    params.onError?.(`session message ${action} failed for ${key}: ${String(err)}`);
+  };
+
+  const unsubscribeKey = async (key: string, action: string) => {
+    try {
+      await params.client.unsubscribeSessionMessages({ key });
+    } catch (err) {
+      report(action, key, err);
+    }
+  };
+
+  const syncActiveSessionSubscription = async () => {
+    const key = params.getSessionKey().trim();
+    if (!key || key === activeKey) {
+      return;
+    }
+    const previousKey = activeKey;
+    activeKey = key;
+    const syncGeneration = ++generation;
+    if (previousKey) {
+      await unsubscribeKey(previousKey, "unsubscribe");
+    }
+    if (syncGeneration !== generation) {
+      return;
+    }
+    try {
+      const result = await params.client.subscribeSessionMessages({ key });
+      if (syncGeneration === generation && result.key.trim()) {
+        activeKey = result.key;
+      }
+    } catch (err) {
+      if (syncGeneration === generation) {
+        activeKey = null;
+      }
+      report("subscribe", key, err);
+    }
+  };
+
+  const unsubscribeActiveSession = async () => {
+    const key = activeKey;
+    generation++;
+    activeKey = null;
+    if (key) {
+      await unsubscribeKey(key, "unsubscribe");
+    }
+  };
+
+  const markDisconnected = () => {
+    generation++;
+    activeKey = null;
+  };
+
+  const getActiveSubscriptionKey = () => activeKey;
+
+  return {
+    syncActiveSessionSubscription,
+    unsubscribeActiveSession,
+    markDisconnected,
+    getActiveSubscriptionKey,
+  };
+}
+
 /** Resolve the absolute path to the `codex` CLI binary, or `null` if not installed. */
 export function resolveCodexCliBin(): string | null {
   try {
@@ -890,32 +961,41 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     setActivityStatus,
     clearLocalRunIds,
   });
-  const {
-    refreshAgents,
-    refreshSessionInfo,
-    applySessionInfoFromPatch,
-    loadHistory,
-    setSession,
-    abortActive,
-  } = sessionActions;
+  const { refreshAgents, refreshSessionInfo, applySessionInfoFromPatch, loadHistory, abortActive } =
+    sessionActions;
 
-  const { handleChatEvent, handleAgentEvent, handleBtwEvent } = createEventHandlers({
-    chatLog,
-    btw,
-    tui,
-    state,
-    localMode: isLocalMode,
-    setActivityStatus,
-    refreshSessionInfo,
-    loadHistory,
-    noteLocalRunId,
-    isLocalRunId,
-    forgetLocalRunId,
-    clearLocalRunIds,
-    isLocalBtwRunId,
-    forgetLocalBtwRunId,
-    clearLocalBtwRunIds,
+  const sessionMessageSubscription = createTuiSessionMessageSubscriptionController({
+    client,
+    getSessionKey: () => currentSessionKey,
+    onError: (message) => {
+      chatLog.addSystem(message);
+      tui.requestRender();
+    },
   });
+
+  const setSession = async (rawKey: string) => {
+    await sessionActions.setSession(rawKey);
+    await sessionMessageSubscription.syncActiveSessionSubscription();
+  };
+
+  const { handleChatEvent, handleAgentEvent, handleBtwEvent, handleSessionMessageEvent } =
+    createEventHandlers({
+      chatLog,
+      btw,
+      tui,
+      state,
+      localMode: isLocalMode,
+      setActivityStatus,
+      refreshSessionInfo,
+      loadHistory,
+      noteLocalRunId,
+      isLocalRunId,
+      forgetLocalRunId,
+      clearLocalRunIds,
+      isLocalBtwRunId,
+      forgetLocalBtwRunId,
+      clearLocalBtwRunIds,
+    });
 
   let finishTui: (() => void) | null = null;
   const requestExit = (result?: Partial<TuiResult>) => {
@@ -927,6 +1007,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       exitReason: result?.exitReason ?? "exit",
       ...(result?.crestodianMessage ? { crestodianMessage: result.crestodianMessage } : {}),
     };
+    void sessionMessageSubscription.unsubscribeActiveSession();
     client.stop();
     void drainAndStopTuiSafely(tui).then(() => {
       finishTui?.();
@@ -1061,6 +1142,9 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     if (evt.event === "agent") {
       handleAgentEvent(evt.payload);
     }
+    if (evt.event === "session.message") {
+      handleSessionMessageEvent(evt.payload);
+    }
   };
 
   client.onConnected = () => {
@@ -1073,6 +1157,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       await refreshAgents();
       updateHeader();
       await loadHistory();
+      await sessionMessageSubscription.syncActiveSessionSubscription();
       setConnectionStatus(
         isLocalMode ? "local ready" : reconnected ? "gateway reconnected" : "gateway connected",
         4000,
@@ -1091,6 +1176,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     isConnected = false;
     wasDisconnected = true;
     historyLoaded = false;
+    sessionMessageSubscription.markDisconnected();
     const disconnectState = isLocalMode
       ? {
           connectionStatus: `local runtime stopped${reason ? `: ${reason}` : ""}`,

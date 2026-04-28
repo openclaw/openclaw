@@ -30,6 +30,7 @@ import type {
   TuiBackend,
   TuiEvent,
   TuiModelChoice,
+  TuiSessionMessageSubscriptionResult,
   TuiSessionList,
 } from "./tui-backend.js";
 
@@ -187,6 +188,24 @@ export class GatewayChatClient implements TuiBackend {
       sessionKey: opts.sessionKey,
       runId: opts.runId,
     });
+  }
+
+  async subscribeSessionMessages(opts: {
+    key: string;
+  }): Promise<TuiSessionMessageSubscriptionResult> {
+    return await this.client.request<TuiSessionMessageSubscriptionResult>(
+      "sessions.messages.subscribe",
+      opts,
+    );
+  }
+
+  async unsubscribeSessionMessages(opts: {
+    key: string;
+  }): Promise<TuiSessionMessageSubscriptionResult> {
+    return await this.client.request<TuiSessionMessageSubscriptionResult>(
+      "sessions.messages.unsubscribe",
+      opts,
+    );
   }
 
   async loadHistory(opts: { sessionKey: string; limit?: number }) {

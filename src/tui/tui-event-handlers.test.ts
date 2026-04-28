@@ -78,6 +78,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     const btw = createMockBtwPresenter();
     const tui = { requestRender: vi.fn() } as unknown as MockTui & HandlerTui;
     const setActivityStatus = vi.fn();
+    const refreshSessionInfo = vi.fn();
     const loadHistory = vi.fn();
     const localRunIds = new Set<string>();
     const localBtwRunIds = new Set<string>();
@@ -100,6 +101,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       tui,
       state,
       setActivityStatus,
+      refreshSessionInfo,
       loadHistory,
       noteLocalRunId,
       noteLocalBtwRunId,
@@ -128,6 +130,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       state,
       localMode: params?.localMode,
       setActivityStatus: context.setActivityStatus,
+      refreshSessionInfo: context.refreshSessionInfo,
       loadHistory: context.loadHistory,
       noteLocalRunId: context.noteLocalRunId,
       isLocalRunId: context.isLocalRunId,
@@ -465,6 +468,80 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       sessionKey: state.currentSessionKey,
       state: "final",
       message: { content: [{ type: "text", text: "done" }] },
+    });
+
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it("reloads history when live transcript updates arrive for the active idle session", () => {
+    const { state, refreshSessionInfo, loadHistory, handleSessionMessageEvent } =
+      createHandlersHarness({
+        state: {
+          activeChatRunId: null,
+          currentSessionKey: "agent:main:main",
+        },
+      });
+
+    handleSessionMessageEvent({
+      sessionKey: state.currentSessionKey,
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "from telegram" }],
+      },
+    });
+
+    expect(refreshSessionInfo).toHaveBeenCalledTimes(1);
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores live transcript updates for other sessions", () => {
+    const { refreshSessionInfo, loadHistory, handleSessionMessageEvent } = createHandlersHarness({
+      state: {
+        activeChatRunId: null,
+        currentSessionKey: "agent:main:main",
+      },
+    });
+
+    handleSessionMessageEvent({
+      sessionKey: "agent:main:other",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "other session" }],
+      },
+    });
+
+    expect(refreshSessionInfo).not.toHaveBeenCalled();
+    expect(loadHistory).not.toHaveBeenCalled();
+  });
+
+  it("defers live transcript reloads while a local stream is active", () => {
+    const { state, loadHistory, noteLocalRunId, handleChatEvent, handleSessionMessageEvent } =
+      createHandlersHarness({
+        state: {
+          activeChatRunId: "run-active",
+          currentSessionKey: "agent:main:main",
+        },
+      });
+    noteLocalRunId("run-active");
+
+    handleSessionMessageEvent({
+      sessionKey: state.currentSessionKey,
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "external reply" }],
+      },
+    });
+
+    expect(loadHistory).not.toHaveBeenCalled();
+
+    handleChatEvent({
+      runId: "run-active",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "local done" }],
+      },
     });
 
     expect(loadHistory).toHaveBeenCalledTimes(1);
