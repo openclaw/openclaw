@@ -788,15 +788,24 @@ describe("tui-event-handlers: streaming watchdog", () => {
     const btw = createMockBtwPresenter();
     const tui = { requestRender: vi.fn() } as unknown as MockTui & HandlerTui;
     const setActivityStatus = vi.fn();
+    const loadHistory = vi.fn();
+    const localRunIds = new Set<string>();
+    const noteLocalRunId = (runId: string) => {
+      localRunIds.add(runId);
+    };
     const handlers = createEventHandlers({
       chatLog,
       btw,
       tui,
       state,
       setActivityStatus,
+      loadHistory,
+      noteLocalRunId,
+      isLocalRunId: localRunIds.has.bind(localRunIds),
+      forgetLocalRunId: localRunIds.delete.bind(localRunIds),
       streamingWatchdogMs: options?.streamingWatchdogMs,
     });
-    return { state, chatLog, tui, setActivityStatus, handlers };
+    return { state, chatLog, tui, setActivityStatus, loadHistory, noteLocalRunId, handlers };
   };
 
   it("resets activityStatus to idle when no stream delta arrives for the watchdog window", () => {
@@ -819,6 +828,37 @@ describe("tui-event-handlers: streaming watchdog", () => {
     expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
     expect(state.activeChatRunId).toBeNull();
     expect(chatLog.addSystem).toHaveBeenCalledWith(expect.stringContaining("streaming watchdog"));
+
+    handlers.dispose?.();
+  });
+
+  it("flushes a deferred history reload when the watchdog clears the active run", () => {
+    const { state, loadHistory, noteLocalRunId, setActivityStatus, handlers } = createHarness({
+      streamingWatchdogMs: 5_000,
+    });
+
+    handlers.handleChatEvent({
+      runId: "run-stuck",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "hello" },
+    } satisfies ChatEvent);
+
+    noteLocalRunId("run-local-empty");
+    handlers.handleChatEvent({
+      runId: "run-local-empty",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+    } satisfies ChatEvent);
+
+    expect(loadHistory).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(5_001);
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(state.activityStatus).toBe("idle");
+    expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
+    expect(loadHistory).toHaveBeenCalledTimes(1);
 
     handlers.dispose?.();
   });

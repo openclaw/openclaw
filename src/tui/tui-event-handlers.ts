@@ -82,6 +82,14 @@ export function createEventHandlers(context: EventHandlerContext) {
   let streamingWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
   let streamingWatchdogRunId: string | null = null;
 
+  const flushPendingHistoryRefreshIfIdle = () => {
+    if (!pendingHistoryRefresh || state.activeChatRunId) {
+      return;
+    }
+    pendingHistoryRefresh = false;
+    void loadHistory?.();
+  };
+
   const clearStreamingWatchdog = () => {
     if (streamingWatchdogTimer) {
       clearTimeout(streamingWatchdogTimer);
@@ -105,7 +113,9 @@ export function createEventHandlers(context: EventHandlerContext) {
       }
       streamingWatchdogRunId = null;
       state.activeChatRunId = null;
+      state.activityStatus = "idle";
       setActivityStatus("idle");
+      flushPendingHistoryRefreshIfIdle();
       chatLog.addSystem(
         `streaming watchdog: no stream updates for ${Math.round(
           streamingWatchdogMs / 1000,
@@ -156,14 +166,6 @@ export function createEventHandlers(context: EventHandlerContext) {
     clearLocalBtwRunIds?.();
     btw.clear();
     clearStreamingWatchdog();
-  };
-
-  const flushPendingHistoryRefreshIfIdle = () => {
-    if (!pendingHistoryRefresh || state.activeChatRunId) {
-      return;
-    }
-    pendingHistoryRefresh = false;
-    void loadHistory?.();
   };
 
   const resolveAuthErrorHint = (errorMessage: string): string | undefined => {
