@@ -55,20 +55,6 @@ const MEMORY_HOST_SDK_EXPORTS = [
   "./secret",
   "./status",
 ] as const;
-const MEMORY_HOST_SDK_ALLOWED_CORE_BRIDGE_FILES = [
-  "packages/memory-host-sdk/src/host/openclaw-runtime.ts",
-] as const;
-const MEMORY_HOST_SDK_RUNTIME_ADAPTER_FILES = [
-  "packages/memory-host-sdk/src/host/openclaw-runtime-agent.ts",
-  "packages/memory-host-sdk/src/host/openclaw-runtime-auth.ts",
-  "packages/memory-host-sdk/src/host/openclaw-runtime-cli.ts",
-  "packages/memory-host-sdk/src/host/openclaw-runtime-config.ts",
-  "packages/memory-host-sdk/src/host/openclaw-runtime-io.ts",
-  "packages/memory-host-sdk/src/host/openclaw-runtime-memory.ts",
-  "packages/memory-host-sdk/src/host/openclaw-runtime-network.ts",
-  "packages/memory-host-sdk/src/host/openclaw-runtime-session.ts",
-] as const;
-
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe JSON file shape.
 function readJsonFile<T>(relativePath: string): T {
   return JSON.parse(readFileSync(resolve(REPO_ROOT, relativePath), "utf8")) as T;
@@ -253,12 +239,11 @@ describe("opt-in extension package boundaries", () => {
       expect(source, target).not.toContain("src/memory-host-sdk/");
     }
 
-    expect(collectCoreReferenceFiles("packages/memory-host-sdk/src")).toEqual([
-      ...MEMORY_HOST_SDK_ALLOWED_CORE_BRIDGE_FILES,
-    ]);
-    expect(collectOpenClawRuntimeDirectImportFiles("packages/memory-host-sdk/src")).toEqual([
-      ...MEMORY_HOST_SDK_RUNTIME_ADAPTER_FILES,
-    ]);
+    expect(collectCoreReferenceFiles("packages/memory-host-sdk/src")).toEqual([]);
+    expect(collectOpenClawRuntimeDirectImportFiles("packages/memory-host-sdk/src")).toEqual([]);
+    expect(existsSync(resolve(REPO_ROOT, "packages/memory-host-sdk/src/host/services.ts"))).toBe(
+      true,
+    );
   });
 
   it("keeps plugin-package-contract independent from core internals", () => {

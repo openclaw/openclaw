@@ -1,20 +1,5 @@
-// Real workspace contract for memory embedding providers and batch helpers.
+// Package-local memory embedding helpers.
 
-export {
-  getMemoryEmbeddingProvider,
-  listRegisteredMemoryEmbeddingProviders,
-  listMemoryEmbeddingProviders,
-  listRegisteredMemoryEmbeddingProviderAdapters,
-} from "./host/openclaw-runtime-memory.js";
-export type {
-  MemoryEmbeddingBatchChunk,
-  MemoryEmbeddingBatchOptions,
-  MemoryEmbeddingProvider,
-  MemoryEmbeddingProviderAdapter,
-  MemoryEmbeddingProviderCreateOptions,
-  MemoryEmbeddingProviderCreateResult,
-  MemoryEmbeddingProviderRuntime,
-} from "./host/openclaw-runtime-memory.js";
 export { createLocalEmbeddingProvider, DEFAULT_LOCAL_MODEL } from "./host/embeddings.js";
 export { extractBatchErrorMessage, formatUnavailableBatchError } from "./host/batch-error-utils.js";
 export { postJsonWithRetry } from "./host/batch-http.js";

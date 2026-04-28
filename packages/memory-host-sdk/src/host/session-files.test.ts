@@ -213,4 +213,34 @@ describe("buildSessionEntry", () => {
     expect(entry!.content).toBe("Assistant: User-facing summary.\nUser: Actual user follow-up.");
     expect(entry!.lineMap).toEqual([2, 3]);
   });
+
+  it("strips internal runtime context blocks", async () => {
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: [
+            "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+            "OpenClaw runtime context (internal):",
+            "This context is runtime-generated, not user-authored. Keep internal details private.",
+            "",
+            "[Internal task completion event]",
+            "source: subagent",
+            "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+          ].join("\n"),
+        },
+      }),
+      JSON.stringify({ type: "message", message: { role: "assistant", content: "NO_REPLY" } }),
+      JSON.stringify({ type: "message", message: { role: "user", content: "Actual user text" } }),
+    ];
+    const filePath = path.join(tmpDir, "internal-context-session.jsonl");
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
+
+    const entry = await buildSessionEntry(filePath);
+
+    expect(entry).not.toBeNull();
+    expect(entry!.content).toBe("User: Actual user text");
+    expect(entry!.lineMap).toEqual([3]);
+  });
 });

@@ -1,5 +1,7 @@
 // Real workspace contract for QMD/session/query helpers used by the memory engine.
 
+import { getMemoryHostServices } from "./host/services.js";
+
 export { extractKeywords, isQueryStopWordToken } from "./host/query-expansion.js";
 export {
   buildSessionEntry,
@@ -12,7 +14,8 @@ export {
   type SessionFileEntry,
   type SessionTranscriptClassification,
 } from "./host/session-files.js";
-export { parseUsageCountedSessionIdFromFileName } from "./host/openclaw-runtime-session.js";
+export const parseUsageCountedSessionIdFromFileName = (fileName: string): string | null =>
+  getMemoryHostServices().session.parseUsageCountedSessionIdFromFileName(fileName);
 export { parseQmdQueryJson, type QmdQueryResult } from "./host/qmd-query-parser.js";
 export {
   deriveQmdScopeChannel,

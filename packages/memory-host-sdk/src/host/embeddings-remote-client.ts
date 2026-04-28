@@ -1,7 +1,7 @@
 import type { EmbeddingProviderOptions } from "./embeddings.types.js";
-import { requireApiKey, resolveApiKeyForProvider } from "./openclaw-runtime-auth.js";
 import { buildRemoteBaseUrlPolicy } from "./remote-http.js";
 import { resolveMemorySecretInputString } from "./secret-input.js";
+import { getMemoryHostServices } from "./services.js";
 import type { SsrFPolicy } from "./ssrf-policy.js";
 import { normalizeOptionalString } from "./string-utils.js";
 
@@ -19,10 +19,11 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
   });
   const remoteBaseUrl = normalizeOptionalString(remote?.baseUrl);
   const providerConfig = params.options.config.models?.providers?.[params.provider];
+  const auth = getMemoryHostServices().auth;
   const apiKey = remoteApiKey
     ? remoteApiKey
-    : requireApiKey(
-        await resolveApiKeyForProvider({
+    : auth.requireApiKey(
+        await auth.resolveApiKeyForProvider({
           provider: params.provider,
           cfg: params.options.config,
           agentDir: params.options.agentDir,

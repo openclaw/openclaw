@@ -12,16 +12,7 @@ import {
   type MemoryMultimodalModality,
   type MemoryMultimodalSettings,
 } from "./multimodal.js";
-import {
-  CHARS_PER_TOKEN_ESTIMATE,
-  detectMime,
-  estimateStringChars,
-  runTasksWithConcurrency,
-} from "./openclaw-runtime-io.js";
-import {
-  resolveCanonicalRootMemoryFile,
-  shouldSkipRootMemoryAuxiliaryPath,
-} from "./openclaw-runtime-memory.js";
+import { CHARS_PER_TOKEN_ESTIMATE, getMemoryHostServices } from "./services.js";
 
 export { hashText } from "./hash.js";
 import { hashText } from "./hash.js";
@@ -144,7 +135,7 @@ export async function listMemoryFiles(
   const memoryDir = path.join(workspaceDir, "memory");
 
   const shouldSkipWorkspaceMemoryPath = (absPath: string): boolean =>
-    shouldSkipRootMemoryAuxiliaryPath({ workspaceDir, absPath });
+    getMemoryHostServices().memory.shouldSkipRootMemoryAuxiliaryPath({ workspaceDir, absPath });
 
   const addMarkdownFile = async (absPath: string) => {
     try {
@@ -159,7 +150,8 @@ export async function listMemoryFiles(
     } catch {}
   };
 
-  const memoryFile = await resolveCanonicalRootMemoryFile(workspaceDir);
+  const memoryFile =
+    await getMemoryHostServices().memory.resolveCanonicalRootMemoryFile(workspaceDir);
   if (memoryFile) {
     await addMarkdownFile(memoryFile);
   }
@@ -240,7 +232,10 @@ export async function buildFileEntry(
       }
       throw err;
     }
-    const mimeType = await detectMime({ buffer: buffer.subarray(0, 512), filePath: absPath });
+    const mimeType = await getMemoryHostServices().io.detectMime({
+      buffer: buffer.subarray(0, 512),
+      filePath: absPath,
+    });
     if (!mimeType || !mimeType.startsWith(`${modality}/`)) {
       return null;
     }
@@ -405,7 +400,7 @@ export function chunkMarkdown(
       if (!entry) {
         continue;
       }
-      acc += estimateStringChars(entry.line) + 1;
+      acc += getMemoryHostServices().io.estimateStringChars(entry.line) + 1;
       kept.unshift(entry);
       if (acc >= overlapChars) {
         break;
@@ -428,7 +423,7 @@ export function chunkMarkdown(
       // chunking.tokens so the chunk stays within the token budget.
       for (let start = 0; start < line.length; start += maxChars) {
         const coarse = line.slice(start, start + maxChars);
-        if (estimateStringChars(coarse) > maxChars) {
+        if (getMemoryHostServices().io.estimateStringChars(coarse) > maxChars) {
           const fineStep = Math.max(1, chunking.tokens);
           for (let j = 0; j < coarse.length; ) {
             let end = Math.min(j + fineStep, coarse.length);
@@ -448,7 +443,7 @@ export function chunkMarkdown(
       }
     }
     for (const segment of segments) {
-      const lineSize = estimateStringChars(segment) + 1;
+      const lineSize = getMemoryHostServices().io.estimateStringChars(segment) + 1;
       if (currentChars + lineSize > maxChars && current.length > 0) {
         flush();
         carryOverlap();
@@ -516,11 +511,12 @@ export async function runWithConcurrency<T>(
   tasks: Array<() => Promise<T>>,
   limit: number,
 ): Promise<T[]> {
-  const { results, firstError, hasError } = await runTasksWithConcurrency({
-    tasks,
-    limit,
-    errorMode: "stop",
-  });
+  const { results, firstError, hasError } =
+    await getMemoryHostServices().io.runTasksWithConcurrency({
+      tasks,
+      limit,
+      errorMode: "stop",
+    });
   if (hasError) {
     throw firstError;
   }

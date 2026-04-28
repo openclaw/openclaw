@@ -2,22 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { hashText } from "./hash.js";
-import { createSubsystemLogger, redactSensitiveText } from "./openclaw-runtime-io.js";
-import {
-  HEARTBEAT_PROMPT,
-  HEARTBEAT_TOKEN,
-  hasInterSessionUserProvenance,
-  isCompactionCheckpointTranscriptFileName,
-  isCronRunSessionKey,
-  isExecCompletionEvent,
-  isHeartbeatUserMessage,
-  isSessionArchiveArtifactName,
-  isSilentReplyPayloadText,
-  isUsageCountedSessionTranscriptFileName,
-  resolveSessionTranscriptsDirForAgent,
-  stripInboundMetadata,
-  stripInternalRuntimeContext,
-} from "./openclaw-runtime-session.js";
+import { HEARTBEAT_PROMPT, HEARTBEAT_TOKEN, getMemoryHostServices } from "./services.js";
 
 const DREAMING_NARRATIVE_RUN_PREFIX = "dreaming-narrative-";
 // Keep the historical one-line-per-message export shape for normal turns, but
@@ -64,7 +49,8 @@ type SessionTranscriptStoreEntry = {
 function shouldSkipTranscriptFileForDreaming(absPath: string): boolean {
   const fileName = path.basename(absPath);
   return (
-    isSessionArchiveArtifactName(fileName) || isCompactionCheckpointTranscriptFileName(fileName)
+    getMemoryHostServices().session.isSessionArchiveArtifactName(fileName) ||
+    getMemoryHostServices().session.isCompactionCheckpointTranscriptFileName(fileName)
   );
 }
 
@@ -184,7 +170,7 @@ export function loadSessionTranscriptClassificationForSessionsDir(
     if (isDreamingNarrativeSessionStoreKey(sessionKey)) {
       dreamingTranscriptPaths.add(transcriptPath);
     }
-    if (isCronRunSessionKey(sessionKey)) {
+    if (getMemoryHostServices().session.isCronRunSessionKey(sessionKey)) {
       cronRunTranscriptPaths.add(transcriptPath);
     }
   }
@@ -218,7 +204,7 @@ export function loadSessionTranscriptClassificationForAgent(
   agentId: string,
 ): SessionTranscriptClassification {
   return loadSessionTranscriptClassificationForSessionsDir(
-    resolveSessionTranscriptsDirForAgent(agentId),
+    getMemoryHostServices().session.resolveSessionTranscriptsDirForAgent(agentId),
   );
 }
 
@@ -237,13 +223,15 @@ function classifySessionTranscriptFromSessionStore(absPath: string): {
 }
 
 export async function listSessionFilesForAgent(agentId: string): Promise<string[]> {
-  const dir = resolveSessionTranscriptsDirForAgent(agentId);
+  const dir = getMemoryHostServices().session.resolveSessionTranscriptsDirForAgent(agentId);
   try {
     const entries = await fs.readdir(dir, { withFileTypes: true });
     return entries
       .filter((entry) => entry.isFile())
       .map((entry) => entry.name)
-      .filter((name) => isUsageCountedSessionTranscriptFileName(name))
+      .filter((name) =>
+        getMemoryHostServices().session.isUsageCountedSessionTranscriptFileName(name),
+      )
       .map((name) => path.join(dir, name));
   } catch {
     return [];
@@ -255,7 +243,9 @@ export function sessionPathForFile(absPath: string): string {
 }
 
 async function logSessionFileReadFailure(absPath: string, err: unknown): Promise<void> {
-  createSubsystemLogger("memory").debug(`Failed reading session file ${absPath}: ${String(err)}`);
+  getMemoryHostServices()
+    .io.createSubsystemLogger("memory")
+    .debug(`Failed reading session file ${absPath}: ${String(err)}`);
 }
 
 function normalizeSessionText(value: string): string {
@@ -361,7 +351,7 @@ function stripInboundMetadataForUserRole(text: string, role: "user" | "assistant
   if (role !== "user") {
     return text;
   }
-  return stripInboundMetadata(text);
+  return getMemoryHostServices().session.stripInboundMetadata(text);
 }
 
 const GENERATED_SYSTEM_MESSAGE_RE = /^System(?: \(untrusted\))?: \[[^\]]+\]\s*/;
@@ -381,12 +371,19 @@ function isGeneratedCronPromptMessage(text: string, role: "user" | "assistant"):
 }
 
 function isGeneratedHeartbeatPromptMessage(text: string, role: "user" | "assistant"): boolean {
-  return role === "user" && isHeartbeatUserMessage({ role, content: text }, HEARTBEAT_PROMPT);
+  return (
+    role === "user" &&
+    getMemoryHostServices().session.isHeartbeatUserMessage(
+      { role, content: text },
+      HEARTBEAT_PROMPT,
+    )
+  );
 }
 
 function sanitizeSessionText(text: string, role: "user" | "assistant"): string | null {
   const strippedInbound = stripInboundMetadataForUserRole(text, role);
-  const strippedInternal = stripInternalRuntimeContext(strippedInbound);
+  const strippedInternal =
+    getMemoryHostServices().session.stripInternalRuntimeContext(strippedInbound);
   const normalized = normalizeSessionText(strippedInternal);
   if (!normalized) {
     return null;
@@ -400,7 +397,7 @@ function sanitizeSessionText(text: string, role: "user" | "assistant"): string |
   if (isGeneratedHeartbeatPromptMessage(normalized, role)) {
     return null;
   }
-  if (isSilentReplyPayloadText(normalized)) {
+  if (getMemoryHostServices().session.isSilentReplyPayloadText(normalized)) {
     return null;
   }
   // Assistant-side machinery acks: HEARTBEAT_OK is the canonical "all clear,
@@ -411,7 +408,7 @@ function sanitizeSessionText(text: string, role: "user" | "assistant"): string |
     return null;
   }
   const withoutSystemEnvelope = normalized.replace(GENERATED_SYSTEM_MESSAGE_RE, "").trim();
-  if (isExecCompletionEvent(withoutSystemEnvelope)) {
+  if (getMemoryHostServices().session.isExecCompletionEvent(withoutSystemEnvelope)) {
     return null;
   }
   return normalized;
@@ -513,7 +510,10 @@ export async function buildSessionEntry(
       if (message.role !== "user" && message.role !== "assistant") {
         continue;
       }
-      if (message.role === "user" && hasInterSessionUserProvenance(message)) {
+      if (
+        message.role === "user" &&
+        getMemoryHostServices().session.hasInterSessionUserProvenance(message)
+      ) {
         continue;
       }
       const rawText = collectRawSessionText(message.content);
@@ -534,7 +534,7 @@ export async function buildSessionEntry(
       if (generatedByDreamingNarrative || generatedByCronRun) {
         continue;
       }
-      const safe = redactSensitiveText(text, { mode: "tools" });
+      const safe = getMemoryHostServices().io.redactSensitiveText(text, { mode: "tools" });
       const label = message.role === "user" ? "User" : "Assistant";
       const renderedLines = renderSessionExportLines(label, safe);
       const timestampMs = parseSessionTimestampMs(

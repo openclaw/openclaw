@@ -54,6 +54,14 @@ steps:
               expr: config.memoryQuery
             expectedNeedle:
               expr: config.expectedNeedle
+      - call: waitForGatewayHealthy
+        args:
+          - ref: env
+          - 60000
+      - call: waitForQaChannelReady
+        args:
+          - ref: env
+          - 60000
       - call: handleQaAction
         saveAs: threadPayload
         args:

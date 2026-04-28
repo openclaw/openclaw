@@ -30,14 +30,16 @@ describe("plugin-boundary-report", () => {
         unusedReservedCount?: unknown;
       };
       memoryHostSdk?: {
+        packageCoreReferenceFileCount?: unknown;
+        sourceBridgeFileCount?: unknown;
         implementation?: unknown;
       };
     };
 
     expect(summary.pluginSdk?.crossOwnerReservedImportCount).toBe(0);
     expect(summary.pluginSdk?.unusedReservedCount).toBe(0);
-    expect(["private-core-bridge", "private-package-core-integrated"]).toContain(
-      summary.memoryHostSdk?.implementation,
-    );
+    expect(summary.memoryHostSdk?.sourceBridgeFileCount).toBe(0);
+    expect(summary.memoryHostSdk?.packageCoreReferenceFileCount).toBe(0);
+    expect(summary.memoryHostSdk?.implementation).toBe("package-owned");
   });
 });
