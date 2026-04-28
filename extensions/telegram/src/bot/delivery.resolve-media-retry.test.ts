@@ -1,6 +1,6 @@
 import type { Message } from "@grammyjs/types";
+import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { retryAsync } from "../../../../src/infra/retry.js";
 import { resolveMedia } from "./delivery.resolve-media.js";
 import type { TelegramContext } from "./types.js";
 

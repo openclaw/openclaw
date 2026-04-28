@@ -7,6 +7,7 @@ import type {
 import type { SessionScope } from "openclaw/plugin-sdk/config-types";
 import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/config-types";
 import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
+import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -218,6 +219,7 @@ export function createSlackMonitorContext(params: {
       params.sessionScope,
       { From: from, ChatType: chatType, Provider: "slack" },
       params.mainKey,
+      resolveDefaultAgentId(params.cfg),
     );
   };
 

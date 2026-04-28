@@ -11,6 +11,10 @@ vi.mock("../config/io.js", () => ({
   getRuntimeConfig: () => hoisted.loadConfigMock(),
 }));
 
+vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: () => hoisted.loadConfigMock(),
+}));
+
 vi.mock("./session-utils.js", async () => {
   const actual = await vi.importActual<typeof import("./session-utils.js")>("./session-utils.js");
   return {

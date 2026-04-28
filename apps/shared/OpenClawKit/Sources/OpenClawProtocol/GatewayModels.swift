@@ -1881,6 +1881,58 @@ public struct SessionsPatchParams: Codable, Sendable {
     }
 }
 
+public struct SessionsPluginPatchParams: Codable, Sendable {
+    public let key: String
+    public let pluginid: String
+    public let namespace: String
+    public let value: AnyCodable?
+    public let unset: Bool?
+
+    public init(
+        key: String,
+        pluginid: String,
+        namespace: String,
+        value: AnyCodable?,
+        unset: Bool?)
+    {
+        self.key = key
+        self.pluginid = pluginid
+        self.namespace = namespace
+        self.value = value
+        self.unset = unset
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case pluginid = "pluginId"
+        case namespace
+        case value
+        case unset
+    }
+}
+
+public struct SessionsPluginPatchResult: Codable, Sendable {
+    public let ok: Bool
+    public let key: String
+    public let value: AnyCodable?
+
+    public init(
+        ok: Bool,
+        key: String,
+        value: AnyCodable?)
+    {
+        self.ok = ok
+        self.key = key
+        self.value = value
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case key
+        case value
+    }
+}
+
 public struct SessionsResetParams: Codable, Sendable {
     public let key: String
     public let reason: AnyCodable?
@@ -3292,6 +3344,8 @@ public struct ToolCatalogEntry: Codable, Sendable {
     public let source: AnyCodable
     public let pluginid: String?
     public let optional: Bool?
+    public let risk: AnyCodable?
+    public let tags: [String]?
     public let defaultprofiles: [AnyCodable]
 
     public init(
@@ -3301,6 +3355,8 @@ public struct ToolCatalogEntry: Codable, Sendable {
         source: AnyCodable,
         pluginid: String?,
         optional: Bool?,
+        risk: AnyCodable?,
+        tags: [String]?,
         defaultprofiles: [AnyCodable])
     {
         self.id = id
@@ -3309,6 +3365,8 @@ public struct ToolCatalogEntry: Codable, Sendable {
         self.source = source
         self.pluginid = pluginid
         self.optional = optional
+        self.risk = risk
+        self.tags = tags
         self.defaultprofiles = defaultprofiles
     }
 
@@ -3319,6 +3377,8 @@ public struct ToolCatalogEntry: Codable, Sendable {
         case source
         case pluginid = "pluginId"
         case optional
+        case risk
+        case tags
         case defaultprofiles = "defaultProfiles"
     }
 }
@@ -3401,6 +3461,8 @@ public struct ToolsEffectiveEntry: Codable, Sendable {
     public let source: AnyCodable
     public let pluginid: String?
     public let channelid: String?
+    public let risk: AnyCodable?
+    public let tags: [String]?
 
     public init(
         id: String,
@@ -3409,7 +3471,9 @@ public struct ToolsEffectiveEntry: Codable, Sendable {
         rawdescription: String,
         source: AnyCodable,
         pluginid: String?,
-        channelid: String?)
+        channelid: String?,
+        risk: AnyCodable?,
+        tags: [String]?)
     {
         self.id = id
         self.label = label
@@ -3418,6 +3482,8 @@ public struct ToolsEffectiveEntry: Codable, Sendable {
         self.source = source
         self.pluginid = pluginid
         self.channelid = channelid
+        self.risk = risk
+        self.tags = tags
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -3428,6 +3494,8 @@ public struct ToolsEffectiveEntry: Codable, Sendable {
         case source
         case pluginid = "pluginId"
         case channelid = "channelId"
+        case risk
+        case tags
     }
 }
 
@@ -4212,6 +4280,72 @@ public struct PluginApprovalResolveParams: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case id
         case decision
+    }
+}
+
+public struct PluginControlUiDescriptor: Codable, Sendable {
+    public let id: String
+    public let pluginid: String
+    public let pluginname: String?
+    public let surface: AnyCodable
+    public let label: String
+    public let description: String?
+    public let placement: String?
+    public let schema: AnyCodable?
+    public let requiredscopes: [String]?
+
+    public init(
+        id: String,
+        pluginid: String,
+        pluginname: String?,
+        surface: AnyCodable,
+        label: String,
+        description: String?,
+        placement: String?,
+        schema: AnyCodable?,
+        requiredscopes: [String]?)
+    {
+        self.id = id
+        self.pluginid = pluginid
+        self.pluginname = pluginname
+        self.surface = surface
+        self.label = label
+        self.description = description
+        self.placement = placement
+        self.schema = schema
+        self.requiredscopes = requiredscopes
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case pluginid = "pluginId"
+        case pluginname = "pluginName"
+        case surface
+        case label
+        case description
+        case placement
+        case schema
+        case requiredscopes = "requiredScopes"
+    }
+}
+
+public struct PluginsUiDescriptorsParams: Codable, Sendable {}
+
+public struct PluginsUiDescriptorsResult: Codable, Sendable {
+    public let ok: Bool
+    public let descriptors: [PluginControlUiDescriptor]
+
+    public init(
+        ok: Bool,
+        descriptors: [PluginControlUiDescriptor])
+    {
+        self.ok = ok
+        self.descriptors = descriptors
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case descriptors
     }
 }
 

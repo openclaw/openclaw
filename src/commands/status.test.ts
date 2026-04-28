@@ -1012,6 +1012,12 @@ describe("statusCommand", () => {
     );
   });
 
+  it("keeps default text status off the security audit path", async () => {
+    await statusCommand({}, runtime as never);
+
+    expect(mocks.runSecurityAudit).not.toHaveBeenCalled();
+  });
+
   it("surfaces unknown usage when totalTokens is missing", async () => {
     await withUnknownUsageStore(async () => {
       runtimeLogMock.mockClear();
@@ -1052,8 +1058,7 @@ describe("statusCommand", () => {
       "OpenClaw status",
       "Overview",
       "Security audit",
-      "Summary:",
-      "CRITICAL",
+      "Skipped in fast status",
       "Dashboard",
       "macos 14.0 (arm64)",
       "Memory",

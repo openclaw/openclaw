@@ -1,5 +1,8 @@
 {
   "id": "tencent",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providerDiscoveryEntry": "./provider-discovery.ts",
   "providers": ["tencent-tokenhub"],

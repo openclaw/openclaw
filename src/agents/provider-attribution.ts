@@ -1,5 +1,6 @@
-import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
+import { listOpenClawPluginManifestMetadata } from "../plugins/manifest-metadata-scan.js";
 import {
+  normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
@@ -224,57 +225,123 @@ function isManifestProviderEndpointClass(value: string): value is ProviderEndpoi
   return MANIFEST_PROVIDER_ENDPOINT_CLASSES.has(value as ProviderEndpointClass);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => normalizeOptionalString(entry))
+    .filter((entry): entry is string => entry !== undefined);
+}
+
+function readManifestProviderEndpoints(
+  manifest: Record<string, unknown>,
+): ManifestProviderEndpointCacheEntry[] {
+  if (!Array.isArray(manifest.providerEndpoints)) {
+    return [];
+  }
+  const entries: ManifestProviderEndpointCacheEntry[] = [];
+  for (const rawEndpoint of manifest.providerEndpoints) {
+    if (!isRecord(rawEndpoint)) {
+      continue;
+    }
+    const endpointClassRaw = normalizeOptionalString(rawEndpoint.endpointClass);
+    if (!endpointClassRaw || !isManifestProviderEndpointClass(endpointClassRaw)) {
+      continue;
+    }
+    entries.push({
+      endpointClass: endpointClassRaw,
+      hosts: normalizeStringList(rawEndpoint.hosts).map((host) => host.toLowerCase()),
+      hostSuffixes: normalizeStringList(rawEndpoint.hostSuffixes).map((host) => host.toLowerCase()),
+      normalizedBaseUrls: normalizeStringList(rawEndpoint.baseUrls)
+        .map((baseUrl) => normalizeComparableBaseUrl(baseUrl))
+        .filter((baseUrl): baseUrl is string => baseUrl !== undefined),
+      ...(normalizeOptionalString(rawEndpoint.googleVertexRegion)
+        ? { googleVertexRegion: normalizeOptionalString(rawEndpoint.googleVertexRegion) }
+        : {}),
+      ...(normalizeOptionalString(rawEndpoint.googleVertexRegionHostSuffix)
+        ? {
+            googleVertexRegionHostSuffix: normalizeOptionalString(
+              rawEndpoint.googleVertexRegionHostSuffix,
+            ),
+          }
+        : {}),
+    });
+  }
+  return entries;
+}
+
+function readManifestProviderRequests(
+  manifest: Record<string, unknown>,
+): Array<[string, ManifestProviderRequestCacheEntry]> {
+  const providerRequest = manifest.providerRequest;
+  if (!isRecord(providerRequest) || !isRecord(providerRequest.providers)) {
+    return [];
+  }
+  const entries: Array<[string, ManifestProviderRequestCacheEntry]> = [];
+  for (const [providerRaw, requestRaw] of Object.entries(providerRequest.providers)) {
+    if (!isRecord(requestRaw)) {
+      continue;
+    }
+    const provider = normalizeLowercaseStringOrEmpty(providerRaw);
+    if (!provider) {
+      continue;
+    }
+    const compatibilityFamily =
+      normalizeOptionalString(requestRaw.compatibilityFamily) === "moonshot"
+        ? "moonshot"
+        : undefined;
+    const supportsStreamingUsage = isRecord(requestRaw.openAICompletions)
+      ? requestRaw.openAICompletions.supportsStreamingUsage
+      : undefined;
+    entries.push([
+      provider,
+      {
+        ...(normalizeOptionalString(requestRaw.family)
+          ? { family: normalizeOptionalString(requestRaw.family) }
+          : {}),
+        ...(compatibilityFamily ? { compatibilityFamily } : {}),
+        ...(typeof supportsStreamingUsage === "boolean"
+          ? { supportsOpenAICompletionsStreamingUsageCompat: supportsStreamingUsage }
+          : {}),
+      },
+    ]);
+  }
+  return entries;
+}
+
+function collectManifestProviderEndpoints(): ManifestProviderEndpointCacheEntry[] {
+  const entries: ManifestProviderEndpointCacheEntry[] = [];
+  for (const { manifest } of listOpenClawPluginManifestMetadata()) {
+    entries.push(...readManifestProviderEndpoints(manifest));
+  }
+  return entries;
+}
+
+function collectManifestProviderRequests(): Map<string, ManifestProviderRequestCacheEntry> {
+  const entries = new Map<string, ManifestProviderRequestCacheEntry>();
+  for (const { manifest } of listOpenClawPluginManifestMetadata()) {
+    for (const [provider, request] of readManifestProviderRequests(manifest)) {
+      entries.set(provider, request);
+    }
+  }
+  return entries;
+}
+
 function loadManifestProviderEndpointCache(): ManifestProviderEndpointCacheEntry[] {
   if (!manifestProviderEndpointCache) {
-    const registry = loadPluginManifestRegistryForPluginRegistry({ includeDisabled: true });
-    const entries: ManifestProviderEndpointCacheEntry[] = [];
-    for (const plugin of registry.plugins) {
-      for (const endpoint of plugin.providerEndpoints ?? []) {
-        if (!isManifestProviderEndpointClass(endpoint.endpointClass)) {
-          continue;
-        }
-        entries.push({
-          endpointClass: endpoint.endpointClass,
-          hosts: (endpoint.hosts ?? []).map((host) => host.toLowerCase()),
-          hostSuffixes: (endpoint.hostSuffixes ?? []).map((host) => host.toLowerCase()),
-          normalizedBaseUrls: (endpoint.baseUrls ?? [])
-            .map((baseUrl) => normalizeComparableBaseUrl(baseUrl))
-            .filter((baseUrl): baseUrl is string => baseUrl !== undefined),
-          ...(endpoint.googleVertexRegion
-            ? { googleVertexRegion: endpoint.googleVertexRegion }
-            : {}),
-          ...(endpoint.googleVertexRegionHostSuffix
-            ? { googleVertexRegionHostSuffix: endpoint.googleVertexRegionHostSuffix }
-            : {}),
-        });
-      }
-    }
-    manifestProviderEndpointCache = entries;
+    manifestProviderEndpointCache = collectManifestProviderEndpoints();
   }
   return manifestProviderEndpointCache;
 }
 
 function loadManifestProviderRequestCache(): Map<string, ManifestProviderRequestCacheEntry> {
   if (!manifestProviderRequestCache) {
-    const registry = loadPluginManifestRegistryForPluginRegistry({ includeDisabled: true });
-    const entries = new Map<string, ManifestProviderRequestCacheEntry>();
-    for (const plugin of registry.plugins) {
-      for (const [provider, request] of Object.entries(plugin.providerRequest?.providers ?? {})) {
-        entries.set(provider, {
-          ...(request.family ? { family: request.family } : {}),
-          ...(request.compatibilityFamily
-            ? { compatibilityFamily: request.compatibilityFamily }
-            : {}),
-          ...(request.openAICompletions?.supportsStreamingUsage !== undefined
-            ? {
-                supportsOpenAICompletionsStreamingUsageCompat:
-                  request.openAICompletions.supportsStreamingUsage,
-              }
-            : {}),
-        });
-      }
-    }
-    manifestProviderRequestCache = entries;
+    manifestProviderRequestCache = collectManifestProviderRequests();
   }
   return manifestProviderRequestCache;
 }

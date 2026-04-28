@@ -107,20 +107,30 @@ function bundledChannelScenarioLane(name, env, options = {}) {
   );
 }
 
-const bundledScenarioLanes = [
-  ...["telegram", "discord", "slack", "feishu", "memory-lancedb"].map((channel) =>
+const bundledChannelSmokeLanes = ["telegram", "discord", "slack", "feishu", "memory-lancedb"].map(
+  (channel) =>
     npmLane(
       `bundled-channel-${channel}`,
       `OPENCLAW_BUNDLED_CHANNELS=${channel} ${bundledChannelLaneCommand}`,
     ),
+);
+
+const bundledChannelUpdateLanes = [
+  "telegram",
+  "discord",
+  "slack",
+  "feishu",
+  "memory-lancedb",
+  "acpx",
+].map((target) =>
+  bundledChannelScenarioLane(
+    `bundled-channel-update-${target}`,
+    `OPENCLAW_BUNDLED_CHANNEL_SCENARIOS=0 OPENCLAW_BUNDLED_CHANNEL_UPDATE_SCENARIO=1 OPENCLAW_BUNDLED_CHANNEL_UPDATE_TARGETS=${target} OPENCLAW_BUNDLED_CHANNEL_ROOT_OWNED_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_SETUP_ENTRY_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_LOAD_FAILURE_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_DISABLED_CONFIG_SCENARIO=0`,
+    { retryPatterns: LIVE_RETRY_PATTERNS, retries: 1, timeoutMs: BUNDLED_UPDATE_TIMEOUT_MS },
   ),
-  ...["telegram", "discord", "slack", "feishu", "memory-lancedb", "acpx"].map((target) =>
-    bundledChannelScenarioLane(
-      `bundled-channel-update-${target}`,
-      `OPENCLAW_BUNDLED_CHANNEL_SCENARIOS=0 OPENCLAW_BUNDLED_CHANNEL_UPDATE_SCENARIO=1 OPENCLAW_BUNDLED_CHANNEL_UPDATE_TARGETS=${target} OPENCLAW_BUNDLED_CHANNEL_ROOT_OWNED_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_SETUP_ENTRY_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_LOAD_FAILURE_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_DISABLED_CONFIG_SCENARIO=0`,
-      { timeoutMs: BUNDLED_UPDATE_TIMEOUT_MS },
-    ),
-  ),
+);
+
+const bundledChannelContractLanes = [
   bundledChannelScenarioLane(
     "bundled-channel-root-owned",
     "OPENCLAW_BUNDLED_CHANNEL_SCENARIOS=0 OPENCLAW_BUNDLED_CHANNEL_UPDATE_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_ROOT_OWNED_SCENARIO=1 OPENCLAW_BUNDLED_CHANNEL_SETUP_ENTRY_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_LOAD_FAILURE_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_DISABLED_CONFIG_SCENARIO=0",
@@ -137,6 +147,12 @@ const bundledScenarioLanes = [
     "bundled-channel-disabled-config",
     "OPENCLAW_BUNDLED_CHANNEL_SCENARIOS=0 OPENCLAW_BUNDLED_CHANNEL_UPDATE_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_ROOT_OWNED_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_SETUP_ENTRY_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_LOAD_FAILURE_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_DISABLED_CONFIG_SCENARIO=1",
   ),
+];
+
+const bundledScenarioLanes = [
+  ...bundledChannelSmokeLanes,
+  ...bundledChannelUpdateLanes,
+  ...bundledChannelContractLanes,
 ];
 
 const bundledPluginInstallUninstallLanes = Array.from(
@@ -465,7 +481,18 @@ const primaryReleasePathChunks = {
   "plugins-runtime-core": releasePathPluginRuntimeCoreLanes,
   "plugins-runtime-install-a": bundledPluginInstallUninstallLanes.slice(0, 4),
   "plugins-runtime-install-b": bundledPluginInstallUninstallLanes.slice(4),
-  "bundled-channels": releasePathBundledChannelLanes,
+  "bundled-channels-core": [releasePathBundledChannelLanes[0], ...bundledChannelSmokeLanes],
+  "bundled-channels-update-a": [
+    bundledChannelUpdateLanes[0],
+    bundledChannelUpdateLanes[1],
+    bundledChannelUpdateLanes[4],
+  ],
+  "bundled-channels-update-b": [
+    bundledChannelUpdateLanes[2],
+    bundledChannelUpdateLanes[3],
+    bundledChannelUpdateLanes[5],
+  ],
+  "bundled-channels-contracts": bundledChannelContractLanes,
   openwebui: [],
 };
 
@@ -477,6 +504,7 @@ const legacyReleasePathChunks = {
   ],
   "plugins-runtime": releasePathPluginRuntimeLanes,
   "plugins-integrations": [...releasePathPluginRuntimeLanes, ...releasePathBundledChannelLanes],
+  "bundled-channels": releasePathBundledChannelLanes,
 };
 
 function openWebUILane() {

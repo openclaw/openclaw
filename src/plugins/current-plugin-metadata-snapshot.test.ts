@@ -100,6 +100,19 @@ describe("current plugin metadata snapshot", () => {
     ).toBeUndefined();
   });
 
+  it("keeps source-policy compatibility when storing an auto-enabled runtime config", () => {
+    const sourceConfig = { channels: { telegram: { botToken: "token" } } };
+    const autoEnabledConfig = {
+      ...sourceConfig,
+      plugins: { allow: ["telegram"] },
+    };
+    const snapshot = createSnapshot({ config: sourceConfig });
+    setCurrentPluginMetadataSnapshot(snapshot, { config: autoEnabledConfig });
+
+    expect(getCurrentPluginMetadataSnapshot({ config: sourceConfig })).toBe(snapshot);
+    expect(getCurrentPluginMetadataSnapshot({ config: autoEnabledConfig })).toBeUndefined();
+  });
+
   it("clears the current snapshot", () => {
     setCurrentPluginMetadataSnapshot(createSnapshot());
     clearCurrentPluginMetadataSnapshot();

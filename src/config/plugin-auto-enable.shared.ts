@@ -466,7 +466,14 @@ function hasConfiguredProviderModelOrHarness(cfg: OpenClawConfig, env: NodeJS.Pr
   return hasConfiguredEmbeddedHarnessRuntime(cfg, env);
 }
 
+function arePluginsGloballyDisabled(cfg: OpenClawConfig): boolean {
+  return cfg.plugins?.enabled === false;
+}
+
 function configMayNeedPluginManifestRegistry(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
+  if (arePluginsGloballyDisabled(cfg)) {
+    return false;
+  }
   if (hasPluginAllowlistWithMaterialEntries(cfg)) {
     return true;
   }
@@ -493,6 +500,9 @@ export function configMayNeedPluginAutoEnable(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): boolean {
+  if (arePluginsGloballyDisabled(cfg)) {
+    return false;
+  }
   if (hasPluginAllowlistWithMaterialEntries(cfg)) {
     return true;
   }

@@ -123,13 +123,19 @@ gh workflow run full-release-validation.yml \
   --ref main \
   -f ref=<branch-or-sha> \
   -f provider=openai \
-  -f mode=both
+  -f mode=both \
+  -f release_profile=stable
 ```
 
 Run the workflow itself from the trusted current ref, normally `--ref main`;
 child workflows are dispatched from that same ref even when `ref` points at an
 older release branch or tag. Full Release Validation has no separate child
 workflow ref input; choose the trusted harness by choosing the workflow run ref.
+Use `release_profile=minimum|stable|full` to control live/provider breadth:
+`minimum` keeps the fastest OpenAI/core release-critical set, `stable` adds the
+stable provider/backend set, and `full` adds the broad advisory provider/media
+matrix. The parent verifier job appends slowest-job tables for child runs; rerun
+only that verifier after a child rerun turns green.
 
 If a full run is already active on a newer `origin/main`, prefer watching that
 run over dispatching a duplicate. If you accidentally dispatch a stale duplicate,
@@ -140,6 +146,11 @@ The child-dispatch jobs record the child run ids. The final
 parent gate. If a child workflow failed but was later rerun successfully, rerun
 only the failed parent verifier job; do not dispatch a new full umbrella unless
 the release evidence is stale.
+
+For bounded recovery after a focused fix, pass `-f rerun_group=<group>`.
+Supported umbrella groups are `all`, `ci`, `release-checks`, `install-smoke`,
+`cross-os`, `live-e2e`, `package`, `qa`, `qa-parity`, `qa-live`, and
+`npm-telegram`. Use the narrowest group that covers the failed box.
 
 ### Release Evidence
 
@@ -192,8 +203,22 @@ gh workflow run openclaw-release-checks.yml \
   --ref main \
   -f ref=<branch-or-sha> \
   -f provider=openai \
-  -f mode=both
+  -f mode=both \
+  -f release_profile=stable \
+  -f rerun_group=all
 ```
+
+Release-check rerun groups are `all`, `install-smoke`, `cross-os`, `live-e2e`,
+`package`, `qa`, `qa-parity`, and `qa-live`.
+`OpenClaw Release Checks` uses the trusted workflow ref to resolve the selected
+ref once as `release-package-under-test` and passes that artifact into both
+release-path Docker live/E2E checks and Package Acceptance.
+
+The release QA parity box is internally split into candidate and baseline lane
+jobs, followed by a report job that downloads both artifacts and runs
+`pnpm openclaw qa parity-report`. For parity failures, inspect the failed lane
+first; inspect the report job when both lane summaries exist but the comparison
+fails.
 
 ### QA Lab Matrix Profiles
 
@@ -236,7 +261,9 @@ gh workflow run openclaw-live-and-e2e-checks-reusable.yml \
 Useful knobs:
 
 - `docker_lanes='<lane[,lane]>'`: run selected Docker scheduler lanes against
-  prepared artifacts instead of the release chunk matrix.
+  prepared artifacts instead of the release chunk matrix. Multiple selected
+  lanes fan out as parallel targeted Docker jobs after one shared package/image
+  preparation step.
 - `include_live_suites=false`: skip live/provider suites when testing Docker
   scheduler or release packaging only.
 - `live_models_only=true`: run only Docker live model coverage.
@@ -244,22 +271,41 @@ Useful knobs:
   targeted Docker live model job instead of the full provider matrix.
 - blank `live_model_providers`: run the full live-model provider matrix.
 
+Release-path Docker chunks are currently `core`, `package-update-openai`,
+`package-update-anthropic`, `package-update-core`, `plugins-runtime-core`,
+`plugins-runtime-install-a`, `plugins-runtime-install-b`,
+`bundled-channels-core`, `bundled-channels-update-a`,
+`bundled-channels-update-b`, and `bundled-channels-contracts`. The aggregate
+`bundled-channels` chunk remains valid for manual one-shot reruns, but release
+checks use the split chunks.
+
 When live suites are enabled, the workflow shards broad native `pnpm test:live`
 coverage through `scripts/test-live-shard.mjs` instead of one serial `live-all`
 job:
 
 - `native-live-src-agents`
 - `native-live-src-gateway-core`
+- `native-live-src-gateway-profiles` (release CI runs this with provider
+  filters such as `OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic`)
 - `native-live-src-gateway-backends`
 - `native-live-test`
 - `native-live-extensions-a-k`
 - `native-live-extensions-l-n`
 - `native-live-extensions-openai`
 - `native-live-extensions-o-z`
+- `native-live-extensions-o-z-other`
+- `native-live-extensions-xai`
 - `native-live-extensions-media`
+- `native-live-extensions-media-audio`
+- `native-live-extensions-media-music`
+- `native-live-extensions-media-music-google`
+- `native-live-extensions-media-music-minimax`
+- `native-live-extensions-media-video`
 
 Use `node scripts/test-live-shard.mjs <shard> --list` to see the exact files
-before rerunning a failed native live shard.
+before rerunning a failed native live shard. The aggregate `o-z` and `media`
+shards remain useful locally; release CI uses the smaller provider/media shards
+so one live-provider flake does not force a broad native live rerun.
 
 For model-list or provider-selection fixes, use `live_models_only=true` plus the
 specific `live_model_providers` allowlist. Confirm logs show the expected

@@ -22,6 +22,8 @@ export type ResolveImplicitProvidersForModelsJson = (params: {
   workspaceDir?: string;
   explicitProviders: Record<string, ProviderConfig>;
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;
+  providerDiscoveryProviderIds?: readonly string[];
+  providerDiscoveryTimeoutMs?: number;
 }) => Promise<Record<string, ProviderConfig>>;
 
 export type ModelsJsonPlan =
@@ -43,6 +45,8 @@ export async function resolveProvidersForModelsJsonWithDeps(
     env: NodeJS.ProcessEnv;
     workspaceDir?: string;
     pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;
+    providerDiscoveryProviderIds?: readonly string[];
+    providerDiscoveryTimeoutMs?: number;
   },
   deps?: {
     resolveImplicitProviders?: ResolveImplicitProvidersForModelsJson;
@@ -59,6 +63,12 @@ export async function resolveProvidersForModelsJsonWithDeps(
     explicitProviders,
     ...(params.pluginMetadataSnapshot
       ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
+      : {}),
+    ...(params.providerDiscoveryProviderIds
+      ? { providerDiscoveryProviderIds: params.providerDiscoveryProviderIds }
+      : {}),
+    ...(params.providerDiscoveryTimeoutMs !== undefined
+      ? { providerDiscoveryTimeoutMs: params.providerDiscoveryTimeoutMs }
       : {}),
   });
   return mergeProviders({
@@ -101,6 +111,8 @@ export async function planOpenClawModelsJsonWithDeps(
     existingRaw: string;
     existingParsed: unknown;
     pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;
+    providerDiscoveryProviderIds?: readonly string[];
+    providerDiscoveryTimeoutMs?: number;
   },
   deps?: {
     resolveImplicitProviders?: ResolveImplicitProvidersForModelsJson;
@@ -115,6 +127,12 @@ export async function planOpenClawModelsJsonWithDeps(
       ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
       ...(params.pluginMetadataSnapshot
         ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
+        : {}),
+      ...(params.providerDiscoveryProviderIds
+        ? { providerDiscoveryProviderIds: params.providerDiscoveryProviderIds }
+        : {}),
+      ...(params.providerDiscoveryTimeoutMs !== undefined
+        ? { providerDiscoveryTimeoutMs: params.providerDiscoveryTimeoutMs }
         : {}),
     },
     deps,

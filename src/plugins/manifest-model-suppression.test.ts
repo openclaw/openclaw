@@ -88,4 +88,92 @@ describe("manifest model suppression", () => {
 
     expect(mocks.loadPluginManifestRegistryForPluginRegistry).toHaveBeenCalledTimes(1);
   });
+
+  it("matches conditional suppressions by base URL host", () => {
+    mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [
+        {
+          id: "qwen",
+          providers: ["qwen", "modelstudio"],
+          modelCatalog: {
+            suppressions: [
+              {
+                provider: "qwen",
+                model: "qwen3.6-plus",
+                reason: "Use qwen/qwen3.5-plus.",
+                when: {
+                  baseUrlHosts: [
+                    "coding.dashscope.aliyuncs.com",
+                    "coding-intl.dashscope.aliyuncs.com",
+                  ],
+                  providerConfigApiIn: ["qwen", "modelstudio"],
+                },
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    expect(
+      resolveManifestBuiltInModelSuppression({
+        provider: "qwen",
+        id: "qwen3.6-plus",
+        baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
+        env: process.env,
+      })?.suppress,
+    ).toBe(true);
+    expect(
+      resolveManifestBuiltInModelSuppression({
+        provider: "qwen",
+        id: "qwen3.6-plus",
+        baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        env: process.env,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not apply conditional suppressions to custom providers with a foreign api owner", () => {
+    mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [
+        {
+          id: "qwen",
+          providers: ["modelstudio"],
+          modelCatalog: {
+            suppressions: [
+              {
+                provider: "modelstudio",
+                model: "qwen3.6-plus",
+                when: {
+                  baseUrlHosts: ["coding-intl.dashscope.aliyuncs.com"],
+                  providerConfigApiIn: ["qwen", "modelstudio"],
+                },
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    expect(
+      resolveManifestBuiltInModelSuppression({
+        provider: "modelstudio",
+        id: "qwen3.6-plus",
+        config: {
+          models: {
+            providers: {
+              modelstudio: {
+                api: "openai-completions",
+                baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
+                models: [],
+              },
+            },
+          },
+        },
+        env: process.env,
+      }),
+    ).toBeUndefined();
+  });
 });
