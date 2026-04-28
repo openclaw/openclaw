@@ -55,6 +55,8 @@ describe("browser maintenance", () => {
     const mkdirSync = vi.spyOn(fs, "mkdirSync").mockImplementation(() => undefined);
     const existsSync = vi.spyOn(fs, "existsSync").mockReturnValue(false);
     const renameSync = vi.spyOn(fs, "renameSync").mockImplementation(() => undefined);
+    const cpSync = vi.spyOn(fs, "cpSync");
+    const rmSync = vi.spyOn(fs, "rmSync");
 
     const { movePathToTrash } = await import("./browser-maintenance.js");
 
@@ -63,5 +65,53 @@ describe("browser maintenance", () => {
     expect(mkdirSync).toHaveBeenCalledWith("/home/test/.Trash", { recursive: true });
     expect(existsSync).toHaveBeenCalledWith("/home/test/.Trash/demo-123");
     expect(renameSync).toHaveBeenCalledWith("/tmp/demo", "/home/test/.Trash/demo-123");
+    expect(cpSync).not.toHaveBeenCalled();
+    expect(rmSync).not.toHaveBeenCalled();
+  });
+
+  it("falls back to copy and remove when rename crosses filesystems", async () => {
+    const exdev = Object.assign(new Error("cross-device"), { code: "EXDEV" });
+    vi.spyOn(fs, "mkdirSync").mockImplementation(() => undefined);
+    vi.spyOn(fs, "existsSync").mockReturnValue(false);
+    vi.spyOn(fs, "renameSync").mockImplementation(() => {
+      throw exdev;
+    });
+    const cpSync = vi.spyOn(fs, "cpSync").mockImplementation(() => undefined);
+    const rmSync = vi.spyOn(fs, "rmSync").mockImplementation(() => undefined);
+
+    const { movePathToTrash } = await import("./browser-maintenance.js");
+
+    await expect(movePathToTrash("/tmp/demo")).resolves.toBe("/home/test/.Trash/demo-123");
+    expect(cpSync).toHaveBeenCalledWith("/tmp/demo", "/home/test/.Trash/demo-123", {
+      recursive: true,
+      force: false,
+      errorOnExist: true,
+    });
+    expect(rmSync).toHaveBeenCalledWith("/tmp/demo", { recursive: true, force: true });
+  });
+
+  it("retries with the same timestamp when the destination is created concurrently", async () => {
+    const collision = Object.assign(new Error("exists"), { code: "EEXIST" });
+    vi.spyOn(fs, "mkdirSync").mockImplementation(() => undefined);
+    vi.spyOn(fs, "existsSync").mockReturnValue(false);
+    const renameSync = vi
+      .spyOn(fs, "renameSync")
+      .mockImplementationOnce(() => {
+        throw collision;
+      })
+      .mockImplementation(() => undefined);
+
+    const { movePathToTrash } = await import("./browser-maintenance.js");
+
+    await expect(movePathToTrash("/tmp/demo")).resolves.toMatch(
+      /^\/home\/test\/\.Trash\/demo-123-[A-Za-z0-9_-]+$/,
+    );
+    expect(renameSync).toHaveBeenNthCalledWith(1, "/tmp/demo", "/home/test/.Trash/demo-123");
+    expect(renameSync).toHaveBeenNthCalledWith(
+      2,
+      "/tmp/demo",
+      expect.stringMatching(/^\/home\/test\/\.Trash\/demo-123-[A-Za-z0-9_-]+$/),
+    );
+    expect(Date.now).toHaveBeenCalledTimes(1);
   });
 });
