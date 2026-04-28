@@ -467,14 +467,16 @@ describe("memory index", () => {
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
 
-    const db = (
+    // Safe reindex streams cache rows from the original database and writes
+    // them into a temporary database, so the SELECT spy belongs on this handle.
+    const sourceDb = (
       manager as unknown as {
         db: {
           prepare: (sql: string) => unknown;
         };
       }
     ).db;
-    const originalPrepare = db.prepare.bind(db);
+    const originalPrepare = sourceDb.prepare.bind(sourceDb);
     const cachedRows = (
       originalPrepare(
         "SELECT provider, model, provider_key, hash, embedding, dims, updated_at FROM embedding_cache",
@@ -483,7 +485,7 @@ describe("memory index", () => {
     expect(cachedRows.length).toBeGreaterThan(0);
 
     const beforeCalls = embedBatchCalls;
-    const prepareSpy = vi.spyOn(db, "prepare").mockImplementation((sql: string) => {
+    const prepareSpy = vi.spyOn(sourceDb, "prepare").mockImplementation((sql: string) => {
       if (
         sql.includes(
           "SELECT provider, model, provider_key, hash, embedding, dims, updated_at FROM embedding_cache",

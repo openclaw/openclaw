@@ -312,6 +312,7 @@ export abstract class MemoryManagerSyncOps {
     if (!this.cache.enabled) {
       return;
     }
+    let transactionStarted = false;
     try {
       const rows = sourceDb
         .prepare(
@@ -326,19 +327,23 @@ export abstract class MemoryManagerSyncOps {
         dims: number | null;
         updated_at: number;
       }>;
-      const insert = this.db.prepare(
-        `INSERT INTO ${EMBEDDING_CACHE_TABLE} (provider, model, provider_key, hash, embedding, dims, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(provider, model, provider_key, hash) DO UPDATE SET
-           embedding=excluded.embedding,
-           dims=excluded.dims,
-           updated_at=excluded.updated_at`,
-      );
-      this.db.exec("BEGIN");
       // Keep gateway health probes responsive while rebuilding large caches.
       const SEED_EMBEDDING_YIELD_EVERY = 1000;
       let rowCount = 0;
+      let insert: ReturnType<DatabaseSync["prepare"]> | null = null;
       for (const row of rows) {
+        if (!insert) {
+          insert = this.db.prepare(
+            `INSERT INTO ${EMBEDDING_CACHE_TABLE} (provider, model, provider_key, hash, embedding, dims, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(provider, model, provider_key, hash) DO UPDATE SET
+               embedding=excluded.embedding,
+               dims=excluded.dims,
+               updated_at=excluded.updated_at`,
+          );
+          this.db.exec("BEGIN");
+          transactionStarted = true;
+        }
         insert.run(
           row.provider,
           row.model,
@@ -355,11 +360,15 @@ export abstract class MemoryManagerSyncOps {
           });
         }
       }
-      this.db.exec("COMMIT");
+      if (transactionStarted) {
+        this.db.exec("COMMIT");
+      }
     } catch (err) {
-      try {
-        this.db.exec("ROLLBACK");
-      } catch {}
+      if (transactionStarted) {
+        try {
+          this.db.exec("ROLLBACK");
+        } catch {}
+      }
       throw err;
     }
   }
