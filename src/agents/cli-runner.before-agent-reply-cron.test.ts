@@ -21,6 +21,7 @@ const {
   prepareCliRunContextMock,
   closeClaudeLiveSessionForContextMock,
   closeMcpLoopbackServerMock,
+  forgetPromptBuildDrainCacheForRunMock,
 } = vi.hoisted(() => ({
   hasHooksMock: vi.fn<(hookName: string) => boolean>(() => false),
   runBeforeAgentReplyMock: vi.fn<(event: unknown, ctx: unknown) => Promise<BeforeAgentReplyResult>>(
@@ -32,6 +33,7 @@ const {
   prepareCliRunContextMock: vi.fn(),
   closeClaudeLiveSessionForContextMock: vi.fn(),
   closeMcpLoopbackServerMock: vi.fn(),
+  forgetPromptBuildDrainCacheForRunMock: vi.fn(),
 }));
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
@@ -56,6 +58,15 @@ vi.mock("./cli-runner/claude-live-session.js", () => ({
 vi.mock("../gateway/mcp-http.js", () => ({
   closeMcpLoopbackServer: closeMcpLoopbackServerMock,
 }));
+
+vi.mock("./pi-embedded-runner/run/attempt.prompt-helpers.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./pi-embedded-runner/run/attempt.prompt-helpers.js")>();
+  return {
+    ...actual,
+    forgetPromptBuildDrainCacheForRun: forgetPromptBuildDrainCacheForRunMock,
+  };
+});
 
 const baseRunParams = {
   sessionId: "test-session",
@@ -100,6 +111,7 @@ beforeEach(() => {
   );
   closeClaudeLiveSessionForContextMock.mockReset();
   closeMcpLoopbackServerMock.mockReset();
+  forgetPromptBuildDrainCacheForRunMock.mockReset();
 });
 
 afterEach(() => {
@@ -201,5 +213,24 @@ describe("runCliAgent cron before_agent_reply seam", () => {
 
     expect(executePreparedCliRunMock).toHaveBeenCalledTimes(1);
     expect(closeMcpLoopbackServerMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears prompt-build drain cache after a normal CLI run", async () => {
+    const { runCliAgent } = await import("./cli-runner.js");
+    executePreparedCliRunMock.mockResolvedValue({ text: "real reply" });
+
+    await runCliAgent({ ...baseRunParams });
+
+    expect(forgetPromptBuildDrainCacheForRunMock).toHaveBeenCalledTimes(1);
+    expect(forgetPromptBuildDrainCacheForRunMock).toHaveBeenCalledWith(baseRunParams.runId);
+  });
+
+  it("preserves prompt-build drain cache for caller-managed same-run retries", async () => {
+    const { runCliAgent } = await import("./cli-runner.js");
+    executePreparedCliRunMock.mockResolvedValue({ text: "real reply" });
+
+    await runCliAgent({ ...baseRunParams, preservePromptBuildDrainCacheOnRunEnd: true });
+
+    expect(forgetPromptBuildDrainCacheForRunMock).not.toHaveBeenCalled();
   });
 });

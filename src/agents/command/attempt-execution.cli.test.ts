@@ -10,6 +10,7 @@ import { persistCliTurnTranscript, runAgentAttempt } from "./attempt-execution.j
 
 const runCliAgentMock = vi.hoisted(() => vi.fn());
 const runEmbeddedPiAgentMock = vi.hoisted(() => vi.fn());
+const forgetPromptBuildDrainCacheForRunMock = vi.hoisted(() => vi.fn());
 const ORIGINAL_HOME = process.env.HOME;
 
 vi.mock("../cli-runner.js", () => ({
@@ -31,6 +32,15 @@ vi.mock("../provider-auth-aliases.js", () => ({
 vi.mock("../pi-embedded.js", () => ({
   runEmbeddedPiAgent: runEmbeddedPiAgentMock,
 }));
+
+vi.mock("../pi-embedded-runner/run/attempt.prompt-helpers.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../pi-embedded-runner/run/attempt.prompt-helpers.js")>();
+  return {
+    ...actual,
+    forgetPromptBuildDrainCacheForRun: forgetPromptBuildDrainCacheForRunMock,
+  };
+});
 
 function makeCliResult(text: string): EmbeddedPiRunResult {
   return {
@@ -82,6 +92,7 @@ describe("CLI attempt execution", () => {
     storePath = path.join(tmpDir, "sessions.json");
     runCliAgentMock.mockReset();
     runEmbeddedPiAgentMock.mockReset();
+    forgetPromptBuildDrainCacheForRunMock.mockReset();
   });
 
   afterEach(async () => {
@@ -198,6 +209,10 @@ describe("CLI attempt execution", () => {
     expect(runCliAgentMock).toHaveBeenCalledTimes(2);
     expect(runCliAgentMock.mock.calls[0]?.[0]?.cliSessionId).toBe("stale-cli-session");
     expect(runCliAgentMock.mock.calls[1]?.[0]?.cliSessionId).toBeUndefined();
+    expect(runCliAgentMock.mock.calls[0]?.[0]?.preservePromptBuildDrainCacheOnRunEnd).toBe(true);
+    expect(runCliAgentMock.mock.calls[1]?.[0]?.preservePromptBuildDrainCacheOnRunEnd).toBe(true);
+    expect(forgetPromptBuildDrainCacheForRunMock).toHaveBeenCalledTimes(1);
+    expect(forgetPromptBuildDrainCacheForRunMock).toHaveBeenCalledWith("run-cli-expired");
     expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
     expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
 

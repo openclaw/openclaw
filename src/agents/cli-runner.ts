@@ -13,6 +13,7 @@ import {
 } from "./harness/lifecycle-hook-helpers.js";
 import { classifyFailoverReason, isFailoverErrorMessage } from "./pi-embedded-helpers.js";
 import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
+import { forgetPromptBuildDrainCacheForRun } from "./pi-embedded-runner/run/attempt.prompt-helpers.js";
 
 function buildHandledReplyPayloads(reply?: ReplyPayload) {
   const normalized = reply ?? { text: SILENT_REPLY_TOKEN };
@@ -106,14 +107,20 @@ export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedPi
   try {
     return await runPreparedCliAgent(context);
   } finally {
-    if (params.cleanupCliLiveSessionOnRunEnd === true) {
-      const { closeClaudeLiveSessionForContext } =
-        await import("./cli-runner/claude-live-session.js");
-      await closeClaudeLiveSessionForContext(context);
-    }
-    if (params.cleanupBundleMcpOnRunEnd === true) {
-      const { closeMcpLoopbackServer } = await import("../gateway/mcp-http.js");
-      await closeMcpLoopbackServer();
+    try {
+      if (params.cleanupCliLiveSessionOnRunEnd === true) {
+        const { closeClaudeLiveSessionForContext } =
+          await import("./cli-runner/claude-live-session.js");
+        await closeClaudeLiveSessionForContext(context);
+      }
+      if (params.cleanupBundleMcpOnRunEnd === true) {
+        const { closeMcpLoopbackServer } = await import("../gateway/mcp-http.js");
+        await closeMcpLoopbackServer();
+      }
+    } finally {
+      if (params.preservePromptBuildDrainCacheOnRunEnd !== true) {
+        forgetPromptBuildDrainCacheForRun(params.runId);
+      }
     }
   }
 }

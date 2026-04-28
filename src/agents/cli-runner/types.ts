@@ -66,6 +66,12 @@ export type RunCliAgentParams = {
    * alive after the JSON response is emitted.
    */
   cleanupBundleMcpOnRunEnd?: boolean;
+  /**
+   * Keep the prompt-build drain cache alive after this CLI attempt. Callers
+   * that may retry with the same runId must clear the cache after the retry
+   * sequence finishes.
+   */
+  preservePromptBuildDrainCacheOnRunEnd?: boolean;
 };
 
 export type CliPreparedBackend = {

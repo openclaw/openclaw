@@ -20,6 +20,7 @@ import { FailoverError } from "../failover-error.js";
 import { resolveAgentHarnessPolicy } from "../harness/selection.js";
 import { isCliRuntimeAlias, resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import { isCliProvider } from "../model-selection.js";
+import { forgetPromptBuildDrainCacheForRun } from "../pi-embedded-runner/run/attempt.prompt-helpers.js";
 import { prepareSessionManagerForRun } from "../pi-embedded-runner/session-manager-init.js";
 import { runEmbeddedPiAgent, type EmbeddedPiRunResult } from "../pi-embedded.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
@@ -486,32 +487,37 @@ export function runAgentAttempt(params: {
         senderIsOwner: params.opts.senderIsOwner,
         cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
         cleanupCliLiveSessionOnRunEnd: params.opts.cleanupCliLiveSessionOnRunEnd,
+        preservePromptBuildDrainCacheOnRunEnd: true,
       });
-    return resolveReusableCliSessionBinding().then(async (activeCliSessionBinding) => {
-      try {
-        return await runCliWithSession(activeCliSessionBinding?.sessionId, activeCliSessionBinding);
-      } catch (err) {
-        if (
-          err instanceof FailoverError &&
-          err.reason === "session_expired" &&
-          activeCliSessionBinding?.sessionId &&
-          params.sessionKey &&
-          params.sessionStore &&
-          params.storePath
-        ) {
-          log.warn(
-            `CLI session expired, clearing from session store: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${params.sessionKey}`,
+    return resolveReusableCliSessionBinding()
+      .then(async (activeCliSessionBinding) => {
+        try {
+          return await runCliWithSession(
+            activeCliSessionBinding?.sessionId,
+            activeCliSessionBinding,
           );
+        } catch (err) {
+          if (
+            err instanceof FailoverError &&
+            err.reason === "session_expired" &&
+            activeCliSessionBinding?.sessionId &&
+            params.sessionKey &&
+            params.sessionStore &&
+            params.storePath
+          ) {
+            log.warn(
+              `CLI session expired, clearing from session store: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${params.sessionKey}`,
+            );
 
-          params.sessionEntry =
-            (await clearCliSessionInStore({
-              provider: cliExecutionProvider,
-              sessionKey: params.sessionKey,
-              sessionStore: params.sessionStore,
-              storePath: params.storePath,
-            })) ?? params.sessionEntry;
+            params.sessionEntry =
+              (await clearCliSessionInStore({
+                provider: cliExecutionProvider,
+                sessionKey: params.sessionKey,
+                sessionStore: params.sessionStore,
+                storePath: params.storePath,
+              })) ?? params.sessionEntry;
 
-          return await runCliWithSession(undefined).then(async (result) => {
+            const result = await runCliWithSession(undefined);
             if (
               result.meta.agentMeta?.cliSessionBinding?.sessionId &&
               params.sessionKey &&
@@ -537,11 +543,13 @@ export function runAgentAttempt(params: {
               }
             }
             return result;
-          });
+          }
+          throw err;
         }
-        throw err;
-      }
-    });
+      })
+      .finally(() => {
+        forgetPromptBuildDrainCacheForRun(params.runId);
+      });
   }
 
   return runEmbeddedPiAgent({
