@@ -36,14 +36,16 @@ openclaw gateway diagnostics export --json
 ## Chat command
 
 Owners can use `/diagnostics [note]` in chat to get the same privacy preamble
-and the local Gateway export command. The chat command does not silently export
-logs. The Gateway diagnostics export should run through an explicit exec
-approval every time; do not approve it through an allow-all rule.
+and the local Gateway export command. The chat command does not collect or
+upload the local Gateway bundle itself. That collection remains an explicit
+exec-approved action: run `openclaw gateway diagnostics export` through an
+explicit exec approval every time; do not approve it through an allow-all rule.
 
 When the active OpenClaw session is using the native OpenAI Codex harness,
 `/diagnostics [note]` also offers an OpenAI feedback upload for the attached
 Codex runtime thread. That upload is separate from the local Gateway zip and is
-sent only after you confirm the per-request prompt.
+sent only after you confirm the per-request prompt. It does not replace or
+trigger the local Gateway export.
 
 ## What the export contains
 

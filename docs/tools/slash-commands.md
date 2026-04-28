@@ -150,7 +150,7 @@ Current source-of-truth:
     - `/commands` shows the generated command catalog.
     - `/tools [compact|verbose]` shows what the current agent can use right now.
     - `/status` shows execution/runtime status, including `Execution`/`Runtime` labels and provider usage/quota when available.
-    - `/diagnostics [note]` is owner-only and shows the sensitive diagnostics preamble, links to [Diagnostics Export](/gateway/diagnostics), and gives the local Gateway export command. When the active session uses the OpenAI Codex harness, it also asks before sending Codex feedback to OpenAI servers.
+    - `/diagnostics [note]` is owner-only and shows the sensitive diagnostics preamble, links to [Diagnostics Export](/gateway/diagnostics), and gives the local Gateway export command without collecting the local bundle itself. Run the Gateway export through explicit exec approval every time; do not approve diagnostics with an allow-all rule. When the active session uses the OpenAI Codex harness, it also asks before sending separate Codex feedback to OpenAI servers.
     - `/crestodian <request>` runs the Crestodian setup and repair helper from an owner DM.
     - `/tasks` lists active/recent background tasks for the current session.
     - `/context [list|detail|json]` explains how context is assembled.

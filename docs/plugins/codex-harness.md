@@ -761,14 +761,17 @@ Common forms:
 Core OpenClaw also exposes owner-only `/diagnostics [note]` as the general
 Gateway diagnostics command. It shows the sensitive-data preamble, links to
 [Diagnostics Export](/gateway/diagnostics), and prints the local Gateway export
-command. When the active OpenClaw session is using the Codex harness, the same
-command adds the Codex feedback confirmation flow.
+command without collecting the local Gateway bundle itself. Run the Gateway
+export through explicit exec approval every time; do not approve diagnostics
+with an allow-all rule. When the active OpenClaw session is using the Codex
+harness, the same command adds the separate Codex feedback confirmation flow.
 
 The confirmed Codex upload calls Codex app-server `feedback/upload` and asks
 app-server to include logs for that thread and spawned Codex subthreads when
 available. The upload goes through Codex's normal feedback path to OpenAI
 servers; if Codex feedback is disabled in that app-server, the command returns
-the app-server error.
+the app-server error. This upload does not replace or trigger the local Gateway
+diagnostics export.
 
 `/codex resume` writes the same sidecar binding file that the harness uses for
 normal turns. On the next message, OpenClaw resumes that Codex thread, passes the

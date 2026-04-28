@@ -85,7 +85,7 @@ function buildDiagnosticsPreamble(): string[] {
   return [
     "Diagnostics can include sensitive local logs and host-level runtime metadata.",
     `Treat diagnostics bundles like secrets and review what they contain before sharing: ${DIAGNOSTICS_DOCS_URL}`,
-    `Local Gateway bundle: run \`${GATEWAY_DIAGNOSTICS_EXPORT_COMMAND}\` through an explicit exec approval each time. Do not approve diagnostics with an allow-all rule.`,
+    `Local Gateway bundle: this chat command only shows the command. Run \`${GATEWAY_DIAGNOSTICS_EXPORT_COMMAND}\` through an explicit exec approval each time. Do not approve diagnostics with an allow-all rule.`,
   ];
 }
 

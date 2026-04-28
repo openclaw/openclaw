@@ -118,6 +118,7 @@ describe("diagnostics command", () => {
     );
     expect(result?.reply?.text).toContain("https://docs.openclaw.ai/gateway/diagnostics");
     expect(result?.reply?.text).toContain("openclaw gateway diagnostics export");
+    expect(result?.reply?.text).toContain("this chat command only shows the command");
     expect(result?.reply?.text).toContain("Do not approve diagnostics with an allow-all rule.");
     expect(result?.reply?.text).not.toContain("OpenAI Codex harness");
   });
