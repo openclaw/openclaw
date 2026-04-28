@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- codex/discord: clarify the embedded developer instructions and bundled Discord skill so the agent emits the normal current-conversation reply as the final assistant message (which OpenClaw delivery routes to the originating channel/thread, including auto-created threads) and only invokes the `message` tool for explicit out-of-band actions, eliminating the duplicate `message.send` reply in the parent channel that landed alongside the thread reply on `autoThread: true` mentions. Fixes #73278. Thanks @solavrc.
 - Control UI/WebChat: keep large attachment payloads out of Lit state and optimistic chat messages, using object URL previews plus send-time payload serialization so PDF/image uploads no longer trigger `RangeError: Maximum call stack size exceeded`. Fixes #73360; refs #54378 and #63432. Thanks @hejunhui-73, @Ansub, and @christianhernandez3-afk.
 - Agents/models: keep per-agent primary models strict when `fallbacks` is omitted, so probe-only custom providers are not tried as hidden fallback candidates unless the agent explicitly opts in. Fixes #73332. Thanks @haumanto.
 - Gateway/models: add `models.pricing.enabled` so offline or restricted-network installs can skip startup OpenRouter and LiteLLM pricing-catalog fetches while keeping explicit model costs working. Fixes #53639. Thanks @callebtc, @palewire, and @rjdjohnston.
