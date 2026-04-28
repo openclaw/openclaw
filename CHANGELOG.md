@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Channels/Signal: derive the Signal HTTP RPC response cap from the per-attachment `mediaMaxMb` size (with base64 + JSON envelope headroom) so inbound photos and videos larger than ~770 KB are no longer silently dropped against the previously hardcoded 1 MiB cap. Fixes #73564. Thanks @heyhudson.
 - fix(agents): canonicalize provider aliases in byProvider tool policy lookup [AI]. (#72917) Thanks @pgondhi987.
 - fix(security): block npm_execpath injection from workspace .env [AI-assisted]. (#73262) Thanks @pgondhi987.
 - Tools/web_fetch: decode response bodies from raw bytes using declared HTTP, XML, or HTML meta charsets before extraction, so Shift_JIS and other legacy-charset pages no longer return mojibake. Fixes #72916. Thanks @amknight.

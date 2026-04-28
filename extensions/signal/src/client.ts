@@ -7,6 +7,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 export type SignalRpcOptions = {
   baseUrl: string;
   timeoutMs?: number;
+  maxResponseBytes?: number;
 };
 
 export type SignalRpcError = {
@@ -29,7 +30,7 @@ export type SignalSseEvent = {
 };
 
 const DEFAULT_TIMEOUT_MS = 10_000;
-const MAX_SIGNAL_HTTP_RESPONSE_BYTES = 1_048_576;
+const DEFAULT_SIGNAL_HTTP_RESPONSE_MAX_BYTES = 1_048_576;
 const MAX_SIGNAL_SSE_BUFFER_BYTES = 1_048_576;
 const MAX_SIGNAL_SSE_EVENT_DATA_BYTES = 1_048_576;
 
@@ -43,6 +44,13 @@ function createSignalSseAbortError(): Error {
   const error = new Error("Signal SSE aborted");
   error.name = "AbortError";
   return error;
+}
+
+function normalizeSignalHttpResponseMaxBytes(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return DEFAULT_SIGNAL_HTTP_RESPONSE_MAX_BYTES;
+  }
+  return Math.floor(value);
 }
 
 function normalizeBaseUrl(url: string): string {
@@ -101,6 +109,7 @@ function requestSignalHttpText(
     headers?: Record<string, string>;
     body?: string;
     timeoutMs: number;
+    maxResponseBytes?: number;
   },
 ): Promise<SignalHttpResponse> {
   assertSignalHttpProtocol(url, "HTTP");
@@ -132,6 +141,7 @@ function requestSignalHttpText(
       cleanup();
       resolve(response);
     };
+    const maxResponseBytes = normalizeSignalHttpResponseMaxBytes(options.maxResponseBytes);
     request = client.request(
       url,
       {
@@ -144,7 +154,7 @@ function requestSignalHttpText(
         res.on("data", (chunk: Buffer | string) => {
           const next = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
           totalBytes += next.byteLength;
-          if (totalBytes > MAX_SIGNAL_HTTP_RESPONSE_BYTES) {
+          if (totalBytes > maxResponseBytes) {
             const error = new Error("Signal HTTP response exceeded size limit");
             request?.destroy(error);
             res.destroy(error);
@@ -194,6 +204,7 @@ export async function signalRpcRequest<T = unknown>(
     },
     body,
     timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    maxResponseBytes: opts.maxResponseBytes,
   });
   if (res.status === 201) {
     return undefined as T;

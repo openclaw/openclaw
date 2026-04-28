@@ -139,6 +139,65 @@ describe("signalRpcRequest", () => {
     ).rejects.toThrow("Signal HTTP response exceeded size limit");
   });
 
+  it("accepts RPC responses larger than the default cap when maxResponseBytes is raised", async () => {
+    const payload = JSON.stringify({
+      jsonrpc: "2.0",
+      result: { data: "y".repeat(1_200_000) },
+      id: "test-id",
+    });
+    const baseUrl = await withSignalServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(payload);
+    });
+
+    const result = await signalRpcRequest<{ data: string }>("getAttachment", undefined, {
+      baseUrl,
+      maxResponseBytes: 4_000_000,
+    });
+
+    expect(result.data.length).toBe(1_200_000);
+  });
+
+  it("rejects RPC responses that exceed a custom maxResponseBytes cap", async () => {
+    const baseUrl = await withSignalServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end("x".repeat(8_193));
+    });
+
+    await expect(
+      signalRpcRequest("getAttachment", undefined, {
+        baseUrl,
+        maxResponseBytes: 8_192,
+      }),
+    ).rejects.toThrow("Signal HTTP response exceeded size limit");
+  });
+
+  it("falls back to the default cap when maxResponseBytes is zero or non-finite", async () => {
+    const baseUrl = await withSignalServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end("x".repeat(1_048_577));
+    });
+
+    await expect(
+      signalRpcRequest("version", undefined, {
+        baseUrl,
+        maxResponseBytes: 0,
+      }),
+    ).rejects.toThrow("Signal HTTP response exceeded size limit");
+
+    const baseUrl2 = await withSignalServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end("x".repeat(1_048_577));
+    });
+
+    await expect(
+      signalRpcRequest("version", undefined, {
+        baseUrl: baseUrl2,
+        maxResponseBytes: Number.POSITIVE_INFINITY,
+      }),
+    ).rejects.toThrow("Signal HTTP response exceeded size limit");
+  });
+
   it("uses an absolute deadline for slow-drip RPC responses", async () => {
     const baseUrl = await withSignalServer((_req, res) => {
       res.writeHead(200, { "Content-Type": "application/json" });
