@@ -247,11 +247,54 @@ describe("startGatewayPostAttachRuntime", () => {
 
       expect(prewarm).toHaveBeenCalledTimes(1);
       expect(log.warn).toHaveBeenCalledWith(
-        "startup model warmup timed out after 25ms; continuing channel startup",
+        "startup model warmup timed out after 25ms; continuing without waiting",
       );
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("schedules model prewarm without awaiting completion", async () => {
+    const log = { warn: vi.fn() };
+    const traceEvents: string[] = [];
+    const startupTrace: NonNullable<
+      Parameters<typeof __testing.schedulePrimaryModelPrewarm>[0]["startupTrace"]
+    > = {
+      mark: vi.fn(),
+      measure: async <T>(name: string, run: () => T | Promise<T>): Promise<T> => {
+        traceEvents.push(`start:${name}`);
+        try {
+          return await run();
+        } finally {
+          traceEvents.push(`end:${name}`);
+        }
+      },
+    };
+    let resolvePrewarm!: () => void;
+    const prewarm = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        resolvePrewarm = resolve;
+      });
+    });
+
+    __testing.schedulePrimaryModelPrewarm(
+      {
+        cfg: {} as never,
+        log,
+        startupTrace,
+      },
+      prewarm as never,
+    );
+
+    expect(prewarm).toHaveBeenCalledTimes(1);
+    expect(traceEvents).toEqual(["start:sidecars.model-prewarm"]);
+
+    resolvePrewarm();
+
+    await vi.waitFor(() => {
+      expect(traceEvents).toEqual(["start:sidecars.model-prewarm", "end:sidecars.model-prewarm"]);
+    });
+    expect(log.warn).not.toHaveBeenCalled();
   });
 
   it("keeps startup-gated methods unavailable while sidecars are still resuming", async () => {
