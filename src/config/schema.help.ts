@@ -167,6 +167,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Talk byte/session transport: webrtc, provider-websocket, gateway-relay, or managed-room.",
   "talk.realtime.brain":
     "Talk reasoning strategy: agent-consult for Gateway-mediated agent help, direct-tools for owner-only tool calls, or none.",
+  "talk.consultThinkingLevel":
+    "Use this to override the thinking level for the regular agent run behind Talk realtime consults.",
+  "talk.consultFastMode":
+    "Use this to set true or false fast mode for the regular agent run behind Talk realtime consults.",
   "talk.speechLocale":
     'BCP 47 locale id for Talk speech recognition on device nodes, for example "ru-RU". Leave unset to use each device default.',
   "talk.interruptOnSpeech":

@@ -537,4 +537,62 @@ describe("createVoiceCallRuntime lifecycle", () => {
     });
     expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
   });
+
+  it("uses the configured realtime consult thinking level when set", async () => {
+    const config = createBaseConfig();
+    config.inboundPolicy = "allowlist";
+    config.realtime.enabled = true;
+    config.realtime.consultThinkingLevel = "low";
+    config.realtime.consultFastMode = true;
+    const sessionStore: Record<string, unknown> = {};
+    const runEmbeddedPiAgent = vi.fn(async () => ({
+      payloads: [{ text: "Done." }],
+      meta: {},
+    }));
+    const agentRuntime = {
+      defaults: { provider: "openai", model: "gpt-5.4" },
+      resolveAgentDir: vi.fn(() => "/tmp/agent"),
+      resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
+      resolveAgentIdentity: vi.fn(),
+      resolveThinkingDefault: vi.fn(() => "high"),
+      resolveAgentTimeoutMs: vi.fn(() => 30_000),
+      ensureAgentWorkspace: vi.fn(async () => {}),
+      session: {
+        resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
+        loadSessionStore: vi.fn(() => sessionStore),
+        saveSessionStore: vi.fn(async () => {}),
+        updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore)),
+        resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
+      },
+      runEmbeddedPiAgent,
+    };
+    mocks.managerGetCall.mockReturnValue({
+      callId: "call-1",
+      direction: "outbound",
+      from: "+15550001234",
+      to: "+15550009999",
+      transcript: [],
+    });
+
+    await createVoiceCallRuntime({
+      config,
+      coreConfig: {} as CoreConfig,
+      agentRuntime: agentRuntime as never,
+    });
+
+    const handler = mocks.realtimeHandlerRegisterToolHandler.mock.calls[0]?.[1] as
+      | ((args: unknown, callId: string) => Promise<unknown>)
+      | undefined;
+    await expect(handler?.({ question: "Turn on the lights." }, "call-1")).resolves.toEqual({
+      text: "Done.",
+    });
+
+    expect(agentRuntime.resolveThinkingDefault).not.toHaveBeenCalled();
+    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        thinkLevel: "low",
+        fastMode: true,
+      }),
+    );
+  });
 });

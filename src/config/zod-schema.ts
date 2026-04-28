@@ -268,6 +268,10 @@ const TalkSchema = z
     provider: z.string().optional(),
     providers: z.record(z.string(), TalkProviderEntrySchema).optional(),
     realtime: TalkRealtimeSchema.optional(),
+    consultThinkingLevel: z
+      .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"])
+      .optional(),
+    consultFastMode: z.boolean().optional(),
     speechLocale: z.string().optional(),
     interruptOnSpeech: z.boolean().optional(),
     silenceTimeoutMs: z.number().int().positive().optional(),

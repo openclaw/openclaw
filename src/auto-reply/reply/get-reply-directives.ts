@@ -14,7 +14,13 @@ import {
 } from "../../shared/string-coerce.js";
 import { shouldHandleTextCommands } from "../commands-text-routing.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
-import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
+import {
+  normalizeThinkLevel,
+  type ElevatedLevel,
+  type ReasoningLevel,
+  type ThinkLevel,
+  type VerboseLevel,
+} from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveBlockStreamingChunking } from "./block-streaming.js";
 import { buildCommandContext } from "./commands-context.js";
@@ -417,8 +423,11 @@ export async function resolveReplyDirectives(params: {
   });
   const defaultActivation = defaultGroupActivation(requireMention);
   const resolvedThinkLevel =
-    directives.thinkLevel ?? (targetSessionEntry?.thinkingLevel as ThinkLevel | undefined);
+    normalizeThinkLevel(opts?.thinkingLevelOverride) ??
+    directives.thinkLevel ??
+    (targetSessionEntry?.thinkingLevel as ThinkLevel | undefined);
   const resolvedFastMode =
+    opts?.fastModeOverride ??
     directives.fastMode ??
     resolveFastModeState({
       cfg,
