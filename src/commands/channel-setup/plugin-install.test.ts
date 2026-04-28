@@ -529,7 +529,6 @@ describe("ensureChannelSetupPluginInstalled", () => {
       }),
     );
   });
-  });
 
   it("falls back to local path after npm install failure", async () => {
     const runtime = makeRuntime();
