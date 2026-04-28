@@ -80,6 +80,20 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads.some((payload) => payload.text === errorJson)).toBe(false);
   });
 
+  it("suppresses mutating tool warnings when an assistant error reply already covers the turn", () => {
+    const payloads = buildPayloads({
+      assistantTexts: [errorJson],
+      lastAssistant: makeAssistant({}),
+      lastToolError: { toolName: "edit", error: "file missing" },
+      sessionKey: "agent:main:telegram:direct:u123",
+    });
+
+    expectOverloadedFallback(payloads);
+    expect(payloads[0]?.isError).toBe(true);
+    expect(payloads.some((payload) => payload.text?.includes("Edit"))).toBe(false);
+    expect(payloads.some((payload) => payload.text?.includes("missing"))).toBe(false);
+  });
+
   it("suppresses pretty-printed error JSON that differs from the errorMessage", () => {
     const payloads = buildPayloads({
       assistantTexts: [errorJsonPretty],
