@@ -36,7 +36,8 @@ import {
 } from "./advanced-workflow-fixtures.js";
 
 const workflowMocks = vi.hoisted(() => ({
-  callGatewayTool: vi.fn(async (method: string) => {
+  callGatewayTool: vi.fn(async (...args: unknown[]) => {
+    const method = typeof args[0] === "string" ? args[0] : "";
     if (method === "cron.add") {
       return { payload: { jobId: "workflow-cron-job" } };
     }
@@ -436,6 +437,10 @@ describe("advanced workflow plugin contract fixtures", () => {
         }),
         expect.objectContaining({ scopes: expect.arrayContaining(["operator.admin"]) }),
       );
+      const cronAddParams = workflowMocks.callGatewayTool.mock.calls.find(
+        ([method]) => method === "cron.add",
+      )?.[2] as Record<string, unknown> | undefined;
+      expect(cronAddParams).not.toHaveProperty("delivery");
 
       await expect(
         createHookRunner(registry.registry).runHeartbeatPromptContribution(
