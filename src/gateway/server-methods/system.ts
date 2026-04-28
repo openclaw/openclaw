@@ -137,11 +137,12 @@ export const systemHandlers: GatewayRequestHandlers = {
           enqueueSystemEvent(deltaText, {
             sessionKey,
             contextKey: presenceUpdate.key,
+            trusted: false,
           });
         }
       }
     } else {
-      enqueueSystemEvent(text, { sessionKey });
+      enqueueSystemEvent(text, { sessionKey, trusted: false });
     }
     broadcastPresenceSnapshot({
       broadcast: context.broadcast,

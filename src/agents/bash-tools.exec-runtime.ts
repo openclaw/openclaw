@@ -420,6 +420,7 @@ export function emitExecSystemEvent(
     sessionKey,
     contextKey: opts.contextKey,
     deliveryContext: opts.deliveryContext,
+    trusted: false,
   });
   requestHeartbeatNow(
     scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event", coalesceMs: 0 }),

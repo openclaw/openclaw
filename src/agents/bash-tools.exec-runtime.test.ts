@@ -417,6 +417,7 @@ describe("emitExecSystemEvent", () => {
         to: "telegram:-100123:topic:47",
         threadId: 47,
       },
+      trusted: false,
     });
     expect(requestHeartbeatNowMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -436,6 +437,7 @@ describe("emitExecSystemEvent", () => {
     expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
       sessionKey: "global",
       contextKey: "exec:run-global",
+      trusted: false,
     });
     expect(requestHeartbeatNowMock).toHaveBeenCalledWith(
       expect.objectContaining({
