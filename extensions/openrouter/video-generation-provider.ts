@@ -19,13 +19,14 @@ import type {
 } from "openclaw/plugin-sdk/video-generation";
 import { OPENROUTER_BASE_URL } from "./provider-catalog.js";
 
-const DEFAULT_MODEL = "google/veo-3.1";
+const DEFAULT_MODEL = "google/veo-3.1-fast";
 const DEFAULT_TIMEOUT_MS = 600_000;
 const DEFAULT_HTTP_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 5_000;
 const MAX_POLL_ATTEMPTS = 120;
-const SUPPORTED_ASPECT_RATIOS = ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "9:21"] as const;
-const SUPPORTED_RESOLUTIONS = ["480P", "720P", "1080P"] as const;
+const SUPPORTED_ASPECT_RATIOS = ["16:9", "9:16"] as const;
+const SUPPORTED_DURATION_SECONDS = [4, 6, 8] as const;
+const SUPPORTED_RESOLUTIONS = ["720P", "1080P"] as const;
 
 type OpenRouterVideoResponse = {
   id?: string;
@@ -49,6 +50,7 @@ type OpenRouterImagePart = {
 type OpenRouterFrameImagePart = OpenRouterImagePart & {
   frame_type: "first_frame" | "last_frame";
 };
+type GuardedFetchResult = Awaited<ReturnType<typeof fetchWithTimeoutGuarded>>;
 type FetchGuardOptions = NonNullable<Parameters<typeof fetchWithTimeoutGuarded>[4]>;
 type DispatcherPolicy = FetchGuardOptions["dispatcherPolicy"];
 
@@ -118,7 +120,18 @@ function resolveDurationSeconds(durationSeconds: number | undefined): number | u
   if (typeof durationSeconds !== "number" || !Number.isFinite(durationSeconds)) {
     return undefined;
   }
-  return Math.max(1, Math.round(durationSeconds));
+  const rounded = Math.max(1, Math.round(durationSeconds));
+  return SUPPORTED_DURATION_SECONDS.reduce((best, current) => {
+    const currentDistance = Math.abs(current - rounded);
+    const bestDistance = Math.abs(best - rounded);
+    if (currentDistance < bestDistance) {
+      return current;
+    }
+    if (currentDistance === bestDistance && current > best) {
+      return current;
+    }
+    return best;
+  });
 }
 
 function resolveResolution(resolution: VideoGenerationRequest["resolution"]): string | undefined {
@@ -188,20 +201,7 @@ async function fetchOpenRouterJson(params: {
   errorContext: string;
   auditContext: string;
 }): Promise<OpenRouterVideoResponse> {
-  const { response, release } = await fetchWithTimeoutGuarded(
-    params.url,
-    {
-      method: "GET",
-      headers: headersForOpenRouterGet(params.url, params.baseUrl, params.headers),
-    },
-    params.timeoutMs,
-    fetch,
-    {
-      ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
-      ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
-      auditContext: params.auditContext,
-    },
-  );
+  const { response, release } = await fetchOpenRouterGet(params);
   try {
     await assertOkOrThrowHttpError(response, params.errorContext);
     return (await response.json()) as OpenRouterVideoResponse;
@@ -268,6 +268,41 @@ function headersForOpenRouterGet(url: string, baseUrl: string, requestHeaders: H
   return headers;
 }
 
+async function fetchOpenRouterGet(params: {
+  url: string;
+  baseUrl: string;
+  headers: Headers;
+  timeoutMs: number;
+  allowPrivateNetwork: boolean;
+  dispatcherPolicy: DispatcherPolicy;
+  auditContext: string;
+}): Promise<GuardedFetchResult> {
+  const url = resolveOpenRouterResponseUrl(params.url, params.baseUrl);
+  return await fetchWithTimeoutGuarded(
+    url,
+    {
+      method: "GET",
+      headers: headersForOpenRouterGet(url, params.baseUrl, params.headers),
+    },
+    params.timeoutMs,
+    fetch,
+    {
+      ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
+      ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
+      auditContext: params.auditContext,
+    },
+  );
+}
+
+function resolveOpenRouterResponseUrl(url: string, baseUrl: string): string {
+  return new URL(url, `${baseUrl}/`).href;
+}
+
+function resolveOpenRouterContentUrl(params: { baseUrl: string; jobId: string }): string {
+  return new URL(`videos/${encodeURIComponent(params.jobId)}/content?index=0`, `${params.baseUrl}/`)
+    .href;
+}
+
 async function downloadOpenRouterVideo(params: {
   url: string;
   baseUrl: string;
@@ -276,20 +311,10 @@ async function downloadOpenRouterVideo(params: {
   allowPrivateNetwork: boolean;
   dispatcherPolicy: DispatcherPolicy;
 }): Promise<GeneratedVideoAsset> {
-  const { response, release } = await fetchWithTimeoutGuarded(
-    params.url,
-    {
-      method: "GET",
-      headers: headersForOpenRouterGet(params.url, params.baseUrl, params.headers),
-    },
-    params.timeoutMs,
-    fetch,
-    {
-      ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
-      ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
-      auditContext: "openrouter-video-download",
-    },
-  );
+  const { response, release } = await fetchOpenRouterGet({
+    ...params,
+    auditContext: "openrouter-video-download",
+  });
   try {
     await assertOkOrThrowHttpError(response, "OpenRouter generated video download failed");
     const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
@@ -319,6 +344,7 @@ export function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvide
       },
       generate: {
         maxVideos: 1,
+        supportedDurationSeconds: [...SUPPORTED_DURATION_SECONDS],
         supportsAspectRatio: true,
         supportsResolution: true,
         supportsSize: true,
@@ -330,6 +356,7 @@ export function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvide
         enabled: true,
         maxVideos: 1,
         maxInputImages: 4,
+        supportedDurationSeconds: [...SUPPORTED_DURATION_SECONDS],
         supportsAspectRatio: true,
         supportsResolution: true,
         supportsSize: true,
@@ -415,10 +442,10 @@ export function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvide
                 allowPrivateNetwork,
                 dispatcherPolicy,
               });
-        const videoUrl = completed.unsigned_urls?.find((url) => normalizeOptionalString(url));
-        if (!videoUrl) {
-          throw new Error("OpenRouter video generation completed without an output URL");
-        }
+        const completedJobId = normalizeOptionalString(completed.id) ?? jobId;
+        const videoUrl =
+          completed.unsigned_urls?.find((url) => normalizeOptionalString(url)) ??
+          resolveOpenRouterContentUrl({ baseUrl, jobId: completedJobId });
         const video = await downloadOpenRouterVideo({
           url: videoUrl,
           baseUrl,

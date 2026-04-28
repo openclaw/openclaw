@@ -953,7 +953,7 @@ Docs: https://docs.openclaw.ai
 - Google Meet joins OpenClaw as a bundled participant plugin, with personal Google auth, Chrome/Twilio realtime sessions, paired-node Chrome support, artifact/attendance exports, and recovery tooling for already-open Meet tabs.
 - DeepSeek V4 Flash and V4 Pro are in the bundled catalog, V4 Flash is the onboarding default, and DeepSeek thinking/replay behavior is fixed for follow-up tool-call turns.
 - Talk, Voice Call, and Google Meet can use realtime voice loops that consult the full OpenClaw agent for deeper tool-backed answers.
-- Providers/OpenRouter: add native video generation through `video_generate`, so OpenRouter video models work with `OPENROUTER_API_KEY`.
+- Providers/OpenRouter: add native video generation through `video_generate`, so OpenRouter video models work with `OPENROUTER_API_KEY`. Thanks @notamicrodose.
 - Browser automation gets coordinate clicks, longer default action budgets, per-profile headless overrides, and steadier tab reuse/recovery.
 - Plugin and model infrastructure is lighter at startup: static model catalogs, manifest-backed model rows, lazy provider dependencies, and external runtime-dependency repair for packaged installs.
 

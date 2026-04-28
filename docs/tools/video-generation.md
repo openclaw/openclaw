@@ -116,7 +116,7 @@ generation.
 | Google                | `veo-3.1-fast-generate-preview` |  ✓   | 1 image                                              | 1 video                                         | `GEMINI_API_KEY`                         |
 | MiniMax               | `MiniMax-Hailuo-2.3`            |  ✓   | 1 image                                              | —                                               | `MINIMAX_API_KEY` or MiniMax OAuth       |
 | OpenAI                | `sora-2`                        |  ✓   | 1 image                                              | 1 video                                         | `OPENAI_API_KEY`                         |
-| OpenRouter            | `google/veo-3.1`                |  ✓   | Up to 4 images (first/last frame or references)      | —                                               | `OPENROUTER_API_KEY`                     |
+| OpenRouter            | `google/veo-3.1-fast`           |  ✓   | Up to 4 images (first/last frame or references)      | —                                               | `OPENROUTER_API_KEY`                     |
 | Qwen                  | `wan2.6-t2v`                    |  ✓   | Yes (remote URL)                                     | Yes (remote URL)                                | `QWEN_API_KEY`                           |
 | Runway                | `gen4.5`                        |  ✓   | 1 image                                              | 1 video                                         | `RUNWAYML_API_SECRET`                    |
 | Together              | `Wan-AI/Wan2.2-T2V-A14B`        |  ✓   | 1 image                                              | —                                               | `TOGETHER_API_KEY`                       |
@@ -390,6 +390,13 @@ only the explicit `model`, `primary`, and `fallbacks` entries.
     Only `size` override is forwarded. Other style overrides
     (`aspectRatio`, `resolution`, `audio`, `watermark`) are ignored with
     a warning.
+  </Accordion>
+  <Accordion title="OpenRouter">
+    Uses OpenRouter's asynchronous `/videos` API. OpenClaw submits the
+    job, polls `polling_url`, and downloads either `unsigned_urls` or the
+    documented job content endpoint. The bundled `google/veo-3.1-fast` default
+    advertises 4/6/8 second durations, `720P`/`1080P` resolutions, and
+    `16:9`/`9:16` aspect ratios.
   </Accordion>
   <Accordion title="Qwen">
     Same DashScope backend as Alibaba. Reference inputs must be remote

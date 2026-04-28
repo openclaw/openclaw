@@ -1,5 +1,5 @@
+import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { expectExplicitVideoGenerationCapabilities } from "../../test/helpers/media-generation/provider-capability-assertions.js";
 import { buildOpenRouterVideoGenerationProvider } from "./video-generation-provider.js";
 
 const {
@@ -76,8 +76,11 @@ describe("openrouter video generation provider", () => {
 
     expectExplicitVideoGenerationCapabilities(provider);
     expect(provider.id).toBe("openrouter");
-    expect(provider.defaultModel).toBe("google/veo-3.1");
+    expect(provider.defaultModel).toBe("google/veo-3.1-fast");
     expect(provider.capabilities.generate?.supportsAudio).toBe(true);
+    expect(provider.capabilities.generate?.supportedDurationSeconds).toEqual([4, 6, 8]);
+    expect(provider.capabilities.generate?.resolutions).toEqual(["720P", "1080P"]);
+    expect(provider.capabilities.generate?.aspectRatios).toEqual(["16:9", "9:16"]);
     expect(provider.capabilities.imageToVideo?.enabled).toBe(true);
     expect(provider.capabilities.videoToVideo?.enabled).toBe(false);
   });
@@ -86,7 +89,7 @@ describe("openrouter video generation provider", () => {
     postJsonRequestMock.mockResolvedValue(
       releasedJson({
         id: "job-123",
-        polling_url: "https://custom.openrouter.test/api/v1/videos/job-123",
+        polling_url: "/api/v1/videos/job-123",
         status: "pending",
       }),
     );
@@ -97,7 +100,7 @@ describe("openrouter video generation provider", () => {
           generation_id: "gen-123",
           status: "completed",
           model: "google/veo-3.1",
-          unsigned_urls: ["https://cdn.openrouter.test/video.mp4"],
+          unsigned_urls: ["/api/v1/videos/job-123/content?index=0"],
           usage: { cost: 0.25, is_byok: false },
         }),
       )
@@ -110,7 +113,7 @@ describe("openrouter video generation provider", () => {
     const result = await provider.generateVideo({
       provider: "openrouter",
       model: "google/veo-3.1",
-      prompt: "A chrome lobster walks across a quiet moon beach",
+      prompt: "A chrome sphere glides across a quiet moonlit beach",
       durationSeconds: 5.4,
       aspectRatio: "16:9",
       resolution: "720P",
@@ -158,8 +161,8 @@ describe("openrouter video generation provider", () => {
         url: "https://custom.openrouter.test/api/v1/videos",
         body: {
           model: "google/veo-3.1",
-          prompt: "A chrome lobster walks across a quiet moon beach",
-          duration: 5,
+          prompt: "A chrome sphere glides across a quiet moonlit beach",
+          duration: 6,
           resolution: "720p",
           aspect_ratio: "16:9",
           size: "1280x720",
@@ -208,7 +211,7 @@ describe("openrouter video generation provider", () => {
     ).toBe("Bearer openrouter-key");
     expect(fetchWithTimeoutGuardedMock).toHaveBeenNthCalledWith(
       2,
-      "https://cdn.openrouter.test/video.mp4",
+      "https://custom.openrouter.test/api/v1/videos/job-123/content?index=0",
       expect.objectContaining({ method: "GET" }),
       expect.any(Number),
       expect.any(Function),
@@ -218,7 +221,7 @@ describe("openrouter video generation provider", () => {
       (fetchWithTimeoutGuardedMock.mock.calls[1]?.[1]?.headers as Headers | undefined)?.get(
         "authorization",
       ),
-    ).toBeNull();
+    ).toBe("Bearer openrouter-key");
     expect(result.videos[0]?.buffer?.toString()).toBe("mp4-bytes");
     expect(result.videos[0]?.mimeType).toBe("video/mp4");
     expect(result.metadata).toEqual({
@@ -268,9 +271,22 @@ describe("openrouter video generation provider", () => {
         "authorization",
       ),
     ).toBeNull();
+    expect(fetchWithTimeoutGuardedMock).toHaveBeenNthCalledWith(
+      2,
+      "https://cdn.openrouter.test/video.mp4",
+      expect.objectContaining({ method: "GET" }),
+      expect.any(Number),
+      expect.any(Function),
+      expect.objectContaining({ auditContext: "openrouter-video-download" }),
+    );
+    expect(
+      (fetchWithTimeoutGuardedMock.mock.calls[1]?.[1]?.headers as Headers | undefined)?.get(
+        "authorization",
+      ),
+    ).toBeNull();
   });
 
-  it("fails clearly when a completed job has no output URL", async () => {
+  it("falls back to the documented content endpoint when a completed job has no output URL", async () => {
     postJsonRequestMock.mockResolvedValue(
       releasedJson({
         id: "job-123",
@@ -278,17 +294,26 @@ describe("openrouter video generation provider", () => {
         status: "completed",
       }),
     );
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce(
+      releasedVideo({ contentType: "video/mp4", bytes: "mp4-bytes" }),
+    );
 
     const provider = buildOpenRouterVideoGenerationProvider();
-    await expect(
-      provider.generateVideo({
-        provider: "openrouter",
-        model: "google/veo-3.1",
-        prompt: "A tiny robot watering a bonsai",
-        cfg: {} as never,
-      }),
-    ).rejects.toThrow("completed without an output URL");
-    expect(fetchWithTimeoutGuardedMock).not.toHaveBeenCalled();
+    const result = await provider.generateVideo({
+      provider: "openrouter",
+      model: "google/veo-3.1",
+      prompt: "A tiny robot watering a bonsai",
+      cfg: {} as never,
+    });
+
+    expect(fetchWithTimeoutGuardedMock).toHaveBeenCalledWith(
+      "https://openrouter.ai/api/v1/videos/job-123/content?index=0",
+      expect.objectContaining({ method: "GET" }),
+      expect.any(Number),
+      expect.any(Function),
+      expect.objectContaining({ auditContext: "openrouter-video-download" }),
+    );
+    expect(result.videos[0]?.buffer?.toString()).toBe("mp4-bytes");
   });
 
   it("rejects video reference inputs", async () => {
