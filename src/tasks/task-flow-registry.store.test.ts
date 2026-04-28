@@ -1,5 +1,6 @@
-import { statSync } from "node:fs";
+import { mkdirSync, statSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   createManagedTaskFlow,
@@ -47,6 +48,28 @@ async function withFlowRegistryTempDir<T>(run: (root: string) => Promise<T>): Pr
       resetTaskFlowRegistryForTests();
     }
   });
+}
+
+function createFlowRegistryDb(sqlitePath: string) {
+  mkdirSync(resolveTaskFlowRegistryDir(process.env), { recursive: true });
+  const { DatabaseSync } = requireNodeSqlite();
+  return new DatabaseSync(sqlitePath);
+}
+
+function listFlowRunsColumnNames(sqlitePath: string): string[] {
+  const { DatabaseSync } = requireNodeSqlite();
+  const db = new DatabaseSync(sqlitePath);
+  try {
+    return (
+      db.prepare(`PRAGMA table_info(flow_runs)`).all() as Array<{
+        name?: string;
+      }>
+    )
+      .map((row) => row.name ?? "")
+      .filter(Boolean);
+  } finally {
+    db.close();
+  }
 }
 
 describe("task-flow-registry store runtime", () => {
@@ -168,6 +191,159 @@ describe("task-flow-registry store runtime", () => {
         stateJson: null,
         waitJson: null,
       });
+    });
+  });
+
+  it("keeps legacy owner_session_key rows writable after restore", async () => {
+    await withFlowRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      const sqlitePath = resolveTaskFlowRegistrySqlitePath(process.env);
+      const db = createFlowRegistryDb(sqlitePath);
+      db.exec(`DROP TABLE IF EXISTS flow_runs;`);
+      db.exec(`
+        CREATE TABLE flow_runs (
+          flow_id TEXT PRIMARY KEY,
+          shape TEXT NOT NULL,
+          owner_session_key TEXT NOT NULL,
+          requester_origin_json TEXT,
+          status TEXT NOT NULL,
+          notify_policy TEXT NOT NULL,
+          goal TEXT NOT NULL,
+          current_step TEXT,
+          blocked_task_id TEXT,
+          blocked_summary TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          ended_at INTEGER
+        );
+      `);
+      db.exec(`CREATE INDEX idx_flow_runs_owner_session_key ON flow_runs(owner_session_key);`);
+      db.prepare(`
+        INSERT INTO flow_runs (
+          flow_id,
+          shape,
+          owner_session_key,
+          status,
+          notify_policy,
+          goal,
+          current_step,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        "legacy-flow",
+        "linear",
+        "agent:main:main",
+        "running",
+        "done_only",
+        "Legacy flow",
+        "wait_for_user",
+        100,
+        110,
+      );
+      db.close();
+
+      resetTaskFlowRegistryForTests({ persist: false });
+
+      expect(getTaskFlowById("legacy-flow")).toMatchObject({
+        flowId: "legacy-flow",
+        syncMode: "managed",
+        ownerKey: "agent:main:main",
+        controllerId: "core/legacy-restored",
+        revision: 0,
+        currentStep: "wait_for_user",
+      });
+      expect(() =>
+        createManagedTaskFlow({
+          ownerKey: "agent:main:main",
+          controllerId: "tests/legacy-owner-session-key",
+          goal: "Fresh flow after legacy restore",
+        }),
+      ).not.toThrow();
+
+      resetTaskFlowRegistryForTests({ persist: false });
+
+      expect(listFlowRunsColumnNames(sqlitePath)).toContain("owner_key");
+      expect(listFlowRunsColumnNames(sqlitePath)).not.toContain("owner_session_key");
+    });
+  });
+
+  it("repairs partially migrated owner_session_key schemas before new writes", async () => {
+    await withFlowRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      const sqlitePath = resolveTaskFlowRegistrySqlitePath(process.env);
+      const db = createFlowRegistryDb(sqlitePath);
+      db.exec(`DROP TABLE IF EXISTS flow_runs;`);
+      db.exec(`
+        CREATE TABLE flow_runs (
+          flow_id TEXT PRIMARY KEY,
+          shape TEXT,
+          owner_session_key TEXT NOT NULL,
+          status TEXT NOT NULL,
+          notify_policy TEXT NOT NULL,
+          goal TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+      `);
+      db.exec(`CREATE INDEX idx_flow_runs_owner_session_key ON flow_runs(owner_session_key);`);
+      db.exec(`ALTER TABLE flow_runs ADD COLUMN owner_key TEXT;`);
+      db.exec(`ALTER TABLE flow_runs ADD COLUMN sync_mode TEXT;`);
+      db.exec(`ALTER TABLE flow_runs ADD COLUMN controller_id TEXT;`);
+      db.exec(`ALTER TABLE flow_runs ADD COLUMN revision INTEGER;`);
+      db.prepare(`
+        INSERT INTO flow_runs (
+          flow_id,
+          shape,
+          owner_session_key,
+          owner_key,
+          sync_mode,
+          controller_id,
+          revision,
+          status,
+          notify_policy,
+          goal,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        "partial-flow",
+        "linear",
+        "agent:main:main",
+        "   ",
+        null,
+        "",
+        null,
+        "queued",
+        "done_only",
+        "Half migrated flow",
+        200,
+        200,
+      );
+      db.close();
+
+      resetTaskFlowRegistryForTests({ persist: false });
+
+      expect(getTaskFlowById("partial-flow")).toMatchObject({
+        flowId: "partial-flow",
+        syncMode: "managed",
+        ownerKey: "agent:main:main",
+        controllerId: "core/legacy-restored",
+        revision: 0,
+      });
+      expect(() =>
+        createManagedTaskFlow({
+          ownerKey: "agent:main:main",
+          controllerId: "tests/partial-owner-session-key",
+          goal: "Fresh flow after partial migration repair",
+        }),
+      ).not.toThrow();
+
+      resetTaskFlowRegistryForTests({ persist: false });
+
+      const columns = listFlowRunsColumnNames(sqlitePath);
+      expect(columns).toContain("owner_key");
+      expect(columns).not.toContain("owner_session_key");
     });
   });
 
