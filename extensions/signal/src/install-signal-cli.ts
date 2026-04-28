@@ -126,10 +126,10 @@ async function downloadToFile(url: string, dest: string, maxRedirects = 5): Prom
 
     let totalBytes = 0;
     const body = response.body as unknown;
-    const readable = isNodeReadableStream(body)
-      ? body
+    const readable: Readable = isNodeReadableStream(body)
+      ? (body as Readable)
       : Readable.fromWeb(body as NodeReadableStream);
-    readable.on("data", (chunk) => {
+    readable.on("data", (chunk: unknown) => {
       totalBytes += chunkByteLength(chunk);
       if (totalBytes > MAX_SIGNAL_CLI_ARCHIVE_BYTES) {
         readable.destroy(new Error("signal-cli archive exceeds 256 MiB limit"));
