@@ -3,16 +3,20 @@ import {
   resolveBlueBubblesEffectiveAllowPrivateNetworkFromConfig,
   resolveBlueBubblesPrivateNetworkConfigValue,
 } from "./accounts-normalization.js";
-import { resolveBlueBubblesClientSsrfPolicy } from "./client.js";
+import { createBlueBubblesClientFromParts } from "./client.js";
 import { rememberBlueBubblesReplyCache } from "./monitor-reply-cache.js";
 import { normalizeBlueBubblesHandle } from "./targets.js";
-import {
-  blueBubblesFetchWithTimeout,
-  buildBlueBubblesApiUrl,
-  type BlueBubblesAccountConfig,
-} from "./types.js";
+import type { BlueBubblesAccountConfig } from "./types.js";
 
 const DEFAULT_REPLY_FETCH_TIMEOUT_MS = 5_000;
+
+// Reject pathological GUIDs before they reach the API path: a trailing slash
+// would yield an empty bare GUID and turn the request into a list query
+// against `/api/v1/message/`; arbitrary characters could let a malformed
+// payload steer encoded path segments. Real BlueBubbles GUIDs are alnum + the
+// punctuation set below; 128 chars is comfortable headroom (CWE-20).
+const REPLY_TO_ID_PATTERN = /^[A-Za-z0-9._:-]+$/;
+const REPLY_TO_ID_MAX_LENGTH = 128;
 
 export type BlueBubblesReplyFetchResult = {
   body?: string;
@@ -43,8 +47,8 @@ export type FetchBlueBubblesReplyContextParams = {
   /**
    * Optional account config — used to resolve the SSRF policy for this fetch
    * via the same three-mode resolver the BlueBubbles client uses. Even when
-   * omitted the request is still SSRF-guarded; we never pass `undefined` to
-   * the underlying fetch helper.
+   * omitted the request is still SSRF-guarded; the typed client routes
+   * through the resolver internally and never returns `undefined`.
    */
   accountConfig?: BlueBubblesAccountConfig;
   /** Optional chat scope used to populate the reply cache for subsequent hits. */
@@ -53,8 +57,8 @@ export type FetchBlueBubblesReplyContextParams = {
   chatId?: number;
   /** Defaults to 5_000 ms. */
   timeoutMs?: number;
-  /** Override the underlying fetch. Test seam. */
-  fetchImpl?: typeof blueBubblesFetchWithTimeout;
+  /** Override the typed client factory. Test seam. */
+  clientFactory?: typeof createBlueBubblesClientFromParts;
 };
 
 /**
@@ -73,7 +77,7 @@ export type FetchBlueBubblesReplyContextParams = {
 export function fetchBlueBubblesReplyContext(
   params: FetchBlueBubblesReplyContextParams,
 ): Promise<BlueBubblesReplyFetchResult | null> {
-  const replyToId = params.replyToId.trim();
+  const replyToId = sanitizeReplyToId(params.replyToId);
   if (!replyToId || !params.baseUrl || !params.password) {
     return Promise.resolve(null);
   }
@@ -89,38 +93,52 @@ export function fetchBlueBubblesReplyContext(
   return promise;
 }
 
+/**
+ * Strip a part-index prefix (`p:0/<guid>` → `<guid>`) and validate the result
+ * against the GUID character set + length cap. Returns null when the id is
+ * empty or cannot safely be used as a path segment.
+ */
+function sanitizeReplyToId(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const bare = trimmed.includes("/") ? (trimmed.split("/").pop() ?? "") : trimmed;
+  if (!bare || bare.length > REPLY_TO_ID_MAX_LENGTH || !REPLY_TO_ID_PATTERN.test(bare)) {
+    return null;
+  }
+  return bare;
+}
+
 async function runFetch(
   params: FetchBlueBubblesReplyContextParams,
   replyToId: string,
 ): Promise<BlueBubblesReplyFetchResult | null> {
-  const fetchImpl = params.fetchImpl ?? blueBubblesFetchWithTimeout;
+  const factory = params.clientFactory ?? createBlueBubblesClientFromParts;
+  // Route through the typed BlueBubbles client. `client.request()` always
+  // applies the SSRF policy resolved via the canonical three-mode helper
+  // (mode 1: explicit private-network opt-in, mode 2: hostname allowlist for
+  // trusted self-hosted servers, mode 3: default-deny guard). Going through
+  // the typed surface guarantees consistency with every other BB client
+  // request and removes the risk of an `undefined` policy slipping past the
+  // guard. (PR #71820 review; same threat model as #68234.)
+  const client = factory({
+    accountId: params.accountId,
+    baseUrl: params.baseUrl,
+    password: params.password,
+    allowPrivateNetwork: resolveBlueBubblesEffectiveAllowPrivateNetworkFromConfig({
+      baseUrl: params.baseUrl,
+      config: params.accountConfig,
+    }),
+    allowPrivateNetworkConfig: resolveBlueBubblesPrivateNetworkConfigValue(params.accountConfig),
+    timeoutMs: params.timeoutMs ?? DEFAULT_REPLY_FETCH_TIMEOUT_MS,
+  });
   try {
-    const url = buildBlueBubblesApiUrl({
-      baseUrl: params.baseUrl,
+    const response = await client.request({
+      method: "GET",
       path: `/api/v1/message/${encodeURIComponent(replyToId)}`,
-      password: params.password,
+      timeoutMs: params.timeoutMs ?? DEFAULT_REPLY_FETCH_TIMEOUT_MS,
     });
-    // Resolve the SSRF policy through the same three-mode helper the BB
-    // client uses (mode 1: explicit private-network opt-in, mode 2: hostname
-    // allowlist for trusted self-hosted servers, mode 3: default-deny guard).
-    // The resolver never returns `undefined`, so this fetch is always routed
-    // through `fetchWithSsrFGuard`. Previously we passed `undefined` when the
-    // user had not opted in to private-network access, which silently skipped
-    // the guard entirely. (PR #71820 review)
-    const { ssrfPolicy } = resolveBlueBubblesClientSsrfPolicy({
-      baseUrl: params.baseUrl,
-      allowPrivateNetwork: resolveBlueBubblesEffectiveAllowPrivateNetworkFromConfig({
-        baseUrl: params.baseUrl,
-        config: params.accountConfig,
-      }),
-      allowPrivateNetworkConfig: resolveBlueBubblesPrivateNetworkConfigValue(params.accountConfig),
-    });
-    const response = await fetchImpl(
-      url,
-      { method: "GET" },
-      params.timeoutMs ?? DEFAULT_REPLY_FETCH_TIMEOUT_MS,
-      ssrfPolicy,
-    );
     if (!response.ok) {
       return null;
     }
