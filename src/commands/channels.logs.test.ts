@@ -91,10 +91,28 @@ describe("channelsLogsCommand", () => {
   it("falls back to the latest rolling log when the configured rolling file is missing", async () => {
     const configuredFile = path.join(tempDir, "openclaw-2026-04-26.log");
     const fallbackFile = path.join(tempDir, "openclaw-2026-04-25.log");
+    const staleFile = path.join(tempDir, "openclaw-2026-04-24.log");
     setLoggerOverride({ file: configuredFile });
     await fs.writeFile(
       fallbackFile,
-      logLine({ module: "gateway/channels/external-chat/send", message: "fallback sent" }),
+      [
+        logLine({ module: "gateway/channels/slack/send", message: "slack fallback" }),
+        logLine({ module: "gateway/channels/external-chat/send", message: "fallback sent" }),
+      ].join("\n"),
+    );
+    await fs.writeFile(
+      staleFile,
+      logLine({ module: "gateway/channels/external-chat/send", message: "stale sent" }),
+    );
+    await fs.utimes(
+      staleFile,
+      new Date("2026-04-24T12:00:00.000Z"),
+      new Date("2026-04-24T12:00:00.000Z"),
+    );
+    await fs.utimes(
+      fallbackFile,
+      new Date("2026-04-25T12:00:00.000Z"),
+      new Date("2026-04-25T12:00:00.000Z"),
     );
 
     await channelsLogsCommand({ channel: "external-chat", json: true }, runtime);
