@@ -205,6 +205,8 @@ function redactProxyUrlForMessage(raw: string): string {
       url.username = "redacted";
       url.password = url.password ? "redacted" : "";
     }
+    url.search = "";
+    url.hash = "";
     return url.toString();
   } catch {
     return "<invalid URL>";

@@ -295,7 +295,7 @@ describe("maybeRunCliInContainer", () => {
     expect(spawnSync).toHaveBeenCalledTimes(2);
   });
 
-  it("redacts proxy URL credentials before rejecting loopback container proxy forwarding", () => {
+  it("redacts proxy URL credentials and URL suffixes before rejecting loopback container proxy forwarding", () => {
     const spawnSync = vi
       .fn()
       .mockReturnValueOnce({
@@ -312,7 +312,8 @@ describe("maybeRunCliInContainer", () => {
       maybeRunCliInContainer(["node", "openclaw", "status"], {
         env: {
           OPENCLAW_CONTAINER: "demo",
-          OPENCLAW_PROXY_URL: "http://proxy-user:proxy-secret@127.1:3128",
+          OPENCLAW_PROXY_URL:
+            "http://proxy-user:proxy-secret@127.1:3128?token=proxy-query-secret#proxy-fragment-secret",
         } as NodeJS.ProcessEnv,
         spawnSync,
       });
@@ -323,6 +324,10 @@ describe("maybeRunCliInContainer", () => {
     expect(message).toContain("OPENCLAW_PROXY_URL=http://redacted:redacted@127.0.0.1:3128/");
     expect(message).not.toContain("proxy-user");
     expect(message).not.toContain("proxy-secret");
+    expect(message).not.toContain("proxy-query-secret");
+    expect(message).not.toContain("proxy-fragment-secret");
+    expect(message).not.toContain("?token=");
+    expect(message).not.toContain("#");
     expect(spawnSync).toHaveBeenCalledTimes(2);
   });
 
