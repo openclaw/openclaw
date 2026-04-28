@@ -966,35 +966,36 @@ describe("gateway agent handler", () => {
     );
   });
 
-  it.each(["heartbeat", "cron", "webhook"] as const)(
-    "accepts internal non-delivery channel hint %s",
-    async (channel) => {
-      primeMainAgentRun();
-      mocks.agentCommand.mockClear();
-      const respond = vi.fn();
+  it.each(
+    (["channel", "replyChannel"] as const).flatMap((field) =>
+      (["heartbeat", "cron", "webhook"] as const).map((channel) => [field, channel] as const),
+    ),
+  )("accepts internal non-delivery %s hint %s", async (field, channel) => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+    const respond = vi.fn();
 
-      await invokeAgent(
-        {
-          message: "spawn from internal source",
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          channel,
-          idempotencyKey: `internal-channel-${channel}`,
-        } as AgentParams,
-        { reqId: `internal-channel-${channel}-1`, respond },
-      );
+    await invokeAgent(
+      {
+        message: "spawn from internal source",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        [field]: channel,
+        idempotencyKey: `internal-channel-${field}-${channel}`,
+      } as AgentParams,
+      { reqId: `internal-channel-${field}-${channel}-1`, respond },
+    );
 
-      const rejection = respond.mock.calls.find(
-        (call: unknown[]) =>
-          call[0] === false &&
-          typeof (call[2] as { message?: string } | undefined)?.message === "string" &&
-          (call[2] as { message: string }).message.includes("unknown channel"),
-      );
-      expect(rejection).toBeUndefined();
-    },
-  );
+    const rejection = respond.mock.calls.find(
+      (call: unknown[]) =>
+        call[0] === false &&
+        typeof (call[2] as { message?: string } | undefined)?.message === "string" &&
+        (call[2] as { message: string }).message.includes("unknown channel"),
+    );
+    expect(rejection).toBeUndefined();
+  });
 
-  it("rejects unknown channel hints", async () => {
+  it.each(["channel", "replyChannel"] as const)("rejects unknown %s hints", async (field) => {
     primeMainAgentRun();
     mocks.agentCommand.mockClear();
     const respond = vi.fn();
@@ -1004,10 +1005,10 @@ describe("gateway agent handler", () => {
         message: "bogus channel",
         agentId: "main",
         sessionKey: "agent:main:main",
-        channel: "not-a-real-channel",
-        idempotencyKey: "unknown-channel",
+        [field]: "not-a-real-channel",
+        idempotencyKey: `unknown-${field}`,
       } as AgentParams,
-      { reqId: "unknown-channel-1", respond },
+      { reqId: `unknown-${field}-1`, respond },
     );
 
     expect(respond).toHaveBeenCalledWith(

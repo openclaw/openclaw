@@ -69,6 +69,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Channels/Telegram: keep Bot API network fallbacks sticky after failed attempts and retry timed-out startup control calls once on the fallback route, so `deleteWebhook` IPv6 stalls no longer trigger slow multi-account retry storms. Fixes #73255. Thanks @ttomiczek and @sktbrd.
+- Gateway/agents: accept heartbeat, cron, and webhook as internal channel hints for agent runs so `sessions_spawn` works from non-delivery parent sessions while unknown channel hints still fail closed. Fixes #73237. Thanks @KeWang0622.
 - Gateway/models: merge explicit `models.providers.*.models` rows into the Gateway model catalog with normalized provider/model dedupe, and use normalized image-capability lookup so custom vision models keep native image attachments even when Pi discovery omits them or model ID casing differs. Fixes #64213 and #65165. Thanks @billonese and @202233a.
 - Gateway/reload: publish canonical post-write source config to in-process reloaders so simple config saves no longer create phantom plugin diffs or trigger unnecessary Gateway restarts. (#73267) Thanks @szsip239.
 - Gateway/Docker: keep config-triggered restarts in-process inside containers instead of spawning a detached child and exiting PID 1 cleanly, so Docker Swarm and other on-failure supervisors do not leave the service stuck at 0/1 replicas. Fixes #73178. Thanks @du-nguyen-IT007.
