@@ -1071,7 +1071,9 @@ describe("runDetachedDreamNarrative", () => {
         d.resolve({ runId: "drain" });
       }
       await drainMicrotasks();
-      if (runDeferreds.length === before) break;
+      if (runDeferreds.length === before) {
+        break;
+      }
     }
   });
 
