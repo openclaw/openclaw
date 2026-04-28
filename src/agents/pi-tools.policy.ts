@@ -154,6 +154,41 @@ function normalizeProviderKey(value: string): string {
   return modelId ? `${provider}/${modelId}` : provider;
 }
 
+function isCanonicalProviderKey(value: string): boolean {
+  return normalizeLowercaseStringOrEmpty(value) === normalizeProviderKey(value);
+}
+
+function buildProviderToolPolicyLookup(
+  entries: Array<[string, ToolPolicyConfig]>,
+): Map<string, ToolPolicyConfig> {
+  const lookup = new Map<
+    string,
+    {
+      canonical: boolean;
+      value: ToolPolicyConfig;
+    }
+  >();
+  for (const [key, value] of entries) {
+    const normalized = normalizeProviderKey(key);
+    if (!normalized) {
+      continue;
+    }
+    const canonical = isCanonicalProviderKey(key);
+    const existing = lookup.get(normalized);
+    // Alias and canonical keys can normalize to the same provider. Prefer the
+    // canonical entry so mixed legacy/canonical configs do not depend on
+    // Object.entries insertion order.
+    if (!existing || (canonical && !existing.canonical)) {
+      lookup.set(normalized, { canonical, value });
+    }
+  }
+  const resolved = new Map<string, ToolPolicyConfig>();
+  for (const [key, entry] of lookup) {
+    resolved.set(key, entry.value);
+  }
+  return resolved;
+}
+
 function collectUniqueStrings(values: Array<string | null | undefined>): string[] {
   const seen = new Set<string>();
   const resolved: string[] = [];
@@ -259,23 +294,11 @@ function resolveProviderToolPolicy(params: {
     return undefined;
   }
 
-  const lookup = new Map<string, ToolPolicyConfig>();
-  for (const [key, value] of entries) {
-    const normalized = normalizeProviderKey(key);
-    if (!normalized) {
-      continue;
-    }
-    lookup.set(normalized, value);
-  }
+  const lookup = buildProviderToolPolicyLookup(entries);
 
   const normalizedProvider = normalizeProviderKey(provider);
   const rawModelId = normalizeOptionalLowercaseString(params.modelId);
-  let fullModelId: string | undefined;
-  if (rawModelId) {
-    fullModelId = rawModelId.includes("/")
-      ? normalizeProviderKey(rawModelId)
-      : `${normalizedProvider}/${rawModelId}`;
-  }
+  const fullModelId = rawModelId ? `${normalizedProvider}/${rawModelId}` : undefined;
 
   const candidates = [...(fullModelId ? [fullModelId] : []), normalizedProvider];
 
