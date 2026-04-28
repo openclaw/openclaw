@@ -193,18 +193,14 @@ describe("ensureOnboardingPluginInstalled", () => {
   });
 
   it("offers registry npm specs without requiring an exact version or integrity pin", async () => {
-    installPluginFromNpmSpec.mockResolvedValue({
-      ok: true,
-      pluginId: "demo-plugin",
-      targetDir: "/tmp/demo-plugin",
-      version: "1.0.0",
-      npmResolution: { resolvedSpec: "@demo/plugin@1.0.0" },
-    });
-    const select = vi.fn(async () => "skip");
-    const stop = vi.fn();
-    const update = vi.fn();
+    let captured:
+      | {
+          options: Array<{ value: "npm" | "local" | "skip"; label: string; hint?: string }>;
+          initialValue: "npm" | "local" | "skip";
+        }
+      | undefined;
 
-    const result = await ensureOnboardingPluginInstalled({
+    await ensureOnboardingPluginInstalled({
       cfg: {},
       entry: {
         pluginId: "demo-plugin",
@@ -214,20 +210,20 @@ describe("ensureOnboardingPluginInstalled", () => {
         },
       },
       prompter: {
-        select,
-        progress: vi.fn(() => ({ update, stop })),
+        select: vi.fn(async (input) => {
+          captured = input;
+          return "skip";
+        }),
       } as never,
       runtime: {} as never,
     });
 
-    // When npm is the only available install option, the redundant
-    // "Install <plugin>?" prompt is skipped and the install starts directly.
-    expect(select).not.toHaveBeenCalled();
-    expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
-      expect.objectContaining({ spec: "@demo/plugin" }),
-    );
-    expect(result.installed).toBe(true);
-    expect(result.status).toBe("installed");
+    expect(captured?.options).toEqual([
+      { value: "npm", label: "Download from npm (@demo/plugin)" },
+      { value: "skip", label: "Skip for now" },
+    ]);
+    expect(captured?.initialValue).toBe("npm");
+    expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
   });
 
   it("does not offer local installs when the workspace only has a spoofed .git marker", async () => {
@@ -543,6 +539,8 @@ describe("ensureOnboardingPluginInstalled", () => {
           { value: "skip", label: "Skip for now" },
         ]);
         expect(captured?.initialValue).toBe("local");
+        findBundledPluginSourceInMap.mockReset();
+        resolveBundledInstallPlanForCatalogEntry.mockReset();
       },
     );
   });
