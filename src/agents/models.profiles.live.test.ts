@@ -1,7 +1,7 @@
 import { type Api, completeSimple, type Model } from "@mariozechner/pi-ai";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { parseLiveCsvFilter } from "../media-generation/live-test-helpers.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
@@ -58,8 +58,12 @@ const LIVE_TEST_TIMEOUT_MS = Math.max(
   toInt(process.env.OPENCLAW_LIVE_TEST_TIMEOUT_MS, 60 * 60 * 1000),
 );
 const DEFAULT_LIVE_MODEL_CONCURRENCY = 20;
-const LIVE_MODEL_CONCURRENCY = resolveLiveModelConcurrency();
-const LIVE_MODELS_JSON_TIMEOUT_MS = resolveLiveModelsJsonTimeoutMs();
+const LIVE_MODEL_CONCURRENCY = resolveLiveModelConcurrency(
+  process.env.OPENCLAW_LIVE_MODEL_CONCURRENCY,
+);
+const LIVE_MODELS_JSON_TIMEOUT_MS = resolveLiveModelsJsonTimeoutMs(
+  process.env.OPENCLAW_LIVE_MODELS_JSON_TIMEOUT_MS,
+);
 const LIVE_FILE_PROBE_ENABLED = isLiveModelProbeEnabled(process.env, LIVE_MODEL_FILE_PROBE_ENV);
 const LIVE_IMAGE_PROBE_ENABLED = isLiveModelProbeEnabled(process.env, LIVE_MODEL_IMAGE_PROBE_ENV);
 
@@ -299,6 +303,15 @@ function isUnsupportedPlanErrorMessage(raw: string): boolean {
   return /current token plan (?:does )?not support (?:this )?model/i.test(raw);
 }
 
+function isOpenRouterOpaqueBadRequestErrorMessage(raw: string): boolean {
+  const msg = raw.toLowerCase();
+  return (
+    msg.includes("provider returned error") &&
+    msg.includes('"code":400') &&
+    msg.includes('"msg":"bad request"')
+  );
+}
+
 describe("isUnsupportedPlanErrorMessage", () => {
   it("matches provider plan-gated models", () => {
     expect(isUnsupportedPlanErrorMessage("current token plan does not support this model")).toBe(
@@ -306,6 +319,17 @@ describe("isUnsupportedPlanErrorMessage", () => {
     );
     expect(isUnsupportedPlanErrorMessage("your current token plan not support model")).toBe(true);
     expect(isUnsupportedPlanErrorMessage("model not found")).toBe(false);
+  });
+});
+
+describe("isOpenRouterOpaqueBadRequestErrorMessage", () => {
+  it("matches opaque OpenRouter upstream bad requests", () => {
+    expect(
+      isOpenRouterOpaqueBadRequestErrorMessage(
+        'Error: 400 Provider returned error {"code":400,"msg":"bad request","request_id":"abc"}',
+      ),
+    ).toBe(true);
+    expect(isOpenRouterOpaqueBadRequestErrorMessage("Error: 400 bad request")).toBe(false);
   });
 });
 
@@ -318,13 +342,13 @@ function toInt(value: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function resolveLiveModelConcurrency(raw = process.env.OPENCLAW_LIVE_MODEL_CONCURRENCY): number {
+function resolveLiveModelConcurrency(raw?: string): number {
   return Math.max(1, toInt(raw, DEFAULT_LIVE_MODEL_CONCURRENCY));
 }
 
 describe("resolveLiveModelConcurrency", () => {
   it("defaults direct-model probes to 20-way concurrency", () => {
-    expect(resolveLiveModelConcurrency(undefined)).toBe(20);
+    expect(resolveLiveModelConcurrency()).toBe(20);
   });
 
   it("accepts explicit concurrency overrides", () => {
@@ -334,7 +358,7 @@ describe("resolveLiveModelConcurrency", () => {
 });
 
 function resolveLiveModelsJsonTimeoutMs(
-  modelsJsonTimeoutRaw = process.env.OPENCLAW_LIVE_MODELS_JSON_TIMEOUT_MS,
+  modelsJsonTimeoutRaw?: string,
   setupTimeoutMs = LIVE_SETUP_TIMEOUT_MS,
 ): number {
   return Math.max(setupTimeoutMs, toInt(modelsJsonTimeoutRaw, 120_000));
@@ -491,6 +515,102 @@ async function completeOkWithRetry(params: {
   return await runOnce(256);
 }
 
+function isDeepSeekV4Model(model: Pick<Model<Api>, "id" | "provider">): boolean {
+  return (
+    model.provider === "deepseek" &&
+    (model.id === "deepseek-v4-flash" || model.id === "deepseek-v4-pro")
+  );
+}
+
+async function runDeepSeekV4ReplayRegression(params: {
+  model: Model<Api>;
+  apiKey: string;
+  timeoutMs: number;
+  progressLabel: string;
+}) {
+  const noopTool = {
+    name: "noop",
+    description: "Return ok.",
+    parameters: Type.Object({}, { additionalProperties: false }),
+  };
+  let firstUser = {
+    role: "user" as const,
+    content: "Call the tool `noop` with {}. Do not write any other text.",
+    timestamp: Date.now(),
+  };
+  let first = await completeSimpleWithTimeout(
+    params.model,
+    { messages: [firstUser], tools: [noopTool] },
+    {
+      apiKey: params.apiKey,
+      reasoning: resolveTestReasoning(params.model),
+      maxTokens: 256,
+    },
+    params.timeoutMs,
+    `${params.progressLabel}: DeepSeek V4 replay first call`,
+  );
+  let toolCall = first.content.find((block) => block.type === "toolCall");
+
+  for (let i = 0; i < 2 && !toolCall; i += 1) {
+    firstUser = {
+      role: "user" as const,
+      content: "Call the tool `noop` with {}. IMPORTANT: respond with the tool call.",
+      timestamp: Date.now(),
+    };
+    first = await completeSimpleWithTimeout(
+      params.model,
+      { messages: [firstUser], tools: [noopTool] },
+      {
+        apiKey: params.apiKey,
+        reasoning: resolveTestReasoning(params.model),
+        maxTokens: 256,
+      },
+      params.timeoutMs,
+      `${params.progressLabel}: DeepSeek V4 replay retry ${i + 1}`,
+    );
+    toolCall = first.content.find((block) => block.type === "toolCall");
+  }
+
+  expect(toolCall).toBeTruthy();
+  if (!toolCall || toolCall.type !== "toolCall") {
+    throw new Error("expected DeepSeek V4 tool call");
+  }
+
+  const second = await completeSimpleWithTimeout(
+    params.model,
+    {
+      messages: [
+        firstUser,
+        first,
+        {
+          role: "toolResult",
+          toolCallId: toolCall.id,
+          toolName: "noop",
+          content: [{ type: "text", text: "ok" }],
+          isError: false,
+          timestamp: Date.now(),
+        },
+        {
+          role: "user",
+          content: "Reply with the word ok.",
+          timestamp: Date.now(),
+        },
+      ],
+    },
+    {
+      apiKey: params.apiKey,
+      reasoning: resolveTestReasoning(params.model),
+      maxTokens: 256,
+    },
+    params.timeoutMs,
+    `${params.progressLabel}: DeepSeek V4 replay followup`,
+  );
+  if (second.stopReason === "error") {
+    throw new Error(second.errorMessage || "DeepSeek V4 replay followup returned error");
+  }
+  expect(extractAssistantText(second).length).toBeGreaterThan(0);
+}
+
 async function runExtraTurnProbes(params: {
   model: Model<Api>;
   apiKey: string;
@@ -589,7 +709,7 @@ describeLive("live models (profile keys)", () => {
     async () => {
       logProgress("[live-models] loading config");
       const cfg = await withLiveStageTimeout(
-        Promise.resolve().then(() => loadConfig()),
+        Promise.resolve().then(() => getRuntimeConfig()),
         "[live-models] load config",
       );
       logProgress("[live-models] preparing models.json");
@@ -849,6 +969,24 @@ describeLive("live models (profile keys)", () => {
               break;
             }
 
+            if (isDeepSeekV4Model(model)) {
+              logProgress(`${progressLabel}: DeepSeek V4 replay regression`);
+              await runDeepSeekV4ReplayRegression({
+                model,
+                apiKey,
+                timeoutMs: perModelTimeoutMs,
+                progressLabel,
+              });
+              await runExtraTurnProbes({
+                model,
+                apiKey,
+                timeoutMs: perModelTimeoutMs,
+                progressLabel,
+              });
+              logProgress(`${progressLabel}: done`);
+              break;
+            }
+
             logProgress(`${progressLabel}: prompt`);
             const ok = await completeOkWithRetry({
               model,
@@ -1031,6 +1169,15 @@ describeLive("live models (profile keys)", () => {
             if (allowNotFoundSkip && isProviderUnavailableErrorMessage(message)) {
               skipped.push({ model: id, reason: message });
               logProgress(`${progressLabel}: skip (provider unavailable)`);
+              break;
+            }
+            if (
+              allowNotFoundSkip &&
+              model.provider === "openrouter" &&
+              isOpenRouterOpaqueBadRequestErrorMessage(message)
+            ) {
+              skipped.push({ model: id, reason: message });
+              logProgress(`${progressLabel}: skip (openrouter upstream bad request)`);
               break;
             }
             if (allowNotFoundSkip && isModelNotFoundErrorMessage(message)) {

@@ -53,6 +53,18 @@
   },
   "redirects": [
     {
+      "source": "/install/migrating-matrix",
+      "destination": "/channels/matrix-migration"
+    },
+    {
+      "source": "/help/gpt54-codex-agentic-parity",
+      "destination": "/help/gpt55-codex-agentic-parity"
+    },
+    {
+      "source": "/help/gpt54-codex-agentic-parity-maintainers",
+      "destination": "/help/gpt55-codex-agentic-parity-maintainers"
+    },
+    {
       "source": "/mcp",
       "destination": "/cli/mcp"
     },
@@ -331,6 +343,14 @@
     {
       "source": "/bonjour",
       "destination": "/gateway/bonjour"
+    },
+    {
+      "source": "/gateway/config-tts",
+      "destination": "/tools/tts"
+    },
+    {
+      "source": "/gateway/observability",
+      "destination": "/gateway/opentelemetry"
     },
     {
       "source": "/browser",
@@ -968,6 +988,22 @@
                 "pages": ["install/index", "install/installer", "install/node"]
               },
               {
+                "group": "Maintenance",
+                "pages": [
+                  "install/updating",
+                  {
+                    "group": "Migrating",
+                    "pages": [
+                      "install/migrating",
+                      "install/migrating-claude",
+                      "install/migrating-hermes"
+                    ]
+                  },
+                  "install/uninstall",
+                  "install/development-channels"
+                ]
+              },
+              {
                 "group": "Containers",
                 "pages": [
                   "install/ansible",
@@ -1000,16 +1036,6 @@
                 ]
               },
               {
-                "group": "Maintenance",
-                "pages": [
-                  "install/updating",
-                  "install/migrating",
-                  "install/migrating-matrix",
-                  "install/uninstall",
-                  "install/development-channels"
-                ]
-              },
-              {
                 "group": "Advanced setup",
                 "pages": ["start/setup", "pi-dev"]
               }
@@ -1035,6 +1061,7 @@
                   "channels/imessage",
                   "channels/bluebubbles",
                   "channels/matrix",
+                  "channels/matrix-migration",
                   "channels/matrix-push-rules"
                 ]
               },
@@ -1085,6 +1112,7 @@
                   "concepts/architecture",
                   "concepts/agent",
                   "concepts/agent-loop",
+                  "concepts/agent-runtimes",
                   "concepts/system-prompt",
                   "concepts/context",
                   "concepts/context-engine",
@@ -1092,13 +1120,16 @@
                   "concepts/soul",
                   "concepts/oauth",
                   "start/bootstrapping",
-                  "concepts/experimental-features"
+                  "concepts/experimental-features",
+                  "concepts/qa-e2e-automation",
+                  "concepts/qa-matrix"
                 ]
               },
               {
                 "group": "Sessions and memory",
                 "pages": [
                   "concepts/session",
+                  "concepts/channel-docking",
                   "concepts/session-pruning",
                   "concepts/session-tool",
                   {
@@ -1149,17 +1180,23 @@
                   "plugins/community",
                   "plugins/bundles",
                   "plugins/codex-harness",
+                  "plugins/codex-computer-use",
                   "plugins/google-meet",
                   "plugins/webhooks",
                   "plugins/voice-call",
                   "plugins/memory-wiki",
+                  "plugins/memory-lancedb",
+                  "plugins/message-presentation",
+                  "plugins/skill-workshop",
                   "plugins/zalouser",
                   {
                     "group": "Building plugins",
                     "pages": [
                       "plugins/building-plugins",
+                      "plugins/hooks",
                       "plugins/sdk-channel-plugins",
                       "plugins/sdk-provider-plugins",
+                      "plugins/compatibility",
                       "plugins/sdk-migration"
                     ]
                   },
@@ -1224,6 +1261,7 @@
                   "tools/tokenjuice",
                   "tools/loop-detection",
                   "tools/trajectory",
+                  "tools/tts",
                   "tools/video-generation",
                   {
                     "group": "Web browser",
@@ -1287,11 +1325,13 @@
                   "providers/bedrock-mantle",
                   "providers/anthropic",
                   "providers/arcee",
+                  "providers/azure-speech",
                   "providers/chutes",
                   "providers/claude-max-api-proxy",
                   "providers/cloudflare-ai-gateway",
                   "providers/comfy",
                   "providers/deepgram",
+                  "providers/deepinfra",
                   "providers/deepseek",
                   "providers/elevenlabs",
                   "providers/fal",
@@ -1299,9 +1339,11 @@
                   "providers/github-copilot",
                   "providers/glm",
                   "providers/google",
+                  "providers/gradium",
                   "providers/groq",
                   "providers/huggingface",
                   "providers/inferrs",
+                  "providers/inworld",
                   "providers/kilocode",
                   "providers/litellm",
                   "providers/lmstudio",
@@ -1420,11 +1462,13 @@
                     "group": "Health and diagnostics",
                     "pages": [
                       "gateway/health",
-                      "gateway/diagnostics",
                       "gateway/heartbeat",
                       "gateway/doctor",
-                      "gateway/logging",
                       "logging",
+                      "gateway/opentelemetry",
+                      "gateway/prometheus",
+                      "gateway/logging",
+                      "gateway/diagnostics",
                       "gateway/troubleshooting"
                     ]
                   },
@@ -1477,6 +1521,7 @@
               {
                 "group": "Security",
                 "pages": [
+                  "security/network-proxy",
                   "security/formal-verification",
                   "security/THREAT-MODEL-ATLAS",
                   "security/CONTRIBUTING-THREAT-MODEL"
@@ -1525,6 +1570,7 @@
                       "cli/gateway",
                       "cli/health",
                       "cli/logs",
+                      "cli/migrate",
                       "cli/onboard",
                       "cli/reset",
                       "cli/secrets",
@@ -1594,6 +1640,7 @@
                       "cli/dns",
                       "cli/docs",
                       "cli/mcp",
+                      "cli/proxy",
                       "cli/wiki"
                     ]
                   }
@@ -1640,7 +1687,9 @@
                   "concepts/markdown-formatting",
                   "concepts/typing-indicators",
                   "concepts/usage-tracking",
-                  "concepts/timezone"
+                  "concepts/timezone",
+                  "help/gpt55-codex-agentic-parity",
+                  "help/gpt55-codex-agentic-parity-maintainers"
                 ]
               },
               {

@@ -2,14 +2,7 @@ import crypto from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { detectMime } from "../../../../src/media/mime.js";
-import {
-  CANONICAL_ROOT_MEMORY_FILENAME,
-  resolveCanonicalRootMemoryFile,
-  shouldSkipRootMemoryAuxiliaryPath,
-} from "../../../../src/memory/root-memory-files.js";
-import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../../../../src/utils/cjk-chars.js";
-import { runTasksWithConcurrency } from "../../../../src/utils/run-with-concurrency.js";
+import { CANONICAL_ROOT_MEMORY_FILENAME } from "./config-utils.js";
 import { estimateStructuredEmbeddingInputBytes } from "./embedding-input-limits.js";
 import { buildTextEmbeddingInput, type EmbeddingInput } from "./embedding-inputs.js";
 import { isFileMissingError } from "./fs-utils.js";
@@ -19,6 +12,19 @@ import {
   type MemoryMultimodalModality,
   type MemoryMultimodalSettings,
 } from "./multimodal.js";
+import {
+  CHARS_PER_TOKEN_ESTIMATE,
+  detectMime,
+  estimateStringChars,
+  runTasksWithConcurrency,
+} from "./openclaw-runtime-io.js";
+import {
+  resolveCanonicalRootMemoryFile,
+  shouldSkipRootMemoryAuxiliaryPath,
+} from "./openclaw-runtime-memory.js";
+
+export { hashText } from "./hash.js";
+import { hashText } from "./hash.js";
 
 export type MemoryFileEntry = {
   path: string;
@@ -202,10 +208,6 @@ export async function listMemoryFiles(
     deduped.push(entry);
   }
   return deduped;
-}
-
-export function hashText(value: string): string {
-  return crypto.createHash("sha256").update(value).digest("hex");
 }
 
 export async function buildFileEntry(

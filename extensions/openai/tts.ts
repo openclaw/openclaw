@@ -1,8 +1,8 @@
+import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
 import {
   captureHttpExchange,
   isDebugProxyGlobalFetchPatchInstalled,
 } from "openclaw/plugin-sdk/proxy-capture";
-import { extractProviderErrorDetail, trimToUndefined } from "openclaw/plugin-sdk/speech";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
@@ -63,13 +63,16 @@ export function isValidOpenAIVoice(voice: string, baseUrl?: string): voice is Op
 export function resolveOpenAITtsInstructions(
   model: string,
   instructions?: string,
+  baseUrl?: string,
 ): string | undefined {
   const next = instructions?.trim();
-  return next && model.includes("gpt-4o-mini-tts") ? next : undefined;
-}
-
-async function extractOpenAiErrorDetail(response: Response): Promise<string | undefined> {
-  return await extractProviderErrorDetail(response);
+  if (!next) {
+    return undefined;
+  }
+  if (baseUrl !== undefined && isCustomOpenAIEndpoint(baseUrl)) {
+    return next;
+  }
+  return model.includes("gpt-4o-mini-tts") ? next : undefined;
 }
 
 export async function openaiTTS(params: {
@@ -85,7 +88,7 @@ export async function openaiTTS(params: {
 }): Promise<Buffer> {
   const { text, apiKey, baseUrl, model, voice, speed, instructions, responseFormat, timeoutMs } =
     params;
-  const effectiveInstructions = resolveOpenAITtsInstructions(model, instructions);
+  const effectiveInstructions = resolveOpenAITtsInstructions(model, instructions, baseUrl);
 
   if (!isValidOpenAIModel(model, baseUrl)) {
     throw new Error(`Invalid model: ${model}`);
@@ -137,17 +140,7 @@ export async function openaiTTS(params: {
       });
     }
 
-    if (!response.ok) {
-      const detail = await extractOpenAiErrorDetail(response);
-      const requestId =
-        trimToUndefined(response.headers.get("x-request-id")) ??
-        trimToUndefined(response.headers.get("request-id"));
-      throw new Error(
-        `OpenAI TTS API error (${response.status})` +
-          (detail ? `: ${detail}` : "") +
-          (requestId ? ` [request_id=${requestId}]` : ""),
-      );
-    }
+    await assertOkOrThrowProviderError(response, "OpenAI TTS API error");
 
     return Buffer.from(await response.arrayBuffer());
   } finally {

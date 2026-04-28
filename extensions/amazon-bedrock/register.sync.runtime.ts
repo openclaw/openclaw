@@ -1,5 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { resolvePluginConfigObject, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
   ANTHROPIC_BY_MODEL_REPLAY_HOOKS,
@@ -10,11 +11,7 @@ import {
   isAnthropicBedrockModel,
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
-import {
-  mergeImplicitBedrockProvider,
-  resolveBedrockConfigApiKey,
-  resolveImplicitBedrockProvider,
-} from "./api.js";
+import { mergeImplicitBedrockProvider, resolveBedrockConfigApiKey } from "./discovery-shared.js";
 import { bedrockMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 
 type GuardrailConfig = {
@@ -157,8 +154,40 @@ function resolvedModelSupportsCaching(modelArn: string): boolean {
  */
 const appProfileCacheEligibleCache = new Map<string, boolean>();
 
+type BedrockGetInferenceProfileResponse = {
+  models?: Array<{ modelArn?: string }>;
+};
+
+type BedrockControlPlane = {
+  getInferenceProfile: (input: {
+    inferenceProfileIdentifier: string;
+  }) => Promise<BedrockGetInferenceProfileResponse>;
+};
+
+type BedrockControlPlaneFactory = (region: string | undefined) => BedrockControlPlane;
+
+let bedrockControlPlaneOverride: BedrockControlPlaneFactory | undefined;
+
 export function resetBedrockAppProfileCacheEligibilityForTest(): void {
   appProfileCacheEligibleCache.clear();
+}
+
+export function setBedrockAppProfileControlPlaneForTest(
+  controlPlane: BedrockControlPlaneFactory | undefined,
+): void {
+  bedrockControlPlaneOverride = controlPlane;
+  resetBedrockAppProfileCacheEligibilityForTest();
+}
+
+async function createBedrockControlPlane(region: string | undefined): Promise<BedrockControlPlane> {
+  if (bedrockControlPlaneOverride) {
+    return bedrockControlPlaneOverride(region);
+  }
+  const { BedrockClient, GetInferenceProfileCommand } = await import("@aws-sdk/client-bedrock");
+  const client = new BedrockClient(region ? { region } : {});
+  return {
+    getInferenceProfile: async (input) => await client.send(new GetInferenceProfileCommand(input)),
+  };
 }
 
 async function resolveAppProfileCacheEligible(
@@ -169,12 +198,9 @@ async function resolveAppProfileCacheEligible(
     return appProfileCacheEligibleCache.get(modelId)!;
   }
   try {
-    const { BedrockClient, GetInferenceProfileCommand } = await import("@aws-sdk/client-bedrock");
     const region = extractRegionFromArn(modelId) ?? fallbackRegion;
-    const client = new BedrockClient(region ? { region } : {});
-    const resp = await client.send(
-      new GetInferenceProfileCommand({ inferenceProfileIdentifier: modelId }),
-    );
+    const controlPlane = await createBedrockControlPlane(region);
+    const resp = await controlPlane.getInferenceProfile({ inferenceProfileIdentifier: modelId });
     const models = resp.models ?? [];
     const eligible =
       models.length > 0 &&
@@ -330,6 +356,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     catalog: {
       order: "simple",
       run: async (ctx) => {
+        const { resolveImplicitBedrockProvider } = await import("./discovery.js");
         const currentPluginConfig = resolveCurrentPluginConfig(ctx.config);
         const implicit = await resolveImplicitBedrockProvider({
           config: ctx.config,

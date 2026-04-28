@@ -71,6 +71,12 @@ export keeps only that a message was omitted and the byte count.
 The Gateway records a bounded, payload-free stability stream by default when
 diagnostics are enabled. It is for operational facts, not content.
 
+The same diagnostic heartbeat records liveness warnings when the Gateway keeps
+running but the Node.js event loop or CPU looks saturated. These
+`diagnostic.liveness.warning` events include event-loop delay, event-loop
+utilization, CPU-core ratio, and active/waiting/queued session counts. They do
+not restart the Gateway by themselves.
+
 Inspect the live recorder:
 
 ```bash
@@ -129,9 +135,10 @@ diagnostic event collection:
 Disabling diagnostics reduces bug-report detail. It does not affect normal
 Gateway logging.
 
-## Related docs
+## Related
 
-- [Health Checks](/gateway/health)
+- [Health checks](/gateway/health)
 - [Gateway CLI](/cli/gateway#gateway-diagnostics-export)
-- [Gateway Protocol](/gateway/protocol#system-and-identity)
+- [Gateway protocol](/gateway/protocol#system-and-identity)
 - [Logging](/logging)
+- [OpenTelemetry export](/gateway/opentelemetry) — separate flow for streaming diagnostics to a collector

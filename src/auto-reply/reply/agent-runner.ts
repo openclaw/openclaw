@@ -5,7 +5,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { queueEmbeddedPiMessage } from "../../agents/pi-embedded-runner/runs.js";
-import { hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
+import { deriveContextPromptTokens, hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
 import {
   loadSessionStore,
   resolveSessionPluginStatusLines,
@@ -15,9 +15,13 @@ import {
 } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { resolveSessionTranscriptCandidates } from "../../gateway/session-utils.fs.js";
+import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
-import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
-import { freezeDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
+import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
+import {
+  createChildDiagnosticTraceContext,
+  freezeDiagnosticTraceContext,
+} from "../../infra/diagnostic-trace-context.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -57,6 +61,7 @@ import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-repl
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
+import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import {
@@ -565,53 +570,6 @@ async function accumulateSessionUsageFromTranscript(params: {
   }
 }
 
-function resolveRequestPromptTokens(params: {
-  lastCallUsage?: {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    total?: number;
-  };
-  promptTokens?: number;
-  usage?: {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    total?: number;
-  };
-}): number | undefined {
-  const lastCall = params.lastCallUsage;
-  if (lastCall) {
-    const input = lastCall.input ?? 0;
-    const cacheRead = lastCall.cacheRead ?? 0;
-    const cacheWrite = lastCall.cacheWrite ?? 0;
-    const sum = input + cacheRead + cacheWrite;
-    if (sum > 0) {
-      return sum;
-    }
-  }
-  if (
-    typeof params.promptTokens === "number" &&
-    Number.isFinite(params.promptTokens) &&
-    params.promptTokens > 0
-  ) {
-    return params.promptTokens;
-  }
-  const usage = params.usage;
-  if (usage) {
-    const input = usage.input ?? 0;
-    const cacheRead = usage.cacheRead ?? 0;
-    const cacheWrite = usage.cacheWrite ?? 0;
-    const sum = input + cacheRead + cacheWrite;
-    if (sum > 0) {
-      return sum;
-    }
-  }
-  return undefined;
-}
-
 function formatRequestContextTraceBlock(params: {
   provider?: string;
   model?: string;
@@ -782,7 +740,7 @@ function buildInlineRawTracePayload(params: {
   if (params.entry?.traceLevel !== "raw") {
     return undefined;
   }
-  const resolvedPromptTokens = resolveRequestPromptTokens({
+  const resolvedPromptTokens = deriveContextPromptTokens({
     lastCallUsage: params.lastCallUsage,
     promptTokens: params.promptTokens,
     usage: params.usage,
@@ -861,6 +819,7 @@ function refreshSessionEntryFromStore(params: {
 
 export async function runReplyAgent(params: {
   commandBody: string;
+  transcriptCommandBody?: string;
   followupRun: FollowupRun;
   queueKey: string;
   resolvedQueue: QueueSettings;
@@ -897,6 +856,7 @@ export async function runReplyAgent(params: {
 }): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const {
     commandBody,
+    transcriptCommandBody,
     followupRun,
     queueKey,
     resolvedQueue,
@@ -1198,6 +1158,7 @@ export async function runReplyAgent(params: {
     const runStartedAt = Date.now();
     const runOutcome = await runAgentTurnWithFallback({
       commandBody,
+      transcriptCommandBody,
       followupRun,
       sessionCtx,
       replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
@@ -1271,7 +1232,10 @@ export async function runReplyAgent(params: {
       blockReplyPipeline.stop();
     }
     if (pendingToolTasks.size > 0) {
-      await Promise.allSettled(pendingToolTasks);
+      await drainPendingToolTasks({
+        tasks: pendingToolTasks,
+        onTimeout: logVerbose,
+      });
     }
 
     const usage = runResult.meta?.agentMeta?.usage;
@@ -1321,7 +1285,14 @@ export async function runReplyAgent(params: {
     const cliSessionBinding = isCliProvider(providerUsed, cfg)
       ? runResult.meta?.agentMeta?.cliSessionBinding
       : undefined;
+    const runtimeContextTokens =
+      typeof runResult.meta?.agentMeta?.contextTokens === "number" &&
+      Number.isFinite(runResult.meta.agentMeta.contextTokens) &&
+      runResult.meta.agentMeta.contextTokens > 0
+        ? Math.floor(runResult.meta.agentMeta.contextTokens)
+        : undefined;
     const contextTokensUsed =
+      runtimeContextTokens ??
       resolveContextTokensForModel({
         cfg,
         provider: providerUsed,
@@ -1329,7 +1300,8 @@ export async function runReplyAgent(params: {
         contextTokensOverride: agentCfgContextTokens,
         fallbackContextTokens: activeSessionEntry?.contextTokens ?? DEFAULT_CONTEXT_TOKENS,
         allowAsyncLoad: false,
-      }) ?? DEFAULT_CONTEXT_TOKENS;
+      }) ??
+      DEFAULT_CONTEXT_TOKENS;
 
     await persistRunSessionUsage({
       storePath,
@@ -1414,22 +1386,32 @@ export async function runReplyAgent(params: {
       const output = usage.output ?? 0;
       const cacheRead = usage.cacheRead ?? 0;
       const cacheWrite = usage.cacheWrite ?? 0;
-      const promptTokens = input + cacheRead + cacheWrite;
-      const totalTokens = usage.total ?? promptTokens + output;
+      const usagePromptTokens = input + cacheRead + cacheWrite;
+      const totalTokens = usage.total ?? usagePromptTokens + output;
+      const contextUsedTokens = deriveContextPromptTokens({
+        lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
+        promptTokens,
+        usage,
+      });
       const costConfig = resolveModelCostConfig({
         provider: providerUsed,
         model: modelUsed,
         config: cfg,
       });
       const costUsd = estimateUsageCost({ usage, cost: costConfig });
-      emitDiagnosticEvent({
+      emitTrustedDiagnosticEvent({
         type: "model.usage",
         ...(runResult.diagnosticTrace
-          ? { trace: freezeDiagnosticTraceContext(runResult.diagnosticTrace) }
+          ? {
+              trace: freezeDiagnosticTraceContext(
+                createChildDiagnosticTraceContext(runResult.diagnosticTrace),
+              ),
+            }
           : {}),
         sessionKey,
         sessionId: followupRun.run.sessionId,
         channel: replyToChannel,
+        agentId: followupRun.run.agentId,
         provider: providerUsed,
         model: modelUsed,
         usage: {
@@ -1437,13 +1419,13 @@ export async function runReplyAgent(params: {
           output,
           cacheRead,
           cacheWrite,
-          promptTokens,
+          promptTokens: usagePromptTokens,
           total: totalTokens,
         },
         lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
         context: {
           limit: contextTokensUsed,
-          used: totalTokens,
+          ...(contextUsedTokens !== undefined ? { used: contextUsedTokens } : {}),
         },
         costUsd,
         durationMs: Date.now() - runStartedAt,
@@ -1557,9 +1539,11 @@ export async function runReplyAgent(params: {
         sessionKey,
         storePath,
         amount: autoCompactionCount,
+        compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
         lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
         contextTokensUsed,
         newSessionId: runResult.meta?.agentMeta?.sessionId,
+        newSessionFile: runResult.meta?.agentMeta?.sessionFile,
       });
       const refreshedSessionEntry =
         sessionKey && activeSessionStore ? activeSessionStore[sessionKey] : undefined;

@@ -11,7 +11,6 @@ import {
   closeSync,
   existsSync,
   lstatSync,
-  mkdirSync,
   openSync,
   readdirSync,
   readFileSync,
@@ -32,18 +31,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_EXTENSIONS_DIR = join(__dirname, "..", "dist", "extensions");
 const DEFAULT_PACKAGE_ROOT = join(__dirname, "..");
 const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
+const DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV = "OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION";
 const EAGER_BUNDLED_PLUGIN_DEPS_ENV = "OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS";
 const DIST_INVENTORY_PATH = "dist/postinstall-inventory.json";
-const LEGACY_UPDATE_COMPAT_SIDECARS = [
-  {
-    path: "dist/extensions/qa-channel/runtime-api.js",
-    content: "export {};\n",
-  },
-  {
-    path: "dist/extensions/qa-lab/runtime-api.js",
-    content: "export {};\n",
-  },
-];
 const BAILEYS_MEDIA_FILE = join(
   "node_modules",
   "@whiskeysockets",
@@ -114,6 +104,11 @@ const BAILEYS_MEDIA_ONCE_IMPORT_RE = /import\s+\{\s*once\s*\}\s+from\s+['"]event
 const BAILEYS_MEDIA_ASYNC_CONTEXT_RE =
   /async\s+function\s+encryptedStream|encryptedStream\s*=\s*async/u;
 
+function hasEnvFlag(env, key) {
+  const value = env?.[key]?.trim().toLowerCase();
+  return Boolean(value && value !== "0" && value !== "false" && value !== "no");
+}
+
 function readJson(filePath) {
   return JSON.parse(readFileSync(filePath, "utf8"));
 }
@@ -179,8 +174,8 @@ function assertSafeInstalledDistPath(relativePath, params) {
   return candidatePath;
 }
 
-function isStagedRuntimeNodeModulesPath(relativePath) {
-  return /^dist\/extensions\/[^/]+\/node_modules(?:\/|$)/u.test(
+function isStagedRuntimeDependencyPath(relativePath) {
+  return /^dist\/extensions\/[^/]+\/(?:node_modules|\.openclaw-install-stage(?:-[^/]+)?)(?:\/|$)/u.test(
     normalizeRelativePath(relativePath),
   );
 }
@@ -200,7 +195,7 @@ function listInstalledDistFiles(params = {}) {
       continue;
     }
     const relativeCurrentDir = normalizeRelativePath(relative(packageRoot, currentDir));
-    if (isStagedRuntimeNodeModulesPath(relativeCurrentDir)) {
+    if (isStagedRuntimeDependencyPath(relativeCurrentDir)) {
       continue;
     }
     for (const entry of readDir(currentDir, { withFileTypes: true })) {
@@ -239,7 +234,7 @@ function pruneEmptyDistDirectories(params = {}) {
 
   function prune(currentDir) {
     const relativeCurrentDir = normalizeRelativePath(relative(packageRoot, currentDir));
-    if (isStagedRuntimeNodeModulesPath(relativeCurrentDir)) {
+    if (isStagedRuntimeDependencyPath(relativeCurrentDir)) {
       return;
     }
     for (const entry of readDir(currentDir, { withFileTypes: true })) {
@@ -319,29 +314,6 @@ export function pruneInstalledPackageDist(params = {}) {
     log.log(`[postinstall] pruned stale dist files: ${removed.join(", ")}`);
   }
   return removed;
-}
-
-export function restoreLegacyUpdaterCompatSidecars(params = {}) {
-  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
-  const writeFile = params.writeFileSync ?? writeFileSync;
-  const makeDirectory = params.mkdirSync ?? mkdirSync;
-  const log = params.log ?? console;
-  const restored = [];
-
-  for (const sidecar of LEGACY_UPDATE_COMPAT_SIDECARS) {
-    // Older npm updater builds verify these exact sidecars after npm has
-    // already replaced the package, so generate them independently of prune
-    // results.
-    const sidecarPath = join(packageRoot, sidecar.path);
-    makeDirectory(dirname(sidecarPath), { recursive: true });
-    writeFile(sidecarPath, sidecar.content, "utf8");
-    restored.push(sidecar.path);
-  }
-
-  if (restored.length > 0) {
-    log.log(`[postinstall] restored legacy updater compat sidecars: ${restored.join(", ")}`);
-  }
-  return restored;
 }
 
 function dependencySentinelPath(depName) {
@@ -478,6 +450,7 @@ export function createNestedNpmInstallEnv(env = process.env) {
 export function createBundledRuntimeDependencyInstallEnv(env = process.env) {
   return {
     ...createNestedNpmInstallEnv(env),
+    npm_config_dry_run: "false",
     npm_config_legacy_peer_deps: "true",
     npm_config_package_lock: "false",
     npm_config_save: "false",
@@ -643,6 +616,62 @@ function applyBundledPluginRuntimeHotfixes(params = {}) {
   }
 }
 
+function resolveDistModuleUrl(packageRoot, distPath) {
+  return pathToFileURL(join(packageRoot, distPath)).href;
+}
+
+async function importInstalledDistModule(params, distPath) {
+  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
+  const pathExists = params.existsSync ?? existsSync;
+  const modulePath = join(packageRoot, distPath);
+  if (!pathExists(modulePath)) {
+    return null;
+  }
+  const importModule = params.importModule ?? ((specifier) => import(specifier));
+  return await importModule(resolveDistModuleUrl(packageRoot, distPath));
+}
+
+export async function runPluginRegistryPostinstallMigration(params = {}) {
+  const log = params.log ?? console;
+  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
+  const env = params.env ?? process.env;
+
+  if (hasEnvFlag(env, DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV)) {
+    return { status: "disabled", migrated: false, reason: "disabled-env" };
+  }
+
+  try {
+    const migrationModule = await importInstalledDistModule(
+      params,
+      "dist/commands/doctor/shared/plugin-registry-migration.js",
+    );
+    if (!migrationModule) {
+      return { status: "skipped", reason: "missing-dist-entry" };
+    }
+    if (typeof migrationModule.migratePluginRegistryForInstall !== "function") {
+      return { status: "skipped", reason: "missing-dist-contract" };
+    }
+
+    const result = await migrationModule.migratePluginRegistryForInstall({
+      env,
+      packageRoot,
+    });
+    for (const warning of result.preflight?.deprecationWarnings ?? []) {
+      log.warn(`[postinstall] ${warning}`);
+    }
+    if (result.migrated) {
+      log.log(
+        `[postinstall] migrated plugin registry: ${result.current.plugins.length} plugin(s) indexed`,
+      );
+    }
+    return result;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    log.warn(`[postinstall] could not migrate plugin registry: ${message}`);
+    return { status: "failed", error: message };
+  }
+}
+
 export function isSourceCheckoutRoot(params) {
   const pathExists = params.existsSync ?? existsSync;
   return (
@@ -717,19 +746,12 @@ export function runBundledPluginPostinstall(params = {}) {
     });
     return;
   }
-  const prunedDistFiles = pruneInstalledPackageDist({
+  pruneInstalledPackageDist({
     packageRoot,
     existsSync: pathExists,
     readFileSync: params.readFileSync,
     readdirSync: params.readdirSync,
     rmSync: params.rmSync,
-    log,
-  });
-  restoreLegacyUpdaterCompatSidecars({
-    packageRoot,
-    removedFiles: prunedDistFiles,
-    mkdirSync: params.mkdirSync,
-    writeFileSync: params.writeFileSync,
     log,
   });
   if (
@@ -796,6 +818,7 @@ export function runBundledPluginPostinstall(params = {}) {
       encoding: "utf8",
       env: npmRunner.env ?? installEnv,
       stdio: "pipe",
+      windowsHide: true,
       shell: npmRunner.shell,
       windowsVerbatimArguments: npmRunner.windowsVerbatimArguments,
     });
@@ -834,4 +857,5 @@ export function isDirectPostinstallInvocation(params = {}) {
 
 if (isDirectPostinstallInvocation()) {
   runBundledPluginPostinstall();
+  await runPluginRegistryPostinstallMigration();
 }

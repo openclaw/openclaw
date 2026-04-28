@@ -1,10 +1,8 @@
 import {
   abortActiveReplyRuns,
   abortReplyRunBySessionId,
-  getActiveReplyRunCount,
   isReplyRunActiveForSessionId,
   isReplyRunStreamingForSessionId,
-  listActiveReplyRunSessionIds,
   queueReplyRunMessage,
   resolveActiveReplyRunSessionId,
   waitForReplyRunEndBySessionId,
@@ -14,64 +12,26 @@ import {
   logMessageQueued,
   logSessionStateChange,
 } from "../../logging/diagnostic.js";
-import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  ACTIVE_EMBEDDED_RUNS,
+  ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY,
+  ACTIVE_EMBEDDED_RUN_SNAPSHOTS,
+  EMBEDDED_RUN_MODEL_SWITCH_REQUESTS,
+  EMBEDDED_RUN_WAITERS,
+  getActiveEmbeddedRunCount,
+  type ActiveEmbeddedRunSnapshot,
+  type EmbeddedPiQueueHandle,
+  type EmbeddedRunModelSwitchRequest,
+  type EmbeddedRunWaiter,
+} from "./run-state.js";
 
-export type EmbeddedPiQueueHandle = {
-  kind?: "embedded";
-  queueMessage: (text: string) => Promise<void>;
-  isStreaming: () => boolean;
-  isCompacting: () => boolean;
-  cancel?: (reason?: "user_abort" | "restart" | "superseded") => void;
-  abort: () => void;
-};
-
-export type ActiveEmbeddedRunSnapshot = {
-  transcriptLeafId: string | null;
-  messages?: unknown[];
-  inFlightPrompt?: string;
-};
-
-type EmbeddedRunWaiter = {
-  resolve: (ended: boolean) => void;
-  timer: NodeJS.Timeout;
-};
-
-export type EmbeddedRunModelSwitchRequest = {
-  provider: string;
-  model: string;
-  authProfileId?: string;
-  authProfileIdSource?: "auto" | "user";
-};
-
-/**
- * Use global singleton state so busy/streaming checks stay consistent even
- * when the bundler emits multiple copies of this module into separate chunks.
- */
-const EMBEDDED_RUN_STATE_KEY = Symbol.for("openclaw.embeddedRunState");
-
-const embeddedRunState = resolveGlobalSingleton(EMBEDDED_RUN_STATE_KEY, () => ({
-  activeRuns: new Map<string, EmbeddedPiQueueHandle>(),
-  snapshots: new Map<string, ActiveEmbeddedRunSnapshot>(),
-  sessionIdsByKey: new Map<string, string>(),
-  waiters: new Map<string, Set<EmbeddedRunWaiter>>(),
-  modelSwitchRequests: new Map<string, EmbeddedRunModelSwitchRequest>(),
-}));
-const ACTIVE_EMBEDDED_RUNS =
-  embeddedRunState.activeRuns ??
-  (embeddedRunState.activeRuns = new Map<string, EmbeddedPiQueueHandle>());
-const ACTIVE_EMBEDDED_RUN_SNAPSHOTS =
-  embeddedRunState.snapshots ??
-  (embeddedRunState.snapshots = new Map<string, ActiveEmbeddedRunSnapshot>());
-const ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY =
-  embeddedRunState.sessionIdsByKey ??
-  (embeddedRunState.sessionIdsByKey = new Map<string, string>());
-const EMBEDDED_RUN_WAITERS =
-  embeddedRunState.waiters ??
-  (embeddedRunState.waiters = new Map<string, Set<EmbeddedRunWaiter>>());
-const EMBEDDED_RUN_MODEL_SWITCH_REQUESTS =
-  embeddedRunState.modelSwitchRequests ??
-  (embeddedRunState.modelSwitchRequests = new Map<string, EmbeddedRunModelSwitchRequest>());
+export {
+  getActiveEmbeddedRunCount,
+  type ActiveEmbeddedRunSnapshot,
+  type EmbeddedPiQueueHandle,
+  type EmbeddedRunModelSwitchRequest,
+} from "./run-state.js";
 
 function setActiveRunSessionKey(sessionKey: string | undefined, sessionId: string): void {
   const normalizedSessionKey = sessionKey?.trim();
@@ -216,16 +176,6 @@ export function resolveActiveEmbeddedRunSessionId(sessionKey: string): string | 
   );
 }
 
-export function getActiveEmbeddedRunCount(): number {
-  let activeCount = ACTIVE_EMBEDDED_RUNS.size;
-  for (const sessionId of listActiveReplyRunSessionIds()) {
-    if (!ACTIVE_EMBEDDED_RUNS.has(sessionId)) {
-      activeCount += 1;
-    }
-  }
-  return Math.max(activeCount, getActiveReplyRunCount());
-}
-
 export function getActiveEmbeddedRunSnapshot(
   sessionId: string,
 ): ActiveEmbeddedRunSnapshot | undefined {
@@ -273,16 +223,22 @@ export function consumeEmbeddedRunModelSwitch(
 /**
  * Wait for active embedded runs to drain.
  *
- * Used during restarts so in-flight compaction runs can release session write
- * locks before the next lifecycle starts.
+ * Used during restarts so in-flight runs can release session write locks before
+ * the next lifecycle starts. If no timeout is passed, waits indefinitely.
  */
 export async function waitForActiveEmbeddedRuns(
-  timeoutMs = 15_000,
+  timeoutMs?: number,
   opts?: { pollMs?: number },
 ): Promise<{ drained: boolean }> {
   const pollMsRaw = opts?.pollMs ?? 250;
   const pollMs = Math.max(10, Math.floor(pollMsRaw));
-  const maxWaitMs = Math.max(pollMs, Math.floor(timeoutMs));
+  if (timeoutMs !== undefined && timeoutMs <= 0) {
+    return { drained: getActiveEmbeddedRunCount() === 0 };
+  }
+  const maxWaitMs =
+    typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
+      ? Math.max(pollMs, Math.floor(timeoutMs))
+      : undefined;
 
   const startedAt = Date.now();
   while (true) {
@@ -290,7 +246,7 @@ export async function waitForActiveEmbeddedRuns(
       return { drained: true };
     }
     const elapsedMs = Date.now() - startedAt;
-    if (elapsedMs >= maxWaitMs) {
+    if (maxWaitMs !== undefined && elapsedMs >= maxWaitMs) {
       diag.warn(
         `wait for active embedded runs timed out: activeRuns=${getActiveEmbeddedRunCount()} timeoutMs=${maxWaitMs}`,
       );

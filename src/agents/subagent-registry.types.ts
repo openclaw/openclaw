@@ -30,7 +30,9 @@ export type SubagentRunRecord = {
   expectsCompletionMessage?: boolean;
   announceRetryCount?: number;
   lastAnnounceRetryAt?: number;
+  lastAnnounceDeliveryError?: string;
   endedReason?: SubagentLifecycleEndedReason;
+  pauseReason?: "sessions_yield";
   wakeOnDescendantSettle?: boolean;
   frozenResultText?: string | null;
   frozenResultCapturedAt?: number;

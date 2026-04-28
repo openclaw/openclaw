@@ -6,6 +6,8 @@ import {
 import type { CodexAppServerStartOptions } from "./config.js";
 import type { CodexAppServerTransport } from "./transport.js";
 
+const UNSAFE_ENVIRONMENT_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
 type CodexAppServerSpawnRuntime = {
   platform: NodeJS.Platform;
   env: NodeJS.ProcessEnv;
@@ -22,6 +24,9 @@ export function resolveCodexAppServerSpawnInvocation(
   options: CodexAppServerStartOptions,
   runtime: CodexAppServerSpawnRuntime = DEFAULT_SPAWN_RUNTIME,
 ): { command: string; args: string[]; shell?: boolean; windowsHide?: boolean } {
+  if (options.commandSource === "managed") {
+    throw new Error("Managed Codex app-server start options must be resolved before spawn.");
+  }
   const program = resolveWindowsSpawnProgram({
     command: options.command,
     platform: runtime.platform,
@@ -38,14 +43,33 @@ export function resolveCodexAppServerSpawnInvocation(
   };
 }
 
-export function createStdioTransport(options: CodexAppServerStartOptions): CodexAppServerTransport {
-  const env = {
-    ...process.env,
-    ...options.env,
-  };
+export function resolveCodexAppServerSpawnEnv(
+  options: Pick<CodexAppServerStartOptions, "env" | "clearEnv">,
+  baseEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const env = Object.create(null) as NodeJS.ProcessEnv;
+  copySafeEnvironmentEntries(env, baseEnv);
+  copySafeEnvironmentEntries(env, options.env ?? {});
   for (const key of options.clearEnv ?? []) {
     delete env[key];
   }
+  return env;
+}
+
+function copySafeEnvironmentEntries(
+  target: NodeJS.ProcessEnv,
+  source: NodeJS.ProcessEnv | Record<string, string | undefined>,
+): void {
+  for (const [key, value] of Object.entries(source)) {
+    if (UNSAFE_ENVIRONMENT_KEYS.has(key)) {
+      continue;
+    }
+    target[key] = value;
+  }
+}
+
+export function createStdioTransport(options: CodexAppServerStartOptions): CodexAppServerTransport {
+  const env = resolveCodexAppServerSpawnEnv(options);
   const invocation = resolveCodexAppServerSpawnInvocation(options, {
     platform: process.platform,
     env,

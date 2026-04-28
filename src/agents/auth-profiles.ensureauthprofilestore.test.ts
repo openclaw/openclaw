@@ -21,6 +21,7 @@ vi.mock("../plugins/provider-runtime.js", () => ({
 }));
 
 vi.mock("./cli-credentials.js", () => ({
+  readClaudeCliCredentialsCached: () => null,
   readCodexCliCredentialsCached: () => {
     const codexHome = process.env.CODEX_HOME;
     if (!codexHome) {
@@ -670,6 +671,27 @@ describe("ensureAuthProfileStore", () => {
         key: "sk-ant-legacy",
       });
     });
+  });
+
+  it("does not load legacy flat auth-profiles.json entries at runtime", () => {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-flat-profiles-"));
+    try {
+      const authPath = path.join(agentDir, "auth-profiles.json");
+      const legacyFlatStore = {
+        "ollama-windows": {
+          apiKey: "ollama-local",
+          baseUrl: "http://10.0.2.2:11434/v1",
+        },
+      };
+      fs.writeFileSync(authPath, `${JSON.stringify(legacyFlatStore)}\n`, "utf8");
+
+      const store = ensureAuthProfileStore(agentDir);
+
+      expect(store.profiles["ollama-windows:default"]).toBeUndefined();
+      expect(JSON.parse(fs.readFileSync(authPath, "utf8"))).toEqual(legacyFlatStore);
+    } finally {
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
   });
 
   it("merges legacy oauth.json into auth-profiles.json", () => {

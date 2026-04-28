@@ -231,24 +231,37 @@ function buildDynamicModel(
     case "openai-codex": {
       const isLegacyGpt54Alias = lower === "gpt-5.4-codex";
       if (lower === "gpt-5.5") {
-        return (
-          (params.modelRegistry.find("openai-codex", modelId) as ResolvedModelLike | null) ??
-          cloneTemplate(
-            undefined,
-            modelId,
-            {
-              provider: "openai-codex",
-              api: "openai-codex-responses",
-              baseUrl: OPENAI_CODEX_BASE_URL,
-              reasoning: true,
-              input: ["text", "image"],
-              cost: OPENROUTER_FALLBACK_COST,
-              contextWindow: 1_000_000,
-              contextTokens: 272_000,
-              maxTokens: 128_000,
-            },
-            {},
-          )
+        const model = params.modelRegistry.find(
+          "openai-codex",
+          modelId,
+        ) as ResolvedModelLike | null;
+        if (model) {
+          const modelContextTokens = model.contextTokens;
+          const modelContextWindow = model.contextWindow;
+          const contextTokens =
+            typeof modelContextTokens === "number"
+              ? modelContextTokens
+              : Math.min(
+                  272_000,
+                  typeof modelContextWindow === "number" ? modelContextWindow : 272_000,
+                );
+          return { ...model, contextWindow: 400_000, contextTokens };
+        }
+        return cloneTemplate(
+          undefined,
+          modelId,
+          {
+            provider: "openai-codex",
+            api: "openai-codex-responses",
+            baseUrl: OPENAI_CODEX_BASE_URL,
+            reasoning: true,
+            input: ["text", "image"],
+            cost: OPENROUTER_FALLBACK_COST,
+            contextWindow: 400_000,
+            contextTokens: 272_000,
+            maxTokens: 128_000,
+          },
+          {},
         );
       }
       const template =
@@ -256,20 +269,9 @@ function buildDynamicModel(
           ? findTemplate(params, "openai-codex", ["gpt-5.4", "gpt-5.4-pro", "gpt-5.3-codex"])
           : lower === "gpt-5.4" || isLegacyGpt54Alias || lower === "gpt-5.4-pro"
             ? findTemplate(params, "openai-codex", ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex"])
-            : lower === "gpt-5.4-mini"
-              ? findTemplate(params, "openai-codex", [
-                  "gpt-5.4",
-                  "gpt-5.1-codex-mini",
-                  "gpt-5.3-codex",
-                  "gpt-5.2-codex",
-                ])
-              : lower === "gpt-5.3-codex-spark"
-                ? findTemplate(params, "openai-codex", [
-                    "gpt-5.4",
-                    "gpt-5.3-codex",
-                    "gpt-5.2-codex",
-                  ])
-                : findTemplate(params, "openai-codex", ["gpt-5.4"]);
+            : lower === "gpt-5.3-codex-spark"
+              ? findTemplate(params, "openai-codex", ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex"])
+              : findTemplate(params, "openai-codex", ["gpt-5.4"]);
       const fallback = {
         provider: "openai-codex",
         api: "openai-codex-responses",
@@ -323,21 +325,6 @@ function buildDynamicModel(
             cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 1_050_000,
             contextTokens: 272_000,
-            maxTokens: 128_000,
-          },
-          fallback,
-        );
-      }
-      if (lower === "gpt-5.4-mini") {
-        return cloneTemplate(
-          template,
-          modelId,
-          {
-            provider: "openai-codex",
-            api: "openai-codex-responses",
-            baseUrl: OPENAI_CODEX_BASE_URL,
-            cost: { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 },
-            contextWindow: 272_000,
             maxTokens: 128_000,
           },
           fallback,

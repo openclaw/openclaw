@@ -78,6 +78,9 @@ class NodeRuntime(
 
   private val externalAudioCaptureActive = MutableStateFlow(false)
 
+  private val _voiceCaptureMode = MutableStateFlow(VoiceCaptureMode.Off)
+  val voiceCaptureMode: StateFlow<VoiceCaptureMode> = _voiceCaptureMode.asStateFlow()
+
   private val discovery = GatewayDiscovery(appContext, scope = scope)
   val gateways: StateFlow<List<GatewayEndpoint>> = discovery.gateways
   val discoveryStatusText: StateFlow<String> = discovery.statusText
@@ -110,8 +113,8 @@ class NodeRuntime(
 
   private val deviceHandler: DeviceHandler = DeviceHandler(
     appContext = appContext,
-    smsEnabled = BuildConfig.OPENCLAW_ENABLE_SMS,
-    callLogEnabled = BuildConfig.OPENCLAW_ENABLE_CALL_LOG,
+    smsEnabled = SensitiveFeatureConfig.smsEnabled,
+    callLogEnabled = SensitiveFeatureConfig.callLogEnabled,
   )
 
   private val notificationsHandler: NotificationsHandler = NotificationsHandler(
@@ -160,10 +163,10 @@ class NodeRuntime(
     voiceWakeMode = { VoiceWakeMode.Off },
     motionActivityAvailable = { motionHandler.isActivityAvailable() },
     motionPedometerAvailable = { motionHandler.isPedometerAvailable() },
-    sendSmsAvailable = { BuildConfig.OPENCLAW_ENABLE_SMS && sms.canSendSms() },
-    readSmsAvailable = { BuildConfig.OPENCLAW_ENABLE_SMS && sms.canReadSms() },
-    smsSearchPossible = { BuildConfig.OPENCLAW_ENABLE_SMS && sms.hasTelephonyFeature() },
-    callLogAvailable = { BuildConfig.OPENCLAW_ENABLE_CALL_LOG },
+    sendSmsAvailable = { SensitiveFeatureConfig.smsEnabled && sms.canSendSms() },
+    readSmsAvailable = { SensitiveFeatureConfig.smsEnabled && sms.canReadSms() },
+    smsSearchPossible = { SensitiveFeatureConfig.smsEnabled && sms.hasTelephonyFeature() },
+    callLogAvailable = { SensitiveFeatureConfig.callLogEnabled },
     hasRecordAudioPermission = { hasRecordAudioPermission() },
     manualTls = { manualTls.value },
   )
@@ -186,11 +189,11 @@ class NodeRuntime(
     isForeground = { _isForeground.value },
     cameraEnabled = { cameraEnabled.value },
     locationEnabled = { locationMode.value != LocationMode.Off },
-    sendSmsAvailable = { BuildConfig.OPENCLAW_ENABLE_SMS && sms.canSendSms() },
-    readSmsAvailable = { BuildConfig.OPENCLAW_ENABLE_SMS && sms.canReadSms() },
-    smsFeatureEnabled = { BuildConfig.OPENCLAW_ENABLE_SMS },
+    sendSmsAvailable = { SensitiveFeatureConfig.smsEnabled && sms.canSendSms() },
+    readSmsAvailable = { SensitiveFeatureConfig.smsEnabled && sms.canReadSms() },
+    smsFeatureEnabled = { SensitiveFeatureConfig.smsEnabled },
     smsTelephonyAvailable = { sms.hasTelephonyFeature() },
-    callLogAvailable = { BuildConfig.OPENCLAW_ENABLE_CALL_LOG },
+    callLogAvailable = { SensitiveFeatureConfig.callLogEnabled },
     debugBuild = { BuildConfig.DEBUG },
     refreshNodeCanvasCapability = { nodeSession.refreshNodeCanvasCapability() },
     onCanvasA2uiPush = {
@@ -258,6 +261,7 @@ class NodeRuntime(
   private var gatewayAgents: List<GatewayAgentSummary> = emptyList()
   private var didAutoRequestCanvasRehydrate = false
   private val canvasRehydrateSeq = AtomicLong(0)
+  @Volatile private var nodePresenceAliveLastSuccessAtMs: Long? = null
   private var operatorConnected = false
   private var operatorStatusText: String = "Offline"
   private var nodeStatusText: String = "Offline"
@@ -313,6 +317,7 @@ class NodeRuntime(
         _canvasRehydrateErrorText.value = null
         updateStatus()
         showLocalCanvasOnConnect()
+        publishNodePresenceAliveBeacon(NodePresenceAliveBeacon.Trigger.Connect)
         val endpoint = connectedEndpoint
         val auth = activeGatewayAuth
         if (endpoint != null && auth != null) {
@@ -429,6 +434,18 @@ class NodeRuntime(
 
   val micIsSending: StateFlow<Boolean>
     get() = micCapture.isSending
+
+  val talkModeEnabled: StateFlow<Boolean>
+    get() = talkMode.isEnabled
+
+  val talkModeListening: StateFlow<Boolean>
+    get() = talkMode.isListening
+
+  val talkModeSpeaking: StateFlow<Boolean>
+    get() = talkMode.isSpeaking
+
+  val talkModeStatusText: StateFlow<String>
+    get() = talkMode.statusText
 
   private val talkMode: TalkModeManager by lazy {
     TalkModeManager(
@@ -619,17 +636,8 @@ class NodeRuntime(
       prefs.loadGatewayToken()
     }
 
-    scope.launch {
-      prefs.talkEnabled.collect { enabled ->
-        // MicCaptureManager handles STT + send to gateway, while the dedicated
-        // reply speaker handles TTS for assistant replies in the voice tab.
-        micCapture.setMicEnabled(enabled)
-        if (enabled) {
-          talkMode.ttsOnAllResponses = false
-          scope.launch { talkMode.ensureChatSubscribed() }
-        }
-        externalAudioCaptureActive.value = enabled
-      }
+    if (prefs.voiceMicEnabled.value) {
+      setVoiceCaptureMode(VoiceCaptureMode.ManualMic, persistManualMic = false)
     }
 
     scope.launch(Dispatchers.Default) {
@@ -663,7 +671,61 @@ class NodeRuntime(
     if (value) {
       reconnectPreferredGatewayOnForeground()
     } else {
-      stopActiveVoiceSession()
+      stopManualVoiceSession()
+      publishNodePresenceAliveBeacon(NodePresenceAliveBeacon.Trigger.Background, throttleRecentSuccess = true)
+    }
+  }
+
+  private fun publishNodePresenceAliveBeacon(
+    trigger: NodePresenceAliveBeacon.Trigger,
+    throttleRecentSuccess: Boolean = false,
+  ) {
+    scope.launch {
+      sendNodePresenceAliveBeacon(trigger = trigger, throttleRecentSuccess = throttleRecentSuccess)
+    }
+  }
+
+  private suspend fun sendNodePresenceAliveBeacon(
+    trigger: NodePresenceAliveBeacon.Trigger,
+    throttleRecentSuccess: Boolean,
+  ) {
+    if (!_nodeConnected.value) return
+    val nowMs = System.currentTimeMillis()
+    if (
+      throttleRecentSuccess &&
+      NodePresenceAliveBeacon.shouldSkipRecentSuccess(
+        nowMs = nowMs,
+        lastSuccessAtMs = nodePresenceAliveLastSuccessAtMs,
+      )
+    ) {
+      return
+    }
+
+    val client = connectionManager.buildClientInfo(clientId = "openclaw-android", clientMode = "node")
+    val payloadJson =
+      NodePresenceAliveBeacon.makePayloadJson(
+        trigger = trigger,
+        sentAtMs = nowMs,
+        displayName = client.displayName?.trim()?.takeIf { it.isNotEmpty() } ?: "Android",
+        version = client.version,
+        platform = NodePresenceAliveBeacon.androidPlatformLabel(),
+        deviceFamily = client.deviceFamily,
+        modelIdentifier = client.modelIdentifier,
+      )
+    val result =
+      nodeSession.sendNodeEventDetailed(
+        event = NodePresenceAliveBeacon.EVENT_NAME,
+        payloadJson = payloadJson,
+      )
+    if (!result.ok) return
+    val response = NodePresenceAliveBeacon.decodeResponse(result.payloadJson)
+    if (response?.handled == true) {
+      nodePresenceAliveLastSuccessAtMs = nowMs
+    } else {
+      Log.d(
+        "OpenClawNode",
+        "node.presence.alive not handled: ${NodePresenceAliveBeacon.sanitizeReasonForLog(response?.reason)}",
+      )
     }
   }
 
@@ -777,21 +839,17 @@ class NodeRuntime(
 
   fun setVoiceScreenActive(active: Boolean) {
     if (!active) {
-      stopActiveVoiceSession()
+      stopManualVoiceSession()
     }
     // Don't re-enable on active=true; mic toggle drives that
   }
 
   fun setMicEnabled(value: Boolean) {
-    prefs.setTalkEnabled(value)
-    if (value) {
-      // Tapping mic on interrupts any active TTS (barge-in)
-      stopVoicePlayback()
-      talkMode.ttsOnAllResponses = false
-      scope.launch { talkMode.ensureChatSubscribed() }
-    }
-    micCapture.setMicEnabled(value)
-    externalAudioCaptureActive.value = value
+    setVoiceCaptureMode(if (value) VoiceCaptureMode.ManualMic else VoiceCaptureMode.Off)
+  }
+
+  fun setTalkModeEnabled(value: Boolean) {
+    setVoiceCaptureMode(if (value) VoiceCaptureMode.TalkMode else VoiceCaptureMode.Off)
   }
 
   val speakerEnabled: StateFlow<Boolean>
@@ -806,11 +864,72 @@ class NodeRuntime(
     talkMode.setPlaybackEnabled(value)
   }
 
+  private fun setVoiceCaptureMode(
+    mode: VoiceCaptureMode,
+    persistManualMic: Boolean = true,
+  ) {
+    if (mode == VoiceCaptureMode.TalkMode && !hasRecordAudioPermission()) {
+      _voiceCaptureMode.value = VoiceCaptureMode.Off
+      externalAudioCaptureActive.value = false
+      return
+    }
+    if (_voiceCaptureMode.value == mode) return
+    _voiceCaptureMode.value = mode
+    when (mode) {
+      VoiceCaptureMode.Off -> {
+        talkMode.ttsOnAllResponses = false
+        talkMode.setEnabled(false)
+        stopVoicePlayback()
+        micCapture.setMicEnabled(false)
+        if (persistManualMic) {
+          prefs.setVoiceMicEnabled(false)
+        }
+        NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
+        externalAudioCaptureActive.value = false
+      }
+
+      VoiceCaptureMode.ManualMic -> {
+        talkMode.ttsOnAllResponses = false
+        talkMode.setEnabled(false)
+        NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.ManualMic)
+        if (persistManualMic) {
+          prefs.setVoiceMicEnabled(true)
+        }
+        // Tapping mic on interrupts any active TTS (barge-in).
+        stopVoicePlayback()
+        scope.launch { talkMode.ensureChatSubscribed() }
+        micCapture.setMicEnabled(true)
+        externalAudioCaptureActive.value = true
+      }
+
+      VoiceCaptureMode.TalkMode -> {
+        if (persistManualMic) {
+          prefs.setVoiceMicEnabled(false)
+        }
+        micCapture.setMicEnabled(false)
+        NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.TalkMode)
+        talkMode.ttsOnAllResponses = true
+        talkMode.setPlaybackEnabled(speakerEnabled.value)
+        scope.launch { talkMode.ensureChatSubscribed() }
+        talkMode.setEnabled(true)
+        externalAudioCaptureActive.value = true
+      }
+    }
+  }
+
+  private fun stopManualVoiceSession() {
+    if (_voiceCaptureMode.value != VoiceCaptureMode.ManualMic) return
+    setVoiceCaptureMode(VoiceCaptureMode.Off)
+  }
+
   private fun stopActiveVoiceSession() {
     talkMode.ttsOnAllResponses = false
+    talkMode.setEnabled(false)
     stopVoicePlayback()
     micCapture.setMicEnabled(false)
-    prefs.setTalkEnabled(false)
+    prefs.setVoiceMicEnabled(false)
+    NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
+    _voiceCaptureMode.value = VoiceCaptureMode.Off
     externalAudioCaptureActive.value = false
   }
 

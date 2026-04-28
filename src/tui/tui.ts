@@ -13,7 +13,7 @@ import {
   TUI,
 } from "@mariozechner/pi-tui";
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { loadConfig, type OpenClawConfig } from "../config/config.js";
+import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { setConsoleSubsystemFilter } from "../logging/console.js";
 import { loggingState } from "../logging/state.js";
 import {
@@ -46,6 +46,7 @@ import type {
   SessionInfo,
   SessionScope,
   TuiOptions,
+  TuiResult,
   TuiStateAccess,
 } from "./tui-types.js";
 import { buildWaitingStatusMessage, defaultWaitingPhrases } from "./tui-waiting.js";
@@ -68,6 +69,12 @@ const OPENCLAW_DIST_ENTRY_MJS_PATH = fileURLToPath(
 );
 
 const OPENAI_CODEX_PROVIDER = "openai-codex";
+
+type RunTuiOptions = TuiOptions & {
+  backend?: TuiBackend;
+  config?: OpenClawConfig;
+  title?: string;
+};
 
 /** Resolve the absolute path to the `codex` CLI binary, or `null` if not installed. */
 export function resolveCodexCliBin(): string | null {
@@ -202,7 +209,7 @@ export function createBackspaceDeduper(params?: { dedupeWindowMs?: number; now?:
   let lastBackspaceAt = -1;
 
   return (data: string): string => {
-    if (!matchesKey(data, Key.backspace)) {
+    if (data !== "\x08" && !matchesKey(data, Key.backspace)) {
       return data;
     }
     const ts = now();
@@ -283,9 +290,9 @@ export function resolveCtrlCAction(params: {
   };
 }
 
-export async function runTui(opts: TuiOptions) {
-  const isLocalMode = opts.local === true;
-  const config = loadConfig();
+export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
+  const isLocalMode = opts.local === true || opts.backend !== undefined;
+  const config = opts.config ?? getRuntimeConfig();
   const initialSessionInput = (opts.session ?? "").trim();
   let sessionScope: SessionScope = (config.session?.scope ?? "per-sender") as SessionScope;
   let sessionMainKey = normalizeMainKey(config.session?.mainKey);
@@ -318,6 +325,7 @@ export async function runTui(opts: TuiOptions) {
   let sessionInfo: SessionInfo = {};
   let lastCtrlCAt = 0;
   let exitRequested = false;
+  let exitResult: TuiResult = { exitReason: "exit" };
   let activityStatus = "idle";
   let connectionStatus = isLocalMode ? "starting local runtime" : "connecting";
   let statusTimeout: NodeJS.Timeout | null = null;
@@ -494,13 +502,15 @@ export async function runTui(opts: TuiOptions) {
     localBtwRunIds.clear();
   };
 
-  const client: TuiBackend = opts.local
-    ? new EmbeddedTuiBackend()
-    : await GatewayChatClient.connect({
-        url: opts.url,
-        token: opts.token,
-        password: opts.password,
-      });
+  const client: TuiBackend = opts.backend
+    ? opts.backend
+    : opts.local
+      ? new EmbeddedTuiBackend()
+      : await GatewayChatClient.connect({
+          url: opts.url,
+          token: opts.token,
+          password: opts.password,
+        });
   const previousConsoleSubsystemFilter = isLocalMode
     ? loggingState.consoleSubsystemFilter
       ? [...loggingState.consoleSubsystemFilter]
@@ -539,6 +549,7 @@ export async function runTui(opts: TuiOptions) {
           local: isLocalMode,
           provider: sessionInfo.modelProvider,
           model: sessionInfo.model,
+          thinkingLevels: sessionInfo.thinkingLevels,
         }),
         process.cwd(),
       ),
@@ -575,9 +586,10 @@ export async function runTui(opts: TuiOptions) {
   const updateHeader = () => {
     const sessionLabel = formatSessionKey(currentSessionKey);
     const agentLabel = formatAgentLabel(currentAgentId);
+    const title = opts.title ?? "openclaw tui";
     header.setText(
       theme.header(
-        `openclaw tui - ${client.connection.url} - agent ${agentLabel} - session ${sessionLabel}`,
+        `${title} - ${client.connection.url} - agent ${agentLabel} - session ${sessionLabel}`,
       ),
     );
   };
@@ -906,16 +918,25 @@ export async function runTui(opts: TuiOptions) {
     clearLocalBtwRunIds,
   });
 
-  const requestExit = () => {
+  let finishTui: (() => void) | null = null;
+  const requestExit = (result?: Partial<TuiResult>) => {
     if (exitRequested) {
       return;
     }
     exitRequested = true;
+    exitResult = {
+      exitReason: result?.exitReason ?? "exit",
+      ...(result?.crestodianMessage ? { crestodianMessage: result.crestodianMessage } : {}),
+    };
     client.stop();
     void drainAndStopTuiSafely(tui).then(() => {
-      process.exit(0);
+      finishTui?.();
     });
   };
+  const exitAwareClient = client as TuiBackend & {
+    setRequestExitHandler?: (handler: () => void) => void;
+  };
+  exitAwareClient.setRequestExitHandler?.(() => requestExit());
 
   const { handleCommand, sendMessage, openModelSelector, openAgentSelector, openSessionSelector } =
     createCommandHandlers({
@@ -1113,8 +1134,12 @@ export async function runTui(opts: TuiOptions) {
       }
       process.removeListener("SIGINT", sigintHandler);
       process.removeListener("SIGTERM", sigtermHandler);
+      process.removeListener("exit", finish);
+      finishTui = null;
       resolve();
     };
+    finishTui = finish;
     process.once("exit", finish);
   });
+  return exitResult;
 }

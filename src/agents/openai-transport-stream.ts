@@ -43,7 +43,10 @@ import {
   resolveOpenAIStrictToolFlagForInventory,
   resolveOpenAIStrictToolSetting,
 } from "./openai-tool-schema.js";
-import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
+import {
+  buildGuardedModelFetch,
+  resolveModelRequestTimeoutMs,
+} from "./provider-transport-fetch.js";
 import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 import { mergeTransportMetadata, sanitizeTransportPayloadText } from "./transport-stream-shared.js";
@@ -84,8 +87,12 @@ type OpenAICompletionsOptions = BaseStreamOptions & {
   reasoningEffort?: OpenAIReasoningEffort;
 };
 
+type OpenAIModeCompatInput = Omit<ModelCompatConfig, "thinkingFormat"> & {
+  thinkingFormat?: string;
+};
+
 type OpenAIModeModel = Omit<Model<Api>, "compat"> & {
-  compat?: ModelCompatConfig;
+  compat?: OpenAIModeCompatInput | null;
 };
 
 type MutableAssistantOutput = {
@@ -665,6 +672,29 @@ function resolveProviderTransportTurnState(
   });
 }
 
+function resolveOpenAISdkTimeoutMs(model: Model<Api>): number | undefined {
+  return resolveModelRequestTimeoutMs(model, undefined);
+}
+
+function buildOpenAISdkClientOptions(model: Model<Api>): { timeout?: number } {
+  const timeout = resolveOpenAISdkTimeoutMs(model);
+  return timeout === undefined ? {} : { timeout };
+}
+
+function buildOpenAISdkRequestOptions(
+  model: Model<Api>,
+  signal?: AbortSignal,
+): { signal?: AbortSignal; timeout?: number } | undefined {
+  const timeout = resolveOpenAISdkTimeoutMs(model);
+  if (timeout === undefined && !signal) {
+    return undefined;
+  }
+  return {
+    ...(signal ? { signal } : {}),
+    ...(timeout !== undefined ? { timeout } : {}),
+  };
+}
+
 function createOpenAIResponsesClient(
   model: Model<Api>,
   context: Context,
@@ -678,6 +708,7 @@ function createOpenAIResponsesClient(
     dangerouslyAllowBrowser: true,
     defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders),
     fetch: buildGuardedModelFetch(model),
+    ...buildOpenAISdkClientOptions(model),
   });
 }
 
@@ -731,7 +762,7 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
         params = mergeTransportMetadata(params, turnState?.metadata);
         const responseStream = (await client.responses.create(
           params as never,
-          options?.signal ? { signal: options.signal } : undefined,
+          buildOpenAISdkRequestOptions(model, options?.signal),
         )) as unknown as AsyncIterable<unknown>;
         stream.push({ type: "start", partial: output as never });
         await processResponsesStream(responseStream, output, stream, model, {
@@ -828,12 +859,24 @@ function raiseMinimalReasoningForResponsesWebSearch(params: {
   return params.effort;
 }
 
+function isOpenAICodexResponsesModel(model: Model<Api>): boolean {
+  return model.provider === "openai-codex" && model.api === "openai-codex-responses";
+}
+
+function buildOpenAICodexResponsesInstructions(context: Context): string | undefined {
+  if (!context.systemPrompt) {
+    return undefined;
+  }
+  return sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt));
+}
+
 export function buildOpenAIResponsesParams(
   model: Model<Api>,
   context: Context,
   options: OpenAIResponsesOptions | undefined,
   metadata?: Record<string, string>,
 ) {
+  const isCodexResponses = isOpenAICodexResponsesModel(model);
   const compat = getCompat(model as OpenAIModeModel);
   const supportsDeveloperRole =
     typeof compat.supportsDeveloperRole === "boolean" ? compat.supportsDeveloperRole : undefined;
@@ -841,7 +884,7 @@ export function buildOpenAIResponsesParams(
     model,
     context,
     new Set(["openai", "openai-codex", "opencode", "azure-openai-responses"]),
-    { supportsDeveloperRole },
+    { includeSystemPrompt: !isCodexResponses, supportsDeveloperRole },
   );
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
   const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
@@ -853,6 +896,7 @@ export function buildOpenAIResponsesParams(
     stream: true,
     prompt_cache_key: cacheRetention === "none" ? undefined : options?.sessionId,
     prompt_cache_retention: getPromptCacheRetention(model.baseUrl, cacheRetention),
+    ...(isCodexResponses ? { instructions: buildOpenAICodexResponsesInstructions(context) } : {}),
     ...(metadata ? { metadata } : {}),
   };
   if (options?.maxTokens) {
@@ -962,7 +1006,7 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
         params = mergeTransportMetadata(params, turnState?.metadata);
         const responseStream = (await client.responses.create(
           params as never,
-          options?.signal ? { signal: options.signal } : undefined,
+          buildOpenAISdkRequestOptions(model, options?.signal),
         )) as unknown as AsyncIterable<unknown>;
         stream.push({ type: "start", partial: output as never });
         await processResponsesStream(responseStream, output, stream, model);
@@ -1016,6 +1060,7 @@ function createAzureOpenAIClient(
     defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders),
     baseURL: normalizeAzureBaseUrl(model.baseUrl),
     fetch: buildGuardedModelFetch(model),
+    ...buildOpenAISdkClientOptions(model),
   });
 }
 
@@ -1054,6 +1099,7 @@ function createOpenAICompletionsClient(
     defaultHeaders: clientConfig.defaultHeaders,
     defaultQuery: clientConfig.defaultQuery,
     fetch: buildGuardedModelFetch(model),
+    ...buildOpenAISdkClientOptions(model),
   });
 }
 
@@ -1147,9 +1193,10 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
         if (nextParams !== undefined) {
           params = nextParams as typeof params;
         }
-        const responseStream = (await client.chat.completions.create(params as never, {
-          signal: options?.signal,
-        })) as unknown as AsyncIterable<ChatCompletionChunk>;
+        const responseStream = (await client.chat.completions.create(
+          params as never,
+          buildOpenAISdkRequestOptions(model, options?.signal),
+        )) as unknown as AsyncIterable<ChatCompletionChunk>;
         stream.push({ type: "start", partial: output as never });
         await processOpenAICompletionsStream(responseStream, output, model, stream);
         if (options?.signal?.aborted) {
@@ -1292,7 +1339,11 @@ async function processOpenAICompletionsStream(
     flushPendingPostToolCallDeltas();
     appendTextDeltaInternal(text);
   };
-  for await (const chunk of responseStream) {
+  for await (const rawChunk of responseStream as AsyncIterable<unknown>) {
+    if (!rawChunk || typeof rawChunk !== "object") {
+      continue;
+    }
+    const chunk = rawChunk as ChatCompletionChunk;
     output.responseId ||= chunk.id;
     if (chunk.usage) {
       output.usage = parseTransportChunkUsage(chunk.usage, model);
@@ -1475,26 +1526,12 @@ function getCompletionsReasoningDeltas(
 }
 
 function detectCompat(model: OpenAIModeModel) {
-  const provider = model.provider;
-  const { capabilities, defaults: compatDefaults } = detectOpenAICompletionsCompat(model);
-  const endpointClass = capabilities.endpointClass;
-  const isDefaultRoute = endpointClass === "default";
-  const isGroq = endpointClass === "groq-native" || (isDefaultRoute && provider === "groq");
-  const reasoningEffortMap: Record<string, string> =
-    isGroq && model.id === "qwen/qwen3-32b"
-      ? {
-          minimal: "default",
-          low: "default",
-          medium: "default",
-          high: "default",
-          xhigh: "default",
-        }
-      : {};
+  const { defaults: compatDefaults } = detectOpenAICompletionsCompat(model);
   return {
     supportsStore: compatDefaults.supportsStore,
     supportsDeveloperRole: compatDefaults.supportsDeveloperRole,
     supportsReasoningEffort: compatDefaults.supportsReasoningEffort,
-    reasoningEffortMap,
+    reasoningEffortMap: {},
     supportsUsageInStreaming: compatDefaults.supportsUsageInStreaming,
     maxTokensField: compatDefaults.maxTokensField,
     requiresToolResultName: false,
@@ -1522,6 +1559,7 @@ function getCompat(model: OpenAIModeModel): {
   openRouterRouting: Record<string, unknown>;
   vercelGatewayRouting: Record<string, unknown>;
   supportsStrictMode: boolean;
+  supportsPromptCacheKey: boolean;
   requiresStringContent: boolean;
   visibleReasoningDetailTypes: string[];
 } {
@@ -1544,12 +1582,13 @@ function getCompat(model: OpenAIModeModel): {
     requiresAssistantAfterToolResult:
       compat.requiresAssistantAfterToolResult ?? detected.requiresAssistantAfterToolResult,
     requiresThinkingAsText: compat.requiresThinkingAsText ?? detected.requiresThinkingAsText,
-    thinkingFormat: (compat.thinkingFormat as string | undefined) ?? detected.thinkingFormat,
+    thinkingFormat: compat.thinkingFormat ?? detected.thinkingFormat,
     openRouterRouting: (compat.openRouterRouting as Record<string, unknown> | undefined) ?? {},
     vercelGatewayRouting:
       (compat.vercelGatewayRouting as Record<string, unknown> | undefined) ??
       detected.vercelGatewayRouting,
     supportsStrictMode: compat.supportsStrictMode ?? detected.supportsStrictMode,
+    supportsPromptCacheKey: compat.supportsPromptCacheKey === true,
     requiresStringContent: compat.requiresStringContent ?? false,
     visibleReasoningDetailTypes:
       compat.visibleReasoningDetailTypes ?? detected.visibleReasoningDetailTypes,
@@ -1560,6 +1599,7 @@ type OpenAIResponsesRequestParams = {
   model: string;
   input: ResponseInput;
   stream: true;
+  instructions?: string;
   prompt_cache_key?: string;
   prompt_cache_retention?: "24h";
   metadata?: Record<string, string>;
@@ -1708,6 +1748,7 @@ export function buildOpenAICompletionsParams(
   options: OpenAICompletionsOptions | undefined,
 ) {
   const compat = getCompat(model);
+  const compatDetection = detectOpenAICompletionsCompat(model);
   const completionsContext = context.systemPrompt
     ? {
         ...context,
@@ -1716,6 +1757,7 @@ export function buildOpenAICompletionsParams(
     : context;
   const messages = convertMessages(model as never, completionsContext, compat as never);
   injectToolCallThoughtSignatures(messages as unknown[], context, model);
+  const cacheRetention = resolveCacheRetention(options?.cacheRetention);
   const params: Record<string, unknown> = {
     model: model.id,
     messages: compat.requiresStringContent
@@ -1726,6 +1768,9 @@ export function buildOpenAICompletionsParams(
   };
   if (compat.supportsStore) {
     params.store = false;
+  }
+  if (compat.supportsPromptCacheKey && cacheRetention !== "none" && options?.sessionId) {
+    params.prompt_cache_key = options.sessionId;
   }
   if (options?.maxTokens) {
     if (compat.maxTokensField === "max_tokens") {
@@ -1741,6 +1786,12 @@ export function buildOpenAICompletionsParams(
     params.tools = convertTools(context.tools, compat, model);
     if (options?.toolChoice) {
       params.tool_choice = options.toolChoice;
+    } else if (
+      compatDetection.capabilities.usesExplicitProxyLikeEndpoint &&
+      Array.isArray(params.tools) &&
+      params.tools.length > 0
+    ) {
+      params.tool_choice = "auto";
     }
   } else if (hasToolHistory(context.messages)) {
     params.tools = [];
@@ -1802,6 +1853,7 @@ function mapStopReason(reason: string | null) {
     case "length":
       return { stopReason: "length" };
     case "function_call":
+    case "tool_call":
     case "tool_calls":
       return { stopReason: "toolUse" };
     case "content_filter":
@@ -1817,6 +1869,11 @@ function mapStopReason(reason: string | null) {
 }
 
 export const __testing = {
+  buildOpenAISdkClientOptions,
+  buildOpenAISdkRequestOptions,
+  createAzureOpenAIClient,
+  createOpenAICompletionsClient,
+  createOpenAIResponsesClient,
   buildOpenAICompletionsClientConfig,
   processOpenAICompletionsStream,
 };

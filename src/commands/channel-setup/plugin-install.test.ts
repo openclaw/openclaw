@@ -1,9 +1,6 @@
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  bundledPluginRoot,
-  bundledPluginRootAt,
-} from "../../../test/helpers/bundled-plugin-paths.js";
+import { bundledPluginRoot, bundledPluginRootAt } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("node:fs", async () => {
   const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
@@ -89,14 +86,17 @@ vi.mock("../../plugins/loader.js", () => ({
 }));
 
 const clearPluginDiscoveryCache = vi.fn();
+const discoverOpenClawPlugins = vi.fn((_args?: unknown) => ({ candidates: [], diagnostics: [] }));
 vi.mock("../../plugins/discovery.js", () => ({
   clearPluginDiscoveryCache: () => clearPluginDiscoveryCache(),
+  discoverOpenClawPlugins: (args: unknown) => discoverOpenClawPlugins(args),
 }));
 
 import fs from "node:fs";
 import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
+import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import {
   pinActivePluginChannelRegistry,
@@ -117,6 +117,7 @@ const bundledChatNpmSpec = "@openclaw/bundled-chat@1.2.3";
 const bundledChatIntegrity = "sha512-bundled-chat";
 const bundledChatForkNpmSpec = "@vendor/bundled-chat-fork@1.2.3";
 const bundledChatForkIntegrity = "sha512-vendor-bundled-chat-fork";
+const ORIGINAL_OPENCLAW_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 
 const baseEntry: ChannelPluginCatalogEntry = {
   id: "bundled-chat",
@@ -163,17 +164,37 @@ function mockActivationOnlyPlugin(plugin: {
 }) {
   loadPluginManifestRegistry.mockReturnValue({
     plugins: [
-      {
+      createManifestRecord({
         id: plugin.id,
-        channels: [],
         ...(plugin.origin === undefined ? {} : { origin: plugin.origin }),
         activation: {
           onChannels: ["external-chat"],
         },
-      },
+      }),
     ],
     diagnostics: [],
   });
+}
+
+function createManifestRecord(
+  overrides: Partial<PluginManifestRecord> & Pick<PluginManifestRecord, "id">,
+): PluginManifestRecord {
+  const { id, ...rest } = overrides;
+  return {
+    id,
+    channels: [],
+    providers: [],
+    cliBackends: [],
+    syntheticAuthRefs: [],
+    nonSecretAuthMarkers: [],
+    skills: [],
+    hooks: [],
+    origin: "bundled",
+    rootDir: `/tmp/openclaw-test/${id}`,
+    source: `/tmp/openclaw-test/${id}/index.ts`,
+    manifestPath: `/tmp/openclaw-test/${id}/openclaw.plugin.json`,
+    ...rest,
+  };
 }
 
 function expectSetupSnapshotDoesNotScopeToPlugin(params: {
@@ -193,10 +214,10 @@ function expectSetupSnapshotDoesNotScopeToPlugin(params: {
       onlyPluginIds: [params.pluginId],
     }),
   );
-  expect(
-    (vi.mocked(loadOpenClawPlugins).mock.calls[0]?.[0] as { onlyPluginIds?: string[] })
-      .onlyPluginIds,
-  ).toBeUndefined();
+  const firstLoadCall = vi.mocked(loadOpenClawPlugins).mock.calls[0]?.[0] as
+    | { onlyPluginIds?: string[] }
+    | undefined;
+  expect(firstLoadCall?.onlyPluginIds).toBeUndefined();
 }
 
 beforeEach(() => {
@@ -210,10 +231,19 @@ beforeEach(() => {
     autoEnabledReasons: {},
   }));
   resolveBundledPluginSources.mockReturnValue(new Map());
+  discoverOpenClawPlugins.mockReturnValue({ candidates: [], diagnostics: [] });
   getChannelPluginCatalogEntry.mockReturnValue(undefined);
   listChannelPluginCatalogEntries.mockReturnValue([]);
   loadPluginManifestRegistry.mockReturnValue({ plugins: [], diagnostics: [] });
   setActivePluginRegistry(createEmptyPluginRegistry());
+});
+
+afterEach(() => {
+  if (ORIGINAL_OPENCLAW_STATE_DIR === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = ORIGINAL_OPENCLAW_STATE_DIR;
+  }
 });
 
 function mockRepoLocalPathExists() {
@@ -313,12 +343,46 @@ describe("ensureChannelSetupPluginInstalled", () => {
     expect(result.installed).toBe(true);
     expect(result.cfg.plugins?.entries?.["bundled-chat"]?.enabled).toBe(true);
     expect(result.cfg.plugins?.allow).toContain("bundled-chat");
-    expect(result.cfg.plugins?.installs?.["bundled-chat"]?.source).toBe("npm");
-    expect(result.cfg.plugins?.installs?.["bundled-chat"]?.spec).toBe(bundledChatNpmSpec);
-    expect(result.cfg.plugins?.installs?.["bundled-chat"]?.installPath).toBe("/tmp/bundled-chat");
+    expect(result.cfg.plugins?.installs).toEqual({
+      "bundled-chat": expect.objectContaining({
+        source: "npm",
+        spec: bundledChatNpmSpec,
+        installPath: "/tmp/bundled-chat",
+      }),
+    });
     expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
       expect.objectContaining({
         expectedIntegrity: bundledChatIntegrity,
+        spec: bundledChatNpmSpec,
+      }),
+    );
+  });
+
+  it("installs npm channel plugins into the active profile extensions dir", async () => {
+    const runtime = makeRuntime();
+    const prompter = makePrompter({
+      select: vi.fn(async () => "npm") as WizardPrompter["select"],
+    });
+    const profileStateDir = "/tmp/openclaw-ledger-channel";
+    process.env.OPENCLAW_STATE_DIR = profileStateDir;
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    installPluginFromNpmSpec.mockResolvedValue({
+      ok: true,
+      pluginId: "bundled-chat",
+      targetDir: path.join(profileStateDir, "extensions", "bundled-chat"),
+      extensions: [],
+    });
+
+    await ensureChannelSetupPluginInstalled({
+      cfg: {},
+      entry: baseEntry,
+      prompter,
+      runtime,
+    });
+
+    expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        extensionsDir: path.join(profileStateDir, "extensions"),
         spec: bundledChatNpmSpec,
       }),
     );
@@ -400,6 +464,27 @@ describe("ensureChannelSetupPluginInstalled", () => {
         ]),
       }),
     );
+  });
+
+  it("uses the bundled default install source without prompting in non-interactive mode", async () => {
+    const runtime = makeRuntime();
+    const { prompter, select } = makeSkipInstallPrompter();
+    const cfg: OpenClawConfig = { update: { channel: "beta" } };
+    mockBundledChatSource();
+
+    const result = await ensureChannelSetupPluginInstalled({
+      cfg,
+      entry: baseEntry,
+      prompter,
+      runtime,
+      promptInstall: false,
+    });
+
+    expect(select).not.toHaveBeenCalled();
+    expect(result.installed).toBe(true);
+    expect(result.cfg.plugins?.entries?.["bundled-chat"]?.enabled).toBe(true);
+    expect(result.cfg.plugins?.load?.paths).toBeUndefined();
+    expect(result.cfg.plugins?.installs).toBeUndefined();
   });
 
   it("does not default to bundled local path when an external catalog overrides the npm spec", async () => {
@@ -739,7 +824,12 @@ describe("ensureChannelSetupPluginInstalled", () => {
     const runtime = makeRuntime();
     const cfg: OpenClawConfig = {};
     loadPluginManifestRegistry.mockReturnValue({
-      plugins: [{ id: "custom-external-chat-plugin", channels: ["external-chat"] }],
+      plugins: [
+        createManifestRecord({
+          id: "custom-external-chat-plugin",
+          channels: ["external-chat"],
+        }),
+      ],
       diagnostics: [],
     });
 

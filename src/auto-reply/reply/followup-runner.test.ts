@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { DELIVERY_NO_REPLY_RUNTIME_CONTRACT } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -1068,7 +1069,7 @@ describe("createFollowupRunner bootstrap warning dedupe", () => {
   });
 });
 
-describe("createFollowupRunner messaging tool dedupe", () => {
+describe("createFollowupRunner messaging delivery and dedupe", () => {
   function createMessagingDedupeRunner(
     onBlockReply: (payload: unknown) => Promise<void>,
     overrides: Partial<{
@@ -1361,6 +1362,30 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     expect(onBlockReply).toHaveBeenCalledWith(expect.objectContaining({ text: "hello world!" }));
   });
 
+  it("keeps message-tool-only queued followup finals private", async () => {
+    const queued = baseQueuedRun("discord");
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [{ text: "hello world!" }] },
+      queued: {
+        ...queued,
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: {
+          ...queued.run,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      } as FollowupRun,
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceReplyDeliveryMode: "message_tool_only",
+      }),
+    );
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
   it("lets provider followup route hooks force dispatcher delivery", async () => {
     resolveProviderFollowupFallbackRouteMock.mockReturnValue({
       route: "dispatcher",
@@ -1408,6 +1433,88 @@ describe("createFollowupRunner messaging tool dedupe", () => {
 
     expect(routeReplyMock).not.toHaveBeenCalled();
     expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("suppresses exact NO_REPLY followups without origin or dispatcher delivery", async () => {
+    const typing = createMockTypingController();
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: `  ${DELIVERY_NO_REPLY_RUNTIME_CONTRACT.silentText}  ` }],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      typing,
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-6",
+    });
+
+    await runner(createQueuedRun({ originatingChannel: undefined, originatingTo: undefined }));
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(typing.markRunComplete).toHaveBeenCalled();
+    expect(typing.markDispatchIdle).toHaveBeenCalled();
+  });
+
+  it("suppresses JSON NO_REPLY followups without origin or dispatcher delivery", async () => {
+    const typing = createMockTypingController();
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: DELIVERY_NO_REPLY_RUNTIME_CONTRACT.jsonSilentText }],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      typing,
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-6",
+    });
+
+    await runner(createQueuedRun({ originatingChannel: undefined, originatingTo: undefined }));
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(typing.markRunComplete).toHaveBeenCalled();
+    expect(typing.markDispatchIdle).toHaveBeenCalled();
+  });
+
+  it("keeps NO_REPLY followups with media deliverable", async () => {
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [
+          {
+            text: DELIVERY_NO_REPLY_RUNTIME_CONTRACT.silentText,
+            mediaUrl: "file:///tmp/followup.png",
+          },
+        ],
+      },
+      queued: {
+        ...baseQueuedRun("webchat"),
+        originatingChannel: undefined,
+        originatingTo: undefined,
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: DELIVERY_NO_REPLY_RUNTIME_CONTRACT.silentText,
+        mediaUrl: "file:///tmp/followup.png",
+      }),
+    );
+  });
+
+  it("falls back to dispatcher when successful output has no complete origin route", async () => {
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [{ text: DELIVERY_NO_REPLY_RUNTIME_CONTRACT.dispatcherText }] },
+      queued: {
+        ...baseQueuedRun("webchat"),
+        originatingChannel: DELIVERY_NO_REPLY_RUNTIME_CONTRACT.originChannel,
+        originatingTo: undefined,
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: DELIVERY_NO_REPLY_RUNTIME_CONTRACT.dispatcherText }),
+    );
   });
 
   it("falls back to dispatcher when same-channel origin routing fails", async () => {

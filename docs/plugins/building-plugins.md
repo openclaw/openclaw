@@ -33,7 +33,7 @@ falls back to npm automatically.
   <Card title="Provider plugin" icon="cpu" href="/plugins/sdk-provider-plugins">
     Add a model provider (LLM, proxy, or custom endpoint)
   </Card>
-  <Card title="Tool / hook plugin" icon="wrench">
+  <Card title="Tool / hook plugin" icon="wrench" href="/plugins/hooks">
     Register agent tools, event hooks, or services — continue below
   </Card>
 </CardGroup>
@@ -76,6 +76,9 @@ and provider plugins have dedicated guides linked above.
       "id": "my-plugin",
       "name": "My Plugin",
       "description": "Adds a custom tool to OpenClaw",
+      "activation": {
+        "onStartup": true
+      },
       "configSchema": {
         "type": "object",
         "additionalProperties": false
@@ -84,7 +87,9 @@ and provider plugins have dedicated guides linked above.
     ```
     </CodeGroup>
 
-    Every plugin needs a manifest, even with no config. See
+    Every plugin needs a manifest, even with no config, and every plugin should
+    declare `activation.onStartup` intentionally. Runtime-registered tools need
+    startup import, so this example sets it to `true`. See
     [Manifest](/plugins/manifest) for the full schema. The canonical ClawHub
     publish snippets live in `docs/snippets/plugin-publish/`.
 
@@ -160,19 +165,22 @@ A single plugin can register any number of capabilities via the `api` object:
 | Video generation       | `api.registerVideoGenerationProvider(...)`       | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
 | Web fetch              | `api.registerWebFetchProvider(...)`              | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
 | Web search             | `api.registerWebSearchProvider(...)`             | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
-| Embedded Pi extension  | `api.registerEmbeddedExtensionFactory(...)`      | [SDK Overview](/plugins/sdk-overview#registration-api)                          |
+| Tool-result middleware | `api.registerAgentToolResultMiddleware(...)`     | [SDK Overview](/plugins/sdk-overview#registration-api)                          |
 | Agent tools            | `api.registerTool(...)`                          | Below                                                                           |
 | Custom commands        | `api.registerCommand(...)`                       | [Entry Points](/plugins/sdk-entrypoints)                                        |
-| Event hooks            | `api.registerHook(...)`                          | [Entry Points](/plugins/sdk-entrypoints)                                        |
+| Plugin hooks           | `api.on(...)`                                    | [Plugin hooks](/plugins/hooks)                                                  |
+| Internal event hooks   | `api.registerHook(...)`                          | [Entry Points](/plugins/sdk-entrypoints)                                        |
 | HTTP routes            | `api.registerHttpRoute(...)`                     | [Internals](/plugins/architecture-internals#gateway-http-routes)                |
 | CLI subcommands        | `api.registerCli(...)`                           | [Entry Points](/plugins/sdk-entrypoints)                                        |
 
 For the full registration API, see [SDK Overview](/plugins/sdk-overview#registration-api).
 
-Use `api.registerEmbeddedExtensionFactory(...)` when a plugin needs Pi-native
-embedded-runner hooks such as async `tool_result` rewriting before the final
-tool result message is emitted. Prefer regular OpenClaw plugin hooks when the
-work does not need Pi extension timing.
+Bundled plugins can use `api.registerAgentToolResultMiddleware(...)` when they
+need async tool-result rewriting before the model sees the output. Declare the
+targeted runtimes in `contracts.agentToolResultMiddleware`, for example
+`["pi", "codex"]`. This is a trusted bundled-plugin seam; external
+plugins should prefer regular OpenClaw plugin hooks unless OpenClaw grows an
+explicit trust policy for this capability.
 
 If your plugin registers custom gateway RPC methods, keep them on a
 plugin-specific prefix. Core admin namespaces (`config.*`,
@@ -197,7 +205,7 @@ If custom approval plumbing needs to detect that same bounded fallback case,
 prefer `isApprovalNotFoundError` from `openclaw/plugin-sdk/error-runtime`
 instead of matching approval-expiry strings manually.
 
-See [SDK Overview hook decision semantics](/plugins/sdk-overview#hook-decision-semantics) for details.
+See [Plugin hooks](/plugins/hooks) for examples and the hook reference.
 
 ## Registering agent tools
 
@@ -240,6 +248,7 @@ Users enable optional tools in config:
 ```
 
 - Tool names must not clash with core tools (conflicts are skipped)
+- Tools with malformed registration objects, including missing `parameters`, are skipped and reported in plugin diagnostics instead of breaking agent runs
 - Use `optional: true` for tools with side effects or extra binary requirements
 - Users can enable all tools from a plugin by adding the plugin id to `tools.allow`
 
@@ -271,9 +280,8 @@ If a helper is only useful inside one bundled provider package, keep it on that
 package-root seam instead of promoting it into `openclaw/plugin-sdk/*`.
 
 Some generated `openclaw/plugin-sdk/<bundled-id>` helper seams still exist for
-bundled-plugin maintenance and compatibility, for example
-`plugin-sdk/feishu-setup` or `plugin-sdk/zalo-setup`. Treat those as reserved
-surfaces, not as the default pattern for new third-party plugins.
+bundled-plugin maintenance when they have tracked owner usage. Treat those as
+reserved surfaces, not as the default pattern for new third-party plugins.
 
 ## Pre-submission checklist
 
@@ -285,7 +293,7 @@ surfaces, not as the default pattern for new third-party plugins.
 <Check>Tests pass (`pnpm test -- <bundled-plugin-root>/my-plugin/`)</Check>
 <Check>`pnpm check` passes (in-repo plugins)</Check>
 
-## Beta Release Testing
+## Beta release testing
 
 1. Watch for GitHub release tags on [openclaw/openclaw](https://github.com/openclaw/openclaw/releases) and subscribe via `Watch` > `Releases`. Beta tags look like `v2026.3.N-beta.1`. You can also turn on notifications for the official OpenClaw X account [@openclaw](https://x.com/openclaw) for release announcements.
 2. Test your plugin against the beta tag as soon as it appears. The window before stable is typically only a few hours.

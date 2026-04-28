@@ -1,4 +1,6 @@
 import path from "node:path";
+import { assertOkOrThrowHttpError } from "../agents/provider-http-errors.js";
+export { assertOkOrThrowHttpError } from "../agents/provider-http-errors.js";
 import type {
   ProviderRequestCapability,
   ProviderRequestTransport,
@@ -13,16 +15,16 @@ import {
 } from "../agents/provider-request-config.js";
 import type { GuardedFetchMode, GuardedFetchResult } from "../infra/net/fetch-guard.js";
 import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../infra/net/fetch-guard.js";
-import { hasEnvHttpProxyConfigured, matchesNoProxy } from "../infra/net/proxy-env.js";
+import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
 import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 export { fetchWithTimeout };
 export { normalizeBaseUrl } from "../agents/provider-request-config.js";
 export { sanitizeConfiguredModelProviderRequest } from "../agents/provider-request-config.js";
 
+const DEFAULT_GUARDED_HTTP_TIMEOUT_MS = 60_000;
 const MAX_ERROR_CHARS = 300;
 const MAX_ERROR_RESPONSE_BYTES = 4096;
-const DEFAULT_GUARDED_HTTP_TIMEOUT_MS = 60_000;
 const MAX_AUDIT_CONTEXT_CHARS = 80;
 
 export function resolveAudioTranscriptionUploadFileName(fileName?: string, mime?: string): string {
@@ -256,29 +258,7 @@ function shouldAutoUpgradeToTrustedEnvProxy(params: {
     return false;
   }
 
-  let protocol: "http" | "https";
-  try {
-    const parsed = new URL(params.url);
-    if (parsed.protocol === "http:") {
-      protocol = "http";
-    } else if (parsed.protocol === "https:") {
-      protocol = "https";
-    } else {
-      return false;
-    }
-  } catch {
-    return false;
-  }
-
-  if (!hasEnvHttpProxyConfigured(protocol)) {
-    return false;
-  }
-
-  if (matchesNoProxy(params.url)) {
-    return false;
-  }
-
-  return true;
+  return shouldUseEnvHttpProxyForUrl(params.url);
 }
 
 export async function fetchWithTimeoutGuarded(
@@ -510,15 +490,6 @@ export async function readErrorResponse(res: Response): Promise<string | undefin
       // Ignore stream-cancel failures while reporting the original HTTP error.
     }
   }
-}
-
-export async function assertOkOrThrowHttpError(res: Response, label: string): Promise<void> {
-  if (res.ok) {
-    return;
-  }
-  const detail = await readErrorResponse(res);
-  const suffix = detail ? `: ${detail}` : "";
-  throw new Error(`${label} (HTTP ${res.status})${suffix}`);
 }
 
 export function requireTranscriptionText(

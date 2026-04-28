@@ -1,9 +1,9 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getRequiredHookHandler,
   registerHookHandlersForTest,
-} from "../../../test/helpers/plugins/subagent-hooks.js";
+} from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type ThreadBindingRecord = {
   accountId: string;
@@ -193,6 +193,15 @@ describe("discord subagent hook handlers", () => {
 
     expect(hookMocks.autoBindSpawnedDiscordSubagent).toHaveBeenCalledTimes(1);
     expect(hookMocks.autoBindSpawnedDiscordSubagent).toHaveBeenCalledWith({
+      cfg: expect.objectContaining({
+        channels: expect.objectContaining({
+          discord: expect.objectContaining({
+            threadBindings: expect.objectContaining({
+              spawnSubagentSessions: true,
+            }),
+          }),
+        }),
+      }),
       accountId: "work",
       channel: "discord",
       to: "channel:123",
