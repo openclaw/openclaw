@@ -359,6 +359,19 @@ export function matchAllowlist(
     return null;
   }
   const resolvedPath = resolution.resolvedPath;
+  // The runtime always pins execution to `resolvedRealPath` (via fs.realpath)
+  // when present. If only `resolvedPath` participates in allowlist matching,
+  // an operator who allowlists the canonical real-binary path (e.g. the file
+  // under `/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg`) sees their allowlist
+  // miss every single Homebrew/nix/asdf-style symlinked binary, while an
+  // operator who allowlists the symlink (e.g. `/opt/homebrew/bin/rg`) keeps
+  // approving the *symlink path* even after the symlink target changes.
+  // Match both paths through every path-shaped pattern so approvals stay
+  // semantically tied to the real binary that actually runs (#45595).
+  const resolvedRealPath =
+    resolution.resolvedRealPath && resolution.resolvedRealPath !== resolvedPath
+      ? resolution.resolvedRealPath
+      : undefined;
   // argPattern matching is currently Windows-only.  On other platforms every
   // path-matched entry is treated as a match regardless of argPattern, which
   // preserves the pre-existing behaviour.
@@ -373,7 +386,9 @@ export function matchAllowlist(
       continue;
     }
     const patternMatches = hasPathSelector(pattern)
-      ? matchesExecAllowlistPattern(pattern, resolvedPath)
+      ? matchesExecAllowlistPattern(pattern, resolvedPath) ||
+        (resolvedRealPath !== undefined &&
+          matchesExecAllowlistPattern(pattern, resolvedRealPath))
       : pattern !== "*" && matchesExecutableBasenamePattern(pattern, resolution);
     if (!patternMatches) {
       continue;
