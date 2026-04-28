@@ -1,11 +1,10 @@
 import type { ChatItem, MessageGroup, ToolCard } from "../types/chat-types.ts";
+import { CHAT_HISTORY_RENDER_CHAR_BUDGET, CHAT_HISTORY_RENDER_LIMIT } from "./history-limits.ts";
 import { extractTextCached } from "./message-extract.ts";
 import { normalizeMessage } from "./message-normalizer.ts";
 import { normalizeRoleForGrouping } from "./role-normalizer.ts";
 import { messageMatchesSearchQuery } from "./search-match.ts";
 import { extractToolCards, extractToolPreview } from "./tool-cards.ts";
-
-const CHAT_HISTORY_RENDER_LIMIT = 200;
 
 export type BuildChatItemsProps = {
   sessionKey: string;
@@ -148,6 +147,115 @@ function findNearestAssistantMessageIndex(
   return assistantEntries[assistantEntries.length - 1]?.index ?? null;
 }
 
+function isHiddenToolMessage(message: unknown, showToolCalls: boolean): boolean {
+  return !showToolCalls && normalizeMessage(message).role.toLowerCase() === "toolresult";
+}
+
+function estimateRawContentChars(value: unknown): number {
+  if (typeof value === "string") {
+    return value.length;
+  }
+  if (Array.isArray(value)) {
+    return value.reduce((total, item) => total + estimateRawContentChars(item), 0);
+  }
+  if (!value || typeof value !== "object") {
+    return 0;
+  }
+  const record = value as Record<string, unknown>;
+  let chars = 0;
+  if (typeof record.text === "string") {
+    chars += record.text.length;
+  }
+  if (record.content !== undefined) {
+    chars += estimateRawContentChars(record.content);
+  }
+  return chars;
+}
+
+function estimateMessageRenderChars(message: unknown): number {
+  const normalized = normalizeMessage(message);
+  const raw = message as Record<string, unknown>;
+  const rawContent = Array.isArray(raw.content) ? (raw.content as Record<string, unknown>[]) : [];
+  let chars = 0;
+  for (let i = 0; i < normalized.content.length; i++) {
+    const item = normalized.content[i];
+    const rawItem = rawContent[i] as Record<string, unknown> | undefined;
+    if (
+      (item.type === "text" || item.type === "tool_call" || item.type === "tool_result") &&
+      typeof item.text === "string"
+    ) {
+      chars += item.text.length;
+    }
+    if (rawItem?.content !== undefined) {
+      chars += estimateRawContentChars(rawItem.content);
+    }
+    if (
+      (item.type === "text" || item.type === "tool_call" || item.type === "tool_result") &&
+      typeof item.args === "string"
+    ) {
+      chars += item.args.length;
+    } else if (
+      (item.type === "text" || item.type === "tool_call" || item.type === "tool_result") &&
+      item.args &&
+      typeof item.args === "object"
+    ) {
+      try {
+        chars += JSON.stringify(item.args).length;
+      } catch {
+        // Ignore non-serializable tool args; text length is still counted.
+      }
+    }
+    if (item.type === "attachment") {
+      chars += item.attachment.label.length;
+    }
+    if (item.type === "canvas") {
+      chars += item.rawText?.length ?? item.preview.title?.length ?? 1;
+    }
+  }
+  return Math.max(chars, 1);
+}
+
+function resolveHistoryStartIndex(history: unknown[], showToolCalls: boolean): number {
+  const rawCap = CHAT_HISTORY_RENDER_LIMIT * 3;
+  let start = history.length;
+  let count = 0;
+  let chars = 0;
+  let rawCount = 0;
+  while (start > 0 && count < CHAT_HISTORY_RENDER_LIMIT) {
+    if (rawCount >= rawCap) {
+      break;
+    }
+    const msg = history[start - 1];
+    rawCount++;
+    if (isHiddenToolMessage(msg, showToolCalls)) {
+      start--;
+      continue;
+    }
+    const nextChars = chars + estimateMessageRenderChars(msg);
+    if (count > 0 && nextChars > CHAT_HISTORY_RENDER_CHAR_BUDGET) {
+      break;
+    }
+    chars = nextChars;
+    start--;
+    count++;
+  }
+  return start;
+}
+
+function countVisibleHistoryMessages(
+  history: unknown[],
+  start: number,
+  showToolCalls: boolean,
+): number {
+  let visibleCount = 0;
+  for (let i = start; i < history.length; i++) {
+    if (!isHiddenToolMessage(history[i], showToolCalls)) {
+      visibleCount++;
+    }
+  }
+  return visibleCount;
+}
+
 function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
   const result: Array<ChatItem | MessageGroup> = [];
   let currentGroup: MessageGroup | null = null;
@@ -199,14 +307,15 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   const items: ChatItem[] = [];
   const history = Array.isArray(props.messages) ? props.messages : [];
   const tools = Array.isArray(props.toolMessages) ? props.toolMessages : [];
-  const historyStart = Math.max(0, history.length - CHAT_HISTORY_RENDER_LIMIT);
+  const historyStart = resolveHistoryStartIndex(history, props.showToolCalls);
   if (historyStart > 0) {
+    const visibleCount = countVisibleHistoryMessages(history, historyStart, props.showToolCalls);
     items.push({
       kind: "message",
       key: "chat:history:notice",
       message: {
         role: "system",
-        content: `Showing last ${CHAT_HISTORY_RENDER_LIMIT} messages (${historyStart} hidden).`,
+        content: `Showing last ${visibleCount} messages (${historyStart} older messages hidden).`,
         timestamp: Date.now(),
       },
     });
@@ -229,7 +338,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       continue;
     }
 
-    if (!props.showToolCalls && normalized.role.toLowerCase() === "toolresult") {
+    if (isHiddenToolMessage(msg, props.showToolCalls)) {
       continue;
     }
 

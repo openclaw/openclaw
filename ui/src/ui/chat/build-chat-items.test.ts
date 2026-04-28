@@ -24,7 +24,139 @@ function firstMessageContent(group: MessageGroup): unknown[] {
   return Array.isArray(message.content) ? message.content : [];
 }
 
+function firstNoticeText(props: Partial<BuildChatItemsProps>): string | null {
+  for (const item of buildChatItems(createProps(props))) {
+    if (item.kind !== "group") {
+      continue;
+    }
+    const message = item.messages[0]?.message as { content?: unknown } | undefined;
+    if (typeof message?.content === "string" && message.content.startsWith("Showing last ")) {
+      return message.content;
+    }
+  }
+  return null;
+}
+
 describe("buildChatItems", () => {
+  it("caps rendered history by message count", () => {
+    const messages = Array.from({ length: 205 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: `message-${index}`,
+      timestamp: index + 1,
+    }));
+
+    expect(firstNoticeText({ messages })).toBe(
+      "Showing last 200 messages (5 older messages hidden).",
+    );
+  });
+
+  it("caps rendered history by total render char budget", () => {
+    const large = "x".repeat(100_000);
+    const messages = Array.from({ length: 6 }, (_, index) => ({
+      role: index % 2 === 0 ? "assistant" : "user",
+      content: `${large}-${index}`,
+      timestamp: index + 1,
+    }));
+
+    expect(firstNoticeText({ messages })).toBe(
+      "Showing last 2 messages (4 older messages hidden).",
+    );
+  });
+
+  it("counts tool_result content fields toward the char budget", () => {
+    const largeContent = "x".repeat(150_000);
+    const messages: unknown[] = [];
+    for (let i = 0; i < 4; i++) {
+      messages.push({ role: "user", content: "run the tool", timestamp: i * 3 + 1 });
+      messages.push({
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: `tool-${i}`, content: largeContent }],
+        timestamp: i * 3 + 2,
+      });
+      messages.push({ role: "assistant", content: "ok", timestamp: i * 3 + 3 });
+    }
+
+    expect(firstNoticeText({ messages })).toBe(
+      "Showing last 4 messages (8 older messages hidden).",
+    );
+  });
+
+  it("counts nested tool_result content blocks toward the char budget", () => {
+    const largeContent = "x".repeat(150_000);
+    const messages: unknown[] = [];
+    for (let i = 0; i < 4; i++) {
+      messages.push({ role: "assistant", content: "using the tool", timestamp: i * 3 + 1 });
+      messages.push({
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: `tool-${i}`,
+            content: [{ type: "text", text: largeContent }],
+          },
+        ],
+        timestamp: i * 3 + 2,
+      });
+      messages.push({ role: "assistant", content: "ok", timestamp: i * 3 + 3 });
+    }
+
+    expect(firstNoticeText({ messages })).toBe(
+      "Showing last 4 messages (8 older messages hidden).",
+    );
+  });
+
+  it("excludes hidden tool messages from the history budget when tool calls are hidden", () => {
+    const messages: unknown[] = [];
+    for (let i = 0; i < 10; i++) {
+      messages.push({
+        role: "user",
+        content: "short question",
+        timestamp: i * 3 + 1,
+      });
+      messages.push({
+        role: "assistant",
+        content: [{ type: "tool_use", id: `tool-${i}`, name: "get_data", input: {} }],
+        timestamp: i * 3 + 2,
+      });
+      messages.push({
+        role: "toolresult",
+        content: "x".repeat(50_000),
+        timestamp: i * 3 + 3,
+      });
+    }
+
+    expect(firstNoticeText({ messages, showToolCalls: false })).toBeNull();
+  });
+
+  it("caps the raw walk when most history items are hidden tool messages", () => {
+    const messages: unknown[] = [];
+    for (let i = 0; i < 1000; i++) {
+      messages.push({
+        role: "toolresult",
+        content: "tool output",
+        timestamp: i + 1,
+      });
+    }
+    messages.push({ role: "user", content: "hello", timestamp: 1001 });
+    messages.push({ role: "assistant", content: "hi", timestamp: 1002 });
+
+    expect(firstNoticeText({ messages, showToolCalls: false })).toBe(
+      "Showing last 2 messages (402 older messages hidden).",
+    );
+  });
+
+  it("history notice counts only visible messages when tool calls are hidden", () => {
+    const messages: unknown[] = [];
+    for (let i = 0; i < 210; i++) {
+      messages.push({ role: "user", content: `msg ${i}`, timestamp: i * 2 + 1 });
+      messages.push({ role: "toolresult", content: "tool output", timestamp: i * 2 + 2 });
+    }
+
+    expect(firstNoticeText({ messages, showToolCalls: false })).toBe(
+      "Showing last 200 messages (20 older messages hidden).",
+    );
+  });
+
   it("keeps consecutive user messages from different senders in separate groups", () => {
     const groups = messageGroups({
       messages: [
