@@ -52,16 +52,17 @@ function stripLeadingIMessageAttributedTextPrefix(text: string): string {
     if (!first) {
       break;
     }
-    const second = text[offset + 1];
-    const third = text[offset + 2];
-    if (
-      isHighAttributedLeadChar(first) &&
-      third &&
-      isLowControlOrReplacementChar(third) &&
-      (!second || isAsciiPrintableChar(second))
-    ) {
-      offset += second ? 3 : 2;
-      continue;
+    if (isHighAttributedLeadChar(first)) {
+      const second = text[offset + 1];
+      const third = text[offset + 2];
+      if (second && third && isAsciiPrintableChar(second) && isLowControlOrReplacementChar(third)) {
+        offset += 3;
+        continue;
+      }
+      if (second && isLowControlOrReplacementChar(second)) {
+        offset += 2;
+        continue;
+      }
     }
 
     let runEnd = offset;
@@ -80,8 +81,7 @@ function stripLeadingIMessageAttributedTextPrefix(text: string): string {
     break;
   }
 
-  const stripped = offset > 0 ? text.slice(offset) : text;
-  return stripped || text;
+  return offset > 0 ? text.slice(offset) : text;
 }
 
 function normalizeEchoTextKey(text: string | undefined): string | null {

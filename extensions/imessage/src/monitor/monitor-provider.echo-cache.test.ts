@@ -60,4 +60,54 @@ describe("iMessage sent-message echo cache", () => {
       ),
     ).toBe(true);
   });
+
+  it("strips two-byte attributed-text prefixes before text fallback matching", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-25T00:00:00Z"));
+    const cache = createSentMessageCache();
+
+    cache.remember("acct:imessage:+1555", {
+      text: "Confirmed full access",
+      messageId: "p:0/GUID-outbound",
+    });
+
+    expect(
+      cache.has(
+        "acct:imessage:+1555",
+        { text: "\u0093\u0002Confirmed full access", messageId: "123800" },
+        true,
+      ),
+    ).toBe(true);
+  });
+
+  it("strips replacement/control prefixes before text fallback matching", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-25T00:00:00Z"));
+    const cache = createSentMessageCache();
+
+    cache.remember("acct:imessage:+1555", {
+      text: "Confirmed full access",
+      messageId: "p:0/GUID-outbound",
+    });
+
+    expect(
+      cache.has(
+        "acct:imessage:+1555",
+        { text: "\uFFFD\u0000\u0001Confirmed full access", messageId: "123801" },
+        true,
+      ),
+    ).toBe(true);
+  });
+
+  it("does not cache all-prefix or all-control text keys", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-25T00:00:00Z"));
+    const cache = createSentMessageCache();
+
+    cache.remember("acct:imessage:+1555", { text: "\u0093\u0002" });
+    cache.remember("acct:imessage:+1555", { text: "\uFFFD\u0000\u0001" });
+
+    expect(cache.has("acct:imessage:+1555", { text: "\u0093\u0002" })).toBe(false);
+    expect(cache.has("acct:imessage:+1555", { text: "\uFFFD\u0000\u0001" })).toBe(false);
+  });
 });
