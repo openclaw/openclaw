@@ -498,7 +498,7 @@ function pickCliJsonlFinalAnswerText(parsed: Record<string, unknown>): string | 
   const payload = isRecord(parsed.payload) ? parsed.payload : null;
   const item = isRecord(parsed.item) ? parsed.item : null;
   for (const record of [payload, item, parsed]) {
-    if (!record || pickCliJsonlPhase(record) !== "final_answer") {
+    if (!record || pickCliJsonlPhase(record, payload, item, parsed) !== "final_answer") {
       continue;
     }
     const text = collectCliJsonlMessageText(record).trim();

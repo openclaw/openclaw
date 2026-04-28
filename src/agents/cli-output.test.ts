@@ -496,6 +496,30 @@ describe("parseCliJsonl", () => {
     });
   });
 
+  it("uses final-answer envelope phase when payload message omits phase", () => {
+    const result = parseCliJsonl(
+      JSON.stringify({
+        type: "response_item",
+        phase: "final_answer",
+        payload: {
+          type: "message",
+          content: [{ type: "output_text", text: "Final answer from envelope phase" }],
+        },
+      }),
+      {
+        command: "codex",
+        output: "jsonl",
+      },
+      "openai-cli",
+    );
+
+    expect(result).toEqual({
+      text: "Final answer from envelope phase",
+      sessionId: undefined,
+      usage: undefined,
+    });
+  });
+
   it("does not fall back to raw JSONL when only commentary-phase item text is skipped", () => {
     const result = parseCliOutput({
       raw: JSON.stringify({
