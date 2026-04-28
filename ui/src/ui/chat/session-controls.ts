@@ -482,8 +482,13 @@ export function resolveSessionOptionGroups(
   const rows = sessions?.sessions ?? [];
   const hideCron = state.sessionsHideCron ?? true;
   const byKey = new Map<string, SessionsListResult["sessions"][number]>();
+  const byNormalizedKey = new Map<string, SessionsListResult["sessions"][number]>();
   for (const row of rows) {
     byKey.set(row.key, row);
+    const normalizedKey = normalizeLowercaseStringOrEmpty(row.key);
+    if (normalizedKey && !byNormalizedKey.has(normalizedKey)) {
+      byNormalizedKey.set(normalizedKey, row);
+    }
   }
 
   const seenKeys = new Set<string>();
@@ -508,7 +513,7 @@ export function resolveSessionOptionGroups(
       return;
     }
     seenKeys.add(normalizedKey);
-    const row = byKey.get(key);
+    const row = byKey.get(key) ?? byNormalizedKey.get(normalizedKey);
     const parsed = parseAgentSessionKey(key);
     const group = parsed
       ? ensureGroup(
