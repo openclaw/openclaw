@@ -79,6 +79,10 @@ const ERROR_PATTERNS = {
     // provider-overload (#32828).
     /service[_ ]unavailable.*(?:overload|capacity|high[_ ]demand)|(?:overload|capacity|high[_ ]demand).*service[_ ]unavailable/i,
     "high demand",
+    // MiniMax returns 529 with "High traffic detected. For a more stable
+    // experience, upgrade to our Plus plan" — treat as overloaded so failover
+    // works correctly (#69642).
+    /high traffic detected.*upgrade to our plus plan/i,
   ],
   serverError: [
     "an error occurred while processing",
