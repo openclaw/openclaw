@@ -1,7 +1,7 @@
 import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -126,18 +126,22 @@ async function downloadToFile(url: string, dest: string, maxRedirects = 5): Prom
 
     let totalBytes = 0;
     const body = response.body as unknown;
-    const readable: Readable = isNodeReadableStream(body)
-      ? (body as Readable)
-      : Readable.fromWeb(body as NodeReadableStream);
-    readable.on("data", (chunk: unknown) => {
-      totalBytes += chunkByteLength(chunk);
-      if (totalBytes > MAX_SIGNAL_CLI_ARCHIVE_BYTES) {
-        readable.destroy(new Error("signal-cli archive exceeds 256 MiB limit"));
-      }
+    const readable = (
+      isNodeReadableStream(body) ? (body as Readable) : Readable.fromWeb(body as NodeReadableStream)
+    ) as Readable;
+    const limiter = new Transform({
+      transform(chunk: unknown, _encoding, callback) {
+        totalBytes += chunkByteLength(chunk);
+        if (totalBytes > MAX_SIGNAL_CLI_ARCHIVE_BYTES) {
+          callback(new Error("signal-cli archive exceeds 256 MiB limit"));
+          return;
+        }
+        callback(null, chunk);
+      },
     });
 
     const out = createWriteStream(dest);
-    await pipeline(readable, out);
+    await pipeline(readable, limiter, out);
   } finally {
     await release();
   }
