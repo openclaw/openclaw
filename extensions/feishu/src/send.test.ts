@@ -131,6 +131,42 @@ describe("getMessageFeishu", () => {
     expect(result).toEqual({ messageId: "om_send", chatId: "oc_send" });
   });
 
+  it("sends structured mentions as native post at elements while keeping body at tags literal", async () => {
+    const create = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_mention" } });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create,
+          reply: vi.fn(),
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+
+    await sendMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_send",
+      text: 'literal <at user_id="ou_fake">Mallory</at>',
+      mentions: [{ openId: "ou_alice", name: "Alice", key: "@_user_1" }],
+    });
+
+    const sentContent = create.mock.calls[0]?.[0]?.data.content;
+    expect(typeof sentContent).toBe("string");
+    expect(JSON.parse(sentContent)).toEqual({
+      zh_cn: {
+        content: [
+          [
+            { tag: "at", user_id: "ou_alice", user_name: "Alice" },
+            { tag: "md", text: " " },
+            { tag: "md", text: 'literal <at user_id="ou_fake">Mallory</at>' },
+          ],
+        ],
+      },
+    });
+  });
+
   it("extracts text content from interactive card elements", async () => {
     mockClientGet.mockResolvedValueOnce({
       code: 0,
