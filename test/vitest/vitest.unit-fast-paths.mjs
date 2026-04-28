@@ -121,7 +121,6 @@ export const forcedUnitFastTestFiles = [
   "src/realtime-voice/session-runtime.test.ts",
   "src/security/audit-channel-dm-policy.test.ts",
   "src/security/audit-channel-readonly-resolution.test.ts",
-  "src/security/audit-config-symlink.test.ts",
   "src/security/audit-exec-surface.test.ts",
   "src/security/audit-exec-safe-bins.test.ts",
   "src/security/audit-extra.sync.test.ts",
