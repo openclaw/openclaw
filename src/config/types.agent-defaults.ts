@@ -404,6 +404,19 @@ export type AgentDefaultsConfig = {
     model?: AgentModelConfig;
     /** Default thinking level for spawned sub-agents (e.g. "off", "low", "medium", "high"). */
     thinking?: string;
+    /** Default workflow for sessions_spawn. "auto" routes likely coding tasks through the coding fan-out. */
+    workflow?: "auto" | "subagent" | "coding-fanout";
+    /** Coding fan-out settings for Codex implementer + Clawd reviewer + Gemini verifier. */
+    codingFanout?: {
+      /** Override Codex CLI model. Omit to use the Codex CLI default. */
+      codexModel?: string;
+      /** Override Claude Code model. Defaults to Claude Opus 4.7. */
+      claudeModel?: string;
+      /** Override Gemini CLI model. Omit to use the CLI's strongest/default model. */
+      geminiModel?: string;
+      /** Per-worker timeout in seconds. Defaults to runTimeoutSeconds or 30 minutes. */
+      timeoutSeconds?: number;
+    };
     /** Default run timeout in seconds for spawned sub-agents (0 = no timeout). */
     runTimeoutSeconds?: number;
     /** Gateway timeout in ms for sub-agent announce delivery calls (default: 90000). */

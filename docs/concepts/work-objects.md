@@ -80,6 +80,21 @@ Each worker must return a verdict beginning with `PASS`, `WARN`, or `FAIL`.
 `FAIL` blocks final success. `WARN` is recorded in the proof packet and can be
 used by higher-level policy to request human review.
 
+`sessions_spawn` now has a workflow router:
+
+- `workflow: "subagent"` keeps the classic isolated OpenClaw sub-agent path.
+- `workflow: "coding-fanout"` runs the Codex → Clawd → Gemini pipeline directly.
+- `workflow: "auto"` is the default. It keeps ordinary delegation on the classic
+  sub-agent path, but routes likely coding tasks to the coding fan-out unless the
+  caller explicitly set a model or thinking level.
+
+The workflow can also be configured globally or per agent at
+`agents.defaults.subagents.workflow` / `agents.list[].subagents.workflow`.
+`codingFanout.codexModel`, `codingFanout.claudeModel`,
+`codingFanout.geminiModel`, and `codingFanout.timeoutSeconds` provide optional
+model and timeout overrides. By default, Codex and Gemini use their CLI defaults,
+while Clawd uses Claude Opus 4.7.
+
 ## Ada medical-device regulatory gate
 
 If a work object is tagged as Ada medical-device work, or its workspace/changed

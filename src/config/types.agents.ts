@@ -115,6 +115,10 @@ export type AgentConfig = {
     allowAgents?: string[];
     /** Per-agent default model for spawned sub-agents (string or {primary,fallbacks}). */
     model?: AgentModelConfig;
+    /** Per-agent workflow override for sessions_spawn. */
+    workflow?: "auto" | "subagent" | "coding-fanout";
+    /** Per-agent coding fan-out overrides. */
+    codingFanout?: NonNullable<AgentDefaultsConfig["subagents"]>["codingFanout"];
     /** Require explicit agentId in sessions_spawn (no default same-as-caller). */
     requireAgentId?: boolean;
   };

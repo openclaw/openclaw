@@ -1,10 +1,25 @@
+import crypto from "node:crypto";
 import { Type } from "typebox";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
+import { parseAgentSessionKey, normalizeAgentId } from "../../routing/session-key.js";
+import { resolveUserPath } from "../../utils.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
+import {
+  completeWorkObject,
+  createWorkObject,
+  runCodingFanout,
+  type CodingFanoutOptions,
+  type CodingFanoutResult,
+} from "../../work-objects/index.js";
+import {
+  resolveAgentConfig,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agent-scope.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
 import { registerSubagentRun } from "../subagent-registry.js";
@@ -28,6 +43,7 @@ import {
 
 const SESSIONS_SPAWN_RUNTIMES = ["subagent", "acp"] as const;
 const SESSIONS_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
+const SESSIONS_SPAWN_WORKFLOWS = ["auto", "subagent", "coding-fanout"] as const;
 // Keep the schema local to avoid a circular import through acp-spawn/openclaw-tools.
 const SESSIONS_SPAWN_ACP_STREAM_TARGETS = ["parent"] as const;
 const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
@@ -70,6 +86,112 @@ function addRoleToFailureResult<T extends { status: string }>(
   return { ...result, role };
 }
 
+type SpawnWorkflow = (typeof SESSIONS_SPAWN_WORKFLOWS)[number];
+
+function normalizeWorkflow(value: unknown): SpawnWorkflow | undefined {
+  return value === "auto" || value === "subagent" || value === "coding-fanout" ? value : undefined;
+}
+
+function readStringArrayParam(params: Record<string, unknown>, key: string): string[] | undefined {
+  const raw = params[key];
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  const values = raw
+    .map((value) => (typeof value === "string" ? value.trim() : ""))
+    .filter(Boolean);
+  return values.length > 0 ? values : undefined;
+}
+
+export function isLikelyCodingTask(task: string): boolean {
+  const text = task.toLowerCase();
+  return /\b(build|implement|code|coding|fix|debug|refactor|test|lint|typecheck|compile|ship|pr|pull request|diff|commit|repo|repository|branch|typescript|javascript|python|rust|go|java|api|cli|frontend|backend)\b/.test(
+    text,
+  );
+}
+
+async function announceCodingFanoutResult(params: {
+  requesterSessionKey: string;
+  requesterOrigin?: ReturnType<typeof normalizeDeliveryContext>;
+  task: string;
+  label?: string;
+  result: CodingFanoutResult;
+}) {
+  const proof = params.result.workObject?.proofPacket;
+  const statusText =
+    params.result.status === "succeeded"
+      ? "completed successfully"
+      : `finished with status ${params.result.status}`;
+  const message = [
+    `Coding fan-out ${statusText}.`,
+    params.label ? `Label: ${params.label}` : undefined,
+    `Task: ${params.task}`,
+    params.result.workObject?.id ? `Work object: ${params.result.workObject.id}` : undefined,
+    proof?.summary ? `Summary: ${proof.summary}` : undefined,
+    proof?.output ? `Output:\n${proof.output.slice(0, 12_000)}` : undefined,
+    params.result.missingRoles.length > 0
+      ? `Missing roles: ${params.result.missingRoles.join(", ")}`
+      : undefined,
+    params.result.failedRoles.length > 0
+      ? `Failed roles: ${params.result.failedRoles.join(", ")}`
+      : undefined,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  await callGateway({
+    method: "agent",
+    params: {
+      sessionKey: params.requesterSessionKey,
+      message,
+      channel: params.requesterOrigin?.channel,
+      accountId: params.requesterOrigin?.accountId,
+      to: params.requesterOrigin?.to,
+      threadId:
+        params.requesterOrigin?.threadId != null
+          ? String(params.requesterOrigin.threadId)
+          : undefined,
+      deliver: true,
+      idempotencyKey: crypto.randomUUID(),
+    },
+    expectFinal: true,
+    timeoutMs: 60_000,
+  });
+}
+
+function resolveSpawnWorkflow(params: {
+  requested?: SpawnWorkflow;
+  targetAgentWorkflow?: SpawnWorkflow;
+  defaultWorkflow?: SpawnWorkflow;
+  task: string;
+  hasExplicitModelOrThinking: boolean;
+}): "subagent" | "coding-fanout" {
+  const configured =
+    params.requested ?? params.targetAgentWorkflow ?? params.defaultWorkflow ?? "auto";
+  if (configured === "coding-fanout") {
+    return "coding-fanout";
+  }
+  if (configured === "subagent") {
+    return "subagent";
+  }
+  if (params.hasExplicitModelOrThinking) {
+    return "subagent";
+  }
+  return isLikelyCodingTask(params.task) ? "coding-fanout" : "subagent";
+}
+
+function resolveCodingFanoutWorkspace(params: {
+  requestedWorkspace?: string;
+  targetAgentWorkspace?: string;
+  defaultWorkspace?: string;
+}): string {
+  return (
+    params.requestedWorkspace?.trim() ||
+    params.targetAgentWorkspace?.trim() ||
+    params.defaultWorkspace?.trim() ||
+    process.cwd()
+  );
+}
+
 function resolveTrackedSpawnMode(params: {
   requestedMode?: "run" | "session";
   threadRequested: boolean;
@@ -110,6 +232,10 @@ function createSessionsSpawnToolSchema(params: { acpAvailable: boolean }) {
     agentId: Type.Optional(Type.String()),
     model: Type.Optional(Type.String()),
     thinking: Type.Optional(Type.String()),
+    workflow: optionalStringEnum(SESSIONS_SPAWN_WORKFLOWS),
+    workspaceDir: Type.Optional(Type.String()),
+    changedFiles: Type.Optional(Type.Array(Type.String())),
+    regulatoryPackagePath: Type.Optional(Type.String()),
     cwd: Type.Optional(Type.String()),
     runTimeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
     // Back-compat: older callers used timeoutSeconds for this tool.
@@ -188,6 +314,8 @@ export function createSessionsSpawnTool(
     config?: OpenClawConfig;
     /** Explicit agent ID override for cron/hook sessions where session key parsing may not work. */
     requesterAgentIdOverride?: string;
+    /** Test seam for the coding fan-out runner. */
+    codingFanoutRunner?: (options: CodingFanoutOptions) => Promise<CodingFanoutResult>;
   } & SpawnedToolContext,
 ): AnyAgentTool {
   const acpAvailable = isAcpRuntimeSpawnAvailable({
@@ -263,6 +391,146 @@ export function createSessionsSpawnTool(
             mimeType?: string;
           }>)
         : undefined;
+
+      if (runtime === "subagent") {
+        const cfg = opts?.config ?? getRuntimeConfig();
+        const { mainKey, alias } = resolveMainSessionAlias(cfg);
+        const requesterInternalKey = opts?.agentSessionKey
+          ? resolveInternalSessionKey({
+              key: opts.agentSessionKey,
+              alias,
+              mainKey,
+            })
+          : alias;
+        const requesterOrigin = normalizeDeliveryContext({
+          channel: opts?.agentChannel,
+          accountId: opts?.agentAccountId,
+          to: opts?.agentTo,
+          threadId: opts?.agentThreadId,
+        });
+        const parsedRequesterAgentId = opts?.agentSessionKey
+          ? parseAgentSessionKey(opts.agentSessionKey)?.agentId
+          : undefined;
+        const targetAgentId = normalizeAgentId(
+          requestedAgentId ??
+            opts?.requesterAgentIdOverride ??
+            parsedRequesterAgentId ??
+            resolveDefaultAgentId(cfg),
+        );
+        const targetAgentConfig = resolveAgentConfig(cfg, targetAgentId);
+        const spawnWorkflow = resolveSpawnWorkflow({
+          requested: normalizeWorkflow(params.workflow),
+          targetAgentWorkflow: normalizeWorkflow(targetAgentConfig?.subagents?.workflow),
+          defaultWorkflow: normalizeWorkflow(cfg.agents?.defaults?.subagents?.workflow),
+          task,
+          hasExplicitModelOrThinking: Boolean(modelOverride || thinkingOverrideRaw),
+        });
+
+        if (spawnWorkflow === "coding-fanout") {
+          const fanoutRunId = `fanout-${crypto.randomUUID()}`;
+          const workspaceDir = resolveCodingFanoutWorkspace({
+            requestedWorkspace: readStringParam(params, "workspaceDir"),
+            targetAgentWorkspace: resolveAgentWorkspaceDir(cfg, targetAgentId),
+            defaultWorkspace: cfg.agents?.defaults?.workspace,
+          });
+          const workObject = createWorkObject({
+            kind: "subagent",
+            title: label || task.slice(0, 120) || "Coding fan-out task",
+            goal: task,
+            status: "queued",
+            source: {
+              type: "sessions_spawn",
+              id: fanoutRunId,
+              label: label || undefined,
+            },
+            actor: {
+              agentId: targetAgentId,
+              runId: fanoutRunId,
+              workerId: "codex-clawd-gemini",
+            },
+            requester: {
+              sessionKey: requesterInternalKey,
+              channel: requesterOrigin?.channel,
+              accountId: requesterOrigin?.accountId,
+              to: requesterOrigin?.to,
+              threadId:
+                requesterOrigin?.threadId != null ? String(requesterOrigin.threadId) : undefined,
+            },
+            isolation: {
+              workspace: workspaceDir,
+            },
+            recovery: {
+              policy: "manual",
+            },
+            evidence: [
+              {
+                kind: "text",
+                label: "Coding fan-out accepted",
+                value: "OpenClaw routed this coding task to Codex, Clawd, and Gemini.",
+              },
+            ],
+          });
+          const defaultFanout = cfg.agents?.defaults?.subagents?.codingFanout;
+          const agentFanout = targetAgentConfig?.subagents?.codingFanout;
+          const fanout = { ...defaultFanout, ...agentFanout };
+          const timeoutSeconds =
+            runTimeoutSeconds && runTimeoutSeconds > 0
+              ? runTimeoutSeconds
+              : (fanout.timeoutSeconds ?? undefined);
+          const runner = opts?.codingFanoutRunner ?? runCodingFanout;
+          void runner({
+            workObjectId: workObject.id,
+            workspaceDir: resolveUserPath(workspaceDir),
+            task,
+            changedFiles: readStringArrayParam(params, "changedFiles"),
+            timeoutMs: timeoutSeconds ? timeoutSeconds * 1000 : undefined,
+            codexModel: fanout.codexModel,
+            claudeModel: fanout.claudeModel,
+            geminiModel: fanout.geminiModel,
+            regulatoryPackagePath: readStringParam(params, "regulatoryPackagePath"),
+          })
+            .then((result) =>
+              announceCodingFanoutResult({
+                requesterSessionKey: requesterInternalKey,
+                requesterOrigin,
+                task,
+                label: label || undefined,
+                result,
+              }),
+            )
+            .catch((err) => {
+              const messageText = summarizeError(err);
+              const workObjectResult = completeWorkObject({
+                id: workObject.id,
+                status: "failed",
+                summary: "Coding fan-out crashed before completion.",
+                output: messageText,
+              });
+              void announceCodingFanoutResult({
+                requesterSessionKey: requesterInternalKey,
+                requesterOrigin,
+                task,
+                label: label || undefined,
+                result: {
+                  workObject: workObjectResult,
+                  status: "failed",
+                  policySatisfied: false,
+                  missingRoles: [],
+                  failedRoles: ["implementer", "reviewer", "verifier"],
+                },
+              });
+            });
+
+          return jsonResult({
+            status: "accepted",
+            workflow: "coding-fanout",
+            runId: fanoutRunId,
+            workObjectId: workObject.id,
+            workspaceDir,
+            ...roleContext,
+          });
+        }
+      }
 
       if (runtime === "acp") {
         const { isSpawnAcpAcceptedResult, spawnAcpDirect } = await loadAcpSpawnModule();

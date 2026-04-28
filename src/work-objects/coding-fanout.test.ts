@@ -31,7 +31,7 @@ describe("coding fanout", () => {
   }
 
   function ok(stdout: string): SpawnResult {
-    return { stdout, stderr: "", code: 0, signal: null, killed: false };
+    return { stdout, stderr: "", code: 0, signal: null, killed: false, termination: "exit" };
   }
 
   it("runs Codex, Clawd, and Gemini and marks the work object succeeded", async () => {

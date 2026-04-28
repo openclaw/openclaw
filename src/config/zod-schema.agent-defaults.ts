@@ -264,6 +264,18 @@ export const AgentDefaultsSchema = z
         archiveAfterMinutes: z.number().int().min(0).optional(),
         model: AgentModelSchema.optional(),
         thinking: z.string().optional(),
+        workflow: z
+          .union([z.literal("auto"), z.literal("subagent"), z.literal("coding-fanout")])
+          .optional(),
+        codingFanout: z
+          .object({
+            codexModel: z.string().optional(),
+            claudeModel: z.string().optional(),
+            geminiModel: z.string().optional(),
+            timeoutSeconds: z.number().int().positive().optional(),
+          })
+          .strict()
+          .optional(),
         runTimeoutSeconds: z.number().int().min(0).optional(),
         announceTimeoutMs: z.number().int().positive().optional(),
         requireAgentId: z.boolean().optional(),
