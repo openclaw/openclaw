@@ -277,7 +277,8 @@ vi.mock("../../skills.js", () => ({
 vi.mock("../skills-runtime.js", () => ({
   resolveEmbeddedRunSkillEntries: () => ({
     shouldLoadSkillEntries: false,
-    skillEntries: undefined,
+    skillEntries: [],
+    promptSkillEntries: [],
   }),
 }));
 

@@ -98,6 +98,10 @@ function isSkillVisibleInAvailableSkillsPrompt(entry: SkillEntry): boolean {
   return entry.skill.disableModelInvocation !== true;
 }
 
+export function filterPromptVisibleWorkspaceSkillEntries(entries: SkillEntry[]): SkillEntry[] {
+  return entries.filter((entry) => isSkillVisibleInAvailableSkillsPrompt(entry));
+}
+
 function filterSkillEntries(
   entries: SkillEntry[],
   config?: OpenClawConfig,
@@ -781,7 +785,7 @@ function resolveWorkspaceSkillPromptState(
     effectiveSkillFilter,
     opts?.eligibility,
   );
-  const promptEntries = eligible.filter((entry) => isSkillVisibleInAvailableSkillsPrompt(entry));
+  const promptEntries = filterPromptVisibleWorkspaceSkillEntries(eligible);
   const remoteNote = opts?.eligibility?.remote?.note?.trim();
   const resolvedSkills = promptEntries.map((entry) => entry.skill);
   // Derive prompt-facing skills with compacted paths (e.g. ~/...) once.

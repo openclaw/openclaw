@@ -154,6 +154,7 @@ describe("resolveEmbeddedRunSkillEntries", () => {
     expect(result).toEqual({
       shouldLoadSkillEntries: false,
       skillEntries: [],
+      promptSkillEntries: [],
     });
     expect(loadWorkspaceSkillEntriesSpy).not.toHaveBeenCalled();
   });
@@ -175,6 +176,7 @@ describe("resolveEmbeddedRunSkillEntries", () => {
     expect(result.shouldLoadSkillEntries).toBe(true);
     expect(loadWorkspaceSkillEntriesSpy).toHaveBeenCalledTimes(1);
     expect(loadWorkspaceSkillEntriesSpy).toHaveBeenCalledWith("/workspace", { config: {} });
+    expect(result.promptSkillEntries).toEqual([]);
   });
 
   it("returns the same config-eligible live entries used for prompt rebuilding", () => {
@@ -200,6 +202,27 @@ describe("resolveEmbeddedRunSkillEntries", () => {
     });
 
     expect(result.skillEntries).toEqual([enabled]);
+    expect(result.promptSkillEntries).toEqual([enabled]);
+  });
+
+  it("keeps env override entries aligned with the prompt-visible live entries", () => {
+    const visible = createSkillEntry("visible-skill");
+    const hidden = createSkillEntry("hidden-skill", { disableModelInvocation: true });
+    loadWorkspaceSkillEntriesSpy.mockReturnValue([visible, hidden]);
+
+    const result = resolveEmbeddedRunSkillEntries({
+      workspaceDir: "/workspace",
+      config: {},
+      skillsSnapshot: {
+        prompt: "host prompt",
+        skills: [{ name: "visible-skill" }, { name: "hidden-skill" }],
+        resolvedSkills: [],
+      },
+      forceLoadEntries: true,
+    });
+
+    expect(result.skillEntries).toEqual([visible, hidden]);
+    expect(result.promptSkillEntries).toEqual([visible]);
   });
 
   it("preserves snapshot skill filter when force loading entries", () => {
@@ -259,7 +282,7 @@ describe("resolveEmbeddedRunSkillEntries", () => {
   });
 });
 
-function createSkillEntry(name: string): SkillEntry {
+function createSkillEntry(name: string, opts?: { disableModelInvocation?: boolean }): SkillEntry {
   return {
     skill: createCanonicalFixtureSkill({
       name,
@@ -267,6 +290,7 @@ function createSkillEntry(name: string): SkillEntry {
       filePath: `/workspace/skills/${name}/SKILL.md`,
       baseDir: `/workspace/skills/${name}`,
       source: "openclaw-workspace",
+      disableModelInvocation: opts?.disableModelInvocation,
     }),
     frontmatter: {},
   };

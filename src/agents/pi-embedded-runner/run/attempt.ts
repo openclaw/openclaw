@@ -625,14 +625,16 @@ export async function runEmbeddedAttempt(
     const skillEligibility = remoteSkillEligibility
       ? { remote: remoteSkillEligibility }
       : undefined;
-    const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
-      workspaceDir: effectiveWorkspace,
-      config: params.config,
-      agentId: sessionAgentId,
-      skillsSnapshot: params.skillsSnapshot,
-      forceLoadEntries: preferWorkspaceSkillsPrompt,
-      ...(skillEligibility === undefined ? {} : { eligibility: skillEligibility }),
-    });
+    const { shouldLoadSkillEntries, skillEntries, promptSkillEntries } =
+      resolveEmbeddedRunSkillEntries({
+        workspaceDir: effectiveWorkspace,
+        config: params.config,
+        agentId: sessionAgentId,
+        skillsSnapshot: params.skillsSnapshot,
+        forceLoadEntries: preferWorkspaceSkillsPrompt,
+        ...(skillEligibility === undefined ? {} : { eligibility: skillEligibility }),
+      });
+    const liveEnvSkillEntries = preferWorkspaceSkillsPrompt ? promptSkillEntries : skillEntries;
     restoreSkillEnv =
       params.skillsSnapshot && !preferWorkspaceSkillsPrompt
         ? applySkillEnvOverridesFromSnapshot({
@@ -640,13 +642,17 @@ export async function runEmbeddedAttempt(
             config: params.config,
           })
         : applySkillEnvOverrides({
-            skills: skillEntries ?? [],
+            skills: liveEnvSkillEntries,
             config: params.config,
           });
 
     const skillsPrompt = resolveSkillsPromptForRun({
       skillsSnapshot: params.skillsSnapshot,
-      entries: shouldLoadSkillEntries ? skillEntries : undefined,
+      entries: shouldLoadSkillEntries
+        ? preferWorkspaceSkillsPrompt
+          ? promptSkillEntries
+          : skillEntries
+        : undefined,
       config: params.config,
       workspaceDir: effectiveWorkspace,
       agentId: sessionAgentId,
