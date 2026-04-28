@@ -122,7 +122,6 @@ body:
     attributes:
       label: Logs, screenshots, and evidence
       description: Include the redacted logs, screenshots, recordings, docs, or version comparisons that support the grounded answers above.
-      render: shell
   - type: textarea
     id: impact
     attributes:
