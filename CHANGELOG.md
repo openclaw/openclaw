@@ -30,7 +30,6 @@ Docs: https://docs.openclaw.ai
 - Agents/Anthropic: cancel stalled Anthropic Messages SSE body reads when abort signals fire, so active-memory timeouts release transport resources instead of leaving hidden recall runs parked on `reader.read()`. Refs #72965 and #73120. Thanks @wdeveloper16.
 - Control UI/WebChat: keep pending run and typing state attached to the active client run, so unowned inject/announce/side-result finals no longer unlock unrelated active runs while completed owned runs still clear promptly. Fixes #57795; carries forward the narrow diagnosis from #57887. Thanks @haoyu-haoyu.
 - Sandbox/Docker: stop satisfying a missing default sandbox image by tagging plain Debian as `openclaw-sandbox:bookworm-slim`, preserving the Python tooling required by sandbox write/edit helpers and directing users to build the default image. Fixes #51185; refs #45108, #51099, #51609, and #57713. Thanks @dpalis, @Tin55FoilDev, @jbcohen2-coder, @macminihal-cyber, and @PraxoOnline.
-- Agents/CLI runner: transfer bundle-MCP tempDir cleanup from the per-turn runner finally to the Claude live-session lifecycle, so persistent Claude CLI sessions keep their `--mcp-config` directory until the live subprocess closes. Fixes #73244. Thanks @edwin-rivera-dev.
 - Agents/models: keep per-agent primary models strict when `fallbacks` is omitted, so probe-only custom providers are not tried as hidden fallback candidates unless the agent explicitly opts in. Fixes #73332. Thanks @haumanto.
 - Gateway/models: add `models.pricing.enabled` so offline or restricted-network installs can skip startup OpenRouter and LiteLLM pricing-catalog fetches while keeping explicit model costs working. Fixes #53639. Thanks @callebtc, @palewire, and @rjdjohnston.
 - Onboarding: pin interactive and non-interactive health checks to the just-configured setup token/password so stale `OPENCLAW_GATEWAY_TOKEN` or `OPENCLAW_GATEWAY_PASSWORD` values do not produce false gateway-token-mismatch failures after setup. Fixes #72203. Thanks @galiniliev.
@@ -61,6 +60,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/runtime deps: reuse enclosing versioned cache roots when bundled plugins resolve from nested staged paths, so plugin-runtime-deps no longer mints `openclaw-unknown-*` directories or loops on `ENOTEMPTY`. Fixes #72956. (#73205) Thanks @SymbolStar.
 - Agents/failover: classify CJK provider transport, quota, billing, auth, and overload error text so Chinese-language provider failures trigger fallback and user-facing transport copy instead of surfacing as unclassified raw errors. (#56242) Thanks @tomcatzh.
 - Agents/failover: seed non-claude-cli fallback prompts with Claude Code session context when a claude-cli attempt fails, so fallback models do not restart cold after billing or quota failover. (#72069) Thanks @stainlu.
+- Agents/CLI runner: transfer bundle-MCP tempDir cleanup from the per-turn runner finally to the Claude live-session lifecycle, so persistent Claude CLI sessions keep their `--mcp-config` directory until the live subprocess closes. Fixes #73244. Thanks @edwin-rivera-dev.
 
 ## 2026.4.27
 
