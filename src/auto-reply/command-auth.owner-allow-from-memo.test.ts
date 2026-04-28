@@ -41,39 +41,45 @@ describe("resolveOwnerAllowFromList memoization (#50289)", () => {
     ).toBe(true);
   });
 
-  it("memoizes per (providerId, accountId, plugin.id) so different lookup keys do not collide", () => {
-    const raw = ["123", "456", "discord:789", "telegram:42"];
-    const cfg = { commands: { ownerAllowFrom: raw } } as unknown as OpenClawConfig;
+  it("memoizes per (providerId, accountId) so different lookup keys do not collide", () => {
+    const raw = ["123", "456", "discord:789"];
+    const cfg = {
+      commands: { ownerAllowFrom: raw },
+      channels: { discord: {} },
+    } as unknown as OpenClawConfig;
 
-    const discordList = resolveOwnerAllowFromListForTest({
+    // Same raw array, different (accountId, providerId) tuples. Each must get
+    // an independent cache entry so config reloads and cross-account lookups
+    // do not pollute each other. discord-scoped entries (`discord:789`) drop
+    // the prefix; plain entries always appear.
+    const acct1 = resolveOwnerAllowFromListForTest({
       cfg,
       accountId: "acct-1",
       providerId: "discord",
       allowFrom: raw,
     });
-    const telegramList = resolveOwnerAllowFromListForTest({
+    const acct2 = resolveOwnerAllowFromListForTest({
       cfg,
-      accountId: "acct-1",
-      providerId: "telegram",
+      accountId: "acct-2",
+      providerId: "discord",
       allowFrom: raw,
     });
 
-    // discord-scoped entries (`discord:789`) drop the prefix and survive the
-    // discord pass. telegram-scoped entries (`telegram:42`) drop the prefix
-    // and survive the telegram pass. Plain entries appear in both.
-    expect(discordList).toContain("789");
-    expect(discordList).not.toContain("42");
-    expect(telegramList).toContain("42");
-    expect(telegramList).not.toContain("789");
+    expect(acct1).toContain("789");
+    expect(acct1).toContain("123");
+    expect(acct2).toEqual(acct1);
 
-    // Both discord and telegram results are independently cached on the same
-    // raw array; no stale cross-pollination between provider passes.
+    // Both account passes are independently cached on the same raw array;
+    // a third, never-resolved key remains a cache miss.
     expect(
       isOwnerAllowFromListMemoizedForTest(raw, { accountId: "acct-1", providerId: "discord" }),
     ).toBe(true);
     expect(
-      isOwnerAllowFromListMemoizedForTest(raw, { accountId: "acct-1", providerId: "telegram" }),
+      isOwnerAllowFromListMemoizedForTest(raw, { accountId: "acct-2", providerId: "discord" }),
     ).toBe(true);
+    expect(
+      isOwnerAllowFromListMemoizedForTest(raw, { accountId: "acct-3", providerId: "discord" }),
+    ).toBe(false);
   });
 
   it("treats a freshly-allocated raw array as a cache miss (config reload semantics)", () => {

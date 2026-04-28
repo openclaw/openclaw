@@ -308,7 +308,7 @@ function resolveOwnerAllowFromList(params: {
   let inner = ownerAllowFromMemo.get(raw);
   if (inner) {
     const cached = inner.get(memoKey);
-    if (cached) {
+    if (cached !== undefined) {
       return cached;
     }
   } else {
