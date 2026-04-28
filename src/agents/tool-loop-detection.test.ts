@@ -396,6 +396,32 @@ describe("tool-loop-detection", () => {
       }
     });
 
+    it("does not escalate generic repeats to critical when outcomes are progressing", () => {
+      const state = createState();
+      const params = { path: "/same.txt" };
+
+      for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "read",
+          params,
+          {
+            content: [{ type: "text", text: `changed output ${index}` }],
+            details: { ok: true },
+          },
+          index,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(state, "read", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("warning");
+        expect(loopResult.detector).toBe("generic_repeat");
+        expect(loopResult.count).toBe(CRITICAL_THRESHOLD);
+      }
+    });
+
     it("applies custom thresholds when detection is enabled", () => {
       const state = createState();
       const { params, result } = createNoProgressPollFixture("sess-custom");

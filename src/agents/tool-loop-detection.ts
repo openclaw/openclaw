@@ -609,7 +609,7 @@ export function detectToolCallLoop(
     };
   }
 
-  // Generic detector: warn then block for repeated identical calls.
+  // Generic detector: warn on repeated identical calls, but block only with no-progress evidence.
   const recentCount = history.filter(
     (h) => h.toolName === toolName && h.argsHash === currentHash,
   ).length;
@@ -617,18 +617,18 @@ export function detectToolCallLoop(
   if (
     !knownPollTool &&
     resolvedConfig.detectors.genericRepeat &&
-    recentCount >= resolvedConfig.criticalThreshold
+    noProgressStreak >= resolvedConfig.criticalThreshold
   ) {
     log.error(
-      `Critical loop detected: ${toolName} called ${recentCount} times with identical arguments`,
+      `Critical loop detected: ${toolName} repeated ${noProgressStreak} times with no progress`,
     );
     return {
       stuck: true,
       level: "critical",
       detector: "generic_repeat",
-      count: recentCount,
-      message: `CRITICAL: You have called ${toolName} ${recentCount} times with identical arguments and are making no progress. Session execution blocked to prevent runaway loops.`,
-      warningKey: `generic:${toolName}:${currentHash}`,
+      count: noProgressStreak,
+      message: `CRITICAL: You have called ${toolName} ${noProgressStreak} times with identical arguments and identical outcomes. Session execution blocked to prevent runaway loops.`,
+      warningKey: `generic:${toolName}:${currentHash}:${noProgress.latestResultHash ?? "none"}`,
     };
   }
 
