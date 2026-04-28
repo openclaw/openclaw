@@ -8,7 +8,7 @@ describe("createRuntimeLogging", () => {
     vi.restoreAllMocks();
   });
 
-  it("passes meta through RuntimeLogger methods", () => {
+  it("passes structured meta as the first logger argument", () => {
     const debug = vi.fn();
     const info = vi.fn();
     const warn = vi.fn();
@@ -30,10 +30,37 @@ describe("createRuntimeLogging", () => {
     logger.warn("warn message", meta);
     logger.error("error message", meta);
 
-    expect(debug).toHaveBeenCalledWith("debug message", meta);
-    expect(info).toHaveBeenCalledWith("info message", meta);
-    expect(warn).toHaveBeenCalledWith("warn message", meta);
-    expect(error).toHaveBeenCalledWith("error message", meta);
+    expect(debug).toHaveBeenCalledWith(meta, "debug message");
+    expect(info).toHaveBeenCalledWith(meta, "info message");
+    expect(warn).toHaveBeenCalledWith(meta, "warn message");
+    expect(error).toHaveBeenCalledWith(meta, "error message");
+  });
+
+  it("omits the meta argument when no structured fields are provided", () => {
+    const debug = vi.fn();
+    const info = vi.fn();
+    const warn = vi.fn();
+    const error = vi.fn();
+
+    vi.spyOn(loggingModule, "getChildLogger").mockReturnValue({
+      debug,
+      info,
+      warn,
+      error,
+    } as unknown as ReturnType<typeof loggingModule.getChildLogger>);
+
+    const runtimeLogging = createRuntimeLogging();
+    const logger = runtimeLogging.getChildLogger({ plugin: "demo" });
+
+    logger.debug?.("debug message");
+    logger.info("info message", {});
+    logger.warn("warn message");
+    logger.error("error message", {});
+
+    expect(debug).toHaveBeenCalledWith("debug message");
+    expect(info).toHaveBeenCalledWith("info message");
+    expect(warn).toHaveBeenCalledWith("warn message");
+    expect(error).toHaveBeenCalledWith("error message");
   });
 
   it("re-exports shouldLogVerbose", () => {
