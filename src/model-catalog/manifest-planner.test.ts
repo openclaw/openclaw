@@ -212,6 +212,9 @@ describe("manifest model catalog suppression planner", () => {
                   provider: "openai",
                   model: "gpt-5.3-codex-spark",
                   reason: "Use openai/gpt-5.5.",
+                  when: {
+                    baseUrlHosts: ["api.openai.com"],
+                  },
                 },
                 {
                   provider: "azure-openai-responses",
@@ -243,6 +246,9 @@ describe("manifest model catalog suppression planner", () => {
         model: "gpt-5.3-codex-spark",
         mergeKey: "openai::gpt-5.3-codex-spark",
         reason: "Use openai/gpt-5.5.",
+        when: {
+          baseUrlHosts: ["api.openai.com"],
+        },
       },
     ]);
   });

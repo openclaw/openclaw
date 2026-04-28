@@ -278,10 +278,17 @@ describe("runGatewayLoop", () => {
       const closeFirst = vi.fn(async () => {});
       const closeSecond = vi.fn(async () => {});
       const { runtime, exited } = createRuntimeWithExitSignal();
+      let resolveSecond: (() => void) | null = null;
+      const startedSecond = new Promise<void>((resolve) => {
+        resolveSecond = resolve;
+      });
       const start = vi
         .fn()
         .mockResolvedValueOnce({ close: closeFirst })
-        .mockResolvedValueOnce({ close: closeSecond });
+        .mockImplementationOnce(async () => {
+          resolveSecond?.();
+          return { close: closeSecond };
+        });
       const { runGatewayLoop } = await import("./run-loop.js");
       void runGatewayLoop({
         start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
@@ -302,7 +309,9 @@ describe("runGatewayLoop", () => {
         reason: "gateway restarting",
         restartExpectedMs: 1500,
       });
+      await startedSecond;
       expect(start).toHaveBeenCalledTimes(2);
+      await new Promise<void>((resolve) => setImmediate(resolve));
 
       sigint();
       await expect(exited).resolves.toBe(0);

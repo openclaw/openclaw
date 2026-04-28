@@ -63,7 +63,7 @@ openclaw pairing approve feishu <CODE>
 | ------------- | -------------------------------------------------------------------------------------------- |
 | `"open"`      | Respond to all messages in groups                                                            |
 | `"allowlist"` | Only respond to groups in `groupAllowFrom` or explicitly configured under `groups.<chat_id>` |
-| `"disabled"`  | Disable all group messages                                                                   |
+| `"disabled"`  | Disable all group messages; explicit `groups.<chat_id>` entries do not override this         |
 
 Default: `allowlist`
 
@@ -117,7 +117,7 @@ Default: `allowlist`
 }
 ```
 
-You can also admit a group by adding an explicit `groups.<chat_id>` entry. Wildcard defaults under `groups.*` configure matching groups, but they do not admit groups by themselves.
+In `allowlist` mode, you can also admit a group by adding an explicit `groups.<chat_id>` entry. Explicit entries do not override `groupPolicy: "disabled"`. Wildcard defaults under `groups.*` configure matching groups, but they do not admit groups by themselves.
 
 ```json5
 {

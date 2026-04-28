@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
+import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
@@ -115,7 +116,7 @@ function resolveBoundConversationOrigin(params: {
       ? conversationId
       : undefined) ??
     (params.requesterOrigin?.threadId != null && params.requesterOrigin.threadId !== ""
-      ? String(params.requesterOrigin.threadId)
+      ? stringifyRouteThreadId(params.requesterOrigin.threadId)
       : undefined);
   if (
     requesterTo &&
@@ -295,7 +296,7 @@ export async function resolveSubagentCompletionOrigin(params: {
   const accountId = normalizeAccountId(requesterOrigin?.accountId);
   const threadId =
     requesterOrigin?.threadId != null && requesterOrigin.threadId !== ""
-      ? String(requesterOrigin.threadId).trim()
+      ? stringifyRouteThreadId(requesterOrigin.threadId)
       : undefined;
   const conversationId =
     threadId ||
@@ -380,7 +381,9 @@ async function sendAnnounce(item: AnnounceQueueItem) {
   const requesterIsSubagent = isInternalAnnounceRequesterSession(item.sessionKey);
   const origin = item.origin;
   const threadId =
-    origin?.threadId != null && origin.threadId !== "" ? String(origin.threadId) : undefined;
+    origin?.threadId != null && origin.threadId !== ""
+      ? stringifyRouteThreadId(origin.threadId)
+      : undefined;
   const deliveryTarget = !requesterIsSubagent
     ? resolveExternalBestEffortDeliveryTarget({
         channel: origin?.channel,

@@ -60,14 +60,13 @@ enum GatewayWebSocketTestSupport {
         canRetryWithDeviceToken: Bool = false,
         recommendedNextStep: String? = nil) -> Data
     {
-        let recommendedNextStepJson: String
-        if let recommendedNextStep {
-            recommendedNextStepJson = """
+        let recommendedNextStepJson = if let recommendedNextStep {
+            """
             ,
                           "recommendedNextStep": "\(recommendedNextStep)"
             """
         } else {
-            recommendedNextStepJson = ""
+            ""
         }
         let json = """
         {

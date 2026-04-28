@@ -4,7 +4,6 @@ import { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import { disposeAllSessionMcpRuntimes } from "../agents/pi-bundle-mcp-tools.js";
 import type { CanvasHostHandler, CanvasHostServer } from "../canvas-host/server.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
-import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -100,6 +99,11 @@ async function disposeAllBundleLspRuntimesOnDemand(): Promise<void> {
   await disposeAllBundleLspRuntimes();
 }
 
+async function stopGmailWatcherOnDemand(): Promise<void> {
+  const { stopGmailWatcher } = await import("../hooks/gmail-watcher.js");
+  await stopGmailWatcher();
+}
+
 export async function runGatewayClosePrelude(params: {
   stopDiagnostics?: () => void;
   clearSkillsRefreshTimer?: () => void;
@@ -108,6 +112,7 @@ export async function runGatewayClosePrelude(params: {
   disposeBrowserAuthRateLimiter: () => void;
   stopModelPricingRefresh?: () => void;
   stopChannelHealthMonitor?: () => void;
+  stopReadinessEventLoopHealth?: () => void;
   clearSecretsRuntimeSnapshot?: () => void;
   closeMcpServer?: () => Promise<void>;
 }): Promise<void> {
@@ -118,6 +123,7 @@ export async function runGatewayClosePrelude(params: {
   params.disposeBrowserAuthRateLimiter();
   params.stopModelPricingRefresh?.();
   params.stopChannelHealthMonitor?.();
+  params.stopReadinessEventLoopHealth?.();
   params.clearSecretsRuntimeSnapshot?.();
   await params.closeMcpServer?.().catch(() => {});
 }
@@ -242,7 +248,7 @@ export function createGatewayCloseHandler(params: {
       if (params.pluginServices) {
         await params.pluginServices.stop().catch(() => {});
       }
-      await stopGmailWatcher();
+      await stopGmailWatcherOnDemand();
       params.cron.stop();
       params.heartbeatRunner.stop();
       try {

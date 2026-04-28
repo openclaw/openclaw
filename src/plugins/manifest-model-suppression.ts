@@ -77,6 +77,75 @@ function buildManifestSuppressionError(params: {
   return params.reason ? `Unknown model: ${ref}. ${params.reason}` : `Unknown model: ${ref}.`;
 }
 
+function normalizeBaseUrlHost(baseUrl: string | null | undefined): string {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return "";
+  }
+  try {
+    return normalizeSuppressionHost(new URL(trimmed).hostname);
+  } catch {
+    return "";
+  }
+}
+
+function normalizeSuppressionHost(host: string): string {
+  return normalizeLowercaseStringOrEmpty(host).replace(/\.+$/, "");
+}
+
+function resolveConfiguredProviderValue(params: {
+  provider: string;
+  config?: OpenClawConfig;
+}): { api?: string; baseUrl?: string } | undefined {
+  const providers = params.config?.models?.providers;
+  if (!providers) {
+    return undefined;
+  }
+  for (const [providerId, entry] of Object.entries(providers)) {
+    if (normalizeLowercaseStringOrEmpty(providerId) !== params.provider) {
+      continue;
+    }
+    return {
+      api: normalizeLowercaseStringOrEmpty(entry?.api),
+      baseUrl: typeof entry?.baseUrl === "string" ? entry.baseUrl : undefined,
+    };
+  }
+  return undefined;
+}
+
+function manifestSuppressionMatchesConditions(params: {
+  suppression: ManifestModelCatalogSuppressionEntry;
+  provider: string;
+  baseUrl?: string | null;
+  config?: OpenClawConfig;
+}): boolean {
+  const when = params.suppression.when;
+  if (!when) {
+    return true;
+  }
+  const configuredProvider = resolveConfiguredProviderValue({
+    provider: params.provider,
+    config: params.config,
+  });
+  if (when.providerConfigApiIn?.length && configuredProvider?.api) {
+    const allowedApis = new Set(when.providerConfigApiIn.map(normalizeLowercaseStringOrEmpty));
+    if (!allowedApis.has(configuredProvider.api)) {
+      return false;
+    }
+  }
+  if (when.baseUrlHosts?.length) {
+    const baseUrlHost = normalizeBaseUrlHost(params.baseUrl ?? configuredProvider?.baseUrl);
+    if (!baseUrlHost) {
+      return false;
+    }
+    const allowedHosts = new Set(when.baseUrlHosts.map(normalizeSuppressionHost));
+    if (!allowedHosts.has(baseUrlHost)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export function clearManifestModelSuppressionCacheForTest(): void {
   cacheWithoutConfig = new WeakMap<NodeJS.ProcessEnv, ManifestSuppressionCache>();
   cacheByConfig = new WeakMap<
@@ -91,6 +160,7 @@ export function resolveManifestBuiltInModelSuppression(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  baseUrl?: string | null;
 }) {
   const provider = normalizeLowercaseStringOrEmpty(params.provider);
   const modelId = normalizeLowercaseStringOrEmpty(params.id);
@@ -102,7 +172,16 @@ export function resolveManifestBuiltInModelSuppression(params: {
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env ?? process.env,
-  }).find((entry) => entry.mergeKey === mergeKey);
+  }).find(
+    (entry) =>
+      entry.mergeKey === mergeKey &&
+      manifestSuppressionMatchesConditions({
+        suppression: entry,
+        provider,
+        baseUrl: params.baseUrl,
+        config: params.config,
+      }),
+  );
   if (!suppression) {
     return undefined;
   }

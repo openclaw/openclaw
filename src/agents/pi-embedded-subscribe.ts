@@ -881,12 +881,20 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     setTerminalLifecycleMeta: (meta: {
       replayInvalid?: boolean;
       livenessState?: EmbeddedRunLivenessState;
+      stopReason?: string;
+      yielded?: boolean;
     }) => {
       if (typeof meta.replayInvalid === "boolean") {
         state.replayState = { ...state.replayState, replayInvalid: meta.replayInvalid };
       }
       if (meta.livenessState) {
         state.livenessState = meta.livenessState;
+      }
+      if (typeof meta.stopReason === "string") {
+        state.terminalStopReason = meta.stopReason;
+      }
+      if (typeof meta.yielded === "boolean") {
+        state.yielded = meta.yielded;
       }
     },
     isCompacting: () => state.compactionInFlight || state.pendingCompactionRetry > 0,

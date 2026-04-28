@@ -1,6 +1,7 @@
 export {
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
+  selectApplicableRuntimeConfig,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 export {

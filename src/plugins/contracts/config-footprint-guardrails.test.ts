@@ -164,12 +164,13 @@ describe("config footprint guardrails", () => {
 
   it("keeps bundled channel schemas out of the generic channel config SDK surface", () => {
     const source = readSource("src/plugin-sdk/channel-config-schema.ts");
+    const bundledSource = readSource("src/plugin-sdk/bundled-channel-config-schema.ts");
     const legacySource = readSource("src/plugin-sdk/channel-config-schema-legacy.ts");
-    const legacySection = legacySource.slice(
-      legacySource.indexOf("Deprecated bundled-channel compatibility surface"),
+    const bundledSection = bundledSource.slice(
+      bundledSource.indexOf("Bundled-channel config schemas"),
     );
     const bundledSchemaExportBlocks = Array.from(
-      legacySection.matchAll(
+      bundledSection.matchAll(
         /export \{(?<exports>[^}]*)\} from "\.\.\/config\/zod-schema\.providers-(?:core|whatsapp)\.js";/g,
       ),
     )
@@ -196,7 +197,10 @@ describe("config footprint guardrails", () => {
     for (const schemaName of exportedSchemaNames) {
       expect(source).not.toContain(schemaName);
     }
+    expect(bundledSource).toContain("Bundled-channel config schemas");
+    expect(bundledSource).toContain("openclaw/plugin-sdk/channel-config-schema");
     expect(legacySource).toContain("Deprecated bundled-channel compatibility surface");
-    expect(legacySource).toContain("openclaw/plugin-sdk/channel-config-schema");
+    expect(legacySource).toContain("openclaw/plugin-sdk/bundled-channel-config-schema");
+    expect(legacySource).toContain('export * from "./bundled-channel-config-schema.js";');
   });
 });
