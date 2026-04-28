@@ -11,6 +11,7 @@ import type { PluginCommandDiagnosticsSession, PluginCommandResult } from "../..
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { ReplyPayload } from "../types.js";
 import { rejectNonOwnerCommand } from "./command-gates.js";
+import { buildCurrentOpenClawCliCommand } from "./commands-openclaw-cli.js";
 import {
   deliverPrivateCommandReply,
   readCommandDeliveryTarget,
@@ -23,8 +24,7 @@ import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 const DIAGNOSTICS_COMMAND = "/diagnostics";
 const CODEX_DIAGNOSTICS_COMMAND = "/codex diagnostics";
 const DIAGNOSTICS_DOCS_URL = "https://docs.openclaw.ai/gateway/diagnostics";
-const GATEWAY_DIAGNOSTICS_EXPORT_COMMAND = "openclaw gateway diagnostics export";
-const GATEWAY_DIAGNOSTICS_EXPORT_JSON_COMMAND = `${GATEWAY_DIAGNOSTICS_EXPORT_COMMAND} --json`;
+const GATEWAY_DIAGNOSTICS_EXPORT_JSON_LABEL = "openclaw gateway diagnostics export --json";
 const DIAGNOSTICS_EXEC_SCOPE_KEY = "chat:diagnostics";
 const DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE =
   "I couldn't find a private owner approval route for diagnostics. Run /diagnostics from an owner DM so the sensitive diagnostics details are not posted in this chat.";
@@ -226,7 +226,7 @@ function buildDiagnosticsApprovalRequest(params: HandleCommandsParams): ExecAppr
   return {
     id: "diagnostics-private-route",
     request: {
-      command: GATEWAY_DIAGNOSTICS_EXPORT_JSON_COMMAND,
+      command: buildGatewayDiagnosticsExportJsonCommand(),
       agentId,
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       turnSourceChannel: params.command.channel,
@@ -237,6 +237,10 @@ function buildDiagnosticsApprovalRequest(params: HandleCommandsParams): ExecAppr
     createdAtMs: now,
     expiresAtMs: now + 5 * 60_000,
   };
+}
+
+function buildGatewayDiagnosticsExportJsonCommand(): string {
+  return buildCurrentOpenClawCliCommand(["gateway", "diagnostics", "export", "--json"]);
 }
 
 async function deliverPrivateDiagnosticsReply(params: {
@@ -261,6 +265,7 @@ async function requestGatewayDiagnosticsExportApproval(
       config: params.cfg,
     });
   const messageThreadId = readCommandMessageThreadId(params);
+  const command = buildGatewayDiagnosticsExportJsonCommand();
   try {
     const execTool = deps.createExecTool({
       host: "gateway",
@@ -288,7 +293,7 @@ async function requestGatewayDiagnosticsExportApproval(
       notifyOnExitEmptySuccess: params.cfg.tools?.exec?.notifyOnExitEmptySuccess,
     });
     const result = await execTool.execute("chat-diagnostics-gateway-export", {
-      command: GATEWAY_DIAGNOSTICS_EXPORT_JSON_COMMAND,
+      command,
       security: "allowlist",
       ask: "always",
       background: true,
@@ -300,7 +305,7 @@ async function requestGatewayDiagnosticsExportApproval(
     const lines = buildDiagnosticsPreamble();
     lines.push(
       "",
-      `Local Gateway bundle: requested \`${GATEWAY_DIAGNOSTICS_EXPORT_JSON_COMMAND}\` through exec approval. Approve once to create the bundle; do not use allow-all for diagnostics.`,
+      `Local Gateway bundle: requested \`${GATEWAY_DIAGNOSTICS_EXPORT_JSON_LABEL}\` through exec approval. Approve once to create the bundle; do not use allow-all for diagnostics.`,
       formatExecToolResultForDiagnostics(result),
     );
     if (codexFollowupText) {
@@ -311,7 +316,7 @@ async function requestGatewayDiagnosticsExportApproval(
     const lines = buildDiagnosticsPreamble();
     lines.push(
       "",
-      `Local Gateway bundle: could not request exec approval for \`${GATEWAY_DIAGNOSTICS_EXPORT_JSON_COMMAND}\`.`,
+      `Local Gateway bundle: could not request exec approval for \`${GATEWAY_DIAGNOSTICS_EXPORT_JSON_LABEL}\`.`,
       formatExecDiagnosticsText(formatErrorMessage(error)),
     );
     return { status: "reply", reply: { text: lines.join("\n") } };

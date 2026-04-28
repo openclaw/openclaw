@@ -232,10 +232,15 @@ describe("diagnostics command", () => {
       String((execCalls[0]?.defaults as { approvalWarningText?: string }).approvalWarningText),
     ).toContain("https://docs.openclaw.ai/gateway/diagnostics");
     expect(execCalls[0]?.params).toMatchObject({
-      command: "openclaw gateway diagnostics export --json",
       security: "allowlist",
       ask: "always",
     });
+    const command = (execCalls[0]?.params as { command?: string }).command ?? "";
+    expect(command).toContain("gateway");
+    expect(command).toContain("diagnostics");
+    expect(command).toContain("export");
+    expect(command).toContain("--json");
+    expect(command).not.toBe("openclaw gateway diagnostics export --json");
   });
 
   it("uses the originating Telegram route for native diagnostics followups", async () => {

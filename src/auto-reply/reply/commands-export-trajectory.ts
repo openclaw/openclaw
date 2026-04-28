@@ -16,6 +16,10 @@ import {
   resolveExportCommandSessionTarget,
 } from "./commands-export-common.js";
 import {
+  buildCurrentOpenClawCliArgv,
+  buildCurrentOpenClawCliCommand,
+} from "./commands-openclaw-cli.js";
+import {
   deliverPrivateCommandReply,
   readCommandDeliveryTarget,
   readCommandMessageThreadId,
@@ -256,12 +260,12 @@ async function requestTrajectoryExportApproval(
       timeout: timeoutSec,
     });
     return [
-      `Trajectory bundle: requested \`${request.command}\` through exec approval. Approve once to create the bundle; do not use allow-all for trajectory exports.`,
+      `Trajectory bundle: requested \`${request.displayCommand}\` through exec approval. Approve once to create the bundle; do not use allow-all for trajectory exports.`,
       formatExecToolResultForTrajectory(result),
     ].join("\n");
   } catch (error) {
     return [
-      `Trajectory bundle: could not request exec approval for \`${request.command}\`.`,
+      `Trajectory bundle: could not request exec approval for \`${request.displayCommand}\`.`,
       formatExecTrajectoryText(formatErrorMessage(error)),
     ].join("\n");
   }
@@ -316,6 +320,7 @@ type TrajectoryExportCliRequest = {
 type TrajectoryExportExecRequest = {
   argv: string[];
   command: string;
+  displayCommand: string;
   encodedRequest: string;
   request: TrajectoryExportCliRequest;
 };
@@ -341,17 +346,11 @@ function buildTrajectoryExportExecRequest(
   if (encodedRequest.length > MAX_TRAJECTORY_EXPORT_ENCODED_REQUEST_CHARS) {
     throw new Error("Encoded trajectory export request is too large");
   }
-  const argv = [
-    "openclaw",
-    "sessions",
-    "export-trajectory",
-    "--request-json-base64",
-    encodedRequest,
-    "--json",
-  ];
+  const args = ["sessions", "export-trajectory", "--request-json-base64", encodedRequest, "--json"];
   return {
-    argv,
-    command: argv.join(" "),
+    argv: buildCurrentOpenClawCliArgv(args),
+    command: buildCurrentOpenClawCliCommand(args),
+    displayCommand: ["openclaw", ...args].join(" "),
     encodedRequest,
     request,
   };

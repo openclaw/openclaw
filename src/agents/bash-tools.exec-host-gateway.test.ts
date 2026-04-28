@@ -1,7 +1,13 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ExecApprovalFollowupTarget } from "./bash-tools.exec-host-shared.js";
 
 type StrictInlineEvalBoundary =
   typeof import("./bash-tools.exec-host-shared.js").enforceStrictInlineEvalApprovalBoundary;
+type SendExecApprovalFollowupResult =
+  typeof import("./bash-tools.exec-host-shared.js").sendExecApprovalFollowupResult;
+type BuildExecApprovalFollowupTargetMock = (
+  value: ExecApprovalFollowupTarget,
+) => ExecApprovalFollowupTarget | null;
 
 const INLINE_EVAL_HIT = {
   executable: "python3",
@@ -12,7 +18,9 @@ const INLINE_EVAL_HIT = {
 
 const createAndRegisterDefaultExecApprovalRequestMock = vi.hoisted(() => vi.fn());
 const buildExecApprovalPendingToolResultMock = vi.hoisted(() => vi.fn());
-const buildExecApprovalFollowupTargetMock = vi.hoisted(() => vi.fn(() => null));
+const buildExecApprovalFollowupTargetMock = vi.hoisted(() =>
+  vi.fn<BuildExecApprovalFollowupTargetMock>(() => null),
+);
 const createExecApprovalDecisionStateMock = vi.hoisted(() =>
   vi.fn(
     (): {
@@ -55,7 +63,9 @@ const resolveExecHostApprovalContextMock = vi.hoisted(() =>
   })),
 );
 const runExecProcessMock = vi.hoisted(() => vi.fn());
-const sendExecApprovalFollowupResultMock = vi.hoisted(() => vi.fn(async () => undefined));
+const sendExecApprovalFollowupResultMock = vi.hoisted(() =>
+  vi.fn<SendExecApprovalFollowupResult>(async () => undefined),
+);
 const enforceStrictInlineEvalApprovalBoundaryMock = vi.hoisted(() =>
   vi.fn<StrictInlineEvalBoundary>((value) => ({
     approvedByAsk: value.approvedByAsk,
@@ -362,7 +372,7 @@ describe("processGatewayAllowlist", () => {
       expect.objectContaining({ direct: true }),
       expect.stringContaining("Diagnostics export created."),
     );
-    const followupText = String(sendExecApprovalFollowupResultMock.mock.calls[0]?.[1] ?? "");
+    const followupText = sendExecApprovalFollowupResultMock.mock.calls[0]?.[1] ?? "";
     expect(followupText).toContain("Path: /tmp/openclaw-diagnostics.zip");
     expect(followupText).toContain("Contents (2 files):");
     expect(followupText).toContain("OpenAI Codex harness:");

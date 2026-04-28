@@ -143,7 +143,7 @@ function createExecDeps(
 }
 
 function readEncodedRequestFromCommand(command: string): Record<string, unknown> {
-  const match = command.match(/--request-json-base64\s+([A-Za-z0-9_-]+)/u);
+  const match = command.match(/'?--request-json-base64'?\s+'?([A-Za-z0-9_-]+)'?/u);
   expect(match?.[1]).toBeTruthy();
   return JSON.parse(Buffer.from(match?.[1] ?? "", "base64url").toString("utf8")) as Record<
     string,
@@ -311,10 +311,12 @@ describe("buildExportTrajectoryCommandReply", () => {
       background: true,
     });
     const command = (execCalls[0]?.params as { command?: string }).command ?? "";
-    expect(command).toContain("openclaw sessions export-trajectory");
+    expect(command).toContain("sessions");
+    expect(command).toContain("export-trajectory");
     expect(command).toContain("--request-json-base64");
     expect(command).toContain("--json");
     expect(command).not.toContain("--session-key");
+    expect(command).not.toContain("openclaw sessions export-trajectory");
     const request = readEncodedRequestFromCommand(command);
     expect(request).toMatchObject({
       sessionKey: "agent:target:session",
@@ -363,11 +365,10 @@ describe("buildExportTrajectoryCommandReply", () => {
     await buildExportTrajectoryCommandReply(params, deps);
 
     const command = (execCalls[0]?.params as { command?: string }).command ?? "";
-    expect(command).toMatch(
-      /^openclaw sessions export-trajectory --request-json-base64 [A-Za-z0-9_-]+ --json$/u,
-    );
+    expect(command).toMatch(/'?sessions'?\s+'?export-trajectory'?/u);
+    expect(command).toMatch(/'?--request-json-base64'?\s+'?[A-Za-z0-9_-]+'?/u);
+    expect(command).toMatch(/'?--json'?$/u);
     expect(command).not.toContain("Invoke-Expression");
-    expect(command).not.toContain("'");
     expect(readEncodedRequestFromCommand(command)).toMatchObject({
       output: "bad';",
     });
