@@ -1,4 +1,5 @@
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   chunkMarkdownTextWithMode,
   isSilentReplyText,
@@ -44,6 +45,8 @@ export async function deliverReplies(params: {
   replyToMode: "off" | "first" | "all" | "batched";
   identity?: SlackSendIdentity;
 }) {
+  const hookRunner = getGlobalHookRunner();
+  const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
   for (const payload of params.replies) {
     const threadTs = resolveDeliveredSlackReplyThreadTs({
       replyToMode: params.replyToMode,
@@ -56,6 +59,54 @@ export async function deliverReplies(params: {
       continue;
     }
 
+    // Run the message_sending plugin hook for agent-reply delivery. Older
+    // Slack releases only wired the hook into the proactive message tool
+    // path, so plugins such as thread-ownership / slack-addressee-guard
+    // never saw agent replies. Keep the behavior identical when no plugin
+    // has registered a hook by short-circuiting on hasMessageSendingHooks.
+    const applyReplyMessageSendingHook = async (
+      content: string,
+      mediaUrls: readonly string[],
+    ): Promise<{ cancel: true } | { cancel: false; content: string }> => {
+      if (!hasMessageSendingHooks || !hookRunner) {
+        return { cancel: false, content };
+      }
+      try {
+        const hookResult = await hookRunner.runMessageSending(
+          {
+            to: params.target,
+            content,
+            threadId: threadTs,
+            metadata: {
+              channel: "slack",
+              accountId: params.accountId,
+              threadTs,
+              mediaUrls: [...mediaUrls],
+            },
+          },
+          {
+            channelId: "slack",
+            accountId: params.accountId ?? undefined,
+            conversationId: params.target,
+          },
+        );
+        if (hookResult?.cancel) {
+          return { cancel: true };
+        }
+        if (typeof hookResult?.content === "string") {
+          return { cancel: false, content: hookResult.content };
+        }
+      } catch (err) {
+        // Fail open: do not block agent replies on hook errors.
+        params.runtime.log?.(
+          `slack reply message_sending hook threw; fail-open (${String(
+            (err as Error | undefined)?.message ?? err,
+          )})`,
+        );
+      }
+      return { cancel: false, content };
+    };
+
     if (!reply.hasMedia && slackBlocks?.length) {
       const trimmed = reply.trimmedText;
       if (!trimmed && !slackBlocks?.length) {
@@ -64,7 +115,11 @@ export async function deliverReplies(params: {
       if (trimmed && isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) {
         continue;
       }
-      await sendMessageSlack(params.target, trimmed, {
+      const gated = await applyReplyMessageSendingHook(trimmed, []);
+      if (gated.cancel) {
+        continue;
+      }
+      await sendMessageSlack(params.target, gated.content, {
         cfg: params.cfg,
         token: params.token,
         threadTs,
@@ -89,7 +144,11 @@ export async function deliverReplies(params: {
           }
         : undefined,
       sendText: async (trimmed) => {
-        await sendMessageSlack(params.target, trimmed, {
+        const gated = await applyReplyMessageSendingHook(trimmed, []);
+        if (gated.cancel) {
+          return;
+        }
+        await sendMessageSlack(params.target, gated.content, {
           cfg: params.cfg,
           token: params.token,
           threadTs,
@@ -98,7 +157,11 @@ export async function deliverReplies(params: {
         });
       },
       sendMedia: async ({ mediaUrl, caption }) => {
-        await sendMessageSlack(params.target, caption ?? "", {
+        const gated = await applyReplyMessageSendingHook(caption ?? "", [mediaUrl]);
+        if (gated.cancel) {
+          return;
+        }
+        await sendMessageSlack(params.target, gated.content, {
           cfg: params.cfg,
           token: params.token,
           mediaUrl,

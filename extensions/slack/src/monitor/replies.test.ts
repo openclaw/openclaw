@@ -5,6 +5,19 @@ vi.mock("../send.js", () => ({
   sendMessageSlack: (...args: unknown[]) => sendMock(...args),
 }));
 
+const messageHookRunner = vi.hoisted(() => ({
+  hasHooks: vi.fn<(name: string) => boolean>(() => false),
+  runMessageSending: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/plugin-runtime")>();
+  return {
+    ...actual,
+    getGlobalHookRunner: () => messageHookRunner,
+  };
+});
+
 let deliverReplies: typeof import("./replies.js").deliverReplies;
 let createSlackReplyDeliveryPlan: typeof import("./replies.js").createSlackReplyDeliveryPlan;
 let resolveDeliveredSlackReplyThreadTs: typeof import("./replies.js").resolveDeliveredSlackReplyThreadTs;
@@ -38,6 +51,9 @@ describe("deliverReplies identity passthrough", () => {
 
   beforeEach(() => {
     sendMock.mockReset();
+    messageHookRunner.hasHooks.mockReset();
+    messageHookRunner.hasHooks.mockReturnValue(false);
+    messageHookRunner.runMessageSending.mockReset();
   });
   it("passes identity to sendMessageSlack for text replies", async () => {
     sendMock.mockResolvedValue(undefined);
@@ -296,5 +312,150 @@ describe("deliverSlackSlashReplies chunking", () => {
       text,
       response_type: "ephemeral",
     });
+  });
+});
+
+describe("deliverReplies message_sending hook wiring", () => {
+  beforeAll(async () => {
+    ({ deliverReplies } = await import("./replies.js"));
+  });
+
+  beforeEach(() => {
+    sendMock.mockReset();
+    sendMock.mockResolvedValue(undefined);
+    messageHookRunner.hasHooks.mockReset();
+    messageHookRunner.hasHooks.mockReturnValue(false);
+    messageHookRunner.runMessageSending.mockReset();
+  });
+
+  function params(overrides?: Record<string, unknown>) {
+    return {
+      cfg: SLACK_TEST_CFG,
+      replies: [{ text: "hello" }],
+      target: "C123",
+      token: "xoxb-test",
+      runtime: { log: () => {}, error: () => {}, exit: () => {} },
+      textLimit: 4000,
+      replyToMode: "off" as const,
+      replyThreadTs: "1712000000.000001",
+      ...overrides,
+    };
+  }
+
+  it("invokes message_sending once per reply with slack routing context", async () => {
+    messageHookRunner.hasHooks.mockImplementation(
+      (name: string) => name === "message_sending",
+    );
+    messageHookRunner.runMessageSending.mockResolvedValue(undefined);
+
+    await deliverReplies(
+      params({
+        replies: [{ text: "first" }, { text: "second" }],
+        accountId: "primary",
+      }),
+    );
+
+    expect(messageHookRunner.runMessageSending).toHaveBeenCalledTimes(2);
+    expect(messageHookRunner.runMessageSending).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        to: "C123",
+        content: "first",
+        threadId: "1712000000.000001",
+        metadata: expect.objectContaining({
+          channel: "slack",
+          accountId: "primary",
+          threadTs: "1712000000.000001",
+        }),
+      }),
+      expect.objectContaining({
+        channelId: "slack",
+        accountId: "primary",
+        conversationId: "C123",
+      }),
+    );
+    expect(sendMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("rewrites outgoing reply text when the hook returns new content", async () => {
+    messageHookRunner.hasHooks.mockImplementation(
+      (name: string) => name === "message_sending",
+    );
+    messageHookRunner.runMessageSending.mockResolvedValue({
+      content: "<@U111> rewritten",
+    });
+
+    await deliverReplies(params({ replies: [{ text: "<@U222> hello" }] }));
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(sendMock.mock.calls[0]?.[1]).toBe("<@U111> rewritten");
+  });
+
+  it("skips delivery entirely when the hook cancels", async () => {
+    messageHookRunner.hasHooks.mockImplementation(
+      (name: string) => name === "message_sending",
+    );
+    messageHookRunner.runMessageSending.mockResolvedValue({ cancel: true });
+
+    await deliverReplies(params());
+
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("short-circuits without touching the hook runner when no hooks are registered", async () => {
+    messageHookRunner.hasHooks.mockReturnValue(false);
+
+    await deliverReplies(params());
+
+    expect(messageHookRunner.runMessageSending).not.toHaveBeenCalled();
+    expect(sendMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails open when the hook handler throws (delivery still happens)", async () => {
+    messageHookRunner.hasHooks.mockImplementation(
+      (name: string) => name === "message_sending",
+    );
+    messageHookRunner.runMessageSending.mockRejectedValueOnce(new Error("boom"));
+
+    await deliverReplies(params());
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(sendMock.mock.calls[0]?.[1]).toBe("hello");
+  });
+
+  it("runs the hook for block-only replies and uses hook content for the send text", async () => {
+    messageHookRunner.hasHooks.mockImplementation(
+      (name: string) => name === "message_sending",
+    );
+    messageHookRunner.runMessageSending.mockResolvedValue({ content: "guarded text" });
+
+    const blocks = [
+      {
+        type: "actions",
+        elements: [
+          {
+            type: "button",
+            action_id: "openclaw:reply_button",
+            text: { type: "plain_text", text: "Option" },
+            value: "opt",
+          },
+        ],
+      },
+    ];
+
+    await deliverReplies(
+      params({
+        replies: [
+          {
+            text: "original",
+            channelData: { slack: { blocks } },
+          },
+        ],
+      }),
+    );
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(sendMock.mock.calls[0]?.[1]).toBe("guarded text");
+    expect(sendMock.mock.calls[0]?.[2]).toMatchObject({ blocks });
   });
 });
