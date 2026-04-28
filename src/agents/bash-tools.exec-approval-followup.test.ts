@@ -132,7 +132,7 @@ describe("exec approval followup", () => {
     expect(callGatewayTool).not.toHaveBeenCalled();
   });
 
-  it("falls back to sanitized direct delivery when session resume fails", async () => {
+  it("falls back to sanitized direct delivery without alarming prefix for successful completions", async () => {
     vi.mocked(callGatewayTool).mockRejectedValueOnce(new Error("session missing"));
 
     await sendExecApprovalFollowup({
@@ -148,7 +148,7 @@ describe("exec approval followup", () => {
 
     expect(sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        content: "Automatic session resume failed, so sending the status directly.\n\nall good",
+        content: "all good",
         idempotencyKey: "exec-approval-followup:req-session-resume-failed",
       }),
     );

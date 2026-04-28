@@ -50,6 +50,10 @@ A small set of bundled-plugin helper seams still appear in the generated export
 map when they have tracked owner usage. They exist for bundled-plugin
 maintenance only and are not recommended import paths for new third-party
 plugins.
+
+`openclaw/plugin-sdk/discord` is also kept as a deprecated compatibility facade
+for the published `@openclaw/discord@2026.3.13` package. Do not copy that import
+path into new plugins; use the generic channel SDK subpaths instead.
 </Warning>
 
 ## Subpath reference
@@ -300,6 +304,7 @@ semantics.
 - `message_received`: use the typed `threadId` field when you need inbound thread/topic routing. Keep `metadata` for channel-specific extras.
 - `message_sending`: use typed `replyToId` / `threadId` routing fields before falling back to channel-specific `metadata`.
 - `gateway_start`: use `ctx.config`, `ctx.workspaceDir`, and `ctx.getCron?.()` for gateway-owned startup state instead of relying on internal `gateway:startup` hooks.
+- `cron_changed`: observe gateway-owned cron lifecycle changes. Use `event.job?.state?.nextRunAtMs` and `ctx.getCron?.()` when syncing external wake schedulers, and keep OpenClaw as the source of truth for due checks and execution.
 
 ### API object fields
 

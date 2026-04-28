@@ -89,6 +89,8 @@ SSH-specific config lives under `agents.defaults.sandbox.ssh`. OpenShell-specifi
 
 Sandboxing is off by default. If you enable sandboxing and do not choose a backend, OpenClaw uses the Docker backend. It executes tools and sandbox browsers locally via the Docker daemon socket (`/var/run/docker.sock`). Sandbox container isolation is determined by Docker namespaces.
 
+To expose host GPUs to Docker sandboxes, set `agents.defaults.sandbox.docker.gpus` or the per-agent `agents.list[].sandbox.docker.gpus` override. The value is passed to Docker's `--gpus` flag as a separate argument, for example `"all"` or `"device=GPU-uuid"`, and requires a compatible host runtime such as NVIDIA Container Toolkit.
+
 <Warning>
 **Docker-out-of-Docker (DooD) constraints**
 

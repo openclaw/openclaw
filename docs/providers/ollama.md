@@ -215,6 +215,25 @@ transport, but it does not start a chat-agent turn or load MCP/tool context. If
 this succeeds while normal agent replies fail, troubleshoot the model's agent
 prompt/tool capacity next.
 
+For a narrow vision-model smoke test on the same lean path, add one or more
+image files to `infer model run`. This sends the prompt and image directly to
+the selected Ollama vision model without loading chat tools, memory, or prior
+session context:
+
+```bash
+OLLAMA_API_KEY=ollama-local \
+  openclaw infer model run \
+    --local \
+    --model ollama/qwen2.5vl:7b \
+    --prompt "Describe this image in one sentence." \
+    --file ./photo.jpg \
+    --json
+```
+
+`model run --file` accepts files detected as `image/*`, including common PNG,
+JPEG, and WebP inputs. Non-image files are rejected before Ollama is called.
+For speech recognition, use `openclaw infer audio transcribe` instead.
+
 When you switch a conversation with `/model ollama/<model>`, OpenClaw treats
 that as an exact user selection. If the configured Ollama `baseUrl` is
 unreachable, the next reply fails with the provider error instead of silently
@@ -268,6 +287,8 @@ openclaw infer image describe \
 ```
 
 `--model` must be a full `<provider/model>` ref. When it is set, `openclaw infer image describe` runs that model directly instead of skipping description because the model supports native vision.
+
+Use `infer image describe` when you want OpenClaw's image-understanding provider flow, configured `agents.defaults.imageModel`, and image-description output shape. Use `infer model run --file` when you want a raw multimodal model probe with a custom prompt and one or more images.
 
 To make Ollama the default image-understanding model for inbound media, configure `agents.defaults.imageModel`:
 
@@ -1059,6 +1080,18 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
     ```
 
     If a small local model still fails on tool schemas, set `compat.supportsTools: false` on that model entry and retest.
+
+  </Accordion>
+
+  <Accordion title="Kimi or GLM returns garbled symbols">
+    Hosted Kimi/GLM responses that are long, non-linguistic symbol runs are treated as failed provider output instead of a successful assistant answer. That lets normal retry, fallback, or error handling take over without persisting the corrupted text into the session.
+
+    If it happens repeatedly, capture the raw model name, the current session file, and whether the run used `Cloud + Local` or `Cloud only`, then try a fresh session and a fallback model:
+
+    ```bash
+    openclaw infer model run --model ollama/kimi-k2.5:cloud --prompt "Reply with exactly: ok" --json
+    openclaw models set ollama/gemma4
+    ```
 
   </Accordion>
 

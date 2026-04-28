@@ -591,6 +591,7 @@ describe("update-cli", () => {
       expect.objectContaining({
         stdio: "inherit",
         env: expect.objectContaining({
+          NODE_DISABLE_COMPILE_CACHE: "1",
           OPENCLAW_UPDATE_POST_CORE: "1",
           OPENCLAW_UPDATE_POST_CORE_CHANNEL: "dev",
         }),

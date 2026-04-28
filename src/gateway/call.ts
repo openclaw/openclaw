@@ -35,6 +35,7 @@ import {
 import { canSkipGatewayConfigLoad } from "./explicit-connection-policy.js";
 import {
   CLI_DEFAULT_OPERATOR_SCOPES,
+  isGatewayMethodClassified,
   resolveLeastPrivilegeOperatorScopesForMethod,
   type OperatorScope,
 } from "./method-scopes.js";
@@ -635,7 +636,11 @@ export async function callGatewayScoped<T = Record<string, unknown>>(
 export async function callGatewayCli<T = Record<string, unknown>>(
   opts: CallGatewayCliOptions,
 ): Promise<T> {
-  const scopes = Array.isArray(opts.scopes) ? opts.scopes : CLI_DEFAULT_OPERATOR_SCOPES;
+  const scopes = Array.isArray(opts.scopes)
+    ? opts.scopes
+    : isGatewayMethodClassified(opts.method)
+      ? resolveLeastPrivilegeOperatorScopesForMethod(opts.method)
+      : CLI_DEFAULT_OPERATOR_SCOPES;
   return await callGatewayWithScopes(opts, scopes);
 }
 

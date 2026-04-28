@@ -19,6 +19,7 @@ trap cleanup EXIT
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" cron-mcp-cleanup
 docker_e2e_harness_mount_args
+OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 cron-mcp-cleanup empty)"
 
 echo "Running in-container cron/subagent MCP cleanup smoke..."
 # Harness files are mounted read-only; the app under test comes from /app/dist.
@@ -32,14 +33,14 @@ docker run --rm \
   -e "OPENCLAW_SKIP_CANVAS_HOST=1" \
   -e "OPENCLAW_SKIP_ACPX_RUNTIME=1" \
   -e "OPENCLAW_SKIP_ACPX_RUNTIME_PROBE=1" \
-  -e "OPENCLAW_STATE_DIR=/tmp/openclaw-state" \
-  -e "OPENCLAW_CONFIG_PATH=/tmp/openclaw-state/openclaw.json" \
+  -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   -e "GW_URL=ws://127.0.0.1:$PORT" \
   -e "GW_TOKEN=$TOKEN" \
   -e "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1" \
   "${DOCKER_E2E_HARNESS_ARGS[@]}" \
   "$IMAGE_NAME" \
   bash -lc "set -euo pipefail
+    eval \"\$(printf '%s' \"\${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}\" | base64 -d)\"
     entry=dist/index.mjs
     [ -f \"\$entry\" ] || entry=dist/index.js
     export MOCK_PORT=44081

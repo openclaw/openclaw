@@ -39,6 +39,8 @@ const normalized = entries.map((entry) => entry.replace(/^package\//u, ""));
 const entrySet = new Set(normalized);
 const errors = [];
 const warnings = [];
+const REQUIRED_TARBALL_ENTRIES = ["dist/control-ui/index.html"];
+const REQUIRED_TARBALL_ENTRY_PREFIXES = ["dist/control-ui/assets/"];
 const LEGACY_PACKAGE_ACCEPTANCE_COMPAT_MAX = { year: 2026, month: 4, day: 25 };
 const LEGACY_LOCAL_BUILD_METADATA_COMPAT_MAX = { year: 2026, month: 4, day: 26 };
 const FORBIDDEN_LOCAL_BUILD_METADATA_FILES = new Set(LOCAL_BUILD_METADATA_DIST_PATHS);
@@ -128,6 +130,16 @@ if (!entrySet.has("package.json")) {
 }
 if (!normalized.some((entry) => entry.startsWith("dist/"))) {
   errors.push("missing dist/ entries");
+}
+for (const requiredEntry of REQUIRED_TARBALL_ENTRIES) {
+  if (!entrySet.has(requiredEntry)) {
+    errors.push(`missing required tar entry ${requiredEntry}`);
+  }
+}
+for (const requiredPrefix of REQUIRED_TARBALL_ENTRY_PREFIXES) {
+  if (!normalized.some((entry) => entry.startsWith(requiredPrefix))) {
+    errors.push(`missing required tar entries under ${requiredPrefix}`);
+  }
 }
 let packageVersion = "";
 if (entrySet.has("package.json")) {

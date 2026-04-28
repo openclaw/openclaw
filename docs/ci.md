@@ -230,24 +230,42 @@ or overlapping changed hunks.
 The `CodeQL` workflow is intentionally a narrow first-pass security scanner,
 not the full repository sweep. Daily and manual runs scan Actions workflow code
 plus the highest-risk JavaScript/TypeScript auth, secrets, sandbox, cron, and
-gateway surfaces with high-precision security queries. macOS remains a manual
-security shard so its runtime and alert quality can be tracked separately.
+gateway surfaces with high-precision security queries. The
+channel-runtime-boundary job separately scans core channel implementation
+contracts plus the channel plugin runtime, gateway, Plugin SDK, secrets, and
+audit touchpoints under the `/codeql-critical-security/channel-runtime-boundary`
+category so channel security signal can scale without broadening the baseline
+JS/TS category.
 
 The `CodeQL Android Critical Security` workflow is the scheduled Android
 security shard. It builds the Android app manually for CodeQL on the smallest
 Blacksmith Linux runner label accepted by workflow sanity and uploads results
 under the `/codeql-critical-security/android` category.
 
+The `CodeQL macOS Critical Security` workflow is the weekly/manual macOS
+security shard. It builds the macOS app manually for CodeQL on Blacksmith macOS,
+filters dependency build results out of the uploaded SARIF, and uploads results
+under the `/codeql-critical-security/macos` category. Keep it outside the daily
+default workflow because the macOS build dominates runtime even when clean.
+
 The `CodeQL Critical Quality` workflow is the matching non-security shard. It
 runs only error-severity, non-security JavaScript/TypeScript quality queries
 over narrow high-value surfaces. Its baseline job scans the same auth, secrets,
-sandbox, cron, and gateway surface as the security workflow. The plugin-boundary
-job scans loader, registry, public-surface, and Plugin SDK entrypoint contracts
-under a separate `/codeql-critical-quality/plugin-boundary` category. Keep the
-workflow separate from security so quality findings can be scheduled, measured,
-disabled, or expanded without obscuring security signal. Swift, Python, UI, and
-bundled-plugin CodeQL expansion should be added back as scoped or sharded
-follow-up work only after the narrow profiles have stable runtime and signal.
+sandbox, cron, and gateway surface as the security workflow. The config-boundary
+job scans config schema, migration, normalization, and IO contracts under the
+separate `/codeql-critical-quality/config-boundary` category. The
+gateway-runtime-boundary job scans gateway protocol schemas and server method
+contracts under the separate
+`/codeql-critical-quality/gateway-runtime-boundary` category. The
+channel-runtime-boundary job scans core channel implementation contracts under
+the separate `/codeql-critical-quality/channel-runtime-boundary` category. The
+plugin-boundary job scans loader, registry, public-surface, and Plugin SDK
+entrypoint contracts under a separate `/codeql-critical-quality/plugin-boundary`
+category. Keep the workflow separate from security so quality findings can be
+scheduled, measured, disabled, or expanded without obscuring security signal.
+Swift, Python, UI, and bundled-plugin CodeQL expansion should be added back as
+scoped or sharded follow-up work only after the narrow profiles have stable
+runtime and signal.
 
 The `Docs Agent` workflow is an event-driven Codex maintenance lane for keeping
 existing docs aligned with recently landed changes. It has no pure schedule: a

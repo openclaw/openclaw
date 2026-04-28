@@ -54,7 +54,10 @@ describe("package acceptance workflow", () => {
       "package_label: openclaw@${{ needs.resolve_package.outputs.package_version }}",
     );
     expect(workflow).toContain(
-      "harness_ref: ${{ inputs.source == 'ref' && inputs.package_ref || inputs.workflow_ref }}",
+      "package_source_sha: ${{ steps.resolve.outputs.package_source_sha }}",
+    );
+    expect(workflow).toContain(
+      "harness_ref: ${{ needs.resolve_package.outputs.package_source_sha || inputs.workflow_ref }}",
     );
   });
 });

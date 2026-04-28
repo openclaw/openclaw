@@ -117,6 +117,27 @@ openclaw gateway
   </Tab>
 </Tabs>
 
+## Socket Mode transport tuning
+
+OpenClaw sets the Slack SDK client pong timeout to 15 seconds by default for Socket Mode. Override the transport settings only when you need workspace- or host-specific tuning:
+
+```json5
+{
+  channels: {
+    slack: {
+      mode: "socket",
+      socketMode: {
+        clientPingTimeout: 20000,
+        serverPingTimeout: 30000,
+        pingPongLoggingEnabled: false,
+      },
+    },
+  },
+}
+```
+
+Use this only for Socket Mode workspaces that log Slack websocket pong/server-ping timeouts or run on hosts with known event-loop starvation. `clientPingTimeout` is the pong wait after the SDK sends a client ping; `serverPingTimeout` is the wait for Slack server pings. App messages and events remain application state, not transport liveness signals.
+
 ## Manifest and scope checklist
 
 The base Slack app manifest is the same for Socket Mode and HTTP Request URLs. Only the `settings` block (and the slash command `url`) differs.
@@ -610,6 +631,8 @@ Notes:
 <AccordionGroup>
   <Accordion title="Inbound attachments">
     Slack file attachments are downloaded from Slack-hosted private URLs (token-authenticated request flow) and written to the media store when fetch succeeds and size limits permit. File placeholders include the Slack `fileId` so agents can fetch the original file with `download-file`.
+
+    Downloads use bounded idle and total timeouts. If Slack file retrieval stalls or fails, OpenClaw keeps processing the message and falls back to the file placeholder.
 
     Runtime inbound size cap defaults to `20MB` unless overridden by `channels.slack.mediaMaxMb`.
 

@@ -662,7 +662,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
             const resolvedSessionKey = opts?.agentSessionKey
               ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias, mainKey })
               : undefined;
-            if (!("agentId" in job)) {
+            if (!("agentId" in job) || (job as { agentId?: unknown }).agentId === undefined) {
               const agentId = opts?.agentSessionKey
                 ? resolveSessionAgentId({ sessionKey: opts.agentSessionKey, config: cfg })
                 : undefined;

@@ -10,6 +10,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -1302,7 +1303,9 @@ export function resolveInstalledPrefixDirFromCliPath(cliPath, platform = process
 }
 
 function readInstalledMetadataFromCliPath(cliPath, platform = process.platform) {
-  return readInstalledMetadata(resolveInstalledPrefixDirFromCliPath(cliPath, platform));
+  return readInstalledMetadataFromPackageRoot(
+    resolveInstalledPackageRootFromCliPath(cliPath, platform),
+  );
 }
 
 function resolveInstalledCliInvocation(cliPath, platform = process.platform) {
@@ -2781,6 +2784,10 @@ async function runOpenClaw(params) {
 
 function readInstalledPackageManifest(prefixDir) {
   const packageRoot = installedPackageRoot(prefixDir);
+  return readInstalledPackageManifestFromPackageRoot(packageRoot);
+}
+
+function readInstalledPackageManifestFromPackageRoot(packageRoot) {
   const packageJsonPath = join(packageRoot, "package.json");
   if (!existsSync(packageJsonPath)) {
     throw new Error(`Installed package manifest missing: ${packageJsonPath}`);
@@ -2798,6 +2805,15 @@ export function readInstalledVersion(prefixDir) {
 
 function readInstalledMetadata(prefixDir) {
   const { packageJson, packageRoot } = readInstalledPackageManifest(prefixDir);
+  return readInstalledMetadataFromManifest(packageJson, packageRoot);
+}
+
+function readInstalledMetadataFromPackageRoot(packageRoot) {
+  const { packageJson } = readInstalledPackageManifestFromPackageRoot(packageRoot);
+  return readInstalledMetadataFromManifest(packageJson, packageRoot);
+}
+
+function readInstalledMetadataFromManifest(packageJson, packageRoot) {
   const buildInfoPath = join(packageRoot, "dist", "build-info.json");
   if (!existsSync(buildInfoPath)) {
     throw new Error(`Installed build info missing: ${buildInfoPath}`);
@@ -2824,8 +2840,55 @@ function verifyInstalledCandidate(installed, build) {
   }
 }
 
-function installedPackageRoot(prefixDir) {
-  return process.platform === "win32"
+export function resolveInstalledPackageRootFromCliPath(
+  cliPath,
+  platform = process.platform,
+  env = process.env,
+) {
+  const prefixDir = resolveInstalledPrefixDirFromCliPath(cliPath, platform);
+  const candidates = [installedPackageRoot(prefixDir, platform)];
+
+  if (platform !== "win32") {
+    const resolvedCliPath = String(cliPath ?? "").trim();
+    if (resolvedCliPath) {
+      try {
+        const realCliPath = realpathSync(resolvedCliPath);
+        candidates.push(dirname(realCliPath));
+        candidates.push(dirname(dirname(realCliPath)));
+      } catch {
+        // Some installer shims are shell wrappers, not symlinks. Fall through to
+        // common user-local npm prefixes below.
+      }
+    }
+
+    for (const prefix of [
+      env.NPM_CONFIG_PREFIX,
+      env.npm_config_prefix,
+      env.HOME && join(env.HOME, ".npm-global"),
+      env.HOME && join(env.HOME, ".local"),
+    ]) {
+      if (typeof prefix === "string" && prefix.trim()) {
+        candidates.push(installedPackageRoot(prefix, platform));
+      }
+    }
+  }
+
+  const checked: string[] = [];
+  for (const candidate of candidates) {
+    if (!candidate || checked.includes(candidate)) {
+      continue;
+    }
+    checked.push(candidate);
+    if (existsSync(join(candidate, "package.json"))) {
+      return candidate;
+    }
+  }
+
+  throw new Error(`Installed package manifest missing. Checked: ${checked.join(", ")}`);
+}
+
+function installedPackageRoot(prefixDir, platform = process.platform) {
+  return platform === "win32"
     ? join(prefixDir, "node_modules", "openclaw")
     : join(prefixDir, "lib", "node_modules", "openclaw");
 }

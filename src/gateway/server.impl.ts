@@ -86,6 +86,7 @@ import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./server-startup-unavailabl
 import { startGatewayEarlyRuntime, startGatewayPostAttachRuntime } from "./server-startup.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
 import { attachGatewayWsHandlers } from "./server-ws-runtime.js";
+import { createGatewayEventLoopHealthMonitor } from "./server/event-loop-health.js";
 import {
   getHealthCache,
   getHealthVersion,
@@ -565,6 +566,7 @@ export async function startGatewayServer(
     throw new Error(gatewayTls.error ?? "gateway tls: failed to enable");
   }
   const serverStartedAt = Date.now();
+  const readinessEventLoopHealth = createGatewayEventLoopHealthMonitor();
   let startupSidecarsReady = minimalTestGateway;
   const channelManager = createChannelManager({
     getRuntimeConfig: () =>
@@ -582,6 +584,7 @@ export async function startGatewayServer(
     channelManager,
     startedAt: serverStartedAt,
     getStartupPending: () => !startupSidecarsReady,
+    getEventLoopHealth: readinessEventLoopHealth.snapshot,
   });
   log.info("starting HTTP server...");
   const {
@@ -682,6 +685,7 @@ export async function startGatewayServer(
       disposeBrowserAuthRateLimiter: () => browserAuthRateLimiter.dispose(),
       stopModelPricingRefresh: runtimeState.stopModelPricingRefresh,
       stopChannelHealthMonitor: () => runtimeState?.channelHealthMonitor?.stop(),
+      stopReadinessEventLoopHealth: readinessEventLoopHealth.stop,
       clearSecretsRuntimeSnapshot,
       closeMcpServer: closeMcpLoopbackServerOnDemand,
     });

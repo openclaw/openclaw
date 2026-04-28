@@ -1,4 +1,12 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -31,6 +39,7 @@ import {
   readInstalledVersion,
   readRunnerOverrideEnv,
   resolveExplicitBaselineVersion,
+  resolveInstalledPackageRootFromCliPath,
   resolveDevUpdateVerificationRef,
   resolveInstalledPrefixDirFromCliPath,
   resolvePublishedInstallerUrl,
@@ -396,6 +405,36 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(
       resolveInstalledPrefixDirFromCliPath("/Users/runner/.npm-global/bin/openclaw", "darwin"),
     ).toBe("/Users/runner/.npm-global");
+  });
+
+  it("resolves Linux npm package roots when the CLI is a user-local shim", () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-linux-home-"));
+    try {
+      const packageRoot = join(homeDir, ".npm-global", "lib", "node_modules", "openclaw");
+      const distDir = join(packageRoot, "dist");
+      const cliDir = join(homeDir, ".local", "bin");
+      mkdirSync(distDir, { recursive: true });
+      mkdirSync(cliDir, { recursive: true });
+      writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "openclaw" }));
+      writeFileSync(join(distDir, "entry.js"), "#!/usr/bin/env node\n");
+
+      expect(
+        resolveInstalledPackageRootFromCliPath(join(cliDir, "openclaw"), "linux", {
+          HOME: homeDir,
+        }),
+      ).toBe(packageRoot);
+
+      rmSync(join(cliDir, "openclaw"), { force: true });
+      symlinkSync(join(distDir, "entry.js"), join(cliDir, "openclaw"));
+
+      expect(
+        resolveInstalledPackageRootFromCliPath(join(cliDir, "openclaw"), "linux", {
+          HOME: homeDir,
+        }),
+      ).toBe(realpathSync(packageRoot));
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
   });
 
   it("detects whether a managed gateway listener is still reachable on loopback", async () => {

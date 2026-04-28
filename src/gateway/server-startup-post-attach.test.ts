@@ -1,8 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
 } from "../plugins/hook-types.js";
+import { withEnvAsync } from "../test-utils/env.js";
 
 const hoisted = vi.hoisted(() => {
   const startPluginServices = vi.fn(async () => null);
@@ -184,6 +185,8 @@ type PostAttachRuntimeDeps = NonNullable<Parameters<typeof startGatewayPostAttac
 
 describe("startGatewayPostAttachRuntime", () => {
   beforeEach(() => {
+    vi.stubEnv("OPENCLAW_SKIP_CHANNELS", "0");
+    vi.stubEnv("OPENCLAW_SKIP_PROVIDERS", "0");
     hoisted.startPluginServices.mockClear();
     hoisted.startGmailWatcherWithLogs.mockClear();
     hoisted.loadInternalHooks.mockClear();
@@ -213,6 +216,10 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.resolveEmbeddedAgentRuntime.mockReturnValue("pi");
     hoisted.ensureOpenClawModelsJson.mockReset();
     hoisted.ensureOpenClawModelsJson.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("re-enables startup-gated methods after post-attach sidecars start", async () => {
@@ -313,48 +320,53 @@ describe("startGatewayPostAttachRuntime", () => {
   });
 
   it("starts channels without waiting for primary model prewarm completion", async () => {
-    let resolvePrewarm!: () => void;
-    const prewarmPrimaryModel = vi.fn(
-      async () =>
-        await new Promise<undefined>((resolve) => {
-          resolvePrewarm = () => resolve(undefined);
-        }),
+    await withEnvAsync(
+      { OPENCLAW_SKIP_CHANNELS: undefined, OPENCLAW_SKIP_PROVIDERS: undefined },
+      async () => {
+        let resolvePrewarm!: () => void;
+        const prewarmPrimaryModel = vi.fn(
+          async () =>
+            await new Promise<undefined>((resolve) => {
+              resolvePrewarm = () => resolve(undefined);
+            }),
+        );
+        const startChannels = vi.fn(async () => undefined);
+
+        const sidecarsPromise = startGatewaySidecars({
+          cfg: {
+            hooks: { internal: { enabled: false } },
+            agents: { defaults: { model: "openai/gpt-5.4" } },
+          } as never,
+          pluginRegistry: createPostAttachParams().pluginRegistry,
+          defaultWorkspaceDir: "/tmp/openclaw-workspace",
+          deps: {} as never,
+          startChannels,
+          prewarmPrimaryModel: prewarmPrimaryModel as never,
+          log: { warn: vi.fn() },
+          logHooks: {
+            info: vi.fn(),
+            warn: vi.fn(),
+            error: vi.fn(),
+          },
+          logChannels: {
+            info: vi.fn(),
+            error: vi.fn(),
+          },
+        });
+
+        await vi.waitFor(
+          () => {
+            expect(prewarmPrimaryModel).toHaveBeenCalledTimes(1);
+            expect(startChannels).toHaveBeenCalledTimes(1);
+          },
+          { timeout: 2_000 },
+        );
+        await sidecarsPromise;
+
+        resolvePrewarm();
+        await Promise.resolve();
+      },
     );
-    const startChannels = vi.fn(async () => undefined);
-
-    const sidecarsPromise = startGatewaySidecars({
-      cfg: {
-        hooks: { internal: { enabled: false } },
-        agents: { defaults: { model: "openai/gpt-5.4" } },
-      } as never,
-      pluginRegistry: createPostAttachParams().pluginRegistry,
-      defaultWorkspaceDir: "/tmp/openclaw-workspace",
-      deps: {} as never,
-      startChannels,
-      prewarmPrimaryModel: prewarmPrimaryModel as never,
-      log: { warn: vi.fn() },
-      logHooks: {
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-      },
-      logChannels: {
-        info: vi.fn(),
-        error: vi.fn(),
-      },
-    });
-
-    await vi.waitFor(
-      () => {
-        expect(prewarmPrimaryModel).toHaveBeenCalledTimes(1);
-        expect(startChannels).toHaveBeenCalledTimes(1);
-      },
-      { timeout: 2_000 },
-    );
-    await sidecarsPromise;
-
-    resolvePrewarm();
-    await Promise.resolve();
   });
 
   it("keeps startup-gated methods unavailable while sidecars are still resuming", async () => {
