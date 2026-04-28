@@ -1,0 +1,728 @@
+---
+title: "@openclaw/call-sdk — design proposal"
+---
+
+Author(s): [visionik](https://github.com/visionik) (OpenClaw)
+
+<Note>
+  **Companion design doc** to [`call-sdk-rfd.mdx`](./call-sdk-rfd.mdx). This document is the
+  portable, OpenClaw-agnostic API design for `@openclaw/call-sdk`. For the channel-plugin binding
+  (`ChannelPlugin.call`, `ChannelCallAdapter`, the "channels never tap" guardrail, the trust
+  boundary), see [`call-sdk-channel-binding.mdx`](./call-sdk-channel-binding.mdx).
+</Note>
+
+## TL;DR
+
+`@openclaw/call-sdk` is a provider-agnostic TypeScript SDK that gives any application a single, clean API for real-time calls — whether the call comes from WhatsApp, Google Meet, a SIP trunk, or any future transport. A `Call` exposes the call's media surface; a `CallTap` is anything attached to that surface — STT/TTS for an AI agent, a recorder, a live captioner, a translator, a DSP transform. Inference is one kind of tap; the SDK supports many kinds and many concurrent taps per call. The SDK has no OpenClaw runtime dependencies and is usable standalone.
+
+---
+
+## Problem
+
+OpenClaw handles dozens of messaging channels uniformly. Real-time calls are different today — each transport (WhatsApp calling, the in-progress Google Meet integration, Twilio voice) has its own ad-hoc wiring. There is no shared call lifecycle, no standard way to attach an STT/TTS pipeline, a recorder, or live captions. Every new transport reinvents the same patterns.
+
+Specifically:
+
+- No shared `Call` abstraction — each provider reimplements lifecycle management
+- No standard media-attachment primitive — STT/TTS is wired one-off per transport, recording and captioning are not implemented at all
+- No participant awareness — agents cannot see who joined, left, or is speaking
+- The Google Meet preflight work (`feat/googlemeet-audio-ingest`) lands OAuth and meeting resolution but deliberately stops short of audio capture — there is nowhere clean to plug that in yet
+
+---
+
+## Solution
+
+A single `Call` interface that every transport implements. A single `CallTap` primitive — anything that consumes or produces media on that call. The transport is a plugin; everything above it is shared.
+
+```
+CallTransport (WhatsApp / Google Meet / SIP / Discord / …)
+    └── Call (accept / reject / hangup / hold / mute / transfer / dtmf / …)
+            └── CallTap (zero or many: InferenceTap, RecordingTap, CaptionTap, TransformTap, MixerTap, …)
+```
+
+OpenClaw channel config exposes calls through `capabilities.call` and `ChannelPlugin.call` — covering **audio, video, screen, and data** in the telecom-heritage sense. The SDK is `call-sdk`; the OpenClaw cap and field are also `call`-named after the rename. Any real-time media flowing over a call is in scope.
+
+A `CallTap` is the meeting point of transport (the `Call`'s media tracks) and whatever wants to do something with that media. Inference (STT/TTS or a realtime model) is the most common kind, but recording, captioning, translation, DSP, and multi-call mixing all sit on the same primitive. Multiple taps can run on a single call simultaneously, none knowing about the others.
+
+---
+
+## How It Fits Into OpenClaw
+
+OpenClaw already has:
+
+- `voice-call` extension — Twilio/Telnyx/Plivo PSTN calls, webhook-driven
+- `realtime-voice` — STT/TTS AI speech provider registry
+- `talk-voice` extension — TTS voice selection for the Talk feature
+
+None of these share an abstraction. `@openclaw/call-sdk` is the missing shared layer:
+
+```
+OpenClaw plugin-sdk
+    ↓ (CallTransport bound to ChannelPlugin.call)
+@openclaw/call-sdk
+    ↓ (Call + CallTap)
+WhatsApp extension     Google Meet plugin     voice-call extension
+```
+
+The `realtime-voice` registry maps directly: `STTProvider` and `TTSProvider` in the SDK are what an `InferenceTap` consumes — a thin adapter bridges the existing `RealtimeVoiceBridge` callbacks with no changes to either side.
+
+For the channel-binding details (where `CallTransport` lives on `ChannelPlugin.call`, who is allowed to attach taps, the trust boundary between channel plugins and tap-attaching code), see the companion doc: [`call-sdk-channel-binding.mdx`](./call-sdk-channel-binding.mdx).
+
+---
+
+## How It Works With the Google Meet Work
+
+Vincent Koc and Peter Steinberger's `feat/googlemeet-audio-ingest` branch is the **control plane** for Google Meet. The SDK is the **call abstraction layer** above it. They plug together without overlap:
+
+```
+feat/googlemeet-audio-ingest (exists today)       @openclaw/call-sdk
+───────────────────────────────────────           ────────────────────────────────────
+OAuth login + token refresh                  →    GoogleMeetConnectionManager
+Space resolution (URL → spaces/id)           →    .join(meetingUrl)
+Preflight checks (preview enrollment)        →    call.accept()
+Meet Media API audio (pending)               →    MediaStreamQueue → call.receive('audio')
+                                                  attachTap(call, inferenceTap({ ear: stt, mouth: tts }))
+```
+
+Once the Meet Media API WebRTC audio surface is accessible, each audio chunk pushes into a `MediaStreamQueue`, which satisfies `MediaSource = AsyncIterable<Buffer>`, and the full pipeline works without changes to the SDK core.
+
+---
+
+## API Reference
+
+### Core types
+
+| Type            | Values / Shape                                                                                                                                           |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MediaType`     | `'audio' \| 'video' \| 'screen' \| 'data'`                                                                                                               |
+| `CallState`     | `'initialized' \| 'ringing' \| 'connecting' \| 'connected' \| 'held' \| 'ended' \| 'failed'`                                                             |
+| `CallMode`      | `'listen-only' \| 'talkback' \| 'full-duplex'`                                                                                                           |
+| `CallDirection` | `'inbound' \| 'outbound'`                                                                                                                                |
+| `DtmfTone`      | `'0'–'9' \| '*' \| '#' \| 'A'–'D'`                                                                                                                       |
+| `MediaSource`   | `AsyncIterable<MediaFrame>` (v2) / `AsyncIterable<Buffer>` (v1 prototype) — Node-native, zero DOM dependency. See [Media unit](#media-unit-v1--v2) below |
+| `Endpoint`      | `{ type: EndpointType; id: string; metadata? }`                                                                                                          |
+| `Participant`   | `{ id: string; name?; endpoint: Endpoint; muted: boolean; hasVideo: boolean }`                                                                           |
+
+### Media unit (v1 → v2)
+
+**v1 ships `MediaSource = AsyncIterable<Buffer>`** — the simplest thing that works, suitable for prototyping. **v2 moves to `MediaSource = AsyncIterable<MediaFrame>`** as part of the codec / encoder-decoder pipeline. Bare `Buffer` carries nothing about the bytes inside it; real transports (RTP/Opus/PCMU/H264, Meet Media API, WebRTC) require codec, sample rate, channels, presentation timestamp, sequence number, track and participant identity, direction, and stream-end / error markers to flow alongside the payload. v1 does not pretend to solve this; v2 is the right place to do it once the codec pipeline is real.
+
+Target `MediaFrame` shape (illustrative, not final):
+
+| Field           | Type                                                                       | Notes                                               |
+| --------------- | -------------------------------------------------------------------------- | --------------------------------------------------- |
+| `payload`       | `Buffer`                                                                   | Raw bytes (for `kind: 'data'`)                      |
+| `codec`         | `'opus' \| 'pcmu' \| 'pcma' \| 'pcm16' \| 'h264' \| 'vp8' \| 'raw' \| ...` | Identifies how to decode `payload`                  |
+| `sampleRate`    | `number`                                                                   | Audio only; e.g., `48000`, `8000`                   |
+| `channels`      | `number`                                                                   | Audio only; mono = 1, stereo = 2                    |
+| `timestampMs`   | `number`                                                                   | Presentation timestamp, monotonic per-call          |
+| `sequence`      | `number`                                                                   | RTP-style sequence number; gap detection            |
+| `trackId`       | `string`                                                                   | Stable id for the track within the call             |
+| `participantId` | `string?`                                                                  | Source participant for inbound; absent for outbound |
+| `direction`     | `'inbound' \| 'outbound'`                                                  | Which leg the frame belongs to                      |
+| `kind`          | `'data' \| 'eos' \| 'error'`                                               | Sentinel kinds for stream-end and error propagation |
+| `error`         | `Error?`                                                                   | Populated when `kind === 'error'`                   |
+
+Migration plan: v1 callers receive `Buffer`s and treat the call media as opaque audio bytes (single transport agreed upfront). v2 introduces `MediaFrame`, the codec/encoder/decoder layer, and the `MediaFrame`-typed `MediaSource` everywhere streams flow. `MediaSource` keeps the same name; the element type changes. Provider implementations migrate alongside the codec pipeline.
+
+### CallTransport
+
+The factory. One implementation per transport (WhatsApp, Google Meet, Twilio, …). Renamed from `VoiceProvider` to remove the "voice provider" vs "realtime voice provider (inference)" ambiguity.
+
+| Method                  | Description                                               |
+| ----------------------- | --------------------------------------------------------- |
+| `dial(endpoint, opts?)` | Initiate an outbound call → `Call`                        |
+| `join(groupId, opts?)`  | Join an existing meeting or group call → `Call`           |
+| `onCall(call => { })`   | Register a handler for inbound calls                      |
+| `connect?(manager)`     | Inject a shared connection (e.g. WASocket, OAuth manager) |
+
+### Call
+
+The session. Every transport implements this same interface.
+
+**Identity**
+
+| Property / Method | Description                                                                                                                                                                                                                                                                                                                          |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `id`              | Unique call identifier                                                                                                                                                                                                                                                                                                               |
+| `transport`       | Transport name (`'whatsapp'`, `'google-meet'`, …)                                                                                                                                                                                                                                                                                    |
+| `endpoint`        | Remote party                                                                                                                                                                                                                                                                                                                         |
+| `direction`       | `'inbound'` or `'outbound'`                                                                                                                                                                                                                                                                                                          |
+| `duration`        | Milliseconds since connected (0 if not yet connected)                                                                                                                                                                                                                                                                                |
+| `state`           | Current `CallState`                                                                                                                                                                                                                                                                                                                  |
+| `capabilities`    | Per-call mirror of the channel's `capabilities.call` block. Use this for **runtime feature-detection** — some transports vary capabilities per call (group vs. 1:1, paid tier, account-level features). Don't catch "not implemented" at runtime; check `call.capabilities.transfer === true` before calling `call.transfer?.(...)`. |
+
+**Lifecycle**
+
+Methods marked `?` are optional — not all transports support them. Probe with `call.capabilities.*` before calling.
+
+| Method            | Required? | Description                                                      |
+| ----------------- | --------- | ---------------------------------------------------------------- |
+| `accept(opts?)`   | required  | Answer an inbound call                                           |
+| `reject(reason?)` | required  | Decline before answering                                         |
+| `hangup(reason?)` | required  | End an active call                                               |
+| `hold?()`         | optional  | Pause — transitions to `held`. Probe `call.capabilities.hold`    |
+| `resume?()`       | optional  | Unpause — returns to `connected`. Probe `call.capabilities.hold` |
+
+**Participation**
+
+`mode` is a property; `setMode()` mutates. Same shape for `channels`.
+
+`mode` controls **how you transmit** on an active call:
+
+| Property / Method        | Description                                                                                           |
+| ------------------------ | ----------------------------------------------------------------------------------------------------- |
+| `mode`                   | Current `CallMode` — one of `'listen-only'`, `'talkback'`, or `'full-duplex'`                         |
+| `setMode('listen-only')` | Receive audio/video but send nothing (observer / lurker)                                              |
+| `setMode('talkback')`    | Receive, and transmit only when explicitly invited — push-to-talk style, useful for large group calls |
+| `setMode('full-duplex')` | Normal two-way — always transmitting and receiving                                                    |
+
+Note: `mode` is about transmit _permission/behaviour_, not muting. `mute('audio')` silences your mic on an already full-duplex call without changing the mode.
+
+`channels` controls **which media types are active** on the call:
+
+| Property / Method                 | Description                                                                                         |
+| --------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `channels`                        | `ReadonlySet<MediaType>` of currently active channels, e.g. `Set { 'audio' }`                       |
+| `setChannels(['audio', 'video'])` | Opens or negotiates the listed channels — e.g. upgrade an audio-only call to include video mid-call |
+
+**Media**
+
+Long-running stream calls accept an `AbortSignal` so taps can detach cleanly without leaking pipelines. Multiple taps reading inbound media each get an independent stream (fan-out is v1 — see [Fan-out and cancellation](#fan-out-and-cancellation-v1-core)).
+
+| Method                                                | Description                                                                                                                                        |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `receive(type, opts?: { signal?: AbortSignal })`      | Get a fresh inbound stream → `MediaSource \| null`. Aborting the signal closes this caller's stream; other callers' streams continue independently |
+| `send(stream, type, opts?: { signal?: AbortSignal })` | Send outbound media. Abort to stop sending early                                                                                                   |
+| `mute(type)`                                          | Silence a channel (channel stays active)                                                                                                           |
+| `unmute(type)`                                        | Un-silence                                                                                                                                         |
+| `muted`                                               | `ReadonlySet<MediaType>` of currently muted channels                                                                                               |
+| `onAudio((stream, ctx) => { })`                       | Fires when audio channel activates; delivers a fresh stream + ctx with `AbortSignal` tied to channel close                                         |
+| `onVideo((stream, ctx) => { })`                       | Fires when video channel activates; delivers a fresh stream + ctx with `AbortSignal`                                                               |
+
+**Text** (optional, gated by `capabilities.textChannel`)
+
+| Method                | Description                                    |
+| --------------------- | ---------------------------------------------- |
+| `text?(msg, opts?)`   | Send a text message in the call's text channel |
+| `onText?(msg => { })` | Receive text messages                          |
+
+**Telephony** (each method gated by its respective `capabilities.*` flag)
+
+| Method                 | Cap probe               | Description                                            |
+| ---------------------- | ----------------------- | ------------------------------------------------------ |
+| `transfer?(endpoint)`  | `capabilities.transfer` | Blind transfer — route remote party to new destination |
+| `dtmf?(tone)`          | `capabilities.dtmf`     | Send a DTMF tone (IVR navigation)                      |
+| `onDTMF?(tone => { })` | `capabilities.dtmf`     | Receive DTMF tones from remote party                   |
+
+**Meeting signals** (optional, gated by `capabilities.participants`)
+
+| Property / Method                     | Description                                                |
+| ------------------------------------- | ---------------------------------------------------------- |
+| `participants?`                       | `ReadonlyArray<Participant>` — current remote participants |
+| `onJoin?(p => { })`                   | Fires when someone joins                                   |
+| `onLeave?((p, reason?) => { })`       | Fires when someone leaves                                  |
+| `onSpeaking?((p, isSpeaking) => { })` | Active speaker changes                                     |
+| `raise?()`                            | Raise hand                                                 |
+| `lower?()`                            | Lower hand                                                 |
+
+`Call` is deliberately dumb about what's attached to it — no `call.transcript`, no `call.taps` accessor, no `call.say()`. Speaking is `call.send(audio, 'audio')`; the audio happens to come from a tap. Tap attachment lives on a separate API (below).
+
+### CallTap (the primitive)
+
+A `CallTap` is _anything attached to a call's media surface_. Renamed from `AgentBridge`: "agent" was OpenClaw-specific framing, and the underlying object is structurally generic — a media attachment that may consume, produce, or both. "Bridge" was rejected because it's loaded in telephony (B2BUA / conference bridging); "control" was rejected because "call control" is the established term for signaling APIs.
+
+A `Call` may have zero or many taps active at once. Composition is independent: each tap doesn't know the others are attached. Each tap's lifecycle is bounded by (or shorter than) the call's.
+
+Attachment API:
+
+| Function / Method             | Description                                                                         |
+| ----------------------------- | ----------------------------------------------------------------------------------- |
+| `attachTap(call, tap, opts?)` | Attaches `tap` to `call`. Returns a handle (the `CallTap`) with a `detach()` method |
+| `tap.detach()`                | Removes the tap; the call continues unaffected. Idempotent                          |
+| `tap.state`                   | `'attaching' \| 'active' \| 'detached' \| 'failed'`                                 |
+| `tap.onError(cb)`             | Tap-level error handling — does not tear down the call                              |
+
+Tap implementations supply the consume/produce side. The SDK ships several built-in kinds (below) and accepts user-defined ones — anything that can consume `MediaSource` and/or produce media into the call qualifies.
+
+**Policy / RBAC is not in the portable SDK.** `attachTap(call, tap, opts?)` is a plain function — anyone with a `Call` and a tap implementation can call it; no caller-identity context, no permission check. That's deliberate: the SDK is portable, and policy is host-specific. OpenClaw wraps this primitive with `core.attachTap(call, tap, opts, callerIdentity)` that adds RBAC (channel plugins refused, skills/jobs/workflow nodes admitted under policy — see the channel-plugin design gist for the trust boundary). Other hosts wrap it differently, or not at all. The SDK ships the primitive; integrators ship the policy.
+
+### Lifecycle observability
+
+The SDK stays policy-free, but exposes attach/detach events on `Call` so hosts can wire consent UX, audit logs, metrics, and recording-disclosure announcements without monkey-patching.
+
+| Method                        | Description                                                                                                            |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `call.onTapAttached(handler)` | Fires after `attachTap` succeeds. Payload: `{ tapKind, mediaDirection, sinkIdentity?, timestamp, callId, opts }`       |
+| `call.onTapDetached(handler)` | Fires after `tap.detach()` (intentional or call-end). Payload: `{ tapKind, sinkIdentity?, timestamp, callId, reason }` |
+
+Fields:
+
+| Field            | Type                                                                                             | Notes                                                                           |
+| ---------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------- |
+| `tapKind`        | `'inference' \| 'recording' \| 'caption' \| 'transform' \| 'mixer' \| 'ivr' \| 'test' \| string` | Tap implementations declare their kind                                          |
+| `mediaDirection` | `'inbound' \| 'outbound' \| 'both'`                                                              | What the tap touches                                                            |
+| `sinkIdentity`   | `string?`                                                                                        | Tap-supplied identifier (storage URL, vendor name, account id) for audit trails |
+| `timestamp`      | `number`                                                                                         | Wall-clock ms                                                                   |
+| `callId`         | `string`                                                                                         | The `Call.id`                                                                   |
+| `opts`           | `unknown`                                                                                        | The opts passed to `attachTap`, redacted of secrets by the tap impl             |
+| `reason`         | `'detached' \| 'call-ended' \| 'error'`                                                          | (detach event only)                                                             |
+
+This is observability, not enforcement: hosts that need policy gates wrap `attachTap` upstream (see RBAC note above). The events fire after the fact; they're for audit and side-effect coordination.
+
+### Tap kinds (built-in)
+
+| Kind           | Consumes                       | Produces                                                   | Status                                                                                                                                                                                                                        |
+| -------------- | ------------------------------ | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `InferenceTap` | inbound audio                  | outbound audio (TTS or realtime model) + transcript events | Designed; the original AgentBridge use case                                                                                                                                                                                   |
+| `IVRTap`       | inbound audio + DTMF           | outbound audio (file playback / TTS / beep / DTMF)         | **Later scope** — not v1. CallXML 3.0-shaped API for scripted prompt-driven flows. Documented now to validate the multi-tap design; implementation deferred so the first PR doesn't balloon into rebuilding Twilio + VoiceXML |
+| `RecordingTap` | inbound + outbound audio/video | nothing on the call; writes to storage                     | Future                                                                                                                                                                                                                        |
+| `CaptionTap`   | inbound audio                  | text events (could land in the in-call text channel)       | Future                                                                                                                                                                                                                        |
+| `TransformTap` | inbound or outbound audio      | replaces the same                                          | Future                                                                                                                                                                                                                        |
+| `MixerTap`     | inbound audio from many calls  | outbound audio to many calls                               | Future                                                                                                                                                                                                                        |
+| `TestTap`      | whichever                      | whichever                                                  | For SDK tests                                                                                                                                                                                                                 |
+
+### InferenceTap
+
+The "AI in the call" tap. Wraps an STT provider (ear), a TTS provider (mouth), and optionally a vision provider (eyes) into a coordinated turn-taking loop. Or, with a `RealtimeVoiceProvider`, runs a single bidirectional audio stream.
+
+```ts path=null start=null
+const infer = inferenceTap({
+  ear: deepgram, // STTProvider
+  mouth: elevenlabs, // TTSProvider
+  // OR:
+  // realtime: openaiRealtime,  // RealtimeVoiceProvider (bidi)
+});
+
+const tap = attachTap(call, infer);
+infer.onHeard((text, confidence) => {
+  /* ... */
+});
+await infer.say("hello");
+```
+
+Senses are properties; `set*` methods mutate:
+
+| Property / Method              | Description                                 |
+| ------------------------------ | ------------------------------------------- |
+| `ear` / `setEar(provider)`     | Current STT provider / set it               |
+| `mouth` / `setMouth(provider)` | Current TTS provider / set it               |
+| `eyes` / `setEyes(provider)`   | Current vision provider / set it _(future)_ |
+
+Perception callbacks:
+
+| Method               | Description                                                        |
+| -------------------- | ------------------------------------------------------------------ |
+| `onHeard(cb)`        | Fires when STT produces a transcript: `(text, confidence) => void` |
+| `onSeen(cb)`         | Fires when vision model produces a description _(future)_          |
+| `onRead(msg => { })` | Inbound text messages — auto-wired from `call.onText`              |
+
+Output:
+
+| Method             | Description                                       |
+| ------------------ | ------------------------------------------------- |
+| `say(text, opts?)` | Synthesise via `mouth` and inject into call audio |
+
+The sensory-organ vocabulary (`ear`/`mouth`/`eyes`) lives on `InferenceTap` specifically, not on the base `CallTap`. It's evocative for the agent use case but not universal — a `RecordingTap` doesn't "ear" anything, it just records.
+
+### IVRTap (later scope — explicitly not v1)
+
+> ⚠️ **Scope fence:** `IVRTap` is documented here to validate that the `CallTap` primitive composes correctly across very different use cases (free-form AI vs. scripted IVR vs. recording, all on the same `Call`). It is **not part of v1, and not v1.1**. Building it alongside the first PR is the classic trap of "rebuild Twilio + VoiceXML in week one" — don't. See the [v1 / v1.1 / later split](#v1-scope) below: v1 ships `InferenceTap` + fan-out + cancellation; v1.1 adds `RecordingTap` and `CaptionTap` as multi-tap validation; `IVRTap` lands later, once those primitives are battle-tested.
+
+The "scripted, prompt-driven" tap. Where `InferenceTap` is for free-form agentic conversation, `IVRTap` is for `play → collect → branch` flows: "press 1 for sales, 2 for support," "please leave a message after the beep," navigating a remote phone tree by sending DTMF, etc. API shape is inspired by CallXML 3.0 (Voxeo) with TwiML/VoiceXML cross-checks; what isn't covered comes from the host language (TS handles flow control, conditionals, variables natively, so we don't reinvent `<goto>`/`<if>`/`<assign>`).
+
+```ts path=null start=null
+const ivr = ivrTap({
+  promptDir: "/var/prompts",
+  tts: elevenlabs, // optional, for `say()`
+  stt: deepgram, // optional, enables speech menus
+  bargeIn: true, // default: input interrupts playback
+});
+attachTap(call, ivr);
+
+// Output
+await ivr.play("welcome.wav", { loop: 1, bargeIn: true });
+await ivr.say("Press 1 for sales", { voice: "WOMAN", lang: "en-US" });
+await ivr.beep({ duration: 250 });
+await ivr.pause(500);
+
+// Input
+const digits = await ivr.gather({
+  numDigits: 4,
+  termDigits: ["#"],
+  timeout: 5000,
+  interDigitTimeout: 1500,
+});
+const utterance = await ivr.listen({
+  grammar: ["sales", "support", "billing"],
+  lang: "en-US",
+  timeout: 5000,
+});
+const choice = await ivr.menu({
+  prompt: "main-menu.wav",
+  choices: { 1: "sales", 2: "support", 3: "billing" },
+  mode: "both", // 'dtmf' | 'speech' | 'both'
+  timeout: 5000,
+  termDigits: ["#"],
+  retries: 3,
+  invalidPrompt: (attempt) => (attempt < 2 ? "invalid.wav" : "last-try.wav"),
+});
+
+// Recording (single-utterance; open-ended recording is RecordingTap's job)
+const rec = await ivr.record("voicemail.opus", {
+  maxDuration: 60_000,
+  endOnSilence: 2_000,
+  endOnDTMF: ["#", "*"],
+  beep: true,
+  format: "opus",
+});
+
+// Outbound DTMF (e.g., navigating a remote phone tree)
+await ivr.dtmf("1234#", { toneDuration: 100, gap: 100 });
+
+// Listening control
+ivr.bargeIn(false);
+ivr.mute();
+ivr.unmute();
+
+// Event hooks
+ivr.onTermDigit((digit, ctx) => {
+  /* ... */
+});
+ivr.onMaxAttempts((ctx) => {
+  /* fall through to operator */
+});
+ivr.onTimeout((ctx) => {
+  /* re-prompt or escalate */
+});
+ivr.onSilenceTimeout((ctx) => {
+  /* user dropped */
+});
+```
+
+Method summary, cross-referenced to the CallXML 3.0 elements they were inspired by:
+
+| Method                                                             | CallXML element                                                            | Purpose                                                                          |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `play(source, opts?)`                                              | `<play>`                                                                   | Audio file/URL with `loop`, `bargeIn`                                            |
+| `say(text, opts?)`                                                 | `<text>`                                                                   | TTS with `voice`, `lang`, `bargeIn`                                              |
+| `beep(opts?)`                                                      | `<beep>`                                                                   | Generated tone                                                                   |
+| `pause(ms)`                                                        | `<wait>`                                                                   | Silent pause                                                                     |
+| `gather(opts)`                                                     | `<getDigits>`                                                              | DTMF collect; supports `termDigits`, `numDigits`, `timeout`, `interDigitTimeout` |
+| `listen(opts)`                                                     | `<speech>` (added in CallXML 3.0)                                          | ASR input with `grammar`, `lang`, `timeout`                                      |
+| `menu(opts)`                                                       | `<menu>` (added in CallXML 3.0)                                            | Composite prompt + DTMF/voice/both + retries + per-attempt prompt                |
+| `record(sink, opts)`                                               | `<record>`                                                                 | Single-utterance with `maxDuration`, `endOnSilence`, `endOnDTMF`, `beep`         |
+| `dtmf(tones, opts?)`                                               | `<sendDTMF>`                                                               | Outbound DTMF for navigating remote IVRs                                         |
+| `mute()` / `unmute()` / `setBargeIn(bool)`                         | `<setListen>`                                                              | Input-collection control                                                         |
+| `onTermDigit` / `onMaxAttempts` / `onTimeout` / `onSilenceTimeout` | `<onTermDigit>` / `<onMaxAttempts>` / `<onTimeout>` / `<onSilenceTimeout>` | Event hooks for retry / escalation flows                                         |
+
+Deliberately _not_ lifted from CallXML:
+
+| CallXML element                                     | Why omitted                                                             |
+| --------------------------------------------------- | ----------------------------------------------------------------------- |
+| `<goto>` / `<run>` / `<exec>`                       | TS async/await + function calls handle flow control natively            |
+| `<if>` / `<else>` / `<assign>` / `<var>`            | Same — host language handles it                                         |
+| `<conference>`                                      | That's `MixerTap`'s territory                                           |
+| `<startRecording>` / `<stopRecording>` (open-ended) | That's `RecordingTap`'s job; `IVRTap.record()` is single-utterance only |
+| `<setVolume>`                                       | Per-tap audio gain is `TransformTap` territory                          |
+
+Composes naturally with `InferenceTap` for hybrid flows: run `IVRTap` for the menu, then on a chosen branch detach it and attach `InferenceTap` for AI-driven conversation. Both can also coexist with `RecordingTap` for compliance recording across the entire call.
+
+### RecordingTap (future)
+
+Captures audio (and optionally video) from a call to durable storage. Does not produce anything back into the call.
+
+```ts path=null start=null
+const rec = recordingTap({ sink: s3Sink, format: "opus" });
+const tap = attachTap(call, rec);
+// later: tap.detach() — recording stops, file is finalized
+```
+
+### CaptionTap (future)
+
+Consumes inbound audio, produces text events. Can reuse an STT provider or use a dedicated caption provider. Optionally emits captions back into the call's text channel.
+
+### TransformTap (future)
+
+Consumes inbound or outbound audio and replaces it. Use cases: noise suppression, voice changing, transcoding, watermarking.
+
+### MixerTap (future)
+
+Consumes audio from many calls and produces audio into many calls — multi-call composition for conferencing scenarios.
+
+### Provider interfaces
+
+`InferenceTap` and `CaptionTap` consume these provider interfaces. They are not taps themselves — they are inference contracts that taps wrap. All long-running provider methods accept an `AbortSignal` so callers can cancel cleanly when a tap detaches.
+
+| Interface               | Key method                                                                                                                      |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `STTProvider`           | `transcribe(audio: MediaSource, opts?: { signal?: AbortSignal })` → `AsyncIterable<{ transcript, confidence, isFinal }>`        |
+| `TTSProvider`           | `synthesize(text, opts?: { signal?: AbortSignal })` → `MediaSource`                                                             |
+| `RealtimeVoiceProvider` | `connect(audioIn: MediaSource, opts?: { signal?: AbortSignal })` → `{ audioOut: MediaSource, transcripts: AsyncIterable<...> }` |
+| `VisionProvider`        | `describe(frames, opts?: { signal?: AbortSignal })` → `AsyncIterable<{ description, timestamp }>` _(future)_                    |
+
+### MockCallTransport — test helpers
+
+| Method                                    | Description                                          |
+| ----------------------------------------- | ---------------------------------------------------- |
+| `ring(endpoint)`                          | Simulate an inbound call; returns `MockCall`         |
+| `speak(callId, text, confidence?)`        | Fire `onHeard` callbacks on attached `InferenceTap`s |
+| `setState(callId, state)`                 | Force a state transition                             |
+| `triggerJoin(callId, participant)`        | Add participant; fires `onJoin`                      |
+| `triggerLeave(callId, id, reason?)`       | Remove participant; fires `onLeave`                  |
+| `triggerSpeaking(callId, id, isSpeaking)` | Fire `onSpeaking`                                    |
+| `call.sent()`                             | Recorded outbound media chunks                       |
+| `call.sentDTMF()`                         | Recorded sent DTMF tones                             |
+| `call._simulateDTMF(tone)`                | Deliver an inbound DTMF tone to `onDTMF` callbacks   |
+
+---
+
+## Key Concepts
+
+**Call is the unit of abstraction.** Not the transport, not the room, not the stream — the call. The transport is a plugin.
+
+**`CallTap` is the media-attachment primitive.** Anything that wants to consume or produce media on the call attaches as a tap. Inference is one tap kind among many.
+
+**Multi-tap composition.** A call can have an inference tap, a recording tap, and a caption tap simultaneously, none knowing about the others. Each tap's lifecycle is bounded by the call's.
+
+**Sensory organ vocabulary lives on `InferenceTap`.** `ear` (STT), `mouth` (TTS), and `eyes` (vision, future) are properties of the inference tap kind specifically — evocative for the agent use case, but not the universal abstraction.
+
+**`MediaSource = AsyncIterable<Buffer>`.** Audio and video are Node-native async iterables. No DOM, no WebRTC browser dependencies in core. Composable with standard async generators.
+
+**`MediaStreamQueue`.** A push-based `AsyncIterable<Buffer>` that bridges callback-style transport events (WASocket audio chunks, Meet Media API frames) into the SDK's pull-based stream model.
+
+### Fan-out and cancellation (v1 core)
+
+**Tee / fan-out is v1, not polish.** `call.receive('audio')` returns a fresh independent stream per caller; multiple taps reading inbound audio simultaneously without competing is the entire point of multi-tap composition. Without correct fan-out, the design's claim that inference + recording + captioning can run side-by-side is a lie. v1 ships fan-out as part of the core, alongside `InferenceTap` and the first real transport.
+
+**`AbortSignal` everywhere long-running.** Every stream/provider call (`receive`, `send`, `onAudio`/`onVideo` ctx, `transcribe`, `synthesize`, `connect`) accepts an `AbortSignal`. When `tap.detach()` runs, core aborts the signal threaded through that tap's pipelines, and all downstream iterators terminate cleanly without leaking. v1 must do this or detach leaks are inevitable.
+
+**`onAudio` / `onVideo` are reactive stream subscriptions.** They fire when a channel activates, delivering a `MediaSource` plus a context object exposing the channel-tied `AbortSignal` — equivalent to WebRTC's `ontrack`. Multiple subscribers each get an independent stream.
+
+**Direction + participants.** Every call knows if it was inbound or outbound, and group calls expose a live participant list with join/leave/speaking events.
+
+---
+
+## Examples
+
+### Inbound WhatsApp call with an AI agent
+
+```ts path=null start=null
+const transport = new WhatsAppCallTransport(connectionManager);
+
+transport.onCall(async (call) => {
+  await call.accept({ mediaTypes: ["audio"] });
+
+  const infer = inferenceTap({ ear: deepgram, mouth: elevenlabs });
+  attachTap(call, infer);
+
+  infer.onHeard(async (text) => {
+    const reply = await llm.complete(text);
+    await infer.say(reply);
+  });
+});
+```
+
+### Join a Google Meet (agent listens, then speaks when summoned)
+
+```ts path=null start=null
+const call = await transport.join("meet.google.com/abc-defg-hij", {
+  mediaTypes: ["audio"],
+  mode: "listen-only",
+});
+
+const transcript: string[] = [];
+const infer = inferenceTap({ ear: mySTT, mouth: myTTS });
+attachTap(call, infer);
+infer.onHeard((text) => transcript.push(text));
+
+call.onText(async (msg) => {
+  if (msg.text.includes("@agent")) {
+    await call.setMode("talkback");
+    const summary = await llm.summarize(transcript.join(" "));
+    await infer.say(summary);
+    await call.setMode("listen-only");
+  }
+});
+```
+
+### Multi-tap: AI agent + recording + live captions
+
+```ts path=null start=null
+const call = await transport.join("meet.google.com/abc-defg-hij");
+
+// AI agent
+const infer = inferenceTap({ ear: deepgram, mouth: elevenlabs });
+attachTap(call, infer);
+
+// Independent recording — does not interfere with the agent
+const rec = recordingTap({ sink: s3Sink, format: "opus" });
+attachTap(call, rec);
+
+// Independent live captions — emits into the call's text channel
+const cap = captionTap({ provider: deepgram, emitToTextChannel: true });
+attachTap(call, cap);
+```
+
+Each tap is independent. None know the others exist. Detaching one doesn't affect the others.
+
+### IVR menu, then hand off to AI
+
+```ts path=null start=null
+transport.onCall(async (call) => {
+  await call.accept({ mediaTypes: ["audio"] });
+
+  const ivr = ivrTap({ tts: elevenlabs, stt: deepgram });
+  const ivrHandle = attachTap(call, ivr);
+
+  await ivr.say("Welcome to Acme Support.");
+  const choice = await ivr.menu({
+    prompt: "main-menu.wav",
+    choices: { 1: "sales", 2: "support" },
+    mode: "both",
+    retries: 3,
+  });
+
+  ivrHandle.detach(); // done with the menu
+
+  if (choice === "sales") {
+    await call.transfer({ type: "sip", id: "sales@example.com" });
+  } else {
+    // hand off to AI agent for free-form support conversation
+    const infer = inferenceTap({ ear: deepgram, mouth: elevenlabs });
+    attachTap(call, infer);
+    infer.onHeard(async (text) => {
+      const reply = await llm.complete(text);
+      await infer.say(reply);
+    });
+  }
+});
+```
+
+### Recording-only host (no inference, no agent)
+
+```ts path=null start=null
+const transport = new WhatsAppCallTransport(connectionManager);
+
+transport.onCall(async (call) => {
+  await call.accept({ mediaTypes: ["audio"] });
+  attachTap(call, recordingTap({ sink: s3Sink }));
+});
+```
+
+This exercises the SDK without any inference at all — proves taps are a generic media-attachment primitive, not just an inference glue.
+
+### Escalate to a human agent
+
+```ts path=null start=null
+infer.onHeard(async (text) => {
+  if (sentiment.isAngry(text)) {
+    await infer.say("Let me transfer you to a specialist.");
+    await call.transfer({ type: "sip", id: "support@example.com" });
+  }
+});
+```
+
+### IVR navigation
+
+```ts path=null start=null
+await call.dtmf("1"); // press 1 for sales
+call.onDTMF((tone) => {
+  console.log("remote pressed:", tone);
+});
+```
+
+### Testing without a real network
+
+```ts path=null start=null
+const transport = new MockCallTransport();
+const call = transport.ring({ type: "whatsapp", id: "+1234" });
+await call.accept();
+
+const infer = inferenceTap({ mouth: { synthesize: vi.fn(() => audioStream) } });
+attachTap(call, infer);
+infer.onHeard(async (t) => infer.say(`You said: ${t}`));
+
+transport.speak(call.id, "book me a flight");
+await new Promise((r) => setImmediate(r));
+
+expect(call.sent()).toHaveLength(1);
+```
+
+---
+
+## Summary
+
+`@openclaw/call-sdk` gives any caller — OpenClaw agents, jobs, skills, or external standalone applications — a single, clean, testable API for real-time calls across any transport. The transport is a plugin. Anything that wants to do something with a call's media attaches as a `CallTap`: inference (STT/TTS or realtime model), recording, captioning, transformation, mixing. Many taps per call, independent composition.
+
+The SDK has zero `@openclaw/core` or `@openclaw/plugin-sdk` imports today — it is structurally portable. OpenClaw is one integrator; nothing in the SDK precludes others.
+
+What we have today: WhatsApp transport, mock transport, the original sensory-organ inference layer (now `InferenceTap`), CLI harness, 161 tests, 95%+ coverage. What's missing before production: fan-out tee, tap auto-attachment helpers, VAD/turn detection, chat context, interruption handling, the non-inference tap kinds (`RecordingTap`, `CaptionTap`, `TransformTap`, `MixerTap`).
+
+---
+
+## Naming changes from earlier drafts
+
+| Old                                                       | New                                                                 | Why                                                                                                                                                                                                                                                                                                                                                      |
+| --------------------------------------------------------- | ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `VoiceProvider`                                           | `CallTransport` (SDK) / `ChannelCallAdapter` (plugin-sdk extension) | Removes "voice provider" vs "realtime voice provider" (inference) ambiguity; pairs with `Call`. The SDK exports the portable `CallTransport`; the OpenClaw plugin-sdk re-exports it as `ChannelCallAdapter` (alias or thin extension adding channel-binding hooks). Standalone SDK gets the generic name; OpenClaw keeps the explicit channel-layer name |
+| `AgentBridge`                                             | `CallTap`                                                           | "Agent" was OpenClaw-specific; "bridge" is loaded in telephony (B2BUA / conference bridging); "control" is loaded for call-control signaling APIs. A `Tap` is structurally generic — a media attachment to a `Call` — and admits multiplicity (many per call, independent)                                                                               |
+| `bridge.ear`/`bridge.mouth`/`bridge.eyes`                 | `inferenceTap.ear` etc.                                             | The sensory-organ vocabulary lives on the `InferenceTap` kind specifically, not the base `CallTap`                                                                                                                                                                                                                                                       |
+| `mode()` / `channels()` / `ear()` getter-setter overloads | `mode` property + `setMode()`, etc.                                 | Overloads were too clever for TS SDK ergonomics. Property + setter is more readable and aligns with `AbortController.signal` / `URL.searchParams` style                                                                                                                                                                                                  |
+| One bridge per call                                       | Many taps per call                                                  | Original "one bridge" was a TTS-loop convenience; multi-tap is more accurate to how call media is actually used (record AND transcribe AND let AI talk)                                                                                                                                                                                                  |
+
+No deprecated aliases — there are no external consumers yet, so renames are clean.
+
+---
+
+## Next Steps — Phased Implementation
+
+### v1 scope
+
+Single source of truth for what ships when:
+
+| Scope     | Contents                                                                                                                                                                                              | Why this line                                                                                                                                                                                                                                        |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **v1**    | Core SDK (`Call`, `CallTap`, `CallTransport`, `attachTap`, lifecycle observability events) + `MockCallTransport` + **one real transport** + `InferenceTap` + **fan-out / `AbortSignal` cancellation** | Smallest shippable surface that validates the core abstractions: a real call lifecycle, one inference tap that talks, multi-stream fan-out so detach works cleanly. Without fan-out and cancellation, the multi-tap design is unproven.              |
+| **v1.1**  | `RecordingTap` + `CaptionTap`                                                                                                                                                                         | Validation taps. They're the first thing that proves the multi-tap claim end-to-end (inference + recording + captions on one call, independent). Implementing them on top of stable v1 fan-out is straightforward.                                   |
+| **v2**    | `MediaFrame` migration + codec / encoder / decoder pipeline; `TransformTap` and `MixerTap` become viable                                                                                              | The bare-`Buffer` `MediaSource` is a v1 prototype shortcut. v2 is where real-codec transports (RTP/Opus, Meet Media API, WebRTC interop) start to actually work, and where DSP transforms and multi-call mixing have something coherent to build on. |
+| **Later** | `IVRTap` (CallXML 3.0-shaped); `VisionProvider`                                                                                                                                                       | After the lower layers are stable.                                                                                                                                                                                                                   |
+
+### Google Meet
+
+| Phase             | What                                                                       | Prerequisite                   |
+| ----------------- | -------------------------------------------------------------------------- | ------------------------------ |
+| **GM-1** (exists) | OAuth, token refresh, space resolution, preflight                          | `feat/googlemeet-audio-ingest` |
+| **GM-2**          | `GoogleMeetConnectionManager` wraps GM-1 utilities                         | GM-1 merged                    |
+| **GM-3**          | `GoogleMeetCall` + `MediaStreamQueue` wired to Meet Media API WebRTC       | GM-2 + Meet Media API access   |
+| **GM-4**          | `GoogleMeetCallTransport.join(meetUrl)` → `GoogleMeetCall` in `connecting` | GM-3                           |
+| **GM-5**          | Fan-out tee (`media-pipeline` scope) so multi-tap composition works        | GM-4                           |
+| **GM-6**          | Participant list from Meet roster API                                      | GM-4                           |
+
+GM-1 is the only prerequisite outside this SDK. GM-2 through GM-4 can be a single `@openclaw/google-meet-transport` package with no changes to SDK core.
+
+### WhatsApp
+
+| Phase    | What                                                          | Status                                                                         |
+| -------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| **WA-1** | `WhatsAppConnectionManager` interface                         | ✅ done                                                                        |
+| **WA-2** | `WhatsAppCall` + `MediaStreamQueue` + `WhatsAppCallTransport` | ✅ done (renamed from `WhatsAppVoiceProvider`)                                 |
+| **WA-3** | Fan-out tee so taps share audio                               | Pending `media-pipeline` scope                                                 |
+| **WA-4** | Auto-start `InferenceTap` STT pipeline when call connects     | Pending `media-pipeline` scope                                                 |
+| **WA-5** | `hold`/`transfer`/`dtmf` wired to actual manager methods      | Needs `holdCall?`, `transferCall?`, `sendDTMF?` on `WhatsAppConnectionManager` |
+| **WA-6** | Participant list for WhatsApp group calls                     | Transport-specific, low priority                                               |
+
+### Cross-cutting (both transports)
+
+| Scope                   | Phase     | What                                                                                                                                                                                                  |
+| ----------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `media-pipeline`        | **v1**    | `MulticastMediaQueue` fan-out; `AbortSignal` plumbed through `receive`/`send`/`onAudio`/`onVideo` and every provider interface; `attachTap` auto-wiring on connect; channel-close → abort propagation |
+| `tap-kinds`             | **v1.1**  | Implement `RecordingTap` and `CaptionTap` as multi-tap validation taps. `IVRTap` is later (see [v1 scope](#v1-scope))                                                                                 |
+| `media-frame`           | **v2**    | Migrate `MediaSource` element type from `Buffer` to `MediaFrame`; codec/encoder/decoder pipeline; provider impls updated alongside                                                                    |
+| `vad-integration`       | v1 / v1.1 | Voice Activity Detection gate before STT (stops transcribing silence)                                                                                                                                 |
+| `chat-context`          | v1        | `InferenceTap` carries conversation history per session                                                                                                                                               |
+| `interruption-handling` | v1        | Cancels active `say()` when new `onHeard` fires (uses `AbortSignal`)                                                                                                                                  |
+
+---
+
+_Questions, naming suggestions, and scope feedback welcome — ping **@visionik** or **@guti** on Discord, or open a discussion on the call-sdk repo._
