@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Hooks/session-memory: add opt-in LLM synthesis and append saved sessions to the canonical daily memory file while keeping raw-message fallback behavior. Carries forward #50584. Thanks @amart19D.
 - iOS/Gateway: add an authenticated `node.presence.alive` protocol event and `node.list` last-seen fields so background iOS wakes can mark paired nodes recently alive without treating them as connected. Carries forward #63123. Thanks @ngutman.
 - Android: publish authenticated `node.presence.alive` events after node connect and background transitions so paired Android nodes retain durable last-seen metadata after disconnects. Carries forward #63123. Thanks @ngutman.
 - Gateway/chat: accept non-image attachments through `chat.send` by staging them as agent-readable media paths, while keeping unsupported RPC attachment paths explicit instead of silently dropping files. Fixes #48123. (#67572) Thanks @samzong.
