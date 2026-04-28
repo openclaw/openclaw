@@ -205,6 +205,34 @@ describe("createSubsystemLogger().isEnabled", () => {
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
+  it("redacts sensitive tokens at the console sink so subsystem writes do not leak secrets (#73284)", () => {
+    setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+    const warn = installConsoleMethodSpy("warn");
+    const log = createSubsystemLogger("gateway");
+    const secret = "sk-supersecretvaluefortest12345";
+
+    log.warn(`token=${secret}`);
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    const written = String(warn.mock.calls[0]?.[0] ?? "");
+    expect(written).not.toContain(secret);
+    expect(written).toMatch(/sk-sup…2345|\*\*\*/);
+  });
+
+  it("redacts Bearer tokens on subsystem error console writes", () => {
+    setLoggerOverride({ level: "silent", consoleLevel: "error" });
+    const error = installConsoleMethodSpy("error");
+    const log = createSubsystemLogger("gateway").child("auth");
+    const bearer = "Bearer abcdefghijklmnopqrstuvwxyz";
+
+    log.error(`Authorization failed: ${bearer}`);
+
+    expect(error).toHaveBeenCalledTimes(1);
+    const written = String(error.mock.calls[0]?.[0] ?? "");
+    expect(written).not.toContain("abcdefghijklmnopqrstuvwxyz");
+    expect(written).toContain("Bearer ");
+  });
+
   it("keeps long-lived subsystem loggers on the current-day rolling file", () => {
     const logDir = path.dirname(logPathTracker.nextPath());
     const firstDay = path.join(logDir, "openclaw-2026-01-01.log");

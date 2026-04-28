@@ -12,6 +12,7 @@ import {
 } from "./console.js";
 import { type LogLevel, levelToMinLevel } from "./levels.js";
 import { getChildLogger, isFileLogLevelEnabled } from "./logger.js";
+import { redactSensitiveText } from "./redact.js";
 import { loggingState } from "./state.js";
 
 type LogObj = { date?: Date } & Record<string, unknown>;
@@ -255,13 +256,19 @@ function writeConsoleLine(level: LogLevel, line: string) {
     process.platform === "win32" && process.env.GITHUB_ACTIONS === "true"
       ? line.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, "?").replace(/[\uD800-\uDFFF]/g, "?")
       : line;
+  // Subsystem console output bypasses the patched console.* capture handler in
+  // ./console.ts to avoid recursion, so the sink-boundary redaction applied
+  // there does not run for these writes (#73284). Redact at this exit instead
+  // so secrets reaching subsystem loggers as message strings or formatted meta
+  // do not appear verbatim on the terminal.
+  const redacted = redactSensitiveText(sanitized);
   const sink = loggingState.rawConsole ?? console;
   if (loggingState.forceConsoleToStderr || level === "error" || level === "fatal") {
-    (sink.error ?? console.error)(sanitized);
+    (sink.error ?? console.error)(redacted);
   } else if (level === "warn") {
-    (sink.warn ?? console.warn)(sanitized);
+    (sink.warn ?? console.warn)(redacted);
   } else {
-    (sink.log ?? console.log)(sanitized);
+    (sink.log ?? console.log)(redacted);
   }
 }
 

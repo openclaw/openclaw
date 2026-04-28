@@ -24,6 +24,7 @@ Docs: https://docs.openclaw.ai
 - Feishu/inbound files: recover CJK filenames from plain `Content-Disposition: filename=` download headers when Feishu exposes UTF-8 bytes through Latin-1 header decoding, while leaving valid Latin-1 and JSON-derived names unchanged. (#48578, #50435, #59431) Thanks @alex-xuweilong, @lishuaigit, and @DoChaoing.
 - Channels/Telegram: normalize accidental full `/bot<TOKEN>` Telegram `apiRoot` values at runtime and teach `openclaw doctor --fix` to remove the suffix, so startup control calls no longer 404 when direct Bot API curl commands work. Fixes #55387. Thanks @brendanmatthewjones-cmyk, @techfindubai-ux, and @Sivlerback-Chris.
 - Zalo Personal: persist refreshed `zca-js` session cookies after QR login, session restore, and successful API calls so gateway restarts restore the freshest local session. (#73277) Thanks @darkamenosa.
+- Logging/security: redact sensitive tokens (sk-\* keys, Bearer/Authorization values, etc.) at the subsystem console sink so `createSubsystemLogger().info/warn/error` output that bypasses the patched console-capture handler still applies the same redaction the file transport already does. Fixes #73284; refs #67953 and #64046. Thanks @edwin-rivera-dev.
 
 ## 2026.4.27
 
