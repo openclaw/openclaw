@@ -232,7 +232,8 @@ not the full repository sweep. Daily and manual runs scan Actions workflow code
 plus the highest-risk JavaScript/TypeScript auth, secrets, sandbox, cron, and
 gateway surfaces with high-precision security queries. The
 channel-runtime-boundary job separately scans core channel implementation
-contracts under the `/codeql-critical-security/channel-runtime-boundary`
+contracts plus the channel plugin runtime, gateway, Plugin SDK, secrets, and
+audit touchpoints under the `/codeql-critical-security/channel-runtime-boundary`
 category so channel security signal can scale without broadening the baseline
 JS/TS category.
 
