@@ -26,6 +26,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "logging.redactSensitive": "Sensitive Data Redaction Mode",
   "logging.redactPatterns": "Custom Redaction Patterns",
   cli: "CLI",
+  "cli.locale": "CLI Locale",
   "cli.banner": "CLI Banner",
   "cli.banner.taglineMode": "CLI Banner Tagline Mode",
   update: "Updates",
