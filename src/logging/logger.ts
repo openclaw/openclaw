@@ -11,6 +11,7 @@ import {
   isValidDiagnosticTraceId,
   type DiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import { expandHomePrefix } from "../infra/home-dir.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import {
   POSIX_OPENCLAW_TMP_DIR,
@@ -673,6 +674,7 @@ export function resetLogger() {
 
 export const __test__ = {
   shouldSkipMutatingLoggingConfigRead,
+  resolveActiveLogFile,
 };
 
 function formatLocalDate(date: Date): string {
@@ -692,10 +694,16 @@ function rollingPathForDate(dir: string, date: Date): string {
 }
 
 function resolveActiveLogFile(file: string): string {
-  if (!isRollingPath(file)) {
-    return file;
+  // Configured `logging.file` paths can come straight from `openclaw.json`, so a
+  // leading `~` is a shell-only construct that `fs.mkdirSync` cannot handle.
+  // Expand it here so the directory creation in `buildLogger` no longer crashes
+  // the gateway with `ENOENT: no such file or directory, mkdir '~/...'`. See
+  // #73587.
+  const expanded = expandHomePrefix(file);
+  if (!isRollingPath(expanded)) {
+    return expanded;
   }
-  return rollingPathForDate(path.dirname(file), new Date());
+  return rollingPathForDate(path.dirname(expanded), new Date());
 }
 
 function isRollingPath(file: string): boolean {
