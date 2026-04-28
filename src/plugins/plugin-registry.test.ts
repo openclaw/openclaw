@@ -45,14 +45,22 @@ function makeTempDir() {
 }
 
 function hermeticEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  return {
+  const env: NodeJS.ProcessEnv = {
     OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+    OPENCLAW_TRUST_BUNDLED_PLUGINS_DIR_FOR_TEST: undefined,
     OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
     OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
     OPENCLAW_VERSION: "2026.4.25",
     VITEST: "true",
     ...overrides,
   };
+  if (
+    env.OPENCLAW_BUNDLED_PLUGINS_DIR &&
+    env.OPENCLAW_TRUST_BUNDLED_PLUGINS_DIR_FOR_TEST === undefined
+  ) {
+    env.OPENCLAW_TRUST_BUNDLED_PLUGINS_DIR_FOR_TEST = "1";
+  }
+  return env;
 }
 
 function createCandidate(rootDir: string): PluginCandidate {
