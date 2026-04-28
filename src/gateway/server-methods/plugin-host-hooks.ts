@@ -75,10 +75,14 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const registration = (getActivePluginRegistry()?.sessionActions ?? []).find(
+    const registry = getActivePluginRegistry();
+    const pluginLoaded = Boolean(
+      registry?.plugins.some((plugin) => plugin.id === pluginId && plugin.status === "loaded"),
+    );
+    const registration = (registry?.sessionActions ?? []).find(
       (entry) => entry.pluginId === pluginId && entry.action.id === actionId,
     );
-    if (!registration) {
+    if (!registration || !pluginLoaded) {
       respond(
         false,
         undefined,

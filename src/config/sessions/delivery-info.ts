@@ -12,23 +12,26 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
 
+function hasRoutableDeliveryContext(context?: {
+  channel?: string;
+  to?: string;
+  accountId?: string;
+  threadId?: string | number;
+}): context is {
+  channel: string;
+  to: string;
+  accountId?: string;
+  threadId?: string | number;
+} {
+  return Boolean(context?.channel && context?.to);
+}
+
 export function extractDeliveryInfo(sessionKey: string | undefined): {
   deliveryContext:
     | { channel?: string; to?: string; accountId?: string; threadId?: string }
     | undefined;
   threadId: string | undefined;
 } {
-  const hasRoutableDeliveryContext = (context?: {
-    channel?: string;
-    to?: string;
-    accountId?: string;
-    threadId?: string | number;
-  }): context is {
-    channel: string;
-    to: string;
-    accountId?: string;
-    threadId?: string | number;
-  } => Boolean(context?.channel && context?.to);
   const { baseSessionKey, threadId } = parseSessionThreadInfo(sessionKey);
   if (!sessionKey || !baseSessionKey) {
     return { deliveryContext: undefined, threadId };
@@ -110,13 +113,26 @@ function loadDeliverySessionEntry(params: {
   const agentId = resolveSessionStoreAgentId(params.cfg, canonicalKey);
   const sessionKeys = [params.sessionKey, canonicalKey];
   const baseKeys = [params.baseSessionKey, canonicalBaseKey];
+  let fallback:
+    | {
+        entry: ReturnType<typeof findSessionEntryInStore>;
+        baseEntry: ReturnType<typeof findSessionEntryInStore>;
+      }
+    | undefined;
   for (const storePath of resolveDeliveryStorePaths(params.cfg, agentId)) {
     const store = loadSessionStore(storePath);
     const entry = findSessionEntryInStore(store, sessionKeys);
     const baseEntry = findSessionEntryInStore(store, baseKeys);
-    if (entry || baseEntry) {
+    if (!entry && !baseEntry) {
+      continue;
+    }
+    fallback ??= { entry, baseEntry };
+    if (
+      hasRoutableDeliveryContext(deliveryContextFromSession(entry)) ||
+      hasRoutableDeliveryContext(deliveryContextFromSession(baseEntry))
+    ) {
       return { entry, baseEntry };
     }
   }
-  return { entry: undefined, baseEntry: undefined };
+  return fallback ?? { entry: undefined, baseEntry: undefined };
 }

@@ -24,6 +24,7 @@ vi.mock("./store.js", () => ({
 vi.mock("./targets.js", () => ({
   resolveAllAgentSessionStoreTargetsSync: () => [
     { agentId: "main", storePath: "/tmp/sessions.json" },
+    { agentId: "shadow", storePath: "/tmp/shadow-sessions.json" },
     { agentId: "worker", storePath: "/tmp/worker-sessions.json" },
   ],
 }));
@@ -122,6 +123,34 @@ describe("extractDeliveryInfo", () => {
         channel: "webchat",
         to: "webchat:user-456",
         accountId: "worker-account",
+      },
+      threadId: undefined,
+    });
+  });
+
+  it("continues across per-agent stores until it finds routable deliveryContext", () => {
+    const sessionKey = "agent:shadow:webchat:dm:user-789";
+    storeState.stores["/tmp/sessions.json"] = {
+      [sessionKey]: {
+        sessionId: "stale-shadow",
+        updatedAt: Date.now() - 1000,
+      },
+    };
+    storeState.stores["/tmp/shadow-sessions.json"] = {
+      [sessionKey]: buildEntry({
+        channel: "webchat",
+        to: "webchat:user-789",
+        accountId: "shadow-account",
+      }),
+    };
+
+    const result = extractDeliveryInfo(sessionKey);
+
+    expect(result).toEqual({
+      deliveryContext: {
+        channel: "webchat",
+        to: "webchat:user-789",
+        accountId: "shadow-account",
       },
       threadId: undefined,
     });

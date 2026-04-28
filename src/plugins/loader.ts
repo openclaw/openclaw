@@ -343,6 +343,14 @@ type PluginRegistrySnapshot = {
     securityAuditCollectors: NonNullable<PluginRegistry["securityAuditCollectors"]>;
     services: PluginRegistry["services"];
     commands: PluginRegistry["commands"];
+    sessionExtensions: NonNullable<PluginRegistry["sessionExtensions"]>;
+    trustedToolPolicies: NonNullable<PluginRegistry["trustedToolPolicies"]>;
+    toolMetadata: NonNullable<PluginRegistry["toolMetadata"]>;
+    controlUiDescriptors: NonNullable<PluginRegistry["controlUiDescriptors"]>;
+    runtimeLifecycles: NonNullable<PluginRegistry["runtimeLifecycles"]>;
+    agentEventSubscriptions: NonNullable<PluginRegistry["agentEventSubscriptions"]>;
+    sessionSchedulerJobs: NonNullable<PluginRegistry["sessionSchedulerJobs"]>;
+    sessionActions: NonNullable<PluginRegistry["sessionActions"]>;
     conversationBindingResolvedHandlers: PluginRegistry["conversationBindingResolvedHandlers"];
     diagnostics: PluginRegistry["diagnostics"];
   };
@@ -383,6 +391,14 @@ function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistrySnapsho
       securityAuditCollectors: [...(registry.securityAuditCollectors ?? [])],
       services: [...registry.services],
       commands: [...registry.commands],
+      sessionExtensions: [...(registry.sessionExtensions ?? [])],
+      trustedToolPolicies: [...(registry.trustedToolPolicies ?? [])],
+      toolMetadata: [...(registry.toolMetadata ?? [])],
+      controlUiDescriptors: [...(registry.controlUiDescriptors ?? [])],
+      runtimeLifecycles: [...(registry.runtimeLifecycles ?? [])],
+      agentEventSubscriptions: [...(registry.agentEventSubscriptions ?? [])],
+      sessionSchedulerJobs: [...(registry.sessionSchedulerJobs ?? [])],
+      sessionActions: [...(registry.sessionActions ?? [])],
       conversationBindingResolvedHandlers: [...registry.conversationBindingResolvedHandlers],
       diagnostics: [...registry.diagnostics],
     },
@@ -422,6 +438,14 @@ function restorePluginRegistry(registry: PluginRegistry, snapshot: PluginRegistr
   registry.securityAuditCollectors = snapshot.arrays.securityAuditCollectors;
   registry.services = snapshot.arrays.services;
   registry.commands = snapshot.arrays.commands;
+  registry.sessionExtensions = snapshot.arrays.sessionExtensions;
+  registry.trustedToolPolicies = snapshot.arrays.trustedToolPolicies;
+  registry.toolMetadata = snapshot.arrays.toolMetadata;
+  registry.controlUiDescriptors = snapshot.arrays.controlUiDescriptors;
+  registry.runtimeLifecycles = snapshot.arrays.runtimeLifecycles;
+  registry.agentEventSubscriptions = snapshot.arrays.agentEventSubscriptions;
+  registry.sessionSchedulerJobs = snapshot.arrays.sessionSchedulerJobs;
+  registry.sessionActions = snapshot.arrays.sessionActions;
   registry.conversationBindingResolvedHandlers =
     snapshot.arrays.conversationBindingResolvedHandlers;
   registry.diagnostics = snapshot.arrays.diagnostics;
