@@ -109,6 +109,7 @@ observation-only.
 **Lifecycle**
 
 - `gateway_start` / `gateway_stop` — start or stop plugin-owned services with the Gateway
+- `cron_changed` — observe gateway-owned cron lifecycle changes (added, updated, removed, started, finished, scheduled)
 - **`before_install`** — inspect skill or plugin install scans and optionally block
 
 ## Tool call policy
@@ -312,6 +313,17 @@ resources.
 
 Do not rely on the internal `gateway:startup` hook for plugin-owned runtime
 services.
+
+`cron_changed` fires for gateway-owned cron lifecycle events with a typed
+event payload covering `added`, `updated`, `removed`, `started`, `finished`,
+and `scheduled` reasons. The event carries a `PluginHookGatewayCronJob`
+snapshot (including `state.nextRunAtMs`, `state.lastRunStatus`, and
+`state.lastError` when present) plus a `PluginHookGatewayCronDeliveryStatus`
+of `not-requested` | `delivered` | `not-delivered` | `unknown`. Removed
+events still carry the deleted job snapshot so external schedulers can
+reconcile state. Use `ctx.getCron?.()` and `ctx.config` from the runtime
+context when syncing external wake schedulers, and keep OpenClaw as the
+source of truth for due checks and execution.
 
 ## Upcoming deprecations
 

@@ -5693,6 +5693,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         type: "number",
                         exclusiveMinimum: 0,
                       },
+                      gpus: {
+                        type: "string",
+                        minLength: 1,
+                        title: "Sandbox Docker GPUs",
+                        description:
+                          'Optional Docker GPU passthrough value passed to --gpus, for example "all" or "device=GPU-uuid". Requires a compatible host runtime such as NVIDIA Container Toolkit.',
+                      },
                       ulimits: {
                         type: "object",
                         propertyNames: {
@@ -7441,6 +7448,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         cpus: {
                           type: "number",
                           exclusiveMinimum: 0,
+                        },
+                        gpus: {
+                          type: "string",
+                          minLength: 1,
+                          title: "Agent Sandbox Docker GPUs",
+                          description:
+                            "Per-agent Docker GPU passthrough override for sandbox containers.",
                         },
                         ulimits: {
                           type: "object",
@@ -21664,6 +21678,39 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Reconnect backoff policy for web channel reconnect attempts after transport failure. Keep bounded retries and jitter tuned to avoid thundering-herd reconnect behavior.",
           },
+          whatsapp: {
+            type: "object",
+            properties: {
+              keepAliveIntervalMs: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+                title: "WhatsApp Web Keepalive Interval (ms)",
+                description:
+                  "Baileys WhatsApp Web application ping interval in milliseconds. Lower values detect and refresh idle links sooner; keep this comfortably below your network's idle-flow timeout.",
+              },
+              connectTimeoutMs: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+                title: "WhatsApp Web Connect Timeout (ms)",
+                description:
+                  "Maximum time in milliseconds Baileys waits for the WhatsApp WebSocket opening handshake. Use a higher value on slow or lossy networks that report opening handshake 408 timeouts.",
+              },
+              defaultQueryTimeoutMs: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+                title: "WhatsApp Web Query Timeout (ms)",
+                description:
+                  "Default Baileys query timeout in milliseconds for WhatsApp Web requests. Keep aligned with upstream unless a network-specific investigation shows queries need longer.",
+              },
+            },
+            additionalProperties: false,
+            title: "WhatsApp Web Socket Timing",
+            description:
+              "WhatsApp Web socket timing controls passed directly to Baileys. Tune these when network edges, proxies, or NATs are closing otherwise healthy WhatsApp Web sessions.",
+          },
         },
         additionalProperties: false,
         title: "Web Channel",
@@ -27191,6 +27238,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "DANGEROUS break-glass override that allows sandbox Docker network mode container:<id>. This joins another container namespace and weakens sandbox isolation.",
       tags: ["security", "access", "storage", "advanced"],
     },
+    "agents.defaults.sandbox.docker.gpus": {
+      label: "Sandbox Docker GPUs",
+      help: 'Optional Docker GPU passthrough value passed to --gpus, for example "all" or "device=GPU-uuid". Requires a compatible host runtime such as NVIDIA Container Toolkit.',
+      tags: ["storage"],
+    },
     "commands.native": {
       label: "Native Commands",
       help: "Registers native slash/menu commands with channels that support command registration (Discord, Slack, Telegram). Keep enabled for discoverability unless you intentionally run text-only command workflows.",
@@ -28001,6 +28053,26 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Maximum reconnect attempts before giving up for the current failure sequence (0 means no retries). Use finite caps for controlled failure handling in automation-sensitive environments.",
       tags: ["performance"],
     },
+    "web.whatsapp": {
+      label: "WhatsApp Web Socket Timing",
+      help: "WhatsApp Web socket timing controls passed directly to Baileys. Tune these when network edges, proxies, or NATs are closing otherwise healthy WhatsApp Web sessions.",
+      tags: ["advanced"],
+    },
+    "web.whatsapp.keepAliveIntervalMs": {
+      label: "WhatsApp Web Keepalive Interval (ms)",
+      help: "Baileys WhatsApp Web application ping interval in milliseconds. Lower values detect and refresh idle links sooner; keep this comfortably below your network's idle-flow timeout.",
+      tags: ["performance"],
+    },
+    "web.whatsapp.connectTimeoutMs": {
+      label: "WhatsApp Web Connect Timeout (ms)",
+      help: "Maximum time in milliseconds Baileys waits for the WhatsApp WebSocket opening handshake. Use a higher value on slow or lossy networks that report opening handshake 408 timeouts.",
+      tags: ["performance"],
+    },
+    "web.whatsapp.defaultQueryTimeoutMs": {
+      label: "WhatsApp Web Query Timeout (ms)",
+      help: "Default Baileys query timeout in milliseconds for WhatsApp Web requests. Keep aligned with upstream unless a network-specific investigation shows queries need longer.",
+      tags: ["performance"],
+    },
     "discovery.wideArea": {
       label: "Wide-area Discovery",
       help: "Wide-area discovery configuration group for exposing discovery signals beyond local-link scopes. Enable only in deployments that intentionally aggregate gateway presence across sites.",
@@ -28323,6 +28395,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Agent Sandbox Docker Allow Container Namespace Join",
       help: "Per-agent DANGEROUS override for container namespace joins in sandbox Docker network mode.",
       tags: ["security", "access", "storage", "advanced"],
+    },
+    "agents.list[].sandbox.docker.gpus": {
+      label: "Agent Sandbox Docker GPUs",
+      help: "Per-agent Docker GPU passthrough override for sandbox containers.",
+      tags: ["storage"],
     },
     "discovery.mdns.mode": {
       label: "mDNS Discovery Mode",

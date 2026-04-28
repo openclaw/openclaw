@@ -632,6 +632,8 @@ Notes:
   <Accordion title="Inbound attachments">
     Slack file attachments are downloaded from Slack-hosted private URLs (token-authenticated request flow) and written to the media store when fetch succeeds and size limits permit. File placeholders include the Slack `fileId` so agents can fetch the original file with `download-file`.
 
+    Downloads use bounded idle and total timeouts. If Slack file retrieval stalls or fails, OpenClaw keeps processing the message and falls back to the file placeholder.
+
     Runtime inbound size cap defaults to `20MB` unless overridden by `channels.slack.mediaMaxMb`.
 
   </Accordion>

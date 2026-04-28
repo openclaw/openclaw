@@ -154,7 +154,7 @@ describe("gateway session utils", () => {
             reasoning === true
               ? [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }]
               : [{ id: "off" }],
-          defaultLevel: "off",
+          defaultLevel: reasoning === true ? "medium" : "off",
         }),
       },
     });
@@ -193,6 +193,8 @@ describe("gateway session utils", () => {
       "high",
       "max",
     ]);
+    expect(defaults.thinkingDefault).toBe("medium");
+    expect(row.thinkingDefault).toBe("medium");
   });
 
   test("session defaults use configured thinking default", () => {

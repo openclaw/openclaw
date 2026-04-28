@@ -678,6 +678,14 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        whatsapp: z
+          .object({
+            keepAliveIntervalMs: z.number().int().positive().optional(),
+            connectTimeoutMs: z.number().int().positive().optional(),
+            defaultQueryTimeoutMs: z.number().int().positive().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

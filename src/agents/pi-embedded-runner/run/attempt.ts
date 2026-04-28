@@ -730,7 +730,7 @@ export async function runEmbeddedAttempt(
               }),
               config: params.config,
               abortSignal: runAbortController.signal,
-              modelProvider: params.model.provider,
+              modelProvider: params.provider,
               modelId: params.modelId,
               modelCompat: extractModelCompat(params.model),
               modelApi: params.model.api,

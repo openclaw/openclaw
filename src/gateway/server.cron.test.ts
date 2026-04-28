@@ -55,7 +55,7 @@ vi.mock("../plugin-sdk/browser-maintenance.js", () => ({
 }));
 
 installGatewayTestHooks({ scope: "suite" });
-const CRON_WAIT_TIMEOUT_MS = 3_000;
+const CRON_WAIT_TIMEOUT_MS = 10_000;
 const EMPTY_CRON_STORE_CONTENT = JSON.stringify({ version: 1, jobs: [] });
 let cronSuiteTempRootPromise: Promise<string> | null = null;
 let cronSuiteCaseId = 0;

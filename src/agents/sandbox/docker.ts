@@ -444,6 +444,10 @@ export function buildSandboxCreateArgs(params: {
   if (typeof params.cfg.cpus === "number" && params.cfg.cpus > 0) {
     args.push("--cpus", String(params.cfg.cpus));
   }
+  const gpus = params.cfg.gpus?.trim();
+  if (gpus) {
+    args.push("--gpus", gpus);
+  }
   for (const [name, value] of Object.entries(params.cfg.ulimits ?? {})) {
     const formatted = formatUlimitValue(name, value);
     if (formatted) {
