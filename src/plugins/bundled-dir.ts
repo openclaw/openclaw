@@ -59,50 +59,27 @@ function pathContains(parentDir: string, childPath: string): boolean {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
-function trustedBundledPluginRootsForPackageRoot(params: {
-  packageRoot: string;
-  includeSourceCheckout: boolean;
-}): string[] {
+function trustedBundledPluginRootsForPackageRoot(packageRoot: string): string[] {
   const roots = [
-    path.join(params.packageRoot, "dist", "extensions"),
-    path.join(params.packageRoot, "dist-runtime", "extensions"),
+    path.join(packageRoot, "dist", "extensions"),
+    path.join(packageRoot, "dist-runtime", "extensions"),
   ];
-  if (params.includeSourceCheckout) {
-    roots.push(path.join(params.packageRoot, "extensions"));
+  if (isSourceCheckoutRoot(packageRoot)) {
+    roots.push(path.join(packageRoot, "extensions"));
   }
   return roots;
 }
 
-function resolveTrustedExistingOverride(params: {
-  resolvedOverride: string;
-  preferSourceCheckout: boolean;
-}): string {
-  const realOverride = safeRealpathSync(params.resolvedOverride);
+function resolveTrustedExistingOverride(resolvedOverride: string): string {
+  const realOverride = safeRealpathSync(resolvedOverride);
   if (!realOverride) {
     throw new Error("OPENCLAW_BUNDLED_PLUGINS_DIR must resolve to an accessible directory");
   }
 
-  if (params.preferSourceCheckout) {
-    if (!hasUsableBundledPluginTree(realOverride)) {
-      throw new Error(
-        "OPENCLAW_BUNDLED_PLUGINS_DIR must contain bundled plugin manifests when set",
-      );
-    }
-    return realOverride;
-  }
-
-  const argvPackageRoot = resolveOpenClawPackageRootSync({ argv1: process.argv[1] });
   const modulePackageRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
-  const packageRoots = [argvPackageRoot, modulePackageRoot].filter(
-    (entry, index, all): entry is string => Boolean(entry) && all.indexOf(entry) === index,
-  );
+  const packageRoots = modulePackageRoot ? [modulePackageRoot] : [];
   const trustedRoots = packageRoots
-    .flatMap((packageRoot) =>
-      trustedBundledPluginRootsForPackageRoot({
-        packageRoot,
-        includeSourceCheckout: false,
-      }),
-    )
+    .flatMap((packageRoot) => trustedBundledPluginRootsForPackageRoot(packageRoot))
     .map((trustedRoot) => safeRealpathSync(trustedRoot))
     .filter((entry): entry is string => Boolean(entry));
   if (!trustedRoots.some((trustedRoot) => pathContains(trustedRoot, realOverride))) {
@@ -183,35 +160,30 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
     return resolveDisabledBundledPluginsDir();
   }
 
-  const preferSourceCheckout = Boolean(env.VITEST) || runningSourceTypeScriptProcess();
   const override = env.OPENCLAW_BUNDLED_PLUGINS_DIR?.trim();
   if (override) {
     const resolvedOverride = resolveUserPath(override, env);
     if (fs.existsSync(resolvedOverride)) {
-      return resolveTrustedExistingOverride({ resolvedOverride, preferSourceCheckout });
+      return resolveTrustedExistingOverride(resolvedOverride);
     }
     // Installed CLIs can inherit stale bundled-dir overrides from older shells
     // or debug sessions. Prefer trusted runtime package roots over a broken
     // override so bundled providers keep working in packaged installs.
     try {
-      const argvPackageRoot = resolveOpenClawPackageRootSync({ argv1: process.argv[1] });
       const modulePackageRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
-      const packageRoots = [argvPackageRoot, modulePackageRoot].filter(
-        (entry, index, all): entry is string => Boolean(entry) && all.indexOf(entry) === index,
-      );
-      for (const packageRoot of packageRoots) {
-        if (!isSourceCheckoutRoot(packageRoot)) {
-          const fallback = resolveBundledDirFromPackageRoot(packageRoot, false);
-          if (fallback) {
-            return fallback;
-          }
+      if (modulePackageRoot && !isSourceCheckoutRoot(modulePackageRoot)) {
+        const fallback = resolveBundledDirFromPackageRoot(modulePackageRoot, false);
+        if (fallback) {
+          return fallback;
         }
       }
     } catch {
       // ignore
     }
-    return resolvedOverride;
+    return undefined;
   }
+
+  const preferSourceCheckout = Boolean(env.VITEST) || runningSourceTypeScriptProcess();
 
   try {
     const argvRoot = resolveOpenClawPackageRootSync({ argv1: process.argv[1] });
