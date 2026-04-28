@@ -1712,7 +1712,7 @@ describe("active-memory plugin", () => {
     );
   });
 
-  it("does not cache timeout_partial results", () => {
+  it("caches ok and empty results but not timeout_partial results", () => {
     expect(
       __testing.shouldCacheResult({
         status: "timeout_partial",
@@ -1734,7 +1734,48 @@ describe("active-memory plugin", () => {
         elapsedMs: 1,
         summary: null,
       }),
-    ).toBe(false);
+    ).toBe(true);
+  });
+
+  it("caches empty recall results", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    runEmbeddedPiAgent.mockResolvedValue({
+      payloads: [{ text: "NONE" }],
+    });
+
+    await hooks.before_prompt_build(
+      { prompt: "what wings should i order? empty cache", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:empty-cache",
+        messageProvider: "webchat",
+      },
+    );
+    await hooks.before_prompt_build(
+      { prompt: "what wings should i order? empty cache", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:empty-cache",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
+    const infoLines = vi
+      .mocked(api.logger.info)
+      .mock.calls.map((call: unknown[]) => String(call[0]));
+    expect(
+      infoLines.some(
+        (line: string) =>
+          line.includes(" cached status=empty ") || line.includes(" cached status=empty"),
+      ),
+    ).toBe(true);
   });
 
   it("surfaces timeout_partial summaries in status lines, metadata, and prompt prefixes", () => {
