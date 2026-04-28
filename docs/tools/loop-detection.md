@@ -67,9 +67,9 @@ Per-agent override (optional):
 - `enabled`: Master switch. `false` means no loop detection is performed.
 - `historySize`: number of recent tool calls kept for analysis.
 - `warningThreshold`: threshold before classifying a pattern as warning-only.
-- `criticalThreshold`: threshold for blocking repetitive loop patterns.
+- `criticalThreshold`: threshold for blocking repetitive loop patterns once no-progress evidence is present.
 - `globalCircuitBreakerThreshold`: global no-progress breaker threshold.
-- `detectors.genericRepeat`: detects repeated same-tool + same-params patterns.
+- `detectors.genericRepeat`: detects repeated same-tool + same-params patterns. It warns on repeated arguments and escalates to critical only when the repeated calls also produce identical outcomes.
 - `detectors.knownPollNoProgress`: detects known polling-like patterns with no state change.
 - `detectors.pingPong`: detects alternating ping-pong patterns.
 
