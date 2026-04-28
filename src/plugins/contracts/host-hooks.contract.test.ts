@@ -1764,7 +1764,6 @@ describe("host-hook fixture plugin contract", () => {
       emitPluginAgentEvent({
         pluginId: "workflow-emitter",
         pluginName: "Workflow Emitter",
-        origin: "bundled",
         event: {
           runId: "run-plugin-terminal",
           stream: "lifecycle",
@@ -1791,7 +1790,6 @@ describe("host-hook fixture plugin contract", () => {
         emitPluginAgentEvent({
           pluginId: "workflow-emitter",
           pluginName: "Workflow Emitter",
-          origin: "bundled",
           event: {
             runId: `run-${stream}`,
             stream,
@@ -1813,7 +1811,6 @@ describe("host-hook fixture plugin contract", () => {
         emitPluginAgentEvent({
           pluginId: "workflow-emitter",
           pluginName: "Workflow Emitter",
-          origin: "workspace",
           event: {
             runId: "run-plugin-event",
             stream: "plugin.approval",

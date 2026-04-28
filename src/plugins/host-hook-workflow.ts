@@ -63,7 +63,6 @@ function isPluginOwnedAgentEventStream(stream: string): boolean {
 export function emitPluginAgentEvent(params: {
   pluginId: string;
   pluginName?: string;
-  origin: PluginOrigin;
   event: PluginAgentEventEmitParams;
 }): PluginAgentEventEmitResult {
   const runId = normalizeOptionalString(params.event.runId);
