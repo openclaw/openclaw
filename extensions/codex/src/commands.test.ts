@@ -531,8 +531,8 @@ describe("codex command", () => {
         threadId: "thread-race",
         cwd: "/repo",
         sessionFile: bindingSessionFile,
-        createdAt: 1,
-        updatedAt: 1,
+        createdAt: "2026-04-28T00:00:00.000Z",
+        updatedAt: "2026-04-28T00:00:00.000Z",
       };
     });
     const safeCodexControlRequest = vi.fn(async () => ({
