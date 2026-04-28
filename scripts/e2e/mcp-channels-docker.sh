@@ -85,7 +85,13 @@ docker run --rm \
     trap cleanup_inner EXIT
     trap dump_gateway_log_on_error ERR
     gateway_ready=0
-    for _ in \$(seq 1 160); do
+    for _ in \$(seq 1 480); do
+      if ! kill -0 \"\$gateway_pid\" >/dev/null 2>&1; then
+        echo \"Gateway exited before becoming ready\"
+        wait \"\$gateway_pid\" || true
+        tail -n 120 /tmp/mcp-channels-gateway.log 2>/dev/null || true
+        exit 1
+      fi
       if grep -q '\[gateway\] ready' /tmp/mcp-channels-gateway.log 2>/dev/null; then
         gateway_ready=1
         break

@@ -108,7 +108,10 @@ vi.mock("https-proxy-agent", () => ({
 }));
 
 vi.mock("ws", () => ({
-  default: function MockWebSocket(url: string, options?: { agent?: unknown }) {
+  default: function MockWebSocket(
+    url: string,
+    options?: { agent?: unknown; handshakeTimeout?: number },
+  ) {
     webSocketSpy(url, options);
   },
 }));
@@ -159,9 +162,15 @@ describe("createDiscordGatewayPlugin", () => {
     return {
       HttpsProxyAgentCtor:
         HttpsProxyAgent as unknown as typeof import("https-proxy-agent").HttpsProxyAgent,
-      webSocketCtor: function WebSocketCtor(url: string, options?: { agent?: unknown }) {
+      webSocketCtor: function WebSocketCtor(
+        url: string,
+        options?: { agent?: unknown; handshakeTimeout?: number },
+      ) {
         webSocketSpy(url, options);
-      } as unknown as new (url: string, options?: { agent?: unknown }) => import("ws").WebSocket,
+      } as unknown as new (
+        url: string,
+        options?: { agent?: unknown; handshakeTimeout?: number },
+      ) => import("ws").WebSocket,
       registerClient: async (_plugin: unknown, client: unknown) => {
         baseRegisterClientSpy(client);
       },
@@ -295,7 +304,9 @@ describe("createDiscordGatewayPlugin", () => {
       .createWebSocket;
     createWebSocket("wss://gateway.discord.gg");
 
-    expect(webSocketSpy).toHaveBeenCalledWith("wss://gateway.discord.gg", undefined);
+    expect(webSocketSpy).toHaveBeenCalledWith("wss://gateway.discord.gg", {
+      handshakeTimeout: 30_000,
+    });
     expect(wsProxyAgentSpy).not.toHaveBeenCalled();
   });
 
@@ -409,7 +420,7 @@ describe("createDiscordGatewayPlugin", () => {
     expect(wsProxyAgentSpy).toHaveBeenCalledWith("http://127.0.0.1:8080");
     expect(webSocketSpy).toHaveBeenCalledWith(
       "wss://gateway.discord.gg",
-      expect.objectContaining({ agent: getLastAgent() }),
+      expect.objectContaining({ agent: getLastAgent(), handshakeTimeout: 30_000 }),
     );
     expect(runtime.log).toHaveBeenCalledWith("discord: gateway proxy enabled");
     expect(runtime.error).not.toHaveBeenCalled();

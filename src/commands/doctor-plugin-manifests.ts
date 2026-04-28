@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
@@ -30,6 +31,14 @@ function readManifestJson(manifestPath: string): Record<string, unknown> | null 
     return safeParseJsonWithSchema(JsonRecordSchema, fs.readFileSync(manifestPath, "utf-8"));
   } catch {
     return null;
+  }
+}
+
+function manifestSeenKey(manifestPath: string): string {
+  try {
+    return fs.realpathSync.native(manifestPath);
+  } catch {
+    return path.resolve(manifestPath);
   }
 }
 
@@ -81,6 +90,7 @@ function buildLegacyManifestContractMigration(params: {
 }
 
 export function collectLegacyPluginManifestContractMigrations(params?: {
+  config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   manifestRoots?: string[];
   workspaceDir?: string;
@@ -97,10 +107,11 @@ export function collectLegacyPluginManifestContractMigrations(params?: {
         continue;
       }
       const manifestPath = path.join(root, entry.name, "openclaw.plugin.json");
-      if (seen.has(manifestPath)) {
+      const seenKey = manifestSeenKey(manifestPath);
+      if (seen.has(seenKey)) {
         continue;
       }
-      seen.add(manifestPath);
+      seen.add(seenKey);
       const raw = readManifestJson(manifestPath);
       if (!raw) {
         continue;
@@ -114,13 +125,15 @@ export function collectLegacyPluginManifestContractMigrations(params?: {
 
   for (const plugin of loadPluginManifestRegistry({
     cache: false,
+    ...(params?.config ? { config: params.config } : {}),
     ...(params?.env ? { env: params.env } : {}),
     ...(params?.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   }).plugins) {
-    if (seen.has(plugin.manifestPath)) {
+    const seenKey = manifestSeenKey(plugin.manifestPath);
+    if (seen.has(seenKey)) {
       continue;
     }
-    seen.add(plugin.manifestPath);
+    seen.add(seenKey);
     const raw = readManifestJson(plugin.manifestPath);
     if (!raw) {
       continue;
@@ -138,6 +151,7 @@ export function collectLegacyPluginManifestContractMigrations(params?: {
 }
 
 export async function maybeRepairLegacyPluginManifestContracts(params: {
+  config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   manifestRoots?: string[];
   workspaceDir?: string;
@@ -146,6 +160,7 @@ export async function maybeRepairLegacyPluginManifestContracts(params: {
   note?: typeof note;
 }): Promise<void> {
   const migrations = collectLegacyPluginManifestContractMigrations({
+    ...(params.config ? { config: params.config } : {}),
     ...(params.env ? { env: params.env } : {}),
     ...(params.manifestRoots ? { manifestRoots: params.manifestRoots } : {}),
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),

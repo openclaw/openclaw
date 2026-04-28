@@ -3,7 +3,6 @@ import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
-import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import {
   createBundledRuntimeDepsWritableInstallSpecs,
   repairBundledRuntimeDepsInstallRootAsync,
@@ -12,26 +11,12 @@ import {
   type BundledRuntimeDepsInstallParams,
 } from "../plugins/bundled-runtime-deps.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
-import { resolveEffectivePluginIds } from "../plugins/effective-plugin-ids.js";
 import { passesManifestOwnerBasePolicy } from "../plugins/manifest-owner-policy.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
 const RUNTIME_DEPS_INSTALL_HEARTBEAT_MS = 15_000;
-
-function filterPluginIdsPresentInBundledTree(
-  bundledPluginsDir: string,
-  pluginIds: readonly string[],
-): string[] | undefined {
-  const present = pluginIds.filter((pluginId) => {
-    if (path.basename(pluginId) !== pluginId) {
-      return false;
-    }
-    return fs.existsSync(path.join(bundledPluginsDir, pluginId));
-  });
-  return present.length > 0 ? present : undefined;
-}
 
 function collectPackagedRuntimeDepsRepairPluginIds(params: {
   bundledPluginsDir: string;
@@ -143,23 +128,11 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
   const env = params.env ?? process.env;
   const bundledPluginsDir = path.join(packageRoot, "dist", "extensions");
   const effectivePluginIds = params.config
-    ? resolveBundledPluginsDir({ ...env, OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir }) ===
-      bundledPluginsDir
-      ? filterPluginIdsPresentInBundledTree(
-          bundledPluginsDir,
-          resolveEffectivePluginIds({
-            config: params.config,
-            env: {
-              ...env,
-              OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
-            },
-          }),
-        )
-      : collectPackagedRuntimeDepsRepairPluginIds({
-          bundledPluginsDir,
-          config: params.config,
-          includeConfiguredChannels: params.includeConfiguredChannels,
-        })
+    ? collectPackagedRuntimeDepsRepairPluginIds({
+        bundledPluginsDir,
+        config: params.config,
+        includeConfiguredChannels: params.includeConfiguredChannels,
+      })
     : undefined;
   const { deps, missing, conflicts } = scanBundledPluginRuntimeDeps({
     packageRoot,
