@@ -199,14 +199,14 @@ describe("gateway lock", () => {
     await lock2?.release();
   });
 
-  it("records and reads the active runtime gateway port from the lock", async () => {
+  it("reads the active runtime gateway port before the listener binds", async () => {
     vi.useRealTimers();
     const env = await makeEnv();
     const lock = await acquireForTest(env, {
       port: 48789,
       readProcessCmdline: () => ["/usr/local/bin/openclaw", "gateway", "run", "--port", "48789"],
     });
-    const connectSpy = createPortProbeConnectionSpy("connect");
+    const connectSpy = createPortProbeConnectionSpy("refused");
 
     try {
       await expect(
@@ -222,6 +222,7 @@ describe("gateway lock", () => {
           ],
         }),
       ).resolves.toBe(48789);
+      expect(connectSpy).not.toHaveBeenCalled();
     } finally {
       connectSpy.mockRestore();
       await lock?.release();
@@ -234,20 +235,15 @@ describe("gateway lock", () => {
     const { lockPath, configPath } = resolveLockPath(env);
     const payload = createLockPayload({ configPath, startTime: 111, port: 48789 });
     await fs.writeFile(lockPath, JSON.stringify(payload), "utf8");
-    const connectSpy = createPortProbeConnectionSpy("connect");
 
-    try {
-      await expect(
-        readActiveGatewayLockPort({
-          env,
-          lockDir: resolveTestLockDir(),
-          platform: "darwin",
-          readProcessCmdline: () => ["/usr/bin/node", "some-other-process"],
-        }),
-      ).resolves.toBeUndefined();
-    } finally {
-      connectSpy.mockRestore();
-    }
+    await expect(
+      readActiveGatewayLockPort({
+        env,
+        lockDir: resolveTestLockDir(),
+        platform: "darwin",
+        readProcessCmdline: () => ["/usr/bin/node", "some-other-process"],
+      }),
+    ).resolves.toBeUndefined();
   });
 
   it("ignores lock ports when the owner cmdline cannot be verified", async () => {

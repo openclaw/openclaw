@@ -115,6 +115,7 @@ describe("resolveGatewayConnection", () => {
   beforeEach(() => {
     envSnapshot = captureEnv([
       "OPENCLAW_GATEWAY_URL",
+      "OPENCLAW_GATEWAY_PORT",
       "OPENCLAW_GATEWAY_TOKEN",
       "OPENCLAW_GATEWAY_PASSWORD",
       "OPENCLAW_TUI_SETUP_AUTH_SOURCE",
@@ -133,6 +134,7 @@ describe("resolveGatewayConnection", () => {
         env.OPENCLAW_CONFIG_PATH ?? `${stateDir}/openclaw.json`,
     );
     delete process.env.OPENCLAW_GATEWAY_URL;
+    delete process.env.OPENCLAW_GATEWAY_PORT;
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
     delete process.env.OPENCLAW_TUI_SETUP_AUTH_SOURCE;
@@ -208,6 +210,24 @@ describe("resolveGatewayConnection", () => {
 
     expect(result.url).toBe("ws://127.0.0.1:48789");
     expect(result.token).toBe("config-token");
+  });
+
+  it("keeps the active local gateway lock port ahead of stale gateway port env", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        port: 18789,
+        auth: { token: "config-token" },
+      },
+    });
+    readActiveGatewayLockPortMock.mockResolvedValue(48789);
+
+    await withEnvAsync({ OPENCLAW_GATEWAY_PORT: "18789" }, async () => {
+      const result = await resolveGatewayConnection({});
+
+      expect(result.url).toBe("ws://127.0.0.1:48789");
+      expect(result.token).toBe("config-token");
+    });
   });
 
   it("keeps explicit TUI url overrides ahead of the active local gateway lock port", async () => {

@@ -259,7 +259,7 @@ export async function readActiveGatewayLockPort(
     payload.pid,
     payload,
     opts.platform ?? process.platform,
-    payload.port,
+    undefined,
     opts.readProcessCmdline,
     { trustUnknownCmdlineOwner: false },
   );
