@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   getTelegramNetworkErrorOrigin,
   isRecoverableTelegramNetworkError,
-  isTelegramRateLimitError,
   isSafeToRetrySendError,
   isTelegramClientRejection,
   isTelegramPollingNetworkError,
+  isTelegramRateLimitError,
   isTelegramServerError,
   tagTelegramNetworkError,
 } from "./network-errors.js";
@@ -219,22 +219,40 @@ describe("isTelegramServerError", () => {
 });
 
 describe("isTelegramRateLimitError", () => {
-  it("returns true for Telegram 429 errors", () => {
-    expect(isTelegramRateLimitError(errorWithTelegramCode("Too Many Requests", 429))).toBe(true);
-  });
+  class MockHttpError extends Error {
+    constructor(
+      message: string,
+      public readonly error: unknown,
+    ) {
+      super(message);
+      this.name = "HttpError";
+    }
+  }
 
-  it("detects wrapped 429 retry_after errors without error_code", () => {
-    const wrapped = {
-      message: "429 Too Many Requests",
-      response: { parameters: { retry_after: 1 } },
-    };
-    expect(isTelegramRateLimitError(wrapped)).toBe(true);
+  it.each([
+    ["Too Many Requests", 429, true],
+    ["Forbidden", 403, false],
+  ])("returns %s for error_code %s", (message, errorCode, expected) => {
+    expect(isTelegramRateLimitError(errorWithTelegramCode(message, errorCode))).toBe(expected);
   });
 
   it("detects error_code in nested cause", () => {
     const inner = Object.assign(new Error("Too Many Requests"), { error_code: 429 });
     const outer = Object.assign(new Error("wrapped"), { cause: inner });
     expect(isTelegramRateLimitError(outer)).toBe(true);
+  });
+
+  it("detects structured grammY HttpError payloads", () => {
+    const wrapped = new MockHttpError("Too Many Requests", {
+      error_code: 429,
+      description: "Too Many Requests: retry after 5",
+      parameters: { retry_after: 5 },
+    });
+    expect(isTelegramRateLimitError(wrapped)).toBe(true);
+  });
+
+  it("does not infer rate limits from plain text", () => {
+    expect(isTelegramRateLimitError(new Error("429 Too Many Requests"))).toBe(false);
   });
 });
 
