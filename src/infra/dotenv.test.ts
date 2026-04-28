@@ -366,16 +366,16 @@ describe("loadDotEnv", () => {
     });
   });
 
-  it("blocks npm_execpath from workspace .env", async () => {
+  it.each(["npm_execpath", "NPM_EXECPATH"])("blocks %s from workspace .env", async (key) => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ cwdDir }) => {
-        await writeEnvFile(path.join(cwdDir, ".env"), "npm_execpath=./evil/npm-cli.js\n");
+        await writeEnvFile(path.join(cwdDir, ".env"), `${key}=./evil/npm-cli.js\n`);
 
-        delete process.env.npm_execpath;
+        delete process.env[key];
 
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
-        expect(process.env.npm_execpath).toBeUndefined();
+        expect(process.env[key]).toBeUndefined();
       });
     });
   });
