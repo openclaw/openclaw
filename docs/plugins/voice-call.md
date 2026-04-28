@@ -160,7 +160,7 @@ Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twi
     - `skipSignatureVerification` is for local testing only.
     - On ngrok free tier, set `publicUrl` to the exact ngrok URL; signature verification is always enforced.
     - `tunnel.allowNgrokFreeTierLoopbackBypass: true` allows Twilio webhooks with invalid signatures **only** when `tunnel.provider="ngrok"` and `serve.bind` is loopback (ngrok local agent). Local dev only.
-    - Ngrok free-tier URLs can change or add interstitial behaviour; if `publicUrl` drifts, Twilio signatures fail. Production: prefer a stable domain or a Tailscale funnel.
+    - Ngrok free-tier URLs can change or add interstitial behavior; if `publicUrl` drifts, Twilio signatures fail. Production: prefer a stable domain or a Tailscale funnel.
 
   </Accordion>
   <Accordion title="Streaming connection caps">
@@ -199,7 +199,7 @@ realtime transcription providers.
 audio mode per call.
 </Warning>
 
-Current runtime behaviour:
+Current runtime behavior:
 
 - `realtime.enabled` is supported for Twilio Media Streams.
 - `realtime.provider` is optional. If unset, Voice Call uses the first registered realtime voice provider.
