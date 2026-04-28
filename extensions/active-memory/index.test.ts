@@ -567,7 +567,7 @@ describe("active-memory plugin", () => {
       agents: ["main"],
       allowedChatTypes: ["explicit"],
     };
-    await plugin.register(api as unknown as OpenClawPluginApi);
+    plugin.register(api as unknown as OpenClawPluginApi);
 
     const result = await hooks.before_prompt_build(
       { prompt: "what should i work on next?", messages: [] },
@@ -591,7 +591,7 @@ describe("active-memory plugin", () => {
       agents: ["main"],
       allowedChatTypes: ["explicit"],
     };
-    await plugin.register(api as unknown as OpenClawPluginApi);
+    plugin.register(api as unknown as OpenClawPluginApi);
 
     const result = await hooks.before_prompt_build(
       { prompt: "what should i work on next?", messages: [] },
