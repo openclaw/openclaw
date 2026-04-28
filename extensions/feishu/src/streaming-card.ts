@@ -428,6 +428,10 @@ export class FeishuStreamingSession {
       .catch((e) => this.log?.(`Note update failed: ${String(e)}`));
   }
 
+  getMessageId(): string | undefined {
+    return this.state?.messageId;
+  }
+
   async close(finalText?: string, options?: { note?: string }): Promise<void> {
     if (!this.state || this.closed) {
       return;

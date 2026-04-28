@@ -1284,6 +1284,9 @@ export async function handleFeishuMessage(params: {
             accountId: account.accountId,
             identity,
             messageCreateTimeMs,
+            sessionKeyForInternalHooks: agentSessionKey,
+            mirrorIsGroup: isGroup,
+            mirrorGroupId: isGroup ? ctx.chatId : undefined,
           });
 
           log(
@@ -1393,6 +1396,9 @@ export async function handleFeishuMessage(params: {
         accountId: account.accountId,
         identity,
         messageCreateTimeMs,
+        sessionKeyForInternalHooks: route.sessionKey,
+        mirrorIsGroup: isGroup,
+        mirrorGroupId: isGroup ? ctx.chatId : undefined,
       });
 
       log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);

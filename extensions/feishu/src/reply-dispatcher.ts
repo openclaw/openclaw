@@ -1,9 +1,18 @@
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import {
+  buildCanonicalSentMessageHookContext,
+  createInternalHookEvent,
+  fireAndForgetHook,
+  toInternalMessageSentContext,
+  toPluginMessageContext,
+  toPluginMessageSentEvent,
+  triggerInternalHook,
+} from "openclaw/plugin-sdk/hook-runtime";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
+import {
   resolveSendableOutboundReplyParts,
   resolveTextChunksWithFallback,
-  sendMediaWithLeadingCaption,
 } from "openclaw/plugin-sdk/reply-payload";
 import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-runtime";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
@@ -120,7 +129,78 @@ export type CreateFeishuReplyDispatcherParams = {
   /** Epoch ms when the inbound message was created. Used to suppress typing
    *  indicators on old/replayed messages after context compaction (#30418). */
   messageCreateTimeMs?: number;
+  /** Session key for internal message:sent hooks on normal Feishu replies. */
+  sessionKeyForInternalHooks?: string;
+  mirrorIsGroup?: boolean;
+  mirrorGroupId?: string;
 };
+
+function formatHookError(error: unknown): string {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  return String(error);
+}
+
+function emitFeishuMessageSentHooks(params: {
+  hookRunner: ReturnType<typeof getGlobalHookRunner>;
+  hasMessageSentHooks: boolean;
+  runtime: RuntimeEnv;
+  chatId: string;
+  accountId?: string;
+  sessionKeyForInternalHooks?: string;
+  mirrorIsGroup?: boolean;
+  mirrorGroupId?: string;
+  content: string;
+  success: boolean;
+  error?: string;
+  messageId?: string;
+}): void {
+  const canEmitInternalHook = Boolean(params.sessionKeyForInternalHooks);
+  if (!params.hasMessageSentHooks && !canEmitInternalHook) {
+    return;
+  }
+  const canonical = buildCanonicalSentMessageHookContext({
+    to: params.chatId,
+    content: params.content,
+    success: params.success,
+    error: params.error,
+    channelId: "feishu",
+    accountId: params.accountId,
+    conversationId: params.chatId,
+    messageId: params.messageId,
+    isGroup: params.mirrorIsGroup,
+    groupId: params.mirrorGroupId,
+  });
+  const logHookFailure = (message: string) => {
+    params.runtime.log?.(message);
+  };
+  if (params.hasMessageSentHooks) {
+    fireAndForgetHook(
+      params.hookRunner!.runMessageSent(
+        toPluginMessageSentEvent(canonical),
+        toPluginMessageContext(canonical),
+      ),
+      "feishu: message_sent plugin hook failed",
+      logHookFailure,
+    );
+  }
+  if (!canEmitInternalHook) {
+    return;
+  }
+  fireAndForgetHook(
+    triggerInternalHook(
+      createInternalHookEvent(
+        "message",
+        "sent",
+        params.sessionKeyForInternalHooks!,
+        toInternalMessageSentContext(canonical),
+      ),
+    ),
+    "feishu: message:sent internal hook failed",
+    logHookFailure,
+  );
+}
 
 export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherParams) {
   const core = getFeishuRuntime();
@@ -136,12 +216,34 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     mentionTargets,
     accountId,
     identity,
+    sessionKeyForInternalHooks,
+    mirrorIsGroup,
+    mirrorGroupId,
   } = params;
   const sendReplyToMessageId = skipReplyToInMessages ? undefined : replyToMessageId;
   const threadReplyMode = threadReply === true;
   const effectiveReplyInThread = threadReplyMode ? true : replyInThread;
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   const prefixContext = createReplyPrefixContext({ cfg, agentId });
+  const hookRunner = getGlobalHookRunner();
+  const hasMessageSentHooks = hookRunner?.hasHooks("message_sent") ?? false;
+  const emitMessageSent = (event: {
+    content: string;
+    success: boolean;
+    error?: string;
+    messageId?: string;
+  }) =>
+    emitFeishuMessageSentHooks({
+      hookRunner,
+      hasMessageSentHooks,
+      runtime: params.runtime,
+      chatId,
+      accountId,
+      sessionKeyForInternalHooks,
+      mirrorIsGroup,
+      mirrorGroupId,
+      ...event,
+    });
 
   let typingState: TypingIndicatorState | null = null;
   const { typingCallbacks } = createChannelReplyPipeline({
@@ -225,6 +327,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let statusLine = "";
   let snapshotBaseText = "";
   let lastSnapshotTextLength = 0;
+  let streamingSentHookEmitted = false;
   const deliveredFinalTexts = new Set<string>();
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
@@ -359,7 +462,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     })();
   };
 
-  const closeStreaming = async () => {
+  const closeStreaming = async (options?: { emitMessageSent?: boolean }) => {
     try {
       if (streamingStartPromise) {
         await streamingStartPromise;
@@ -372,12 +475,21 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           text = buildMentionedCardContent(mentionTargets, text);
         }
         const finalNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
+        const messageId = streaming.getMessageId();
         await streaming.close(text, { note: finalNote });
         // Track the raw streamed text so the duplicate-final check in deliver()
         // can skip the redundant text delivery that arrives after onIdle closes
         // the streaming card.
         if (streamText) {
           deliveredFinalTexts.add(streamText);
+        }
+        if (options?.emitMessageSent && streamText && !streamingSentHookEmitted) {
+          streamingSentHookEmitted = true;
+          emitMessageSent({
+            content: streamText,
+            success: true,
+            messageId,
+          });
         }
       }
     } finally {
@@ -390,6 +502,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       statusLine = "";
       snapshotBaseText = "";
       lastSnapshotTextLength = 0;
+      streamingSentHookEmitted = false;
     }
   };
 
@@ -406,8 +519,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     text: string;
     useCard: boolean;
     infoKind?: string;
-    sendChunk: (params: { chunk: string; isFirst: boolean }) => Promise<void>;
-  }) => {
+    sendChunk: (params: { chunk: string; isFirst: boolean }) => Promise<{ messageId?: string }>;
+  }): Promise<{ messageId?: string } | undefined> => {
     const chunkSource = params.useCard
       ? params.text
       : core.channel.text.convertMarkdownTables(params.text, tableMode);
@@ -415,8 +528,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       chunkSource,
       core.channel.text.chunkTextWithMode(chunkSource, textChunkLimit, chunkMode),
     );
+    let lastResult: { messageId?: string } | undefined;
     for (const [index, chunk] of chunks.entries()) {
-      await params.sendChunk({
+      lastResult = await params.sendChunk({
         chunk,
         isFirst: index === 0,
       });
@@ -424,24 +538,25 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     if (params.infoKind === "final") {
       deliveredFinalTexts.add(params.text);
     }
+    return lastResult;
   };
 
-  const sendMediaReplies = async (payload: ReplyPayload) => {
-    await sendMediaWithLeadingCaption({
-      mediaUrls: resolveSendableOutboundReplyParts(payload).mediaUrls,
-      caption: "",
-      send: async ({ mediaUrl }) => {
-        await sendMediaFeishu({
-          cfg,
-          to: chatId,
-          mediaUrl,
-          replyToMessageId: sendReplyToMessageId,
-          replyInThread: effectiveReplyInThread,
-          accountId,
-          ...(payload.audioAsVoice === true ? { audioAsVoice: true } : {}),
-        });
-      },
-    });
+  const sendMediaReplies = async (
+    payload: ReplyPayload,
+  ): Promise<{ messageId?: string } | undefined> => {
+    let lastResult: { messageId?: string } | undefined;
+    for (const mediaUrl of resolveSendableOutboundReplyParts(payload).mediaUrls) {
+      lastResult = await sendMediaFeishu({
+        cfg,
+        to: chatId,
+        mediaUrl,
+        replyToMessageId: sendReplyToMessageId,
+        replyInThread: effectiveReplyInThread,
+        accountId,
+        ...(payload.audioAsVoice === true ? { audioAsVoice: true } : {}),
+      });
+    }
+    return lastResult;
   };
 
   const { dispatcher, replyOptions, markDispatchIdle } =
@@ -464,95 +579,130 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         const skipTextForDuplicateFinal =
           info?.kind === "final" && hasText && deliveredFinalTexts.has(text);
         const shouldDeliverText = hasText && !skipTextForDuplicateFinal;
+        let delivered = false;
+        let messageId: string | undefined;
+        let skipFailureHook = false;
 
-        if (!shouldDeliverText && !hasMedia) {
-          return;
-        }
-
-        if (shouldDeliverText) {
-          const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
-
-          if (info?.kind === "block") {
-            // Drop internal block chunks unless we can safely consume them as
-            // streaming-card fallback content.
-            if (!(streamingEnabled && useCard)) {
-              return;
-            }
-            startStreaming();
-            if (streamingStartPromise) {
-              await streamingStartPromise;
-            }
-          }
-
-          if (info?.kind === "final" && streamingEnabled && useCard) {
-            startStreaming();
-            if (streamingStartPromise) {
-              await streamingStartPromise;
-            }
-          }
-
-          if (streaming?.isActive()) {
-            if (info?.kind === "block") {
-              // Some runtimes emit block payloads without onPartial/final callbacks.
-              // Mirror block text into streamText so onIdle close still sends content.
-              queueStreamingUpdate(text, { mode: "delta", dedupeWithLastPartial: true });
-            }
-            if (info?.kind === "final") {
-              streamText = text;
-              snapshotBaseText = "";
-              lastSnapshotTextLength = text.length;
-              flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
-            }
-            // Send media even when streaming handled the text
-            if (hasMedia) {
-              await sendMediaReplies(payload);
-            }
+        try {
+          if (!shouldDeliverText && !hasMedia) {
             return;
           }
 
-          if (useCard) {
-            const cardHeader = resolveCardHeader(agentId, identity);
-            const cardNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
-            await sendChunkedTextReply({
-              text,
-              useCard: true,
-              infoKind: info?.kind,
-              sendChunk: async ({ chunk, isFirst }) => {
-                await sendStructuredCardFeishu({
-                  cfg,
-                  to: chatId,
-                  text: chunk,
-                  replyToMessageId: sendReplyToMessageId,
-                  replyInThread: effectiveReplyInThread,
-                  mentions: isFirst ? mentionTargets : undefined,
-                  accountId,
-                  header: cardHeader,
-                  note: cardNote,
-                });
-              },
-            });
-          } else {
-            await sendChunkedTextReply({
-              text,
-              useCard: false,
-              infoKind: info?.kind,
-              sendChunk: async ({ chunk, isFirst }) => {
-                await sendMessageFeishu({
-                  cfg,
-                  to: chatId,
-                  text: chunk,
-                  replyToMessageId: sendReplyToMessageId,
-                  replyInThread: effectiveReplyInThread,
-                  mentions: isFirst ? mentionTargets : undefined,
-                  accountId,
-                });
-              },
+          if (shouldDeliverText) {
+            const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
+
+            if (info?.kind === "block") {
+              // Drop internal block chunks unless we can safely consume them as
+              // streaming-card fallback content.
+              if (!(streamingEnabled && useCard)) {
+                return;
+              }
+              startStreaming();
+              if (streamingStartPromise) {
+                await streamingStartPromise;
+              }
+            }
+
+            if (info?.kind === "final" && streamingEnabled && useCard) {
+              startStreaming();
+              if (streamingStartPromise) {
+                await streamingStartPromise;
+              }
+            }
+
+            if (streaming?.isActive()) {
+              if (info?.kind === "block") {
+                // Some runtimes emit block payloads without onPartial/final callbacks.
+                // Mirror block text into streamText so onIdle close still sends content.
+                queueStreamingUpdate(text, { mode: "delta", dedupeWithLastPartial: true });
+              }
+              if (info?.kind === "final") {
+                streamText = text;
+                snapshotBaseText = "";
+                lastSnapshotTextLength = text.length;
+                flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
+              }
+              // Send media even when streaming handled the text. The final
+              // message:sent emission happens when the streaming card closes.
+              if (hasMedia) {
+                try {
+                  await sendMediaReplies(payload);
+                } catch (error) {
+                  if (streamText && !streamingSentHookEmitted) {
+                    await closeStreaming({ emitMessageSent: true });
+                    skipFailureHook = true;
+                  }
+                  throw error;
+                }
+              }
+              return;
+            }
+
+            if (useCard) {
+              const cardHeader = resolveCardHeader(agentId, identity);
+              const cardNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
+              const result = await sendChunkedTextReply({
+                text,
+                useCard: true,
+                infoKind: info?.kind,
+                sendChunk: async ({ chunk, isFirst }) =>
+                  await sendStructuredCardFeishu({
+                    cfg,
+                    to: chatId,
+                    text: chunk,
+                    replyToMessageId: sendReplyToMessageId,
+                    replyInThread: effectiveReplyInThread,
+                    mentions: isFirst ? mentionTargets : undefined,
+                    accountId,
+                    header: cardHeader,
+                    note: cardNote,
+                  }),
+              });
+              messageId = result?.messageId;
+              delivered = true;
+            } else {
+              const result = await sendChunkedTextReply({
+                text,
+                useCard: false,
+                infoKind: info?.kind,
+                sendChunk: async ({ chunk, isFirst }) =>
+                  await sendMessageFeishu({
+                    cfg,
+                    to: chatId,
+                    text: chunk,
+                    replyToMessageId: sendReplyToMessageId,
+                    replyInThread: effectiveReplyInThread,
+                    mentions: isFirst ? mentionTargets : undefined,
+                    accountId,
+                  }),
+              });
+              messageId = result?.messageId;
+              delivered = true;
+            }
+          }
+
+          if (hasMedia) {
+            const result = await sendMediaReplies(payload);
+            messageId = result?.messageId ?? messageId;
+            delivered = true;
+          }
+
+          if (delivered) {
+            emitMessageSent({
+              content: text,
+              success: true,
+              messageId,
             });
           }
-        }
-
-        if (hasMedia) {
-          await sendMediaReplies(payload);
+        } catch (error) {
+          if (!skipFailureHook) {
+            emitMessageSent({
+              content: text,
+              success: false,
+              error: formatHookError(error),
+            });
+          }
+          throw error;
         }
       },
       onError: async (error, info) => {
@@ -563,7 +713,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         typingCallbacks?.onIdle?.();
       },
       onIdle: async () => {
-        await closeStreaming();
+        await closeStreaming({ emitMessageSent: true });
         typingCallbacks?.onIdle?.();
       },
       onCleanup: () => {
