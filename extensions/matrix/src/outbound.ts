@@ -31,8 +31,8 @@ function resolveMatrixChannelData(payload: ReplyPayload): MatrixChannelData {
 
 function buildMatrixPresentationContent(presentation: MessagePresentation) {
   return {
-    version: 1,
     ...presentation,
+    version: 1,
   };
 }
 
