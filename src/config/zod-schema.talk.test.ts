@@ -6,10 +6,22 @@ describe("OpenClawSchema talk validation", () => {
     expect(
       OpenClawSchema.safeParse({
         talk: {
+          consultThinkingLevel: "low",
+          consultFastMode: true,
           silenceTimeoutMs: 1500,
         },
       }),
     ).toMatchObject({ success: true });
+  });
+
+  it("rejects invalid talk.consultThinkingLevel", () => {
+    expect(() =>
+      OpenClawSchema.parse({
+        talk: {
+          consultThinkingLevel: "turbo",
+        },
+      }),
+    ).toThrow(/consultThinkingLevel/i);
   });
 
   it.each([

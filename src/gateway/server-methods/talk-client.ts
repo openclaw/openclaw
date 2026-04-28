@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { normalizeTalkSection } from "../../config/talk.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -45,6 +46,7 @@ async function startRealtimeToolCallAgentConsult(params: {
     return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)) };
   }
   const idempotencyKey = `talk-${params.callId}-${randomUUID()}`;
+  const normalizedTalk = normalizeTalkSection(params.request.context.getRuntimeConfig().talk);
   let chatResponse: { ok: true; result: unknown } | { ok: false; error: ErrorShape } | undefined;
   await chatHandlers["chat.send"]({
     ...params.request,
@@ -57,6 +59,12 @@ async function startRealtimeToolCallAgentConsult(params: {
       sessionKey: params.sessionKey,
       message,
       idempotencyKey,
+      ...(normalizedTalk?.consultThinkingLevel
+        ? { thinking: normalizedTalk.consultThinkingLevel }
+        : {}),
+      ...(typeof normalizedTalk?.consultFastMode === "boolean"
+        ? { fastMode: normalizedTalk.consultFastMode }
+        : {}),
     },
     respond: (ok: boolean, result?: unknown, error?: ErrorShape) => {
       chatResponse = ok
