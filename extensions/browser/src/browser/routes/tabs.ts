@@ -1,4 +1,5 @@
 import { resolveBrowserNavigationProxyMode } from "../browser-proxy-mode.js";
+import { probeChromeMcpHealth } from "../chrome-mcp.js";
 import {
   BrowserProfileUnavailableError,
   BrowserTabNotFoundError,
@@ -9,6 +10,7 @@ import {
   assertBrowserNavigationResultAllowed,
   withBrowserNavigationPolicy,
 } from "../navigation-guard.js";
+import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import { resolveTargetIdFromTabs } from "../target-id.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
@@ -85,6 +87,18 @@ async function ensureBrowserRunning(profileCtx: ProfileContext, res: BrowserResp
     return false;
   }
   return true;
+}
+
+async function isChromeMcpProfileAttached(profileCtx: ProfileContext): Promise<boolean> {
+  const health = await probeChromeMcpHealth(profileCtx.profile.name, profileCtx.profile);
+  return health.attached;
+}
+
+async function isProfileReadyForTabList(profileCtx: ProfileContext): Promise<boolean> {
+  const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
+  return capabilities.usesChromeMcp
+    ? await isChromeMcpProfileAttached(profileCtx)
+    : await profileCtx.isReachable(300);
 }
 
 async function redactBlockedTabUrls(params: {
@@ -167,8 +181,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
         res,
         ctx,
         run: async (profileCtx) => {
-          const reachable = await profileCtx.isReachable(300);
-          if (!reachable) {
+          if (!(await isProfileReadyForTabList(profileCtx))) {
             return res.json({ running: false, tabs: [] as unknown[] });
           }
           const tabs = await redactBlockedTabUrls({

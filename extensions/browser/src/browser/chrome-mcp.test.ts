@@ -7,6 +7,7 @@ import {
   listChromeMcpTabs,
   navigateChromeMcpPage,
   openChromeMcpTab,
+  probeChromeMcpHealth,
   resetChromeMcpSessionsForTest,
   setChromeMcpSessionFactoryForTest,
 } from "./chrome-mcp.js";
@@ -674,6 +675,26 @@ describe("chrome MCP page parsing", () => {
     const tabs = await listChromeMcpTabs("chrome-live");
     expect(factoryCalls).toBe(2);
     expect(tabs).toHaveLength(2);
+  });
+
+  it("probeChromeMcpHealth returns attached:false without invoking the session factory when cache is empty", async () => {
+    const factory = vi.fn(async () => createFakeSession());
+    setChromeMcpSessionFactoryForTest(factory as unknown as ChromeMcpSessionFactory);
+
+    const result = await probeChromeMcpHealth("chrome-live");
+
+    expect(result).toEqual({ attached: false, mcpPid: null });
+    expect(factory).not.toHaveBeenCalled();
+  });
+
+  it("probeChromeMcpHealth reports attached when a ready session exists in the cache", async () => {
+    const factory: ChromeMcpSessionFactory = async () => createFakeSession();
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await listChromeMcpTabs("chrome-live");
+
+    const result = await probeChromeMcpHealth("chrome-live");
+    expect(result).toEqual({ attached: true, mcpPid: 123 });
   });
 
   it("honors timeoutMs for ephemeral availability probes", async () => {

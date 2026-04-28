@@ -1,5 +1,5 @@
 import { snapshotAria } from "../cdp.js";
-import { getChromeMcpPid } from "../chrome-mcp.js";
+import { probeChromeMcpHealth } from "../chrome-mcp.js";
 import { resolveBrowserExecutableForPlatform } from "../chrome.executables.js";
 import { resolveManagedBrowserHeadlessMode } from "../config.js";
 import { buildBrowserDoctorReport } from "../doctor.js";
@@ -70,11 +70,11 @@ async function buildBrowserStatus(req: BrowserRequest, ctx: BrowserRouteContext)
   }
 
   const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
-  const [cdpHttp, cdpReady] = capabilities.usesChromeMcp
-    ? await (async () => {
-        const ready = await profileCtx.isTransportAvailable(600);
-        return [ready, ready] as const;
-      })()
+  const chromeMcpHealth = capabilities.usesChromeMcp
+    ? await probeChromeMcpHealth(profileCtx.profile.name, profileCtx.profile)
+    : null;
+  const [cdpHttp, cdpReady] = chromeMcpHealth
+    ? ([chromeMcpHealth.attached, chromeMcpHealth.attached] as const)
     : await Promise.all([profileCtx.isHttpReachable(300), profileCtx.isTransportAvailable(600)]);
 
   const profileState = current.profiles.get(profileCtx.profile.name);
@@ -112,7 +112,7 @@ async function buildBrowserStatus(req: BrowserRequest, ctx: BrowserRouteContext)
     cdpReady,
     cdpHttp,
     pid: capabilities.usesChromeMcp
-      ? getChromeMcpPid(profileCtx.profile.name)
+      ? (chromeMcpHealth?.mcpPid ?? null)
       : (profileState?.running?.pid ?? null),
     cdpPort: capabilities.usesChromeMcp ? null : profileCtx.profile.cdpPort,
     cdpUrl: capabilities.usesChromeMcp ? null : profileCtx.profile.cdpUrl,

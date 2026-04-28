@@ -18,6 +18,7 @@ const chromeMcpMock = vi.hoisted(() => ({
   })),
   closeChromeMcpTab: vi.fn(async () => {}),
   getChromeMcpPid: vi.fn(() => 4321),
+  probeChromeMcpHealth: vi.fn(async () => ({ attached: true, mcpPid: 4321 })),
 }));
 
 vi.mock("./chrome-mcp.js", () => chromeMcpMock);
@@ -102,12 +103,15 @@ afterEach(() => {
 });
 
 describe("browser server-context existing-session profile", () => {
-  it("reports attach-only profiles as running when the MCP session is available but no page is selected", async () => {
+  it("reports attach-only profiles as running when the MCP cache is healthy but no page is selected", async () => {
     fs.mkdirSync("/tmp/brave-profile", { recursive: true });
     const state = makeState();
     const ctx = createBrowserRouteContext({ getState: () => state });
 
-    vi.mocked(chromeMcp.ensureChromeMcpAvailable).mockResolvedValueOnce();
+    vi.mocked(chromeMcp.probeChromeMcpHealth).mockResolvedValueOnce({
+      attached: true,
+      mcpPid: 4321,
+    });
     vi.mocked(chromeMcp.listChromeMcpTabs).mockRejectedValueOnce(new Error("No page selected"));
 
     const profiles = await ctx.listProfiles();
@@ -120,11 +124,11 @@ describe("browser server-context existing-session profile", () => {
       }),
     ]);
 
-    expect(chromeMcp.ensureChromeMcpAvailable).toHaveBeenCalledWith(
+    expect(chromeMcp.probeChromeMcpHealth).toHaveBeenCalledWith(
       "chrome-live",
       expectChromeLiveProfile(),
-      { ephemeral: true, timeoutMs: 300 },
     );
+    expect(chromeMcp.ensureChromeMcpAvailable).not.toHaveBeenCalled();
     expect(chromeMcp.listChromeMcpTabs).toHaveBeenCalledWith(
       "chrome-live",
       expectChromeLiveProfile(),
@@ -132,6 +136,31 @@ describe("browser server-context existing-session profile", () => {
         ephemeral: true,
       },
     );
+  });
+
+  it("reports chrome-mcp profiles as not-running when the session cache is empty without spawning", async () => {
+    fs.mkdirSync("/tmp/brave-profile", { recursive: true });
+    const state = makeState();
+    const ctx = createBrowserRouteContext({ getState: () => state });
+
+    vi.mocked(chromeMcp.probeChromeMcpHealth).mockResolvedValueOnce({
+      attached: false,
+      mcpPid: null,
+    });
+
+    const profiles = await ctx.listProfiles();
+    expect(profiles).toEqual([
+      expect.objectContaining({
+        name: "chrome-live",
+        transport: "chrome-mcp",
+        running: false,
+        tabCount: 0,
+      }),
+    ]);
+
+    expect(chromeMcp.probeChromeMcpHealth).toHaveBeenCalledTimes(1);
+    expect(chromeMcp.ensureChromeMcpAvailable).not.toHaveBeenCalled();
+    expect(chromeMcp.listChromeMcpTabs).not.toHaveBeenCalled();
   });
 
   it("keeps the next real attach on the normal sticky session path after an idle status probe", async () => {

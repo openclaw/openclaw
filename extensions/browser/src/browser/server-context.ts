@@ -3,7 +3,7 @@ import {
   resolveCdpReachabilityPolicy,
 } from "./cdp-reachability-policy.js";
 import { usesFastLoopbackCdpProbeClass } from "./cdp-timeouts.js";
-import { listChromeMcpTabs } from "./chrome-mcp.js";
+import { listChromeMcpTabs, probeChromeMcpHealth } from "./chrome-mcp.js";
 import { isChromeReachable, resolveOpenClawUserDataDir } from "./chrome.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { resolveProfile } from "./config.js";
@@ -180,7 +180,8 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
 
       if (capabilities.usesChromeMcp) {
         try {
-          running = await profileCtx.isTransportAvailable(300);
+          const health = await probeChromeMcpHealth(profile.name, profile);
+          running = health.attached;
           if (running) {
             const tabs = await listChromeMcpTabs(profile.name, profile, {
               ephemeral: true,

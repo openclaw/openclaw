@@ -355,6 +355,7 @@ const chromeMcpMocks = vi.hoisted(() => ({
     type: "page",
   })),
   pressChromeMcpKey: vi.fn(async () => {}),
+  probeChromeMcpHealth: vi.fn(async () => ({ attached: true, mcpPid: 4321 })),
   resizeChromeMcpPage: vi.fn(async () => {}),
   takeChromeMcpScreenshot: vi.fn(async () => Buffer.from("png")),
   takeChromeMcpSnapshot: vi.fn(async () => ({

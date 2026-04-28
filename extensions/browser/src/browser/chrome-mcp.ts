@@ -89,7 +89,27 @@ const STALE_SELECTED_PAGE_ERROR =
 
 const sessions = new Map<string, ChromeMcpSession>();
 const pendingSessions = new Map<string, Promise<ChromeMcpSession>>();
+const sessionReadyState = new WeakMap<ChromeMcpSession, "pending" | "ready" | "failed">();
 let sessionFactory: ChromeMcpSessionFactory | null = null;
+
+function trackSessionReadyState(session: ChromeMcpSession): void {
+  if (sessionReadyState.has(session)) {
+    return;
+  }
+  sessionReadyState.set(session, "pending");
+  session.ready.then(
+    () => {
+      if (sessionReadyState.get(session) === "pending") {
+        sessionReadyState.set(session, "ready");
+      }
+    },
+    () => {
+      if (sessionReadyState.get(session) === "pending") {
+        sessionReadyState.set(session, "failed");
+      }
+    },
+  );
+}
 
 function asPages(value: unknown): ChromeMcpStructuredPage[] {
   if (!Array.isArray(value)) {
@@ -503,6 +523,7 @@ async function getSession(
     if (!pending) {
       pending = (async () => {
         const created = await (sessionFactory ?? createRealSession)(profileName, options);
+        trackSessionReadyState(created);
         if (pendingSessions.get(cacheKey) === pending) {
           sessions.set(cacheKey, created);
         } else {
@@ -760,6 +781,32 @@ export function getChromeMcpPid(profileName: string): number | null {
     }
   }
   return null;
+}
+
+/**
+ * Non-spawning health probe for the cached Chrome MCP session.
+ *
+ * Reports attached:true only when a session is in the cache, its child
+ * process pid is set, and its handshake (`session.ready`) has resolved.
+ * Never calls getSession, never spawns, and never awaits a still-pending
+ * session — callers (status polls, listProfiles, GET /tabs) must not be
+ * able to trigger a fresh chrome-devtools-mcp spawn that would re-pop the
+ * macOS automation-consent dialog after a gateway restart.
+ */
+export async function probeChromeMcpHealth(
+  profileName: string,
+  profileOptions?: string | ChromeMcpProfileOptions,
+): Promise<{ attached: boolean; mcpPid: number | null }> {
+  const options = normalizeChromeMcpOptions(profileOptions);
+  const cacheKey = buildChromeMcpSessionCacheKey(profileName, options);
+  const session = sessions.get(cacheKey);
+  if (!session || session.transport.pid == null) {
+    return { attached: false, mcpPid: null };
+  }
+  if (sessionReadyState.get(session) !== "ready") {
+    return { attached: false, mcpPid: null };
+  }
+  return { attached: true, mcpPid: session.transport.pid };
 }
 
 export async function closeChromeMcpSession(profileName: string): Promise<boolean> {
