@@ -853,6 +853,32 @@ describe("model-selection", () => {
         ref: { provider: "opencode-go", model: "kimi-k2.6" },
       });
     });
+
+    it("resolves slash-form aliases through the allowlist path", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "openai/xiaomi/mimo-v2-pro-mit": {
+                alias: "xiaomi/mimo-v2-pro-mit",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveAllowedModelRef({
+        cfg,
+        catalog: [],
+        raw: "xiaomi/mimo-v2-pro-mit",
+        defaultProvider: "openai",
+      });
+
+      expect(result).toEqual({
+        key: "openai/xiaomi/mimo-v2-pro-mit",
+        ref: { provider: "openai", model: "xiaomi/mimo-v2-pro-mit" },
+      });
+    });
   });
 
   describe("resolveModelRefFromString", () => {
@@ -976,6 +1002,33 @@ describe("model-selection", () => {
         model: "moonshotai/kimi-k2.5",
       });
       expect(resolved?.alias).toBe("kimi");
+    });
+
+    it("resolves slash-form aliases before provider/model parsing", () => {
+      const index = {
+        byAlias: new Map([
+          [
+            "xiaomi/mimo-v2-pro-mit",
+            {
+              alias: "xiaomi/mimo-v2-pro-mit",
+              ref: { provider: "openai", model: "xiaomi/mimo-v2-pro-mit" },
+            },
+          ],
+        ]),
+        byKey: new Map(),
+      };
+
+      const resolved = resolveModelRefFromString({
+        raw: "xiaomi/mimo-v2-pro-mit",
+        defaultProvider: "openai",
+        aliasIndex: index,
+      });
+
+      expect(resolved?.ref).toEqual({
+        provider: "openai",
+        model: "xiaomi/mimo-v2-pro-mit",
+      });
+      expect(resolved?.alias).toBe("xiaomi/mimo-v2-pro-mit");
     });
   });
 
