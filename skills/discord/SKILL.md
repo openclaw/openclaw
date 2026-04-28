@@ -21,7 +21,7 @@ Use the `message` tool. No provider-specific `discord` tool exposed to the agent
 - Avoid Markdown tables in outbound Discord messages.
 - Mention users as `<@USER_ID>`.
 - Prefer Discord components v2 (`components`) for rich UI; use legacy `embeds` only when you must.
-- **Don't repeat your conversational reply via `message.send`.** The runtime already delivers your final assistant text to the originating channel — and when the channel is configured with `autoThread: true`, it delivers that reply to the auto-created thread, not the parent. Use `message.send` only for sideband traffic (proactive notifications to a different target, mid-turn status updates, posting to another channel/thread). Calling `message.send` for the same conversational answer the runtime is about to deliver produces duplicate replies in the parent channel + thread.
+- **Don't repeat your conversational reply via `message.send` when the runtime will deliver it on its own.** The clearest case: with `autoThread: true`, the runtime delivers your final assistant text to the auto-created thread — calling `message.send` for the same answer also posts it in the parent channel, producing the duplicate. Use `message.send` for traffic the runtime won't deliver on its own: proactive notifications, mid-turn status updates, or sends to a different channel / target / thread.
 
 ## Targets
 
