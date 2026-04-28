@@ -6,8 +6,6 @@ import { createLogger } from "./logging.js";
 import { isSyntheticOrInternalEnvelope, stripEnvelope } from "./strip-envelope.js";
 import { createTriggerManager, getRecallTrigger, isInternalPrompt } from "./triggers.js";
 
-let currentRuntime;
-
 function sessionKeyFor(ctx = {}, event = {}) {
   return (
     ctx.sessionKey ||
@@ -263,13 +261,18 @@ export const plugin = {
   description:
     "Triggers recall backends from user questions and injects relevant memory into the prompt.",
   register(api) {
-    if (currentRuntime) void currentRuntime.dispose();
-    currentRuntime = createRuntime(api.pluginConfig || {}, api.logger || console);
-    if (!currentRuntime.cfg.enabled) {
+    const runtime = createRuntime(api.pluginConfig || {}, api.logger || console);
+    if (!runtime.cfg.enabled) {
       api.logger?.info?.("auto-recall: disabled");
-      return;
+      return () => {
+        void runtime.dispose();
+      };
     }
-    api.on("before_prompt_build", createBeforePromptBuildHandler(currentRuntime));
+    const unsubscribe = api.on("before_prompt_build", createBeforePromptBuildHandler(runtime));
+    return () => {
+      if (typeof unsubscribe === "function") unsubscribe();
+      void runtime.dispose();
+    };
   },
 };
 

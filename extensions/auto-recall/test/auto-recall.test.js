@@ -423,6 +423,43 @@ test("ScriptBackend uses argv/stdin protocols and does not invoke a shell", asyn
   assert.ok(abortedResult.diagnostics.latencyMs < 100);
 });
 
+test("ScriptBackend handles missing timeout and fast-exit stdin safely", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "auto-recall-script-edge-"));
+  const okScript = path.join(tmp, "ok.mjs");
+  await fs.writeFile(okScript, "console.log(JSON.stringify({answer:'no timeout',confidence:.9}))\n");
+  const noTimeoutBackend = new ScriptBackend({
+    command: process.execPath,
+    args: [okScript],
+    queryMode: "arg",
+    protocol: "json",
+  });
+  const noTimeout = await noTimeoutBackend.query({
+    text: "hello",
+    normalizedText: "hello",
+    trigger: {},
+    signal: new AbortController().signal,
+  });
+  assert.equal(noTimeout.status, "ok");
+  assert.equal(noTimeout.answer, "no timeout");
+
+  const fastExitScript = path.join(tmp, "fast-exit.mjs");
+  await fs.writeFile(fastExitScript, "process.exit(0)\n");
+  const fastExitBackend = new ScriptBackend({
+    command: process.execPath,
+    args: [fastExitScript],
+    queryMode: "stdin",
+    protocol: "json",
+    timeoutMs: 1000,
+  });
+  const fastExit = await fastExitBackend.query({
+    text: "x".repeat(1024 * 1024),
+    normalizedText: "x",
+    trigger: {},
+    signal: new AbortController().signal,
+  });
+  assert.ok(["not_found", "error"].includes(fastExit.status));
+});
+
 test("cache isolation uses sessionKey from event metadata when ctx omits it", async () => {
   const seen = [];
   const server = http.createServer((req, res) => {
@@ -754,6 +791,22 @@ test("hot reload keeps last-known-good trigger snapshot on malformed config", as
 
 test("plugin entry registers and helpers work", () => {
   assert.equal(typeof plugin.register, "function");
+  const handlers = [];
+  const cleanup = plugin.register({
+    pluginConfig: { backends: [{ type: "http", url: "http://127.0.0.1:1" }] },
+    logger: { info() {}, warn() {} },
+    on(name, handler) {
+      handlers.push({ name, handler });
+      return () => {
+        handlers.length = 0;
+      };
+    },
+  });
+  assert.equal(handlers.length, 1);
+  assert.equal(handlers[0].name, "before_prompt_build");
+  assert.equal(typeof cleanup, "function");
+  cleanup();
+  assert.equal(handlers.length, 0);
   assert.equal(
     deriveChatType({ messageProvider: "telegram", sessionKey: "agent:main:telegram:group:-100" }),
     "group",

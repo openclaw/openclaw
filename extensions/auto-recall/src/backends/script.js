@@ -175,15 +175,19 @@ export class ScriptBackend {
           cache: { cacheable: false },
         });
       };
-      const timer = setTimeout(() => {
-        killGroup();
-        finish({
-          status: "error",
-          confidence: 0,
-          diagnostics: { reason: "timeout" },
-          cache: { cacheable: false },
-        });
-      }, timeoutMs).unref?.();
+      const timer =
+        timeoutMs > 0
+          ? setTimeout(() => {
+              killGroup();
+              finish({
+                status: "error",
+                confidence: 0,
+                diagnostics: { reason: "timeout" },
+                cache: { cacheable: false },
+              });
+            }, timeoutMs)
+          : undefined;
+      timer?.unref?.();
       request.signal?.addEventListener?.("abort", onAbort, { once: true });
 
       child.stdout.on("data", (chunk) => {
@@ -192,6 +196,7 @@ export class ScriptBackend {
       child.stderr.on("data", (chunk) => {
         stderr = appendLimited(stderr, chunk, this.config.maxStderrBytes);
       });
+      child.stdin.on("error", () => {});
       child.on("error", (error) =>
         finish({
           status: "error",
