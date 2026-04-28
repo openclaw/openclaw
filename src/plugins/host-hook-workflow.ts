@@ -224,12 +224,19 @@ function extractCronJobId(value: unknown): string | undefined {
     return undefined;
   }
   const record = value as Record<string, unknown>;
+  const topLevelId = normalizeCronJobId(record.jobId ?? record.id);
+  if (topLevelId) {
+    return topLevelId;
+  }
   const payload =
     record.payload && typeof record.payload === "object"
       ? (record.payload as Record<string, unknown>)
       : record;
-  const id = payload.jobId ?? payload.id;
-  return typeof id === "string" && id.trim() ? id.trim() : undefined;
+  return normalizeCronJobId(payload.jobId ?? payload.id);
+}
+
+function normalizeCronJobId(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 export async function schedulePluginSessionTurn(params: {
