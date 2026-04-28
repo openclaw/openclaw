@@ -74,6 +74,7 @@ function hasCarbonGatewaySocketStarted(plugin: carbonGateway.GatewayPlugin): boo
 
 export function resolveDiscordGatewayIntents(
   intentsConfig?: import("openclaw/plugin-sdk/config-types").DiscordIntentsConfig,
+  voiceConfig?: { enabled?: boolean },
 ): number {
   let intents =
     carbonGateway.GatewayIntents.Guilds |
@@ -81,8 +82,14 @@ export function resolveDiscordGatewayIntents(
     carbonGateway.GatewayIntents.MessageContent |
     carbonGateway.GatewayIntents.DirectMessages |
     carbonGateway.GatewayIntents.GuildMessageReactions |
-    carbonGateway.GatewayIntents.DirectMessageReactions |
-    carbonGateway.GatewayIntents.GuildVoiceStates;
+    carbonGateway.GatewayIntents.DirectMessageReactions;
+  // Only subscribe to GuildVoiceStates when voice is actually enabled
+  // (default `true` preserves prior behavior). Subscribing to this intent
+  // when `channels.discord.voice.enabled === false` was the source of a
+  // sustained ~100% CPU spin in the gateway process on Linux. See #73709.
+  if (voiceConfig?.enabled !== false) {
+    intents |= carbonGateway.GatewayIntents.GuildVoiceStates;
+  }
   if (intentsConfig?.presence) {
     intents |= carbonGateway.GatewayIntents.GuildPresences;
   }
@@ -479,7 +486,10 @@ export function createDiscordGatewayPlugin(params: {
     ) => Promise<void>;
   };
 }): carbonGateway.GatewayPlugin {
-  const intents = resolveDiscordGatewayIntents(params.discordConfig?.intents);
+  const intents = resolveDiscordGatewayIntents(
+    params.discordConfig?.intents,
+    params.discordConfig?.voice,
+  );
   const proxy = resolveEffectiveDebugProxyUrl(params.discordConfig?.proxy);
   const debugProxySettings = resolveDebugProxySettings();
   const options = {

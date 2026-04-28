@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Channels/Discord: gate the `GuildVoiceStates` gateway intent on `channels.discord.voice.enabled` instead of subscribing unconditionally, so operators who set `voice.enabled: false` no longer pin the gateway process at ~100% CPU on Linux (~20-33% on macOS) from voice-state events that nothing consumes. Default behavior is unchanged (voice on → voice-state intent on). Fixes #73709. Thanks @sanchezm86.
 - CLI/plugins: use plugin metadata snapshots for install slot selection and add opt-in plugin lifecycle timing traces, so plugin install avoids runtime-loading the plugin registry for metadata-only decisions. Thanks @shakkernerd.
 - fix(plugins): restrict bundled plugin dir resolution to trusted package roots. (#73275) Thanks @pgondhi987.
 - fix(security): prevent workspace PATH injection via service env and trash helpers. (#73264) Thanks @pgondhi987.
