@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { exportTrajectoryCommand } from "../../commands/export-trajectory.js";
 import { flowsCancelCommand, flowsListCommand, flowsShowCommand } from "../../commands/flows.js";
 import { healthCommand } from "../../commands/health.js";
 import { sessionsCleanupCommand } from "../../commands/sessions-cleanup.js";
@@ -216,6 +217,38 @@ export function registerStatusHealthSessionsCommands(program: Command) {
             enforce: Boolean(opts.enforce),
             fixMissing: Boolean(opts.fixMissing),
             activeKey: opts.activeKey as string | undefined,
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  sessionsCmd
+    .command("export-trajectory")
+    .description("Export a redacted trajectory bundle for a stored session")
+    .requiredOption("--session-key <key>", "Session key to export")
+    .option("--output <path>", "Output directory name inside .openclaw/trajectory-exports")
+    .option("--workspace <path>", "Workspace root for the export (default: current directory)")
+    .option("--store <path>", "Path to session store (default: resolved from session key)")
+    .option("--agent <id>", "Agent id for resolving the default session store")
+    .option("--json", "Output JSON", false)
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.opts() as
+        | {
+            store?: string;
+            agent?: string;
+            json?: boolean;
+          }
+        | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await exportTrajectoryCommand(
+          {
+            sessionKey: opts.sessionKey as string,
+            output: opts.output as string | undefined,
+            workspace: opts.workspace as string | undefined,
+            store: (opts.store as string | undefined) ?? parentOpts?.store,
+            agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
             json: Boolean(opts.json || parentOpts?.json),
           },
           defaultRuntime,

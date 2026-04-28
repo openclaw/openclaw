@@ -129,7 +129,7 @@ Current source-of-truth:
     - `/stop` aborts the current run.
     - `/session idle <duration|off>` and `/session max-age <duration|off>` manage thread-binding expiry.
     - `/export-session [path]` exports the current session to HTML. Alias: `/export`.
-    - `/export-trajectory [path]` exports a JSONL [trajectory bundle](/tools/trajectory) for the current session. Alias: `/trajectory`.
+    - `/export-trajectory [path]` asks for exec approval, then exports a JSONL [trajectory bundle](/tools/trajectory) for the current session. In group chats, the approval prompt and export result go to the owner privately. Alias: `/trajectory`.
 
   </Accordion>
   <Accordion title="Model and run controls">

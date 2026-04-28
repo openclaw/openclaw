@@ -1,10 +1,6 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { createExecTool } from "../../agents/bash-tools.js";
 import type { ExecToolDetails } from "../../agents/bash-tools.js";
-import {
-  getLoadedChannelPlugin,
-  resolveChannelApprovalAdapter,
-} from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -13,11 +9,15 @@ import type { InteractiveReply } from "../../interactive/payload.js";
 import { executePluginCommand, matchPluginCommand } from "../../plugins/commands.js";
 import type { PluginCommandDiagnosticsSession, PluginCommandResult } from "../../plugins/types.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { rejectNonOwnerCommand } from "./command-gates.js";
+import {
+  deliverPrivateCommandReply,
+  readCommandMessageThreadId,
+  resolvePrivateCommandRouteTargets,
+  type PrivateCommandRouteTarget,
+} from "./commands-private-route.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
-import { routeReply } from "./route-reply.js";
 
 const DIAGNOSTICS_COMMAND = "/diagnostics";
 const CODEX_DIAGNOSTICS_COMMAND = "/codex diagnostics";
@@ -34,10 +34,10 @@ type DiagnosticsCommandDeps = {
   createExecTool: typeof createExecTool;
   resolvePrivateDiagnosticsTargets: (
     params: HandleCommandsParams,
-  ) => Promise<PrivateDiagnosticsTarget[]>;
+  ) => Promise<PrivateCommandRouteTarget[]>;
   deliverPrivateDiagnosticsReply: (params: {
     commandParams: HandleCommandsParams;
-    targets: PrivateDiagnosticsTarget[];
+    targets: PrivateCommandRouteTarget[];
     reply: ReplyPayload;
   }) => Promise<boolean>;
 };
@@ -46,13 +46,6 @@ const defaultDiagnosticsCommandDeps: DiagnosticsCommandDeps = {
   createExecTool,
   resolvePrivateDiagnosticsTargets: resolvePrivateDiagnosticsTargetsForCommand,
   deliverPrivateDiagnosticsReply: deliverPrivateDiagnosticsReply,
-};
-
-type PrivateDiagnosticsTarget = {
-  channel: string;
-  to: string;
-  accountId?: string | null;
-  threadId?: string | number | null;
 };
 
 export function createDiagnosticsCommandHandler(
@@ -142,7 +135,7 @@ async function buildDiagnosticsReply(
   args: string,
   options: {
     diagnosticsPrivateRouted?: boolean;
-    privateApprovalTarget?: PrivateDiagnosticsTarget;
+    privateApprovalTarget?: PrivateCommandRouteTarget;
   } = {},
 ): Promise<ReplyPayload> {
   const lines = buildDiagnosticsPreamble();
@@ -218,37 +211,11 @@ function buildDiagnosticsPreamble(): string[] {
 
 async function resolvePrivateDiagnosticsTargetsForCommand(
   params: HandleCommandsParams,
-): Promise<PrivateDiagnosticsTarget[]> {
-  const adapter = resolveChannelApprovalAdapter(getLoadedChannelPlugin(params.command.channel));
-  const native = adapter?.native;
-  if (!native?.resolveApproverDmTargets) {
-    return [];
-  }
-  const request = buildDiagnosticsApprovalRequest(params);
-  const accountId = params.ctx.AccountId ?? undefined;
-  const capabilities = native.describeDeliveryCapabilities({
-    cfg: params.cfg,
-    accountId,
-    approvalKind: "exec",
-    request,
+): Promise<PrivateCommandRouteTarget[]> {
+  return await resolvePrivateCommandRouteTargets({
+    commandParams: params,
+    request: buildDiagnosticsApprovalRequest(params),
   });
-  if (!capabilities.enabled || !capabilities.supportsApproverDmSurface) {
-    return [];
-  }
-  const targets = await native.resolveApproverDmTargets({
-    cfg: params.cfg,
-    accountId,
-    approvalKind: "exec",
-    request,
-  });
-  return dedupePrivateDiagnosticsTargets(
-    targets.map((target) => ({
-      channel: params.command.channel,
-      to: target.to,
-      accountId,
-      threadId: target.threadId,
-    })),
-  );
 }
 
 function buildDiagnosticsApprovalRequest(params: HandleCommandsParams): ExecApprovalRequest {
@@ -268,69 +235,25 @@ function buildDiagnosticsApprovalRequest(params: HandleCommandsParams): ExecAppr
       turnSourceChannel: params.command.channel,
       turnSourceTo: params.command.to ?? params.command.from ?? null,
       turnSourceAccountId: params.ctx.AccountId ?? null,
-      turnSourceThreadId: readMessageThreadId(params) ?? null,
+      turnSourceThreadId: readCommandMessageThreadId(params) ?? null,
     },
     createdAtMs: now,
     expiresAtMs: now + 5 * 60_000,
   };
 }
 
-function dedupePrivateDiagnosticsTargets(
-  targets: PrivateDiagnosticsTarget[],
-): PrivateDiagnosticsTarget[] {
-  const seen = new Set<string>();
-  const deduped: PrivateDiagnosticsTarget[] = [];
-  for (const target of targets) {
-    const key = [
-      target.channel,
-      target.to,
-      target.accountId ?? "",
-      target.threadId == null ? "" : String(target.threadId),
-    ].join("\0");
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    deduped.push(target);
-  }
-  return deduped;
-}
-
 async function deliverPrivateDiagnosticsReply(params: {
   commandParams: HandleCommandsParams;
-  targets: PrivateDiagnosticsTarget[];
+  targets: PrivateCommandRouteTarget[];
   reply: ReplyPayload;
 }): Promise<boolean> {
-  const results = await Promise.allSettled(
-    params.targets.map((target) =>
-      routeReply({
-        payload: params.reply,
-        channel: target.channel as OriginatingChannelType,
-        to: target.to,
-        accountId: target.accountId ?? undefined,
-        threadId: target.threadId ?? undefined,
-        cfg: params.commandParams.cfg,
-        sessionKey: params.commandParams.sessionKey,
-        policyConversationType: "direct",
-        mirror: false,
-        isGroup: false,
-      }),
-    ),
-  );
-  return results.some((result) => result.status === "fulfilled" && result.value.ok);
-}
-
-function readMessageThreadId(params: HandleCommandsParams): string | undefined {
-  return typeof params.ctx.MessageThreadId === "string" ||
-    typeof params.ctx.MessageThreadId === "number"
-    ? String(params.ctx.MessageThreadId)
-    : undefined;
+  return await deliverPrivateCommandReply(params);
 }
 
 async function requestGatewayDiagnosticsExportApproval(
   deps: DiagnosticsCommandDeps,
   params: HandleCommandsParams,
-  options: { privateApprovalTarget?: PrivateDiagnosticsTarget } = {},
+  options: { privateApprovalTarget?: PrivateCommandRouteTarget } = {},
 ): Promise<string> {
   const timeoutSec = params.cfg.tools?.exec?.timeoutSec;
   const agentId =
@@ -339,7 +262,7 @@ async function requestGatewayDiagnosticsExportApproval(
       sessionKey: params.sessionKey,
       config: params.cfg,
     });
-  const messageThreadId = readMessageThreadId(params);
+  const messageThreadId = readCommandMessageThreadId(params);
   try {
     const execTool = deps.createExecTool({
       host: "gateway",

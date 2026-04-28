@@ -68,6 +68,7 @@ function makeParams(workspaceDir = makeTempDir()): HandleCommandsParams {
     cfg: {},
     ctx: {
       SessionKey: "agent:main:slash-session",
+      AccountId: "account-1",
     },
     command: {
       commandBodyNormalized: "/export-trajectory",
@@ -78,6 +79,8 @@ function makeParams(workspaceDir = makeTempDir()): HandleCommandsParams {
       surface: "quietchat",
       ownerList: [],
       rawBodyNormalized: "/export-trajectory",
+      from: "sender-1",
+      to: "bot",
     },
     sessionEntry: {
       sessionId: "session-1",
@@ -96,6 +99,47 @@ function makeParams(workspaceDir = makeTempDir()): HandleCommandsParams {
     contextTokens: 0,
     isGroup: false,
   } as unknown as HandleCommandsParams;
+}
+
+function createExecDeps(
+  options: {
+    privateTargets?: Array<{ channel: string; to: string; accountId?: string | null }>;
+  } = {},
+) {
+  const execCalls: Array<{ defaults: unknown; params: unknown }> = [];
+  const privateReplies: Array<{
+    targets: Array<{ channel: string; to: string; accountId?: string | null }>;
+    text?: string;
+  }> = [];
+  const createExecTool = vi.fn((defaults: unknown) => ({
+    execute: vi.fn(async (_toolCallId: string, params: unknown) => {
+      execCalls.push({ defaults, params });
+      return {
+        details: {
+          status: "approval-pending" as const,
+          approvalId: "approval-1",
+          approvalSlug: "traj-approval",
+          expiresAtMs: Date.now() + 60_000,
+          allowedDecisions: ["allow-once", "deny"] as const,
+          host: "gateway" as const,
+          command: "openclaw sessions export-trajectory --session-key agent:target:session",
+          cwd: "/tmp",
+        },
+      };
+    }),
+  }));
+  return {
+    execCalls,
+    privateReplies,
+    deps: {
+      createExecTool: createExecTool as never,
+      resolvePrivateTrajectoryTargets: vi.fn(async () => options.privateTargets ?? []),
+      deliverPrivateTrajectoryReply: vi.fn(async ({ targets, reply }) => {
+        privateReplies.push({ targets, text: reply.text });
+        return true;
+      }),
+    },
+  };
 }
 
 describe("buildExportTrajectoryReply", () => {
@@ -223,5 +267,86 @@ describe("buildExportTrajectoryReply", () => {
     expect(reply.text).toContain("Failed to resolve output path");
     expect(fs.existsSync(path.join(outsideDir, "trajectory-exports"))).toBe(false);
     expect(hoisted.exportTrajectoryBundleMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("buildExportTrajectoryCommandReply", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("requests per-run exec approval for trajectory exports", async () => {
+    const { buildExportTrajectoryCommandReply } = await import("./commands-export-trajectory.js");
+    const { execCalls, deps } = createExecDeps();
+
+    const reply = await buildExportTrajectoryCommandReply(makeParams(), deps);
+
+    expect(reply.text).toContain(
+      "Trajectory exports can include prompts, model messages, tool schemas",
+    );
+    expect(reply.text).toContain("https://docs.openclaw.ai/tools/trajectory");
+    expect(reply.text).toContain("do not use allow-all");
+    expect(reply.text).toContain("Allowed decisions: allow-once, deny");
+    expect(execCalls).toHaveLength(1);
+    expect(execCalls[0]?.defaults).toMatchObject({
+      host: "gateway",
+      security: "allowlist",
+      ask: "always",
+      trigger: "export-trajectory",
+      currentChannelId: "bot",
+      accountId: "account-1",
+    });
+    expect(execCalls[0]?.params).toMatchObject({
+      security: "allowlist",
+      ask: "always",
+      background: true,
+    });
+    const command = (execCalls[0]?.params as { command?: string }).command ?? "";
+    expect(command).toContain("openclaw sessions export-trajectory");
+    expect(command).toContain("--session-key agent:target:session");
+    expect(command).toContain("--workspace");
+    expect(command).toContain("--json");
+  });
+
+  it("routes group trajectory export approval privately", async () => {
+    const { buildExportTrajectoryCommandReply } = await import("./commands-export-trajectory.js");
+    const { execCalls, privateReplies, deps } = createExecDeps({
+      privateTargets: [{ channel: "quietchat", to: "owner-dm", accountId: "account-1" }],
+    });
+    const params = makeParams();
+    params.isGroup = true;
+    params.command.to = "group-1";
+
+    const reply = await buildExportTrajectoryCommandReply(params, deps);
+
+    expect(reply.text).toBe(
+      "Trajectory exports are sensitive. I sent the export request and approval prompt to the owner privately.",
+    );
+    expect(reply.text).not.toContain("agent:target:session");
+    expect(privateReplies).toHaveLength(1);
+    expect(privateReplies[0]?.targets).toEqual([
+      { channel: "quietchat", to: "owner-dm", accountId: "account-1" },
+    ]);
+    expect(privateReplies[0]?.text).toContain("Trajectory exports can include prompts");
+    expect(privateReplies[0]?.text).toContain("openclaw sessions export-trajectory");
+    expect(execCalls).toHaveLength(1);
+    expect(execCalls[0]?.defaults).toMatchObject({
+      currentChannelId: "owner-dm",
+      accountId: "account-1",
+    });
+  });
+
+  it("fails closed in groups when no private owner route is available", async () => {
+    const { buildExportTrajectoryCommandReply } = await import("./commands-export-trajectory.js");
+    const { execCalls, privateReplies, deps } = createExecDeps();
+    const params = makeParams();
+    params.isGroup = true;
+    params.command.to = "group-1";
+
+    const reply = await buildExportTrajectoryCommandReply(params, deps);
+
+    expect(reply.text).toContain("Run /export-trajectory from an owner DM");
+    expect(execCalls).toHaveLength(0);
+    expect(privateReplies).toHaveLength(0);
   });
 });
