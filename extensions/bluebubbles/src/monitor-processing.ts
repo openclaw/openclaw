@@ -1594,12 +1594,14 @@ async function processMessageAfterDedupe(
       if (!streamingActive) {
         return;
       }
-      sendBlueBubblesTyping(chatGuidForActions, true, {
-        cfg: config,
-        accountId: account.accountId,
-      }).catch((err) => {
-        runtime.error?.(`[bluebubbles] typing restart failed: ${String(err)}`);
-      });
+      if (privateApiEnabled) {
+        sendBlueBubblesTyping(chatGuidForActions, true, {
+          cfg: config,
+          accountId: account.accountId,
+        }).catch((err) => {
+          runtime.error?.(`[bluebubbles] typing restart failed: ${String(err)}`);
+        });
+      }
     }, typingRestartDelayMs);
   };
   try {
@@ -1619,10 +1621,12 @@ async function processMessageAfterDedupe(
           streamingActive = true;
           clearTypingRestartTimer();
           try {
-            await sendBlueBubblesTyping(chatGuidForActions, true, {
-              cfg: config,
-              accountId: account.accountId,
-            });
+            if (privateApiEnabled) {
+              await sendBlueBubblesTyping(chatGuidForActions, true, {
+                cfg: config,
+                accountId: account.accountId,
+              });
+            }
           } catch (err) {
             runtime.error?.(`[bluebubbles] typing start failed: ${String(err)}`);
           }
@@ -1817,7 +1821,7 @@ async function processMessageAfterDedupe(
         },
       });
     }
-    if (shouldStopTyping && chatGuidForActions) {
+    if (shouldStopTyping && chatGuidForActions && privateApiEnabled) {
       // Stop typing after streaming completes to avoid a stuck indicator.
       sendBlueBubblesTyping(chatGuidForActions, false, {
         cfg: config,

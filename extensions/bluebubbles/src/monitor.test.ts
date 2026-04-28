@@ -61,6 +61,10 @@ vi.mock("./history.js", () => ({
   fetchBlueBubblesHistory: vi.fn().mockResolvedValue({ entries: [], resolved: true }),
 }));
 
+vi.mock("./probe.js", () => ({
+  isBlueBubblesPrivateApiEnabled: vi.fn().mockReturnValue(true),
+}));
+
 // Mock runtime
 const mockEnqueueSystemEvent = vi.fn();
 const mockBuildPairingReply = vi.fn(() => "Pairing code: TESTCODE");
@@ -1965,6 +1969,29 @@ describe("BlueBubbles webhook monitor", () => {
         true,
         expect.any(Object),
       );
+    });
+
+    it("does not send typing indicator when Private API is disabled", async () => {
+      const { sendBlueBubblesTyping } = await import("./chat.js");
+      const { isBlueBubblesPrivateApiEnabled } = await import("./probe.js");
+      vi.mocked(sendBlueBubblesTyping).mockClear();
+      vi.mocked(isBlueBubblesPrivateApiEnabled).mockReturnValueOnce(false);
+
+      setupWebhookTarget();
+
+      const payload = createTimestampedNewMessagePayloadForTest({
+        chatGuid: "iMessage;-;+15551234567",
+      });
+
+      mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
+        await params.dispatcherOptions.onReplyStart?.();
+        return EMPTY_DISPATCH_RESULT;
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      // Should NOT call sendBlueBubblesTyping in any form when Private API is disabled.
+      expect(sendBlueBubblesTyping).not.toHaveBeenCalled();
     });
 
     it("stops typing on idle", async () => {
