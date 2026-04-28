@@ -52,6 +52,56 @@ describe("feishu card interaction decoder", () => {
     ).toBe("/new");
   });
 
+  it("includes form_value in structured result", () => {
+    const result = decodeFeishuCardAction({
+      event: {
+        operator: { open_id: "u123" },
+        context: { chat_id: "chat1" },
+        action: {
+          value: createFeishuCardInteractionEnvelope({
+            k: "quick",
+            a: "feishu.quick_actions.help",
+            q: "/help",
+          }),
+          form_value: { Input_xxx: "user input", Select_yyy: "option1" },
+        },
+      },
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        kind: "structured",
+        formValue: { Input_xxx: "user input", Select_yyy: "option1" },
+      }),
+    );
+  });
+
+  it("appends form_value to legacy text fallback", () => {
+    const text = buildFeishuCardActionTextFallback({
+      operator: { open_id: "u123" },
+      context: { chat_id: "chat1" },
+      action: {
+        value: { text: "/command" },
+        form_value: { Input_xxx: "user input" },
+      },
+    });
+
+    expect(text).toBe("/command Input_xxx=user input");
+  });
+
+  it("handles form_value without value", () => {
+    const text = buildFeishuCardActionTextFallback({
+      operator: { open_id: "u123" },
+      context: { chat_id: "chat1" },
+      action: {
+        value: {},
+        form_value: { Input_xxx: "user input" },
+      },
+    });
+
+    expect(text).toBe("{} Input_xxx=user input");
+  });
+
   it("rejects malformed structured payloads", () => {
     const result = decodeFeishuCardAction({
       event: {

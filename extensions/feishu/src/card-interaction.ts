@@ -35,6 +35,7 @@ export type FeishuCardActionEventLike = {
   };
   action: {
     value: unknown;
+    form_value?: Record<string, unknown>;
   };
   context: {
     chat_id?: string;
@@ -45,6 +46,7 @@ export type DecodedFeishuCardAction =
   | {
       kind: "structured";
       envelope: FeishuCardInteractionEnvelope;
+      formValue?: Record<string, unknown>;
     }
   | {
       kind: "legacy";
@@ -80,16 +82,31 @@ export function createFeishuCardInteractionEnvelope(
 
 export function buildFeishuCardActionTextFallback(event: FeishuCardActionEventLike): string {
   const actionValue = event.action.value;
+  const formValue = event.action.form_value;
+
+  // Build base text from action.value
+  let text = "";
   if (isRecord(actionValue)) {
     if (typeof actionValue.text === "string") {
-      return actionValue.text;
+      text = actionValue.text;
+    } else if (typeof actionValue.command === "string") {
+      text = actionValue.command;
+    } else {
+      text = JSON.stringify(actionValue);
     }
-    if (typeof actionValue.command === "string") {
-      return actionValue.command;
-    }
-    return JSON.stringify(actionValue);
+  } else {
+    text = String(actionValue);
   }
-  return String(actionValue);
+
+  // If form_value exists, append it to the text
+  if (formValue && Object.keys(formValue).length > 0) {
+    const formText = Object.entries(formValue)
+      .map(([key, value]) => `${key}=${value}`)
+      .join(" ");
+    text = text ? `${text} ${formText}` : formText;
+  }
+
+  return text;
 }
 
 export function decodeFeishuCardAction(params: {
@@ -98,6 +115,8 @@ export function decodeFeishuCardAction(params: {
 }): DecodedFeishuCardAction {
   const { event, now = Date.now() } = params;
   const actionValue = event.action.value;
+  const formValue = event.action.form_value;
+
   if (!isRecord(actionValue) || actionValue.oc !== FEISHU_CARD_INTERACTION_VERSION) {
     return {
       kind: "legacy",
@@ -162,5 +181,6 @@ export function decodeFeishuCardAction(params: {
   return {
     kind: "structured",
     envelope: actionValue as FeishuCardInteractionEnvelope,
+    formValue,
   };
 }
