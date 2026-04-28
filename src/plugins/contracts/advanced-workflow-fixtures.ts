@@ -161,7 +161,6 @@ export function registerBackgroundMonitorFixture(
       sessionKey: SESSION_KEY,
       delayMs: 60_000,
       message: "Background monitor wake-up",
-      payload: { reason: "status-check" },
       name: "background-monitor-status-check",
     }),
   );
