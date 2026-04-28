@@ -40,6 +40,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Media: treat legacy Word/OLE attachments with `application/msword` or `application/x-cfb` MIME as binary so printable-looking `.doc` files are not embedded into prompts as text. Fixes #54176; carries forward #54380. Thanks @andyliu.
 - Config: accept documented `browser.tabCleanup` keys in strict root config validation, so configured tab cleanup no longer fails before runtime reads it. Fixes #74577. Thanks @lonexreb and @ezdlp.
 - Cron: validate disabled job schedule edits before persisting updates, so invalid cron changes no longer partially mutate stored jobs. Fixes #74459. Thanks @yfge.
 - Channels/status: keep Telegram, Slack, and Google Chat read-only allowlist/default-target accessors on config-only paths, so status and channel summaries do not resolve SecretRef-backed runtime credentials. Thanks @eusine.
