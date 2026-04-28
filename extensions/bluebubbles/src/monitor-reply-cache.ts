@@ -156,6 +156,20 @@ function describeChatForError(values: {
   return parts.length === 0 ? "<unknown chat>" : parts.join(", ");
 }
 
+function describeMessageIdForError(inputId: string, inputKind: "short" | "uuid"): string {
+  // Don't reflect the raw message id back into an error message that may end
+  // up in agent transcripts / tool results / log streams. Surface only the
+  // shape (numeric short id length range, or a UUID prefix) so callers can
+  // still tell which message id they typed (CWE-117 / CWE-200).
+  if (inputKind === "short") {
+    const len = inputId.length;
+    return `<short:${len}-digit>`;
+  }
+  // For UUID input, expose just an 8-char prefix; consumer can correlate
+  // against full GUID via the trace if needed.
+  return `<uuid:${inputId.slice(0, 8)}…>`;
+}
+
 function buildCrossChatError(
   inputId: string,
   inputKind: "short" | "uuid",
@@ -167,9 +181,20 @@ function buildCrossChatError(
       ? `Retry with the full message GUID to avoid cross-chat reactions/replies landing in the wrong conversation.`
       : `Retry with the correct chat target — even the full GUID cannot be reused across chats.`;
   return new Error(
-    `BlueBubbles message id "${inputId}" belongs to a different chat ` +
+    `BlueBubbles message id ${describeMessageIdForError(inputId, inputKind)} belongs to a different chat ` +
       `(${describeChatForError(cached)}) than the current call target ` +
       `(${describeChatForError(ctx)}). ${remediation}`,
+  );
+}
+
+function hasChatScope(ctx?: BlueBubblesChatContext): boolean {
+  if (!ctx) {
+    return false;
+  }
+  return Boolean(
+    normalizeOptionalString(ctx.chatGuid) ||
+    normalizeOptionalString(ctx.chatIdentifier) ||
+    typeof ctx.chatId === "number",
   );
 }
 
@@ -199,6 +224,17 @@ export function resolveBlueBubblesMessageId(
 
   // If it looks like a short ID (numeric), try to resolve it
   if (/^\d+$/.test(trimmed)) {
+    // Privileged callers (requireKnownShortId=true) MUST scope the resolution
+    // to a chat. Without a chat scope the cross-chat guard cannot detect when
+    // the short id belongs to a different chat than the action target — short
+    // ids are allocated from a single global counter across every account and
+    // chat, so an empty `chatContext={}` would otherwise let an action operate
+    // on a message in the wrong conversation (CWE-285).
+    if (opts?.requireKnownShortId && !hasChatScope(opts.chatContext)) {
+      throw new Error(
+        `BlueBubbles short message id "${describeMessageIdForError(trimmed, "short")}" requires a chat scope (chatGuid / chatIdentifier / chatId or a --to target).`,
+      );
+    }
     const uuid = blueBubblesShortIdToUuid.get(trimmed);
     if (uuid) {
       if (opts?.chatContext) {
@@ -211,7 +247,7 @@ export function resolveBlueBubblesMessageId(
     }
     if (opts?.requireKnownShortId) {
       throw new Error(
-        `BlueBubbles short message id "${trimmed}" is no longer available. Use MessageSidFull.`,
+        `BlueBubbles short message id ${describeMessageIdForError(trimmed, "short")} is no longer available. Use MessageSidFull.`,
       );
     }
     return trimmed;

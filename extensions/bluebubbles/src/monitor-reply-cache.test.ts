@@ -66,21 +66,25 @@ describe("resolveBlueBubblesMessageId chat-scoped short-id guard", () => {
     ).toThrow(/different chat/);
   });
 
-  it("fails open when caller cannot supply any chat identifier", () => {
-    const entry = seedMessage({
+  it("rejects empty chat context for privileged callers (fail-closed cross-chat scope)", () => {
+    seedMessage({
       accountId: "default",
       messageId: "uuid-no-ctx",
       chatGuid: "iMessage;+;chat240698944142298252",
     });
 
-    // Empty context means "caller could not derive any chat hint" (e.g.
-    // tool invocation with only messageId). Permit resolution; downstream
-    // API will still carry whatever chatGuid the call site provides.
-    const resolved = resolveBlueBubblesMessageId(entry.shortId, {
-      requireKnownShortId: true,
-      chatContext: {},
-    });
-    expect(resolved).toBe("uuid-no-ctx");
+    // Empty context = caller could not derive any chat hint. The previous
+    // behavior (fail-open) let a short id resolve without a chat scope —
+    // but short ids are global across all chats, so an action call without
+    // chat context could silently apply to the wrong conversation. Now
+    // requireKnownShortId callers must pass at least one identifier
+    // (chatGuid / chatIdentifier / chatId).
+    expect(() =>
+      resolveBlueBubblesMessageId("1", {
+        requireKnownShortId: true,
+        chatContext: {},
+      }),
+    ).toThrow(/requires a chat scope/);
   });
 
   it("falls back to chatIdentifier comparison when the caller has no chatGuid", () => {

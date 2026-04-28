@@ -629,7 +629,17 @@ function buildInboundHistorySnapshot(params: {
 }
 
 function sanitizeForLog(value: unknown, maxLen = 200): string {
-  const cleaned = String(value).replace(/[\r\n\t\p{C}]/gu, " ");
+  let cleaned = String(value).replace(/[\r\n\t\p{C}]/gu, " ");
+  // Redact common secret-bearing patterns before logging. BlueBubbles uses
+  // query-string auth (`?password=...`) by default, so attachment download
+  // failures and similar errors can carry the API password in the captured
+  // request URL; other libraries occasionally surface `Authorization: Bearer …`
+  // headers in error chains. Strip both before they reach the log sink (CWE-532).
+  cleaned = cleaned.replace(
+    /([?&](?:password|token|api[_-]?key|secret)=)[^&\s"]+/gi,
+    "$1<redacted>",
+  );
+  cleaned = cleaned.replace(/(authorization\s*:\s*(?:bearer|basic)\s+)[^\s"]+/gi, "$1<redacted>");
   return cleaned.length > maxLen ? cleaned.slice(0, maxLen) + "..." : cleaned;
 }
 
