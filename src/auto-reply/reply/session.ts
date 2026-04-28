@@ -909,13 +909,13 @@ export async function initSessionState(params: {
       hookRunner.hasHooks("before_reset")
     ) {
       void (async () => {
-        // Dynamic import to avoid pulling the reset-hooks module's dependency tree
-        // (route-reply runtime, hook-runner-global, etc.) into session.ts's static imports.
-        const { loadBeforeResetTranscript } = await import("./commands-reset-hooks.js");
-        const { sessionFile, messages } = await loadBeforeResetTranscript({
-          sessionFile: previousSessionTranscript.sessionFile,
-        });
         try {
+          // Dynamic import to avoid pulling the reset-hooks module's dependency tree
+          // (route-reply runtime, hook-runner-global, etc.) into session.ts's static imports.
+          const { loadBeforeResetTranscript } = await import("./commands-reset-hooks.js");
+          const { sessionFile, messages } = await loadBeforeResetTranscript({
+            sessionFile: previousSessionTranscript.sessionFile,
+          });
           await hookRunner.runBeforeReset(
             { sessionFile, messages, reason: previousSessionEndReason },
             {

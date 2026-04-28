@@ -251,6 +251,68 @@ describe("lazy session reset hooks", () => {
     expect(context).toMatchObject({ sessionKey, agentId: "main" });
   });
 
+  it("fires before_reset plugin hook with idle reason for idle-expired session", async () => {
+    const sessionKey = "agent:main:telegram:direct:203";
+    const storePath = await createStorePath("openclaw-idle-plugin");
+    const transcriptPath = await writeTranscript(storePath, "idle-plugin-session", "idle data");
+    const threeHoursAgo = Date.now() - 3 * 60 * 60 * 1000;
+    await writeStore(storePath, {
+      [sessionKey]: {
+        sessionId: "idle-plugin-session",
+        sessionFile: transcriptPath,
+        updatedAt: threeHoursAgo,
+      },
+    });
+    const cfg = {
+      session: {
+        store: storePath,
+        reset: { mode: "idle", idleMinutes: 60 },
+      },
+    } as OpenClawConfig;
+
+    await initSessionState({
+      ctx: { Body: "still here?", SessionKey: sessionKey },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    await vi.waitFor(() => {
+      expect(hookRunnerMocks.runBeforeReset).toHaveBeenCalledTimes(1);
+    });
+    const [event, context] = hookRunnerMocks.runBeforeReset.mock.calls[0] ?? [];
+    expect(event).toMatchObject({ reason: "idle" });
+    expect(context).toMatchObject({ sessionKey, agentId: "main" });
+  });
+
+  it("keeps lazy before_reset transcript load failures fire-and-forget", async () => {
+    const sessionKey = "agent:main:telegram:direct:204";
+    const storePath = await createStorePath("openclaw-stale-plugin-load-failure");
+    const transcriptPath = await writeTranscript(storePath, "load-failure-session", "data");
+    const yesterday = Date.now() - 48 * 60 * 60 * 1000;
+    await writeStore(storePath, {
+      [sessionKey]: {
+        sessionId: "load-failure-session",
+        sessionFile: transcriptPath,
+        updatedAt: yesterday,
+      },
+    });
+    commandsCoreMocks.loadBeforeResetTranscript.mockRejectedValueOnce(new Error("boom"));
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    await expect(
+      initSessionState({
+        ctx: { Body: "hello", SessionKey: sessionKey },
+        cfg,
+        commandAuthorized: true,
+      }),
+    ).resolves.toMatchObject({ isNewSession: true });
+
+    await vi.waitFor(() => {
+      expect(commandsCoreMocks.loadBeforeResetTranscript).toHaveBeenCalledTimes(1);
+    });
+    expect(hookRunnerMocks.runBeforeReset).not.toHaveBeenCalled();
+  });
+
   it("does not fire hooks for system events even when session is stale", async () => {
     const sessionKey = "agent:main:telegram:direct:303";
     const storePath = await createStorePath("openclaw-system-event");
