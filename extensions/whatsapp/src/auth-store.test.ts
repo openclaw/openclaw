@@ -217,6 +217,73 @@ describe("auth-store", () => {
     expect(fsSync.existsSync(path.join(nestedDir, "session-abc.json"))).toBe(true);
   });
 
+  it("does not clear auth files through a symlinked owned auth directory", async () => {
+    const previousOAuthDir = process.env.OPENCLAW_OAUTH_DIR;
+    const oauthDir = createTempAuthDir("openclaw-wa-auth-symlink-oauth");
+    const externalDir = createTempAuthDir("openclaw-wa-auth-symlink-target");
+    const authDir = path.join(oauthDir, "whatsapp", "default");
+    try {
+      fsSync.mkdirSync(path.dirname(authDir), { recursive: true });
+      fsSync.writeFileSync(path.join(externalDir, "creds.json"), "{}", "utf-8");
+      fsSync.writeFileSync(path.join(externalDir, "notes.txt"), "keep me", "utf-8");
+      fsSync.symlinkSync(externalDir, authDir, "dir");
+      process.env.OPENCLAW_OAUTH_DIR = oauthDir;
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+
+      await expect(logoutWeb({ authDir, runtime: runtime as never })).resolves.toBe(false);
+      expect(fsSync.existsSync(authDir)).toBe(true);
+      expect(fsSync.existsSync(path.join(externalDir, "creds.json"))).toBe(true);
+      expect(fsSync.existsSync(path.join(externalDir, "notes.txt"))).toBe(true);
+    } finally {
+      if (previousOAuthDir === undefined) {
+        delete process.env.OPENCLAW_OAUTH_DIR;
+      } else {
+        process.env.OPENCLAW_OAUTH_DIR = previousOAuthDir;
+      }
+      fsSync.rmSync(oauthDir, { recursive: true, force: true });
+      fsSync.rmSync(externalDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not clear auth files through an intermediate symlink in the owned auth tree", async () => {
+    const previousOAuthDir = process.env.OPENCLAW_OAUTH_DIR;
+    const oauthDir = createTempAuthDir("openclaw-wa-auth-symlink-parent-oauth");
+    const externalRoot = createTempAuthDir("openclaw-wa-auth-symlink-parent-target");
+    const externalAuthDir = path.join(externalRoot, "default");
+    const linkedParent = path.join(oauthDir, "whatsapp", "linked");
+    const authDir = path.join(linkedParent, "default");
+    try {
+      fsSync.mkdirSync(path.dirname(linkedParent), { recursive: true });
+      fsSync.mkdirSync(externalAuthDir, { recursive: true });
+      fsSync.writeFileSync(path.join(externalAuthDir, "creds.json"), "{}", "utf-8");
+      fsSync.writeFileSync(path.join(externalAuthDir, "notes.txt"), "keep me", "utf-8");
+      fsSync.symlinkSync(externalRoot, linkedParent, "dir");
+      process.env.OPENCLAW_OAUTH_DIR = oauthDir;
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+
+      await expect(logoutWeb({ authDir, runtime: runtime as never })).resolves.toBe(false);
+      expect(fsSync.existsSync(authDir)).toBe(true);
+      expect(fsSync.existsSync(path.join(externalAuthDir, "creds.json"))).toBe(true);
+      expect(fsSync.existsSync(path.join(externalAuthDir, "notes.txt"))).toBe(true);
+    } finally {
+      if (previousOAuthDir === undefined) {
+        delete process.env.OPENCLAW_OAUTH_DIR;
+      } else {
+        process.env.OPENCLAW_OAUTH_DIR = previousOAuthDir;
+      }
+      fsSync.rmSync(oauthDir, { recursive: true, force: true });
+      fsSync.rmSync(externalRoot, { recursive: true, force: true });
+    }
+  });
+
   it("does not delete unrelated non-empty directories on logout", async () => {
     const authDir = createTempAuthDir("openclaw-wa-auth-unrelated");
     fsSync.writeFileSync(path.join(authDir, "notes.txt"), "keep me", "utf-8");

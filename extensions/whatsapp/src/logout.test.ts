@@ -126,4 +126,37 @@ describe("web logout", () => {
     expect(fs.existsSync(path.join(authDir, "notes.txt"))).toBe(true);
     expect(fs.existsSync(path.join(authDir, "nested", "session-abc.json"))).toBe(true);
   });
+
+  it("does not delete through symlinked auth dirs inside the OpenClaw auth root", async () => {
+    const externalDir = await makeExternalCaseDir();
+    const authDir = path.join(fixtureRoot, "oauth", "whatsapp", `case-${caseId++}`);
+    await fsPromises.mkdir(path.dirname(authDir), { recursive: true });
+    await fsPromises.writeFile(path.join(externalDir, "creds.json"), "{}", "utf-8");
+    await fsPromises.writeFile(path.join(externalDir, "notes.txt"), "keep", "utf-8");
+    await fsPromises.symlink(externalDir, authDir, "dir");
+
+    const result = await logoutWeb({ authDir, runtime: runtime as never });
+    expect(result).toBe(false);
+    expect(fs.existsSync(authDir)).toBe(true);
+    expect(fs.existsSync(path.join(externalDir, "creds.json"))).toBe(true);
+    expect(fs.existsSync(path.join(externalDir, "notes.txt"))).toBe(true);
+  });
+
+  it("does not delete through intermediate symlinks inside the OpenClaw auth root", async () => {
+    const externalRoot = path.join(fixtureRoot, "external", `case-${caseId++}`);
+    const externalAuthDir = path.join(externalRoot, "default");
+    const linkedParent = path.join(fixtureRoot, "oauth", "whatsapp", `linked-${caseId++}`);
+    const authDir = path.join(linkedParent, "default");
+    await fsPromises.mkdir(externalAuthDir, { recursive: true });
+    await fsPromises.mkdir(path.dirname(linkedParent), { recursive: true });
+    await fsPromises.writeFile(path.join(externalAuthDir, "creds.json"), "{}", "utf-8");
+    await fsPromises.writeFile(path.join(externalAuthDir, "notes.txt"), "keep", "utf-8");
+    await fsPromises.symlink(externalRoot, linkedParent, "dir");
+
+    const result = await logoutWeb({ authDir, runtime: runtime as never });
+    expect(result).toBe(false);
+    expect(fs.existsSync(authDir)).toBe(true);
+    expect(fs.existsSync(path.join(externalAuthDir, "creds.json"))).toBe(true);
+    expect(fs.existsSync(path.join(externalAuthDir, "notes.txt"))).toBe(true);
+  });
 });

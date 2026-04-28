@@ -234,6 +234,10 @@ function isBaileysAuthFileName(name: string): boolean {
 }
 
 async function clearBaileysAuthFiles(authDir: string) {
+  const rootStats = await fs.lstat(authDir).catch(() => null);
+  if (!rootStats?.isDirectory() || rootStats.isSymbolicLink()) {
+    return;
+  }
   const entries = await fs.readdir(authDir, { withFileTypes: true });
   await Promise.all(
     entries.map(async (entry) => {
@@ -250,9 +254,9 @@ async function clearBaileysAuthFiles(authDir: string) {
 
 async function shouldClearOnLogout(authDir: string, isLegacyAuthDir: boolean): Promise<boolean> {
   try {
-    const stats = await fs.stat(authDir);
-    if (!stats.isDirectory()) {
-      return true;
+    const stats = await fs.lstat(authDir);
+    if (!stats.isDirectory() || stats.isSymbolicLink()) {
+      return false;
     }
     if (isLegacyAuthDir) {
       const entries = await fs.readdir(authDir, { withFileTypes: true });
@@ -263,11 +267,11 @@ async function shouldClearOnLogout(authDir: string, isLegacyAuthDir: boolean): P
         return isBaileysAuthFileName(entry.name);
       });
     }
-    const credsStats = await fs.stat(resolveWebCredsPath(authDir)).catch(() => null);
+    const credsStats = await fs.lstat(resolveWebCredsPath(authDir)).catch(() => null);
     if (credsStats?.isFile()) {
       return true;
     }
-    const backupStats = await fs.stat(resolveWebCredsBackupPath(authDir)).catch(() => null);
+    const backupStats = await fs.lstat(resolveWebCredsBackupPath(authDir)).catch(() => null);
     return backupStats?.isFile() === true;
   } catch (error) {
     const codeValue =
@@ -284,9 +288,45 @@ function isPathInsideDirectory(baseDir: string, targetPath: string): boolean {
   return relativePath !== "" && !relativePath.startsWith("..") && !path.isAbsolute(relativePath);
 }
 
-function isAppOwnedWebAuthDir(authDir: string): boolean {
+async function pathHasSymlinkComponent(baseDir: string, targetPath: string): Promise<boolean> {
+  const relativePath = path.relative(baseDir, targetPath);
+  let currentPath = baseDir;
+  for (const segment of relativePath.split(path.sep)) {
+    currentPath = path.join(currentPath, segment);
+    const stats = await fs.lstat(currentPath).catch(() => null);
+    if (!stats || stats.isSymbolicLink()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+type WebAuthDirOwnership =
+  | { kind: "owned"; authDir: string }
+  | { kind: "unsafe-owned" }
+  | { kind: "external" };
+
+async function classifyWebAuthDirOwnership(authDir: string): Promise<WebAuthDirOwnership> {
   const whatsappAuthBase = path.resolve(resolveOAuthDir(), "whatsapp");
-  return isPathInsideDirectory(whatsappAuthBase, path.resolve(authDir));
+  const resolvedAuthDir = path.resolve(authDir);
+  if (!isPathInsideDirectory(whatsappAuthBase, resolvedAuthDir)) {
+    return { kind: "external" };
+  }
+
+  const [baseRealPath, authDirRealPath] = await Promise.all([
+    fs.realpath(whatsappAuthBase).catch(() => null),
+    fs.realpath(resolvedAuthDir).catch(() => null),
+  ]);
+  if (!baseRealPath || !authDirRealPath) {
+    return { kind: "unsafe-owned" };
+  }
+  if (!isPathInsideDirectory(baseRealPath, authDirRealPath)) {
+    return { kind: "unsafe-owned" };
+  }
+  if (await pathHasSymlinkComponent(whatsappAuthBase, resolvedAuthDir)) {
+    return { kind: "unsafe-owned" };
+  }
+  return { kind: "owned", authDir: resolvedAuthDir };
 }
 
 export async function logoutWeb(params: {
@@ -308,10 +348,20 @@ export async function logoutWeb(params: {
   }
   if (params.isLegacyAuthDir) {
     await clearBaileysAuthFiles(resolvedAuthDir);
-  } else if (isAppOwnedWebAuthDir(resolvedAuthDir)) {
-    await fs.rm(resolvedAuthDir, { recursive: true, force: true });
   } else {
-    await clearBaileysAuthFiles(resolvedAuthDir);
+    const ownership = await classifyWebAuthDirOwnership(resolvedAuthDir);
+    if (ownership.kind === "owned") {
+      await fs.rm(ownership.authDir, { recursive: true, force: true });
+    } else if (ownership.kind === "unsafe-owned") {
+      runtime.log(
+        info(
+          "Skipped WhatsApp Web credential cleanup because the auth directory crosses a symlink boundary.",
+        ),
+      );
+      return false;
+    } else {
+      await clearBaileysAuthFiles(resolvedAuthDir);
+    }
   }
   runtime.log(success("Cleared WhatsApp Web credentials."));
   return true;
