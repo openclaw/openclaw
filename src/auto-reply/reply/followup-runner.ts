@@ -33,7 +33,11 @@ import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
 import { createReplyOperation } from "./reply-run-registry.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
-import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
+import {
+  incrementRunCompactionCount,
+  persistRunSessionUsage,
+  persistSystemSentAfterSuccess,
+} from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
@@ -404,6 +408,13 @@ export function createFollowupRunner(params: {
           logLabel: "followup",
         });
       }
+
+      await persistSystemSentAfterSuccess({
+        storePath,
+        sessionKey,
+        sessionEntry,
+        runResult,
+      });
 
       const payloadArray = runResult.payloads ?? [];
       if (payloadArray.length === 0) {

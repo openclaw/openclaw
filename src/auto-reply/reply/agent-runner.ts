@@ -81,7 +81,11 @@ import {
   type ReplyOperation,
 } from "./reply-run-registry.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
-import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
+import {
+  incrementRunCompactionCount,
+  persistRunSessionUsage,
+  persistSystemSentAfterSuccess,
+} from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
@@ -1389,37 +1393,12 @@ export async function runReplyAgent(params: {
       cliSessionBinding,
     });
 
-    // Mark systemSent=true only after a successful LLM response.
-    // This prevents corruption when the first LLM call fails (e.g.
-    // insufficient API credits): without this guard, systemSent=true
-    // would be persisted before the system prompt was actually delivered,
-    // causing all subsequent sessions to skip re-sending it (#41462).
-    // Additionally, skip persistence when the run returned only error
-    // payloads (provider failures surfaced as error payloads still
-    // produce runOutcome.kind !== "final").
-    const hasMetaError = Boolean(runResult.meta?.error);
-    const hasNonErrorPayload = payloadArray.some(
-      (p) => !p.isError && Boolean(p.text?.trim() || (p.mediaUrls?.length ?? 0) > 0),
-    );
-    // Also count messaging-tool sends (NO_REPLY / tool-only runs still
-    // represent a successful LLM completion and should not re-trigger
-    // first-turn system prompt re-sends).
-    const hasSentViaMessagingTool =
-      (runResult.messagingToolSentTexts?.length ?? 0) > 0 ||
-      (runResult.messagingToolSentMediaUrls?.length ?? 0) > 0;
-    if (
-      sessionKey &&
-      storePath &&
-      activeSessionEntry?.systemSent !== true &&
-      !hasMetaError &&
-      (hasNonErrorPayload || hasSentViaMessagingTool)
-    ) {
-      await updateSessionStoreEntry({
-        storePath,
-        sessionKey,
-        update: async () => ({ systemSent: true }),
-      });
-    }
+    await persistSystemSentAfterSuccess({
+      storePath,
+      sessionKey,
+      sessionEntry: activeSessionEntry,
+      runResult,
+    });
 
     // Drain any late tool/block deliveries before deciding there's "nothing to send".
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and

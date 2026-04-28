@@ -1293,6 +1293,41 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     persistSpy.mockRestore();
   });
 
+  it("persists systemSent on successful silent followups", async () => {
+    const scenarios = [{ payloads: [{ text: "NO_REPLY" }] }, { payloads: [] }];
+
+    for (const agentResult of scenarios) {
+      const storePath = path.join(
+        await fs.mkdtemp(path.join(tmpdir(), "openclaw-followup-systemsent-")),
+        "sessions.json",
+      );
+      const sessionKey = "main";
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        systemSent: false,
+      };
+      const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+      await saveSessionStore(storePath, sessionStore);
+
+      await runMessagingCase({
+        agentResult: {
+          ...agentResult,
+          meta: { durationMs: 1, stopReason: "stop" },
+        },
+        runnerOverrides: {
+          sessionEntry,
+          sessionStore,
+          sessionKey,
+          storePath,
+        },
+      });
+
+      const store = loadSessionStore(storePath, { skipCache: true });
+      expect(store[sessionKey]?.systemSent).toBe(true);
+    }
+  });
+
   it("does not send cross-channel payload content to dispatcher when origin routing fails", async () => {
     routeReplyMock.mockResolvedValue({
       ok: false,
