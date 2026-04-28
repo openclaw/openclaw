@@ -40,6 +40,7 @@ import {
   resetConfigPendingChanges,
   runUpdate,
   saveConfig,
+  stageDefaultAgentConfigEntry,
   stageConfigPreset,
   updateConfigFormValue,
   removeConfigFormValue,
@@ -2148,27 +2149,7 @@ export function renderApp(state: AppViewState) {
                   updateConfigFormValue(state, basePath, { primary, fallbacks: normalized });
                 },
                 onSetDefault: (agentId) => {
-                  if (!configValue) {
-                    return;
-                  }
-                  const list = (getCurrentConfigValue() as { agents?: { list?: unknown[] } } | null)
-                    ?.agents?.list;
-                  if (!Array.isArray(list)) {
-                    return;
-                  }
-                  const targetIndex = list.findIndex(
-                    (e) => (e as { id?: string } | undefined)?.id === agentId,
-                  );
-                  if (targetIndex < 0) {
-                    return;
-                  }
-                  for (let i = 0; i < list.length; i++) {
-                    if (i === targetIndex) {
-                      updateConfigFormValue(state, ["agents", "list", i, "default"], true);
-                    } else {
-                      removeConfigFormValue(state, ["agents", "list", i, "default"]);
-                    }
-                  }
+                  stageDefaultAgentConfigEntry(state, agentId);
                 },
               }),
             )

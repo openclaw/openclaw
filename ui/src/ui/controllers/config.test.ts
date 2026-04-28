@@ -5,10 +5,10 @@ import {
   ensureAgentConfigEntry,
   findAgentConfigEntryIndex,
   loadConfig,
-  removeConfigFormValue,
   resetConfigPendingChanges,
   runUpdate,
   saveConfig,
+  stageDefaultAgentConfigEntry,
   stageConfigPreset,
   updateConfigFormValue,
   type ConfigState,
@@ -492,27 +492,35 @@ describe("agent config helpers", () => {
       raw: "{\n}\n",
     };
 
-    const list = (
-      (state.configForm ?? state.configSnapshot?.config) as {
-        agents?: { list?: Array<{ id: string }> };
-      }
-    )?.agents?.list;
-    if (Array.isArray(list)) {
-      for (let i = 0; i < list.length; i++) {
-        if (list[i]!.id === "beta") {
-          updateConfigFormValue(state, ["agents", "list", i, "default"], true);
-        } else {
-          removeConfigFormValue(state, ["agents", "list", i, "default"]);
-        }
-      }
-    }
+    const updated = stageDefaultAgentConfigEntry(state, "beta");
 
+    expect(updated).toBe(true);
     expect(state.configFormDirty).toBe(true);
     expect(state.configForm).toEqual({
       agents: {
         list: [{ id: "alpha" }, { id: "beta", default: true }],
       },
     });
+  });
+
+  it("does not stage agents.defaultId when the target agent is absent", () => {
+    const state = createState();
+    state.configSnapshot = {
+      config: {
+        agents: {
+          list: [{ id: "alpha", default: true }],
+        },
+      },
+      valid: true,
+      issues: [],
+      raw: "{\n}\n",
+    };
+
+    const updated = stageDefaultAgentConfigEntry(state, "beta");
+
+    expect(updated).toBe(false);
+    expect(state.configFormDirty).toBe(false);
+    expect(state.configForm).toBeNull();
   });
 });
 
