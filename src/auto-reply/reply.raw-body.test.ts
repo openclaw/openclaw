@@ -39,4 +39,25 @@ describe("RawBody directive parsing", () => {
     expect(prompt).toContain("status please");
     expect(prompt).not.toContain("/think:high");
   });
+
+  it("adds conversational shaping hints only when requested", () => {
+    const sessionCtx = finalizeInboundContext({
+      Body: "hello there",
+      BodyForAgent: "hello there",
+      From: "+1222",
+      To: "+1222",
+      ChatType: "direct",
+    });
+    const prompt = buildReplyPromptBodies({
+      ctx: sessionCtx,
+      sessionCtx,
+      effectiveBaseBody: sessionCtx.BodyForAgent,
+      prefixedBody: sessionCtx.BodyForAgent,
+      conversationalFreeform: true,
+    }).prefixedCommandBody;
+
+    expect(prompt).toContain("[Reply shaping hint]");
+    expect(prompt).toContain("This message is conversational freeform.");
+    expect(prompt).toContain("hello there");
+  });
 });

@@ -40,6 +40,54 @@ import type { TypingController } from "./typing.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 
+// 履歴scaffolding込みのbodyから「今返信すべき現在ターン分」だけを切り出す。
+// CURRENT_MESSAGE_MARKER 以降があればその範囲を、無ければbody全体を返す。
+function extractCurrentMessageSegment(body: string): string {
+  const markerIndex = body.indexOf(CURRENT_MESSAGE_MARKER);
+  if (markerIndex < 0) {
+    return body;
+  }
+  return body.slice(markerIndex + CURRENT_MESSAGE_MARKER.length);
+}
+
+export function isLikelyConversationalFreeformBody(body: string): boolean {
+  // 履歴/contextラッパーが混じった全文ではなく、現在ターンのメッセージだけで判定する
+  const segment = extractCurrentMessageSegment(body);
+  const trimmed = normalizeOptionalString(segment)?.trim() ?? "";
+  if (!trimmed) {
+    return false;
+  }
+  if (/^\s*Use the "[^"]+" skill for this request\.\s+User input\s*:/i.test(trimmed)) {
+    return false;
+  }
+  if (
+    /^\s*(?:\[[^\]]+\]\s*)?(?:Subagent Task|Task|User input|Input|Instructions?)\s*:/i.test(trimmed)
+  ) {
+    return false;
+  }
+  if (/\bYou are running as a subagent\b/i.test(trimmed)) {
+    return false;
+  }
+  const stripped = stripStructuralPrefixes(segment).trim();
+  if (!stripped) {
+    return false;
+  }
+  if (/^\s*\/[A-Za-z][\w-]*(?:\s|$)/.test(stripped)) {
+    return false;
+  }
+  if (/^\s*[-*=#]{2,}\s*$/m.test(stripped)) {
+    return false;
+  }
+  if (/^\s*(#{1,6}|[-*+]\s|\d+[.)]\s|```)/m.test(stripped)) {
+    return false;
+  }
+  const lineCount = trimmed.split(/\n/).length;
+  if (lineCount >= 8) {
+    return false;
+  }
+  return true;
+}
+
 let commandsRegistryPromise: Promise<typeof import("../commands-registry.runtime.js")> | null =
   null;
 let skillCommandsPromise: Promise<typeof import("../skill-commands.runtime.js")> | null = null;
@@ -134,6 +182,7 @@ export type ReplyDirectiveContinuation = {
     cap?: number;
     dropPolicy?: InlineDirectives["dropPolicy"];
   };
+  conversationalFreeform: boolean;
 };
 
 export type ReplyDirectiveResult =
@@ -368,6 +417,8 @@ export async function resolveReplyDirectives(params: {
   sessionCtx.BodyForAgent = cleanedBody;
   sessionCtx.Body = cleanedBody;
   sessionCtx.BodyStripped = cleanedBody;
+
+  const conversationalFreeform = isLikelyConversationalFreeformBody(cleanedBody);
 
   const messageProviderKey = normalizeOptionalString(sessionCtx.Provider)
     ? normalizeLowercaseStringOrEmpty(sessionCtx.Provider)
@@ -622,6 +673,7 @@ export async function resolveReplyDirectives(params: {
       directiveAck,
       perMessageQueueMode,
       perMessageQueueOptions,
+      conversationalFreeform,
     },
   };
 }

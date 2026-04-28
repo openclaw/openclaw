@@ -74,6 +74,7 @@ vi.mock("./reply/typing.js", () => ({
 
 vi.mock("./reply/get-reply-directives.js", () => ({
   resolveReplyDirectives: (...args: unknown[]) => mocks.resolveReplyDirectives(...args),
+  isLikelyConversationalFreeformBody: (_body?: string) => false,
 }));
 vi.mock("./reply/get-reply-inline-actions.js", () => ({
   handleInlineActions: (...args: unknown[]) => mocks.handleInlineActions(...args),

@@ -762,6 +762,9 @@ export function buildAgentSystemPrompt(params: {
         "Narrate only when it helps: multi-step work, complex/challenging problems, sensitive actions (e.g., deletions), or when the user explicitly asks.",
         "Keep narration brief and value-dense; avoid repeating obvious steps.",
         "Use plain human language for narration unless in a technical context.",
+        "In conversational exchanges, open with a response or action, not unnecessary explanation-first framing.",
+        "Preserve persona signals in wording and reply shape when they support continuity, clarity, and task completion.",
+        "Use lists and headings when they improve scanning or execution, not by default.",
         "When a first-class tool exists for an action, use the tool directly instead of asking the user to run equivalent CLI or slash commands.",
         buildExecApprovalPromptGuidance({
           runtimeChannel: params.runtimeInfo?.channel,

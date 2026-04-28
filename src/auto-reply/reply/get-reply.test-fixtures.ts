@@ -141,9 +141,13 @@ export function registerGetReplyRuntimeOverrides(handles: {
   initSessionState: (...args: unknown[]) => unknown;
   handleInlineActions?: (...args: unknown[]) => unknown;
 }): void {
-  vi.doMock("./get-reply-directives.js", () => ({
-    resolveReplyDirectives: (...args: unknown[]) => handles.resolveReplyDirectives(...args),
-  }));
+  vi.doMock("./get-reply-directives.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("./get-reply-directives.js")>();
+    return {
+      ...actual,
+      resolveReplyDirectives: (...args: unknown[]) => handles.resolveReplyDirectives(...args),
+    };
+  });
   vi.doMock("./get-reply-inline-actions.js", () => ({
     handleInlineActions:
       handles.handleInlineActions ?? vi.fn(async () => ({ kind: "reply", reply: { text: "ok" } })),

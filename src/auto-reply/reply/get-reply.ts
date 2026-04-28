@@ -22,7 +22,10 @@ import { normalizeVerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { resolveDefaultModel } from "./directive-handling.defaults.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
-import { resolveReplyDirectives } from "./get-reply-directives.js";
+import {
+  isLikelyConversationalFreeformBody,
+  resolveReplyDirectives,
+} from "./get-reply-directives.js";
 import {
   initFastReplySessionState,
   buildFastReplyCommandContext,
@@ -511,6 +514,7 @@ export async function getReplyFromConfig(
     directiveAck,
     perMessageQueueMode,
     perMessageQueueOptions,
+    conversationalFreeform,
   } = directiveResult.result;
   provider = resolvedProvider;
   model = resolvedModel;
@@ -584,6 +588,14 @@ export async function getReplyFromConfig(
   await maybeEmitMissingResetHooks();
   directives = inlineActionResult.directives;
   abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
+
+  // handleInlineActions が sessionCtx.Body* を書き換える場合（skill slash-command の
+  // promptTemplate 等）、最初に算出した conversationalFreeform は古い判定になる。
+  // 最終 body から再計算して、command-style に書き換わったターンに会話用ヒントが
+  // 残らないようにする。
+  conversationalFreeform = isLikelyConversationalFreeformBody(
+    normalizeOptionalString(sessionCtx.Body) ?? "",
+  );
 
   // Allow plugins to intercept and return a synthetic reply before the LLM runs.
   if (!useFastTestBootstrap) {
@@ -672,5 +684,6 @@ export async function getReplyFromConfig(
     storePath,
     workspaceDir,
     abortedLastRun,
+    conversationalFreeform,
   });
 }
