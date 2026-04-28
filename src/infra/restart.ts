@@ -265,14 +265,28 @@ export function emitGatewayRestart(reasonOverride?: string): boolean {
   authorizeGatewaySigusr1Restart();
   try {
     if (process.listenerCount("SIGUSR1") > 0) {
+      // Signal path: let the run-loop's SIGUSR1 handler drive restart.
+      // Works on all platforms including Windows when a listener is registered.
       process.emit("SIGUSR1");
+    } else if (process.platform === "win32") {
+      // On Windows with no SIGUSR1 listener, fall back to task-scheduler handoff.
+      // triggerOpenClawRestart() uses schtasks to restart the gateway.
+      const result = triggerOpenClawRestart();
+      if (!result.ok) {
+        // Roll back the cycle marker so future restart requests can still proceed.
+        rollBackGatewayRestartEmission();
+        restartLog.warn("Windows scheduled task restart failed, token rolled back");
+        return false;
+      }
+      consumeGatewaySigusr1RestartAuthorization();
+      markGatewaySigusr1RestartHandled();
     } else {
+      // Unix without listener: send signal directly.
       process.kill(process.pid, "SIGUSR1");
     }
   } catch {
     // Roll back the cycle marker so future restart requests can still proceed.
-    emittedRestartToken = consumedRestartToken;
-    emittedRestartReason = undefined;
+    rollBackGatewayRestartEmission();
     return false;
   }
   lastRestartEmittedAt = Date.now();
@@ -333,6 +347,12 @@ export function markGatewaySigusr1RestartHandled(): void {
     consumedRestartToken = emittedRestartToken;
     emittedRestartReason = undefined;
   }
+}
+
+function rollBackGatewayRestartEmission(): void {
+  emittedRestartToken = consumedRestartToken;
+  emittedRestartReason = undefined;
+  consumeGatewaySigusr1RestartAuthorization();
 }
 
 export type RestartDeferralHooks = {
@@ -617,7 +637,7 @@ export type ScheduledRestart = {
   signal: "SIGUSR1";
   delayMs: number;
   reason?: string;
-  mode: "emit" | "signal";
+  mode: "emit" | "signal" | "supervisor";
   coalesced: boolean;
   cooldownMsApplied: number;
 };
@@ -637,7 +657,8 @@ export function scheduleGatewaySigusr1Restart(opts?: {
     typeof opts?.reason === "string" && opts.reason.trim()
       ? opts.reason.trim().slice(0, 200)
       : undefined;
-  const mode = process.listenerCount("SIGUSR1") > 0 ? "emit" : "signal";
+  const hasSigusr1Listener = process.listenerCount("SIGUSR1") > 0;
+  const mode = hasSigusr1Listener ? "emit" : process.platform === "win32" ? "supervisor" : "signal";
   const nowMs = Date.now();
   const cooldownMsApplied = Math.max(0, lastRestartEmittedAt + RESTART_COOLDOWN_MS - nowMs);
   const requestedDueAt = nowMs + delayMs + cooldownMsApplied;
