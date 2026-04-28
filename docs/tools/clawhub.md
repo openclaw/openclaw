@@ -152,16 +152,6 @@ abuse without blocking legitimate contributors.
     install surfaces while still visible to their owner in `/dashboard`.
 
   </Accordion>
-  <Accordion title="Owner recovery">
-    Owners can use `/dashboard` to find their own unavailable or scan-held
-    skills and plugins, open scanner detail pages, and request a fresh scan
-    when a result looks like a false positive.
-
-    Rescans apply to the latest published skill version or plugin release.
-    ClawHub limits owner-requested rescans per version/release and blocks
-    duplicate requests while a rescan is already in progress.
-
-  </Accordion>
   <Accordion title="Reporting">
     - Any signed-in user can report a skill.
     - Report reasons are required and recorded.

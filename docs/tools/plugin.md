@@ -405,10 +405,11 @@ dependency installs use the matching `dangerouslyForceUnsafeInstall` request
 override instead, while `openclaw skills install` remains the separate ClawHub
 skill download/install flow.
 
-For a ClawHub-hosted plugin release that is scan-held in the registry, publishers
-should use the ClawHub dashboard or `clawhub package rescan <name>` to request a
-fresh registry scan. The unsafe-install override is local to OpenClaw
-install/update flows and does not request or bypass ClawHub registry rescans.
+If a plugin you published on ClawHub is hidden or blocked by a scan, open the
+ClawHub dashboard or run `clawhub package rescan <name>` to ask ClawHub to check
+it again. `--dangerously-force-unsafe-install` only affects installs on your own
+machine; it does not ask ClawHub to rescan the plugin or make a blocked release
+public.
 
 Compatible bundles participate in the same plugin list/inspect/enable/disable
 flow. Current runtime support includes bundle skills, Claude command-skills,

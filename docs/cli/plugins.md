@@ -95,7 +95,7 @@ Bare package names are checked against ClawHub first, then npm. Treat plugin ins
 
     This CLI flag applies to plugin install/update flows. Gateway-backed skill dependency installs use the matching `dangerouslyForceUnsafeInstall` request override, while `openclaw skills install` remains a separate ClawHub skill download/install flow.
 
-    For ClawHub-hosted package scan recovery, use the publisher flow documented in [ClawHub](/tools/clawhub).
+    If a plugin you published on ClawHub is blocked by a registry scan, use the publisher steps in [ClawHub](/tools/clawhub).
 
   </Accordion>
   <Accordion title="Hook packs and npm specs">
