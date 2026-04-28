@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
-import { sanitizeGoogleThinkingPayload } from "./google-stream-wrappers.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  createGoogleThinkingPayloadWrapper,
+  sanitizeGoogleThinkingPayload,
+} from "./google-stream-wrappers.js";
 
 describe("sanitizeGoogleThinkingPayload — gemini-2.5-pro zero budget", () => {
   it("removes thinkingBudget=0 for gemini-2.5-pro", () => {
@@ -143,6 +146,70 @@ describe("sanitizeGoogleThinkingPayload — gemini-2.5-pro zero budget", () => {
     });
     expect(payload.config.thinkingConfig).toEqual({
       includeThoughts: true,
+      thinkingBudget: -1,
+    });
+  });
+});
+
+describe("createGoogleThinkingPayloadWrapper — Google API shape coverage (#38327)", () => {
+  // The wrapper's payload-sanitize step previously gated on a single
+  // `model.api === "google-generative-ai"` string. That guard left
+  // `google-vertex`, `google-gemini-cli`, and OpenAI-completions-shaped Vertex
+  // routes uncovered, so embedded-runner streams hit the unhandled negative
+  // `thinkingBudget` and crashed with "Cannot convert undefined or null to
+  // object" (issue #38327, still reproducing on v2026.4.21+ per fxstein's
+  // forensic notes on the issue).
+  async function runWrapper(model: { api: string; id: string; provider?: string }) {
+    let captured: Record<string, unknown> | undefined;
+    const baseStreamFn = vi.fn(async function* (_model: unknown, _ctx: unknown, options: unknown) {
+      const onPayload = (options as { onPayload?: (payload: unknown) => void } | undefined)
+        ?.onPayload;
+      onPayload?.({
+        config: { thinkingConfig: { thinkingBudget: -1 } },
+      });
+    });
+    const wrapped = createGoogleThinkingPayloadWrapper(baseStreamFn as never, undefined);
+    const generator = wrapped(model as never, { messages: [] } as never, {
+      onPayload: (payload: unknown) => {
+        captured = payload as Record<string, unknown>;
+      },
+    } as never) as AsyncIterable<unknown>;
+    for await (const _chunk of generator) {
+      // drain
+    }
+    return captured;
+  }
+
+  it("strips negative thinkingBudget for api=google-generative-ai (existing behavior preserved)", async () => {
+    const payload = await runWrapper({
+      api: "google-generative-ai",
+      id: "gemini-3.1-pro-preview",
+      provider: "google",
+    });
+    expect((payload?.config as { thinkingConfig?: unknown })?.thinkingConfig).toBeUndefined();
+  });
+
+  it("strips negative thinkingBudget for api=google-vertex (regression #38327)", async () => {
+    const payload = await runWrapper({
+      api: "google-vertex",
+      id: "gemini-3.1-pro-preview",
+      provider: "google-vertex",
+    });
+    expect((payload?.config as { thinkingConfig?: unknown })?.thinkingConfig).toBeUndefined();
+  });
+
+  it("strips negative thinkingBudget for api=google-gemini-cli (regression #38327)", async () => {
+    const payload = await runWrapper({
+      api: "google-gemini-cli",
+      id: "gemini-3.1-pro-preview",
+      provider: "google",
+    });
+    expect((payload?.config as { thinkingConfig?: unknown })?.thinkingConfig).toBeUndefined();
+  });
+
+  it("does not sanitize for unrelated APIs (api=anthropic stays untouched)", async () => {
+    const payload = await runWrapper({ api: "anthropic", id: "claude-sonnet-4.6" });
+    expect((payload?.config as { thinkingConfig?: unknown })?.thinkingConfig).toEqual({
       thinkingBudget: -1,
     });
   });
