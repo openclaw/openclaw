@@ -4,7 +4,7 @@ import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import type { RuntimeEnv } from "../../runtime.js";
+import type { OutputRuntimeEnv, RuntimeEnv } from "../../runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { deliverAgentCommandResult, normalizeAgentCommandReplyPayloads } from "./delivery.js";
 import type { AgentCommandOpts } from "./types.js";
@@ -183,47 +183,6 @@ describe("deliverAgentCommandResult", () => {
     expect(delivered.payloads).toMatchObject([{ text: "Options: on, off." }]);
   });
 
-  it("writes JSON envelopes to runtime.writeJson when available", async () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-      writeStdout: vi.fn(),
-      writeJson: vi.fn(),
-    } as unknown as RuntimeEnv & {
-      writeJson: ReturnType<typeof vi.fn>;
-      writeStdout: ReturnType<typeof vi.fn>;
-      log: ReturnType<typeof vi.fn>;
-    };
-
-    await deliverAgentCommandResult({
-      cfg: {} as OpenClawConfig,
-      deps: {} as CliDeps,
-      runtime,
-      opts: {
-        message: "test",
-        json: true,
-      } as AgentCommandOpts,
-      outboundSession: undefined,
-      sessionEntry: undefined,
-      payloads: [{ text: "pong" }],
-      result: createResult({
-        meta: {
-          durationMs: 1,
-        },
-      }),
-    });
-
-    expect(runtime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payloads: [expect.objectContaining({ text: "pong" })],
-        meta: { durationMs: 1 },
-      }),
-      2,
-    );
-    expect(runtime.log).not.toHaveBeenCalled();
-  });
-
   it("normalizes reply-media paths before outbound delivery", async () => {
     const normalizerFn = vi.fn(
       async (payload: ReplyPayload): Promise<ReplyPayload> => ({
@@ -308,47 +267,121 @@ describe("deliverAgentCommandResult", () => {
     ]);
   });
 
-  it("merges result metadata overrides into JSON output and returned results", async () => {
-    const runtime = {
-      log: vi.fn(),
-      writeStdout: vi.fn(),
-      writeJson: vi.fn(),
-    };
+  describe("JSON output", () => {
+    it("writes JSON envelopes to runtime.writeJson when stdout output is available", async () => {
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+        writeStdout: vi.fn(),
+        writeJson: vi.fn(),
+      } satisfies OutputRuntimeEnv;
 
-    const delivered = await deliverAgentCommandResult({
-      cfg: {} as OpenClawConfig,
-      deps: {} as CliDeps,
-      runtime: runtime as never,
-      opts: {
-        message: "test",
-        json: true,
-        resultMetaOverrides: {
-          transport: "embedded",
-          fallbackFrom: "gateway",
-        },
-      } as AgentCommandOpts,
-      outboundSession: undefined,
-      sessionEntry: undefined,
-      payloads: [{ text: "local" }],
-      result: createResult(),
+      await deliverAgentCommandResult({
+        cfg: {} as OpenClawConfig,
+        deps: {} as CliDeps,
+        runtime,
+        opts: {
+          message: "test",
+          json: true,
+        } as AgentCommandOpts,
+        outboundSession: undefined,
+        sessionEntry: undefined,
+        payloads: [{ text: "pong" }],
+        result: createResult({
+          meta: {
+            durationMs: 1,
+          },
+        }),
+      });
+
+      expect(runtime.writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payloads: [expect.objectContaining({ text: "pong" })],
+          meta: { durationMs: 1 },
+        }),
+        2,
+      );
+      expect(runtime.log).not.toHaveBeenCalled();
     });
 
-    expect(runtime.log).not.toHaveBeenCalled();
-    expect(runtime.writeJson).toHaveBeenCalledWith(
-      {
-        payloads: [{ text: "local", mediaUrl: null }],
-        meta: {
-          durationMs: 1,
-          transport: "embedded",
-          fallbackFrom: "gateway",
+    it("falls back to runtime.log for plain RuntimeEnv JSON output", async () => {
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      } satisfies RuntimeEnv;
+
+      await deliverAgentCommandResult({
+        cfg: {} as OpenClawConfig,
+        deps: {} as CliDeps,
+        runtime,
+        opts: {
+          message: "test",
+          json: true,
+        } as AgentCommandOpts,
+        outboundSession: undefined,
+        sessionEntry: undefined,
+        payloads: [{ text: "pong" }],
+        result: createResult(),
+      });
+
+      expect(runtime.log).toHaveBeenCalledWith(
+        JSON.stringify(
+          {
+            payloads: [{ text: "pong", mediaUrl: null }],
+            meta: { durationMs: 1 },
+          },
+          null,
+          2,
+        ),
+      );
+    });
+
+    it("merges result metadata overrides into JSON output and returned results", async () => {
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+        writeStdout: vi.fn(),
+        writeJson: vi.fn(),
+      } satisfies OutputRuntimeEnv;
+
+      const delivered = await deliverAgentCommandResult({
+        cfg: {} as OpenClawConfig,
+        deps: {} as CliDeps,
+        runtime,
+        opts: {
+          message: "test",
+          json: true,
+          resultMetaOverrides: {
+            transport: "embedded",
+            fallbackFrom: "gateway",
+          },
+        } as AgentCommandOpts,
+        outboundSession: undefined,
+        sessionEntry: undefined,
+        payloads: [{ text: "local" }],
+        result: createResult(),
+      });
+
+      expect(runtime.log).not.toHaveBeenCalled();
+      expect(runtime.writeJson).toHaveBeenCalledWith(
+        {
+          payloads: [{ text: "local", mediaUrl: null }],
+          meta: {
+            durationMs: 1,
+            transport: "embedded",
+            fallbackFrom: "gateway",
+          },
         },
-      },
-      2,
-    );
-    expect(delivered.meta).toMatchObject({
-      durationMs: 1,
-      transport: "embedded",
-      fallbackFrom: "gateway",
+        2,
+      );
+      expect(delivered.meta).toMatchObject({
+        durationMs: 1,
+        transport: "embedded",
+        fallbackFrom: "gateway",
+      });
     });
   });
 });
