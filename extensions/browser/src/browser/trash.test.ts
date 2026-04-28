@@ -72,6 +72,47 @@ describe("browser trash", () => {
     expect(rmSync).toHaveBeenCalledWith("/tmp/demo", { recursive: true, force: true });
   });
 
+  it("retries copy fallback when the copy destination is created concurrently", async () => {
+    const { movePathToTrash } = await import("./trash.js");
+    const exdev = Object.assign(new Error("cross-device"), { code: "EXDEV" });
+    const copyCollision = Object.assign(new Error("copy exists"), {
+      code: "ERR_FS_CP_EEXIST",
+    });
+    vi.spyOn(fs, "mkdirSync").mockImplementation(() => undefined);
+    vi.spyOn(fs, "existsSync").mockReturnValue(false);
+    vi.spyOn(fs, "renameSync").mockImplementation(() => {
+      throw exdev;
+    });
+    const cpSync = vi
+      .spyOn(fs, "cpSync")
+      .mockImplementationOnce(() => {
+        throw copyCollision;
+      })
+      .mockImplementation(() => undefined);
+    const rmSync = vi.spyOn(fs, "rmSync").mockImplementation(() => undefined);
+
+    await expect(movePathToTrash("/tmp/demo")).resolves.toMatch(
+      /^\/home\/test\/\.Trash\/demo-123-[A-Za-z0-9_-]+$/,
+    );
+    expect(cpSync).toHaveBeenNthCalledWith(1, "/tmp/demo", "/home/test/.Trash/demo-123", {
+      recursive: true,
+      force: false,
+      errorOnExist: true,
+    });
+    expect(cpSync).toHaveBeenNthCalledWith(
+      2,
+      "/tmp/demo",
+      expect.stringMatching(/^\/home\/test\/\.Trash\/demo-123-[A-Za-z0-9_-]+$/),
+      {
+        recursive: true,
+        force: false,
+        errorOnExist: true,
+      },
+    );
+    expect(rmSync).toHaveBeenCalledTimes(1);
+    expect(Date.now).toHaveBeenCalledTimes(1);
+  });
+
   it("retries with the same timestamp when the destination is created concurrently", async () => {
     const { movePathToTrash } = await import("./trash.js");
     const collision = Object.assign(new Error("exists"), { code: "EEXIST" });

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { generateSecureToken } from "../infra/secure-random.js";
 
-const TRASH_DESTINATION_COLLISION_CODES = new Set(["EEXIST", "ENOTEMPTY"]);
+const TRASH_DESTINATION_COLLISION_CODES = new Set(["EEXIST", "ENOTEMPTY", "ERR_FS_CP_EEXIST"]);
 const TRASH_DESTINATION_RETRY_LIMIT = 4;
 
 function getFsErrorCode(error: unknown): string | undefined {

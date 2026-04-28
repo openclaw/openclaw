@@ -16,7 +16,7 @@ type SecureRandomRuntime = typeof import("../infra/secure-random.js");
 
 let cachedBrowserMaintenanceSurface: BrowserMaintenanceSurface | undefined;
 let secureRandomRuntimePromise: Promise<SecureRandomRuntime> | undefined;
-const TRASH_DESTINATION_COLLISION_CODES = new Set(["EEXIST", "ENOTEMPTY"]);
+const TRASH_DESTINATION_COLLISION_CODES = new Set(["EEXIST", "ENOTEMPTY", "ERR_FS_CP_EEXIST"]);
 const TRASH_DESTINATION_RETRY_LIMIT = 4;
 
 function hasRequestedSessionKeys(sessionKeys: Array<string | undefined>): boolean {
