@@ -215,7 +215,85 @@ export function isClientToolNameConflictError(err: unknown): err is Error {
   return err instanceof Error && err.message.startsWith(CLIENT_TOOL_NAME_CONFLICT_PREFIX);
 }
 
-export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
+/**
+ * Wraps a tool execution promise with a timeout and abort propagation.
+ * If the tool doesn't complete within the timeout, aborts the execution
+ * via AbortController and returns an error instead of hanging indefinitely.
+ *
+ * Cleanup guarantees:
+ * - Timeout timer is always cleared (normal, abort, error paths)
+ * - Parent abort listener is always removed
+ * - Child AbortController.abort() is called on timeout so downstream can cancel
+ */
+export function withToolCallTimeout<T>(
+  execute: (signal?: AbortSignal) => Promise<T>,
+  timeoutMs: number,
+  toolName: string,
+  parentSignal?: AbortSignal,
+): Promise<T> {
+  if (timeoutMs <= 0) {
+    return execute(parentSignal);
+  }
+  if (parentSignal?.aborted) {
+    return execute(parentSignal);
+  }
+
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const controller = new AbortController();
+
+    const cleanup = () => {
+      if (timeoutId) clearTimeout(timeoutId);
+      if (parentSignal) parentSignal.removeEventListener("abort", onParentAbort);
+    };
+
+    const finishOk = (value: T) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(value);
+    };
+
+    const finishErr = (err: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(err);
+    };
+
+    const onParentAbort = () => {
+      controller.abort();
+      finishErr(new Error("Tool execution aborted"));
+    };
+
+    timeoutId = setTimeout(() => {
+      controller.abort();
+      finishErr(
+        new Error(
+          `Tool '${toolName}' timed out after ${timeoutMs}ms. The tool did not complete in time.`,
+        ),
+      );
+    }, timeoutMs);
+
+    if (parentSignal) {
+      parentSignal.addEventListener("abort", onParentAbort);
+    }
+
+    execute(controller.signal)
+      .then((result) => finishOk(result))
+      .catch((err) => finishErr(err instanceof Error ? err : new Error(String(err))));
+  });
+}
+
+export function toToolDefinitions(
+  tools: AnyAgentTool[],
+  config?: { toolCallTimeoutSeconds?: number },
+): ToolDefinition[] {
+  const timeoutMs =
+    typeof config?.toolCallTimeoutSeconds === "number"
+      ? config.toolCallTimeoutSeconds * 1000
+      : 60_000; // Default 60s
   return tools.map((tool) => {
     const name = tool.name || "tool";
     const normalizedName = normalizeToolName(name);
@@ -246,7 +324,12 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
             }
             executeParams = hookOutcome.params;
           }
-          const rawResult = await tool.execute(toolCallId, executeParams, signal, onUpdate);
+          const rawResult = await withToolCallTimeout(
+            (sig) => tool.execute(toolCallId, executeParams, sig ?? signal, onUpdate),
+            timeoutMs,
+            normalizedName,
+            signal,
+          );
           const result = normalizeToolExecutionResult({
             toolName: normalizedName,
             result: rawResult,
