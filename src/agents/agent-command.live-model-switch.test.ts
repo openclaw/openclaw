@@ -264,6 +264,7 @@ vi.mock("../routing/session-key.js", async () => {
   );
   return {
     ...actual,
+    isAcpSessionKey: () => false,
     isSubagentSessionKey: () => false,
     normalizeAgentId: (id: string) => id,
     normalizeMainKey: (key?: string | null) => key?.trim() || "main",
@@ -1195,6 +1196,33 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       },
     );
     expect(lifecycleFinishingCalls).toHaveLength(1);
+  });
+
+  it("does not pass stale sessionEntry.spawnedBy for top-level sessions", async () => {
+    const runAttemptCalls: Array<{ spawnedBy?: string }> = [];
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      const result = await params.run(params.provider, params.model);
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockImplementation(async (...args: unknown[]) => {
+      const attemptParams = args[0] as { spawnedBy?: string } | undefined;
+      runAttemptCalls.push({ spawnedBy: attemptParams?.spawnedBy });
+      return makeSuccessResult("anthropic", "claude");
+    });
+    state.sessionEntryMock = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      spawnedBy: "agent:main:subagent:stale-child",
+    };
+
+    await runBasicAgentCommand();
+
+    expect(runAttemptCalls[0]?.spawnedBy).toBeUndefined();
   });
 
   it("validates explicit thinking against configured model compat without an allowlist", async () => {

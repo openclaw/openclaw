@@ -26,6 +26,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
 import {
   classifySessionKeyShape,
+  isAcpSessionKey,
   isUnscopedSessionKeySentinel,
   isSubagentSessionKey,
   normalizeAgentId,
@@ -1321,7 +1322,11 @@ async function agentCommandInternal(
     });
     for (;;) {
       try {
-        const spawnedBy = normalizedSpawned.spawnedBy ?? sessionEntry?.spawnedBy;
+        const spawnedBy =
+          normalizedSpawned.spawnedBy ??
+          (isSubagentSessionKey(sessionKey) || isAcpSessionKey(sessionKey)
+            ? sessionEntry?.spawnedBy
+            : undefined);
         const effectiveFallbacksOverride = resolveEffectiveModelFallbacks({
           cfg,
           agentId: sessionAgentId,

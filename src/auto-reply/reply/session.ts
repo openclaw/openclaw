@@ -43,7 +43,11 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { closeTrackedBrowserTabsForSessions } from "../../plugin-sdk/browser-maintenance.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookSessionEndReason } from "../../plugins/hook-types.js";
-import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
+import {
+  isAcpSessionKey,
+  isSubagentSessionKey,
+  normalizeMainKey,
+} from "../../routing/session-key.js";
 import { isInterSessionInputProvenance } from "../../sessions/input-provenance.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
@@ -628,6 +632,7 @@ export async function initSessionState(params: {
   const lastTo = deliveryFields.lastTo ?? lastToRaw;
   const lastAccountId = deliveryFields.lastAccountId ?? lastAccountIdRaw;
   const lastThreadId = deliveryFields.lastThreadId ?? lastThreadIdRaw;
+  const preserveSpawnLineage = isSubagentSessionKey(sessionKey) || isAcpSessionKey(sessionKey);
   sessionEntry = {
     ...baseEntry,
     sessionId,
@@ -659,14 +664,20 @@ export async function initSessionState(params: {
     cliSessionBindings: baseEntry?.cliSessionBindings,
     claudeCliSessionId: baseEntry?.claudeCliSessionId,
     label: persistedLabel ?? baseEntry?.label,
-    spawnedBy: persistedSpawnedBy ?? baseEntry?.spawnedBy,
-    spawnedWorkspaceDir: persistedSpawnedWorkspaceDir ?? baseEntry?.spawnedWorkspaceDir,
-    spawnedCwd: persistedSpawnedCwd ?? baseEntry?.spawnedCwd,
+    spawnedBy: preserveSpawnLineage ? (persistedSpawnedBy ?? baseEntry?.spawnedBy) : undefined,
+    spawnedWorkspaceDir: preserveSpawnLineage
+      ? (persistedSpawnedWorkspaceDir ?? baseEntry?.spawnedWorkspaceDir)
+      : undefined,
+    spawnedCwd: preserveSpawnLineage ? (persistedSpawnedCwd ?? baseEntry?.spawnedCwd) : undefined,
     parentSessionKey: persistedParentSessionKey ?? baseEntry?.parentSessionKey,
     forkedFromParent: persistedForkedFromParent ?? baseEntry?.forkedFromParent,
-    spawnDepth: persistedSpawnDepth ?? baseEntry?.spawnDepth,
-    subagentRole: persistedSubagentRole ?? baseEntry?.subagentRole,
-    subagentControlScope: persistedSubagentControlScope ?? baseEntry?.subagentControlScope,
+    spawnDepth: preserveSpawnLineage ? (persistedSpawnDepth ?? baseEntry?.spawnDepth) : undefined,
+    subagentRole: preserveSpawnLineage
+      ? (persistedSubagentRole ?? baseEntry?.subagentRole)
+      : undefined,
+    subagentControlScope: preserveSpawnLineage
+      ? (persistedSubagentControlScope ?? baseEntry?.subagentControlScope)
+      : undefined,
     sendPolicy: baseEntry?.sendPolicy,
     queueMode: baseEntry?.queueMode,
     queueDebounceMs: baseEntry?.queueDebounceMs,
