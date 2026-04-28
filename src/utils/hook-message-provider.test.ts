@@ -21,6 +21,13 @@ describe("inferHookMessageProviderFromSessionKey", () => {
     expect(inferHookMessageProviderFromSessionKey("agent:main:telegram:notes")).toBeUndefined();
   });
 
+  it("requires a concrete channel conversation target before inferring", () => {
+    expect(inferHookMessageProviderFromSessionKey("agent:main:telegram:direct")).toBeUndefined();
+    expect(
+      inferHookMessageProviderFromSessionKey("agent:main:telegram:default:direct"),
+    ).toBeUndefined();
+  });
+
   it("does not infer providers from non-channel direct session keys", () => {
     expect(inferHookMessageProviderFromSessionKey("agent:main:direct:peer_123")).toBeUndefined();
   });
@@ -52,6 +59,15 @@ describe("resolveHookMessageProvider", () => {
         provider: "internal",
       }),
     ).toBe("internal");
+  });
+
+  it("preserves explicit non-gateway provider identities", () => {
+    expect(
+      resolveHookMessageProvider({
+        sessionKey: "agent:main:telegram:direct:123",
+        provider: "custom-provider",
+      }),
+    ).toBe("custom-provider");
   });
 
   it("falls back to channel-scoped session key inference when no provider is explicit", () => {

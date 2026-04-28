@@ -41,6 +41,7 @@ function createCompactionContext(params: {
   agentId?: string;
   initialCount: number;
   messageProvider?: string;
+  messageChannel?: string;
 }): EmbeddedPiSubscribeContext {
   let compactionCount = params.initialCount;
   return {
@@ -52,6 +53,7 @@ function createCompactionContext(params: {
       sessionId: "session-1",
       agentId: params.agentId ?? "test-agent",
       messageProvider: params.messageProvider,
+      messageChannel: params.messageChannel,
       onAgentEvent: undefined,
     },
     state: {
@@ -166,6 +168,27 @@ describe("handleCompactionStart", () => {
       sessionKey: "agent:main:telegram:direct:ou_test",
       initialCount: 1,
       messageProvider: "Telegram",
+    });
+
+    handleCompactionStart(ctx);
+    await vi.waitFor(() => expect(hookRunnerMocks.runBeforeCompaction).toHaveBeenCalledTimes(1));
+    expect(hookRunnerMocks.runBeforeCompaction).toHaveBeenCalledWith(
+      expect.objectContaining({ messageCount: 0 }),
+      expect.objectContaining({
+        sessionKey: "agent:main:telegram:direct:ou_test",
+        messageProvider: "telegram",
+      }),
+    );
+  });
+
+  it("prefers messageChannel fallback over the provider identity for hook context", async () => {
+    hookRunnerMocks.hasHooks.mockImplementation((hookName) => hookName === "before_compaction");
+    const ctx = createCompactionContext({
+      storePath: "/tmp/sessions.json",
+      sessionKey: "agent:main:telegram:direct:ou_test",
+      initialCount: 1,
+      messageProvider: "internal",
+      messageChannel: "Telegram",
     });
 
     handleCompactionStart(ctx);
