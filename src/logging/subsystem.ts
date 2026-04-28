@@ -12,6 +12,7 @@ import {
 } from "./console.js";
 import { type LogLevel, levelToMinLevel } from "./levels.js";
 import { getChildLogger, isFileLogLevelEnabled } from "./logger.js";
+import { redactSensitiveText } from "./redact.js";
 import { loggingState } from "./state.js";
 
 type LogObj = { date?: Date } & Record<string, unknown>;
@@ -255,13 +256,14 @@ function writeConsoleLine(level: LogLevel, line: string) {
     process.platform === "win32" && process.env.GITHUB_ACTIONS === "true"
       ? line.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, "?").replace(/[\uD800-\uDFFF]/g, "?")
       : line;
+  const redacted = redactSensitiveText(sanitized);
   const sink = loggingState.rawConsole ?? console;
   if (loggingState.forceConsoleToStderr || level === "error" || level === "fatal") {
-    (sink.error ?? console.error)(sanitized);
+    (sink.error ?? console.error)(redacted);
   } else if (level === "warn") {
-    (sink.warn ?? console.warn)(sanitized);
+    (sink.warn ?? console.warn)(redacted);
   } else {
-    (sink.log ?? console.log)(sanitized);
+    (sink.log ?? console.log)(redacted);
   }
 }
 

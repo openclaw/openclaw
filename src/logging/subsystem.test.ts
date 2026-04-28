@@ -9,10 +9,10 @@ import { createSubsystemLogger } from "./subsystem.js";
 
 const logPathTracker = createSuiteLogPathTracker("openclaw-subsystem-log-");
 
-function installConsoleMethodSpy(method: "warn" | "error") {
+function installConsoleMethodSpy(method: "log" | "warn" | "error") {
   const spy = vi.fn();
   loggingState.rawConsole = {
-    log: vi.fn(),
+    log: method === "log" ? spy : vi.fn(),
     info: vi.fn(),
     warn: method === "warn" ? spy : vi.fn(),
     error: method === "error" ? spy : vi.fn(),
@@ -203,6 +203,50 @@ describe("createSubsystemLogger().isEnabled", () => {
     });
 
     expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("redacts sensitive tokens from info console output", () => {
+    setLoggerOverride({ level: "silent", consoleLevel: "info" });
+    const logSpy = installConsoleMethodSpy("log");
+    const log = createSubsystemLogger("gateway/auth");
+    const secret = "sk-abcdefghijklmnopqrstuvwxyz123456";
+
+    log.info(`provider api key API_KEY=${secret}`);
+
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    const message = String(logSpy.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain("API_KEY=");
+    expect(message).not.toContain(secret);
+    expect(message).toContain("API_KEY=***");
+  });
+
+  it("redacts bearer tokens from error console output", () => {
+    setLoggerOverride({ level: "silent", consoleLevel: "error" });
+    const error = installConsoleMethodSpy("error");
+    const log = createSubsystemLogger("gateway/auth");
+    const token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.secret";
+
+    log.error(`Authorization: Bearer ${token}`);
+
+    expect(error).toHaveBeenCalledTimes(1);
+    const message = String(error.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain("Authorization: Bearer");
+    expect(message).not.toContain(token);
+    expect(message).toContain("eyJhbG…cret");
+  });
+
+  it("redacts sensitive tokens from raw console output", () => {
+    setLoggerOverride({ level: "silent", consoleLevel: "info" });
+    const logSpy = installConsoleMethodSpy("log");
+    const log = createSubsystemLogger("gateway/auth");
+    const secret = "sk-rawtokenabcdefghijklmnopqrstuvwxyz123456";
+
+    log.raw(`raw token ${secret}`);
+
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    const message = String(logSpy.mock.calls[0]?.[0] ?? "");
+    expect(message).not.toContain(secret);
+    expect(message).toContain("sk-raw…3456");
   });
 
   it("keeps long-lived subsystem loggers on the current-day rolling file", () => {
