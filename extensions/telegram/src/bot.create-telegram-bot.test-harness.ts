@@ -142,6 +142,7 @@ async function dispatchHarnessReplies(
       params.dispatcherOptions.onError?.(err, { kind: "final" });
     }
   }
+  params.dispatcherOptions.typingCallbacks?.onIdle?.();
   return {
     queuedFinal: finalCount > 0,
     counts: {
