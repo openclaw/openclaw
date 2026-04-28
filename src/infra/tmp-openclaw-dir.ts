@@ -30,8 +30,13 @@ function isNodeErrorWithCode(err: unknown, code: string): err is MaybeNodeError 
   );
 }
 
+type ResolvePreferredOpenClawTmpDirInternalOptions = ResolvePreferredOpenClawTmpDirOptions & {
+  /** Test seam for the host platform; defaults to `process.platform`. */
+  platform?: NodeJS.Platform;
+};
+
 export function resolvePreferredOpenClawTmpDir(
-  options: ResolvePreferredOpenClawTmpDirOptions = {},
+  options: ResolvePreferredOpenClawTmpDirInternalOptions = {},
 ): string {
   // Evaluated here (not at module load) so this file is safe to import in browser bundles.
   const TMP_DIR_ACCESS_MODE = fs.constants.W_OK | fs.constants.X_OK;
@@ -50,6 +55,7 @@ export function resolvePreferredOpenClawTmpDir(
       }
     });
   const tmpdir = typeof options.tmpdir === "function" ? options.tmpdir : getOsTmpDir;
+  const platform = options.platform ?? process.platform;
   const uid = getuid();
 
   const isSecureDirForUser = (st: { mode?: number; uid?: number }): boolean => {
@@ -154,6 +160,17 @@ export function resolvePreferredOpenClawTmpDir(
     }
     return fallbackPath;
   };
+
+  // On Windows, Node resolves the POSIX path `/tmp` to `C:\tmp` (relative to
+  // the current drive root). Many Windows hosts have `C:\tmp` because Git,
+  // MSYS2, and other Unix-compat tools create it; the existing logic then
+  // happily writes logs and TTS files to `C:\tmp\openclaw\` while every
+  // other code path expects `%TEMP%\openclaw\`. Skip the POSIX preferred
+  // path entirely on Windows so the function falls through to the
+  // os.tmpdir() fallback (#60713).
+  if (platform === "win32") {
+    return ensureTrustedFallbackDir();
+  }
 
   const existingPreferredState = resolveDirState(POSIX_OPENCLAW_TMP_DIR);
   if (existingPreferredState === "available") {
