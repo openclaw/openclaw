@@ -357,9 +357,21 @@ class OpenAiCompatibleEmbeddings implements Embeddings {
     private model: string,
     baseUrl?: string,
     private dimensions?: number,
+    timeoutMs?: number,
+    maxRetries?: number,
   ) {
     this.clientPromise = loadOpenAiModule().then(
-      ({ default: OpenAI }) => new OpenAI({ apiKey, baseURL: baseUrl }) as OpenAiEmbeddingClient,
+      ({ default: OpenAI }) =>
+        // Only pass timeout/maxRetries through when the operator explicitly
+        // configured them. Leaving them unset preserves the OpenAI SDK defaults
+        // (600000ms timeout, 2 retries) so upgrading installs with slow-but-
+        // working embedding endpoints do not silently start failing.
+        new OpenAI({
+          apiKey,
+          baseURL: baseUrl,
+          ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
+          ...(maxRetries !== undefined ? { maxRetries } : {}),
+        }) as OpenAiEmbeddingClient,
     );
   }
 
@@ -471,9 +483,9 @@ async function runWithTimeout<T>(params: {
 }
 
 function createEmbeddings(api: OpenClawPluginApi, cfg: MemoryConfig): Embeddings {
-  const { provider, model, dimensions, apiKey, baseUrl } = cfg.embedding;
+  const { provider, model, dimensions, apiKey, baseUrl, timeoutMs, maxRetries } = cfg.embedding;
   if (provider === "openai" && apiKey) {
-    return new OpenAiCompatibleEmbeddings(apiKey, model, baseUrl, dimensions);
+    return new OpenAiCompatibleEmbeddings(apiKey, model, baseUrl, dimensions, timeoutMs, maxRetries);
   }
   return new ProviderAdapterEmbeddings(api, cfg.embedding);
 }
