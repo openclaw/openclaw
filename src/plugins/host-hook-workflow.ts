@@ -103,7 +103,10 @@ async function validateAttachmentFiles(
   const paths: string[] = [];
   let totalBytes = 0;
   for (const file of files) {
-    const filePath = normalizeOptionalString(file.path);
+    if (!file || typeof file !== "object" || Array.isArray(file)) {
+      return { error: "attachment file entry must be an object" };
+    }
+    const filePath = normalizeOptionalString((file as { path?: unknown }).path);
     if (!filePath) {
       return { error: "attachment file path is required" };
     }
