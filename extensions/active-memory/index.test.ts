@@ -1566,9 +1566,12 @@ describe("active-memory plugin", () => {
       expect.arrayContaining([
         expect.stringContaining("🧩 Active Memory: status=timeout_partial"),
         expect.stringContaining("summary=35 chars"),
-        expect.stringContaining("🔎 Active Memory Debug: alpha beta gamma delta epsilon zeta"),
+        expect.stringContaining(
+          "🔎 Active Memory Debug: timeout_partial: 35 chars recovered (not persisted)",
+        ),
       ]),
     );
+    expect(lines.join("\n")).not.toContain("alpha beta gamma delta");
   });
 
   it("keeps timeout status when the timeout transcript is empty", async () => {
@@ -1671,9 +1674,12 @@ describe("active-memory plugin", () => {
     expect(getActiveMemoryLines(sessionKey)).toEqual(
       expect.arrayContaining([
         expect.stringContaining("🧩 Active Memory: status=timeout_partial"),
-        expect.stringContaining("🔎 Active Memory Debug: partial abort summary"),
+        expect.stringContaining(
+          "🔎 Active Memory Debug: timeout_partial: 21 chars recovered (not persisted)",
+        ),
       ]),
     );
+    expect(getActiveMemoryLines(sessionKey).join("\n")).not.toContain("partial abort summary");
   });
 
   it("keeps generic subagent errors unavailable without using partial transcript output", async () => {

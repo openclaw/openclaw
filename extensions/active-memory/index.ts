@@ -1200,6 +1200,13 @@ function buildPluginStatusLine(params: {
   return parts.join(" ");
 }
 
+function buildPersistedDebugSummary(result: ActiveRecallResult): string | null {
+  if (result.status === "timeout_partial") {
+    return `timeout_partial: ${String(result.summary.length)} chars recovered (not persisted)`;
+  }
+  return result.summary;
+}
+
 function buildPluginDebugLine(params: {
   summary?: string | null;
   searchDebug?: ActiveMemorySearchDebug;
@@ -2109,7 +2116,7 @@ async function maybeResolveActiveRecall(params: {
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       statusLine: `${buildPluginStatusLine({ result: cached, config: params.config })} cached`,
-      debugSummary: cached.summary,
+      debugSummary: buildPersistedDebugSummary(cached),
       searchDebug: cached.searchDebug,
     });
     if (params.config.logging) {
@@ -2175,7 +2182,7 @@ async function maybeResolveActiveRecall(params: {
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         statusLine: buildPluginStatusLine({ result, config: params.config }),
-        debugSummary: result.summary,
+        debugSummary: buildPersistedDebugSummary(result),
         searchDebug: result.searchDebug,
       });
       return result;
@@ -2214,7 +2221,7 @@ async function maybeResolveActiveRecall(params: {
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       statusLine: buildPluginStatusLine({ result, config: params.config }),
-      debugSummary: result.summary,
+      debugSummary: buildPersistedDebugSummary(result),
       searchDebug: result.searchDebug,
     });
     if (shouldCacheResult(result)) {
@@ -2241,7 +2248,7 @@ async function maybeResolveActiveRecall(params: {
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         statusLine: buildPluginStatusLine({ result, config: params.config }),
-        debugSummary: result.summary,
+        debugSummary: buildPersistedDebugSummary(result),
         searchDebug: result.searchDebug,
       });
       return result;
