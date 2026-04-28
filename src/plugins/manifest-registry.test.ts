@@ -92,13 +92,21 @@ function loadRegistry(candidates: PluginCandidate[]) {
 }
 
 function hermeticEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  return {
+  const env: NodeJS.ProcessEnv = {
     OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+    OPENCLAW_TRUST_BUNDLED_PLUGINS_DIR_FOR_TEST: undefined,
     OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
     OPENCLAW_VERSION: undefined,
     VITEST: "true",
     ...overrides,
   };
+  if (
+    env.OPENCLAW_BUNDLED_PLUGINS_DIR &&
+    env["OPENCLAW_TRUST_BUNDLED_PLUGINS_DIR_FOR_TEST"] === undefined
+  ) {
+    env["OPENCLAW_TRUST_BUNDLED_PLUGINS_DIR_FOR_TEST"] = "1";
+  }
+  return env;
 }
 
 function countDuplicateWarnings(registry: ReturnType<typeof loadPluginManifestRegistry>): number {
