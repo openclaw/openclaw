@@ -56,12 +56,11 @@ describe("secret target registry fast path", () => {
     expect(target).not.toBeNull();
     expect(target?.entry.id).toBe("channels.googlechat.serviceAccount");
     expect(target?.refPathSegments).toEqual(["channels", "googlechat", "serviceAccountRef"]);
-    expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        dirName: "googlechat",
-        artifactBasename: "secret-contract-api.js",
-      }),
-    );
+    expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
+      dirName: "googlechat",
+      artifactBasename: "secret-contract-api.js",
+      installRuntimeDeps: false,
+    });
     expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
   });
 });
