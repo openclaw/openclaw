@@ -134,7 +134,7 @@ import {
 } from "./handshake-auth-helpers.js";
 import { isUnauthorizedRoleError, UnauthorizedFloodGuard } from "./unauthorized-flood-guard.js";
 
-function buildTrustedProxyScopes(authResult: GatewayAuthResult): string[] {
+export function buildTrustedProxyScopes(authResult: GatewayAuthResult): string[] {
   if (authResult.method !== "trusted-proxy") {
     return [];
   }
