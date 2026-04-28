@@ -10,6 +10,7 @@ import {
   resolvePublicAgentAvatarSource,
 } from "../../agents/identity-avatar.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
+import { resolveTrustedGroupId } from "../../agents/pi-tools.policy.js";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
 import {
   normalizeSpawnedRunMetadata,
@@ -882,6 +883,31 @@ export const agentHandlers: GatewayRequestHandlers = {
       resolvedGroupId = resolvedGroupId || inheritedGroup?.groupId;
       resolvedGroupChannel = resolvedGroupChannel || inheritedGroup?.groupChannel;
       resolvedGroupSpace = resolvedGroupSpace || inheritedGroup?.groupSpace;
+      // Validate the effective group ID (request value or stored fallback) against
+      // the session key before persisting. Fail-closed: non-group session keys
+      // cannot have a trusted groupId regardless of what the caller or the
+      // existing session entry contains. This prevents a forged groupId from
+      // surviving across reconnections via the session entry.
+      const effectiveGroupId = resolvedGroupId ?? entry?.groupId;
+      if (effectiveGroupId) {
+        const trustedGroup = resolveTrustedGroupId({
+          groupId: effectiveGroupId,
+          sessionKey: canonicalKey,
+          spawnedBy: spawnedByValue,
+        });
+        if (trustedGroup.dropped) {
+          resolvedGroupId = undefined;
+          resolvedGroupChannel = undefined;
+          resolvedGroupSpace = undefined;
+        } else if (!resolvedGroupId) {
+          // Promote the validated stored value into resolvedGroupId so the
+          // session entry write below does not need a ?? fallback that could
+          // re-admit a stale or previously-forged entry value.
+          resolvedGroupId = effectiveGroupId;
+          resolvedGroupChannel = resolvedGroupChannel ?? entry?.groupChannel;
+          resolvedGroupSpace = resolvedGroupSpace ?? entry?.space;
+        }
+      }
       const deliveryFields = normalizeSessionDeliveryFields(entry);
       // When the session has no delivery context yet (e.g. a freshly-spawned subagent
       // with deliver: false), seed it from the request's channel/to/threadId params.
@@ -935,9 +961,9 @@ export const agentHandlers: GatewayRequestHandlers = {
         spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
         spawnDepth: entry?.spawnDepth,
         channel: entry?.channel ?? request.channel?.trim(),
-        groupId: resolvedGroupId ?? entry?.groupId,
-        groupChannel: resolvedGroupChannel ?? entry?.groupChannel,
-        space: resolvedGroupSpace ?? entry?.space,
+        groupId: resolvedGroupId,
+        groupChannel: resolvedGroupChannel,
+        space: resolvedGroupSpace,
         ...(pluginOwnerId ? { pluginOwnerId } : {}),
         cliSessionIds: entry?.cliSessionIds,
         cliSessionBindings: entry?.cliSessionBindings,
