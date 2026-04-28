@@ -494,7 +494,9 @@ export const registerTelegramHandlers = ({
     if (!replyMessage || !hasInboundMedia(replyMessage)) {
       return [];
     }
-    if (typeof ctx.me?.id === "number" && replyMessage.from?.id === ctx.me.id) {
+    const botId = ctx.me?.id;
+    const replyFromId = replyMessage.from?.id;
+    if (typeof botId === "number" && typeof replyFromId === "number" && replyFromId === botId) {
       return [];
     }
     const replyFileId = resolveInboundMediaFileId(replyMessage);

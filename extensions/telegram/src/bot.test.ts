@@ -1665,6 +1665,59 @@ describe("createTelegramBot", () => {
     expect(mediaFetch).not.toHaveBeenCalled();
   });
 
+  it("keeps reply media from a different bot for text replies", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    getFileSpy.mockClear();
+
+    const mediaFetch = vi.fn(
+      async () =>
+        new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+    );
+    const ssrfMock = mockPinnedHostnameResolution();
+
+    try {
+      createTelegramBot({
+        token: "tok",
+        telegramTransport: {
+          fetch: mediaFetch as typeof fetch,
+          sourceFetch: mediaFetch as typeof fetch,
+          close: async () => {},
+        },
+      });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      await handler({
+        message: {
+          chat: { id: 7, type: "private" },
+          text: "what is in this image?",
+          date: 1736380800,
+          from: { id: 99, first_name: "Ada", is_bot: false },
+          reply_to_message: {
+            message_id: 9001,
+            photo: [{ file_id: "reply-photo-1" }],
+            from: { id: 1001, first_name: "OtherBot", is_bot: true },
+          },
+        },
+        me: { id: 42, is_bot: true, first_name: "OpenClaw", username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+    } finally {
+      ssrfMock.mockRestore();
+    }
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0][0] as {
+      ReplyToBody?: string;
+    };
+    expect(payload.ReplyToBody).toBe("<media:image>");
+    expect(getFileSpy).toHaveBeenCalledWith("reply-photo-1");
+    expect(mediaFetch).toHaveBeenCalledTimes(1);
+  });
+
   it("does not fetch reply media for unauthorized DM replies", async () => {
     onSpy.mockClear();
     replySpy.mockClear();
