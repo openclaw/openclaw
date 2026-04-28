@@ -469,6 +469,55 @@ describe("codex command", () => {
     expect(safeCodexControlRequest).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps diagnostics cooldown tracking bounded", async () => {
+    const safeCodexControlRequest = vi.fn(async () => ({
+      ok: true as const,
+      value: {},
+    }));
+    const deps = createDeps({ safeCodexControlRequest });
+    const threadPrefix = `thread-${path.basename(tempDir)}`;
+    const sessionFile = path.join(tempDir, "bounded-session.jsonl");
+
+    for (let index = 0; index <= 100; index += 1) {
+      await fs.writeFile(
+        `${sessionFile}.codex-app-server.json`,
+        JSON.stringify({ schemaVersion: 1, threadId: `${threadPrefix}-${index}`, cwd: "/repo" }),
+      );
+      await handleCodexCommand(createContext("diagnostics", sessionFile), { deps });
+    }
+
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({ schemaVersion: 1, threadId: `${threadPrefix}-0`, cwd: "/repo" }),
+    );
+    await handleCodexCommand(createContext("diagnostics", sessionFile), { deps });
+
+    expect(safeCodexControlRequest).toHaveBeenCalledTimes(102);
+  });
+
+  it("sanitizes diagnostics upload errors before showing them", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({ schemaVersion: 1, threadId: "thread-error", cwd: "/repo" }),
+    );
+    const safeCodexControlRequest = vi.fn(async () => ({
+      ok: false as const,
+      error: "bad\n\u202e; echo pwn",
+    }));
+
+    await expect(
+      handleCodexCommand(createContext("diagnostics", sessionFile), {
+        deps: createDeps({ safeCodexControlRequest }),
+      }),
+    ).resolves.toEqual({
+      text: [
+        "Could not send Codex diagnostics for thread thread-error: bad??; echo pwn",
+        "Inspect locally: codex resume 'thread-error'",
+      ].join("\n"),
+    });
+  });
+
   it("shell-quotes diagnostics resume hints", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await fs.writeFile(

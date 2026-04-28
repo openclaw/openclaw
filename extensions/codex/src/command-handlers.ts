@@ -119,6 +119,8 @@ type ParsedComputerUseArgs = {
 const CODEX_DIAGNOSTICS_SOURCE = "openclaw-diagnostics";
 const CODEX_DIAGNOSTICS_REASON_MAX_CHARS = 2048;
 const CODEX_DIAGNOSTICS_COOLDOWN_MS = 60_000;
+const CODEX_DIAGNOSTICS_ERROR_MAX_CHARS = 500;
+const CODEX_DIAGNOSTICS_COOLDOWN_MAX_THREADS = 100;
 
 const lastCodexDiagnosticsUploadByThread = new Map<string, number>();
 
@@ -543,7 +545,9 @@ async function sendCodexDiagnosticsFeedback(
   if (!response.ok) {
     const displayThreadId = formatCodexThreadIdForDisplay(binding.threadId);
     return [
-      `Could not send Codex diagnostics for thread ${displayThreadId}: ${response.error}`,
+      `Could not send Codex diagnostics for thread ${displayThreadId}: ${formatCodexErrorForDisplay(
+        response.error,
+      )}`,
       `Inspect locally: ${formatCodexResumeCommand(displayThreadId)}`,
     ].join("\n");
   }
@@ -551,7 +555,7 @@ async function sendCodexDiagnosticsFeedback(
     ? readString(response.value, "threadId")
     : undefined;
   const threadId = responseThreadId ?? binding.threadId;
-  lastCodexDiagnosticsUploadByThread.set(binding.threadId, Date.now());
+  recordCodexDiagnosticsUpload(binding.threadId, Date.now());
   const displayThreadId = formatCodexThreadIdForDisplay(threadId);
   return [
     `Codex diagnostics sent for thread ${displayThreadId}.`,
@@ -580,8 +584,12 @@ function addTag(tags: Record<string, string>, key: string, value: unknown): void
 }
 
 function formatCodexThreadIdForDisplay(threadId: string): string {
+  return formatCodexTextForDisplay(threadId);
+}
+
+function formatCodexTextForDisplay(value: string): string {
   let safe = "";
-  for (const character of threadId) {
+  for (const character of value) {
     const codePoint = character.codePointAt(0);
     safe += codePoint != null && isUnsafeDisplayCodePoint(codePoint) ? "?" : character;
   }
@@ -594,7 +602,38 @@ function readCodexDiagnosticsCooldownMs(threadId: string, now: number): number {
   if (!lastSentAt) {
     return 0;
   }
-  return Math.max(0, CODEX_DIAGNOSTICS_COOLDOWN_MS - (now - lastSentAt));
+  const remainingMs = Math.max(0, CODEX_DIAGNOSTICS_COOLDOWN_MS - (now - lastSentAt));
+  if (remainingMs === 0) {
+    lastCodexDiagnosticsUploadByThread.delete(threadId);
+  }
+  return remainingMs;
+}
+
+function recordCodexDiagnosticsUpload(threadId: string, now: number): void {
+  pruneCodexDiagnosticsCooldowns(now);
+  if (!lastCodexDiagnosticsUploadByThread.has(threadId)) {
+    while (lastCodexDiagnosticsUploadByThread.size >= CODEX_DIAGNOSTICS_COOLDOWN_MAX_THREADS) {
+      const oldestThreadId = lastCodexDiagnosticsUploadByThread.keys().next().value;
+      if (typeof oldestThreadId !== "string") {
+        break;
+      }
+      lastCodexDiagnosticsUploadByThread.delete(oldestThreadId);
+    }
+  }
+  lastCodexDiagnosticsUploadByThread.set(threadId, now);
+}
+
+function pruneCodexDiagnosticsCooldowns(now: number): void {
+  for (const [threadId, lastSentAt] of lastCodexDiagnosticsUploadByThread) {
+    if (now - lastSentAt >= CODEX_DIAGNOSTICS_COOLDOWN_MS) {
+      lastCodexDiagnosticsUploadByThread.delete(threadId);
+    }
+  }
+}
+
+function formatCodexErrorForDisplay(error: string): string {
+  const safe = formatCodexTextForDisplay(error).slice(0, CODEX_DIAGNOSTICS_ERROR_MAX_CHARS);
+  return safe || "unknown error";
 }
 
 function isUnsafeDisplayCodePoint(codePoint: number): boolean {
