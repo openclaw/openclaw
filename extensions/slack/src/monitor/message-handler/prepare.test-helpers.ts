@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { App } from "@slack/bolt";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import type { ResolvedSlackAccount } from "../../accounts.js";
@@ -12,7 +12,7 @@ export function createInboundSlackTestContext(params: {
   cfg: OpenClawConfig;
   appClient?: App["client"];
   defaultRequireMention?: boolean;
-  replyToMode?: "off" | "all" | "first";
+  replyToMode?: "off" | "all" | "first" | "batched";
   channelsConfig?: SlackChannelConfigEntries;
   threadRequireExplicitMention?: boolean;
 }) {
@@ -23,6 +23,7 @@ export function createInboundSlackTestContext(params: {
     app: { client: params.appClient ?? {} } as App,
     runtime: {} as RuntimeEnv,
     botUserId: "B1",
+    botId: "B1",
     teamId: "T1",
     apiAppId: "A1",
     historyLimit: 0,

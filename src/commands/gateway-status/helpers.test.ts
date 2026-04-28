@@ -4,11 +4,13 @@ import {
   buildNetworkHints,
   extractConfigSummary,
   isProbeReachable,
+  isPostConnectProbeFailure,
   isScopeLimitedProbeFailure,
   renderProbeSummaryLine,
   resolveAuthForTarget,
   resolveProbeBudgetMs,
   resolveTargets,
+  sanitizeSshTarget,
 } from "./helpers.js";
 import { createSecretRefGatewayConfig } from "./test-support.js";
 
@@ -187,6 +189,8 @@ describe("resolveAuthForTarget", () => {
   it("redacts resolver internals from unresolved SecretRef diagnostics", async () => {
     await withEnvAsync(
       {
+        OPENCLAW_GATEWAY_PASSWORD: undefined,
+        OPENCLAW_GATEWAY_TOKEN: undefined,
         MISSING_GATEWAY_TOKEN: undefined,
       },
       async () => {
@@ -230,6 +234,11 @@ describe("probe reachability classification", () => {
       connectLatencyMs: 51,
       error: "missing scope: operator.read",
       close: null,
+      auth: {
+        role: "operator",
+        scopes: ["operator.write"],
+        capability: "write_capable" as const,
+      },
       health: null,
       status: null,
       presence: null,
@@ -238,16 +247,22 @@ describe("probe reachability classification", () => {
 
     expect(isScopeLimitedProbeFailure(probe)).toBe(true);
     expect(isProbeReachable(probe)).toBe(true);
-    expect(renderProbeSummaryLine(probe, false)).toContain("RPC: limited");
+    expect(renderProbeSummaryLine(probe, false)).toContain("Capability: write-capable");
+    expect(renderProbeSummaryLine(probe, false)).toContain("Read probe: limited");
   });
 
-  it("keeps non-scope RPC failures as unreachable", () => {
+  it("treats post-connect read failures as reachable with failed diagnostics", () => {
     const probe = {
       ok: false,
       url: "ws://127.0.0.1:18789",
       connectLatencyMs: 43,
       error: "unknown method: status",
       close: null,
+      auth: {
+        role: "operator",
+        scopes: [],
+        capability: "connected_no_operator_scope" as const,
+      },
       health: null,
       status: null,
       presence: null,
@@ -255,8 +270,32 @@ describe("probe reachability classification", () => {
     };
 
     expect(isScopeLimitedProbeFailure(probe)).toBe(false);
+    expect(isPostConnectProbeFailure(probe)).toBe(true);
+    expect(isProbeReachable(probe)).toBe(true);
+    expect(renderProbeSummaryLine(probe, false)).toContain("Capability: connect-only");
+    expect(renderProbeSummaryLine(probe, false)).toContain("Read probe: failed");
+  });
+
+  it("keeps failed-before-connect probes unreachable", () => {
+    const probe = {
+      ok: false,
+      url: "ws://127.0.0.1:18789",
+      connectLatencyMs: null,
+      error: "timeout",
+      close: null,
+      auth: {
+        role: null,
+        scopes: [],
+        capability: "unknown" as const,
+      },
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    };
+
+    expect(isPostConnectProbeFailure(probe)).toBe(false);
     expect(isProbeReachable(probe)).toBe(false);
-    expect(renderProbeSummaryLine(probe, false)).toContain("RPC: failed");
   });
 });
 describe("gateway-status local target scheme", () => {
@@ -355,5 +394,12 @@ describe("resolveProbeBudgetMs", () => {
         url: "wss://gateway.example/ws",
       }),
     ).toBe(2000);
+  });
+});
+
+describe("sanitizeSshTarget", () => {
+  it("strips a leading ssh command prefix", () => {
+    expect(sanitizeSshTarget("ssh me@studio")).toBe("me@studio");
+    expect(sanitizeSshTarget("  ssh me@studio:2222  ")).toBe("me@studio:2222");
   });
 });

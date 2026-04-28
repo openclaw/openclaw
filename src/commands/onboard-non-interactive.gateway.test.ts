@@ -353,6 +353,38 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     });
   }, 60_000);
 
+  it("persists skipBootstrap and skips workspace bootstrap creation", async () => {
+    ensureWorkspaceAndSessionsMock.mockClear();
+    await withStateDir("state-skip-bootstrap-", async (stateDir) => {
+      const workspace = path.join(stateDir, "openclaw");
+
+      await runNonInteractiveSetup(
+        {
+          nonInteractive: true,
+          mode: "local",
+          workspace,
+          authChoice: "skip",
+          skipBootstrap: true,
+          skipSkills: true,
+          skipHealth: true,
+          installDaemon: false,
+          gatewayBind: "loopback",
+        },
+        runtime,
+      );
+
+      const cfg = readTestConfig();
+
+      expect(cfg.agents?.defaults?.workspace).toBe(workspace);
+      expect(cfg.agents?.defaults?.skipBootstrap).toBe(true);
+      expect(ensureWorkspaceAndSessionsMock).toHaveBeenCalledWith(
+        workspace,
+        runtime,
+        expect.objectContaining({ skipBootstrap: true }),
+      );
+    });
+  }, 60_000);
+
   it("writes gateway.remote url/token", async () => {
     await withStateDir("state-remote-", async (_stateDir) => {
       const port = getPseudoPort(30_000);
@@ -421,6 +453,44 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(installGatewayDaemonNonInteractiveMock).toHaveBeenCalledTimes(1);
       expect(captured.deadlineMs).toBe(45_000);
       expect(captured.probeTimeoutMs).toBe(10_000);
+    });
+  }, 60_000);
+
+  it("passes pinned gateway auth through non-interactive health checks", async () => {
+    await withStateDir("state-local-daemon-health-auth-", async (stateDir) => {
+      const token = "tok_noninteractive_health";
+      waitForGatewayReachableMock = vi.fn(async () => ({ ok: true }));
+
+      await runNonInteractiveSetup(
+        {
+          ...createLocalDaemonSetupOptions(stateDir),
+          gatewayAuth: "token",
+          gatewayToken: token,
+        },
+        runtime,
+      );
+
+      expect(waitForGatewayReachableMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          token,
+          password: undefined,
+        }),
+      );
+      expect(healthCommandMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          token,
+          password: undefined,
+          config: expect.objectContaining({
+            gateway: expect.objectContaining({
+              auth: expect.objectContaining({
+                mode: "token",
+                token,
+              }),
+            }),
+          }),
+        }),
+        expect.any(Object),
+      );
     });
   }, 60_000);
 

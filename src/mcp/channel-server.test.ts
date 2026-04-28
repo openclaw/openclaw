@@ -2,7 +2,9 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, test, vi } from "vitest";
 import { z } from "zod";
+import { shouldRetryInitialMcpGatewayConnect } from "./channel-bridge.js";
 import { createOpenClawChannelMcpServer, OpenClawChannelBridge } from "./channel-server.js";
+import { extractAttachmentsFromMessage } from "./channel-shared.js";
 
 const ClaudeChannelNotificationSchema = z.object({
   method: z.literal("notifications/claude/channel"),
@@ -23,6 +25,7 @@ const ClaudePermissionNotificationSchema = z.object({
 async function connectMcpWithoutGateway(params?: { claudeChannelMode?: "auto" | "on" | "off" }) {
   const serverHarness = await createOpenClawChannelMcpServer({
     claudeChannelMode: params?.claudeChannelMode ?? "auto",
+    config: {} as never,
     verbose: false,
   });
   const client = new Client({ name: "mcp-test-client", version: "1.0.0" });
@@ -39,7 +42,54 @@ async function connectMcpWithoutGateway(params?: { claudeChannelMode?: "auto" | 
   };
 }
 
+function attachReadyGateway(
+  bridge: OpenClawChannelBridge,
+  gatewayRequest: ReturnType<typeof vi.fn>,
+) {
+  (
+    bridge as unknown as {
+      gateway: { request: typeof gatewayRequest; stopAndWait: () => Promise<void> };
+      readySettled: boolean;
+      resolveReady: () => void;
+    }
+  ).gateway = {
+    request: gatewayRequest,
+    stopAndWait: async () => {},
+  };
+  (
+    bridge as unknown as {
+      readySettled: boolean;
+      resolveReady: () => void;
+    }
+  ).readySettled = true;
+  (
+    bridge as unknown as {
+      resolveReady: () => void;
+    }
+  ).resolveReady();
+}
+
+async function flushMcpNotifications() {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+function gatewayRequestError(retryable: boolean): Error {
+  return Object.assign(new Error(retryable ? "gateway busy" : "auth failed"), {
+    name: "GatewayClientRequestError",
+    retryable,
+  });
+}
+
 describe("openclaw channel mcp server", () => {
+  test("keeps initial MCP gateway connection alive through transient connect errors", () => {
+    expect(
+      shouldRetryInitialMcpGatewayConnect(new Error("gateway request timeout for connect")),
+    ).toBe(true);
+    expect(shouldRetryInitialMcpGatewayConnect(gatewayRequestError(true))).toBe(true);
+    expect(shouldRetryInitialMcpGatewayConnect(gatewayRequestError(false))).toBe(false);
+  });
+
   describe("gateway-backed flows", () => {
     describe("gateway integration", () => {
       test("lists conversations and reads messages", async () => {
@@ -60,7 +110,7 @@ describe("openclaw channel mcp server", () => {
               ],
             };
           }
-          if (method === "chat.history") {
+          if (method === "sessions.get") {
             return {
               messages: [
                 {
@@ -89,86 +139,41 @@ describe("openclaw channel mcp server", () => {
           }
           throw new Error(`unexpected gateway method ${method}`);
         });
-        let mcp: Awaited<ReturnType<typeof connectMcpWithoutGateway>> | null = null;
-        try {
-          mcp = await connectMcpWithoutGateway({
-            claudeChannelMode: "off",
-          });
-          const connectedMcp = mcp;
-          (
-            connectedMcp.bridge as unknown as {
-              gateway: { request: typeof gatewayRequest; stopAndWait: () => Promise<void> };
-              readySettled: boolean;
-              resolveReady: () => void;
-            }
-          ).gateway = {
-            request: gatewayRequest,
-            stopAndWait: async () => {},
-          };
-          (
-            connectedMcp.bridge as unknown as {
-              readySettled: boolean;
-              resolveReady: () => void;
-            }
-          ).readySettled = true;
-          (
-            connectedMcp.bridge as unknown as {
-              resolveReady: () => void;
-            }
-          ).resolveReady();
+        const bridge = new OpenClawChannelBridge({} as never, {
+          claudeChannelMode: "off",
+          verbose: false,
+        });
+        attachReadyGateway(bridge, gatewayRequest);
 
-          const listed = (await connectedMcp.client.callTool({
-            name: "conversations_list",
-            arguments: {},
-          })) as {
-            structuredContent?: { conversations?: Array<Record<string, unknown>> };
-          };
-          expect(listed.structuredContent?.conversations).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({
-                sessionKey,
-                channel: "telegram",
-                to: "-100123",
-                accountId: "acct-1",
-                threadId: 42,
-              }),
-            ]),
-          );
+        await expect(bridge.listConversations()).resolves.toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              sessionKey,
+              channel: "telegram",
+              to: "-100123",
+              accountId: "acct-1",
+              threadId: 42,
+            }),
+          ]),
+        );
 
-          const read = (await connectedMcp.client.callTool({
-            name: "messages_read",
-            arguments: { session_key: sessionKey, limit: 5 },
-          })) as {
-            structuredContent?: { messages?: Array<Record<string, unknown>> };
-          };
-          expect(read.structuredContent?.messages?.[0]).toMatchObject({
-            role: "assistant",
-            content: [{ type: "text", text: "hello from transcript" }],
-          });
-          expect(read.structuredContent?.messages?.[1]).toMatchObject({
-            __openclaw: {
-              id: "msg-attachment",
-            },
-          });
-
-          const attachments = (await connectedMcp.client.callTool({
-            name: "attachments_fetch",
-            arguments: { session_key: sessionKey, message_id: "msg-attachment" },
-          })) as {
-            structuredContent?: { attachments?: Array<Record<string, unknown>> };
-            isError?: boolean;
-          };
-          expect(attachments.isError).not.toBe(true);
-          expect(attachments.structuredContent?.attachments).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({
-                type: "image",
-              }),
-            ]),
-          );
-        } finally {
-          await mcp?.close();
-        }
+        const messages = await bridge.readMessages(sessionKey, 5);
+        expect(messages[0]).toMatchObject({
+          role: "assistant",
+          content: [{ type: "text", text: "hello from transcript" }],
+        });
+        expect(messages[1]).toMatchObject({
+          __openclaw: {
+            id: "msg-attachment",
+          },
+        });
+        expect(extractAttachmentsFromMessage(messages[1])).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              type: "image",
+            }),
+          ]),
+        );
       });
 
       test("emits Claude channel and permission notifications", async () => {
@@ -207,9 +212,8 @@ describe("openclaw channel mcp server", () => {
             },
           });
 
-          await vi.waitFor(() => {
-            expect(channelNotifications).toHaveLength(1);
-          });
+          await flushMcpNotifications();
+          expect(channelNotifications).toHaveLength(1);
           expect(channelNotifications[0]).toMatchObject({
             content: "hello Claude",
             meta: expect.objectContaining({
@@ -246,9 +250,8 @@ describe("openclaw channel mcp server", () => {
             },
           });
 
-          await vi.waitFor(() => {
-            expect(permissionNotifications).toHaveLength(1);
-          });
+          await flushMcpNotifications();
+          expect(permissionNotifications).toHaveLength(1);
           expect(permissionNotifications[0]).toEqual({
             request_id: "abcde",
             behavior: "allow",
@@ -270,9 +273,8 @@ describe("openclaw channel mcp server", () => {
             },
           });
 
-          await vi.waitFor(() => {
-            expect(channelNotifications).toHaveLength(2);
-          });
+          await flushMcpNotifications();
+          expect(channelNotifications).toHaveLength(2);
           expect(channelNotifications[1]).toMatchObject({
             content: "plain string user turn",
             meta: expect.objectContaining({
@@ -293,27 +295,7 @@ describe("openclaw channel mcp server", () => {
       });
       const gatewayRequest = vi.fn().mockResolvedValue({ ok: true, channel: "telegram" });
 
-      (
-        bridge as unknown as {
-          gateway: { request: typeof gatewayRequest; stopAndWait: () => Promise<void> };
-          readySettled: boolean;
-          resolveReady: () => void;
-        }
-      ).gateway = {
-        request: gatewayRequest,
-        stopAndWait: async () => {},
-      };
-      (
-        bridge as unknown as {
-          readySettled: boolean;
-          resolveReady: () => void;
-        }
-      ).readySettled = true;
-      (
-        bridge as unknown as {
-          resolveReady: () => void;
-        }
-      ).resolveReady();
+      attachReadyGateway(bridge, gatewayRequest);
 
       vi.spyOn(bridge, "getConversation").mockResolvedValue({
         sessionKey: "agent:main:main",
@@ -369,27 +351,7 @@ describe("openclaw channel mcp server", () => {
         ],
       });
 
-      (
-        bridge as unknown as {
-          gateway: { request: typeof gatewayRequest; stopAndWait: () => Promise<void> };
-          readySettled: boolean;
-          resolveReady: () => void;
-        }
-      ).gateway = {
-        request: gatewayRequest,
-        stopAndWait: async () => {},
-      };
-      (
-        bridge as unknown as {
-          readySettled: boolean;
-          resolveReady: () => void;
-        }
-      ).readySettled = true;
-      (
-        bridge as unknown as {
-          resolveReady: () => void;
-        }
-      ).resolveReady();
+      attachReadyGateway(bridge, gatewayRequest);
 
       await expect(bridge.listConversations()).resolves.toEqual([
         expect.objectContaining({

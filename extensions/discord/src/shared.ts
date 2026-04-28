@@ -5,9 +5,11 @@ import { createScopedChannelConfigAdapter } from "openclaw/plugin-sdk/channel-co
 import type { ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import {
+  isDiscordAccountEnabledForRuntime,
   listDiscordAccountIds,
   resolveDefaultDiscordAccountId,
   resolveDiscordAccount,
+  resolveDiscordAccountDisabledReason,
   type ResolvedDiscordAccount,
 } from "./accounts.js";
 import { getChatChannelMeta, type ChannelPlugin } from "./channel-api.js";
@@ -22,6 +24,7 @@ import {
   collectUnsupportedSecretRefConfigCandidates,
   unsupportedSecretRefSurfacePatterns,
 } from "./security-contract.js";
+import { discordSecurityAdapter } from "./security.js";
 import { deriveLegacySessionChatType } from "./session-contract.js";
 
 export const DISCORD_CHANNEL = "discord" as const;
@@ -82,6 +85,7 @@ export function createDiscordPluginBase(params: {
   | "config"
   | "setup"
   | "messaging"
+  | "security"
   | "secrets"
 > {
   return {
@@ -94,6 +98,11 @@ export function createDiscordPluginBase(params: {
       reactions: true,
       threads: true,
       media: true,
+      tts: {
+        voice: {
+          synthesisTarget: "voice-note",
+        },
+      },
       nativeCommands: true,
     },
     commands: {
@@ -112,6 +121,8 @@ export function createDiscordPluginBase(params: {
       ...discordConfigAdapter,
       hasConfiguredState: ({ env }) =>
         typeof env?.DISCORD_BOT_TOKEN === "string" && env.DISCORD_BOT_TOKEN.trim().length > 0,
+      isEnabled: (account, cfg) => isDiscordAccountEnabledForRuntime(account, cfg),
+      disabledReason: (account, cfg) => resolveDiscordAccountDisabledReason(account, cfg),
       isConfigured: (account) => Boolean(account.token?.trim()),
       describeAccount: (account) =>
         describeAccountSnapshot({
@@ -125,6 +136,7 @@ export function createDiscordPluginBase(params: {
     messaging: {
       deriveLegacySessionChatType,
     },
+    security: discordSecurityAdapter,
     secrets: {
       secretTargetRegistryEntries,
       unsupportedSecretRefSurfacePatterns,
@@ -146,6 +158,7 @@ export function createDiscordPluginBase(params: {
     | "config"
     | "setup"
     | "messaging"
+    | "security"
     | "secrets"
   >;
 }

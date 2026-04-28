@@ -1,5 +1,19 @@
 {
   "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": ".artifacts/tsgo-cache/extensions.tsbuildinfo"
+  },
   "include": ["src/**/*.d.ts", "ui/src/**/*.d.ts", "extensions/**/*"],
-  "exclude": ["node_modules", "dist", "**/dist/**", "**/*.test.ts", "**/*.test.tsx", "test/**"]
+  "exclude": [
+    "node_modules",
+    "dist",
+    "**/dist/**",
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/*test-helpers.ts",
+    "**/*test-harness.ts",
+    "**/*test-support.ts",
+    "extensions/**/src/test-support/**",
+    "test/**"
+  ]
 }

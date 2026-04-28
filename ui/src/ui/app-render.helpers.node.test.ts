@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 const {
   refreshChatMock,
@@ -67,6 +68,26 @@ function labelsForSessionOptions(params: {
     },
   );
   return groups.flatMap((group) => group.options.map((option) => option.label));
+}
+
+function createSettings(): AppViewState["settings"] {
+  return {
+    gatewayUrl: "",
+    token: "",
+    locale: "en",
+    sessionKey: "main",
+    lastActiveSessionKey: "main",
+    theme: "claw",
+    themeMode: "dark",
+    splitRatio: 0.6,
+    navWidth: 280,
+    navCollapsed: false,
+    navGroupsCollapsed: {},
+    borderRadius: 50,
+    chatFocusMode: false,
+    chatShowThinking: false,
+    chatShowToolCalls: true,
+  };
 }
 
 /* ================================================================
@@ -158,9 +179,20 @@ describe("parseSessionKey", () => {
 });
 
 describe("resolveAssistantAttachmentAuthToken", () => {
+  it("prefers the paired device token when present", () => {
+    expect(
+      resolveAssistantAttachmentAuthToken({
+        hello: { auth: { deviceToken: "device-token" } } as AppViewState["hello"],
+        settings: { token: "session-token" } as AppViewState["settings"],
+        password: "shared-password",
+      }),
+    ).toBe("device-token");
+  });
+
   it("prefers the explicit gateway token when present", () => {
     expect(
       resolveAssistantAttachmentAuthToken({
+        hello: null,
         settings: { token: "session-token" } as AppViewState["settings"],
         password: "shared-password",
       }),
@@ -170,6 +202,7 @@ describe("resolveAssistantAttachmentAuthToken", () => {
   it("falls back to the shared password when token is blank", () => {
     expect(
       resolveAssistantAttachmentAuthToken({
+        hello: null,
         settings: { token: "   " } as AppViewState["settings"],
         password: "shared-password",
       }),
@@ -179,6 +212,7 @@ describe("resolveAssistantAttachmentAuthToken", () => {
   it("returns null when neither auth secret is available", () => {
     expect(
       resolveAssistantAttachmentAuthToken({
+        hello: null,
         settings: { token: "" } as AppViewState["settings"],
         password: "   ",
       }),
@@ -461,27 +495,13 @@ describe("resolveSessionOptionGroups", () => {
 
 describe("switchChatSession", () => {
   it("refreshes the chat avatar after clearing session-scoped state", async () => {
-    const settings: AppViewState["settings"] = {
-      gatewayUrl: "",
-      token: "",
-      locale: "en",
-      sessionKey: "main",
-      lastActiveSessionKey: "main",
-      theme: "claw",
-      themeMode: "dark",
-      splitRatio: 0.6,
-      navWidth: 280,
-      navCollapsed: false,
-      navGroupsCollapsed: {},
-      borderRadius: 50,
-      chatFocusMode: false,
-      chatShowThinking: false,
-      chatShowToolCalls: true,
-    };
+    const settings = createSettings();
     const state = {
       sessionKey: "main",
       chatMessage: "draft",
-      chatAttachments: [{ mimeType: "image/png", dataUrl: "data:image/png;base64,AAA" }],
+      chatAttachments: [
+        { id: "att-1", mimeType: "image/png", dataUrl: "data:image/png;base64,AAA" },
+      ],
       chatMessages: [{ role: "assistant", content: "old" }],
       chatToolMessages: [{ id: "tool-1" }],
       chatStreamSegments: [{ text: "segment", ts: 1 }],
@@ -511,6 +531,7 @@ describe("switchChatSession", () => {
       loadAssistantIdentity: vi.fn(),
       resetToolStream: vi.fn(),
       resetChatScroll: vi.fn(),
+      resetChatInputHistoryNavigation: vi.fn(),
     } as unknown as AppViewState;
 
     refreshChatAvatarMock.mockResolvedValue(undefined);
@@ -523,6 +544,10 @@ describe("switchChatSession", () => {
 
     expect(state.chatSideResult).toBeNull();
     expect(state.chatSideResultTerminalRuns.size).toBe(0);
+    expect(
+      (state as unknown as { resetChatInputHistoryNavigation: ReturnType<typeof vi.fn> })
+        .resetChatInputHistoryNavigation,
+    ).toHaveBeenCalled();
     expect(refreshChatAvatarMock).toHaveBeenCalledWith(state);
     expect(refreshSlashCommandsMock).toHaveBeenCalledWith({
       client: undefined,
@@ -538,23 +563,7 @@ describe("switchChatSession", () => {
   });
 
   it("does not force agentId=main for plain session keys", async () => {
-    const settings: AppViewState["settings"] = {
-      gatewayUrl: "",
-      token: "",
-      locale: "en",
-      sessionKey: "main",
-      lastActiveSessionKey: "main",
-      theme: "claw",
-      themeMode: "dark",
-      splitRatio: 0.6,
-      navWidth: 280,
-      navCollapsed: false,
-      navGroupsCollapsed: {},
-      borderRadius: 50,
-      chatFocusMode: false,
-      chatShowThinking: false,
-      chatShowToolCalls: true,
-    };
+    const settings = createSettings();
     const state = {
       sessionKey: "main",
       chatMessage: "",
@@ -580,6 +589,7 @@ describe("switchChatSession", () => {
       loadAssistantIdentity: vi.fn(),
       resetToolStream: vi.fn(),
       resetChatScroll: vi.fn(),
+      resetChatInputHistoryNavigation: vi.fn(),
       client: { request: vi.fn() },
     } as unknown as AppViewState;
 

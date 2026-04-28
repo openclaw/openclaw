@@ -96,7 +96,7 @@ Model note: while many providers and models are supported, prefer a current flag
 
 ## Install (recommended)
 
-Runtime: **Node 24 (recommended) or Node 22.16+**.
+Runtime: **Node 24 (recommended) or Node 22.14+**.
 
 ```bash
 npm install -g openclaw@latest
@@ -109,7 +109,7 @@ OpenClaw Onboard installs the Gateway daemon (launchd/systemd user service) so i
 
 ## Quick start (TL;DR)
 
-Runtime: **Node 24 (recommended) or Node 22.16+**.
+Runtime: **Node 24 (recommended) or Node 22.14+**.
 
 Full beginner guide (auth, pairing, channels): [Getting started](https://docs.openclaw.ai/start/getting-started)
 
@@ -119,7 +119,7 @@ openclaw onboard --install-daemon
 openclaw gateway --port 18789 --verbose
 
 # Send a message
-openclaw message send --to +1234567890 --message "Hello from OpenClaw"
+openclaw message send --target +1234567890 --message "Hello from OpenClaw"
 
 # Talk to the assistant (optionally deliver back to any connected channel: WhatsApp/Telegram/Slack/Discord/Google Chat/Signal/iMessage/BlueBubbles/IRC/Microsoft Teams/Matrix/Feishu/LINE/Mattermost/Nextcloud Talk/Nostr/Synology Chat/Tlon/Twitch/Zalo/Zalo Personal/WeChat/QQ/WebChat)
 openclaw agent --message "Ship checklist" --thinking high
@@ -157,15 +157,15 @@ Run `openclaw doctor` to surface risky/misconfigured DM policies.
 ## Security model (important)
 
 - Default: tools run on the host for the `main` session, so the agent has full access when it is just you.
-- Group/channel safety: set `agents.defaults.sandbox.mode: "non-main"` to run non-`main` sessions inside per-session Docker sandboxes.
+- Group/channel safety: set `agents.defaults.sandbox.mode: "non-main"` to run non-`main` sessions inside sandboxes. Docker is the default sandbox backend; SSH and OpenShell backends are also available.
 - Typical sandbox default: allow `bash`, `process`, `read`, `write`, `edit`, `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`; deny `browser`, `canvas`, `nodes`, `cron`, `discord`, `gateway`.
-- Before exposing anything remotely, read [Security](https://docs.openclaw.ai/gateway/security), [Docker sandboxing](https://docs.openclaw.ai/install/docker), and [Configuration](https://docs.openclaw.ai/gateway/configuration).
+- Before exposing anything remotely, read [Security](https://docs.openclaw.ai/gateway/security), [Sandboxing](https://docs.openclaw.ai/gateway/sandboxing), and [Configuration](https://docs.openclaw.ai/gateway/configuration).
 
 ## Operator quick refs
 
 - Chat commands: `/status`, `/new`, `/reset`, `/compact`, `/think <level>`, `/verbose on|off`, `/trace on|off`, `/usage off|tokens|full`, `/restart`, `/activation mention|always`
 - Session tools: `sessions_list`, `sessions_history`, `sessions_send`
-- Skills registry: [ClawHub](https://clawhub.com)
+- Skills registry: [ClawHub](https://clawhub.ai)
 - Architecture overview: [Architecture](https://docs.openclaw.ai/concepts/architecture)
 
 ## Docs by goal
@@ -173,7 +173,7 @@ Run `openclaw doctor` to surface risky/misconfigured DM policies.
 - New here: [Getting started](https://docs.openclaw.ai/start/getting-started), [Onboarding](https://docs.openclaw.ai/start/wizard), [Updating](https://docs.openclaw.ai/install/updating)
 - Channel setup: [Channels index](https://docs.openclaw.ai/channels), [WhatsApp](https://docs.openclaw.ai/channels/whatsapp), [Telegram](https://docs.openclaw.ai/channels/telegram), [Discord](https://docs.openclaw.ai/channels/discord), [Slack](https://docs.openclaw.ai/channels/slack)
 - Apps + nodes: [macOS](https://docs.openclaw.ai/platforms/macos), [iOS](https://docs.openclaw.ai/platforms/ios), [Android](https://docs.openclaw.ai/platforms/android), [Nodes](https://docs.openclaw.ai/nodes)
-- Config + security: [Configuration](https://docs.openclaw.ai/gateway/configuration), [Security](https://docs.openclaw.ai/gateway/security), [Docker sandboxing](https://docs.openclaw.ai/install/docker)
+- Config + security: [Configuration](https://docs.openclaw.ai/gateway/configuration), [Security](https://docs.openclaw.ai/gateway/security), [Sandboxing](https://docs.openclaw.ai/gateway/sandboxing)
 - Remote + web: [Gateway](https://docs.openclaw.ai/gateway), [Remote access](https://docs.openclaw.ai/gateway/remote), [Tailscale](https://docs.openclaw.ai/gateway/tailscale), [Web surfaces](https://docs.openclaw.ai/web)
 - Tools + automation: [Tools](https://docs.openclaw.ai/tools), [Skills](https://docs.openclaw.ai/tools/skills), [Cron jobs](https://docs.openclaw.ai/automation/cron-jobs), [Webhooks](https://docs.openclaw.ai/automation/webhook), [Gmail Pub/Sub](https://docs.openclaw.ai/automation/gmail-pubsub)
 - Internals: [Architecture](https://docs.openclaw.ai/concepts/architecture), [Agent](https://docs.openclaw.ai/concepts/agent), [Session model](https://docs.openclaw.ai/concepts/session), [Gateway protocol](https://docs.openclaw.ai/reference/rpc)

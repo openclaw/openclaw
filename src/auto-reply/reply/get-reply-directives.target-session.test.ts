@@ -86,6 +86,64 @@ function parseInlineDirectivesForTest(body: string) {
   };
 }
 
+async function resolveHelloWithModelDefaults(params: {
+  defaultThinking: "off" | "low";
+  defaultReasoning: "on";
+  sessionEntry?: SessionEntry;
+}) {
+  const resolveDefaultThinkingLevel = vi.fn(async () => params.defaultThinking);
+  const resolveDefaultReasoningLevel = vi.fn(async () => params.defaultReasoning);
+  mocks.createModelSelectionState.mockResolvedValueOnce({
+    provider: "openai",
+    model: "gpt-4o-mini",
+    allowedModelKeys: new Set<string>(),
+    allowedModelCatalog: [],
+    resetModelOverride: false,
+    resolveDefaultThinkingLevel,
+    resolveDefaultReasoningLevel,
+  });
+
+  const result = await resolveReplyDirectives({
+    ctx: buildTestCtx({
+      Body: "hello",
+      CommandBody: "hello",
+    }),
+    cfg: {},
+    agentId: "main",
+    agentDir: "/tmp/main-agent",
+    workspaceDir: "/tmp",
+    agentCfg: {},
+    sessionCtx: {
+      Body: "hello",
+      BodyStripped: "hello",
+      BodyForAgent: "hello",
+      CommandBody: "hello",
+      Provider: "whatsapp",
+    } as TemplateContext,
+    sessionEntry: params.sessionEntry ?? makeSessionEntry(),
+    sessionStore: {},
+    sessionKey: "agent:main:whatsapp:+2000",
+    storePath: "/tmp/sessions.json",
+    sessionScope: "per-sender",
+    groupResolution: undefined,
+    isGroup: false,
+    triggerBodyNormalized: "hello",
+    resetTriggered: false,
+    commandAuthorized: false,
+    defaultProvider: "openai",
+    defaultModel: "gpt-4o-mini",
+    aliasIndex: { byAlias: new Map(), byKey: new Map() },
+    provider: "openai",
+    model: "gpt-4o-mini",
+    hasResolvedHeartbeatModelOverride: false,
+    typing: makeTypingController(),
+    opts: undefined,
+    skillFilter: undefined,
+  });
+
+  return { result, resolveDefaultReasoningLevel };
+}
+
 vi.mock("../../agents/agent-scope.js", () => ({
   listAgentEntries: vi.fn(() => []),
 }));
@@ -182,6 +240,7 @@ describe("resolveReplyDirectives", () => {
       allowedModelKeys: new Set<string>(),
       allowedModelCatalog: [],
       resetModelOverride: false,
+      resolveThinkingCatalog: vi.fn(async () => []),
       resolveDefaultThinkingLevel: vi.fn(async () => "off"),
       resolveDefaultReasoningLevel: vi.fn(async () => "off"),
     });
@@ -244,6 +303,7 @@ describe("resolveReplyDirectives", () => {
       groupResolution: undefined,
       isGroup: false,
       triggerBodyNormalized: "hello",
+      resetTriggered: false,
       commandAuthorized: false,
       defaultProvider: "openai",
       defaultModel: "gpt-4o-mini",
@@ -335,6 +395,7 @@ describe("resolveReplyDirectives", () => {
       groupResolution: undefined,
       isGroup: false,
       triggerBodyNormalized: "/trace on",
+      resetTriggered: false,
       commandAuthorized: true,
       defaultProvider: "openai",
       defaultModel: "gpt-4o-mini",
@@ -356,53 +417,9 @@ describe("resolveReplyDirectives", () => {
   });
 
   it("uses the model reasoning default when thinking is off", async () => {
-    const resolveDefaultThinkingLevel = vi.fn(async () => "off");
-    const resolveDefaultReasoningLevel = vi.fn(async () => "on");
-    mocks.createModelSelectionState.mockResolvedValueOnce({
-      provider: "openai",
-      model: "gpt-4o-mini",
-      allowedModelKeys: new Set<string>(),
-      allowedModelCatalog: [],
-      resetModelOverride: false,
-      resolveDefaultThinkingLevel,
-      resolveDefaultReasoningLevel,
-    });
-
-    const result = await resolveReplyDirectives({
-      ctx: buildTestCtx({
-        Body: "hello",
-        CommandBody: "hello",
-      }),
-      cfg: {},
-      agentId: "main",
-      agentDir: "/tmp/main-agent",
-      workspaceDir: "/tmp",
-      agentCfg: {},
-      sessionCtx: {
-        Body: "hello",
-        BodyStripped: "hello",
-        BodyForAgent: "hello",
-        CommandBody: "hello",
-        Provider: "whatsapp",
-      } as TemplateContext,
-      sessionEntry: makeSessionEntry(),
-      sessionStore: {},
-      sessionKey: "agent:main:whatsapp:+2000",
-      storePath: "/tmp/sessions.json",
-      sessionScope: "per-sender",
-      groupResolution: undefined,
-      isGroup: false,
-      triggerBodyNormalized: "hello",
-      commandAuthorized: false,
-      defaultProvider: "openai",
-      defaultModel: "gpt-4o-mini",
-      aliasIndex: { byAlias: new Map(), byKey: new Map() },
-      provider: "openai",
-      model: "gpt-4o-mini",
-      hasResolvedHeartbeatModelOverride: false,
-      typing: makeTypingController(),
-      opts: undefined,
-      skillFilter: undefined,
+    const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
+      defaultThinking: "off",
+      defaultReasoning: "on",
     });
 
     expect(result).toEqual({
@@ -415,45 +432,82 @@ describe("resolveReplyDirectives", () => {
     expect(resolveDefaultReasoningLevel).toHaveBeenCalledOnce();
   });
 
-  it("skips the model reasoning default when thinking is active", async () => {
-    const resolveDefaultThinkingLevel = vi.fn(async () => "low");
-    const resolveDefaultReasoningLevel = vi.fn(async () => "on");
-    mocks.createModelSelectionState.mockResolvedValueOnce({
-      provider: "openai",
-      model: "gpt-4o-mini",
-      allowedModelKeys: new Set<string>(),
-      allowedModelCatalog: [],
-      resetModelOverride: false,
-      resolveDefaultThinkingLevel,
-      resolveDefaultReasoningLevel,
+  it("does not re-enable model reasoning when thinking was explicitly disabled", async () => {
+    const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
+      defaultThinking: "off",
+      defaultReasoning: "on",
+      sessionEntry: makeSessionEntry({ thinkingLevel: "off" }),
     });
+
+    expect(result).toEqual({
+      kind: "continue",
+      result: expect.objectContaining({
+        resolvedThinkLevel: "off",
+        resolvedReasoningLevel: "off",
+      }),
+    });
+    expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
+  });
+
+  it("skips the model reasoning default when thinking is active", async () => {
+    const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
+      defaultThinking: "low",
+      defaultReasoning: "on",
+    });
+
+    expect(result).toEqual({
+      kind: "continue",
+      result: expect.objectContaining({
+        resolvedThinkLevel: "low",
+        resolvedReasoningLevel: "off",
+      }),
+    });
+    expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
+  });
+
+  it("keeps consumed text reset triggers empty after directive cleanup", async () => {
+    const sessionCtx = {
+      Body: "",
+      BodyStripped: "",
+      BodyForAgent: "",
+      BodyForCommands: "new session",
+      CommandBody: "new session",
+      Provider: "slack",
+      Surface: "slack",
+    } as TemplateContext;
 
     const result = await resolveReplyDirectives({
       ctx: buildTestCtx({
-        Body: "hello",
-        CommandBody: "hello",
+        Body: "new session",
+        BodyForAgent: "new session",
+        BodyForCommands: "new session",
+        CommandBody: "new session",
+        CommandAuthorized: true,
+        Provider: "slack",
+        Surface: "slack",
       }),
-      cfg: {},
+      cfg: {
+        session: {
+          resetTriggers: ["/new", "/reset", "new session"],
+        },
+      },
       agentId: "main",
       agentDir: "/tmp/main-agent",
       workspaceDir: "/tmp",
       agentCfg: {},
-      sessionCtx: {
-        Body: "hello",
-        BodyStripped: "hello",
-        BodyForAgent: "hello",
-        CommandBody: "hello",
-        Provider: "whatsapp",
-      } as TemplateContext,
+      sessionCtx,
       sessionEntry: makeSessionEntry(),
-      sessionStore: {},
-      sessionKey: "agent:main:whatsapp:+2000",
+      sessionStore: {
+        "agent:main:slack:C123": makeSessionEntry(),
+      },
+      sessionKey: "agent:main:slack:C123",
       storePath: "/tmp/sessions.json",
       sessionScope: "per-sender",
       groupResolution: undefined,
       isGroup: false,
-      triggerBodyNormalized: "hello",
-      commandAuthorized: false,
+      triggerBodyNormalized: "new session",
+      resetTriggered: true,
+      commandAuthorized: true,
       defaultProvider: "openai",
       defaultModel: "gpt-4o-mini",
       aliasIndex: { byAlias: new Map(), byKey: new Map() },
@@ -468,10 +522,11 @@ describe("resolveReplyDirectives", () => {
     expect(result).toEqual({
       kind: "continue",
       result: expect.objectContaining({
-        resolvedThinkLevel: "low",
-        resolvedReasoningLevel: "off",
+        cleanedBody: "",
       }),
     });
-    expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
+    expect(sessionCtx.Body).toBe("");
+    expect(sessionCtx.BodyForAgent).toBe("");
+    expect(sessionCtx.BodyStripped).toBe("");
   });
 });

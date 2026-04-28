@@ -219,7 +219,8 @@ function renderDailyChartCompact(
             const isSelected = selectedDays.includes(d.date);
             const label = formatDayLabel(d.date);
             // Shorter label for many days (just day number)
-            const shortLabel = daily.length > 20 ? String(parseInt(d.date.slice(8), 10)) : label;
+            const shortLabel =
+              daily.length > 20 ? String(Number.parseInt(d.date.slice(8), 10)) : label;
             const labelClass =
               daily.length > 20 ? "daily-bar-label daily-bar-label--compact" : "daily-bar-label";
             const segments =
@@ -496,7 +497,7 @@ function renderUsageInsights(
     ? Math.round(totals.totalTokens / aggregates.messages.total)
     : 0;
   const avgCost = aggregates.messages.total ? totals.totalCost / aggregates.messages.total : 0;
-  const cacheBase = totals.input + totals.cacheRead;
+  const cacheBase = totals.input + totals.cacheRead + totals.cacheWrite;
   const cacheHitRate = cacheBase > 0 ? totals.cacheRead / cacheBase : 0;
   const cacheHitLabel =
     cacheBase > 0 ? `${(cacheHitRate * 100).toFixed(1)}%` : t("usage.common.emptyValue");

@@ -6,6 +6,9 @@ const runtime = vi.hoisted(() => ({
   log: vi.fn<(line: string) => void>(),
   error: vi.fn<(line: string) => void>(),
 }));
+const resolveControlUiLinksMock = vi.hoisted(() =>
+  vi.fn((_opts?: unknown) => ({ httpUrl: "http://127.0.0.1:18789" })),
+);
 
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: runtime,
@@ -21,7 +24,7 @@ vi.mock("../../terminal/theme.js", async () => {
 });
 
 vi.mock("../../gateway/control-ui-links.js", () => ({
-  resolveControlUiLinks: () => ({ httpUrl: "http://127.0.0.1:18789" }),
+  resolveControlUiLinks: resolveControlUiLinksMock,
 }));
 
 vi.mock("../../daemon/inspect.js", () => ({
@@ -73,6 +76,7 @@ describe("printDaemonStatus", () => {
   beforeEach(() => {
     runtime.log.mockReset();
     runtime.error.mockReset();
+    resolveControlUiLinksMock.mockClear();
   });
 
   it("prints stale gateway pid guidance when runtime does not own the listener", () => {
@@ -119,5 +123,89 @@ describe("printDaemonStatus", () => {
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining(formatCliCommand("openclaw gateway restart")),
     );
+  });
+
+  it("prints probe kind and capability separately", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        gateway: {
+          bindMode: "loopback",
+          bindHost: "127.0.0.1",
+          port: 18789,
+          portSource: "env/config",
+          probeUrl: "ws://127.0.0.1:18789",
+        },
+        rpc: {
+          ok: true,
+          kind: "connect",
+          capability: "write_capable",
+          url: "ws://127.0.0.1:18789",
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Connectivity probe: ok"));
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Capability: write-capable"));
+  });
+
+  it("passes daemon TLS state to dashboard link rendering", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        config: {
+          cli: {
+            path: "/tmp/openclaw-cli/openclaw.json",
+            exists: true,
+            valid: true,
+          },
+          daemon: {
+            path: "/tmp/openclaw-daemon/openclaw.json",
+            exists: true,
+            valid: true,
+            controlUi: { basePath: "/ui" },
+          },
+          mismatch: true,
+        },
+        gateway: {
+          bindMode: "lan",
+          bindHost: "0.0.0.0",
+          port: 19001,
+          portSource: "service args",
+          probeUrl: "wss://127.0.0.1:19001",
+          tlsEnabled: true,
+        },
+        rpc: {
+          ok: true,
+          kind: "connect",
+          capability: "write_capable",
+          url: "wss://127.0.0.1:19001",
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expect(resolveControlUiLinksMock).toHaveBeenCalledWith({
+      port: 19001,
+      bind: "lan",
+      customBindHost: undefined,
+      basePath: "/ui",
+      tlsEnabled: true,
+    });
   });
 });

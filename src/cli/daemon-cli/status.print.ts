@@ -50,6 +50,17 @@ function sanitizeDaemonStatusForJson(status: DaemonStatus): DaemonStatus {
   };
 }
 
+function formatProbeKindLabel(kind?: "connect" | "read") {
+  return kind === "read" ? "Read probe:" : "Connectivity probe:";
+}
+
+function formatCapabilityLabel(capability?: string) {
+  if (!capability) {
+    return null;
+  }
+  return capability.replaceAll("_", "-");
+}
+
 export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
   if (opts.json) {
     const sanitized = sanitizeDaemonStatusForJson(status);
@@ -154,6 +165,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
         bind: status.gateway.bindMode,
         customBindHost: status.gateway.customBindHost,
         basePath: status.config?.daemon?.controlUi?.basePath,
+        tlsEnabled: status.gateway.tlsEnabled === true,
       });
       defaultRuntime.log(`${label("Dashboard:")} ${infoText(links.httpUrl)}`);
     }
@@ -175,20 +187,25 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     );
   }
   if (rpc) {
+    const probeLabel = formatProbeKindLabel(rpc.kind);
     if (rpc.ok) {
-      defaultRuntime.log(`${label("RPC probe:")} ${okText("ok")}`);
+      defaultRuntime.log(`${label(probeLabel)} ${okText("ok")}`);
     } else {
-      defaultRuntime.error(`${label("RPC probe:")} ${errorText("failed")}`);
+      defaultRuntime.error(`${label(probeLabel)} ${errorText("failed")}`);
       if (rpc.authWarning) {
-        defaultRuntime.error(`${label("RPC auth:")} ${warnText(rpc.authWarning)}`);
+        defaultRuntime.error(`${label("Probe auth:")} ${warnText(rpc.authWarning)}`);
       }
       if (rpc.url) {
-        defaultRuntime.error(`${label("RPC target:")} ${rpc.url}`);
+        defaultRuntime.error(`${label("Probe target:")} ${rpc.url}`);
       }
       const lines = (rpc.error ?? "unknown").split(/\r?\n/).filter(Boolean);
       for (const line of lines.slice(0, 12)) {
         defaultRuntime.error(`  ${errorText(line)}`);
       }
+    }
+    const capability = formatCapabilityLabel(rpc.capability);
+    if (capability) {
+      defaultRuntime.log(`${label("Capability:")} ${infoText(capability)}`);
     }
     spacer();
   }
@@ -232,6 +249,15 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
   if (service.runtime?.missingUnit) {
     defaultRuntime.error(errorText("Service unit not found."));
     for (const hint of renderRuntimeHints(service.runtime, process.env, status.logFile)) {
+      defaultRuntime.error(errorText(hint));
+    }
+  } else if (service.runtime?.missingSupervision) {
+    defaultRuntime.error(errorText("LaunchAgent plist exists but launchd has no loaded job."));
+    for (const hint of renderRuntimeHints(
+      service.runtime,
+      service.command?.environment ?? process.env,
+      status.logFile,
+    )) {
       defaultRuntime.error(errorText(hint));
     }
   } else if (service.loaded && service.runtime?.status === "stopped") {

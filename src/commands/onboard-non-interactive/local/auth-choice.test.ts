@@ -68,7 +68,30 @@ describe("applyNonInteractiveAuthChoice", () => {
 
     expect(result).toBeNull();
     expect(runtime.error).toHaveBeenCalledWith(
-      '"demo-provider-legacy" is no longer supported. Use --auth-choice demo-provider-modern-api instead.',
+      '"demo-provider-legacy" is no longer supported. Use --auth-choice "demo-provider-modern-api" instead.',
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(applyNonInteractivePluginProviderChoice).toHaveBeenCalledOnce();
+  });
+
+  it("escapes deprecated auth choice guidance for terminal output", async () => {
+    const runtime = createRuntime();
+    const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+    resolveManifestDeprecatedProviderAuthChoice.mockReturnValueOnce({
+      choiceId: "modern\nchoice",
+    } as never);
+
+    const result = await applyNonInteractiveAuthChoice({
+      nextConfig,
+      authChoice: "legacy\u001b[31mchoice",
+      opts: {} as never,
+      runtime: runtime as never,
+      baseConfig: nextConfig,
+    });
+
+    expect(result).toBeNull();
+    expect(runtime.error).toHaveBeenCalledWith(
+      '"legacy\\u001b[31mchoice" is no longer supported. Use --auth-choice "modern\\nchoice" instead.',
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(applyNonInteractivePluginProviderChoice).toHaveBeenCalledOnce();
@@ -112,5 +135,72 @@ describe("applyNonInteractiveAuthChoice", () => {
         secretInputMode: "ref",
       }),
     );
+  });
+
+  it("marks non-interactive custom provider models as image-capable when requested", async () => {
+    const runtime = createRuntime();
+    const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+    resolveNonInteractiveApiKey.mockResolvedValueOnce(undefined);
+
+    const result = await applyNonInteractiveAuthChoice({
+      nextConfig,
+      authChoice: "custom-api-key",
+      opts: {
+        customBaseUrl: "https://models.custom.local/v1",
+        customModelId: "gpt-4o",
+        customImageInput: true,
+      } as never,
+      runtime: runtime as never,
+      baseConfig: nextConfig,
+    });
+
+    expect(result?.models?.providers?.["custom-models-custom-local"]?.models?.[0]?.input).toEqual([
+      "text",
+      "image",
+    ]);
+  });
+
+  it("infers image-capable non-interactive custom provider models by known model id", async () => {
+    const runtime = createRuntime();
+    const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+    resolveNonInteractiveApiKey.mockResolvedValueOnce(undefined);
+
+    const result = await applyNonInteractiveAuthChoice({
+      nextConfig,
+      authChoice: "custom-api-key",
+      opts: {
+        customBaseUrl: "https://models.custom.local/v1",
+        customModelId: "gpt-4o",
+      } as never,
+      runtime: runtime as never,
+      baseConfig: nextConfig,
+    });
+
+    expect(result?.models?.providers?.["custom-models-custom-local"]?.models?.[0]?.input).toEqual([
+      "text",
+      "image",
+    ]);
+  });
+
+  it("honors explicit text-only override for known custom vision models", async () => {
+    const runtime = createRuntime();
+    const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+    resolveNonInteractiveApiKey.mockResolvedValueOnce(undefined);
+
+    const result = await applyNonInteractiveAuthChoice({
+      nextConfig,
+      authChoice: "custom-api-key",
+      opts: {
+        customBaseUrl: "https://models.custom.local/v1",
+        customModelId: "gpt-4o",
+        customImageInput: false,
+      } as never,
+      runtime: runtime as never,
+      baseConfig: nextConfig,
+    });
+
+    expect(result?.models?.providers?.["custom-models-custom-local"]?.models?.[0]?.input).toEqual([
+      "text",
+    ]);
   });
 });

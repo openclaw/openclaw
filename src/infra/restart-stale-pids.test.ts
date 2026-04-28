@@ -34,7 +34,7 @@ const mockReadWindowsProcessArgsResult = vi.hoisted(() =>
 const mockReadFileSync = vi.hoisted(() => vi.fn());
 
 vi.mock("node:fs", async () => {
-  const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
+  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
   return mockNodeBuiltinModule(
     () => vi.importActual<typeof import("node:fs")>("node:fs"),
     (actual) => ({
@@ -51,7 +51,7 @@ vi.mock("node:fs", async () => {
 });
 
 vi.mock("node:child_process", async () => {
-  const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
+  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
   return mockNodeBuiltinModule(
     () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
     {
@@ -185,24 +185,19 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
   afterEach(() => {
     __testing.setSleepSyncOverride(null);
     __testing.setDateNowOverride(null);
+    __testing.setParentPidOverride(null);
     vi.restoreAllMocks();
   });
 
-  // Temporarily rewrites `process.ppid` for a block of test code. Used by the
+  // Temporarily overrides the parent PID for a block of test code. Used by the
   // ancestor-exclusion tests to drive the real `getSelfAndAncestorPidsSync`
-  // walk without installing a runtime-reachable override on the module. Node
-  // always exposes `process.ppid` as an own property so the captured
-  // descriptor is non-null in practice; the `if (orig)` guard is defensive
-  // against a broken environment, not a reachable branch.
+  // walk without depending on runtime-specific `process.ppid` descriptors.
   function withStubbedPpid<T>(ppid: number, fn: () => T): T {
-    const orig = Object.getOwnPropertyDescriptor(process, "ppid");
-    Object.defineProperty(process, "ppid", { value: ppid, configurable: true });
+    __testing.setParentPidOverride(() => ppid);
     try {
       return fn();
     } finally {
-      if (orig) {
-        Object.defineProperty(process, "ppid", orig);
-      }
+      __testing.setParentPidOverride(null);
     }
   }
 

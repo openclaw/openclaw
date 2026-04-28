@@ -1,176 +1,118 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import {
+  createBundledRuntimeDepsWritableInstallSpecs,
+  repairBundledRuntimeDepsInstallRootAsync,
+  resolveBundledRuntimeDependencyPackageInstallRootPlan,
+  scanBundledPluginRuntimeDeps,
+  type BundledRuntimeDepsInstallParams,
+} from "../plugins/bundled-runtime-deps.js";
+import { normalizePluginsConfig } from "../plugins/config-state.js";
+import { passesManifestOwnerBasePolicy } from "../plugins/manifest-owner-policy.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
-type RuntimeDepEntry = {
-  name: string;
-  version: string;
-  pluginIds: string[];
-};
+const RUNTIME_DEPS_INSTALL_HEARTBEAT_MS = 15_000;
 
-type RuntimeDepConflict = {
-  name: string;
-  versions: string[];
-  pluginIdsByVersion: Map<string, string[]>;
-};
-
-function isSourceCheckoutRoot(packageRoot: string): boolean {
-  return (
-    fs.existsSync(path.join(packageRoot, ".git")) &&
-    fs.existsSync(path.join(packageRoot, "src")) &&
-    fs.existsSync(path.join(packageRoot, "extensions"))
-  );
-}
-
-function dependencySentinelPath(depName: string): string {
-  return path.join("node_modules", ...depName.split("/"), "package.json");
-}
-
-function collectRuntimeDeps(packageJson: Record<string, unknown>): Record<string, unknown> {
-  return {
-    ...(packageJson.dependencies as Record<string, unknown> | undefined),
-    ...(packageJson.optionalDependencies as Record<string, unknown> | undefined),
-  };
-}
-
-function collectBundledPluginRuntimeDeps(params: { extensionsDir: string }): {
-  deps: RuntimeDepEntry[];
-  conflicts: RuntimeDepConflict[];
-} {
-  const versionMap = new Map<string, Map<string, Set<string>>>();
-
-  for (const entry of fs.readdirSync(params.extensionsDir, { withFileTypes: true })) {
+function collectPackagedRuntimeDepsRepairPluginIds(params: {
+  bundledPluginsDir: string;
+  config: OpenClawConfig;
+  includeConfiguredChannels?: boolean;
+}): string[] {
+  if (!fs.existsSync(params.bundledPluginsDir)) {
+    return [];
+  }
+  const plugins = normalizePluginsConfig(params.config.plugins);
+  const ids = new Set<string>();
+  for (const entry of fs.readdirSync(params.bundledPluginsDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) {
       continue;
     }
-    const pluginId = entry.name;
-    const packageJsonPath = path.join(params.extensionsDir, pluginId, "package.json");
-    if (!fs.existsSync(packageJsonPath)) {
-      continue;
-    }
+    const pluginDir = path.join(params.bundledPluginsDir, entry.name);
+    let manifest: Record<string, unknown>;
     try {
-      const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as Record<
-        string,
-        unknown
-      >;
-      for (const [name, rawVersion] of Object.entries(collectRuntimeDeps(packageJson))) {
-        if (typeof rawVersion !== "string" || rawVersion.trim() === "") {
-          continue;
-        }
-        const version = rawVersion.trim();
-        const byVersion = versionMap.get(name) ?? new Map<string, Set<string>>();
-        const pluginIds = byVersion.get(version) ?? new Set<string>();
-        pluginIds.add(pluginId);
-        byVersion.set(version, pluginIds);
-        versionMap.set(name, byVersion);
-      }
+      manifest = JSON.parse(
+        fs.readFileSync(path.join(pluginDir, "openclaw.plugin.json"), "utf-8"),
+      ) as Record<string, unknown>;
     } catch {
-      // Ignore malformed plugin manifests; doctor will surface those separately.
-    }
-  }
-
-  const deps: RuntimeDepEntry[] = [];
-  const conflicts: RuntimeDepConflict[] = [];
-  for (const [name, byVersion] of versionMap.entries()) {
-    if (byVersion.size === 1) {
-      const [version, pluginIds] = [...byVersion.entries()][0] ?? [];
-      if (version) {
-        deps.push({
-          name,
-          version,
-          pluginIds: [...pluginIds].toSorted((a, b) => a.localeCompare(b)),
-        });
-      }
       continue;
     }
-    const versions = [...byVersion.keys()].toSorted((a, b) => a.localeCompare(b));
-    const pluginIdsByVersion = new Map<string, string[]>();
-    for (const [version, pluginIds] of byVersion.entries()) {
-      pluginIdsByVersion.set(
-        version,
-        [...pluginIds].toSorted((a, b) => a.localeCompare(b)),
-      );
+    const pluginId = typeof manifest.id === "string" && manifest.id ? manifest.id : entry.name;
+    if (
+      !passesManifestOwnerBasePolicy({
+        plugin: { id: pluginId },
+        normalizedConfig: plugins,
+        allowRestrictiveAllowlistBypass: true,
+      })
+    ) {
+      continue;
     }
-    conflicts.push({
-      name,
-      versions,
-      pluginIdsByVersion,
-    });
+    if (plugins.allow.includes(pluginId) || plugins.entries[pluginId]?.enabled === true) {
+      ids.add(pluginId);
+      continue;
+    }
+    const channels = Array.isArray(manifest.channels)
+      ? manifest.channels.filter((channel): channel is string => typeof channel === "string")
+      : [];
+    if (
+      channels.some((channelId) => {
+        const channelConfig = (params.config.channels as Record<string, unknown> | undefined)?.[
+          channelId
+        ];
+        if (!channelConfig || typeof channelConfig !== "object" || Array.isArray(channelConfig)) {
+          return false;
+        }
+        if ((channelConfig as { enabled?: unknown }).enabled === false) {
+          return false;
+        }
+        return (
+          (channelConfig as { enabled?: unknown }).enabled === true ||
+          params.includeConfiguredChannels === true
+        );
+      })
+    ) {
+      ids.add(pluginId);
+      continue;
+    }
+    const providers = Array.isArray(manifest.providers)
+      ? manifest.providers.filter((provider): provider is string => typeof provider === "string")
+      : [];
+    if (manifest.enabledByDefault === true && providers.length === 0 && channels.length === 0) {
+      ids.add(pluginId);
+    }
   }
-
-  return {
-    deps: deps.toSorted((a, b) => a.name.localeCompare(b.name)),
-    conflicts: conflicts.toSorted((a, b) => a.name.localeCompare(b.name)),
-  };
+  return [...ids].toSorted((left, right) => left.localeCompare(right));
 }
 
-export function scanBundledPluginRuntimeDeps(params: { packageRoot: string }): {
-  missing: RuntimeDepEntry[];
-  conflicts: RuntimeDepConflict[];
-} {
-  if (isSourceCheckoutRoot(params.packageRoot)) {
-    return { missing: [], conflicts: [] };
+function formatElapsedMs(elapsedMs: number): string {
+  if (elapsedMs < 1000) {
+    return `${elapsedMs}ms`;
   }
-  const extensionsDir = path.join(params.packageRoot, "dist", "extensions");
-  if (!fs.existsSync(extensionsDir)) {
-    return { missing: [], conflicts: [] };
+  const seconds = Math.round(elapsedMs / 1000);
+  if (seconds < 60) {
+    return `${seconds}s`;
   }
-  const { deps, conflicts } = collectBundledPluginRuntimeDeps({ extensionsDir });
-  const missing = deps.filter(
-    (dep) => !fs.existsSync(path.join(params.packageRoot, dependencySentinelPath(dep.name))),
-  );
-  return { missing, conflicts };
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return remainingSeconds > 0 ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`;
 }
 
-function createNestedNpmInstallEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const nextEnv = { ...env };
-  delete nextEnv.npm_config_global;
-  delete nextEnv.npm_config_location;
-  delete nextEnv.npm_config_prefix;
-  return nextEnv;
-}
-
-function installBundledRuntimeDeps(params: {
-  packageRoot: string;
-  missingSpecs: string[];
-  env: NodeJS.ProcessEnv;
-}) {
-  const result = spawnSync(
-    "npm",
-    [
-      "install",
-      "--omit=dev",
-      "--no-save",
-      "--package-lock=false",
-      "--ignore-scripts",
-      "--legacy-peer-deps",
-      ...params.missingSpecs,
-    ],
-    {
-      cwd: params.packageRoot,
-      encoding: "utf8",
-      env: createNestedNpmInstallEnv(params.env),
-      stdio: "pipe",
-      shell: false,
-    },
-  );
-  if (result.status !== 0) {
-    const output = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
-    throw new Error(output || "npm install failed");
-  }
+function logRuntimeDepsInstallProgress(runtime: RuntimeEnv, message: string): void {
+  runtime.log(message);
 }
 
 export async function maybeRepairBundledPluginRuntimeDeps(params: {
   runtime: RuntimeEnv;
   prompter: DoctorPrompter;
+  config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   packageRoot?: string | null;
-  installDeps?: (params: { packageRoot: string; missingSpecs: string[] }) => void;
+  includeConfiguredChannels?: boolean;
+  installDeps?: (params: BundledRuntimeDepsInstallParams) => void | Promise<void>;
 }): Promise<void> {
   const packageRoot =
     params.packageRoot ??
@@ -183,7 +125,22 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
     return;
   }
 
-  const { missing, conflicts } = scanBundledPluginRuntimeDeps({ packageRoot });
+  const env = params.env ?? process.env;
+  const bundledPluginsDir = path.join(packageRoot, "dist", "extensions");
+  const effectivePluginIds = params.config
+    ? collectPackagedRuntimeDepsRepairPluginIds({
+        bundledPluginsDir,
+        config: params.config,
+        includeConfiguredChannels: params.includeConfiguredChannels,
+      })
+    : undefined;
+  const { deps, missing, conflicts } = scanBundledPluginRuntimeDeps({
+    packageRoot,
+    config: params.config,
+    pluginIds: effectivePluginIds,
+    includeConfiguredChannels: params.includeConfiguredChannels,
+    env,
+  });
   if (conflicts.length > 0) {
     const conflictLines = conflicts.flatMap((conflict) =>
       [`- ${conflict.name}: ${conflict.versions.join(", ")}`].concat(
@@ -208,6 +165,14 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
   }
 
   const missingSpecs = missing.map((dep) => `${dep.name}@${dep.version}`);
+  const installRootPlan = resolveBundledRuntimeDependencyPackageInstallRootPlan(packageRoot, {
+    env,
+  });
+  const installSpecs = createBundledRuntimeDepsWritableInstallSpecs({
+    deps,
+    searchRoots: installRootPlan.searchRoots,
+    installRoot: installRootPlan.installRoot,
+  });
   note(
     [
       "Bundled plugin runtime deps are missing.",
@@ -219,6 +184,7 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
 
   const shouldRepair =
     params.prompter.shouldRepair ||
+    params.prompter.repairMode.nonInteractive ||
     (await params.prompter.confirmAutoFix({
       message: "Install missing bundled plugin runtime deps now?",
       initialValue: true,
@@ -227,18 +193,52 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
     return;
   }
 
+  let heartbeat: NodeJS.Timeout | undefined;
+  let progress: { setLabel: (label: string) => void; done: () => void } | undefined;
   try {
-    const install =
-      params.installDeps ??
-      ((installParams) =>
-        installBundledRuntimeDeps({
-          packageRoot: installParams.packageRoot,
-          missingSpecs: installParams.missingSpecs,
-          env: params.env ?? process.env,
-        }));
-    install({ packageRoot, missingSpecs });
-    note(`Installed bundled plugin deps: ${missingSpecs.join(", ")}`, "Bundled plugins");
+    const { createCliProgress } = await import("../cli/progress.js");
+    progress = createCliProgress({
+      label: `Installing bundled plugin runtime deps (${missingSpecs.length})`,
+      indeterminate: true,
+      enabled: process.env.VITEST !== "true" || process.env.OPENCLAW_TEST_RUNTIME_LOG === "1",
+    });
+    const installStartedAt = Date.now();
+    logRuntimeDepsInstallProgress(
+      params.runtime,
+      `Installing bundled plugin runtime deps (${missingSpecs.length} missing, ${installSpecs.length} install specs): ${missingSpecs.join(", ")}`,
+    );
+    heartbeat = setInterval(() => {
+      logRuntimeDepsInstallProgress(
+        params.runtime,
+        `Still installing bundled plugin runtime deps after ${formatElapsedMs(Date.now() - installStartedAt)}...`,
+      );
+    }, RUNTIME_DEPS_INSTALL_HEARTBEAT_MS);
+    heartbeat.unref?.();
+    const result = await repairBundledRuntimeDepsInstallRootAsync({
+      installRoot: installRootPlan.installRoot,
+      missingSpecs,
+      installSpecs,
+      env: params.env ?? process.env,
+      installDeps: params.installDeps
+        ? async (installParams) => {
+            await params.installDeps?.(installParams);
+          }
+        : undefined,
+      warn: (message) => logRuntimeDepsInstallProgress(params.runtime, message),
+      onProgress: (message) => progress?.setLabel(message),
+    });
+    logRuntimeDepsInstallProgress(
+      params.runtime,
+      `Installed bundled plugin runtime deps in ${formatElapsedMs(Date.now() - installStartedAt)}: ${result.installSpecs.join(", ")}`,
+    );
+    note(`Installed bundled plugin deps: ${result.installSpecs.join(", ")}`, "Bundled plugins");
   } catch (error) {
     params.runtime.error(`Failed to install bundled plugin runtime deps: ${String(error)}`);
+    throw error instanceof Error ? error : new Error(String(error));
+  } finally {
+    if (heartbeat) {
+      clearInterval(heartbeat);
+    }
+    progress?.done();
   }
 }

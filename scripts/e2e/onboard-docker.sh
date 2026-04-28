@@ -2,17 +2,24 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
-IMAGE_NAME="openclaw-onboard-e2e"
+source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-onboard-e2e" OPENCLAW_ONBOARD_E2E_IMAGE)"
+OPENCLAW_TEST_STATE_FUNCTION_B64="$(
+  node "$ROOT_DIR/scripts/lib/openclaw-test-state.mjs" shell-function \
+    | base64 \
+    | tr -d '\n'
+)"
 
-echo "Building Docker image..."
-run_logged onboard-build docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
+docker_e2e_build_or_reuse "$IMAGE_NAME" onboard
 
 echo "Running onboarding E2E..."
-docker run --rm -t "$IMAGE_NAME" bash -lc '
+docker run --rm -t \
+  -e "OPENCLAW_TEST_STATE_FUNCTION_B64=$OPENCLAW_TEST_STATE_FUNCTION_B64" \
+  "$IMAGE_NAME" bash -lc '
   set -euo pipefail
 	  trap "" PIPE
 	  export TERM=xterm-256color
+  eval "$(printf "%s" "${OPENCLAW_TEST_STATE_FUNCTION_B64:?missing OPENCLAW_TEST_STATE_FUNCTION_B64}" | base64 -d)"
 	  ONBOARD_FLAGS="--flow quickstart --auth-choice skip --skip-channels --skip-skills --skip-daemon --skip-ui"
 	  # tsdown may emit dist/index.js or dist/index.mjs depending on runtime/bundler.
 	  if [ -f dist/index.mjs ]; then
@@ -160,14 +167,14 @@ TRASH
 
   run_wizard_cmd() {
     local case_name="$1"
-    local home_dir="$2"
+    local state_ref="$2"
     local command="$3"
     local send_fn="$4"
     local with_gateway="${5:-false}"
     local validate_fn="${6:-}"
 
     echo "== Wizard case: $case_name =="
-    set_isolated_openclaw_env "$home_dir"
+    set_isolated_openclaw_env "$state_ref"
 
     input_fifo="$(mktemp -u "/tmp/openclaw-onboard-${case_name}.XXXXXX")"
     mkfifo "$input_fifo"
@@ -209,25 +216,17 @@ TRASH
 
   run_wizard() {
     local case_name="$1"
-    local home_dir="$2"
+    local state_ref="$2"
     local send_fn="$3"
     local validate_fn="${4:-}"
 
 	    # Default onboarding command wrapper.
-	    run_wizard_cmd "$case_name" "$home_dir" "node \"$OPENCLAW_ENTRY\" onboard $ONBOARD_FLAGS" "$send_fn" true "$validate_fn"
+	    run_wizard_cmd "$case_name" "$state_ref" "node \"$OPENCLAW_ENTRY\" onboard $ONBOARD_FLAGS" "$send_fn" true "$validate_fn"
 	  }
 
-  make_home() {
-    mktemp -d "/tmp/openclaw-e2e-$1.XXXXXX"
-  }
-
   set_isolated_openclaw_env() {
-    local home_dir="$1"
-    export HOME="$home_dir"
-    export OPENCLAW_HOME="$home_dir"
-    export OPENCLAW_STATE_DIR="$home_dir/.openclaw"
-    export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"
-    mkdir -p "$OPENCLAW_STATE_DIR"
+    local state_ref="$1"
+    openclaw_test_state_create "$state_ref" empty
   }
 
   assert_file() {
@@ -306,9 +305,7 @@ TRASH
   }
 
   run_case_local_basic() {
-    local home_dir
-    home_dir="$(make_home local-basic)"
-    set_isolated_openclaw_env "$home_dir"
+    set_isolated_openclaw_env local-basic
     run_case_logged local-basic node "$OPENCLAW_ENTRY" onboard \
 	      --non-interactive \
 	      --accept-risk \
@@ -381,9 +378,7 @@ NODE
   }
 
   run_case_remote_non_interactive() {
-    local home_dir
-    home_dir="$(make_home remote-non-interactive)"
-    set_isolated_openclaw_env "$home_dir"
+    set_isolated_openclaw_env remote-non-interactive
 	    # Smoke test non-interactive remote config write.
 	    run_case_logged remote-non-interactive node "$OPENCLAW_ENTRY" onboard --non-interactive --accept-risk \
 	      --mode remote \
@@ -423,9 +418,7 @@ NODE
   }
 
   run_case_reset() {
-    local home_dir
-    home_dir="$(make_home reset-config)"
-    set_isolated_openclaw_env "$home_dir"
+    set_isolated_openclaw_env reset-config
     # Seed a remote config to exercise reset path.
 	    cat > "$OPENCLAW_CONFIG_PATH" <<'"'"'JSON'"'"'
 {
@@ -478,10 +471,8 @@ NODE
   }
 
   run_case_channels() {
-	    local home_dir
-	    home_dir="$(make_home channels)"
 	    # Channels-only configure flow.
-	    run_wizard_cmd channels "$home_dir" "node \"$OPENCLAW_ENTRY\" configure --section channels" send_channels_flow
+	    run_wizard_cmd channels channels "node \"$OPENCLAW_ENTRY\" configure --section channels" send_channels_flow
 
     config_path="$OPENCLAW_CONFIG_PATH"
     assert_file "$config_path"
@@ -519,8 +510,8 @@ NODE
 
   run_case_skills() {
     local home_dir
-    home_dir="$(make_home skills)"
-    set_isolated_openclaw_env "$home_dir"
+    set_isolated_openclaw_env skills
+    home_dir="$HOME"
     # Seed skills config to ensure it survives the wizard.
 	    cat > "$OPENCLAW_CONFIG_PATH" <<'"'"'JSON'"'"'
 {

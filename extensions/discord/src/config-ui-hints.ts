@@ -61,6 +61,10 @@ export const discordChannelConfigUiHints = {
     label: "Discord Draft Chunk Break Preference",
     help: "Preferred breakpoints for Discord draft chunks (paragraph | newline | sentence). Default: paragraph.",
   },
+  "streaming.preview.toolProgress": {
+    label: "Discord Draft Tool Progress",
+    help: "Show tool/progress activity in the live draft preview message (default: true). Set false to keep tool updates as separate messages.",
+  },
   "retry.attempts": {
     label: "Discord Retry Attempts",
     help: "Max retry attempts for outbound Discord API calls (default: 3).",
@@ -80,6 +84,10 @@ export const discordChannelConfigUiHints = {
   maxLinesPerMessage: {
     label: "Discord Max Lines Per Message",
     help: "Soft max line count per Discord message (default: 17).",
+  },
+  "thread.inheritParent": {
+    label: "Discord Thread Parent Inheritance",
+    help: "If true, Discord thread sessions inherit the parent channel transcript (default: false).",
   },
   "inboundWorker.runTimeoutMs": {
     label: "Discord Inbound Worker Timeout (ms)",
@@ -129,9 +137,21 @@ export const discordChannelConfigUiHints = {
     label: "Discord Guild Members Intent",
     help: "Enable the Guild Members privileged intent. Must also be enabled in the Discord Developer Portal. Default: false.",
   },
+  "intents.voiceStates": {
+    label: "Discord Voice States Intent",
+    help: "Enable the Guild Voice States intent. Defaults to the effective Discord voice setting; set false for text-only gateway sessions even when voice config is present.",
+  },
+  gatewayInfoTimeoutMs: {
+    label: "Discord Gateway Metadata Timeout (ms)",
+    help: "Timeout for Discord /gateway/bot metadata lookup before falling back to the default gateway URL. Default is 30000; OPENCLAW_DISCORD_GATEWAY_INFO_TIMEOUT_MS can override when config is unset.",
+  },
   "voice.enabled": {
     label: "Discord Voice Enabled",
-    help: "Enable Discord voice channel conversations (default: true). Omit channels.discord.voice to keep voice support disabled for the account.",
+    help: "Enable Discord voice channel conversations (default: true). Set false for text-only gateway sessions.",
+  },
+  "voice.model": {
+    label: "Discord Voice Model",
+    help: "Optional LLM model override for Discord voice channel responses (for example openai/gpt-5.4-mini). Leave unset to inherit the routed agent model.",
   },
   "voice.autoJoin": {
     label: "Discord Voice Auto-Join",

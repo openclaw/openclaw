@@ -116,6 +116,8 @@ export type DiscordIntentsConfig = {
   presence?: boolean;
   /** Enable Guild Members privileged intent (requires Portal opt-in). Default: false. */
   guildMembers?: boolean;
+  /** Enable Guild Voice States intent. Defaults to voice.enabled, unless explicitly set. */
+  voiceStates?: boolean;
 };
 
 export type DiscordVoiceAutoJoinConfig = {
@@ -128,6 +130,8 @@ export type DiscordVoiceAutoJoinConfig = {
 export type DiscordVoiceConfig = {
   /** Enable Discord voice channel conversations (default: true). */
   enabled?: boolean;
+  /** Optional LLM model override for Discord voice channel responses. */
+  model?: string;
   /** Voice channels to auto-join on startup. */
   autoJoin?: DiscordVoiceAutoJoinConfig[];
   /** Enable/disable DAVE end-to-end encryption (default: true; Discord may require this). */
@@ -203,6 +207,11 @@ export type DiscordSlashCommandConfig = {
   ephemeral?: boolean;
 };
 
+export type DiscordThreadConfig = {
+  /** If true, Discord thread sessions inherit the parent channel transcript. Default: false. */
+  inheritParent?: boolean;
+};
+
 export type DiscordAutoPresenceConfig = {
   /** Enable automatic runtime/quota-based Discord presence updates. Default: false. */
   enabled?: boolean;
@@ -234,6 +243,8 @@ export type DiscordAccountConfig = {
   token?: SecretInput;
   /** HTTP(S) proxy URL for Discord gateway WebSocket connections. */
   proxy?: string;
+  /** Timeout for Discord /gateway/bot metadata lookup before falling back to the default gateway URL. Default: 30000. */
+  gatewayInfoTimeoutMs?: number;
   /** Allow bot-authored messages to trigger replies (default: false). Set "mentions" to gate on mentions. */
   allowBots?: boolean | "mentions";
   /**
@@ -272,6 +283,8 @@ export type DiscordAccountConfig = {
   actions?: DiscordActionConfig;
   /** Control reply threading when reply tags are present (off|first|all|batched). */
   replyToMode?: ReplyToMode;
+  /** Thread session behavior. */
+  thread?: DiscordThreadConfig;
   /**
    * Alias for dm.policy (prefer this so it inherits cleanly via base->account shallow merge).
    * Legacy key: channels.discord.dm.policy.

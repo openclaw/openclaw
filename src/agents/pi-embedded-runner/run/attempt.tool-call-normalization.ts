@@ -1,5 +1,6 @@
 import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
+import { visitObjectContentBlocks } from "../../../shared/message-content-blocks.js";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import { validateAnthropicTurns, validateGeminiTurns } from "../../pi-embedded-helpers.js";
 import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
@@ -524,6 +525,32 @@ function sanitizeAnthropicReplayToolResults(
   return changed ? out : messages;
 }
 
+function assistantTurnHasReplayToolCall(message: AgentMessage): boolean {
+  if (!message || typeof message !== "object" || message.role !== "assistant") {
+    return false;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return content.some((block) => isReplayToolCallBlock(block));
+}
+
+function stripTrailingAssistantPrefillTurns(messages: AgentMessage[]): AgentMessage[] {
+  let end = messages.length;
+  while (end > 0) {
+    const message = messages[end - 1];
+    if (!message || typeof message !== "object" || message.role !== "assistant") {
+      break;
+    }
+    if (assistantTurnHasReplayToolCall(message)) {
+      break;
+    }
+    end -= 1;
+  }
+  return end === messages.length ? messages : messages.slice(0, end);
+}
+
 function normalizeToolCallIdsInMessage(message: unknown): void {
   if (!message || typeof message !== "object") {
     return;
@@ -586,20 +613,10 @@ function trimWhitespaceFromToolCallNamesInMessage(
   message: unknown,
   allowedToolNames?: Set<string>,
 ): void {
-  if (!message || typeof message !== "object") {
-    return;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
-    return;
-  }
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
+  visitObjectContentBlocks(message, (block) => {
     const typedBlock = block as { type?: unknown; name?: unknown; id?: unknown };
     if (!isToolCallBlockType(typedBlock.type)) {
-      continue;
+      return;
     }
     const rawId = typeof typedBlock.id === "string" ? typedBlock.id : undefined;
     if (typeof typedBlock.name === "string") {
@@ -607,13 +624,13 @@ function trimWhitespaceFromToolCallNamesInMessage(
       if (normalized !== typedBlock.name) {
         typedBlock.name = normalized;
       }
-      continue;
+      return;
     }
     const inferred = inferToolNameFromToolCallId(rawId, allowedToolNames);
     if (inferred) {
       typedBlock.name = inferred;
     }
-  }
+  });
   normalizeToolCallIdsInMessage(message);
 }
 
@@ -878,15 +895,25 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
     let nextMessages = replayInputsChanged
       ? sanitizeToolUseResultPairing(sanitized.messages)
       : sanitized.messages;
+    let strippedTrailingAssistantPrefill = false;
     if (transcriptPolicy?.validateAnthropicTurns) {
       nextMessages = sanitizeAnthropicReplayToolResults(nextMessages, {
         disallowEmbeddedUserToolResultsForSignedThinkingReplay: allowProviderOwnedThinkingReplay,
       });
     }
+    if (transcriptPolicy?.validateAnthropicTurns || transcriptPolicy?.validateGeminiTurns) {
+      const beforeStrip = nextMessages;
+      nextMessages = stripTrailingAssistantPrefillTurns(nextMessages);
+      strippedTrailingAssistantPrefill ||= nextMessages !== beforeStrip;
+    }
     if (nextMessages === messages) {
       return baseFn(model, context, options);
     }
-    if (sanitized.droppedAssistantMessages > 0 || transcriptPolicy?.validateAnthropicTurns) {
+    if (
+      sanitized.droppedAssistantMessages > 0 ||
+      transcriptPolicy?.validateAnthropicTurns ||
+      strippedTrailingAssistantPrefill
+    ) {
       if (transcriptPolicy?.validateGeminiTurns) {
         nextMessages = validateGeminiTurns(nextMessages);
       }

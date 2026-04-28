@@ -1,13 +1,14 @@
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { createRunningTaskRun } from "../tasks/detached-task-runtime.js";
-import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
-import { waitForAgentRun } from "./run-wait.js";
+import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import { isRecoverableAgentWaitError, waitForAgentRun } from "./run-wait.js";
 import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
-import type { SubagentRunOutcome } from "./subagent-announce-output.js";
+import { type SubagentRunOutcome, withSubagentOutcomeTiming } from "./subagent-announce-output.js";
 import {
   SUBAGENT_ENDED_OUTCOME_KILLED,
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -15,7 +16,10 @@ import {
   SUBAGENT_ENDED_REASON_KILLED,
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
-import { emitSubagentEndedHookOnce, runOutcomesEqual } from "./subagent-registry-completion.js";
+import {
+  emitSubagentEndedHookOnce,
+  shouldUpdateRunOutcome,
+} from "./subagent-registry-completion.js";
 import {
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
@@ -26,9 +30,54 @@ import {
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const log = createSubsystemLogger("agents/subagent-registry");
+const RECOVERABLE_WAIT_RETRY_DELAY_MS = process.env.OPENCLAW_TEST_FAST === "1" ? 25 : 5_000;
 
 function shouldDeleteAttachments(entry: SubagentRunRecord) {
   return entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
+}
+
+export function markSubagentRunPausedAfterYield(params: {
+  entry: SubagentRunRecord;
+  startedAt?: number;
+  endedAt?: number;
+  now?: number;
+}): boolean {
+  const { entry } = params;
+  let mutated = false;
+  if (typeof params.startedAt === "number" && entry.startedAt !== params.startedAt) {
+    entry.startedAt = params.startedAt;
+    if (typeof entry.sessionStartedAt !== "number") {
+      entry.sessionStartedAt = params.startedAt;
+    }
+    mutated = true;
+  }
+  const endedAt = typeof params.endedAt === "number" ? params.endedAt : (params.now ?? Date.now());
+  if (entry.endedAt !== endedAt) {
+    entry.endedAt = endedAt;
+    mutated = true;
+  }
+  if (entry.pauseReason !== "sessions_yield") {
+    entry.pauseReason = "sessions_yield";
+    mutated = true;
+  }
+  if (entry.outcome !== undefined) {
+    entry.outcome = undefined;
+    mutated = true;
+  }
+  if (entry.endedReason !== undefined) {
+    entry.endedReason = undefined;
+    mutated = true;
+  }
+  if (entry.cleanupHandled === true) {
+    entry.cleanupHandled = false;
+    mutated = true;
+  }
+  if (entry.frozenResultText !== undefined) {
+    entry.frozenResultText = undefined;
+    entry.frozenResultCapturedAt = undefined;
+    mutated = true;
+  }
+  return mutated;
 }
 
 export type RegisterSubagentRunParams = {
@@ -57,7 +106,7 @@ export function createSubagentRunManager(params: {
   endedHookInFlightRunIds: Set<string>;
   persist(): void;
   callGateway: typeof callGateway;
-  loadConfig: typeof loadConfig;
+  getRuntimeConfig: typeof getRuntimeConfig;
   ensureRuntimePluginsLoaded:
     | typeof ensureRuntimePluginsLoadedFn
     | ((args: {
@@ -71,6 +120,7 @@ export function createSubagentRunManager(params: {
   resumeSubagentRun(runId: string): void;
   clearPendingLifecycleError(runId: string): void;
   resolveSubagentWaitTimeoutMs(cfg: OpenClawConfig, runTimeoutSeconds?: number): number;
+  scheduleOrphanRecovery(args?: { delayMs?: number; maxRetries?: number }): void;
   notifyContextEngineSubagentEnded(args: {
     childSessionKey: string;
     reason: "completed" | "deleted" | "released";
@@ -110,6 +160,38 @@ export function createSubagentRunManager(params: {
       if (wait.status === "pending") {
         return;
       }
+      if (wait.yielded === true) {
+        if (
+          markSubagentRunPausedAfterYield({
+            entry,
+            startedAt: wait.startedAt,
+            endedAt: wait.endedAt,
+          })
+        ) {
+          params.persist();
+        }
+        return;
+      }
+      if (wait.status === "error" && isRecoverableAgentWaitError(wait.error)) {
+        log.info("subagent wait interrupted; scheduling recovery", {
+          runId,
+          childSessionKey: expectedEntry?.childSessionKey ?? entry?.childSessionKey,
+          error: wait.error,
+        });
+        params.scheduleOrphanRecovery({ delayMs: 1_000 });
+        const scheduledEntry = entry;
+        setTimeout(() => {
+          if (!scheduledEntry) {
+            return;
+          }
+          const current = params.runs.get(runId);
+          if (!current || current !== scheduledEntry || typeof current.endedAt === "number") {
+            return;
+          }
+          void waitForSubagentCompletion(runId, waitTimeoutMs, scheduledEntry);
+        }, RECOVERABLE_WAIT_RETRY_DELAY_MS).unref?.();
+        return;
+      }
       let mutated = false;
       if (typeof wait.startedAt === "number") {
         entry.startedAt = wait.startedAt;
@@ -127,13 +209,17 @@ export function createSubagentRunManager(params: {
         mutated = true;
       }
       const waitError = typeof wait.error === "string" ? wait.error : undefined;
-      const outcome: SubagentRunOutcome =
+      const baseOutcome: SubagentRunOutcome =
         wait.status === "error"
           ? { status: "error", error: waitError }
           : wait.status === "timeout"
             ? { status: "timeout" }
             : { status: "ok" };
-      if (!runOutcomesEqual(entry.outcome, outcome)) {
+      const outcome = withSubagentOutcomeTiming(baseOutcome, {
+        startedAt: entry.startedAt,
+        endedAt: entry.endedAt,
+      });
+      if (shouldUpdateRunOutcome(entry.outcome, outcome)) {
         entry.outcome = outcome;
         mutated = true;
       }
@@ -224,7 +310,7 @@ export function createSubagentRunManager(params: {
     }
 
     const now = Date.now();
-    const cfg = params.loadConfig();
+    const cfg = params.getRuntimeConfig();
     const archiveAfterMs = resolveArchiveAfterMs(cfg);
     const spawnMode = source.spawnMode === "session" ? "session" : "run";
     const archiveAtMs =
@@ -252,6 +338,7 @@ export function createSubagentRunManager(params: {
       accumulatedRuntimeMs,
       endedAt: undefined,
       endedReason: undefined,
+      pauseReason: undefined,
       endedHookEmittedAt: undefined,
       wakeOnDescendantSettle: undefined,
       outcome: undefined,
@@ -290,7 +377,7 @@ export function createSubagentRunManager(params: {
       return;
     }
     const now = Date.now();
-    const cfg = params.loadConfig();
+    const cfg = params.getRuntimeConfig();
     const archiveAfterMs = resolveArchiveAfterMs(cfg);
     const spawnMode = registerParams.spawnMode === "session" ? "session" : "run";
     const archiveAtMs =
@@ -417,7 +504,13 @@ export function createSubagentRunManager(params: {
         continue;
       }
       entry.endedAt = now;
-      entry.outcome = { status: "error", error: reason };
+      entry.outcome = withSubagentOutcomeTiming(
+        { status: "error", error: reason },
+        {
+          startedAt: entry.startedAt,
+          endedAt: now,
+        },
+      );
       entry.endedReason = SUBAGENT_ENDED_REASON_KILLED;
       entry.cleanupHandled = true;
       entry.cleanupCompletedAt = now;
@@ -463,7 +556,7 @@ export function createSubagentRunManager(params: {
           });
           continue;
         }
-        const cfg = params.loadConfig();
+        const cfg = params.getRuntimeConfig();
         void Promise.resolve(
           params.ensureRuntimePluginsLoaded({
             config: cfg,

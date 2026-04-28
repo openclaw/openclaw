@@ -1,7 +1,6 @@
-import { Type } from "@sinclair/typebox";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { withEnv } from "openclaw/plugin-sdk/testing";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 
 const handleDiscordMessageActionMock = vi.hoisted(() =>
@@ -53,8 +52,8 @@ describe("discordMessageActions", () => {
       } as OpenClawConfig,
     });
 
-    expect(discovery?.capabilities).toEqual(["interactive", "components"]);
-    expect(discovery?.schema).not.toBeNull();
+    expect(discovery?.capabilities).toEqual(["presentation"]);
+    expect(discovery?.schema).toBeUndefined();
     expect(discovery?.actions).toEqual(
       expect.arrayContaining(["send", "poll", "react", "reactions", "emoji-list", "permissions"]),
     );
@@ -101,7 +100,7 @@ describe("discordMessageActions", () => {
     expect(workDiscovery?.actions).not.toContain("poll");
   });
 
-  it("keeps components optional in the message tool schema", () => {
+  it("does not expose Discord-native message tool schema", () => {
     const discovery = discordMessageActions.describeMessageTool?.({
       cfg: {
         channels: {
@@ -111,13 +110,23 @@ describe("discordMessageActions", () => {
         },
       } as OpenClawConfig,
     });
-    const schema = discovery?.schema;
-    if (!schema || Array.isArray(schema)) {
-      throw new Error("expected discord message-tool schema");
-    }
-
-    expect(Type.Object(schema.properties).required).toBeUndefined();
+    expect(discovery?.schema).toBeUndefined();
   });
+
+  it.each(["read", "search"])("routes %s actions through gateway execution mode", (action) => {
+    expect(discordMessageActions.resolveExecutionMode?.({ action: action as never })).toBe(
+      "gateway",
+    );
+  });
+
+  it.each(["send", "edit", "delete", "react", "pin", "poll"])(
+    "routes %s actions through local execution mode",
+    (action) => {
+      expect(discordMessageActions.resolveExecutionMode?.({ action: action as never })).toBe(
+        "local",
+      );
+    },
+  );
 
   it("extracts send targets for message and thread reply actions", () => {
     expect(

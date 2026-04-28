@@ -109,11 +109,12 @@ export const QWEN_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig> = [
 ];
 
 export function isQwenCodingPlanBaseUrl(baseUrl: string | undefined): boolean {
-  if (!baseUrl?.trim()) {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
     return false;
   }
   try {
-    const hostname = new URL(baseUrl).hostname.toLowerCase();
+    const hostname = new URL(trimmed).hostname.toLowerCase().replace(/\.+$/, "");
     return (
       hostname === "coding.dashscope.aliyuncs.com" ||
       hostname === "coding-intl.dashscope.aliyuncs.com"

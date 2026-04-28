@@ -282,26 +282,65 @@ export function loadAuthProfileStoreForSecretsRuntime(agentDir?: string): AuthPr
   return loadAuthProfileStoreForRuntime(agentDir, { readOnly: true, allowKeychainPrompt: false });
 }
 
+export function loadAuthProfileStoreWithoutExternalProfiles(agentDir?: string): AuthProfileStore {
+  const options: LoadAuthProfileStoreOptions = { readOnly: true, allowKeychainPrompt: false };
+  const store = loadAuthProfileStoreForAgent(agentDir, options);
+  const authPath = resolveAuthStorePath(agentDir);
+  const mainAuthPath = resolveAuthStorePath();
+  if (!agentDir || authPath === mainAuthPath) {
+    return store;
+  }
+
+  const mainStore = loadAuthProfileStoreForAgent(undefined, options);
+  return mergeAuthProfileStores(mainStore, store);
+}
+
 export function ensureAuthProfileStore(
+  agentDir?: string,
+  options?: { allowKeychainPrompt?: boolean },
+): AuthProfileStore {
+  return overlayExternalAuthProfiles(
+    ensureAuthProfileStoreWithoutExternalProfiles(agentDir, options),
+    { agentDir },
+  );
+}
+
+export function ensureAuthProfileStoreWithoutExternalProfiles(
   agentDir?: string,
   options?: { allowKeychainPrompt?: boolean },
 ): AuthProfileStore {
   const runtimeStore = resolveRuntimeAuthProfileStore(agentDir);
   if (runtimeStore) {
-    return overlayExternalAuthProfiles(runtimeStore, { agentDir });
+    return runtimeStore;
   }
-
   const store = loadAuthProfileStoreForAgent(agentDir, options);
   const authPath = resolveAuthStorePath(agentDir);
   const mainAuthPath = resolveAuthStorePath();
   if (!agentDir || authPath === mainAuthPath) {
-    return overlayExternalAuthProfiles(store, { agentDir });
+    return store;
   }
 
   const mainStore = loadAuthProfileStoreForAgent(undefined, options);
-  const merged = mergeAuthProfileStores(mainStore, store);
+  return mergeAuthProfileStores(mainStore, store);
+}
 
-  return overlayExternalAuthProfiles(merged, { agentDir });
+export function findPersistedAuthProfileCredential(params: {
+  agentDir?: string;
+  profileId: string;
+}): AuthProfileStore["profiles"][string] | undefined {
+  const requestedStore = loadPersistedAuthProfileStore(params.agentDir);
+  const requestedProfile = requestedStore?.profiles[params.profileId];
+  if (requestedProfile || !params.agentDir) {
+    return requestedProfile;
+  }
+
+  const requestedPath = resolveAuthStorePath(params.agentDir);
+  const mainPath = resolveAuthStorePath();
+  if (requestedPath === mainPath) {
+    return requestedProfile;
+  }
+
+  return loadPersistedAuthProfileStore()?.profiles[params.profileId];
 }
 
 export function ensureAuthProfileStoreForLocalUpdate(agentDir?: string): AuthProfileStore {

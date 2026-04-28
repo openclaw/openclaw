@@ -1,5 +1,6 @@
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import type { SpawnedRunMetadata } from "../../agents/spawned-context.js";
+import type { PromptMode } from "../../agents/system-prompt.types.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
@@ -12,6 +13,13 @@ export type ImageContent = {
   mimeType: string;
 };
 export type { AgentStreamParams } from "./shared-types.js";
+
+export type AgentCommandResultMetaOverrides = {
+  transport?: "embedded";
+  fallbackFrom?: "gateway";
+};
+
+export type AcpTurnSource = "manual_spawn";
 
 export type AgentRunContext = {
   messageChannel?: string;
@@ -27,6 +35,8 @@ export type AgentRunContext = {
 
 export type AgentCommandOpts = {
   message: string;
+  /** User-visible transcript body; defaults to message and excludes runtime-only context. */
+  transcriptMessage?: string;
   /** Optional image attachments for multimodal messages. */
   images?: ImageContent[];
   /** Original inline/offloaded attachment order for inbound images. */
@@ -56,10 +66,11 @@ export type AgentCommandOpts = {
   replyAccountId?: string;
   /** Override delivery thread/topic id (separate from session routing). */
   threadId?: string | number;
-  /** Message channel context (webchat|voicewake|whatsapp|...). */
+  /** Message channel context. */
   messageChannel?: string;
-  channel?: string; // delivery channel (whatsapp|telegram|...)
-  /** Account ID for multi-account channel routing (e.g., WhatsApp account). */
+  /** Delivery channel. */
+  channel?: string;
+  /** Account ID for multi-account channel routing. */
   accountId?: string;
   /** Context for embedded run routing (channel/account/thread). */
   runContext?: AgentRunContext;
@@ -90,11 +101,21 @@ export type AgentCommandOpts = {
   workspaceDir?: SpawnedRunMetadata["workspaceDir"];
   /** Force bundled MCP teardown when a one-shot local run completes. */
   cleanupBundleMcpOnRunEnd?: boolean;
+  /** Force long-lived CLI live session teardown when a one-shot local run completes. */
+  cleanupCliLiveSessionOnRunEnd?: boolean;
+  /** Internal local CLI callers can annotate result metadata before JSON/text output. */
+  resultMetaOverrides?: AgentCommandResultMetaOverrides;
+  /** Internal one-shot model probe mode: no tools, no workspace/chat prompt policy. */
+  modelRun?: boolean;
+  /** Internal prompt-mode override for trusted local/gateway callsites. */
+  promptMode?: PromptMode;
+  /** Internal ACP-ready session turn source. Manual spawn turns bypass only the dispatch gate. */
+  acpTurnSource?: AcpTurnSource;
 };
 
 export type AgentCommandIngressOpts = Omit<
   AgentCommandOpts,
-  "senderIsOwner" | "allowModelOverride"
+  "senderIsOwner" | "allowModelOverride" | "resultMetaOverrides"
 > & {
   /** Ingress callsites must always pass explicit owner-tool authorization state. */
   senderIsOwner: boolean;

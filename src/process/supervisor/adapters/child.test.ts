@@ -7,10 +7,16 @@ import {
   expectWaitStaysPendingUntilSigkillFallback,
 } from "./test-support.js";
 
-const { spawnWithFallbackMock, killProcessTreeMock } = vi.hoisted(() => ({
-  spawnWithFallbackMock: vi.fn(),
-  killProcessTreeMock: vi.fn(),
-}));
+const { spawnWithFallbackMock, killProcessTreeMock, createWindowsOutputDecoderMock } = vi.hoisted(
+  () => ({
+    spawnWithFallbackMock: vi.fn(),
+    killProcessTreeMock: vi.fn(),
+    createWindowsOutputDecoderMock: vi.fn(() => ({
+      decode: (chunk: Buffer | string) => (Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk),
+      flush: () => "",
+    })),
+  }),
+);
 
 vi.mock("../../spawn-utils.js", () => ({
   spawnWithFallback: spawnWithFallbackMock,
@@ -18,6 +24,10 @@ vi.mock("../../spawn-utils.js", () => ({
 
 vi.mock("../../kill-tree.js", () => ({
   killProcessTree: killProcessTreeMock,
+}));
+
+vi.mock("../../../infra/windows-encoding.js", () => ({
+  createWindowsOutputDecoder: createWindowsOutputDecoderMock,
 }));
 
 let createChildAdapter: typeof import("./child.js").createChildAdapter;
@@ -84,6 +94,11 @@ describe("createChildAdapter", () => {
   beforeEach(() => {
     spawnWithFallbackMock.mockClear();
     killProcessTreeMock.mockClear();
+    createWindowsOutputDecoderMock.mockClear();
+    createWindowsOutputDecoderMock.mockImplementation(() => ({
+      decode: (chunk: Buffer | string) => (Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk),
+      flush: () => "",
+    }));
     delete process.env.OPENCLAW_SERVICE_MARKER;
     vi.useRealTimers();
   });
@@ -122,8 +137,44 @@ describe("createChildAdapter", () => {
 
     adapter.kill();
 
-    expect(killProcessTreeMock).toHaveBeenCalledWith(4321);
+    // Detachment flag is now passed to killProcessTree so it knows whether
+    // it can safely group-kill via -pid. (#71662)
+    const expectedDetached = process.platform !== "win32" && !process.env.OPENCLAW_SERVICE_MARKER;
+    expect(killProcessTreeMock).toHaveBeenCalledWith(4321, { detached: expectedDetached });
     expect(killMock).toHaveBeenCalledWith("SIGKILL");
+  });
+
+  it("passes detached:false to killProcessTree when spawn fell back to no-detach (#71662 follow-up)", async () => {
+    // Simulate the fallback scenario: spawnWithFallback retried with
+    // detached:false because the initial detached spawn failed. The kill
+    // closure must NOT group-kill since the child shares the gateway's group.
+    const { child, killMock } = createStubChild(8888);
+    spawnWithFallbackMock.mockResolvedValue({
+      child,
+      usedFallback: true,
+      fallbackLabel: "no-detach",
+    });
+    const adapter = await createChildAdapter({
+      argv: ["node", "-e", "setTimeout(() => {}, 1000)"],
+      stdinMode: "pipe-open",
+    });
+
+    adapter.kill();
+
+    expect(killProcessTreeMock).toHaveBeenCalledWith(8888, { detached: false });
+    expect(killMock).toHaveBeenCalledWith("SIGKILL");
+  });
+
+  it("passes detached:false in service-managed mode where useDetached is false from the start (#71662)", async () => {
+    process.env.OPENCLAW_SERVICE_MARKER = "1";
+    try {
+      const { adapter, killMock } = await createAdapterHarness({ pid: 9999 });
+      adapter.kill();
+      expect(killProcessTreeMock).toHaveBeenCalledWith(9999, { detached: false });
+      expect(killMock).toHaveBeenCalledWith("SIGKILL");
+    } finally {
+      delete process.env.OPENCLAW_SERVICE_MARKER;
+    }
   });
 
   it("uses direct child.kill for non-SIGKILL signals", async () => {
@@ -215,16 +266,68 @@ describe("createChildAdapter", () => {
     expect(spawnArgs.fallbacks ?? []).toEqual([]);
   });
 
-  it("keeps inherited env when no override env is provided", async () => {
+  it("keeps inherited env when no override env is provided on non-Linux", async () => {
+    setPlatform("darwin");
+
     await createAdapterHarness({
       pid: 3333,
       argv: ["node", "-e", "process.exit(0)"],
     });
 
     const spawnArgs = spawnWithFallbackMock.mock.calls[0]?.[0] as {
+      argv?: string[];
       options?: { env?: NodeJS.ProcessEnv };
     };
+    expect(spawnArgs.argv).toEqual(["node", "-e", "process.exit(0)"]);
     expect(spawnArgs.options?.env).toBeUndefined();
+  });
+
+  it("wraps Linux child spawns and strips shell-init env", async () => {
+    const originalBashEnv = process.env.BASH_ENV;
+    const originalEnv = process.env.ENV;
+    const originalCdpath = process.env.CDPATH;
+    setPlatform("linux");
+    process.env.BASH_ENV = "/tmp/bashenv";
+    process.env.ENV = "/tmp/env";
+    process.env.CDPATH = "/tmp";
+    try {
+      await createAdapterHarness({
+        pid: 3334,
+        argv: ["/usr/bin/node", "-e", "process.exit(0)"],
+      });
+    } finally {
+      if (originalBashEnv === undefined) {
+        delete process.env.BASH_ENV;
+      } else {
+        process.env.BASH_ENV = originalBashEnv;
+      }
+      if (originalEnv === undefined) {
+        delete process.env.ENV;
+      } else {
+        process.env.ENV = originalEnv;
+      }
+      if (originalCdpath === undefined) {
+        delete process.env.CDPATH;
+      } else {
+        process.env.CDPATH = originalCdpath;
+      }
+    }
+
+    const spawnArgs = spawnWithFallbackMock.mock.calls[0]?.[0] as {
+      argv?: string[];
+      options?: { env?: NodeJS.ProcessEnv };
+    };
+    expect(spawnArgs.argv?.slice(0, 4)).toEqual([
+      "/bin/sh",
+      "-c",
+      'echo 1000 > /proc/self/oom_score_adj 2>/dev/null; exec "$0" "$@"',
+      "/usr/bin/node",
+    ]);
+    expect(spawnArgs.argv?.slice(4)).toEqual(["-e", "process.exit(0)"]);
+    expect(spawnArgs.options?.env).toBeDefined();
+    expect(spawnArgs.options?.env?.BASH_ENV).toBeUndefined();
+    expect(spawnArgs.options?.env?.ENV).toBeUndefined();
+    expect(spawnArgs.options?.env?.CDPATH).toBeUndefined();
   });
 
   it("passes explicit env overrides as strings", async () => {
@@ -238,5 +341,35 @@ describe("createChildAdapter", () => {
       options?: { env?: Record<string, string> };
     };
     expect(spawnArgs.options?.env).toEqual({ FOO: "bar", COUNT: "12" });
+  });
+
+  it("uses a separate stdout decoder for each listener", async () => {
+    const decoderOutputs = ["first", "second"];
+    createWindowsOutputDecoderMock.mockImplementation(() => {
+      const output = decoderOutputs.shift() ?? "";
+      return {
+        decode: () => output,
+        flush: () => "",
+      };
+    });
+    const { child } = createStubChild(5555);
+    spawnWithFallbackMock.mockResolvedValue({
+      child,
+      usedFallback: false,
+    });
+    const adapter = await createChildAdapter({
+      argv: ["node", "-e", "process.exit(0)"],
+      stdinMode: "pipe-open",
+    });
+    const first = vi.fn();
+    const second = vi.fn();
+
+    adapter.onStdout(first);
+    adapter.onStdout(second);
+    child.stdout?.emit("data", Buffer.from([0xb2]));
+
+    expect(createWindowsOutputDecoderMock).toHaveBeenCalledTimes(2);
+    expect(first).toHaveBeenCalledWith("first");
+    expect(second).toHaveBeenCalledWith("second");
   });
 });

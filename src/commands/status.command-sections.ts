@@ -1,3 +1,8 @@
+import {
+  buildPairingConnectRecoveryTitle,
+  describePairingConnectRequirement,
+  type ConnectPairingRequiredReason,
+} from "../gateway/protocol/connect-error-details.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { Tone } from "../memory-host-sdk/status.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -40,6 +45,8 @@ type PluginCompatibilityNoticeLike = {
 
 type PairingRecoveryLike = {
   requestId?: string | null;
+  reason?: ConnectPairingRequiredReason | null;
+  remediationHint?: string | null;
 };
 
 export const statusHealthColumns: TableColumn[] = [
@@ -137,6 +144,7 @@ export function buildStatusMemoryValue(
     ok: (value: string) => string;
     warn: (value: string) => string;
     muted: (value: string) => string;
+    memoryUnavailableLabel?: string;
   } & StatusMemoryStateResolvers,
 ) {
   if (!params.memoryPlugin.enabled) {
@@ -145,7 +153,7 @@ export function buildStatusMemoryValue(
   }
   if (!params.memory) {
     const slot = params.memoryPlugin.slot ? `plugin ${params.memoryPlugin.slot}` : "plugin";
-    return params.muted(`enabled (${slot}) · unavailable`);
+    return params.muted(`enabled (${slot}) · ${params.memoryUnavailableLabel ?? "unavailable"}`);
   }
   const parts: string[] = [];
   const dirtySuffix = params.memory.dirty ? ` · ${params.warn("dirty")}` : "";
@@ -367,7 +375,17 @@ export function buildStatusPairingRecoveryLines(params: {
     return [];
   }
   return [
-    params.warn("Gateway pairing approval required."),
+    params.warn(buildPairingConnectRecoveryTitle(params.pairingRecovery.reason ?? undefined)),
+    ...(params.pairingRecovery.reason
+      ? [
+          params.muted(
+            `Reason: ${describePairingConnectRequirement(params.pairingRecovery.reason)}.`,
+          ),
+        ]
+      : []),
+    ...(params.pairingRecovery.remediationHint
+      ? [params.muted(`Hint: ${params.pairingRecovery.remediationHint}`)]
+      : []),
     ...(params.pairingRecovery.requestId
       ? [
           params.muted(

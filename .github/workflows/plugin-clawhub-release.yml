@@ -35,7 +35,7 @@ jobs:
     permissions:
       contents: read
     outputs:
-      ref_sha: ${{ steps.ref.outputs.sha }}
+      ref_revision: ${{ steps.ref.outputs.sha }}
       has_candidates: ${{ steps.plan.outputs.has_candidates }}
       candidate_count: ${{ steps.plan.outputs.candidate_count }}
       skipped_published_count: ${{ steps.plan.outputs.skipped_published_count }}
@@ -44,6 +44,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ github.sha }}
           fetch-depth: 0
 
@@ -53,7 +54,6 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "false"
-          use-sticky-disk: "false"
 
       - name: Resolve checked-out ref
         id: ref
@@ -151,7 +151,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.preview_plugins_clawhub.outputs.ref_sha }}
+          persist-credentials: false
+          ref: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
           fetch-depth: 1
 
       - name: Setup Node environment
@@ -160,12 +161,12 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
-          use-sticky-disk: "false"
           install-deps: "false"
 
       - name: Checkout ClawHub CLI source
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           repository: ${{ env.CLAWHUB_REPOSITORY }}
           ref: ${{ env.CLAWHUB_REF }}
           path: clawhub-source
@@ -189,7 +190,7 @@ jobs:
         env:
           CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
           SOURCE_REPO: ${{ github.repository }}
-          SOURCE_COMMIT: ${{ needs.preview_plugins_clawhub.outputs.ref_sha }}
+          SOURCE_COMMIT: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
           SOURCE_REF: ${{ github.ref }}
           PACKAGE_TAG: ${{ matrix.plugin.publishTag }}
           PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
@@ -211,7 +212,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.preview_plugins_clawhub.outputs.ref_sha }}
+          persist-credentials: false
+          ref: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
           fetch-depth: 1
 
       - name: Setup Node environment
@@ -220,12 +222,12 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
-          use-sticky-disk: "false"
           install-deps: "false"
 
       - name: Checkout ClawHub CLI source
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           repository: ${{ env.CLAWHUB_REPOSITORY }}
           ref: ${{ env.CLAWHUB_REF }}
           path: clawhub-source
@@ -269,7 +271,7 @@ jobs:
         env:
           CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
           SOURCE_REPO: ${{ github.repository }}
-          SOURCE_COMMIT: ${{ needs.preview_plugins_clawhub.outputs.ref_sha }}
+          SOURCE_COMMIT: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
           SOURCE_REF: ${{ github.ref }}
           PACKAGE_TAG: ${{ matrix.plugin.publishTag }}
           PACKAGE_DIR: ${{ matrix.plugin.packageDir }}

@@ -9,7 +9,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vi
  */
 
 const mocks = vi.hoisted(() => ({
-  loadConfig: vi.fn(() => ({
+  getRuntimeConfig: vi.fn(() => ({
     session: { store: "/tmp/test-store", mainKey: "main" },
     agents: {},
   })),
@@ -27,7 +27,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../config/config.js", () => ({
-  loadConfig: mocks.loadConfig,
+  getRuntimeConfig: mocks.getRuntimeConfig,
 }));
 
 vi.mock("../config/sessions.js", () => ({
@@ -51,11 +51,6 @@ vi.mock("../gateway/call.js", () => ({
 
 vi.mock("../infra/agent-events.js", () => ({
   onAgentEvent: mocks.onAgentEvent,
-}));
-
-vi.mock("./subagent-announce.js", () => ({
-  runSubagentAnnounceFlow: mocks.runSubagentAnnounceFlow,
-  captureSubagentCompletionReply: mocks.captureSubagentCompletionReply,
 }));
 
 vi.mock("./subagent-registry.store.js", () => ({
@@ -87,7 +82,7 @@ describe("announce loop guard (#18264)", () => {
     vi.useFakeTimers();
     mocks.callGateway.mockClear();
     mocks.captureSubagentCompletionReply.mockClear();
-    mocks.loadConfig.mockClear();
+    mocks.getRuntimeConfig.mockClear();
     mocks.loadSubagentRegistryFromDisk.mockReset();
     mocks.loadSubagentRegistryFromDisk.mockReturnValue(new Map());
     mocks.onAgentEventStop.mockClear();
@@ -101,10 +96,16 @@ describe("announce loop guard (#18264)", () => {
     mocks.saveSubagentRegistryToDisk.mockClear();
     mocks.updateSessionStore.mockClear();
     registry.resetSubagentRegistryForTests({ persist: false });
+    registry.__testing.setDepsForTest({
+      captureSubagentCompletionReply: mocks.captureSubagentCompletionReply,
+      cleanupBrowserSessionsForLifecycleEnd: async () => {},
+      runSubagentAnnounceFlow: mocks.runSubagentAnnounceFlow,
+    });
   });
 
   afterEach(() => {
     registry.resetSubagentRegistryForTests({ persist: false });
+    registry.__testing.setDepsForTest();
     vi.useRealTimers();
     vi.clearAllMocks();
   });

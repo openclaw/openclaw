@@ -20,6 +20,8 @@ vi.mock("./suite-runtime-gateway.js", () => ({
 }));
 
 import {
+  findManagedDreamingCronJob,
+  isManagedDreamingCronJob,
   listCronJobs,
   readDoctorMemoryStatus,
   runAgentPrompt,
@@ -29,16 +31,26 @@ import {
   waitForMemorySearchMatch,
 } from "./suite-runtime-agent-process.js";
 
+type MockEmitter = {
+  emit: (eventName: string | symbol, ...args: unknown[]) => boolean;
+  on: (eventName: string | symbol, listener: (...args: unknown[]) => void) => MockEmitter;
+  once: (eventName: string | symbol, listener: (...args: unknown[]) => void) => MockEmitter;
+};
+
+type MockChildProcess = MockEmitter & {
+  stdout: MockEmitter;
+  stderr: MockEmitter;
+  kill: ReturnType<typeof vi.fn>;
+};
+
+function createMockEmitter() {
+  return new EventEmitter() as unknown as MockEmitter;
+}
+
 function createSpawnedProcess() {
-  const child = new EventEmitter() as EventEmitter & {
-    stdout: EventEmitter;
-    stderr: EventEmitter;
-    kill: ReturnType<typeof vi.fn>;
-    once: (event: string, listener: (...args: unknown[]) => void) => unknown;
-    on: (event: string, listener: (...args: unknown[]) => void) => unknown;
-  };
-  child.stdout = new EventEmitter();
-  child.stderr = new EventEmitter();
+  const child = createMockEmitter() as MockChildProcess;
+  child.stdout = createMockEmitter();
+  child.stderr = createMockEmitter();
   child.kill = vi.fn();
   return child;
 }
@@ -69,8 +81,8 @@ describe("qa suite runtime agent process helpers", () => {
           tempRoot: "/tmp/runtime",
           runtimeEnv: { PATH: "/usr/bin" },
         },
-        primaryModel: "openai/gpt-5.4",
-        alternateModel: "openai/gpt-5.4-mini",
+        primaryModel: "openai/gpt-5.5",
+        alternateModel: "openai/gpt-5.5-mini",
         providerMode: "mock-openai",
       } as never,
       ["qa", "suite"],
@@ -91,6 +103,48 @@ describe("qa suite runtime agent process helpers", () => {
     );
   });
 
+  it("merges isolated env overrides into qa cli runs", async () => {
+    const child = createSpawnedProcess();
+    spawnMock.mockReturnValue(child);
+
+    const pending = runQaCli(
+      {
+        repoRoot: "/repo",
+        gateway: {
+          tempRoot: "/tmp/runtime",
+          runtimeEnv: { PATH: "/usr/bin", OPENCLAW_STATE_DIR: "/tmp/default-state" },
+        },
+        primaryModel: "openai/gpt-5.5",
+        alternateModel: "openai/gpt-5.5-mini",
+        providerMode: "mock-openai",
+      } as never,
+      ["crestodian", "-m", "overview"],
+      {
+        env: {
+          OPENCLAW_STATE_DIR: "/tmp/isolated-state",
+          OPENCLAW_CONFIG_PATH: "/tmp/isolated-state/openclaw.json",
+        },
+      },
+    );
+
+    await waitForSpawnCount(1);
+    child.stdout.emit("data", Buffer.from("ok\n"));
+    child.emit("exit", 0);
+
+    await expect(pending).resolves.toBe("ok");
+    expect(spawnMock).toHaveBeenCalledWith(
+      "/usr/bin/node",
+      ["/repo/dist/index.js", "crestodian", "-m", "overview"],
+      expect.objectContaining({
+        env: expect.objectContaining({
+          PATH: "/usr/bin",
+          OPENCLAW_STATE_DIR: "/tmp/isolated-state",
+          OPENCLAW_CONFIG_PATH: "/tmp/isolated-state/openclaw.json",
+        }),
+      }),
+    );
+  });
+
   it("parses json qa cli output when requested", async () => {
     const child = createSpawnedProcess();
     spawnMock.mockReturnValue(child);
@@ -102,8 +156,8 @@ describe("qa suite runtime agent process helpers", () => {
           tempRoot: "/tmp/runtime",
           runtimeEnv: {},
         },
-        primaryModel: "openai/gpt-5.4",
-        alternateModel: "openai/gpt-5.4-mini",
+        primaryModel: "openai/gpt-5.5",
+        alternateModel: "openai/gpt-5.5-mini",
         providerMode: "mock-openai",
       } as never,
       ["memory", "search"],
@@ -115,6 +169,68 @@ describe("qa suite runtime agent process helpers", () => {
     child.emit("exit", 0);
 
     await expect(pending).resolves.toEqual({ ok: true });
+  });
+
+  it("parses json qa cli output after colored startup logs", async () => {
+    const child = createSpawnedProcess();
+    spawnMock.mockReturnValue(child);
+
+    const pending = runQaCli(
+      {
+        repoRoot: "/repo",
+        gateway: {
+          tempRoot: "/tmp/runtime",
+          runtimeEnv: {},
+        },
+        primaryModel: "openai/gpt-5.5",
+        alternateModel: "openai/gpt-5.5-mini",
+        providerMode: "mock-openai",
+      } as never,
+      ["memory", "search", "--json"],
+      { json: true },
+    );
+
+    await waitForSpawnCount(1);
+    child.stdout.emit(
+      "data",
+      Buffer.from(
+        '\u001b[35m[plugins]\u001b[39m \u001b[36mcodex installed bundled runtime deps\u001b[39m\n{"results":[{"text":"ORBIT-10"}]}\n',
+      ),
+    );
+    child.emit("exit", 0);
+
+    await expect(pending).resolves.toEqual({ results: [{ text: "ORBIT-10" }] });
+  });
+
+  it("parses pretty json qa cli output after startup logs", async () => {
+    const child = createSpawnedProcess();
+    spawnMock.mockReturnValue(child);
+
+    const pending = runQaCli(
+      {
+        repoRoot: "/repo",
+        gateway: {
+          tempRoot: "/tmp/runtime",
+          runtimeEnv: {},
+        },
+        primaryModel: "openai/gpt-5.5",
+        alternateModel: "openai/gpt-5.5-mini",
+        providerMode: "mock-openai",
+      } as never,
+      ["memory", "search", "--json"],
+      { json: true },
+    );
+
+    await waitForSpawnCount(1);
+    child.stdout.emit(
+      "data",
+      Buffer.from(
+        '[plugins] memory-core installed bundled runtime deps\n{\n  "results": [\n    {\n      "text": "ORBIT-10"\n    }\n  ]\n}\n',
+      ),
+    );
+    child.emit("exit", 0);
+
+    await expect(pending).resolves.toEqual({ results: [{ text: "ORBIT-10" }] });
   });
 
   it("starts an agent run with transport-derived delivery metadata", async () => {
@@ -147,6 +263,32 @@ describe("qa suite runtime agent process helpers", () => {
       }),
       expect.any(Object),
     );
+  });
+
+  it("finds managed dreaming cron jobs across legacy and current payload contracts", () => {
+    const legacy = {
+      id: "legacy",
+      name: "Memory Dreaming Promotion",
+      payload: {
+        kind: "systemEvent",
+        text: "__openclaw_memory_core_short_term_promotion_dream__",
+      },
+    };
+    const current = {
+      id: "current",
+      name: "Memory Dreaming Promotion",
+      payload: {
+        kind: "agentTurn",
+        message: "__openclaw_memory_core_short_term_promotion_dream__",
+        lightContext: true,
+      },
+      sessionTarget: "isolated",
+      delivery: { mode: "none" },
+    };
+
+    expect(isManagedDreamingCronJob(legacy)).toBe(true);
+    expect(isManagedDreamingCronJob(current)).toBe(true);
+    expect(findManagedDreamingCronJob([{ id: "other", name: "Other" }, current])).toBe(current);
   });
 
   it("waits for an agent run and fails when the run does not finish ok", async () => {

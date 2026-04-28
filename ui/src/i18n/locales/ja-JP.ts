@@ -110,6 +110,14 @@ export const ja_JP: TranslationMap = {
       lightningHelp: "チップ用の Lightning アドレス（LUD-16）",
     },
   },
+  lazyView: {
+    loadingTitle: "パネルを読み込み中",
+    errorTitle: "パネルの読み込みに失敗しました",
+    errorSubtitle:
+      "最新の Control UI バンドルを読み込むにはページを再読み込みしてください。ネットワークリクエストに失敗した場合は再試行してください。",
+    retry: "再試行",
+    unknownError: "不明なモジュール読み込みエラーです。",
+  },
   nodes: {
     binding: {
       loadConfigHint: "バインディングを編集するには設定を読み込んでください。",
@@ -198,10 +206,17 @@ export const ja_JP: TranslationMap = {
       wsUrl: "WebSocket URL",
       token: "Gateway トークン",
       password: "パスワード（保存されません）",
+      passwordPlaceholder: "システムまたは共有パスワード",
       sessionKey: "デフォルトのセッションキー",
       language: "言語",
       connectHint: "接続の変更を適用するには、［Connect］をクリックしてください。",
       trustedProxy: "信頼済みプロキシ経由で認証されています。",
+      showToken: "トークンを表示",
+      hideToken: "トークンを非表示",
+      toggleTokenVisibility: "トークンの表示/非表示を切り替え",
+      showPassword: "パスワードを表示",
+      hidePassword: "パスワードを非表示",
+      togglePasswordVisibility: "パスワードの表示/非表示を切り替え",
     },
     snapshot: {
       title: "スナップショット",
@@ -240,8 +255,19 @@ export const ja_JP: TranslationMap = {
     },
     pairing: {
       hint: "このデバイスは Gateway ホストからのペアリング承認が必要です。",
+      scopeUpgradeTitle: "スコープの拡張は承認待ちです。",
+      scopeUpgradeSummary:
+        "このデバイスはすでにペアリングされていますが、要求されたより広いスコープは承認待ちです。",
+      roleUpgradeTitle: "ロールの変更は承認待ちです。",
+      roleUpgradeSummary:
+        "このデバイスはすでにペアリングされていますが、要求されたロールの変更は承認待ちです。",
+      metadataUpgradeTitle: "デバイスのメタデータ変更は承認待ちです。",
+      metadataUpgradeSummary:
+        "このデバイスはすでにペアリングされていますが、メタデータの変更は承認待ちです。",
       mobileHint:
         "モバイルを使用していますか？ デスクトップで openclaw dashboard --no-open から完全な URL（#token=... を含む）をコピーしてください。",
+      docsTitle: "デバイスのペアリングに関するドキュメント（新しいタブで開きます）",
+      docsLink: "ドキュメント: デバイスのペアリング",
     },
     insecure: {
       hint: "このページは HTTP のため、ブラウザーがデバイス ID をブロックしています。HTTPS（Tailscale Serve）を使用するか、Gateway ホストで {url} を開いてください。",
@@ -255,6 +281,14 @@ export const ja_JP: TranslationMap = {
       step4: "または、再利用可能なトークンを生成します:",
       docsHint: "リモートアクセスには、Tailscale Serve を推奨します。 ",
       docsLink: "ドキュメントを読む →",
+      authDocsTitle: "Control UI 認証ドキュメント（新しいタブで開きます）",
+      authDocsLink: "ドキュメント: Control UI 認証",
+      tailscaleDocsTitle: "Tailscale Serve ドキュメント（新しいタブで開きます）",
+      tailscaleDocsLink: "ドキュメント: Tailscale Serve",
+      insecureHttpDocsTitle: "安全でない HTTP に関するドキュメント（新しいタブで開きます）",
+      insecureHttpDocsLink: "ドキュメント: 安全でない HTTP",
+      copyCommand: "コマンドをコピー",
+      copyCommandAria: "コマンドをコピー: {command}",
     },
     cards: {
       cost: "コスト",
@@ -290,6 +324,30 @@ export const ja_JP: TranslationMap = {
     palette: {
       placeholder: "コマンドを入力…",
       noResults: "結果がありません",
+      categories: {
+        search: "検索",
+        navigation: "ナビゲーション",
+        skills: "Skills",
+      },
+      items: {
+        overview: "概要",
+        sessions: "セッション",
+        scheduled: "スケジュール済み",
+        skills: "Skills",
+        settings: "設定",
+        agents: "エージェント",
+        shellCommand: "シェルコマンド",
+        debugMode: "デバッグモード",
+      },
+      descriptions: {
+        shellCommand: "シェルを実行",
+        debugMode: "デバッグを切り替え",
+      },
+      footer: {
+        navigate: "移動",
+        select: "選択",
+        close: "閉じる",
+      },
     },
   },
   dreaming: {
@@ -303,6 +361,15 @@ export const ja_JP: TranslationMap = {
       refreshing: "更新中…",
       on: "Dreaming オン",
       off: "Dreaming オフ",
+    },
+    restartConfirmation: {
+      title: "Restart Gateway to Apply Change",
+      subtitle: "Changing Dreaming mode restarts the gateway.",
+      warning:
+        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      confirm: "Confirm Restart",
+      restarting: "Restarting…",
+      failed: "Could not apply change. Check your connection and try again.",
     },
     status: {
       active: "Dreaming 有効",
@@ -624,6 +691,12 @@ export const ja_JP: TranslationMap = {
   login: {
     subtitle: "Gateway ダッシュボード",
     passwordPlaceholder: "任意",
+    showToken: "トークンを表示",
+    hideToken: "トークンを非表示",
+    toggleTokenVisibility: "トークンの表示/非表示を切り替え",
+    showPassword: "パスワードを表示",
+    hidePassword: "パスワードを非表示",
+    togglePasswordVisibility: "パスワードの表示/非表示を切り替え",
   },
   chat: {
     disconnected: "Gateway から切断されました。",
@@ -650,6 +723,7 @@ export const ja_JP: TranslationMap = {
     uk: "Українська（ウクライナ語）",
     id: "Bahasa Indonesia（Indonesian）",
     pl: "Polski（Polish）",
+    th: "ไทย (Thai)",
   },
   cron: {
     summary: {

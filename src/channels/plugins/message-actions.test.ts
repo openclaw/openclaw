@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -11,6 +11,7 @@ import {
   __testing,
   channelSupportsMessageCapability,
   channelSupportsMessageCapabilityForChannel,
+  listCrossChannelSchemaSupportedMessageActions,
   listChannelMessageActions,
   listChannelMessageCapabilities,
   listChannelMessageCapabilitiesForChannel,
@@ -52,12 +53,12 @@ function createMessageActionsPlugin(params: {
 
 const buttonsPlugin = createMessageActionsPlugin({
   id: "demo-buttons",
-  capabilities: ["interactive", "buttons"],
+  capabilities: ["presentation"],
 });
 
 const cardsPlugin = createMessageActionsPlugin({
   id: "demo-cards",
-  capabilities: ["cards"],
+  capabilities: ["delivery-pin"],
 });
 
 function activateMessageActionTestRegistry() {
@@ -82,13 +83,11 @@ describe("message action capability checks", () => {
     activateMessageActionTestRegistry();
 
     expect(listChannelMessageCapabilities({} as OpenClawConfig).toSorted()).toEqual([
-      "buttons",
-      "cards",
-      "interactive",
+      "delivery-pin",
+      "presentation",
     ]);
-    expect(channelSupportsMessageCapability({} as OpenClawConfig, "interactive")).toBe(true);
-    expect(channelSupportsMessageCapability({} as OpenClawConfig, "buttons")).toBe(true);
-    expect(channelSupportsMessageCapability({} as OpenClawConfig, "cards")).toBe(true);
+    expect(channelSupportsMessageCapability({} as OpenClawConfig, "presentation")).toBe(true);
+    expect(channelSupportsMessageCapability({} as OpenClawConfig, "delivery-pin")).toBe(true);
   });
 
   it("checks per-channel capabilities", () => {
@@ -99,46 +98,40 @@ describe("message action capability checks", () => {
         cfg: {} as OpenClawConfig,
         channel: "demo-buttons",
       }),
-    ).toEqual(["interactive", "buttons"]);
+    ).toEqual(["presentation"]);
     expect(
       listChannelMessageCapabilitiesForChannel({
         cfg: {} as OpenClawConfig,
         channel: "demo-cards",
       }),
-    ).toEqual(["cards"]);
+    ).toEqual(["delivery-pin"]);
     expect(
       channelSupportsMessageCapabilityForChannel(
         { cfg: {} as OpenClawConfig, channel: "demo-buttons" },
-        "interactive",
+        "presentation",
       ),
     ).toBe(true);
     expect(
       channelSupportsMessageCapabilityForChannel(
         { cfg: {} as OpenClawConfig, channel: "demo-cards" },
-        "interactive",
+        "presentation",
       ),
     ).toBe(false);
     expect(
       channelSupportsMessageCapabilityForChannel(
         { cfg: {} as OpenClawConfig, channel: "demo-buttons" },
-        "buttons",
-      ),
-    ).toBe(true);
-    expect(
-      channelSupportsMessageCapabilityForChannel(
-        { cfg: {} as OpenClawConfig, channel: "demo-cards" },
-        "buttons",
+        "delivery-pin",
       ),
     ).toBe(false);
     expect(
       channelSupportsMessageCapabilityForChannel(
         { cfg: {} as OpenClawConfig, channel: "demo-cards" },
-        "cards",
+        "delivery-pin",
       ),
     ).toBe(true);
-    expect(channelSupportsMessageCapabilityForChannel({ cfg: {} as OpenClawConfig }, "cards")).toBe(
-      false,
-    );
+    expect(
+      channelSupportsMessageCapabilityForChannel({ cfg: {} as OpenClawConfig }, "delivery-pin"),
+    ).toBe(false);
   });
 
   it("normalizes channel aliases for per-channel capability checks", () => {
@@ -150,7 +143,7 @@ describe("message action capability checks", () => {
           plugin: createMessageActionsPlugin({
             id: "demo-cards",
             aliases: ["demo-cards-alias"],
-            capabilities: ["cards"],
+            capabilities: ["delivery-pin"],
           }),
         },
       ]),
@@ -161,7 +154,7 @@ describe("message action capability checks", () => {
         cfg: {} as OpenClawConfig,
         channel: "demo-cards-alias",
       }),
-    ).toEqual(["cards"]);
+    ).toEqual(["delivery-pin"]);
   });
 
   it("uses unified message tool discovery for actions, capabilities, and schema", () => {
@@ -177,7 +170,7 @@ describe("message action capability checks", () => {
       actions: {
         describeMessageTool: () => ({
           actions: ["react"],
-          capabilities: ["interactive"],
+          capabilities: ["presentation"],
           schema: {
             properties: {
               components: Type.Array(Type.String()),
@@ -191,13 +184,124 @@ describe("message action capability checks", () => {
     );
 
     expect(listChannelMessageActions({} as OpenClawConfig)).toEqual(["send", "broadcast", "react"]);
-    expect(listChannelMessageCapabilities({} as OpenClawConfig)).toEqual(["interactive"]);
+    expect(listChannelMessageCapabilities({} as OpenClawConfig)).toEqual(["presentation"]);
     expect(
       resolveChannelMessageToolSchemaProperties({
         cfg: {} as OpenClawConfig,
         channel: "demo-unified",
       }),
     ).toHaveProperty("components");
+  });
+
+  it("filters only actions that depend on current-channel-only schema", () => {
+    const scopedSchemaPlugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id: "demo-scoped-schema",
+        label: "Demo Scoped Schema",
+        capabilities: { chatTypes: ["direct", "group"] },
+        config: {
+          listAccountIds: () => ["default"],
+        },
+      }),
+      actions: {
+        describeMessageTool: () => ({
+          actions: ["read", "list-pins", "unpin"],
+          schema: {
+            actions: ["unpin"],
+            properties: {
+              pinnedMessageId: Type.Optional(Type.String()),
+            },
+          },
+        }),
+      },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "demo-scoped-schema", source: "test", plugin: scopedSchemaPlugin },
+      ]),
+    );
+
+    expect(
+      listCrossChannelSchemaSupportedMessageActions({
+        cfg: {} as OpenClawConfig,
+        channel: "demo-scoped-schema",
+      }),
+    ).toEqual(["read", "list-pins"]);
+  });
+
+  it("keeps unscoped current-channel schema conservative for cross-channel actions", () => {
+    const unscopedSchemaPlugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id: "demo-unscoped-schema",
+        label: "Demo Unscoped Schema",
+        capabilities: { chatTypes: ["direct", "group"] },
+        config: {
+          listAccountIds: () => ["default"],
+        },
+      }),
+      actions: {
+        describeMessageTool: () => ({
+          actions: ["read", "unpin"],
+          schema: {
+            properties: {
+              pinnedMessageId: Type.Optional(Type.String()),
+            },
+          },
+        }),
+      },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "demo-unscoped-schema", source: "test", plugin: unscopedSchemaPlugin },
+      ]),
+    );
+
+    expect(
+      listCrossChannelSchemaSupportedMessageActions({
+        cfg: {} as OpenClawConfig,
+        channel: "demo-unscoped-schema",
+      }),
+    ).toEqual([]);
+  });
+
+  it("treats empty current-channel schema action lists as blocking no cross-channel actions", () => {
+    const emptyScopedSchemaPlugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id: "demo-empty-scoped-schema",
+        label: "Demo Empty Scoped Schema",
+        capabilities: { chatTypes: ["direct", "group"] },
+        config: {
+          listAccountIds: () => ["default"],
+        },
+      }),
+      actions: {
+        describeMessageTool: () => ({
+          actions: ["read", "list-pins"],
+          schema: {
+            actions: [],
+            properties: {
+              optionalChannelOnlyValue: Type.Optional(Type.String()),
+            },
+          },
+        }),
+      },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "demo-empty-scoped-schema",
+          source: "test",
+          plugin: emptyScopedSchemaPlugin,
+        },
+      ]),
+    );
+
+    expect(
+      listCrossChannelSchemaSupportedMessageActions({
+        cfg: {} as OpenClawConfig,
+        channel: "demo-empty-scoped-schema",
+      }),
+    ).toEqual(["read", "list-pins"]);
   });
 
   it("derives plugin-owned media-source params for the current action", () => {
