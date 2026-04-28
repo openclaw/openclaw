@@ -643,10 +643,7 @@ function normalizePluginConfig(pluginConfig: unknown): ResolvedActiveRecallPlugi
   const allowedChatTypes = Array.isArray(raw.allowedChatTypes)
     ? raw.allowedChatTypes.filter(
         (value): value is ActiveMemoryChatType =>
-          value === "direct" ||
-          value === "group" ||
-          value === "channel" ||
-          value === "explicit",
+          value === "direct" || value === "group" || value === "channel" || value === "explicit",
       )
     : [];
   return {

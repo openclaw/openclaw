@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Active Memory: allow `allowedChatTypes` to include explicit portal/webchat sessions and classify `agent:...:explicit:...` session keys before opaque session ids can shadow the chat type. Fixes #65775. (#66285) Thanks @Lidang-Jiang.
 - fix(device-pairing): validate callerScopes against resolved token scopes on repair [AI]. (#72925) Thanks @pgondhi987.
 - fix(agents): canonicalize provider aliases in byProvider tool policy lookup [AI]. (#72917) Thanks @pgondhi987.
 - fix(security): block npm_execpath injection from workspace .env [AI-assisted]. (#73262) Thanks @pgondhi987.
