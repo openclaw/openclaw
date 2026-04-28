@@ -1,5 +1,10 @@
 import { isPluginJsonValue } from "../../plugins/host-hooks.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  validateJsonSchemaValue,
+  type JsonSchemaValidationError,
+} from "../../plugins/schema-validator.js";
+import type { JsonSchemaObject } from "../../shared/json-schema.types.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import {
   ErrorCodes,
@@ -12,6 +17,10 @@ import type { GatewayRequestHandlers } from "./types.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function formatSessionActionPayloadSchemaErrors(errors: JsonSchemaValidationError[]): string {
+  return errors.map((error) => error.text).join("; ");
 }
 
 export const pluginHostHookHandlers: GatewayRequestHandlers = {
@@ -90,6 +99,35 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
           ),
         );
         return;
+      }
+      if (registration.action.schema !== undefined) {
+        if (!isRecord(registration.action.schema)) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "plugin session action schema must be an object",
+            ),
+          );
+          return;
+        }
+        const validation = validateJsonSchemaValue({
+          schema: registration.action.schema as JsonSchemaObject,
+          cacheKey: `plugin-session-action:${pluginId}:${actionId}`,
+          value: params.payload,
+        });
+        if (!validation.ok) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `plugin session action payload does not match schema: ${formatSessionActionPayloadSchemaErrors(validation.errors)}`,
+            ),
+          );
+          return;
+        }
       }
       const result = await registration.action.handler({
         pluginId,
