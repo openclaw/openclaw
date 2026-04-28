@@ -33,7 +33,16 @@ export function resolveApprovalAuditLogPath(
 }
 
 function redactSecretArgs(args: unknown): unknown {
-  if (args === null || typeof args !== "object" || Array.isArray(args)) {
+  if (Array.isArray(args)) {
+    return args.map((item) =>
+      typeof item === "string" && /^[A-Z_]+=/.test(item)
+        ? item.replace(/^([^=]+=)(.*)$/, (_, key, val) =>
+            SECRET_KEY_PATTERNS.test(key) ? `${key}[REDACTED]` : `${key}${val}`,
+          )
+        : item,
+    );
+  }
+  if (args === null || typeof args !== "object") {
     return args;
   }
   const result: Record<string, unknown> = {};
