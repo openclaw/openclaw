@@ -298,6 +298,9 @@ function resolveProviderToolPolicy(params: {
 
   const normalizedProvider = normalizeProviderKey(provider);
   const rawModelId = normalizeOptionalLowercaseString(params.modelId);
+  // Model IDs can contain provider-like prefixes (for example OpenRouter refs);
+  // keep them inside the selected provider scope instead of treating them as a
+  // byProvider override.
   const fullModelId = rawModelId ? `${normalizedProvider}/${rawModelId}` : undefined;
 
   const candidates = [...(fullModelId ? [fullModelId] : []), normalizedProvider];
