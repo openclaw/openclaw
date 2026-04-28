@@ -1584,7 +1584,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     this.sessionWatchTimer = setTimeout(() => {
       this.sessionWatchTimer = null;
-      void this.runUpdate("session-delta").catch((err) => {
+      void this.runUpdate("session-delta", true).catch((err) => {
         log.warn(`qmd session-delta sync failed: ${String(err)}`);
       });
     }, QMD_SESSION_DIRTY_DEBOUNCE_MS);

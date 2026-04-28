@@ -3424,7 +3424,7 @@ describe("QmdMemoryManager", () => {
     await vi.advanceTimersByTimeAsync(4_999);
     expect(runUpdateSpy).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
-    expect(runUpdateSpy).toHaveBeenCalledWith("session-delta");
+    expect(runUpdateSpy).toHaveBeenCalledWith("session-delta", true);
 
     runUpdateSpy.mockRestore();
     await manager.close();
