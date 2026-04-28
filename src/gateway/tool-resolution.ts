@@ -31,6 +31,10 @@ export function resolveGatewayScopedTools(params: {
   sessionKey: string;
   messageProvider?: string;
   accountId?: string;
+  groupId?: string | null;
+  groupChannel?: string | null;
+  groupSpace?: string | null;
+  trustGroupContext?: boolean;
   agentTo?: string;
   agentThreadId?: string;
   allowGatewaySubagentBinding?: boolean;
@@ -63,6 +67,10 @@ export function resolveGatewayScopedTools(params: {
     sessionKey: params.sessionKey,
     messageProvider: params.messageProvider,
     accountId: params.accountId ?? null,
+    groupId: params.groupId,
+    groupChannel: params.groupChannel,
+    groupSpace: params.groupSpace,
+    trustGroupContext: params.trustGroupContext,
   });
   const subagentStore = resolveSubagentCapabilityStore(params.sessionKey, {
     cfg: params.cfg,

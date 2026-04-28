@@ -11,6 +11,7 @@ import {
   type McpLoopbackTool,
   type McpToolSchemaEntry,
 } from "./mcp-http.schema.js";
+import { resolveTrustedGatewayToolGroupContext } from "./tool-group-context.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 const TOOL_CACHE_TTL_MS = 30_000;
@@ -34,10 +35,15 @@ export class McpLoopbackToolCache {
     accountId: string | undefined;
     senderIsOwner: boolean | undefined;
   }): CachedScopedTools {
+    const groupContext = resolveTrustedGatewayToolGroupContext(params.sessionKey);
     const cacheKey = [
       params.sessionKey,
       params.messageProvider ?? "",
       params.accountId ?? "",
+      groupContext.groupId ?? "",
+      groupContext.groupChannel ?? "",
+      groupContext.groupSpace ?? "",
+      groupContext.trustGroupContext === true ? "trusted-group" : "no-group",
       params.senderIsOwner === true ? "owner" : "non-owner",
     ].join("\u0000");
     const now = Date.now();
@@ -51,6 +57,10 @@ export class McpLoopbackToolCache {
       sessionKey: params.sessionKey,
       messageProvider: params.messageProvider,
       accountId: params.accountId,
+      groupId: groupContext.groupId,
+      groupChannel: groupContext.groupChannel,
+      groupSpace: groupContext.groupSpace,
+      trustGroupContext: groupContext.trustGroupContext,
       senderIsOwner: params.senderIsOwner,
       surface: "loopback",
       excludeToolNames: NATIVE_TOOL_EXCLUDE,
