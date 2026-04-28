@@ -7,11 +7,13 @@ allowed-tools: ["message"]
 
 # Discord (Via `message`)
 
-Use the `message` tool. No provider-specific `discord` tool exposed to the agent.
+Use the `message` tool for Discord operations that cannot be handled by normal final reply delivery. No provider-specific `discord` tool is exposed to the agent.
+
+For a normal reply to the current Discord conversation, answer in your final response and let OpenClaw deliver it. Do not use `message.send` or `message.thread-reply` to send the same conversational reply.
 
 ## Musts
 
-- Always: `channel: "discord"`.
+- For message-tool actions, always pass `channel: "discord"`.
 - Respect gating: `channels.discord.actions.*` (some default off: `roles`, `moderation`, `presence`, `channels`).
 - Prefer explicit ids: `guildId`, `channelId`, `messageId`, `userId`.
 - Multi-account: optional `accountId`.

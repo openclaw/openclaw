@@ -1,5 +1,21 @@
+import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it } from "vitest";
-import { resolveReasoningEffort } from "./thread-lifecycle.js";
+import { buildDeveloperInstructions, resolveReasoningEffort } from "./thread-lifecycle.js";
+
+describe("buildDeveloperInstructions", () => {
+  it("keeps current conversation replies on final delivery instead of the message tool", () => {
+    const instructions = buildDeveloperInstructions({} as EmbeddedRunAttemptParams);
+
+    expect(instructions).toContain("For normal replies to the current conversation");
+    expect(instructions).toContain("answer in your final response");
+    expect(instructions).toContain(
+      "Use the OpenClaw messaging tool only for explicit messaging actions",
+    );
+    expect(instructions).not.toContain(
+      "If sending a channel reply, use the OpenClaw messaging tool",
+    );
+  });
+});
 
 describe("resolveReasoningEffort (#71946)", () => {
   describe("modern Codex models (none/low/medium/high/xhigh enum)", () => {
