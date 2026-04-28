@@ -12,10 +12,10 @@ type KeptRecord = { role: "user" | "assistant"; line: string };
 /**
  * Copy the tail of user/assistant JSONL records from a prior transcript into a
  * freshly-rotated one. Tool, system, and compaction records are skipped so
- * replay cannot reshape tool/role ordering, and the tail is aligned to start
- * with a user turn so role-ordering resets cannot immediately recur. Uses
- * async I/O so long transcripts do not block the event loop. Returns 0 on
- * any error.
+ * replay cannot reshape tool/role ordering, and the tail is aligned and
+ * coalesced into alternating user/assistant turns so role-ordering resets
+ * cannot immediately recur. Uses async I/O so long transcripts do not block
+ * the event loop. Returns 0 on any error.
  */
 export async function replayRecentUserAssistantMessages(params: {
   sourceTranscript?: string;
@@ -55,7 +55,7 @@ export async function replayRecentUserAssistantMessages(params: {
       // role-ordering hazard this reset path is recovering from.
       return 0;
     }
-    const tail = kept.slice(startIdx).map((entry) => entry.line);
+    const tail = coalesceAlternatingReplayTail(kept.slice(startIdx)).map((entry) => entry.line);
     if (!fs.existsSync(params.targetTranscript)) {
       await fsp.mkdir(path.dirname(params.targetTranscript), { recursive: true });
       const header = JSON.stringify({
@@ -75,4 +75,19 @@ export async function replayRecentUserAssistantMessages(params: {
   } catch {
     return 0;
   }
+}
+
+// Keep the newest record from each same-role run, preserving original JSONL bytes
+// for replay while ensuring strict provider alternation.
+function coalesceAlternatingReplayTail(entries: KeptRecord[]): KeptRecord[] {
+  const tail: KeptRecord[] = [];
+  for (const entry of entries) {
+    const lastIdx = tail.length - 1;
+    if (lastIdx >= 0 && tail[lastIdx]?.role === entry.role) {
+      tail[lastIdx] = entry;
+      continue;
+    }
+    tail.push(entry);
+  }
+  return tail;
 }

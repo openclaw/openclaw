@@ -77,4 +77,39 @@ describe("replayRecentUserAssistantMessages", () => {
     expect(records[0]).toMatchObject({ id: "existing" });
     expect(records[1].message.role).toBe("user");
   });
+
+  it("coalesces same-role runs so replayed records strictly alternate", async () => {
+    const source = path.join(root, "prev.jsonl");
+    const target = path.join(root, "next.jsonl");
+    await fs.writeFile(
+      source,
+      [
+        j({ message: { role: "user", content: "older user" } }),
+        j({ message: { role: "user", content: "latest user" } }),
+        j({ message: { role: "assistant", content: "older assistant" } }),
+        j({ message: { role: "assistant", content: "latest assistant" } }),
+        j({ message: { role: "user", content: "follow-up" } }),
+        j({ message: { role: "assistant", content: "answer" } }),
+      ].join(""),
+      "utf8",
+    );
+
+    expect(await call(source, target)).toBe(4);
+    const records = (await fs.readFile(target, "utf8"))
+      .split(/\r?\n/)
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line));
+    expect(records.slice(1).map((r) => r.message.role)).toEqual([
+      "user",
+      "assistant",
+      "user",
+      "assistant",
+    ]);
+    expect(records.slice(1).map((r) => r.message.content)).toEqual([
+      "latest user",
+      "latest assistant",
+      "follow-up",
+      "answer",
+    ]);
+  });
 });
