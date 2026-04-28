@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createHostRunContextGetter } from "../plugins/host-hook-runtime.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
@@ -18,6 +19,8 @@ export type OpenClawPluginToolOptions = {
   requesterSenderId?: string | null;
   senderIsOwner?: boolean;
   sessionId?: string;
+  /** Active run id, when the tool factory is constructed inside a known run. */
+  runId?: string;
   sandboxBrowserBridgeUrl?: string;
   allowHostBrowserControl?: boolean;
   sandboxed?: boolean;
@@ -58,6 +61,7 @@ export function resolveOpenClawPluginToolInputs(params: {
       agentId: sessionAgentId,
       sessionKey: options?.agentSessionKey,
       sessionId: options?.sessionId,
+      runId: options?.runId,
       browser: {
         sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,
         allowHostControl: options?.allowHostBrowserControl,
@@ -68,6 +72,7 @@ export function resolveOpenClawPluginToolInputs(params: {
       requesterSenderId: options?.requesterSenderId ?? undefined,
       senderIsOwner: options?.senderIsOwner ?? undefined,
       sandboxed: options?.sandboxed,
+      getHostRunContext: createHostRunContextGetter(options?.runId),
     },
     allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
   };

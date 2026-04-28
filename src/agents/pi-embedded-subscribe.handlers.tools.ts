@@ -13,6 +13,7 @@ import {
   emitAgentPatchSummaryEvent,
 } from "../infra/agent-events.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
+import { createHostRunContextGetter } from "../plugins/host-hook-runtime.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { normalizeOptionalLowercaseString, readStringValue } from "../shared/string-coerce.js";
 import type { ApplyPatchSummary } from "./apply-patch.js";
@@ -1170,6 +1171,7 @@ export async function handleToolExecutionEnd(
         sessionId: ctx.params.sessionId,
         runId,
         toolCallId,
+        getHostRunContext: createHostRunContextGetter(runId),
       })
       .catch((err) => {
         ctx.log.warn(`after_tool_call hook failed: tool=${toolName} error=${String(err)}`);

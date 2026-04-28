@@ -15,6 +15,8 @@ import {
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { createHostRunContextGetter } from "../plugins/host-hook-runtime.js";
+import { deriveToolParams } from "../plugins/host-tool-param-parsers.js";
 import { copyPluginToolMeta } from "../plugins/tools.js";
 import { runTrustedToolPolicies } from "../plugins/trusted-tool-policy.js";
 import {
@@ -473,6 +475,7 @@ export async function runBeforeToolCallHook(args: {
   const hookRunner = getGlobalHookRunner();
   try {
     const normalizedParams = isPlainObject(params) ? params : {};
+    const derivedToolParams = deriveToolParams(toolName, normalizedParams);
     const toolContext = {
       toolName,
       ...(args.ctx?.agentId && { agentId: args.ctx.agentId }),
@@ -481,6 +484,7 @@ export async function runBeforeToolCallHook(args: {
       ...(args.ctx?.runId && { runId: args.ctx.runId }),
       ...(args.ctx?.trace && { trace: freezeDiagnosticTraceContext(args.ctx.trace) }),
       ...(args.toolCallId && { toolCallId: args.toolCallId }),
+      getHostRunContext: createHostRunContextGetter(args.ctx?.runId),
     };
     const trustedPolicyResult = await runTrustedToolPolicies(
       {
@@ -488,6 +492,7 @@ export async function runBeforeToolCallHook(args: {
         params: normalizedParams,
         ...(args.ctx?.runId && { runId: args.ctx.runId }),
         ...(args.toolCallId && { toolCallId: args.toolCallId }),
+        ...(derivedToolParams.derivedPaths ? { derivedPaths: derivedToolParams.derivedPaths } : {}),
       },
       toolContext,
     );
@@ -522,6 +527,7 @@ export async function runBeforeToolCallHook(args: {
         params: hookEventParams,
         ...(args.ctx?.runId && { runId: args.ctx.runId }),
         ...(args.toolCallId && { toolCallId: args.toolCallId }),
+        ...(derivedToolParams.derivedPaths ? { derivedPaths: derivedToolParams.derivedPaths } : {}),
       },
       toolContext,
     );

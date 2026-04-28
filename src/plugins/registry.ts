@@ -63,6 +63,7 @@ import {
   emitPluginAgentEvent,
   schedulePluginSessionTurn,
   sendPluginSessionAttachment,
+  unschedulePluginSessionTurnsByTag,
 } from "./host-hook-workflow.js";
 import {
   isPluginJsonValue,
@@ -2256,6 +2257,14 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                       pluginName: record.name,
                       origin: record.origin,
                       schedule,
+                    }),
+              unscheduleSessionTurnsByTag: (request) =>
+                registryParams.activateGlobalSideEffects === false
+                  ? Promise.resolve({ removed: 0, failed: 0 })
+                  : unschedulePluginSessionTurnsByTag({
+                      pluginId: record.id,
+                      origin: record.origin,
+                      request,
                     }),
               sendSessionAttachment: (params) =>
                 registryParams.activateGlobalSideEffects === false

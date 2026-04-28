@@ -1,4 +1,4 @@
-import type { AgentEventPayload } from "../infra/agent-events.js";
+import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
@@ -11,6 +11,14 @@ import {
   type PluginSessionSchedulerJobHandle,
   type PluginSessionSchedulerJobRegistration,
 } from "./host-hooks.js";
+import {
+  assertHostRuntimeNamespace,
+  HOST_RUNTIME_NAMESPACE,
+  type HostRuntimeNamespaceKey,
+  type HostRuntimeNamespaceMap,
+  type HostRuntimeRunContext,
+  isReservedHostRuntimeNamespace,
+} from "./host-runtime-namespace.js";
 import type { PluginRegistry } from "./registry-types.js";
 
 type PluginRunContextNamespaces = Map<string, PluginJsonValue>;
@@ -106,6 +114,60 @@ function waitForTerminalEventHandlers(pendingHandlers: Set<Promise<void>>): Prom
   });
 }
 
+function buildHostRuntimeSnapshot(runId: string | undefined): HostRuntimeRunContext | undefined {
+  if (!runId) {
+    return undefined;
+  }
+  const ctx = getAgentRunContext(runId);
+  if (!ctx) {
+    return undefined;
+  }
+  // Deep-copy the open-subagent list so mutating the returned snapshot cannot
+  // disturb the live host run state. `lastSubagentSettledAt` and `parentRunId`
+  // are immutable scalars and pass through directly.
+  const snapshot: HostRuntimeRunContext = {
+    openSubagentRunIds: Array.from(ctx.openSubagentRunIds ?? []),
+    ...(ctx.lastSubagentSettledAt !== undefined
+      ? { lastSubagentSettledAt: ctx.lastSubagentSettledAt }
+      : {}),
+    ...(ctx.parentRunId ? { parentRunId: ctx.parentRunId } : {}),
+  };
+  return snapshot;
+}
+
+/**
+ * Materialise a host-owned run-context snapshot for the given namespace.
+ * Returns `undefined` when no run is registered for `runId`. The result is
+ * always a fresh value — callers may safely retain it without leaking
+ * references into live runtime state.
+ */
+export function resolveHostRunContextSnapshot<K extends HostRuntimeNamespaceKey>(
+  runId: string | undefined,
+  namespace: K,
+): HostRuntimeNamespaceMap[K] | undefined {
+  assertHostRuntimeNamespace(namespace);
+  if (namespace === HOST_RUNTIME_NAMESPACE) {
+    return buildHostRuntimeSnapshot(runId) as HostRuntimeNamespaceMap[K] | undefined;
+  }
+  // Defensive: assertHostRuntimeNamespace narrows namespace, so this branch is
+  // unreachable, but keeping it guards against future namespaces being added
+  // without a matching builder.
+  return undefined;
+}
+
+/**
+ * Build a `getHostRunContext` getter bound to `runId`. Always returns a
+ * function (never undefined) so consumers can attach it unconditionally to
+ * the contexts they construct; the function returns `undefined` when no run
+ * id is in scope.
+ */
+export function createHostRunContextGetter(
+  runId: string | undefined,
+): <K extends HostRuntimeNamespaceKey>(namespace: K) => HostRuntimeNamespaceMap[K] | undefined {
+  return <K extends HostRuntimeNamespaceKey>(namespace: K) =>
+    resolveHostRunContextSnapshot(runId, namespace);
+}
+
 function getPluginRunContextNamespaces(params: {
   runId: string;
   pluginId: string;
@@ -135,6 +197,12 @@ export function setPluginRunContext(params: {
   const runId = normalizeOptionalString(params.patch.runId);
   const namespace = normalizeNamespace(params.patch.namespace);
   if (!runId || !namespace) {
+    return false;
+  }
+  if (isReservedHostRuntimeNamespace(namespace)) {
+    log.warn(
+      `plugin run-context write rejected (host-reserved namespace): plugin=${params.pluginId} namespace=${namespace}`,
+    );
     return false;
   }
   if (isPluginRunClosed(runId)) {
@@ -174,6 +242,12 @@ export function getPluginRunContext<T extends PluginJsonValue = PluginJsonValue>
   const runId = normalizeOptionalString(params.get.runId);
   const namespace = normalizeNamespace(params.get.namespace);
   if (!runId || !namespace) {
+    return undefined;
+  }
+  // Host-reserved namespaces are addressed via getHostRunContext; the plugin
+  // run-context map never contains them, so return undefined eagerly to keep
+  // the read path symmetric with the write rejection.
+  if (isReservedHostRuntimeNamespace(namespace)) {
     return undefined;
   }
   const value = getPluginRunContextNamespaces({

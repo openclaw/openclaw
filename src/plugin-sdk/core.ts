@@ -124,6 +124,13 @@ export type {
 } from "./plugin-entry.js";
 export type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 export type { OpenClawPluginToolContext, OpenClawPluginToolFactory } from "../plugins/types.js";
+export {
+  HOST_RUNTIME_NAMESPACE,
+  type HostRuntimeNamespace,
+  type HostRuntimeNamespaceKey,
+  type HostRuntimeNamespaceMap,
+  type HostRuntimeRunContext,
+} from "../plugins/host-runtime-namespace.js";
 export type {
   MemoryPluginCapability,
   MemoryPluginPublicArtifact,
