@@ -15,6 +15,13 @@ Originally drafted as PR 7 (docs-only) for [RFC 72072](https://github.com/opencl
 
 > **Update:** PR [#72276](https://github.com/openclaw/openclaw/pull/72276) supersedes the seven-PR plan and lands the consolidated cleanup package together with the structural-split follow-ups (`attempt-prompt.ts`, `attempt-transport.ts`, `attempt-lifecycle.ts`, `attempt-stream-wrappers.ts`, `runtime-plan-factory.ts`, `lane-workspace.ts`, `terminal-result.ts`). The per-PR rows below are preserved for traceability and review-by-slice; see the [#72276 description](https://github.com/openclaw/openclaw/pull/72276) for the consolidated commit stack map.
 
+> **Final-stack follow-up:** The post-#72276 stacked PR continues the remaining
+> cleanup with `model-auth-plan.ts`, `attempt-stream-loop.ts`, neutral import
+> guardrails, Codex native Harness V2, public Harness V2 registration, optional
+> WebSocket pooling, and the full embedded-runner package rename. See
+> [`runtime-plan-final-stack-smoke-handoff.md`](./runtime-plan-final-stack-smoke-handoff.md)
+> for the smoke checklist and commit-by-commit handoff.
+
 The original seven PRs were opened as drafts on fresh `origin/main` branches; none stacked at first. Each linked the RFC plus the relevant predecessor and follow-up PRs.
 
 | #   | Title                                      | PR                                                        | Effect                                                                                                                                                                                                                       |
@@ -119,5 +126,7 @@ This handoff doc cannot run the smoke matrix from CI — it depends on live mode
 - Linked RFC: [openclaw/openclaw#72072](https://github.com/openclaw/openclaw/issues/72072).
 - Predecessor context: PR [#71722](https://github.com/openclaw/openclaw/pull/71722) (closed-merged at commit `2c35a6e`), RFC #71004 (closed-implemented).
 - Companion baseline doc: [`docs/refactor/runtime-plan-finalization-baseline.md`](./runtime-plan-finalization-baseline.md) (added in #72098).
+- Final-stack smoke handoff:
+  [`docs/refactor/runtime-plan-final-stack-smoke-handoff.md`](./runtime-plan-final-stack-smoke-handoff.md).
 - In the original seven-PR draft series this file was documentation-only; in the consolidated package it ships alongside the production/test cleanup slices listed above.
 - If maintainers want a different sequencing for the deferred structural splits, please flag here and I will queue follow-up PRs against this handoff doc rather than against the RFC issue directly.
