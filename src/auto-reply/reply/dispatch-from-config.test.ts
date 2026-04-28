@@ -3208,6 +3208,63 @@ describe("dispatchReplyFromConfig", () => {
     expect(hookMocks.runner.runInboundClaim).toHaveBeenCalledTimes(1);
   });
 
+  it("short-circuits when a global plugin handles the inbound_claim broadcast", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) =>
+        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
+    );
+    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+      status: "no_handler",
+    });
+    hookMocks.runner.runInboundClaim.mockResolvedValue({ handled: true } as never);
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "binding-broadcast-handled-1",
+      targetSessionKey: "plugin-binding:codex:broadcast-handled",
+      targetKind: "session",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:broadcast-handled",
+      },
+      status: "active",
+      boundAt: 1710000000000,
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "openclaw-codex-app-server",
+        pluginName: "Codex App Server",
+        pluginRoot: "/Users/huntharo/github/openclaw-app-server",
+      },
+    } satisfies SessionBindingRecord);
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "openclaw fallback" }) satisfies ReplyPayload);
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "discord:channel:broadcast-handled",
+        To: "discord:channel:broadcast-handled",
+        AccountId: "default",
+        MessageSid: "msg-broadcast-handled-1",
+        SessionKey: "agent:main:discord:channel:broadcast-handled",
+        CommandBody: "hello",
+        RawBody: "hello",
+        Body: "hello",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    expect(hookMocks.runner.runInboundClaim).toHaveBeenCalledTimes(1);
+    expect(hookMocks.runner.runMessageReceived).not.toHaveBeenCalled();
+    expect(replyResolver).not.toHaveBeenCalled();
+  });
+
   it("notifies the user when a bound plugin declines the turn and keeps the binding attached", async () => {
     setNoAbort();
     hookMocks.runner.hasHooks.mockImplementation(

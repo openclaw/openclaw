@@ -720,6 +720,13 @@ export async function dispatchReplyFromConfig(
       inboundClaimContext,
     );
     if (broadcastResult?.handled) {
+      // Commit dedupe before the early return so the claim does not stay
+      // pinned in inFlight forever. The other plugin-bound early returns
+      // above have the same latent issue; tracking that as a separate
+      // cleanup so this PR stays focused.
+      if (inboundDedupeClaim.status === "claimed") {
+        commitInboundDedupe(inboundDedupeClaim.key);
+      }
       markIdle("plugin_broadcast_claim");
       recordProcessed("completed", { reason: "plugin-broadcast-handled" });
       return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
