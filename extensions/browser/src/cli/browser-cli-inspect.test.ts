@@ -190,7 +190,7 @@ describe("browser cli snapshot defaults", () => {
     sharedMocks.callBrowserRequest.mockResolvedValueOnce({
       ok: true,
       path: absolutePath,
-    });
+    } as never);
     await runBrowserInspect(["screenshot", "tab-1"]);
     const mediaLines = runtimeLogs.filter((line) => line.startsWith("MEDIA:"));
     expect(mediaLines).toEqual([`MEDIA:${absolutePath}`]);
@@ -207,10 +207,36 @@ describe("browser cli snapshot defaults", () => {
       url: "https://example.com",
       snapshot: "ok",
       imagePath: absolutePath,
-    });
+    } as never);
     await runBrowserInspect(["snapshot"]);
     const mediaLines = runtimeLogs.filter((line) => line.startsWith("MEDIA:"));
     expect(mediaLines).toEqual([`MEDIA:${absolutePath}`]);
+    expect(mediaLines[0]).not.toMatch(/^MEDIA:~/);
+  });
+
+  it("emits snapshot --out MEDIA: with absolute path for ai snapshots (regression for #73796)", async () => {
+    const fs = await import("node:fs/promises");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-snap-out-"));
+    const outPath = path.join(tmpDir, "snap.txt");
+    const homeDir = process.env.HOME ?? "/home/test-user";
+    const imagePath = `${homeDir}/.openclaw/media/browser/snap-out.png`;
+    sharedMocks.callBrowserRequest.mockResolvedValueOnce({
+      ok: true,
+      format: "ai",
+      targetId: "t1",
+      url: "https://example.com",
+      snapshot: "ok",
+      imagePath,
+    } as never);
+    try {
+      await runBrowserInspect(["snapshot", "--out", outPath]);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+    const mediaLines = runtimeLogs.filter((line) => line.startsWith("MEDIA:"));
+    expect(mediaLines).toEqual([`MEDIA:${imagePath}`]);
     expect(mediaLines[0]).not.toMatch(/^MEDIA:~/);
   });
 });
