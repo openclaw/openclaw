@@ -1,3 +1,4 @@
+import { resolveNeverReply } from "openclaw/plugin-sdk/channel-policy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   getPrimaryIdentityId,
@@ -117,6 +118,19 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
   if (conversationGroupPolicy.allowlistEnabled && !conversationGroupPolicy.allowed) {
     params.logVerbose(`Skipping group message ${params.conversationId} (not in allowlist)`);
     return { shouldProcess: false };
+  }
+
+  if (
+    resolveNeverReply({
+      cfg: params.cfg,
+      channel: "whatsapp",
+      accountId: inboundPolicy.account.accountId,
+    })
+  ) {
+    return skipGroupMessageAndStoreHistory(
+      params,
+      `whatsapp: group message stored for context (neverReply: true)`,
+    );
   }
 
   noteGroupMember(

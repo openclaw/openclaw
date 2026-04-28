@@ -2,6 +2,7 @@ import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pair
 import {
   readStoreAllowFromForDmPolicy,
   resolveEffectiveAllowFromLists,
+  resolveNeverReply,
 } from "openclaw/plugin-sdk/channel-policy";
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
@@ -150,6 +151,16 @@ export async function handleIrcInbound(params: {
     const groupAccess = resolveIrcGroupAccessGate({ groupPolicy, groupMatch });
     if (!groupAccess.allowed) {
       runtime.log?.(`irc: drop channel ${message.target} (${groupAccess.reason})`);
+      return;
+    }
+    if (
+      resolveNeverReply({
+        cfg: config as OpenClawConfig,
+        channel: "irc",
+        accountId: account.accountId,
+      })
+    ) {
+      runtime.log?.("irc: group message stored for context (neverReply: true)");
       return;
     }
   }

@@ -7,6 +7,7 @@ import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pair
 import {
   DM_GROUP_ACCESS_REASON,
   resolveDmGroupAccessWithLists,
+  resolveNeverReply,
 } from "openclaw/plugin-sdk/channel-policy";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import { resolveSenderCommandAuthorization } from "openclaw/plugin-sdk/command-auth";
@@ -469,6 +470,32 @@ async function processMessage(
     },
   });
   const historyKey = isGroup ? route.sessionKey : undefined;
+
+  if (
+    isGroup &&
+    resolveNeverReply({ cfg: config, channel: "zalouser", accountId: account.accountId })
+  ) {
+    recordPendingHistoryEntryIfEnabled({
+      historyMap: historyState.groupHistories,
+      historyKey: historyKey ?? "",
+      limit: historyState.historyLimit,
+      entry:
+        historyKey && rawBody
+          ? {
+              sender: senderName || senderId,
+              body: rawBody,
+              timestamp: message.timestampMs,
+              messageId: resolveZalouserMessageSid({
+                msgId: message.msgId,
+                cliMsgId: message.cliMsgId,
+                fallback: `${message.timestampMs}`,
+              }),
+            }
+          : null,
+    });
+    logVerbose(core, runtime, "zalouser: group message stored for context (neverReply: true)");
+    return;
+  }
 
   const requireMention = isGroup
     ? resolveGroupRequireMention({

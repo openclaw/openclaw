@@ -1,9 +1,11 @@
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbound";
 import {
   logInboundDrop,
   resolveInboundSessionEnvelopeContext,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveNeverReply } from "openclaw/plugin-sdk/channel-policy";
 import { resolveDualTextControlCommandGate } from "openclaw/plugin-sdk/command-gating";
 import {
   filterSupplementalContextItems,
@@ -390,6 +392,27 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         });
         return;
       }
+    }
+
+    if (
+      !isDirectMessage &&
+      resolveNeverReply({ cfg, channel: "msteams", accountId: DEFAULT_ACCOUNT_ID })
+    ) {
+      logVerboseMessage("msteams: group message stored for context (neverReply: true)");
+      recordPendingHistoryEntryIfEnabled({
+        historyMap: conversationHistories,
+        historyKey: conversationId,
+        limit: historyLimit,
+        entry: rawBody
+          ? {
+              sender: senderName,
+              body: rawBody,
+              timestamp: activity.timestamp ? new Date(activity.timestamp).getTime() : undefined,
+              messageId: activity.id ?? undefined,
+            }
+          : null,
+      });
+      return;
     }
 
     const commandDmAllowFrom = isDirectMessage ? effectiveDmAllowFrom : configuredDmAllowFrom;

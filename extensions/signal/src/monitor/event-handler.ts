@@ -14,6 +14,7 @@ import { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
+  resolveNeverReply,
 } from "openclaw/plugin-sdk/channel-policy";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
@@ -162,8 +163,30 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       previousTimestamp,
       envelope: envelopeOptions,
     });
-    let combinedBody = body;
     const historyKey = entry.isGroup ? (entry.groupId ?? "unknown") : undefined;
+
+    if (
+      entry.isGroup &&
+      resolveNeverReply({ cfg: deps.cfg, channel: "signal", accountId: deps.accountId })
+    ) {
+      logVerbose("signal: group message stored for context (neverReply: true)");
+      if (historyKey) {
+        recordPendingHistoryEntryIfEnabled({
+          historyMap: deps.groupHistories,
+          historyKey,
+          limit: deps.historyLimit,
+          entry: {
+            sender: entry.senderName ?? entry.senderDisplay,
+            body: entry.bodyText,
+            timestamp: entry.timestamp ?? undefined,
+            messageId: typeof entry.timestamp === "number" ? String(entry.timestamp) : undefined,
+          },
+        });
+      }
+      return;
+    }
+
+    let combinedBody = body;
     if (entry.isGroup && historyKey) {
       combinedBody = buildPendingHistoryContextFromMap({
         historyMap: deps.groupHistories,

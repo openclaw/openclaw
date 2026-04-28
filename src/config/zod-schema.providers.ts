@@ -49,6 +49,7 @@ export const ChannelsSchema: z.ZodType<ChannelsConfig | undefined> = z
       .object({
         groupPolicy: GroupPolicySchema.optional(),
         contextVisibility: ContextVisibilityModeSchema.optional(),
+        neverReply: z.boolean().optional(),
         heartbeat: ChannelHeartbeatVisibilitySchema,
       })
       .strict()

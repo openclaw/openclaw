@@ -11,6 +11,7 @@ import {
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
+  resolveNeverReply,
 } from "openclaw/plugin-sdk/channel-policy";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
 import { resolveDualTextControlCommandGate } from "openclaw/plugin-sdk/command-auth";
@@ -413,6 +414,27 @@ export function resolveIMessageInboundDecision(params: {
   const historyKey = isGroup
     ? String(chatId ?? chatGuid ?? chatIdentifier ?? "unknown")
     : undefined;
+
+  if (
+    isGroup &&
+    resolveNeverReply({ cfg: params.cfg, channel: "imessage", accountId: params.accountId })
+  ) {
+    params.logVerbose?.("imessage: group message stored for context (neverReply: true)");
+    recordPendingHistoryEntryIfEnabled({
+      historyMap: params.groupHistories,
+      historyKey: historyKey ?? "",
+      limit: params.historyLimit,
+      entry: historyKey
+        ? {
+            sender: senderNormalized,
+            body: bodyText,
+            timestamp: createdAt,
+            messageId: params.message.guid ?? undefined,
+          }
+        : null,
+    });
+    return { kind: "drop", reason: "neverReply" };
+  }
 
   const mentioned = isGroup ? matchesMentionPatterns(messageText, mentionRegexes) : true;
   const requireMention = resolveChannelGroupRequireMention({

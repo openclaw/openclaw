@@ -28829,6 +28829,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: 'Default supplemental context visibility for fetched quote/thread/history content: "all" (keep all context), "allowlist" (only allowlisted senders), or "allowlist_quote" (allowlist + keep explicit quotes).',
       tags: ["network", "channels"],
     },
+    "channels.defaults.neverReply": {
+      label: "Default Never Reply",
+      help: "When true, the bot passively observes group conversations without replying, even when mentioned. Group messages are stored as pending context but never trigger an agent run. DMs continue to work normally. Resolved per-account, per-channel, then defaults.",
+      tags: ["network", "channels"],
+    },
     "channels.defaults.heartbeat": {
       label: "Default Heartbeat Visibility",
       help: "Default heartbeat visibility settings for status messages emitted by providers/channels. Tune this globally to reduce noisy healthy-state updates while keeping alerts visible.",

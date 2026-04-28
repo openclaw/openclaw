@@ -40,6 +40,7 @@ export {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
   resolveChannelGroupToolsPolicy,
+  resolveNeverReply,
   resolveToolsBySender,
   type ChannelGroupPolicy,
 } from "../config/group-policy.js";

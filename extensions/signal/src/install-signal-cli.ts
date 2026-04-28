@@ -301,6 +301,7 @@ export async function installSignalCliFromRelease(
   } finally {
     await release();
   }
+
   const version = payload.tag_name?.replace(/^v/, "") ?? "unknown";
   const assets = payload.assets ?? [];
   const asset = pickAsset(assets, process.platform, process.arch);

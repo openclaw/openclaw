@@ -1,3 +1,4 @@
+import { resolveNeverReply } from "openclaw/plugin-sdk/channel-policy";
 import {
   resolveOutboundMediaUrls,
   resolveTextChunksWithFallback,
@@ -1059,6 +1060,36 @@ async function processMessageAfterDedupe(
       runtime,
       `drop: dm sender not allowed sender=${message.senderId} allowFrom=${effectiveAllowFrom.join(",")}`,
     );
+    return;
+  }
+
+  if (
+    isGroup &&
+    resolveNeverReply({ cfg: config, channel: "bluebubbles", accountId: account.accountId })
+  ) {
+    logVerbose(core, runtime, "bluebubbles: group message stored for context (neverReply: true)");
+    const nrHistoryIdentifier =
+      message.chatGuid ??
+      message.chatIdentifier ??
+      (message.chatId ? String(message.chatId) : null) ??
+      "";
+    const nrHistoryKey = nrHistoryIdentifier
+      ? buildAccountScopedHistoryKey(account.accountId, nrHistoryIdentifier)
+      : "";
+    recordPendingHistoryEntryIfEnabled({
+      historyMap: chatHistories,
+      historyKey: nrHistoryKey,
+      limit: account.config.historyLimit ?? 0,
+      entry:
+        nrHistoryKey && rawBody
+          ? {
+              sender: message.senderName || message.senderId,
+              body: truncateHistoryBody(rawBody, MAX_STORED_HISTORY_ENTRY_CHARS),
+              timestamp: message.timestamp ?? Date.now(),
+              messageId: message.messageId ?? undefined,
+            }
+          : null,
+    });
     return;
   }
 

@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "./config.js";
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
+  resolveNeverReply,
   resolveToolsBySender,
 } from "./group-policy.js";
 
@@ -296,5 +297,69 @@ describe("resolveToolsBySender", () => {
     expect(warningSpy.mock.calls[0]?.[1]).toMatchObject({
       code: "OPENCLAW_TOOLS_BY_SENDER_UNTYPED_KEY",
     });
+  });
+});
+
+describe("resolveNeverReply", () => {
+  it("returns false when neverReply is not set", () => {
+    const cfg = { channels: { telegram: {} } } as unknown as OpenClawConfig;
+    expect(resolveNeverReply({ cfg, channel: "telegram" })).toBe(false);
+  });
+
+  it("returns true when channel-level neverReply is true", () => {
+    const cfg = {
+      channels: { telegram: { neverReply: true } },
+    } as unknown as OpenClawConfig;
+    expect(resolveNeverReply({ cfg, channel: "telegram" })).toBe(true);
+  });
+
+  it("returns false when channel-level neverReply is false", () => {
+    const cfg = {
+      channels: { telegram: { neverReply: false } },
+    } as unknown as OpenClawConfig;
+    expect(resolveNeverReply({ cfg, channel: "telegram" })).toBe(false);
+  });
+
+  it("falls back to channels.defaults.neverReply when channel has no override", () => {
+    const cfg = {
+      channels: { defaults: { neverReply: true }, slack: {} },
+    } as unknown as OpenClawConfig;
+    expect(resolveNeverReply({ cfg, channel: "slack" })).toBe(true);
+  });
+
+  it("channel-level overrides channels.defaults", () => {
+    const cfg = {
+      channels: { defaults: { neverReply: true }, telegram: { neverReply: false } },
+    } as unknown as OpenClawConfig;
+    expect(resolveNeverReply({ cfg, channel: "telegram" })).toBe(false);
+  });
+
+  it("account-level overrides channel-level", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          neverReply: false,
+          accounts: { alice: { neverReply: true } },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    expect(resolveNeverReply({ cfg, channel: "telegram", accountId: "alice" })).toBe(true);
+  });
+
+  it("falls through to channel-level when account has no override", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          neverReply: true,
+          accounts: { alice: {} },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    expect(resolveNeverReply({ cfg, channel: "telegram", accountId: "alice" })).toBe(true);
+  });
+
+  it("returns false when channels config is absent", () => {
+    const cfg = {} as OpenClawConfig;
+    expect(resolveNeverReply({ cfg, channel: "telegram" })).toBe(false);
   });
 });

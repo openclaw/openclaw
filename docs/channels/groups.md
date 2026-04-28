@@ -357,6 +357,33 @@ Replying to a bot message counts as an implicit mention when the channel support
   </Accordion>
 </AccordionGroup>
 
+## Silent observation (neverReply)
+
+Set `neverReply: true` on a channel or account to make the bot passively observe group conversations without ever sending a reply. Group messages still pass access control and no LLM call is made or reply sent. DMs are not affected.
+
+On most channels (Telegram, WhatsApp, Signal, Slack, iMessage, MS Teams, Matrix, Mattermost, Discord, LINE, ZaloUser, BlueBubbles) group messages are also recorded as pending history context for future replies. Google Chat and IRC drop the message silently without history accumulation.
+
+```json5
+{
+  channels: {
+    telegram: {
+      groupPolicy: "open",
+      neverReply: true, // observe all Telegram groups silently
+    },
+    slack: {
+      neverReply: false, // Slack still replies normally
+    },
+    defaults: {
+      neverReply: true, // silent by default across all channels
+    },
+  },
+}
+```
+
+Resolution order (most specific wins): account-level `neverReply` → channel-level `neverReply` → `channels.defaults.neverReply`.
+
+The difference from `groupPolicy: "disabled"`: `disabled` drops messages before access control is applied; `neverReply: true` lets messages through access control and records them as context history — the bot just never replies.
+
 ## Group/channel tool restrictions (optional)
 
 Some channel configs support restricting which tools are available **inside a specific group/room/channel**.

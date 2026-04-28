@@ -7,7 +7,7 @@ import {
   resolveInboundMentionDecision,
   type NormalizedLocation,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/channel-policy";
+import { resolveChannelGroupPolicy, resolveNeverReply } from "openclaw/plugin-sdk/channel-policy";
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth-native";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
@@ -225,6 +225,25 @@ export async function resolveTelegramInboundBody(params: {
     rawBody = placeholder;
   }
   if (!rawBody && allMedia.length === 0) {
+    return null;
+  }
+
+  // Check neverReply early to avoid unnecessary audio transcription
+  if (isGroup && resolveNeverReply({ cfg, channel: "telegram", accountId })) {
+    logVerbose("telegram: group message stored for context (neverReply: true)");
+    recordPendingHistoryEntryIfEnabled({
+      historyMap: groupHistories,
+      historyKey: historyKey ?? "",
+      limit: historyLimit,
+      entry: historyKey
+        ? {
+            sender: buildSenderLabel(msg, senderId || chatId),
+            body: rawBody,
+            timestamp: msg.date ? msg.date * 1000 : undefined,
+            messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
+          }
+        : null,
+    });
     return null;
   }
 

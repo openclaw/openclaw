@@ -81,6 +81,7 @@ const bluebubblesAccountSchema = z
     allowFrom: AllowFromListSchema,
     groupAllowFrom: AllowFromListSchema,
     groupPolicy: GroupPolicySchema.optional(),
+    neverReply: z.boolean().optional(),
     enrichGroupParticipantsFromContacts: z.boolean().optional().default(true),
     historyLimit: z.number().int().min(0).optional(),
     dmHistoryLimit: z.number().int().min(0).optional(),

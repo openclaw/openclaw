@@ -20,6 +20,7 @@ const zaloAccountSchema = z.object({
   dmPolicy: DmPolicySchema.optional(),
   allowFrom: AllowFromListSchema,
   groupPolicy: GroupPolicySchema.optional(),
+  neverReply: z.boolean().optional(),
   groupAllowFrom: AllowFromListSchema,
   mediaMaxMb: z.number().optional(),
   proxy: z.string().optional(),

@@ -107,6 +107,7 @@ export const MatrixConfigSchema = z.object({
   allowlistOnly: z.boolean().optional(),
   allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
   groupPolicy: GroupPolicySchema.optional(),
+  neverReply: z.boolean().optional(),
   contextVisibility: ContextVisibilityModeSchema.optional(),
   blockStreaming: z.boolean().optional(),
   streaming: z

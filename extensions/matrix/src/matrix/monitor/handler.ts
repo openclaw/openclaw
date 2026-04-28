@@ -6,6 +6,7 @@ import {
   isChannelProgressDraftWorkToolName,
   resolveChannelProgressDraftMaxLines,
 } from "openclaw/plugin-sdk/channel-streaming";
+import { resolveNeverReply } from "openclaw/plugin-sdk/channel-policy";
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-gating";
 import {
   evaluateSupplementalContextVisibility,
@@ -702,6 +703,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             : [];
         const roomUsers = roomConfig?.users ?? [];
         const liveCfg = core.config.current() as CoreConfig;
+        if (isRoom && resolveNeverReply({ cfg: liveCfg, channel: "matrix", accountId })) {
+          logVerboseMessage("matrix: group message stored for context (neverReply: true)");
+          await commitInboundEventIfClaimed();
+          return undefined;
+        }
         const liveAccountAllowlists = resolveMatrixAccountAllowlistConfig({
           cfg: liveCfg,
           accountId,

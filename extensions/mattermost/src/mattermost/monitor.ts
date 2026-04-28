@@ -1,4 +1,5 @@
 import { deliverFinalizableDraftPreview } from "openclaw/plugin-sdk/channel-lifecycle";
+import { resolveNeverReply } from "openclaw/plugin-sdk/channel-policy";
 import { resolveChannelStreamingPreviewToolProgress } from "openclaw/plugin-sdk/channel-streaming";
 import { createClaimableDedupe, type ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import { isReasoningReplyPayload } from "openclaw/plugin-sdk/reply-payload";
@@ -1390,6 +1391,14 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             reason: "control command (unauthorized)",
             target: senderId,
           });
+          return;
+        }
+
+        if (
+          kind !== "direct" &&
+          resolveNeverReply({ cfg, channel: "mattermost", accountId: account.accountId })
+        ) {
+          logVerboseMessage("mattermost: group message stored for context (neverReply: true)");
           return;
         }
 

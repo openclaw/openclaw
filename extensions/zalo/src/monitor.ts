@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
+import { resolveNeverReply } from "openclaw/plugin-sdk/channel-policy";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import {
   resolveDirectDmAuthorizationOutcome,
@@ -456,6 +457,14 @@ async function authorizeZaloMessage(
       }
       return undefined;
     }
+  }
+
+  if (
+    isGroup &&
+    resolveNeverReply({ cfg: config, channel: "zalo", accountId: account.accountId })
+  ) {
+    logVerbose(core, runtime, "zalo: group message dropped silently (neverReply: true)");
+    return undefined;
   }
 
   const rawBody = text?.trim() || (mediaPath ? "<media:image>" : "");

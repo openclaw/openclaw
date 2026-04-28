@@ -1,3 +1,4 @@
+import { resolveNeverReply } from "openclaw/plugin-sdk/channel-policy";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import type { OpenClawConfig } from "../runtime-api.js";
 import {
@@ -151,6 +152,13 @@ async function processMessageWithPipeline(params: {
     logVerbose: (message) => logVerbose(core, runtime, message),
   });
   if (!access.ok) {
+    return;
+  }
+  if (
+    isGroup &&
+    resolveNeverReply({ cfg: config, channel: "googlechat", accountId: account.accountId })
+  ) {
+    logVerbose(core, runtime, "googlechat: group message dropped silently (neverReply: true)");
     return;
   }
   const { commandAuthorized, effectiveWasMentioned, groupSystemPrompt } = access;

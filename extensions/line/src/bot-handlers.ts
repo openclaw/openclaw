@@ -5,6 +5,7 @@ import {
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
+import { resolveNeverReply } from "openclaw/plugin-sdk/channel-policy";
 import { hasControlCommand, resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
@@ -317,6 +318,10 @@ async function shouldProcessLineEvent(
     }
     if (!senderGroupAccess.allowed && senderGroupAccess.reason === "not_allowlisted") {
       logVerbose(`Blocked line group message from ${senderId} (groupPolicy: allowlist)`);
+      return denied;
+    }
+    if (resolveNeverReply({ cfg, channel: "line", accountId: account.accountId })) {
+      logVerbose("line: group message stored for context (neverReply: true)");
       return denied;
     }
     return {

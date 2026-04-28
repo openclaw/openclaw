@@ -20,6 +20,8 @@ export type ChannelHealthMonitorConfig = {
 export type ChannelDefaultsConfig = {
   groupPolicy?: GroupPolicy;
   contextVisibility?: ContextVisibilityMode;
+  /** When true, the bot stores group messages as context but never replies to them. */
+  neverReply?: boolean;
   /** Default heartbeat visibility for all channels. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
 };
