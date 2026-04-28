@@ -45,10 +45,45 @@ function extractToolText(item: Record<string, unknown>): string | undefined {
   if (typeof item.text === "string") {
     return item.text;
   }
+  if (Array.isArray(item.text)) {
+    const parts = collectTextParts(item.text);
+    if (parts.length > 0) {
+      return parts.join("\n");
+    }
+  }
   if (typeof item.content === "string") {
     return item.content;
   }
+  if (Array.isArray(item.content)) {
+    const parts = collectTextParts(item.content);
+    if (parts.length > 0) {
+      return parts.join("\n");
+    }
+  }
   return undefined;
+}
+
+function collectTextParts(items: unknown[]): string[] {
+  const parts: string[] = [];
+  for (const entry of items) {
+    if (typeof entry === "string") {
+      parts.push(entry);
+      continue;
+    }
+    if (typeof entry !== "object" || entry === null) {
+      continue;
+    }
+    const text = (entry as Record<string, unknown>).text;
+    if (typeof text === "string") {
+      parts.push(text);
+      continue;
+    }
+    const content = (entry as Record<string, unknown>).content;
+    if (typeof content === "string") {
+      parts.push(content);
+    }
+  }
+  return parts;
 }
 
 export function extractToolPreview(

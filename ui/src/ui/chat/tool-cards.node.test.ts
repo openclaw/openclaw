@@ -136,6 +136,65 @@ describe("tool-card extraction", () => {
     });
   });
 
+  it("joins string fragments from array-shaped tool result text and content", () => {
+    const cards = extractToolCards(
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_result",
+            name: "browser.open",
+            text: [
+              "Opened A",
+              { text: "Loaded title" },
+              { content: "Captured content" },
+              { text: 42 },
+              null,
+            ],
+          },
+          {
+            type: "tool_result",
+            name: "browser.read",
+            content: [undefined, { text: "First paragraph" }, "Second paragraph", { text: null }],
+          },
+        ],
+      },
+      "msg:array-results",
+    );
+
+    expect(cards).toHaveLength(2);
+    expect(cards[0]).toMatchObject({
+      name: "browser.open",
+      outputText: "Opened A\nLoaded title\nCaptured content",
+    });
+    expect(cards[1]).toMatchObject({
+      name: "browser.read",
+      outputText: "First paragraph\nSecond paragraph",
+    });
+  });
+
+  it("keeps array-shaped tool results empty when they contain no string fragments", () => {
+    const cards = extractToolCards(
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_result",
+            name: "browser.open",
+            text: [undefined, null, 42, { text: null }, { content: false }],
+          },
+        ],
+      },
+      "msg:array-empty",
+    );
+
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({
+      name: "browser.open",
+      outputText: undefined,
+    });
+  });
+
   it("builds sidebar content with input and empty output status", () => {
     const [card] = extractToolCards(
       {
