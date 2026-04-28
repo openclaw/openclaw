@@ -738,9 +738,9 @@ describe("resolveNodeCommandAllowlist", () => {
     expect(allow.has("system.which")).toBe(true);
     expect(allow.has("system.notify")).toBe(true);
 
-    expect(allow.has("camera.snap")).toBe(false);
-    expect(allow.has("camera.clip")).toBe(false);
-    expect(allow.has("screen.record")).toBe(false);
+    for (const cmd of DEFAULT_DANGEROUS_NODE_COMMANDS) {
+      expect(allow.has(cmd)).toBe(false);
+    }
   });
 
   it("can explicitly allow dangerous commands via allowCommands", () => {
