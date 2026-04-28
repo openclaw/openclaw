@@ -83,6 +83,7 @@ export type ChannelOutboundAdapter = {
   pollMaxOptions?: number;
   supportsPollDurationSeconds?: boolean;
   supportsAnonymousPolls?: boolean;
+  supportsLineNativePayload?: boolean;
   normalizePayload?: (params: { payload: ReplyPayload }) => ReplyPayload | null;
   shouldSkipPlainTextSanitization?: (params: { payload: ReplyPayload }) => boolean;
   resolveEffectiveTextChunkLimit?: (params: {
