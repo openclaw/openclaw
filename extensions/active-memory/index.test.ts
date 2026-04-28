@@ -185,9 +185,9 @@ describe("active-memory plugin", () => {
 
   it("registers a before_prompt_build hook", () => {
     expect(api.on).toHaveBeenCalledWith("before_prompt_build", expect.any(Function), {
-      timeoutMs: 150_000,
+      timeoutMs: 4_000,
     });
-    expect(hookOptions.before_prompt_build?.timeoutMs).toBe(150_000);
+    expect(hookOptions.before_prompt_build?.timeoutMs).toBe(4_000);
   });
 
   it("runs recall without recording shared auth-profile failures", async () => {
