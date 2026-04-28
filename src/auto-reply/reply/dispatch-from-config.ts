@@ -203,7 +203,9 @@ function resolveSourceReplyDeliveryMode(params: {
   }
   const chatType = normalizeChatType(params.ctx.ChatType);
   if (chatType === "group" || chatType === "channel") {
-    return params.cfg.messages?.groupChat?.sourceReplyDeliveryMode ?? "message_tool_only";
+    return params.cfg.messages?.groupChat?.visibleReplies === "automatic"
+      ? "automatic"
+      : "message_tool_only";
   }
   return "automatic";
 }

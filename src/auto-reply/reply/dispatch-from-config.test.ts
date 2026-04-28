@@ -485,7 +485,7 @@ const emptyConfig = {} as OpenClawConfig;
 const automaticGroupReplyConfig = {
   messages: {
     groupChat: {
-      sourceReplyDeliveryMode: "automatic",
+      visibleReplies: "automatic",
     },
   },
 } as const satisfies OpenClawConfig;

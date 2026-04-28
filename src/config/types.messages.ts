@@ -5,10 +5,10 @@ export type GroupChatConfig = {
   mentionPatterns?: string[];
   historyLimit?: number;
   /**
-   * Controls whether group/channel turns automatically post assistant replies
-   * back to the source room. Default: "message_tool_only".
+   * Controls how group/channel turns produce visible room replies.
+   * Default: "message_tool".
    */
-  sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+  visibleReplies?: "automatic" | "message_tool";
 };
 
 export type DmConfig = {

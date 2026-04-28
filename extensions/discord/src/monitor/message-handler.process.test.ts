@@ -236,7 +236,7 @@ async function createAutomaticSourceDeliveryContext(
         ackReaction: cfg.messages?.ackReaction ?? "👀",
         groupChat: {
           ...cfg.messages?.groupChat,
-          sourceReplyDeliveryMode: "automatic",
+          visibleReplies: "automatic",
         },
       },
     },
@@ -845,7 +845,7 @@ describe("processDiscordMessage session routing", () => {
         cfg: {
           messages: {
             groupChat: {
-              sourceReplyDeliveryMode: "automatic",
+              visibleReplies: "automatic",
             },
           },
           session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },

@@ -7214,9 +7214,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       exclusiveMinimum: 0,
                       maximum: 9007199254740991,
                     },
-                    sourceReplyDeliveryMode: {
+                    visibleReplies: {
                       type: "string",
-                      enum: ["automatic", "message_tool_only"],
+                      enum: ["automatic", "message_tool"],
                     },
                   },
                   additionalProperties: false,
@@ -18858,12 +18858,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "Maximum number of prior group messages loaded as context per turn for group sessions. Use higher values for richer continuity, or lower values for faster and cheaper responses.",
               },
-              sourceReplyDeliveryMode: {
+              visibleReplies: {
                 type: "string",
-                enum: ["automatic", "message_tool_only"],
-                title: "Group Source Reply Delivery",
+                enum: ["automatic", "message_tool"],
+                title: "Group Visible Replies",
                 description:
-                  'Controls group/channel source reply delivery. "message_tool_only" keeps normal final replies private and requires message(action=send) for visible room output; "automatic" posts normal replies as before.',
+                  'Controls visible group/channel replies. "message_tool" keeps normal final replies private and requires message(action=send) for room output; "automatic" posts normal replies as before.',
               },
             },
             additionalProperties: false,
@@ -28061,9 +28061,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Maximum number of prior group messages loaded as context per turn for group sessions. Use higher values for richer continuity, or lower values for faster and cheaper responses.",
       tags: ["performance"],
     },
-    "messages.groupChat.sourceReplyDeliveryMode": {
-      label: "Group Source Reply Delivery",
-      help: 'Controls group/channel source reply delivery. "message_tool_only" keeps normal final replies private and requires message(action=send) for visible room output; "automatic" posts normal replies as before.',
+    "messages.groupChat.visibleReplies": {
+      label: "Group Visible Replies",
+      help: 'Controls visible group/channel replies. "message_tool" keeps normal final replies private and requires message(action=send) for room output; "automatic" posts normal replies as before.',
       tags: ["advanced"],
     },
     "messages.queue": {

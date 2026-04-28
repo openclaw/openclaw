@@ -246,7 +246,7 @@ const TARGET_KEYS = [
   "messages.groupChat",
   "messages.groupChat.mentionPatterns",
   "messages.groupChat.historyLimit",
-  "messages.groupChat.sourceReplyDeliveryMode",
+  "messages.groupChat.visibleReplies",
   "messages.queue",
   "messages.queue.mode",
   "messages.queue.byChannel",

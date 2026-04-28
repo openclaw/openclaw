@@ -239,7 +239,7 @@ Once DMs are working, you can set up your Discord server as a full workspace whe
 }
 ```
 
-        To restore legacy automatic final replies for group/channel rooms, set `messages.groupChat.sourceReplyDeliveryMode: "automatic"`.
+        To restore legacy automatic final replies for group/channel rooms, set `messages.groupChat.visibleReplies: "automatic"`.
 
       </Tab>
     </Tabs>

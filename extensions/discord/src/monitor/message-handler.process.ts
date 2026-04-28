@@ -207,7 +207,9 @@ export async function processDiscordMessage(
     threadBindings.touchThread({ threadId: boundThreadId });
   }
   const sourceReplyDeliveryMode = isGuildMessage
-    ? (cfg.messages?.groupChat?.sourceReplyDeliveryMode ?? ("message_tool_only" as const))
+    ? cfg.messages?.groupChat?.visibleReplies === "automatic"
+      ? ("automatic" as const)
+      : ("message_tool_only" as const)
     : undefined;
   const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
   const ackReaction = resolveAckReaction(cfg, route.agentId, {
