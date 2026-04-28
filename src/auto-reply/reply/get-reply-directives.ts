@@ -156,6 +156,7 @@ export async function resolveReplyDirectives(params: {
   groupResolution: Parameters<typeof resolveGroupRequireMention>[0]["groupResolution"];
   isGroup: boolean;
   triggerBodyNormalized: string;
+  resetTriggered: boolean;
   commandAuthorized: boolean;
   defaultProvider: string;
   defaultModel: string;
@@ -183,6 +184,7 @@ export async function resolveReplyDirectives(params: {
     groupResolution,
     isGroup,
     triggerBodyNormalized,
+    resetTriggered,
     commandAuthorized,
     defaultProvider,
     defaultModel,
@@ -334,6 +336,9 @@ export async function resolveReplyDirectives(params: {
       };
   const existingBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   let cleanedBody = (() => {
+    if (resetTriggered && !existingBody) {
+      return "";
+    }
     if (!existingBody) {
       return parsedDirectives.cleaned;
     }

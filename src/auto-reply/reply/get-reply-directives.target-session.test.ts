@@ -128,6 +128,7 @@ async function resolveHelloWithModelDefaults(params: {
     groupResolution: undefined,
     isGroup: false,
     triggerBodyNormalized: "hello",
+    resetTriggered: false,
     commandAuthorized: false,
     defaultProvider: "openai",
     defaultModel: "gpt-4o-mini",
@@ -301,6 +302,7 @@ describe("resolveReplyDirectives", () => {
       groupResolution: undefined,
       isGroup: false,
       triggerBodyNormalized: "hello",
+      resetTriggered: false,
       commandAuthorized: false,
       defaultProvider: "openai",
       defaultModel: "gpt-4o-mini",
@@ -392,6 +394,7 @@ describe("resolveReplyDirectives", () => {
       groupResolution: undefined,
       isGroup: false,
       triggerBodyNormalized: "/trace on",
+      resetTriggered: false,
       commandAuthorized: true,
       defaultProvider: "openai",
       defaultModel: "gpt-4o-mini",
@@ -426,6 +429,65 @@ describe("resolveReplyDirectives", () => {
       }),
     });
     expect(resolveDefaultReasoningLevel).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a fully consumed reset trigger out of the agent body", async () => {
+    const sessionCtx = {
+      Body: "",
+      BodyStripped: "",
+      BodyForAgent: "",
+      BodyForCommands: "new session",
+      CommandBody: "new session",
+      Provider: "slack",
+      Surface: "slack",
+    } as TemplateContext;
+
+    const result = await resolveReplyDirectives({
+      ctx: buildTestCtx({
+        Body: "Slack envelope",
+        BodyForAgent: "new session",
+        BodyForCommands: "new session",
+        CommandBody: "new session",
+        Provider: "slack",
+        Surface: "slack",
+        CommandAuthorized: true,
+      }),
+      cfg: {},
+      agentId: "main",
+      agentDir: "/tmp/main-agent",
+      workspaceDir: "/tmp",
+      agentCfg: {},
+      sessionCtx,
+      sessionEntry: makeSessionEntry(),
+      sessionStore: {},
+      sessionKey: "agent:main:slack:direct:user",
+      storePath: "/tmp/sessions.json",
+      sessionScope: "per-sender",
+      groupResolution: undefined,
+      isGroup: false,
+      triggerBodyNormalized: "new session",
+      resetTriggered: true,
+      commandAuthorized: true,
+      defaultProvider: "openai",
+      defaultModel: "gpt-4o-mini",
+      aliasIndex: { byAlias: new Map(), byKey: new Map() },
+      provider: "openai",
+      model: "gpt-4o-mini",
+      hasResolvedHeartbeatModelOverride: false,
+      typing: makeTypingController(),
+      opts: undefined,
+      skillFilter: undefined,
+    });
+
+    expect(result).toEqual({
+      kind: "continue",
+      result: expect.objectContaining({
+        cleanedBody: "",
+      }),
+    });
+    expect(sessionCtx.Body).toBe("");
+    expect(sessionCtx.BodyForAgent).toBe("");
+    expect(sessionCtx.BodyStripped).toBe("");
   });
 
   it("does not re-enable model reasoning when thinking was explicitly disabled", async () => {
