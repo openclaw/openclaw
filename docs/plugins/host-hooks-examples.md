@@ -84,6 +84,10 @@ export default definePluginEntry({
     //   api.registerAgentEventSubscription(...)
     //   api.setRunContext(...) / getRunContext(...) / clearRunContext(...)
     //   api.registerSessionSchedulerJob(...)
+    //   api.registerSessionAction(...)
+    //   api.sendSessionAttachment(...)
+    //   api.scheduleSessionTurn(...)
+    //   api.emitAgentEvent(...)
     //
     // And new typed hook names for api.on(...):
     //   "agent_turn_prepare"
@@ -370,6 +374,7 @@ export type PluginNextTurnInjection = {
   idempotencyKey?: string;
   placement?: PluginNextTurnInjectionPlacement;
   ttlMs?: number;
+  priority?: number;
   metadata?: PluginJsonValue;
 };
 
@@ -1197,6 +1202,9 @@ export type PluginControlUiDescriptor = {
   label: string;
   description?: string;
   placement?: string;
+  renderer?: "approval-card" | "mode-switcher" | "sidebar-panel" | "input-guard" | (string & {});
+  stateNamespace?: string;
+  actionIds?: string[];
   schema?: PluginJsonValue;
   requiredScopes?: OperatorScope[];
 };
