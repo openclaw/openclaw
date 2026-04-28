@@ -303,7 +303,5 @@ export function isServerErrorMessage(raw: string): boolean {
     return true;
   }
   const scrubbed = value.replace(STATUS_INTERNAL_SERVER_ERROR_RE, "").trim();
-  return scrubbed.length === 0
-    ? matchesErrorPatterns(value, ERROR_PATTERNS.serverError)
-    : matchesErrorPatterns(scrubbed, ERROR_PATTERNS.serverError);
+  return scrubbed.length > 0 && matchesErrorPatterns(scrubbed, ERROR_PATTERNS.serverError);
 }
