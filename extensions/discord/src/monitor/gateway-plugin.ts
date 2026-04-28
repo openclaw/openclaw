@@ -117,7 +117,7 @@ export function resolveDiscordGatewayIntents(params?: ResolveDiscordGatewayInten
 
 function normalizeGatewayInfoTimeoutMs(value: unknown): number | undefined {
   const numeric =
-    typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+    typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
   if (!Number.isFinite(numeric) || numeric <= 0) {
     return undefined;
   }

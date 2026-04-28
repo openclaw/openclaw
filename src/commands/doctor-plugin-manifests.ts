@@ -87,6 +87,7 @@ export function collectLegacyPluginManifestContractMigrations(params?: {
   candidates?: PluginCandidate[];
   diagnostics?: PluginDiagnostic[];
   manifestRoots?: string[];
+  workspaceDir?: string;
 }): LegacyManifestContractMigration[] {
   const seen = new Set<string>();
   const migrations: LegacyManifestContractMigration[] = [];
@@ -120,6 +121,7 @@ export function collectLegacyPluginManifestContractMigrations(params?: {
     ...(params?.env ? { env: params.env } : {}),
     ...(params?.candidates ? { candidates: params.candidates } : {}),
     ...(params?.diagnostics ? { diagnostics: params.diagnostics } : {}),
+    ...(params?.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   }).plugins) {
     if (seen.has(plugin.manifestPath)) {
       continue;
@@ -146,6 +148,7 @@ export async function maybeRepairLegacyPluginManifestContracts(params: {
   candidates?: PluginCandidate[];
   diagnostics?: PluginDiagnostic[];
   manifestRoots?: string[];
+  workspaceDir?: string;
   runtime: RuntimeEnv;
   prompter: DoctorPrompter;
   note?: typeof note;
@@ -155,6 +158,7 @@ export async function maybeRepairLegacyPluginManifestContracts(params: {
     ...(params.candidates ? { candidates: params.candidates } : {}),
     ...(params.diagnostics ? { diagnostics: params.diagnostics } : {}),
     ...(params.manifestRoots ? { manifestRoots: params.manifestRoots } : {}),
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
   if (migrations.length === 0) {
     return;
