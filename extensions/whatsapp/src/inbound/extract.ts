@@ -438,3 +438,28 @@ export function describeReplyContext(
     sender,
   };
 }
+
+/**
+ * Fast O(1) check that a Baileys message carries user-visible inbound content
+ * (text, media, contact, location). Returns false for protocol/receipt/typing
+ * notifications that arrive on the same `messages.upsert` stream as real
+ * messages but should not trigger pairing access-control side effects.
+ */
+export function hasInboundUserContent(rawMessage: proto.IMessage | undefined): boolean {
+  if (!rawMessage) {
+    return false;
+  }
+  if (extractText(rawMessage)) {
+    return true;
+  }
+  if (extractMediaPlaceholder(rawMessage)) {
+    return true;
+  }
+  if (extractContactContext(rawMessage)) {
+    return true;
+  }
+  if (extractLocationData(rawMessage)) {
+    return true;
+  }
+  return false;
+}
