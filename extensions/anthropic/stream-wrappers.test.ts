@@ -142,6 +142,24 @@ describe("anthropic stream wrappers", () => {
     expect(captured.headers?.["anthropic-beta"]).toContain(OAUTH_BETA);
     expect(captured.headers?.["anthropic-beta"]).not.toContain(CONTEXT_1M_BETA);
   });
+
+  it("preserves OAuth-required betas when legacy context-1m is the only configured beta", () => {
+    const captured: { headers?: Record<string, string> } = {};
+    const wrapped = wrapAnthropicProviderStream({
+      streamFn: createPayloadCapturingBaseStream(captured),
+      modelId: "claude-sonnet-4-6",
+      extraParams: { anthropicBeta: [CONTEXT_1M_BETA] },
+    } as never);
+
+    void wrapped?.(
+      { provider: "anthropic", api: "anthropic-messages", id: "claude-sonnet-4-6" } as never,
+      {} as never,
+      { apiKey: "sk-ant-oat01-oauth-token" } as never,
+    );
+
+    expect(captured.headers?.["anthropic-beta"]).toContain(OAUTH_BETA);
+    expect(captured.headers?.["anthropic-beta"]).not.toContain(CONTEXT_1M_BETA);
+  });
 });
 
 describe("createAnthropicThinkingPrefillWrapper", () => {

@@ -280,7 +280,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     }
     ```
 
-    OpenClaw uses this for context sizing and no longer sends the retired `context-1m-2025-08-07` beta header.
+    OpenClaw uses this for context sizing and no longer sends the retired `context-1m-2025-08-07` beta header. Older `anthropicBeta` config entries with that value are ignored during request header resolution.
 
     `params.context1m: true` also applies to the Claude CLI backend
     (`claude-cli/*`) for eligible Opus and Sonnet models, expanding the runtime
@@ -293,7 +293,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
   </Accordion>
 
   <Accordion title="Claude Opus 4.7 1M context">
-    `anthropic/claude-opus-4.7` and its `claude-cli` variant have a 1M context
+    `anthropic/claude-opus-4-7` and its `claude-cli` variant have a 1M context
     window by default — no `params.context1m: true` needed.
   </Accordion>
 </AccordionGroup>
