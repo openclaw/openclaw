@@ -383,6 +383,10 @@ export function getPluginSessionSchedulerJobGeneration(params: {
   return record.generation;
 }
 
+export function makePluginSessionSchedulerJobKey(pluginId: string, jobId: string): string {
+  return JSON.stringify([pluginId, jobId]);
+}
+
 export async function cleanupPluginSessionSchedulerJobs(params: {
   pluginId?: string;
   reason: PluginHostCleanupReason;
@@ -394,7 +398,7 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
     generation?: number;
   }[];
   preserveJobIds?: ReadonlySet<string>;
-  excludeJobIds?: ReadonlySet<string>;
+  excludeJobKeys?: ReadonlySet<string>;
 }): Promise<Array<{ pluginId: string; hookId: string; error: unknown }>> {
   const state = getPluginHostRuntimeState();
   const failures: Array<{ pluginId: string; hookId: string; error: unknown }> = [];
@@ -474,7 +478,7 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
       if (params.sessionKey && record.job.sessionKey !== params.sessionKey) {
         continue;
       }
-      if (params.excludeJobIds?.has(jobId)) {
+      if (params.excludeJobKeys?.has(makePluginSessionSchedulerJobKey(pluginId, jobId))) {
         continue;
       }
       if (params.preserveJobIds?.has(jobId)) {
