@@ -178,6 +178,36 @@ describe("resolveGatewayProbeSnapshot", () => {
     expect(result.gatewayReachable).toBe(true);
     expect(result.gatewayProbe?.error).toBe("missing scope: operator.read; warn");
   });
+
+  it("bounds probe auth resolution so status scans can fall back", async () => {
+    mocks.resolveGatewayProbeTarget.mockReturnValue({
+      mode: "local",
+      gatewayMode: "local",
+      remoteUrlMissing: false,
+    });
+    mocks.resolveGatewayProbeAuthResolution.mockReturnValue(new Promise(() => {}));
+    mocks.probeGateway.mockResolvedValue({
+      ok: false,
+      url: "ws://127.0.0.1:18789",
+      connectLatencyMs: null,
+      error: "timeout",
+      close: null,
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+
+    const result = await resolveGatewayProbeSnapshot({
+      cfg: {},
+      opts: { timeoutMs: 1 },
+    });
+
+    expect(mocks.probeGateway).toHaveBeenCalledWith(expect.objectContaining({ auth: {} }));
+    expect(result.gatewayProbeAuth).toEqual({});
+    expect(result.gatewayProbe?.error).toContain("gateway probe auth resolution timed out");
+    expect(result.gatewayProbeAuthWarning).toBeUndefined();
+  });
 });
 
 describe("resolveSharedMemoryStatusSnapshot", () => {
