@@ -327,9 +327,8 @@ export function buildRuntimeConfigOptionPairs(
   if (normalized.permissionProfile) {
     pairs.set("approval_policy", normalized.permissionProfile);
   }
-  if (typeof normalized.timeoutSeconds === "number") {
-    pairs.set("timeout", String(normalized.timeoutSeconds));
-  }
+  // timeoutSeconds is enforced in the control plane by resolveTurnTimeoutMs/
+  // awaitTurnWithTimeout (see manager.core.ts); it never needs to round-trip.
   for (const [key, value] of Object.entries(normalized.backendExtras ?? {})) {
     if (!pairs.has(key)) {
       pairs.set(key, value);

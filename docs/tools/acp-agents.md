@@ -781,15 +781,15 @@ roots.
 `/acp` has convenience commands and a generic setter. Equivalent
 operations:
 
-| Command                      | Maps to                              | Notes                                                                                                                                                                          |
-| ---------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `/acp model <id>`            | runtime config key `model`           | For Codex ACP, OpenClaw normalizes `openai-codex/<model>` to the adapter model id and maps slash reasoning suffixes such as `openai-codex/gpt-5.4/high` to `reasoning_effort`. |
-| `/acp set thinking <level>`  | runtime config key `thinking`        | For Codex ACP, OpenClaw sends the corresponding `reasoning_effort` where the adapter supports one.                                                                             |
-| `/acp permissions <profile>` | runtime config key `approval_policy` | —                                                                                                                                                                              |
-| `/acp timeout <seconds>`     | runtime config key `timeout`         | —                                                                                                                                                                              |
-| `/acp cwd <path>`            | runtime cwd override                 | Direct update.                                                                                                                                                                 |
-| `/acp set <key> <value>`     | generic                              | `key=cwd` uses the cwd override path.                                                                                                                                          |
-| `/acp reset-options`         | clears all runtime overrides         | —                                                                                                                                                                              |
+| Command                      | Maps to                               | Notes                                                                                                                                                                                                 |
+| ---------------------------- | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/acp model <id>`            | runtime config key `model`            | For Codex ACP, OpenClaw normalizes `openai-codex/<model>` to the adapter model id and maps slash reasoning suffixes such as `openai-codex/gpt-5.4/high` to `reasoning_effort`.                        |
+| `/acp set thinking <level>`  | runtime config key `thinking`         | For Codex ACP, OpenClaw sends the corresponding `reasoning_effort` where the adapter supports one.                                                                                                    |
+| `/acp permissions <profile>` | runtime config key `approval_policy`  | —                                                                                                                                                                                                     |
+| `/acp timeout <seconds>`     | local runtime option `timeoutSeconds` | Enforced in the OpenClaw control plane by `resolveTurnTimeoutMs` → `awaitTurnWithTimeout`; not round-tripped to the harness, so adapters that do not advertise a `timeout` config key still honor it. |
+| `/acp cwd <path>`            | runtime cwd override                  | Direct update.                                                                                                                                                                                        |
+| `/acp set <key> <value>`     | generic                               | `key=cwd` uses the cwd override path.                                                                                                                                                                 |
+| `/acp reset-options`         | clears all runtime overrides          | —                                                                                                                                                                                                     |
 
 ## acpx harness, plugin setup, and permissions
 

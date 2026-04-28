@@ -1,3 +1,5 @@
+import { isRecord } from "../../utils.js";
+
 export const ACP_ERROR_CODES = [
   "ACP_BACKEND_MISSING",
   "ACP_BACKEND_UNAVAILABLE",
@@ -82,4 +84,76 @@ export async function withAcpRuntimeErrorBoundary<T>(params: {
       fallbackMessage: params.fallbackMessage,
     });
   }
+}
+
+export type AcpRpcErrorPayload = {
+  code: number;
+  message: string;
+  data?: unknown;
+};
+
+function toAcpRpcErrorPayload(value: unknown): AcpRpcErrorPayload | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  if (typeof value.code !== "number" || !Number.isFinite(value.code)) {
+    return undefined;
+  }
+  if (typeof value.message !== "string" || value.message.length === 0) {
+    return undefined;
+  }
+  return {
+    code: value.code,
+    message: value.message,
+    data: value.data,
+  };
+}
+
+// Mirrors the recursive walker in acpx/src/acp/error-shapes.ts (private upstream).
+// Walks `.error`, `.acp`, `.cause` to find the first JSON-RPC-shaped payload so
+// callers can surface the real backend detail instead of an opaque wrapper.
+export function extractAcpRpcError(value: unknown, depth = 0): AcpRpcErrorPayload | undefined {
+  if (depth > 5) {
+    return undefined;
+  }
+  const direct = toAcpRpcErrorPayload(value);
+  if (direct) {
+    return direct;
+  }
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  if ("error" in value) {
+    const nested = extractAcpRpcError(value.error, depth + 1);
+    if (nested) {
+      return nested;
+    }
+  }
+  if ("acp" in value) {
+    const nested = extractAcpRpcError(value.acp, depth + 1);
+    if (nested) {
+      return nested;
+    }
+  }
+  if ("cause" in value) {
+    const nested = extractAcpRpcError(value.cause, depth + 1);
+    if (nested) {
+      return nested;
+    }
+  }
+  return undefined;
+}
+
+export function describeAcpRpcError(err: unknown): string {
+  const payload = extractAcpRpcError(err);
+  if (payload) {
+    const data = payload.data;
+    const details = isRecord(data) && typeof data.details === "string" ? data.details.trim() : "";
+    const detail = details.length > 0 ? details : payload.message;
+    return `${detail} (acp ${payload.code})`;
+  }
+  if (err instanceof Error) {
+    return err.message;
+  }
+  return String(err);
 }

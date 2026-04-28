@@ -1,4 +1,10 @@
-import { type AcpRuntimeErrorCode, AcpRuntimeError, toAcpRuntimeError } from "./errors.js";
+import {
+  type AcpRuntimeErrorCode,
+  AcpRuntimeError,
+  describeAcpRpcError,
+  extractAcpRpcError,
+  toAcpRuntimeError,
+} from "./errors.js";
 
 function resolveAcpRuntimeErrorNextStep(error: AcpRuntimeError): string | undefined {
   if (error.code === "ACP_BACKEND_MISSING" || error.code === "ACP_BACKEND_UNAVAILABLE") {
@@ -22,12 +28,29 @@ function resolveAcpRuntimeErrorNextStep(error: AcpRuntimeError): string | undefi
   return undefined;
 }
 
-export function formatAcpRuntimeErrorText(error: AcpRuntimeError): string {
-  const next = resolveAcpRuntimeErrorNextStep(error);
-  if (!next) {
-    return `ACP error (${error.code}): ${error.message}`;
+function resolveAcpRuntimeErrorDetail(error: AcpRuntimeError): string | undefined {
+  const payload = extractAcpRpcError(error.cause);
+  if (!payload) {
+    return undefined;
   }
-  return `ACP error (${error.code}): ${error.message}\nnext: ${next}`;
+  const summary = describeAcpRpcError(error.cause);
+  if (!summary) {
+    return undefined;
+  }
+  if (error.message && summary.toLowerCase().includes(error.message.toLowerCase())) {
+    return undefined;
+  }
+  return summary;
+}
+
+export function formatAcpRuntimeErrorText(error: AcpRuntimeError): string {
+  const detail = resolveAcpRuntimeErrorDetail(error);
+  const next = resolveAcpRuntimeErrorNextStep(error);
+  const detailLine = detail ? `\ndetail: ${detail}` : "";
+  if (!next) {
+    return `ACP error (${error.code}): ${error.message}${detailLine}`;
+  }
+  return `ACP error (${error.code}): ${error.message}${detailLine}\nnext: ${next}`;
 }
 
 export function toAcpRuntimeErrorText(params: {

@@ -13,12 +13,14 @@ const hoisted = vi.hoisted(() => {
   const upsertAcpSessionMetaMock = vi.fn();
   const getAcpRuntimeBackendMock = vi.fn();
   const requireAcpRuntimeBackendMock = vi.fn();
+  const logVerboseMock = vi.fn();
   return {
     listAcpSessionEntriesMock,
     readAcpSessionEntryMock,
     upsertAcpSessionMetaMock,
     getAcpRuntimeBackendMock,
     requireAcpRuntimeBackendMock,
+    logVerboseMock,
   };
 });
 
@@ -32,6 +34,14 @@ vi.mock("../runtime/registry.js", () => ({
   getAcpRuntimeBackend: (backendId?: string) => hoisted.getAcpRuntimeBackendMock(backendId),
   requireAcpRuntimeBackend: (backendId?: string) => hoisted.requireAcpRuntimeBackendMock(backendId),
 }));
+
+vi.mock("../../globals.js", async () => {
+  const actual = await vi.importActual<typeof import("../../globals.js")>("../../globals.js");
+  return {
+    ...actual,
+    logVerbose: (...args: Parameters<typeof actual.logVerbose>) => hoisted.logVerboseMock(...args),
+  };
+});
 
 const {
   AcpSessionManager,
@@ -2846,12 +2856,252 @@ describe("AcpSessionManager", () => {
         value: "strict",
       }),
     );
-    expect(runtimeState.setConfigOption).toHaveBeenCalledWith(
+    expect(runtimeState.setConfigOption).not.toHaveBeenCalledWith(
       expect.objectContaining({
         key: "timeout",
-        value: "120",
       }),
     );
+  });
+
+  it("warns and continues when setConfigOption rejects an unknown key", async () => {
+    hoisted.logVerboseMock.mockClear();
+    const runtimeState = createRuntime();
+    runtimeState.setConfigOption.mockImplementation(
+      async (input: { key: string; value: string }) => {
+        if (input.key === "thinking") {
+          throw new Error("Internal error", {
+            cause: {
+              code: -32603,
+              message: "Internal error",
+              data: { details: "Unknown config option: thinking" },
+            },
+          });
+        }
+      },
+    );
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:claude:acp:fail-soft-config",
+      storeSessionKey: "agent:claude:acp:fail-soft-config",
+      acp: {
+        ...readySessionMeta(),
+        runtimeOptions: {
+          model: "claude-3.7",
+          thinking: "high",
+          permissionProfile: "strict",
+        },
+      },
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:claude:acp:fail-soft-config",
+      text: "do work",
+      mode: "prompt",
+      requestId: "run-fail-soft-config",
+    });
+
+    expect(runtimeState.setConfigOption).toHaveBeenCalledWith(
+      expect.objectContaining({ key: "model" }),
+    );
+    expect(runtimeState.setConfigOption).toHaveBeenCalledWith(
+      expect.objectContaining({ key: "approval_policy" }),
+    );
+    const warnings = hoisted.logVerboseMock.mock.calls.map((call) => String(call[0]));
+    expect(
+      warnings.some((line) => line.includes("thinking") && line.includes("Unknown config option")),
+    ).toBe(true);
+  });
+
+  it("retries the rejected key on the next turn when the failure was non-classified", async () => {
+    hoisted.logVerboseMock.mockClear();
+    const runtimeState = createRuntime();
+    let invocation = 0;
+    runtimeState.setConfigOption.mockImplementation(
+      async (input: { key: string; value: string }) => {
+        if (input.key === "model") {
+          invocation += 1;
+          if (invocation === 1) {
+            throw new Error("ECONNRESET");
+          }
+        }
+      },
+    );
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:retry-non-classified",
+      storeSessionKey: "agent:codex:acp:retry-non-classified",
+      acp: {
+        ...readySessionMeta(),
+        runtimeOptions: {
+          model: "codex/gpt-5",
+          permissionProfile: "strict",
+        },
+      },
+    });
+
+    const manager = new AcpSessionManager();
+
+    await expect(
+      manager.runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:retry-non-classified",
+        text: "first",
+        mode: "prompt",
+        requestId: "run-retry-1",
+      }),
+    ).rejects.toMatchObject({ code: "ACP_TURN_FAILED" });
+
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:retry-non-classified",
+      text: "second",
+      mode: "prompt",
+      requestId: "run-retry-2",
+    });
+
+    const modelCalls = runtimeState.setConfigOption.mock.calls.filter(
+      (call: Array<{ key: string }>) => call[0]?.key === "model",
+    );
+    expect(modelCalls).toHaveLength(2);
+  });
+
+  it("warns and continues when setMode rejects with method-not-found", async () => {
+    hoisted.logVerboseMock.mockClear();
+    const runtimeState = createRuntime();
+    runtimeState.setMode.mockImplementation(async () => {
+      throw new Error("Method not found", {
+        cause: { code: -32601, message: "Method not found" },
+      });
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:claude:acp:setmode-skip",
+      storeSessionKey: "agent:claude:acp:setmode-skip",
+      acp: {
+        ...readySessionMeta(),
+        runtimeOptions: {
+          runtimeMode: "plan",
+          model: "claude-3.7",
+        },
+      },
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:claude:acp:setmode-skip",
+      text: "do work",
+      mode: "prompt",
+      requestId: "run-setmode-skip",
+    });
+
+    expect(runtimeState.setConfigOption).toHaveBeenCalledWith(
+      expect.objectContaining({ key: "model" }),
+    );
+    const warnings = hoisted.logVerboseMock.mock.calls.map((call) => String(call[0]));
+    expect(
+      warnings.some(
+        (line) => line.includes("session/set_mode") && line.includes("Method not found"),
+      ),
+    ).toBe(true);
+  });
+
+  it("rethrows when setMode rejects with a bare Invalid params", async () => {
+    hoisted.logVerboseMock.mockClear();
+    const runtimeState = createRuntime();
+    runtimeState.setMode.mockImplementation(async () => {
+      throw new Error("Invalid params", {
+        cause: { code: -32602, message: "Invalid params" },
+      });
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:claude:acp:setmode-bad-value",
+      storeSessionKey: "agent:claude:acp:setmode-bad-value",
+      acp: {
+        ...readySessionMeta(),
+        runtimeOptions: {
+          runtimeMode: "plan",
+        },
+      },
+    });
+
+    const manager = new AcpSessionManager();
+    await expect(
+      manager.runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:claude:acp:setmode-bad-value",
+        text: "do work",
+        mode: "prompt",
+        requestId: "run-setmode-bad-value",
+      }),
+    ).rejects.toMatchObject({ code: "ACP_TURN_FAILED" });
+
+    const setModeWarnings = hoisted.logVerboseMock.mock.calls
+      .map((call) => String(call[0]))
+      .filter((line) => line.includes("session/set_mode"));
+    expect(setModeWarnings).toHaveLength(0);
+  });
+
+  it("skips non-advertised configOption keys before RPC when capabilities advertise a narrow set", async () => {
+    hoisted.logVerboseMock.mockClear();
+    const runtimeState = createRuntime();
+    runtimeState.getCapabilities.mockResolvedValue({
+      controls: ["session/set_mode", "session/set_config_option", "session/status"],
+      configOptionKeys: ["model", "effort"],
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:claude:acp:advertised-filter",
+      storeSessionKey: "agent:claude:acp:advertised-filter",
+      acp: {
+        ...readySessionMeta(),
+        runtimeOptions: {
+          model: "claude-3.7",
+          thinking: "high",
+          permissionProfile: "strict",
+        },
+      },
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:claude:acp:advertised-filter",
+      text: "do work",
+      mode: "prompt",
+      requestId: "run-advertised-filter",
+    });
+
+    expect(runtimeState.setConfigOption).toHaveBeenCalledWith(
+      expect.objectContaining({ key: "model" }),
+    );
+    expect(runtimeState.setConfigOption).not.toHaveBeenCalledWith(
+      expect.objectContaining({ key: "thinking" }),
+    );
+    expect(runtimeState.setConfigOption).not.toHaveBeenCalledWith(
+      expect.objectContaining({ key: "approval_policy" }),
+    );
+    const warnings = hoisted.logVerboseMock.mock.calls.map((call) => String(call[0]));
+    expect(warnings.some((line) => line.includes('config key "thinking"'))).toBe(true);
+    expect(warnings.some((line) => line.includes('config key "approval_policy"'))).toBe(true);
   });
 
   it("re-ensures runtime handles after cwd runtime option updates", async () => {

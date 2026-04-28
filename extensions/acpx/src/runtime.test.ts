@@ -21,6 +21,7 @@ function makeRuntime(
   delegate: {
     close: AcpRuntime["close"];
     ensureSession: AcpRuntime["ensureSession"];
+    getCapabilities: NonNullable<AcpRuntime["getCapabilities"]>;
     getStatus: NonNullable<AcpRuntime["getStatus"]>;
     setConfigOption: NonNullable<AcpRuntime["setConfigOption"]>;
     isHealthy(): boolean;
@@ -58,6 +59,7 @@ function makeRuntime(
         delegate: {
           close: AcpRuntime["close"];
           ensureSession: AcpRuntime["ensureSession"];
+          getCapabilities: NonNullable<AcpRuntime["getCapabilities"]>;
           getStatus: NonNullable<AcpRuntime["getStatus"]>;
           setConfigOption: NonNullable<AcpRuntime["setConfigOption"]>;
           isHealthy(): boolean;
@@ -783,6 +785,49 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(status.summary).toBe("bridge");
     expect(bridgeStatus).toHaveBeenCalledOnce();
     expect(defaultStatus).not.toHaveBeenCalled();
+  });
+
+  it("forwards getCapabilities({ handle }) to the delegate so per-session configOptionKeys reach the control plane", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    const advertised = {
+      controls: ["session/set_mode", "session/set_config_option", "session/status"] as const,
+      configOptionKeys: ["mode", "model", "effort"],
+    };
+    const getCapabilities = vi
+      .spyOn(delegate, "getCapabilities")
+      .mockResolvedValue(advertised as never);
+    const handle = {
+      sessionKey: "agent:claude:acp:caps",
+      backend: "acpx",
+      runtimeSessionName: "agent:claude:acp:caps",
+      acpxRecordId: "agent:claude:acp:caps",
+    };
+
+    const result = await runtime.getCapabilities({ handle });
+
+    expect(getCapabilities).toHaveBeenCalledWith({ handle });
+    expect(result).toEqual(advertised);
+  });
+
+  it("forwards getCapabilities() with no input through to the delegate", () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    const base = {
+      controls: ["session/set_mode", "session/set_config_option", "session/status"] as const,
+    };
+    const getCapabilities = vi.spyOn(delegate, "getCapabilities").mockReturnValue(base as never);
+
+    const result = runtime.getCapabilities();
+
+    expect(getCapabilities).toHaveBeenCalledWith(undefined);
+    expect(result).toEqual(base);
   });
 
   it("probes through the bridge-safe delegate when probeAgent resolves to openclaw bridge", async () => {

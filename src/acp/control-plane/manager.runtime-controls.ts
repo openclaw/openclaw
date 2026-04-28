@@ -1,4 +1,10 @@
-import { AcpRuntimeError, withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
+import { logVerbose } from "../../globals.js";
+import { isRecord } from "../../utils.js";
+import {
+  describeAcpRpcError,
+  extractAcpRpcError,
+  withAcpRuntimeErrorBoundary,
+} from "../runtime/errors.js";
 import type { AcpRuntime, AcpRuntimeCapabilities, AcpRuntimeHandle } from "../runtime/types.js";
 import type { SessionAcpMeta } from "./manager.types.js";
 import { createUnsupportedControlError } from "./manager.utils.js";
@@ -9,6 +15,33 @@ import {
   normalizeText,
   resolveRuntimeOptionsFromMeta,
 } from "./runtime-options.js";
+
+// Apply-path policy. Returns true ONLY for the unsupported-control class:
+//   -32601 Method not found              → always (control not implemented).
+//   -32602 Invalid params, -32603 Internal error
+//     → only when message + data.details match the unsupported-config /
+//       unsupported-control hint regex below.
+// A bare "-32602 Invalid params" with NO details is NOT swallowed —
+// for setMode that means "bad mode value" (user error), not an unsupported control.
+const UNSUPPORTED_HINT_RE =
+  /unknown\s+config\s+option|unsupported\s+config\s+option|config\s+option[^.]{0,20}not\s+(?:supported|recognized|implemented)|method\s+(?:is\s+)?not\s+(?:supported|implemented)|not\s+supported\s+by\s+(?:this\s+)?(?:adapter|harness|backend)/i;
+
+function isUnsupportedSessionControlError(err: unknown): boolean {
+  const acp = extractAcpRpcError(err);
+  if (!acp) {
+    return false;
+  }
+  if (acp.code === -32601) {
+    return true;
+  }
+  if (acp.code !== -32602 && acp.code !== -32603) {
+    return false;
+  }
+  const details =
+    isRecord(acp.data) && typeof acp.data.details === "string" ? acp.data.details : "";
+  const haystack = `${acp.message ?? ""} ${details}`;
+  return UNSUPPORTED_HINT_RE.test(haystack);
+}
 
 export async function resolveManagerRuntimeCapabilities(params: {
   runtime: AcpRuntime;
@@ -77,10 +110,20 @@ export async function applyManagerRuntimeControls(params: {
             control: "session/set_mode",
           });
         }
-        await params.runtime.setMode({
-          handle: params.handle,
-          mode: runtimeMode,
-        });
+        try {
+          await params.runtime.setMode({
+            handle: params.handle,
+            mode: runtimeMode,
+          });
+        } catch (err) {
+          if (isUnsupportedSessionControlError(err)) {
+            logVerbose(
+              `acp-manager: backend "${backend}" rejected session/set_mode(mode=${runtimeMode}): ${describeAcpRpcError(err)} — skipping`,
+            );
+          } else {
+            throw err;
+          }
+        }
       }
 
       if (configOptions.length > 0) {
@@ -95,16 +138,26 @@ export async function applyManagerRuntimeControls(params: {
         }
         for (const [key, value] of configOptions) {
           if (advertisedKeys.size > 0 && !advertisedKeys.has(key)) {
-            throw new AcpRuntimeError(
-              "ACP_BACKEND_UNSUPPORTED_CONTROL",
-              `ACP backend "${backend}" does not accept config key "${key}".`,
+            logVerbose(
+              `acp-manager: backend "${backend}" does not advertise config key "${key}" — skipping`,
             );
+            continue;
           }
-          await params.runtime.setConfigOption({
-            handle: params.handle,
-            key,
-            value,
-          });
+          try {
+            await params.runtime.setConfigOption({
+              handle: params.handle,
+              key,
+              value,
+            });
+          } catch (err) {
+            if (isUnsupportedSessionControlError(err)) {
+              logVerbose(
+                `acp-manager: backend "${backend}" rejected session/set_config_option(key=${key},value=${value}): ${describeAcpRpcError(err)} — skipping`,
+              );
+            } else {
+              throw err;
+            }
+          }
         }
       }
     },

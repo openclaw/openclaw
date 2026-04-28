@@ -243,6 +243,17 @@ export async function handleAcpSetAction(
           text: `✅ Updated ACP cwd for ${target.sessionKey}: ${cwd}. Effective options: ${formatRuntimeOptionsText(options)}`,
         };
       }
+      if (lowerKey === "timeout" || lowerKey === "timeout_seconds") {
+        const timeoutSeconds = parseRuntimeTimeoutSecondsInput(value);
+        const options = await getAcpSessionManager().updateSessionRuntimeOptions({
+          cfg: params.cfg,
+          sessionKey: target.sessionKey,
+          patch: { timeoutSeconds },
+        });
+        return {
+          text: `✅ Updated ACP timeout for ${target.sessionKey}: ${timeoutSeconds}s. Effective options: ${formatRuntimeOptionsText(options)}`,
+        };
+      }
       const validated = validateRuntimeConfigOptionInput(key, value);
       const options = await getAcpSessionManager().setSessionConfigOption({
         cfg: params.cfg,
@@ -337,11 +348,10 @@ export async function handleAcpTimeoutAction(
       await withAcpCommandErrorBoundary({
         run: async () => {
           const timeoutSeconds = parseRuntimeTimeoutSecondsInput(value);
-          const options = await getAcpSessionManager().setSessionConfigOption({
+          const options = await getAcpSessionManager().updateSessionRuntimeOptions({
             cfg: params.cfg,
             sessionKey: targetSessionKey,
-            key: "timeout",
-            value: String(timeoutSeconds),
+            patch: { timeoutSeconds },
           });
           return {
             timeoutSeconds,

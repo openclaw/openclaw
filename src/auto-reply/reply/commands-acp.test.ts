@@ -1913,6 +1913,28 @@ describe("/acp command", () => {
     expect(hoisted.setConfigOptionMock).not.toHaveBeenCalled();
   });
 
+  it("updates ACP timeout via local runtime options without a backend setConfigOption call", async () => {
+    mockBoundThreadSession();
+    hoisted.setConfigOptionMock.mockClear();
+
+    const result = await runThreadAcpCommand("/acp timeout 120", baseCfg);
+
+    expect(hoisted.setConfigOptionMock).not.toHaveBeenCalled();
+    expect(result?.reply?.text).toContain("Updated ACP timeout");
+    expect(result?.reply?.text).toContain("120s");
+  });
+
+  it("routes /acp set timeout through local runtime options too", async () => {
+    mockBoundThreadSession();
+    hoisted.setConfigOptionMock.mockClear();
+
+    const result = await runThreadAcpCommand("/acp set timeout 90", baseCfg);
+
+    expect(hoisted.setConfigOptionMock).not.toHaveBeenCalled();
+    expect(result?.reply?.text).toContain("Updated ACP timeout");
+    expect(result?.reply?.text).toContain("90s");
+  });
+
   it("returns actionable doctor output when backend is missing", async () => {
     hoisted.getAcpRuntimeBackendMock.mockReturnValue(null);
     hoisted.requireAcpRuntimeBackendMock.mockImplementation(() => {

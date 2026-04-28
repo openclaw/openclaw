@@ -509,8 +509,10 @@ export class AcpxRuntime implements AcpRuntime {
     yield* (await this.resolveDelegateForHandle(input.handle)).runTurn(input);
   }
 
-  getCapabilities(): ReturnType<BaseAcpxRuntime["getCapabilities"]> {
-    return this.delegate.getCapabilities();
+  getCapabilities(
+    input?: Parameters<BaseAcpxRuntime["getCapabilities"]>[0],
+  ): ReturnType<BaseAcpxRuntime["getCapabilities"]> {
+    return this.delegate.getCapabilities(input);
   }
 
   async getStatus(
