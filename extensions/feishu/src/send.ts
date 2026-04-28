@@ -252,23 +252,25 @@ function extractInteractiveElementsText(
   variables: Map<string, string>,
 ): string {
   const texts: string[] = [];
-  for (const element of elements) {
-    // Some cards use nested arrays (e.g. [[row1_col1, row1_col2], [row2_col1, ...]])
-    // for table-like layouts. Flatten one level and extract text from each cell.
+
+  function collectText(element: unknown): void {
     if (Array.isArray(element)) {
       for (const cell of element) {
-        const text = extractInteractiveElementText(cell, variables);
-        if (text !== undefined) {
-          texts.push(text);
-        }
+        collectText(cell);
       }
-      continue;
+      return;
     }
+
     const text = extractInteractiveElementText(element, variables);
     if (text !== undefined) {
       texts.push(text);
     }
   }
+
+  for (const element of elements) {
+    collectText(element);
+  }
+
   return texts.join("\n").trim();
 }
 

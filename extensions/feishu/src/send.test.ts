@@ -180,8 +180,14 @@ describe("getMessageFeishu", () => {
             body: {
               content: JSON.stringify({
                 elements: [
-                  [{ tag: "text", text: "Service Name" }, { tag: "text", text: "eip-admin-api" }],
-                  [{ tag: "text", text: "Alert" }, { tag: "text", text: "Health check failed 3 times" }],
+                  [
+                    { tag: "text", text: "Service Name" },
+                    { tag: "text", text: "eip-admin-api" },
+                  ],
+                  [
+                    { tag: "text", text: "Alert" },
+                    { tag: "text", text: "Health check failed 3 times" },
+                  ],
                 ],
               }),
             },
@@ -327,6 +333,42 @@ describe("getMessageFeishu", () => {
         chatId: "oc_post_card",
         contentType: "interactive",
         content: "Card summary\n\n**fallback** body",
+      }),
+    );
+  });
+
+  it("falls back to direct post-format content when interactive card elements are empty", async () => {
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_direct_post_card",
+            chat_id: "oc_direct_post_card",
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({
+                elements: [],
+                title: "Direct card summary",
+                content: [[{ tag: "text", text: "fallback body" }]],
+              }),
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_direct_post_card",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        messageId: "om_direct_post_card",
+        chatId: "oc_direct_post_card",
+        contentType: "interactive",
+        content: "Direct card summary\n\nfallback body",
       }),
     );
   });
