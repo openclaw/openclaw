@@ -126,17 +126,17 @@ describe("listThinkingLevels", () => {
     expect(listThinkingLevels("github-copilot", "gpt-5.4")).toContain("xhigh");
   });
 
-  it("excludes xhigh for non-codex models", () => {
-    expect(listThinkingLevels(undefined, "gpt-4.1-mini")).not.toContain("xhigh");
+  it("includes xhigh for all non-binary providers", () => {
+    expect(listThinkingLevels(undefined, "gpt-4.1-mini")).toContain("xhigh");
   });
 
-  it("does not include max without provider support", () => {
-    expect(listThinkingLevels("openai", "gpt-5.4")).not.toContain("max");
+  it("includes max for all non-binary providers", () => {
+    expect(listThinkingLevels("openai", "gpt-5.4")).toContain("max");
   });
 
-  it("does not include adaptive without provider support", () => {
-    expect(listThinkingLevels(undefined, "gpt-4.1-mini")).not.toContain("adaptive");
-    expect(listThinkingLevels("openai", "gpt-5.4")).not.toContain("adaptive");
+  it("includes adaptive for all non-binary providers", () => {
+    expect(listThinkingLevels(undefined, "gpt-4.1-mini")).toContain("adaptive");
+    expect(listThinkingLevels("openai", "gpt-5.4")).toContain("adaptive");
   });
 
   it("uses provider thinking profiles for adaptive and max support", () => {
@@ -219,7 +219,7 @@ describe("listThinkingLevels", () => {
     ).toBe("high");
   });
 
-  it("maps unsupported adaptive to medium and unsupported xhigh to high", () => {
+  it("maps unsupported adaptive to high and unsupported xhigh to high", () => {
     providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
       levels: [{ id: "off" }, { id: "minimal" }, { id: "low" }, { id: "medium" }, { id: "high" }],
     });
@@ -230,7 +230,7 @@ describe("listThinkingLevels", () => {
         model: "gpt-5.4",
         level: "adaptive",
       }),
-    ).toBe("medium");
+    ).toBe("high");
     expect(
       resolveSupportedThinkingLevel({
         provider: "openai",
@@ -246,6 +246,15 @@ describe("listThinkingLevelLabels", () => {
     providerRuntimeMocks.resolveProviderBinaryThinking.mockReturnValue(true);
 
     expect(listThinkingLevelLabels("demo", "demo-model")).toEqual(["off", "on"]);
+  });
+
+  it("excludes xhigh, adaptive, and max for binary thinking providers", () => {
+    providerRuntimeMocks.resolveProviderBinaryThinking.mockReturnValue(true);
+
+    const levels = listThinkingLevels("demo", "demo-model");
+    expect(levels).not.toContain("xhigh");
+    expect(levels).not.toContain("adaptive");
+    expect(levels).not.toContain("max");
   });
 
   it("returns on/off for provider-advertised binary thinking", () => {
