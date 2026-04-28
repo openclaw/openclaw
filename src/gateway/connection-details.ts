@@ -17,6 +17,19 @@ type GatewayConnectionDetailResolvers = {
   resolveGatewayPort?: (cfg?: OpenClawConfig, env?: NodeJS.ProcessEnv) => number;
 };
 
+function resolveSshTunnelLoopbackUrl(remoteUrl: string): string {
+  try {
+    const parsed = new URL(remoteUrl);
+    const scheme = parsed.protocol === "wss:" ? "wss" : "ws";
+    const port = parsed.port || (scheme === "wss" ? "443" : "80");
+    const suffix = `${parsed.pathname || ""}${parsed.search || ""}${parsed.hash || ""}`;
+    return `${scheme}://127.0.0.1:${port}${suffix}`;
+  } catch {
+    // Fallback to the default local gateway endpoint shape.
+    return "ws://127.0.0.1:18789";
+  }
+}
+
 export function buildGatewayConnectionDetailsWithResolvers(
   options: {
     config?: OpenClawConfig;
@@ -45,14 +58,20 @@ export function buildGatewayConnectionDetailsWithResolvers(
     : normalizeOptionalString(process.env.OPENCLAW_GATEWAY_URL);
   const urlOverride = cliUrlOverride ?? envUrlOverride;
   const remoteUrl = normalizeOptionalString(remote?.url);
+  const sshTransport = isRemoteMode && remote?.transport === "ssh";
+  const sshLoopbackUrl = !urlOverride && sshTransport && remoteUrl
+    ? resolveSshTunnelLoopbackUrl(remoteUrl)
+    : null;
   const remoteMisconfigured = isRemoteMode && !urlOverride && !remoteUrl;
   const urlSourceHint =
     options.urlSource ?? (cliUrlOverride ? "cli" : envUrlOverride ? "env" : undefined);
-  const url = urlOverride || remoteUrl || localUrl;
+  const url = urlOverride || sshLoopbackUrl || remoteUrl || localUrl;
   const urlSource = urlOverride
     ? urlSourceHint === "env"
       ? "env OPENCLAW_GATEWAY_URL"
       : "cli --url"
+    : sshLoopbackUrl
+      ? "config gateway.remote.url (ssh tunnel local endpoint)"
     : remoteUrl
       ? "config gateway.remote.url"
       : remoteMisconfigured
