@@ -77,12 +77,13 @@ export function shouldStartCrestodianForModernOnboard(argv: string[]): boolean {
 }
 
 export function shouldStartProxyForCli(argv: string[]): boolean {
-  const invocation = resolveCliArgvInvocation(argv);
+  const policyArgv = rewriteUpdateFlagArgv(argv);
+  const invocation = resolveCliArgvInvocation(policyArgv);
   const [primary] = invocation.commandPath;
   if (invocation.hasHelpOrVersion || !primary) {
     return false;
   }
-  return resolveCliNetworkProxyPolicy(argv) === "default";
+  return resolveCliNetworkProxyPolicy(policyArgv) === "default";
 }
 
 export function resolveMissingPluginCommandMessage(
