@@ -2,6 +2,7 @@ import { stripInternalRuntimeContext } from "../../../../src/agents/internal-run
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
 import { extractAssistantVisibleText as extractSharedAssistantVisibleText } from "../../../../src/shared/chat-message-content.js";
+import { stripInjectedRelevantMemoriesPrefix } from "../../../../src/shared/text/assistant-visible-text.js";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import { stripThinkingTags } from "../strip-thinking-tags.ts";
 
@@ -15,7 +16,9 @@ function processMessageText(text: string, role: string): string {
     return stripThinkingTags(withoutInternalContext);
   }
   return shouldStripInboundMetadata
-    ? stripInboundMetadata(stripEnvelope(withoutInternalContext))
+    ? stripInjectedRelevantMemoriesPrefix(
+        stripInboundMetadata(stripEnvelope(withoutInternalContext)),
+      )
     : stripEnvelope(withoutInternalContext);
 }
 

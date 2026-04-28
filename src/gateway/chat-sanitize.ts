@@ -5,6 +5,7 @@ import {
 } from "../auto-reply/reply/strip-inbound-meta.js";
 import { stripEnvelope, stripMessageIdHints } from "../shared/chat-envelope.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { stripInjectedRelevantMemoriesPrefix } from "../shared/text/assistant-visible-text.js";
 
 export { stripEnvelope };
 
@@ -52,7 +53,7 @@ function stripEnvelopeFromContentWithRole(
     const runtimeStripped = stripInternalRuntimeContext(entry.text);
     const inboundStripped = stripInboundMetadata(runtimeStripped);
     const stripped = stripUserEnvelope
-      ? stripMessageIdHints(stripEnvelope(inboundStripped))
+      ? stripInjectedRelevantMemoriesPrefix(stripMessageIdHints(stripEnvelope(inboundStripped)))
       : inboundStripped;
     if (stripped === entry.text) {
       return item;
@@ -86,7 +87,7 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
     const runtimeStripped = stripInternalRuntimeContext(entry.content);
     const inboundStripped = stripInboundMetadata(runtimeStripped);
     const stripped = stripUserEnvelope
-      ? stripMessageIdHints(stripEnvelope(inboundStripped))
+      ? stripInjectedRelevantMemoriesPrefix(stripMessageIdHints(stripEnvelope(inboundStripped)))
       : inboundStripped;
     if (stripped !== entry.content) {
       next.content = stripped;
@@ -102,7 +103,7 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
     const runtimeStripped = stripInternalRuntimeContext(entry.text);
     const inboundStripped = stripInboundMetadata(runtimeStripped);
     const stripped = stripUserEnvelope
-      ? stripMessageIdHints(stripEnvelope(inboundStripped))
+      ? stripInjectedRelevantMemoriesPrefix(stripMessageIdHints(stripEnvelope(inboundStripped)))
       : inboundStripped;
     if (stripped !== entry.text) {
       next.text = stripped;
