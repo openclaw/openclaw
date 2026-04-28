@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createCommandsLightVitestConfig } from "./vitest/vitest.commands-light.config.ts";
 import { createPluginSdkLightVitestConfig } from "./vitest/vitest.plugin-sdk-light.config.ts";
 import {
+  alwaysExcludedUnitFastTestFiles,
   classifyUnitFastTestFileContent,
   collectBroadUnitFastTestCandidates,
   collectUnitFastTestCandidates,
@@ -65,15 +66,20 @@ describe("unit-fast vitest lane", () => {
 
   it("routes audited stateful-looking tests through the fast lane", () => {
     const analysis = collectUnitFastTestFileAnalysis();
-    const forcedAnalysis = analysis.filter((entry) => forcedUnitFastTestFiles.includes(entry.file));
+    const excludedSet = new Set(alwaysExcludedUnitFastTestFiles);
+    const expectedForcedUnitFast = forcedUnitFastTestFiles.filter((file) => !excludedSet.has(file));
+    const forcedAnalysis = analysis.filter((entry) => expectedForcedUnitFast.includes(entry.file));
     const unitFastTestFiles = getUnitFastTestFiles();
 
-    expect(forcedAnalysis).toHaveLength(forcedUnitFastTestFiles.length);
-    for (const file of forcedUnitFastTestFiles) {
+    expect(forcedAnalysis).toHaveLength(expectedForcedUnitFast.length);
+    for (const file of expectedForcedUnitFast) {
       expect(unitFastTestFiles).toContain(file);
       expect(isUnitFastTestFile(file)).toBe(true);
     }
     expect(forcedAnalysis.every((entry) => entry.forced && entry.unitFast)).toBe(true);
+    for (const file of alwaysExcludedUnitFastTestFiles) {
+      expect(isUnitFastTestFile(file)).toBe(false);
+    }
   });
 
   it("keeps broad audit candidates separate from automatically routed unit-fast tests", () => {

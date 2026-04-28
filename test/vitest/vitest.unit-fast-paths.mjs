@@ -183,11 +183,20 @@ const broadUnitFastCandidateSkipGlobs = [
   "test/vitest-unit-paths.test.ts",
   ...boundaryTestFiles,
 ];
-const alwaysExcludedUnitFastTestFiles = new Set([
+export const alwaysExcludedUnitFastTestFiles = [
   // Stateful filesystem+symlink security audit test. Keep it out of unit-fast routing
   // even if candidate/forced lists drift.
   "src/security/audit-config-symlink.test.ts",
-]);
+];
+const alwaysExcludedUnitFastTestFileSet = new Set(alwaysExcludedUnitFastTestFiles);
+const overlappingForcedAndExcluded = forcedUnitFastTestFiles.filter((file) =>
+  alwaysExcludedUnitFastTestFileSet.has(file),
+);
+if (overlappingForcedAndExcluded.length > 0) {
+  throw new Error(
+    `unit-fast config overlap: files cannot be both forced and always-excluded (${overlappingForcedAndExcluded.join(", ")})`,
+  );
+}
 
 const disqualifyingPatterns = [
   {
@@ -286,7 +295,7 @@ export function collectUnitFastTestCandidates(cwd = process.cwd()) {
         !matchesAnyGlob(file, broadUnitFastCandidateSkipGlobs),
     );
   return [...new Set([...discovered, ...unitFastCandidateExactFiles, ...forcedUnitFastTestFiles])]
-    .filter((file) => !alwaysExcludedUnitFastTestFiles.has(file))
+    .filter((file) => !alwaysExcludedUnitFastTestFileSet.has(file))
     .toSorted((a, b) => a.localeCompare(b));
 }
 
@@ -300,7 +309,7 @@ export function collectBroadUnitFastTestCandidates(cwd = process.cwd()) {
         !matchesAnyGlob(file, broadUnitFastCandidateSkipGlobs),
     );
   return [...new Set([...discovered, ...unitFastCandidateExactFiles, ...forcedUnitFastTestFiles])]
-    .filter((file) => !alwaysExcludedUnitFastTestFiles.has(file))
+    .filter((file) => !alwaysExcludedUnitFastTestFileSet.has(file))
     .toSorted((a, b) => a.localeCompare(b));
 }
 
@@ -323,7 +332,7 @@ export function collectUnitFastTestFileAnalysis(cwd = process.cwd(), options = {
     }
     const reasons = classifyUnitFastTestFileContent(source);
     const forced = forcedUnitFastTestFileSet.has(file);
-    if (alwaysExcludedUnitFastTestFiles.has(file)) {
+    if (alwaysExcludedUnitFastTestFileSet.has(file)) {
       return {
         file,
         unitFast: false,
