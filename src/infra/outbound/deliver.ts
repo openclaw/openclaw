@@ -691,6 +691,7 @@ async function applyMessageSendingHook(params: {
   accountId?: string;
   replyToId?: string | null;
   threadId?: string | number | null;
+  sessionKey?: string;
 }): Promise<{
   cancelled: boolean;
   payload: ReplyPayload;
@@ -720,6 +721,7 @@ async function applyMessageSendingHook(params: {
         channelId: params.channel,
         accountId: params.accountId ?? undefined,
         conversationId: params.to,
+        sessionKey: params.sessionKey,
       },
     );
     if (sendingResult?.cancel) {
@@ -1028,6 +1030,7 @@ async function deliverOutboundPayloadsCore(
         accountId,
         replyToId: resolveCurrentReplyTo(payload).replyToId,
         threadId: params.threadId,
+        sessionKey: sessionKeyForInternalHooks,
       });
       if (hookResult.cancelled) {
         continue;
