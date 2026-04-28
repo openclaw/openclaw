@@ -508,7 +508,7 @@ describe("createImageGenerateTool", () => {
     expect(text).toContain("MEDIA:/tmp/generated-2.png");
   });
 
-  it("uses configured timeoutMs for image generation and lets calls override it", async () => {
+  it("uses configured timeoutMs for image generation and ignores model-supplied timeoutMs", async () => {
     stubImageGenerationProviders();
     const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
       provider: "openai",
@@ -553,20 +553,25 @@ describe("createImageGenerateTool", () => {
       timeoutMs: 12_345,
     });
 
+    // Operator-configured imageGenerationModel.timeoutMs still flows to the
+    // runtime — that is the only timeout source after the schema change.
     expect(generateImage).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
         timeoutMs: 180_000,
       }),
     );
+    // Model-supplied timeoutMs is intentionally ignored: the schema field
+    // is gone, so the tool falls back to the operator config value rather
+    // than honoring 12_345 from params.
     expect(generateImage).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
-        timeoutMs: 12_345,
+        timeoutMs: 180_000,
       }),
     );
     expect(defaultResult.details).toMatchObject({ timeoutMs: 180_000 });
-    expect(overrideResult.details).toMatchObject({ timeoutMs: 12_345 });
+    expect(overrideResult.details).toMatchObject({ timeoutMs: 180_000 });
   });
 
   it("forwards output hints and OpenAI provider options", async () => {
