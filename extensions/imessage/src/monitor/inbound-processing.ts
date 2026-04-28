@@ -102,6 +102,49 @@ export function isIMessageTapback(message: IMessagePayload, bodyText: string): b
   return false;
 }
 
+export function resolveIMessageDebouncedInboundMessage(
+  messages: IMessagePayload[],
+): IMessagePayload | null {
+  const last = messages.at(-1);
+  if (!last) {
+    return null;
+  }
+  if (messages.length === 1) {
+    return last;
+  }
+
+  const textMessages = messages.filter((message) => {
+    const text = (message.text ?? "").trim();
+    return text && !isIMessageTapback(message, text);
+  });
+
+  if (textMessages.length === 0) {
+    return last;
+  }
+
+  if (textMessages.length === 1) {
+    return textMessages[0];
+  }
+
+  const lastTextMessage = textMessages.at(-1);
+  if (!lastTextMessage) {
+    return null;
+  }
+
+  const combinedText = textMessages
+    .map((message) => message.text?.trim() ?? "")
+    .filter(Boolean)
+    .join("\n");
+
+  return {
+    ...lastTextMessage,
+    text: combinedText,
+    attachments: null,
+    is_tapback: false,
+    associated_message_type: undefined,
+  };
+}
+
 type IMessageReplyContext = {
   id?: string;
   body: string;

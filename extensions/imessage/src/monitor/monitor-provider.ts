@@ -47,7 +47,7 @@ import { deliverReplies } from "./deliver.js";
 import { createSentMessageCache } from "./echo-cache.js";
 import {
   buildIMessageInboundContext,
-  isIMessageTapback,
+  resolveIMessageDebouncedInboundMessage,
   resolveIMessageInboundDecision,
 } from "./inbound-processing.js";
 import { createLoopRateLimiter } from "./loop-rate-limiter.js";
@@ -211,47 +211,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       });
     },
     onFlush: async (entries) => {
-      const last = entries.at(-1);
-      if (!last) {
+      const message = resolveIMessageDebouncedInboundMessage(entries.map((entry) => entry.message));
+      if (!message) {
         return;
       }
-      if (entries.length === 1) {
-        await handleMessageNow(last.message);
-        return;
-      }
-
-      const textEntries = entries.filter((entry) => {
-        const text = (entry.message.text ?? "").trim();
-        return text && !isIMessageTapback(entry.message, text);
-      });
-
-      if (textEntries.length === 0) {
-        await handleMessageNow(last.message);
-        return;
-      }
-
-      if (textEntries.length === 1) {
-        await handleMessageNow(textEntries[0].message);
-        return;
-      }
-
-      const lastTextEntry = textEntries.at(-1);
-      if (!lastTextEntry) {
-        return;
-      }
-
-      const combinedText = textEntries
-        .map((entry) => entry.message.text?.trim() ?? "")
-        .filter(Boolean)
-        .join("\n");
-      const syntheticMessage: IMessagePayload = {
-        ...lastTextEntry.message,
-        text: combinedText,
-        attachments: null,
-        is_tapback: false,
-        associated_message_type: undefined,
-      };
-      await handleMessageNow(syntheticMessage);
+      await handleMessageNow(message);
     },
     onError: (err) => {
       runtime.error?.(`imessage debounce flush failed: ${String(err)}`);
