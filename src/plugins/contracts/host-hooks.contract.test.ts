@@ -15,7 +15,7 @@ import { pluginHostHookHandlers } from "../../gateway/server-methods/plugin-host
 import type { GatewayClient, RespondFn } from "../../gateway/server-methods/types.js";
 import { buildGatewaySessionRow } from "../../gateway/session-utils.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
-import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
+import { emitAgentEvent, onAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { executePluginCommand, validatePluginCommandDefinition } from "../commands.js";
 import { createHookRunner } from "../hooks.js";
@@ -1741,7 +1741,7 @@ describe("host-hook fixture plugin contract", () => {
     ).toBeUndefined();
   });
 
-  it("blocks plugin-emitted terminal lifecycle events so plugins cannot close run context", async () => {
+  it("blocks plugin attempts to emit host lifecycle events so plugins cannot close run context", async () => {
     expect(
       setPluginRunContext({
         pluginId: "workflow-emitter",
@@ -1760,7 +1760,10 @@ describe("host-hook fixture plugin contract", () => {
           data: { phase: "end", note: "plugin workflow finished" },
         },
       }),
-    ).toEqual({ emitted: false, reason: "terminal lifecycle events are host-owned" });
+    ).toEqual({
+      emitted: false,
+      reason: "plugin-emitted streams must use plugin.* namespace: lifecycle",
+    });
     await waitForPluginEventHandlers();
 
     expect(
@@ -1769,6 +1772,58 @@ describe("host-hook fixture plugin contract", () => {
         get: { runId: "run-plugin-terminal", namespace: "state" },
       }),
     ).toEqual({ ok: true });
+  });
+
+  it("requires plugin-owned streams for plugin-emitted agent events", () => {
+    for (const stream of ["tool", "assistant", "error", "approval", "item", "plan"] as const) {
+      expect(
+        emitPluginAgentEvent({
+          pluginId: "workflow-emitter",
+          pluginName: "Workflow Emitter",
+          origin: "bundled",
+          event: {
+            runId: `run-${stream}`,
+            stream,
+            data: { phase: "plugin-update" },
+          },
+        }),
+      ).toEqual({
+        emitted: false,
+        reason: `plugin-emitted streams must use plugin.* namespace: ${stream}`,
+      });
+    }
+
+    const events: Array<{ stream: string; data: Record<string, unknown> }> = [];
+    const unsubscribe = onAgentEvent((event) => {
+      events.push({ stream: event.stream, data: event.data });
+    });
+    try {
+      expect(
+        emitPluginAgentEvent({
+          pluginId: "workflow-emitter",
+          pluginName: "Workflow Emitter",
+          origin: "workspace",
+          event: {
+            runId: "run-plugin-event",
+            stream: "plugin.approval",
+            data: { phase: "plugin-update" },
+          },
+        }),
+      ).toEqual({ emitted: true, stream: "plugin.approval" });
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events).toEqual([
+      {
+        stream: "plugin.approval",
+        data: {
+          phase: "plugin-update",
+          pluginId: "workflow-emitter",
+          pluginName: "Workflow Emitter",
+        },
+      },
+    ]);
   });
 
   it("does not let delayed non-terminal subscriptions resurrect closed run context", async () => {

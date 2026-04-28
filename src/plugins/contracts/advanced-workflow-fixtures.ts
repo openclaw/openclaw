@@ -71,7 +71,7 @@ export function registerApprovalWorkflowFixture(api: OpenClawPluginApi) {
       }
       api.emitAgentEvent({
         runId: "approval-workflow-run",
-        stream: "approval",
+        stream: "plugin.approval",
         ...(ctx.sessionKey ? { sessionKey: ctx.sessionKey } : {}),
         data: {
           phase: "resolved",

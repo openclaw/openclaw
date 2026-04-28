@@ -22,6 +22,7 @@ import type { PluginOrigin } from "./plugin-origin.types.js";
 
 const DEFAULT_ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024;
 const MAX_ATTACHMENT_FILES = 10;
+const PLUGIN_AGENT_EVENT_STREAM_PREFIX = "plugin.";
 const log = createSubsystemLogger("plugins/host-workflow");
 type SendMessage = typeof import("../infra/outbound/message.js").sendMessage;
 let sendMessagePromise: Promise<SendMessage> | undefined;
@@ -52,12 +53,11 @@ function normalizePluginEventData(params: {
   };
 }
 
-function isTerminalLifecyclePluginEvent(data: PluginJsonValue): boolean {
-  if (!data || typeof data !== "object" || Array.isArray(data)) {
-    return false;
-  }
-  const phase = data.phase;
-  return phase === "end" || phase === "error";
+function isPluginOwnedAgentEventStream(stream: string): boolean {
+  return (
+    stream.startsWith(PLUGIN_AGENT_EVENT_STREAM_PREFIX) &&
+    stream.length > PLUGIN_AGENT_EVENT_STREAM_PREFIX.length
+  );
 }
 
 export function emitPluginAgentEvent(params: {
@@ -74,11 +74,11 @@ export function emitPluginAgentEvent(params: {
   if (!isPluginJsonValue(params.event.data)) {
     return { emitted: false, reason: "event data must be JSON-compatible" };
   }
-  if (params.origin !== "bundled" && (stream === "lifecycle" || stream === "model")) {
-    return { emitted: false, reason: `stream ${stream} is reserved for bundled plugins` };
-  }
-  if (stream === "lifecycle" && isTerminalLifecyclePluginEvent(params.event.data)) {
-    return { emitted: false, reason: "terminal lifecycle events are host-owned" };
+  if (!isPluginOwnedAgentEventStream(stream)) {
+    return {
+      emitted: false,
+      reason: `plugin-emitted streams must use plugin.* namespace: ${stream}`,
+    };
   }
   emitAgentEvent({
     runId,
