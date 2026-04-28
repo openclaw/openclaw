@@ -442,9 +442,7 @@ describe("loadWorkspaceSkillEntries", () => {
         description: "Skill nested under a group",
       });
 
-      const names = loadTestWorkspaceSkillEntries(workspaceDir).map(
-        (entry) => entry.skill.name,
-      );
+      const names = loadTestWorkspaceSkillEntries(workspaceDir).map((entry) => entry.skill.name);
       expect(names).toEqual(expect.arrayContaining(["direct-skill", "grouped-skill"]));
     });
 
@@ -456,9 +454,7 @@ describe("loadWorkspaceSkillEntries", () => {
         description: "Should not be discovered (depth 3)",
       });
 
-      const names = loadTestWorkspaceSkillEntries(workspaceDir).map(
-        (entry) => entry.skill.name,
-      );
+      const names = loadTestWorkspaceSkillEntries(workspaceDir).map((entry) => entry.skill.name);
       expect(names).not.toContain("too-deep");
     });
 
@@ -477,11 +473,45 @@ describe("loadWorkspaceSkillEntries", () => {
         description: "Should be ignored when parent is itself a skill",
       });
 
-      const names = loadTestWorkspaceSkillEntries(workspaceDir).map(
-        (entry) => entry.skill.name,
-      );
+      const names = loadTestWorkspaceSkillEntries(workspaceDir).map((entry) => entry.skill.name);
       expect(names).toContain("group");
       expect(names).not.toContain("inner");
+    });
+
+    it("warns and caps discovery in large grouping subfolders", async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      for (let i = 0; i < 3; i += 1) {
+        const name = `nested-skill-${i}`;
+        await writeSkill({
+          dir: path.join(workspaceDir, "skills", "group", name),
+          name,
+          description: `Nested skill ${i}`,
+        });
+      }
+      const warn = captureWarningLogger();
+
+      const names = loadTestWorkspaceSkillEntries(workspaceDir, {
+        config: {
+          skills: {
+            limits: {
+              maxCandidatesPerRoot: 2,
+              maxSkillsLoadedPerSource: 10,
+            },
+          },
+        },
+      }).map((entry) => entry.skill.name);
+
+      expect(names).toEqual(expect.arrayContaining(["nested-skill-0", "nested-skill-1"]));
+      expect(names).not.toContain("nested-skill-2");
+      expect(
+        warn.mock.calls
+          .map(([line]) => String(line))
+          .some((line) =>
+            line.includes(
+              "Nested skills directory looks suspiciously large, truncating discovery.",
+            ),
+          ),
+      ).toBe(true);
     });
   });
 });

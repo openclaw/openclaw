@@ -36,6 +36,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Auto-reply/session: carry the tail of user/assistant turns into the freshly-rotated transcript on silent in-reply session resets (compaction failure, role-ordering conflict) so direct-chat continuity survives the rebind. Fixes #70853. (#70898) Thanks @neeravmakwana.
+- Skills: load grouped skill directories such as `skills/<group>/<skill>/SKILL.md` from configured skill roots while keeping grouped discovery capped for large directories. Fixes #56915. (#72534) Thanks @ottodeng, @MoerAI, and @i010542.
 
 ## 2026.4.27
 
