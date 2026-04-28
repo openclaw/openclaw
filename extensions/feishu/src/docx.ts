@@ -36,6 +36,10 @@ function json(data: unknown) {
   };
 }
 
+function hasOwnProperty(data: object, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(data, key);
+}
+
 function resolveDocToolLocalRoots(ctx: {
   workspaceDir?: string;
   fsPolicy?: { workspaceOnly: boolean };
@@ -1472,11 +1476,12 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                     grantToRequester: p.grant_to_requester,
                     requesterOpenId: trustedRequesterOpenId,
                   });
-                  if (p.content) {
+                  if (hasOwnProperty(p, "content")) {
+                    const content = p.content ?? "";
                     const writeResult = await writeDoc(
                       client,
                       created.document_id,
-                      p.content,
+                      content,
                       getMediaMaxBytes(p, defaultAccountId),
                       api.logger,
                     );

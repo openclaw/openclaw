@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Feishu/Docx: allow `feishu_doc` create to populate initial markdown content, including explicit empty content, while keeping create responses free of misleading deleted-block counts. Fixes #48373; carries forward #48377. Thanks @wzx011011.
 - NVIDIA/NIM: persist the `NVIDIA_API_KEY` provider marker and mark bundled NVIDIA Chat Completions models as string-content compatible, so NIM models load from `models.json` and OpenAI-compatible subagent calls send plain text content. Fixes #73013 and #50107; refs #73014. Thanks @bautrey, @iot2edge, @ifearghal, and @futhgar.
 - CLI/plugins: use plugin metadata snapshots for install slot selection and add opt-in plugin lifecycle timing traces, so plugin install avoids runtime-loading the plugin registry for metadata-only decisions. Thanks @shakkernerd.
 - fix(plugins): restrict bundled plugin dir resolution to trusted package roots. (#73275) Thanks @pgondhi987.
