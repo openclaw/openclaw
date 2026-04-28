@@ -849,6 +849,7 @@ describe("buildAgentSystemPrompt", () => {
     const line = buildRuntimeLine(
       {
         agentId: "work",
+        sessionId: "550e8400-e29b-41d4-a716-446655440000",
         host: "host",
         repoRoot: "/repo",
         os: "macOS",
@@ -863,6 +864,7 @@ describe("buildAgentSystemPrompt", () => {
     );
 
     expect(line).toContain("agent=work");
+    expect(line).toContain("session=550e8400-e29b-41d4-a716-446655440000");
     expect(line).toContain("host=host");
     expect(line).toContain("repo=/repo");
     expect(line).toContain("os=macOS (arm64)");
