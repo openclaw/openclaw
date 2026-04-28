@@ -122,6 +122,71 @@ static void test_parse_exec_approval_action_rejects_invalid(void) {
     g_assert_null(mode);
 }
 
+/* ── CHECK formatter (Tranche E) ─────────────────────────── */
+
+static void test_format_check_true(void) {
+    g_autofree gchar *line = tray_protocol_format_check("HEARTBEATS", TRUE);
+    g_assert_cmpstr(line, ==, "CHECK:HEARTBEATS:1\n");
+}
+
+static void test_format_check_false(void) {
+    g_autofree gchar *line = tray_protocol_format_check("BROWSER_CONTROL", FALSE);
+    g_assert_cmpstr(line, ==, "CHECK:BROWSER_CONTROL:0\n");
+}
+
+static void test_format_check_rejects_invalid_keys(void) {
+    g_assert_null(tray_protocol_format_check(NULL, TRUE));
+    g_assert_null(tray_protocol_format_check("", TRUE));
+    g_assert_null(tray_protocol_format_check("HAS:COLON", TRUE));
+    g_assert_null(tray_protocol_format_check("HAS SPACE", TRUE));
+    g_assert_null(tray_protocol_format_check("HAS\nNEWLINE", TRUE));
+}
+
+/* ── <KEY>_SET parser (Tranche E) ────────────────────────── */
+
+static void test_parse_check_action_zero(void) {
+    char *key = NULL;
+    gboolean value = TRUE;
+    g_assert_true(tray_protocol_parse_check_action("HEARTBEATS_SET:0", &key, &value));
+    g_assert_cmpstr(key, ==, "HEARTBEATS");
+    g_assert_false(value);
+    g_free(key);
+}
+
+static void test_parse_check_action_one(void) {
+    char *key = NULL;
+    gboolean value = FALSE;
+    g_assert_true(tray_protocol_parse_check_action("BROWSER_CONTROL_SET:1", &key, &value));
+    g_assert_cmpstr(key, ==, "BROWSER_CONTROL");
+    g_assert_true(value);
+    g_free(key);
+}
+
+static void test_parse_check_action_accepts_null_outs(void) {
+    g_assert_true(tray_protocol_parse_check_action("HEARTBEATS_SET:1", NULL, NULL));
+}
+
+static void test_parse_check_action_rejects_invalid(void) {
+    char *key = NULL;
+    gboolean value = FALSE;
+    g_assert_false(tray_protocol_parse_check_action(NULL, &key, &value));
+    g_assert_false(tray_protocol_parse_check_action("", &key, &value));
+    g_assert_false(tray_protocol_parse_check_action("HEARTBEATS_SET:", &key, &value));
+    g_assert_false(tray_protocol_parse_check_action("HEARTBEATS_SET:yes", &key, &value));
+    g_assert_false(tray_protocol_parse_check_action("HEARTBEATS_SET:2", &key, &value));
+    g_assert_false(tray_protocol_parse_check_action("HEARTBEATS_SET:11", &key, &value));
+    g_assert_false(tray_protocol_parse_check_action("HEARTBEATS_SET:1:0", &key, &value));
+    g_assert_false(tray_protocol_parse_check_action("HEARTBEATS_SET: 1", &key, &value));
+    g_assert_false(tray_protocol_parse_check_action("HEARTBEATS_SET:1\n", &key, &value));
+    /* No trailing `_SET` on the key. */
+    g_assert_false(tray_protocol_parse_check_action("HEARTBEATS:1", &key, &value));
+    /* Empty key — colon at offset 0 means head_len == 0. */
+    g_assert_false(tray_protocol_parse_check_action(":1", &key, &value));
+    /* Bare `_SET:1` → empty key. */
+    g_assert_false(tray_protocol_parse_check_action("_SET:1", &key, &value));
+    g_assert_null(key);
+}
+
 int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL);
 
@@ -148,6 +213,17 @@ int main(int argc, char **argv) {
                     test_parse_exec_approval_action_accepts_null_out);
     g_test_add_func("/tray_protocol/parse_exec_approval_action_rejects_invalid",
                     test_parse_exec_approval_action_rejects_invalid);
+
+    g_test_add_func("/tray_protocol/format_check_true", test_format_check_true);
+    g_test_add_func("/tray_protocol/format_check_false", test_format_check_false);
+    g_test_add_func("/tray_protocol/format_check_rejects_invalid_keys",
+                    test_format_check_rejects_invalid_keys);
+    g_test_add_func("/tray_protocol/parse_check_action_zero", test_parse_check_action_zero);
+    g_test_add_func("/tray_protocol/parse_check_action_one", test_parse_check_action_one);
+    g_test_add_func("/tray_protocol/parse_check_action_accepts_null_outs",
+                    test_parse_check_action_accepts_null_outs);
+    g_test_add_func("/tray_protocol/parse_check_action_rejects_invalid",
+                    test_parse_check_action_rejects_invalid);
 
     return g_test_run();
 }

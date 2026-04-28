@@ -40,6 +40,11 @@ typedef enum {
     TRAY_HELPER_MENU_KEY_APPROVALS_PENDING,
     TRAY_HELPER_MENU_KEY_RESET_REMOTE_TUNNEL,
     TRAY_HELPER_MENU_KEY_RESTART_APP,
+    /* Tranche E binary check toggles. When extending TrayHelperMenuKey,
+     * remember to extend the helper's `widget_for_menu_key` switch and
+     * the `tray_helper_protocol_menu_key_from_string` parser as well. */
+    TRAY_HELPER_MENU_KEY_HEARTBEATS,
+    TRAY_HELPER_MENU_KEY_BROWSER_CONTROL,
 } TrayHelperMenuKey;
 
 typedef struct {
@@ -55,6 +60,12 @@ typedef struct {
     /* Update the pending-approvals counter. Helper computes the
      * displayed label and visibility from the count. */
     void (*set_approvals_count)(guint count, gpointer user_data);
+
+    /* Set the checked state of a binary toggle item (Tranche E). The
+     * helper must use its `updating_from_host` guard so the resulting
+     * GtkCheckMenuItem::toggled does not re-emit an ACTION line. Keys
+     * that don't map to a check item are silently ignored. */
+    void (*set_check_state)(TrayHelperMenuKey key, gboolean checked, gpointer user_data);
 
     gpointer user_data;
 } TrayHelperProtocolHandlers;

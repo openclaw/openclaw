@@ -123,4 +123,14 @@ gchar* mutation_node_list(GatewayRpcCallback cb, gpointer data);
 
 gchar* mutation_node_pair_list(GatewayRpcCallback cb, gpointer data);
 
+/* ── System mutations ────────────────────────────────────────────── */
+
+/*
+ * Set the persistent heartbeats-enabled flag on the gateway. Maps to
+ * the macOS `set-heartbeats` RPC (see `src/gateway/server-methods/
+ * system.ts`). Params: { "enabled": <bool> }.
+ */
+gchar* mutation_system_set_heartbeats(gboolean enabled,
+                                      GatewayRpcCallback cb, gpointer data);
+
 #endif /* OPENCLAW_LINUX_GATEWAY_MUTATIONS_H */

@@ -26,6 +26,18 @@ void gateway_client_invalidate_dependencies(gboolean invalidate_models,
                                             gboolean invalidate_agents,
                                             gboolean invalidate_config_audit);
 
+/*
+ * Push the locally-persisted Heartbeats intent (`product_state`) to
+ * the gateway via the `set-heartbeats` RPC. Safe to call repeatedly;
+ * a no-op when WS is not connected.
+ *
+ * The gateway client invokes this automatically on every WS-connected
+ * transition so that operator intent survives gateway restarts and
+ * scope upgrades. Other modules may call it after a UI mutation has
+ * already updated `product_state`.
+ */
+void gateway_client_resync_heartbeats_intent(void);
+
 #include "gateway_config.h"
 GatewayConfig* gateway_client_get_config(void);
 

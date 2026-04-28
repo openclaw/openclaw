@@ -369,6 +369,30 @@ static void test_channels_logout_no_acct(void) {
     g_free(rid);
 }
 
+/* ── System mutation tests (Tranche E) ──────────────────────────── */
+
+static void test_system_set_heartbeats_enabled(void) {
+    stub_reset();
+    gchar *rid = mutation_system_set_heartbeats(TRUE, noop_cb, NULL);
+    ASSERT(rid != NULL, "set_heartbeats: rid");
+    ASSERT(g_strcmp0(stub_last_method, "set-heartbeats") == 0, "set_heartbeats: method");
+    JsonObject *p = get_stub_params_obj();
+    ASSERT(p != NULL, "set_heartbeats: params obj");
+    ASSERT(json_object_has_member(p, "enabled"), "set_heartbeats: enabled present");
+    ASSERT(obj_get_bool(p, "enabled") == TRUE, "set_heartbeats: enabled=true");
+    g_free(rid);
+}
+
+static void test_system_set_heartbeats_disabled(void) {
+    stub_reset();
+    gchar *rid = mutation_system_set_heartbeats(FALSE, noop_cb, NULL);
+    ASSERT(rid != NULL, "set_heartbeats_off: rid");
+    ASSERT(g_strcmp0(stub_last_method, "set-heartbeats") == 0, "set_heartbeats_off: method");
+    JsonObject *p = get_stub_params_obj();
+    ASSERT(obj_get_bool(p, "enabled") == FALSE, "set_heartbeats_off: enabled=false");
+    g_free(rid);
+}
+
 /* ── Config mutation tests ───────────────────────────────────────── */
 
 static void test_config_get(void) {
@@ -1324,6 +1348,9 @@ int main(int argc, char **argv) {
     g_test_add_func("/rpc_mutations/web_login/wait", test_web_login_wait);
     g_test_add_func("/rpc_mutations/web_login/wait_null_account", test_web_login_wait_null_account);
     g_test_add_func("/rpc_mutations/web_login/qr_login_start_without_qrdataurl", test_qr_login_start_without_qrdataurl);
+
+    g_test_add_func("/rpc_mutations/system/set_heartbeats_enabled", test_system_set_heartbeats_enabled);
+    g_test_add_func("/rpc_mutations/system/set_heartbeats_disabled", test_system_set_heartbeats_disabled);
 
     int status = g_test_run();
     stub_reset();

@@ -195,3 +195,21 @@ gchar* config_setup_apply_default_model(const gchar *raw_json,
     g_object_unref(parser);
     return updated;
 }
+
+gchar* config_setup_apply_browser_enabled(const gchar *raw_json,
+                                          gboolean enabled,
+                                          GError **error) {
+    JsonParser *parser = NULL;
+    JsonObject *root_obj = parse_root_object(raw_json, error, &parser);
+    if (!root_obj) return NULL;
+
+    /* `ensure_object_member` already replaces non-object values with a
+     * fresh empty object, which is the deterministic recovery path
+     * documented in the public contract. */
+    JsonObject *browser_obj = ensure_object_member(root_obj, "browser");
+    json_object_set_boolean_member(browser_obj, "enabled", enabled ? TRUE : FALSE);
+
+    gchar *updated = transform_to_pretty_json(root_obj);
+    g_object_unref(parser);
+    return updated;
+}

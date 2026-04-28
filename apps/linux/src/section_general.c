@@ -13,12 +13,15 @@
 
 #include <adwaita.h>
 
+#include "browser_control_state.h"
 #include "connection_mode_resolver.h"
 #include "display_model.h"
 #include "exec_approval_store.h"
 #include "gateway_client.h"
 #include "gateway_config.h"
 #include "gateway_remote_config.h"
+#include "log.h"
+#include "onboarding_cli_detect.h"
 #include "product_coordinator.h"
 #include "product_state.h"
 #include "readiness.h"
@@ -59,6 +62,22 @@ static GtkWidget *gen_btn_start = NULL;
 static GtkWidget *gen_btn_stop = NULL;
 static GtkWidget *gen_btn_restart = NULL;
 static GtkWidget *gen_btn_open_dashboard = NULL;
+
+/* ── Behavior toggles (Heartbeats + Browser Control) ── */
+static GtkWidget *gen_heartbeats_row = NULL;
+static gboolean gen_heartbeats_programmatic_change = FALSE;
+static GtkWidget *gen_browser_row = NULL;
+static gboolean gen_browser_programmatic_change = FALSE;
+/*
+ * Subscription id into `browser_control_state`. Non-zero while the
+ * row is mounted; zero after `general_destroy` unsubscribes. The
+ * shared module owns the cached enabled/known values so we never
+ * mirror them locally.
+ */
+static guint gen_browser_state_sub = 0;
+
+/* ── Companion CLI status row ── */
+static GtkWidget *gen_cli_status_row = NULL;
 
 /* ── Remote-mode settings group ── */
 static GtkWidget *gen_remote_group = NULL;
@@ -723,6 +742,162 @@ static void on_gen_remote_apply_clicked(GtkButton *button, gpointer user_data) {
     gen_remote_set_test_status("✅ Remote settings saved and applied");
 }
 
+/* ── Behavior toggle helpers (Heartbeats + Browser Control) ── */
+
+static void gen_heartbeats_set_row_active(gboolean active) {
+    if (!gen_heartbeats_row || !ADW_IS_SWITCH_ROW(gen_heartbeats_row)) return;
+    gen_heartbeats_programmatic_change = TRUE;
+    adw_switch_row_set_active(ADW_SWITCH_ROW(gen_heartbeats_row), active);
+    gen_heartbeats_programmatic_change = FALSE;
+}
+
+static void gen_browser_set_row_active(gboolean active) {
+    if (!gen_browser_row || !ADW_IS_SWITCH_ROW(gen_browser_row)) return;
+    gen_browser_programmatic_change = TRUE;
+    adw_switch_row_set_active(ADW_SWITCH_ROW(gen_browser_row), active);
+    gen_browser_programmatic_change = FALSE;
+}
+
+static void gen_browser_set_subtitle(const char *subtitle) {
+    if (!gen_browser_row || !ADW_IS_ACTION_ROW(gen_browser_row)) return;
+    adw_action_row_set_subtitle(ADW_ACTION_ROW(gen_browser_row),
+                                subtitle ? subtitle : "");
+}
+
+static void gen_browser_set_sensitive(gboolean sensitive) {
+    if (!gen_browser_row) return;
+    gtk_widget_set_sensitive(gen_browser_row, sensitive);
+}
+
+/*
+ * Repaint the row from the shared `browser_control_state` cache.
+ * Called both from the subscriber callback (when the cache changes)
+ * and during section build to seed the initial state.
+ */
+static void gen_browser_render_from_state(void) {
+    if (!gen_browser_row) return;
+
+    gboolean enabled = FALSE;
+    gboolean known = FALSE;
+    browser_control_state_get(&enabled, &known);
+
+    if (known) {
+        gen_browser_set_row_active(enabled);
+        gen_browser_set_subtitle(
+            "Allow agents to drive a managed browser session.");
+        gen_browser_set_sensitive(TRUE);
+        return;
+    }
+
+    if (browser_control_state_is_refreshing()) {
+        gen_browser_set_subtitle("Loading current setting…");
+        gen_browser_set_sensitive(FALSE);
+        return;
+    }
+
+    gen_browser_set_subtitle(
+        "Browser Control state unavailable — gateway not ready yet.");
+    gen_browser_set_sensitive(TRUE);
+}
+
+static void on_gen_browser_state_changed(gpointer user_data) {
+    (void)user_data;
+    /* Cache changed (refresh or set completed). Re-render — this also
+     * clears the optimistic "Saving…" subtitle on save success. */
+    gen_browser_render_from_state();
+}
+
+static void on_gen_browser_save_done(const BrowserControlStateSetResult *result,
+                                     gpointer user_data) {
+    (void)user_data;
+    if (!gen_browser_row) return;
+
+    if (result && result->status == BROWSER_CONTROL_STATE_OK) {
+        /* Subscribers fired before this callback so the row already
+         * reflects the new authoritative state. Nothing else to do. */
+        return;
+    }
+
+    OC_LOG_INFO(OPENCLAW_LOG_CAT_GATEWAY,
+                "Browser Control toggle failed: status=%d msg=%s",
+                result ? (int)result->status : -1,
+                result && result->error_msg ? result->error_msg : "(none)");
+
+    /* On failure the shared cache is unchanged. Re-render from cache
+     * to revert the optimistic switch position, then overlay an
+     * actionable subtitle so the operator sees what happened. */
+    gen_browser_render_from_state();
+    gen_browser_set_subtitle("Browser Control change failed — please try again.");
+}
+
+void section_general_request_heartbeats(gboolean enabled) {
+    (void)product_state_set_heartbeats_enabled(enabled);
+    gen_heartbeats_set_row_active(enabled);
+    /*
+     * Best-effort RPC push. When WS isn't yet connected the local
+     * persistence above will be replayed by the WS-ready hook in
+     * gateway_client.c, so this is safe to skip silently.
+     */
+    if (gateway_client_is_connected()) {
+        gateway_client_resync_heartbeats_intent();
+    }
+}
+
+void section_general_request_browser_control(gboolean enabled) {
+    /*
+     * Section-side compatibility wrapper around the shared mutator.
+     * Adds optimistic UI: paint the desired position, lock the row,
+     * and surface "Saving…" until the subscriber-driven repaint or
+     * the failure callback runs. The optimistic helpers are NULL-safe
+     * so calling this when the row isn't mounted is harmless.
+     */
+    if (gen_browser_row) {
+        gen_browser_set_row_active(enabled);
+        gen_browser_set_sensitive(FALSE);
+        gen_browser_set_subtitle("Saving…");
+    }
+    browser_control_state_request_set(enabled, on_gen_browser_save_done, NULL);
+}
+
+gboolean section_general_heartbeats_enabled(void) {
+    return product_state_get_heartbeats_enabled();
+}
+
+static void on_gen_heartbeats_active_notify(GObject *object,
+                                            GParamSpec *pspec,
+                                            gpointer user_data) {
+    (void)pspec;
+    (void)user_data;
+    if (gen_heartbeats_programmatic_change) return;
+    if (!ADW_IS_SWITCH_ROW(object)) return;
+
+    gboolean enabled = adw_switch_row_get_active(ADW_SWITCH_ROW(object));
+    section_general_request_heartbeats(enabled);
+}
+
+static void on_gen_browser_active_notify(GObject *object,
+                                         GParamSpec *pspec,
+                                         gpointer user_data) {
+    (void)pspec;
+    (void)user_data;
+    if (gen_browser_programmatic_change) return;
+    if (!ADW_IS_SWITCH_ROW(object)) return;
+
+    gboolean enabled = adw_switch_row_get_active(ADW_SWITCH_ROW(object));
+    section_general_request_browser_control(enabled);
+}
+
+/* ── Companion CLI status helpers ── */
+
+static void gen_cli_refresh_status_row(void) {
+    if (!gen_cli_status_row || !ADW_IS_ACTION_ROW(gen_cli_status_row)) return;
+    gboolean present = onboarding_cli_is_present();
+    adw_action_row_set_subtitle(ADW_ACTION_ROW(gen_cli_status_row),
+        present
+            ? "Detected on PATH."
+            : "Not detected — open onboarding to install the openclaw CLI.");
+}
+
 static GtkWidget* general_build(void) {
     GtkWidget *scrolled = gtk_scrolled_window_new();
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scrolled),
@@ -773,6 +948,53 @@ static GtkWidget* general_build(void) {
     gen_connection_mode_detail_row = general_note_row("Availability");
     adw_preferences_group_add(ADW_PREFERENCES_GROUP(connection_group), gen_connection_mode_detail_row);
     refresh_general_connection_mode_controls();
+
+    /* ── Behavior toggles (Heartbeats + Browser Control) ── */
+    GtkWidget *behavior_group = adw_preferences_group_new();
+    adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(behavior_group), "Behavior");
+    adw_preferences_group_set_description(ADW_PREFERENCES_GROUP(behavior_group),
+        "Everyday on/off toggles shared with the tray menu.");
+    adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(behavior_group));
+
+    gen_heartbeats_row = adw_switch_row_new();
+    adw_preferences_row_set_title(ADW_PREFERENCES_ROW(gen_heartbeats_row),
+                                  "Send Heartbeats");
+    adw_action_row_set_subtitle(ADW_ACTION_ROW(gen_heartbeats_row),
+        "Periodically nudge the gateway so it can drive scheduled work and presence.");
+    gen_heartbeats_set_row_active(product_state_get_heartbeats_enabled());
+    g_signal_connect(gen_heartbeats_row, "notify::active",
+                     G_CALLBACK(on_gen_heartbeats_active_notify), NULL);
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(behavior_group), gen_heartbeats_row);
+
+    gen_browser_row = adw_switch_row_new();
+    adw_preferences_row_set_title(ADW_PREFERENCES_ROW(gen_browser_row),
+                                  "Browser Control");
+    g_signal_connect(gen_browser_row, "notify::active",
+                     G_CALLBACK(on_gen_browser_active_notify), NULL);
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(behavior_group), gen_browser_row);
+
+    /* Subscribe to the shared cache and paint the current state. The
+     * subscription stays active until `general_destroy` unhooks it,
+     * so any cache change triggered by the tray (or by a parallel
+     * refresh) repaints the row in place. */
+    gen_browser_render_from_state();
+    if (gen_browser_state_sub == 0) {
+        gen_browser_state_sub =
+            browser_control_state_subscribe(on_gen_browser_state_changed, NULL);
+    }
+    {
+        gboolean bc_known = FALSE;
+        browser_control_state_get(NULL, &bc_known);
+        if (!bc_known) {
+            /* Best-effort kick. If WS isn't yet connected the cache
+             * stays unknown and the WS-connected hook in
+             * gateway_client.c will retry; in either case the
+             * subscriber callback will paint the row when the value
+             * lands. */
+            browser_control_state_refresh();
+            gen_browser_render_from_state();
+        }
+    }
 
     /* ── Exec approvals quick-mode picker ── */
     GtkWidget *approvals_group = adw_preferences_group_new();
@@ -964,6 +1186,19 @@ static GtkWidget* general_build(void) {
     adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(companion_group), "Companion");
     adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(companion_group));
 
+    /*
+     * Passive read-only OpenClaw CLI presence indicator. Onboarding
+     * remains the single owner of CLI install guidance — we surface
+     * the same `onboarding_cli_is_present()` truth here without
+     * duplicating the install copy or auto-running install scripts.
+     * Operators recover by clicking Re-run Onboarding below.
+     */
+    gen_cli_status_row = adw_action_row_new();
+    adw_preferences_row_set_title(ADW_PREFERENCES_ROW(gen_cli_status_row),
+                                  "OpenClaw CLI");
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(companion_group), gen_cli_status_row);
+    gen_cli_refresh_status_row();
+
     GtkWidget *onboard_btn = gtk_button_new_with_label("Re-run Onboarding");
     g_signal_connect(onboard_btn, "clicked", G_CALLBACK(on_gen_rerun_onboarding), NULL);
     adw_preferences_group_add(ADW_PREFERENCES_GROUP(companion_group),
@@ -1059,6 +1294,9 @@ static void general_refresh(void) {
     refresh_general_approval_mode_controls();
     gen_remote_refresh_group_visibility();
     gen_remote_refresh_status_row();
+    gen_heartbeats_set_row_active(product_state_get_heartbeats_enabled());
+    gen_browser_render_from_state();
+    gen_cli_refresh_status_row();
 
     gtk_widget_set_sensitive(gen_btn_start, dm.can_start);
     gtk_widget_set_sensitive(gen_btn_stop, dm.can_stop);
@@ -1118,6 +1356,20 @@ static void general_destroy(void) {
     gen_remote_status_row = NULL;
     gen_remote_test_btn = NULL;
     gen_remote_apply_btn = NULL;
+
+    /* Behavior toggles + CLI status row cleanup. The shared
+     * `browser_control_state` cache is process-scoped and survives
+     * section rebuilds — we just unsubscribe so the destroyed row
+     * can't be repainted from a delayed transport callback. */
+    if (gen_browser_state_sub) {
+        browser_control_state_unsubscribe(gen_browser_state_sub);
+        gen_browser_state_sub = 0;
+    }
+    gen_heartbeats_row = NULL;
+    gen_heartbeats_programmatic_change = FALSE;
+    gen_browser_row = NULL;
+    gen_browser_programmatic_change = FALSE;
+    gen_cli_status_row = NULL;
     gen_remote_test_status_label = NULL;
 }
 

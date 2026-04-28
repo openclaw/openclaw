@@ -69,4 +69,30 @@ gboolean tray_protocol_parse_exec_approval_action(const char *action, char **out
  */
 gboolean tray_protocol_exec_approval_mode_is_valid(const char *mode);
 
+/*
+ * Format a CHECK line for a binary toggle menu item. Tranche E adds
+ * two such items: HEARTBEATS and BROWSER_CONTROL.
+ *
+ *   CHECK:<KEY>:0|1\n
+ *
+ * `key` must be a non-empty bare token without colons, spaces, or
+ * newlines. Returns NULL for any malformed key. Caller frees with
+ * g_free().
+ */
+gchar* tray_protocol_format_check(const char *key, gboolean checked);
+
+/*
+ * Parse the body of a `<KEY>_SET:0|1` action line (i.e. the substring
+ * AFTER `ACTION:`). On success writes a newly-allocated copy of the
+ * KEY token (without the trailing `_SET:<flag>`) into `*out_key` and
+ * the parsed boolean into `*out_value`. Either out-pointer may be
+ * NULL — the function still returns the validity verdict.
+ *
+ * Rejects any input with extra colons, whitespace, non-binary flags,
+ * empty keys, missing `_SET` infix, or trailing characters.
+ */
+gboolean tray_protocol_parse_check_action(const char *action,
+                                          char **out_key,
+                                          gboolean *out_value);
+
 #endif /* OPENCLAW_LINUX_TRAY_PROTOCOL_H */

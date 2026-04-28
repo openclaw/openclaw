@@ -317,6 +317,94 @@ static void test_wizard_empty_last_run_at(void) {
     gateway_config_free(cfg);
 }
 
+/* ── browser.enabled transform (Tranche E) ─────────────────────── */
+
+static gboolean parse_browser_enabled(const gchar *raw, gboolean *out_value) {
+    g_autoptr(GError) err = NULL;
+    g_autoptr(JsonParser) parser = json_parser_new();
+    if (!json_parser_load_from_data(parser, raw, -1, &err)) return FALSE;
+    JsonNode *root = json_parser_get_root(parser);
+    if (!root || !JSON_NODE_HOLDS_OBJECT(root)) return FALSE;
+    JsonObject *obj = json_node_get_object(root);
+    if (!json_object_has_member(obj, "browser")) return FALSE;
+    JsonNode *node = json_object_get_member(obj, "browser");
+    if (!node || !JSON_NODE_HOLDS_OBJECT(node)) return FALSE;
+    JsonObject *browser = json_node_get_object(node);
+    if (!json_object_has_member(browser, "enabled")) return FALSE;
+    if (out_value) *out_value = json_object_get_boolean_member(browser, "enabled");
+    return TRUE;
+}
+
+static void test_setup_apply_browser_enabled_creates_object_when_missing(void) {
+    const gchar *raw = "{\"gateway\":{\"port\":18789}}";
+    g_autoptr(GError) err = NULL;
+    g_autofree gchar *updated = config_setup_apply_browser_enabled(raw, TRUE, &err);
+    g_assert_no_error(err);
+    g_assert_nonnull(updated);
+
+    gboolean parsed = FALSE;
+    g_assert_true(parse_browser_enabled(updated, &parsed));
+    g_assert_true(parsed);
+}
+
+static void test_setup_apply_browser_enabled_overwrites_existing(void) {
+    const gchar *raw = "{\"gateway\":{\"port\":18789},\"browser\":{\"enabled\":false,\"foo\":\"bar\"}}";
+    g_autoptr(GError) err = NULL;
+    g_autofree gchar *updated = config_setup_apply_browser_enabled(raw, TRUE, &err);
+    g_assert_no_error(err);
+    g_assert_nonnull(updated);
+
+    gboolean parsed = FALSE;
+    g_assert_true(parse_browser_enabled(updated, &parsed));
+    g_assert_true(parsed);
+
+    /* Other browser members must survive the toggle. */
+    g_autoptr(JsonParser) parser = json_parser_new();
+    g_assert_true(json_parser_load_from_data(parser, updated, -1, &err));
+    JsonObject *root = json_node_get_object(json_parser_get_root(parser));
+    JsonObject *browser = json_node_get_object(json_object_get_member(root, "browser"));
+    g_assert_cmpstr(json_object_get_string_member(browser, "foo"), ==, "bar");
+}
+
+static void test_setup_apply_browser_enabled_preserves_unrelated_keys(void) {
+    const gchar *raw =
+        "{\"gateway\":{\"port\":18789,\"auth\":{\"mode\":\"none\"}},"
+        "\"models\":{\"providers\":{\"openai\":{\"baseUrl\":\"https://api.openai.com\"}}}}";
+    g_autoptr(GError) err = NULL;
+    g_autofree gchar *updated = config_setup_apply_browser_enabled(raw, FALSE, &err);
+    g_assert_no_error(err);
+    g_assert_nonnull(updated);
+
+    gboolean parsed = TRUE;
+    g_assert_true(parse_browser_enabled(updated, &parsed));
+    g_assert_false(parsed);
+
+    g_autoptr(JsonParser) parser = json_parser_new();
+    g_assert_true(json_parser_load_from_data(parser, updated, -1, &err));
+    JsonObject *root = json_node_get_object(json_parser_get_root(parser));
+    JsonObject *gateway = json_node_get_object(json_object_get_member(root, "gateway"));
+    g_assert_cmpint(json_object_get_int_member(gateway, "port"), ==, 18789);
+    JsonObject *models = json_node_get_object(json_object_get_member(root, "models"));
+    JsonObject *providers = json_node_get_object(json_object_get_member(models, "providers"));
+    JsonObject *openai = json_node_get_object(json_object_get_member(providers, "openai"));
+    g_assert_cmpstr(json_object_get_string_member(openai, "baseUrl"), ==, "https://api.openai.com");
+}
+
+static void test_setup_apply_browser_enabled_handles_non_object_browser(void) {
+    /* If `browser` is something stupid like a string, the transform
+     * still recovers by replacing it with a fresh `{ "enabled": ... }`
+     * object — same recovery path documented for `apply_provider`. */
+    const gchar *raw = "{\"browser\":\"oops\"}";
+    g_autoptr(GError) err = NULL;
+    g_autofree gchar *updated = config_setup_apply_browser_enabled(raw, TRUE, &err);
+    g_assert_no_error(err);
+    g_assert_nonnull(updated);
+
+    gboolean parsed = FALSE;
+    g_assert_true(parse_browser_enabled(updated, &parsed));
+    g_assert_true(parsed);
+}
+
 int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL);
 
@@ -343,6 +431,15 @@ int main(int argc, char **argv) {
     g_test_add_func("/config/model/root_providers_empty_false", test_model_config_root_providers_empty_false);
     g_test_add_func("/config/model/agents_defaults_model_malformed_false", test_model_config_agents_defaults_model_malformed_false);
     g_test_add_func("/config/model/minimal_onboard_false", test_model_config_minimal_onboard_false);
+
+    g_test_add_func("/config/setup/apply_browser_enabled_creates_object_when_missing",
+                    test_setup_apply_browser_enabled_creates_object_when_missing);
+    g_test_add_func("/config/setup/apply_browser_enabled_overwrites_existing",
+                    test_setup_apply_browser_enabled_overwrites_existing);
+    g_test_add_func("/config/setup/apply_browser_enabled_preserves_unrelated_keys",
+                    test_setup_apply_browser_enabled_preserves_unrelated_keys);
+    g_test_add_func("/config/setup/apply_browser_enabled_handles_non_object_browser",
+                    test_setup_apply_browser_enabled_handles_non_object_browser);
 
     return g_test_run();
 }

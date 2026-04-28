@@ -66,6 +66,13 @@ static GtkWidget *approvals_pending_item = NULL;
 static GtkWidget *reset_remote_tunnel_item = NULL;
 static GtkWidget *restart_app_item = NULL;
 
+/* Tranche E binary toggles. Hidden by default — the host's first
+ * `MENU_VISIBLE:HEARTBEATS:1` / `MENU_VISIBLE:BROWSER_CONTROL:1`
+ * line reveals each item once it has the source-of-truth value to
+ * paint. */
+static GtkWidget *heartbeats_check_item = NULL;
+static GtkWidget *browser_control_check_item = NULL;
+
 /* Navigation actions */
 static GtkWidget *open_main_item = NULL;
 static GtkWidget *open_dashboard_item = NULL;
@@ -137,6 +144,23 @@ static void on_exec_approval_radio_activate(GtkRadioMenuItem *item, gpointer dat
     send_action(line);
 }
 
+/*
+ * Tranche E check-toggle handlers. Each item carries its KEY token
+ * via `g_object_set_data(item, "tray-check-key", "HEARTBEATS"|...)`
+ * so a single callback can serve every binary toggle. The
+ * `updating_from_host` guard prevents a host-driven CHECK update
+ * from echoing back as ACTION:<KEY>_SET.
+ */
+static void on_check_item_toggled(GtkCheckMenuItem *item, gpointer data) {
+    (void)data;
+    if (updating_from_host) return;
+    const char *key = g_object_get_data(G_OBJECT(item), "tray-check-key");
+    if (!key) return;
+    gboolean active = gtk_check_menu_item_get_active(item);
+    g_autofree gchar *line = g_strdup_printf("%s_SET:%d", key, active ? 1 : 0);
+    send_action(line);
+}
+
 static void on_quit_clicked(GtkMenuItem *item, gpointer data) { 
     (void)item; (void)data;
     send_action("QUIT"); 
@@ -156,6 +180,8 @@ static GtkWidget* widget_for_menu_key(TrayHelperMenuKey key) {
     case TRAY_HELPER_MENU_KEY_APPROVALS_PENDING:   return approvals_pending_item;
     case TRAY_HELPER_MENU_KEY_RESET_REMOTE_TUNNEL: return reset_remote_tunnel_item;
     case TRAY_HELPER_MENU_KEY_RESTART_APP:         return restart_app_item;
+    case TRAY_HELPER_MENU_KEY_HEARTBEATS:          return heartbeats_check_item;
+    case TRAY_HELPER_MENU_KEY_BROWSER_CONTROL:     return browser_control_check_item;
     case TRAY_HELPER_MENU_KEY_UNKNOWN:
     default:                                       return NULL;
     }
@@ -208,10 +234,22 @@ static void helper_set_approvals_count(guint count, gpointer ud) {
     else         gtk_widget_hide(approvals_pending_item);
 }
 
+static void helper_set_check_state(TrayHelperMenuKey key, gboolean checked, gpointer ud) {
+    (void)ud;
+    GtkWidget *w = widget_for_menu_key(key);
+    if (!w || !GTK_IS_CHECK_MENU_ITEM(w)) return;
+    /* Apply under the host-update guard so the resulting `toggled`
+     * signal does not echo a `<KEY>_SET:<flag>` ACTION back. */
+    updating_from_host = TRUE;
+    gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(w), checked);
+    updating_from_host = FALSE;
+}
+
 static const TrayHelperProtocolHandlers helper_protocol_handlers = {
     .set_menu_visible        = helper_set_menu_visible,
     .set_radio_exec_approval = helper_set_radio_exec_approval,
     .set_approvals_count     = helper_set_approvals_count,
+    .set_check_state         = helper_set_check_state,
     .user_data               = NULL,
 };
 
@@ -345,6 +383,35 @@ int main(int argc, char **argv) {
     refresh_item = gtk_menu_item_new_with_label("Refresh Status");
     g_signal_connect(refresh_item, "activate", G_CALLBACK(on_refresh_clicked), NULL);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), refresh_item);
+
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
+
+    /* ── Behavior toggles (Tranche E) ──
+     *
+     * Hidden by default. The host emits a MENU_VISIBLE:<KEY>:1 line
+     * once it has the source-of-truth value to render, paired with a
+     * CHECK:<KEY>:0|1 line that paints the initial state under the
+     * `updating_from_host` guard. Operator clicks emit
+     * `ACTION:<KEY>_SET:<0|1>`; on the host side HEARTBEATS routes
+     * through the General-section / product_state funnel
+     * (`section_general_request_heartbeats`), while BROWSER_CONTROL
+     * routes through the shared `browser_control_state` cache
+     * (`browser_control_state_request_set`) so the tray does not
+     * depend on the General section being mounted.
+     */
+    heartbeats_check_item = gtk_check_menu_item_new_with_label("Send Heartbeats");
+    g_object_set_data(G_OBJECT(heartbeats_check_item), "tray-check-key", "HEARTBEATS");
+    g_signal_connect(heartbeats_check_item, "toggled",
+                     G_CALLBACK(on_check_item_toggled), NULL);
+    gtk_widget_set_no_show_all(heartbeats_check_item, TRUE);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), heartbeats_check_item);
+
+    browser_control_check_item = gtk_check_menu_item_new_with_label("Browser Control");
+    g_object_set_data(G_OBJECT(browser_control_check_item), "tray-check-key", "BROWSER_CONTROL");
+    g_signal_connect(browser_control_check_item, "toggled",
+                     G_CALLBACK(on_check_item_toggled), NULL);
+    gtk_widget_set_no_show_all(browser_control_check_item, TRUE);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), browser_control_check_item);
 
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
 

@@ -40,6 +40,10 @@ add_project_arguments('-DOPENCLAW_BUILD_TIMESTAMP="' + build_timestamp + '"', la
 # Main app (GTK4 + Libadwaita + JSON-GLib + libsoup-3.0 + GIO)
 sources = [
   'src/main.c',
+  'src/main_open_dispatch.c',
+  'src/deep_link.c',
+  'src/browser_control_state.c',
+  'src/config_browser_toggle.c',
   'src/tray.c',
   'src/systemd.c',
   'src/systemd_helpers.c',
@@ -301,6 +305,13 @@ test_tray_protocol_exe = executable('test_tray_protocol',
   dependencies : [glib_dep])
 test('tray_protocol', test_tray_protocol_exe)
 
+# Pure-C regression for the openclaw:// deep-link parser. Headless;
+# only glib is needed (uses GUri for RFC-3986 parsing).
+test_deep_link_exe = executable('test_deep_link',
+  ['tests/test_deep_link.c', 'src/deep_link.c'],
+  dependencies : [glib_dep])
+test('deep_link', test_deep_link_exe)
+
 # Pure-C regression for the helper-side parser/applier. Capture
 # callbacks stand in for the GTK widget mutations so the suite stays
 # headless.
@@ -309,6 +320,15 @@ test_tray_helper_protocol_exe = executable('test_tray_helper_protocol',
    'src/tray_helper_protocol.c', 'src/tray_protocol.c'],
   dependencies : [glib_dep])
 test('tray_helper_protocol', test_tray_helper_protocol_exe)
+
+# Pure-C regression for the shared Browser Control state module
+# (Tranche E finalization). The module is GTK-free and exposes a
+# transport seam, so the tests install a stub transport and drive
+# refresh / set callbacks directly without spinning up the gateway.
+test_browser_control_state_exe = executable('test_browser_control_state',
+  ['tests/test_browser_control_state.c', 'src/browser_control_state.c'],
+  dependencies : [glib_dep])
+test('browser_control_state', test_browser_control_state_exe)
 
 # Hermetic regression for the Restart App argv builder. The actual
 # spawn path is intentionally NOT exercised — see test source for the

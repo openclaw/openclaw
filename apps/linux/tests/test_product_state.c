@@ -238,6 +238,79 @@ static void test_reset_onboarding_seen_version_persists_zero(void) {
     cleanup_tmp_dir(dir);
 }
 
+/* ── Heartbeats persistence (Tranche E) ──────────────────────── */
+
+static void test_heartbeats_default_is_true(void) {
+    g_autofree gchar *dir = make_tmp_dir();
+    g_autofree gchar *storage_path = g_build_filename(dir, "product-state.ini", NULL);
+    g_autofree gchar *legacy_path = g_build_filename(dir, "onboarding_version", NULL);
+
+    reset_product_state_for_paths(storage_path, legacy_path);
+    product_state_init();
+    g_assert_true(product_state_get_heartbeats_enabled());
+
+    /* The first flush after a default-init must persist the explicit
+     * value so that future loads can read a deterministic answer. */
+    g_autofree gchar *contents = read_file_or_null(storage_path);
+    g_assert_nonnull(contents);
+    g_assert_nonnull(g_strstr_len(contents, -1, "heartbeats_enabled=true"));
+
+    clear_product_state_test_overrides();
+    remove_if_exists(storage_path);
+    remove_if_exists(legacy_path);
+    cleanup_tmp_dir(dir);
+}
+
+static void test_heartbeats_persist_across_reload(void) {
+    g_autofree gchar *dir = make_tmp_dir();
+    g_autofree gchar *storage_path = g_build_filename(dir, "product-state.ini", NULL);
+    g_autofree gchar *legacy_path = g_build_filename(dir, "onboarding_version", NULL);
+
+    reset_product_state_for_paths(storage_path, legacy_path);
+    product_state_init();
+    g_assert_true(product_state_set_heartbeats_enabled(FALSE));
+
+    /* Reload from disk. */
+    product_state_test_reset();
+    product_state_init();
+    g_assert_false(product_state_get_heartbeats_enabled());
+
+    g_assert_true(product_state_set_heartbeats_enabled(TRUE));
+    product_state_test_reset();
+    product_state_init();
+    g_assert_true(product_state_get_heartbeats_enabled());
+
+    clear_product_state_test_overrides();
+    remove_if_exists(storage_path);
+    remove_if_exists(legacy_path);
+    cleanup_tmp_dir(dir);
+}
+
+static void test_heartbeats_legacy_storage_upgrades_to_default(void) {
+    g_autofree gchar *dir = make_tmp_dir();
+    g_autofree gchar *storage_path = g_build_filename(dir, "product-state.ini", NULL);
+    g_autofree gchar *legacy_path = g_build_filename(dir, "onboarding_version", NULL);
+
+    /* Storage that predates Tranche E omits `heartbeats_enabled`.
+     * The loader must pick up the TRUE default and rewrite the file
+     * so the next launch has an explicit value. */
+    const gchar *legacy_data = "[product]\nconnection_mode=local\nonboarding_seen_version=2\n";
+    g_assert_true(g_file_set_contents(storage_path, legacy_data, -1, NULL));
+
+    reset_product_state_for_paths(storage_path, legacy_path);
+    product_state_init();
+    g_assert_true(product_state_get_heartbeats_enabled());
+
+    g_autofree gchar *contents = read_file_or_null(storage_path);
+    g_assert_nonnull(contents);
+    g_assert_nonnull(g_strstr_len(contents, -1, "heartbeats_enabled=true"));
+
+    clear_product_state_test_overrides();
+    remove_if_exists(storage_path);
+    remove_if_exists(legacy_path);
+    cleanup_tmp_dir(dir);
+}
+
 int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL);
     g_test_add_func("/product_state/defaults_create_local_state", test_defaults_create_local_state);
@@ -248,5 +321,9 @@ int main(int argc, char **argv) {
     g_test_add_func("/product_state/invalid_seen_version_falls_back_to_zero", test_invalid_seen_version_falls_back_to_zero);
     g_test_add_func("/product_state/legacy_marker_migrates", test_legacy_marker_migrates_to_product_state);
     g_test_add_func("/product_state/reset_onboarding_seen_version_persists_zero", test_reset_onboarding_seen_version_persists_zero);
+    g_test_add_func("/product_state/heartbeats_default_is_true", test_heartbeats_default_is_true);
+    g_test_add_func("/product_state/heartbeats_persist_across_reload", test_heartbeats_persist_across_reload);
+    g_test_add_func("/product_state/heartbeats_legacy_storage_upgrades_to_default",
+                    test_heartbeats_legacy_storage_upgrades_to_default);
     return g_test_run();
 }
