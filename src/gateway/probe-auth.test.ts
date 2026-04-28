@@ -195,7 +195,7 @@ describe("resolveGatewayProbeAuthSafeWithSecretInputs", () => {
     });
   });
 
-  it("does not resolve remote SecretRefs for local probes", async () => {
+  it("returns empty auth without warning for gateway.remote SecretRefs in local probes", async () => {
     const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
       cfg: {
         gateway: {
@@ -217,11 +217,10 @@ describe("resolveGatewayProbeAuthSafeWithSecretInputs", () => {
       } as NodeJS.ProcessEnv,
     });
 
-    expect(result).toEqual({
-      auth: {
-        token: undefined,
-        password: undefined,
-      },
+    expect(result.warning).toBeUndefined();
+    expect(result.auth).toEqual({
+      token: undefined,
+      password: undefined,
     });
   });
 
