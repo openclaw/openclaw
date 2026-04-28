@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createBundleMcpJsonSchemaValidator } from "./pi-bundle-mcp-runtime.js";
+import {
+  createBundleMcpCallToolRequest,
+  createBundleMcpJsonSchemaValidator,
+} from "./pi-bundle-mcp-runtime.js";
 import { cleanupBundleMcpHarness } from "./pi-bundle-mcp-test-harness.js";
 import {
   __testing,
@@ -76,6 +79,23 @@ afterEach(async () => {
 });
 
 describe("session MCP runtime", () => {
+  it("injects MCP traceparent metadata only when the canary is enabled", () => {
+    const disabled = createBundleMcpCallToolRequest({
+      toolName: "probe",
+      input: { keep: true },
+      cfg: {},
+    });
+    expect(disabled).toEqual({ name: "probe", arguments: { keep: true } });
+
+    const enabled = createBundleMcpCallToolRequest({
+      toolName: "probe",
+      input: { keep: true },
+      cfg: { diagnostics: { otel: { mcp: { enabled: true } } } },
+    });
+    expect(enabled.arguments).toEqual({ keep: true });
+    expect(enabled._meta?.traceparent).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
+  });
+
   it("accepts draft-2020-12 tool output schemas from external MCP catalogs", () => {
     const validator = createBundleMcpJsonSchemaValidator().getValidator<{ url: string }>({
       $schema: "https://json-schema.org/draft/2020-12/schema",

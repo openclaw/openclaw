@@ -443,6 +443,30 @@ export type DiagnosticTelemetryExporterEvent = DiagnosticBaseEvent & {
   errorCategory?: string;
 };
 
+type DiagnosticMcpBaseEvent = DiagnosticBaseEvent & {
+  type: "mcp.request.started" | "mcp.request.completed" | "mcp.request.error";
+  sessionKey?: string;
+  method: string;
+  requestId?: string;
+  toolName?: string;
+  transport: "streamable-http" | "stdio" | "sse" | "tcp";
+};
+
+export type DiagnosticMcpRequestStartedEvent = DiagnosticMcpBaseEvent & {
+  type: "mcp.request.started";
+};
+
+export type DiagnosticMcpRequestCompletedEvent = DiagnosticMcpBaseEvent & {
+  type: "mcp.request.completed";
+  durationMs: number;
+};
+
+export type DiagnosticMcpRequestErrorEvent = DiagnosticMcpBaseEvent & {
+  type: "mcp.request.error";
+  durationMs: number;
+  errorCategory: string;
+};
+
 export type DiagnosticEventPayload =
   | DiagnosticUsageEvent
   | DiagnosticWebhookReceivedEvent
@@ -479,7 +503,10 @@ export type DiagnosticEventPayload =
   | DiagnosticMemoryPressureEvent
   | DiagnosticPayloadLargeEvent
   | DiagnosticLogRecordEvent
-  | DiagnosticTelemetryExporterEvent;
+  | DiagnosticTelemetryExporterEvent
+  | DiagnosticMcpRequestStartedEvent
+  | DiagnosticMcpRequestCompletedEvent
+  | DiagnosticMcpRequestErrorEvent;
 
 export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
   ? Event extends DiagnosticEventPayload
@@ -529,6 +556,9 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "harness.run.completed",
   "harness.run.error",
   "context.assembled",
+  "mcp.request.started",
+  "mcp.request.completed",
+  "mcp.request.error",
   "log.record",
 ]);
 

@@ -251,6 +251,33 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "Interval in milliseconds for periodic telemetry flush from buffers to the collector. Increase to reduce export chatter, or lower for faster visibility during active incident response.",
               },
+              mcp: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                    title: "OpenTelemetry MCP Canary Enabled",
+                    description:
+                      "Enable MCP JSON-RPC diagnostic span emission. Defaults to false so normal MCP behavior and telemetry volume remain unchanged.",
+                  },
+                  propagateTraceContext: {
+                    type: "boolean",
+                    title: "OpenTelemetry MCP Trace Context Propagation",
+                    description:
+                      "Extract W3C traceparent/tracestate values from MCP params._meta and use them as the parent for MCP diagnostic spans. Defaults to true when the MCP canary is enabled.",
+                  },
+                  captureBaggage: {
+                    type: "boolean",
+                    title: "OpenTelemetry MCP Baggage Capture",
+                    description:
+                      "Reserved baggage capture switch for MCP diagnostics. Keep disabled unless an approved collector policy explicitly allows baggage capture.",
+                  },
+                },
+                additionalProperties: false,
+                title: "OpenTelemetry MCP Canary",
+                description:
+                  "Opt-in MCP JSON-RPC OpenTelemetry canary. Defaults to disabled; enable only while validating MCP trace propagation through the loopback server.",
+              },
               captureContent: {
                 anyOf: [
                   {
@@ -24252,6 +24279,26 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "OpenTelemetry Flush Interval (ms)",
       help: "Interval in milliseconds for periodic telemetry flush from buffers to the collector. Increase to reduce export chatter, or lower for faster visibility during active incident response.",
       tags: ["observability", "performance"],
+    },
+    "diagnostics.otel.mcp": {
+      label: "OpenTelemetry MCP Canary",
+      help: "Opt-in MCP JSON-RPC OpenTelemetry canary. Defaults to disabled; enable only while validating MCP trace propagation through the loopback server.",
+      tags: ["observability"],
+    },
+    "diagnostics.otel.mcp.enabled": {
+      label: "OpenTelemetry MCP Canary Enabled",
+      help: "Enable MCP JSON-RPC diagnostic span emission. Defaults to false so normal MCP behavior and telemetry volume remain unchanged.",
+      tags: ["observability"],
+    },
+    "diagnostics.otel.mcp.propagateTraceContext": {
+      label: "OpenTelemetry MCP Trace Context Propagation",
+      help: "Extract W3C traceparent/tracestate values from MCP params._meta and use them as the parent for MCP diagnostic spans. Defaults to true when the MCP canary is enabled.",
+      tags: ["observability"],
+    },
+    "diagnostics.otel.mcp.captureBaggage": {
+      label: "OpenTelemetry MCP Baggage Capture",
+      help: "Reserved baggage capture switch for MCP diagnostics. Keep disabled unless an approved collector policy explicitly allows baggage capture.",
+      tags: ["observability"],
     },
     "diagnostics.otel.captureContent": {
       label: "OpenTelemetry Content Capture",

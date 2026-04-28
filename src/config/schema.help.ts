@@ -588,6 +588,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Trace sampling rate (0-1) controlling how much trace traffic is exported to observability backends. Lower rates reduce overhead/cost, while higher rates improve debugging fidelity.",
   "diagnostics.otel.flushIntervalMs":
     "Interval in milliseconds for periodic telemetry flush from buffers to the collector. Increase to reduce export chatter, or lower for faster visibility during active incident response.",
+  "diagnostics.otel.mcp":
+    "Opt-in MCP JSON-RPC OpenTelemetry canary. Defaults to disabled; enable only while validating MCP trace propagation through the loopback server.",
+  "diagnostics.otel.mcp.enabled":
+    "Enable MCP JSON-RPC diagnostic span emission. Defaults to false so normal MCP behavior and telemetry volume remain unchanged.",
+  "diagnostics.otel.mcp.propagateTraceContext":
+    "Extract W3C traceparent/tracestate values from MCP params._meta and use them as the parent for MCP diagnostic spans. Defaults to true when the MCP canary is enabled.",
+  "diagnostics.otel.mcp.captureBaggage":
+    "Reserved baggage capture switch for MCP diagnostics. Keep disabled unless an approved collector policy explicitly allows baggage capture.",
   "diagnostics.otel.captureContent":
     "Opt-in OTEL span content capture. Defaults to off; boolean true captures non-system message/tool content, while the object form lets you enable specific content classes.",
   "diagnostics.otel.captureContent.enabled":

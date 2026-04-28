@@ -319,6 +319,14 @@ export const OpenClawSchema = z
             logs: z.boolean().optional(),
             sampleRate: z.number().min(0).max(1).optional(),
             flushIntervalMs: z.number().int().nonnegative().optional(),
+            mcp: z
+              .object({
+                enabled: z.boolean().optional(),
+                propagateTraceContext: z.boolean().optional(),
+                captureBaggage: z.boolean().optional(),
+              })
+              .strict()
+              .optional(),
             captureContent: z
               .union([
                 z.boolean(),

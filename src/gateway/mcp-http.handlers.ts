@@ -9,7 +9,14 @@ import {
   jsonRpcResult,
   type JsonRpcRequest,
 } from "./mcp-http.protocol.js";
+import type { McpRequestContext } from "./mcp-http.request.js";
 import type { McpLoopbackTool, McpToolSchemaEntry } from "./mcp-http.schema.js";
+import {
+  completeMcpTraceScope,
+  failMcpTraceScope,
+  startMcpTraceScope,
+  type McpTraceOptions,
+} from "./mcp-http.trace.js";
 
 type McpTextContent = {
   type: "text";
@@ -33,6 +40,33 @@ function normalizeToolCallContent(result: unknown): McpTextContent[] {
 }
 
 export async function handleMcpJsonRpc(params: {
+  message: JsonRpcRequest;
+  tools: McpLoopbackTool[];
+  toolSchema: McpToolSchemaEntry[];
+  hookContext?: HookContext;
+  requestContext?: Pick<McpRequestContext, "sessionKey">;
+  mcpTrace?: McpTraceOptions;
+  signal?: AbortSignal;
+}): Promise<object | null> {
+  const traceScope = params.mcpTrace
+    ? startMcpTraceScope({
+        message: params.message,
+        requestContext: params.requestContext,
+        options: params.mcpTrace,
+      })
+    : undefined;
+
+  try {
+    const response = await handleMcpJsonRpcCore(params);
+    completeMcpTraceScope(traceScope, response);
+    return response;
+  } catch (error) {
+    failMcpTraceScope(traceScope, error);
+    throw error;
+  }
+}
+
+async function handleMcpJsonRpcCore(params: {
   message: JsonRpcRequest;
   tools: McpLoopbackTool[];
   toolSchema: McpToolSchemaEntry[];

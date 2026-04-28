@@ -1044,16 +1044,21 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         evt: DiagnosticEventPayload,
         metadata: DiagnosticEventMetadata,
       ) => {
-        const parentSpanId = trustedTraceContext(evt, metadata)?.parentSpanId;
-        if (!parentSpanId) {
+        const traceContext = trustedTraceContext(evt, metadata);
+        const parentSpanId = traceContext?.parentSpanId;
+        if (!traceContext || !parentSpanId) {
           return undefined;
         }
         const activeParentSpan =
           activeTrustedSpans.get(parentSpanId) ?? activeTrustedSpanAliases.get(parentSpanId);
-        if (!activeParentSpan) {
-          return undefined;
+        if (activeParentSpan) {
+          return trace.setSpanContext(otelContextApi.active(), activeParentSpan.spanContext());
         }
-        return trace.setSpanContext(otelContextApi.active(), activeParentSpan.spanContext());
+        return contextForTraceContext({
+          traceId: traceContext.traceId,
+          spanId: parentSpanId,
+          traceFlags: traceContext.traceFlags,
+        });
       };
       const trackTrustedSpan = (
         evt: DiagnosticEventPayload,
@@ -2042,6 +2047,95 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         span.end(evt.ts);
       };
 
+      const mcpMethodAttr = (method: string | undefined) =>
+        redactSensitiveText(method?.trim() || "unknown").slice(0, 120) || "unknown";
+
+      const mcpRequestBaseAttrs = (
+        evt: Extract<
+          DiagnosticEventPayload,
+          { type: "mcp.request.started" | "mcp.request.completed" | "mcp.request.error" }
+        >,
+      ): Record<string, string | number | boolean> => ({
+        "mcp.method.name": mcpMethodAttr(evt.method),
+        "network.transport": evt.transport === "tcp" ? "tcp" : lowCardinalityAttr(evt.transport),
+        ...(evt.requestId ? { "jsonrpc.request.id": lowCardinalityAttr(evt.requestId) } : {}),
+        ...(evt.sessionKey ? { "mcp.session.id": lowCardinalityAttr(evt.sessionKey) } : {}),
+        ...(evt.toolName
+          ? {
+              "gen_ai.operation.name": "execute_tool",
+              "gen_ai.tool.name": lowCardinalityAttr(evt.toolName),
+            }
+          : {}),
+      });
+
+      const mcpSpanName = (
+        evt: Extract<
+          DiagnosticEventPayload,
+          { type: "mcp.request.started" | "mcp.request.completed" | "mcp.request.error" }
+        >,
+      ) =>
+        evt.method === "tools/call" && evt.toolName ? `tools/call ${evt.toolName}` : evt.method;
+
+      const recordMcpRequestStarted = (
+        evt: Extract<DiagnosticEventPayload, { type: "mcp.request.started" }>,
+        metadata: DiagnosticEventMetadata,
+      ) => {
+        if (!tracesEnabled || !metadata.trusted) {
+          return;
+        }
+        trackTrustedSpan(
+          evt,
+          metadata,
+          spanWithDuration(mcpSpanName(evt), mcpRequestBaseAttrs(evt), undefined, {
+            parentContext: activeTrustedParentContext(evt, metadata),
+            startTimeMs: evt.ts,
+          }),
+        );
+      };
+
+      const recordMcpRequestCompleted = (
+        evt: Extract<DiagnosticEventPayload, { type: "mcp.request.completed" }>,
+        metadata: DiagnosticEventMetadata,
+      ) => {
+        if (!tracesEnabled) {
+          return;
+        }
+        const spanAttrs = mcpRequestBaseAttrs(evt);
+        const span =
+          takeTrackedTrustedSpan(evt, metadata) ??
+          spanWithDuration(mcpSpanName(evt), spanAttrs, evt.durationMs, {
+            parentContext: activeTrustedParentContext(evt, metadata),
+            endTimeMs: evt.ts,
+          });
+        setSpanAttrs(span, spanAttrs);
+        span.end(evt.ts);
+      };
+
+      const recordMcpRequestError = (
+        evt: Extract<DiagnosticEventPayload, { type: "mcp.request.error" }>,
+        metadata: DiagnosticEventMetadata,
+      ) => {
+        if (!tracesEnabled) {
+          return;
+        }
+        const spanAttrs = {
+          ...mcpRequestBaseAttrs(evt),
+          "error.type": lowCardinalityAttr(evt.errorCategory, "Error"),
+        };
+        const span =
+          takeTrackedTrustedSpan(evt, metadata) ??
+          spanWithDuration(mcpSpanName(evt), spanAttrs, evt.durationMs, {
+            parentContext: activeTrustedParentContext(evt, metadata),
+            endTimeMs: evt.ts,
+          });
+        setSpanAttrs(span, spanAttrs);
+        span.setStatus({
+          code: SpanStatusCode.ERROR,
+          message: redactSensitiveText(evt.errorCategory),
+        });
+        span.end(evt.ts);
+      };
+
       const recordExecProcessCompleted = (
         evt: Extract<DiagnosticEventPayload, { type: "exec.process.completed" }>,
       ) => {
@@ -2265,6 +2359,15 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "tool.execution.blocked":
               recordToolExecutionBlocked(evt, metadata);
+              return;
+            case "mcp.request.started":
+              recordMcpRequestStarted(evt, metadata);
+              return;
+            case "mcp.request.completed":
+              recordMcpRequestCompleted(evt, metadata);
+              return;
+            case "mcp.request.error":
+              recordMcpRequestError(evt, metadata);
               return;
             case "exec.process.completed":
               recordExecProcessCompleted(evt);

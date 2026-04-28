@@ -308,6 +308,21 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.outcome = "blocked";
       assignReasonCode(record, event.deniedReason);
       break;
+    case "mcp.request.started":
+      record.toolName = event.toolName;
+      record.outcome = event.method;
+      break;
+    case "mcp.request.completed":
+      record.toolName = event.toolName;
+      record.outcome = event.method;
+      record.durationMs = event.durationMs;
+      break;
+    case "mcp.request.error":
+      record.toolName = event.toolName;
+      record.outcome = "error";
+      record.durationMs = event.durationMs;
+      assignReasonCode(record, event.errorCategory);
+      break;
     case "exec.process.completed":
       record.target = event.target;
       record.mode = event.mode;

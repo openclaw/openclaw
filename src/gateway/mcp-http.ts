@@ -22,6 +22,7 @@ import {
   validateMcpLoopbackRequest,
 } from "./mcp-http.request.js";
 import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
+import { resolveMcpTraceOptions } from "./mcp-http.trace.js";
 
 export {
   createMcpLoopbackServerConfig,
@@ -106,6 +107,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
         const body = await readMcpHttpBody(req);
         const parsed: JsonRpcRequest | JsonRpcRequest[] = JSON.parse(body);
         const cfg = getRuntimeConfig();
+        const mcpTrace = resolveMcpTraceOptions(cfg);
         const requestContext = resolveMcpRequestContext(req, cfg, auth);
         const scopedTools = toolCache.resolve({
           cfg,
@@ -134,6 +136,8 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
               agentId: scopedTools.agentId,
               sessionKey: requestContext.sessionKey,
             },
+            requestContext,
+            mcpTrace,
             signal: requestAbort.signal,
           });
           if (response !== null) {

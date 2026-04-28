@@ -247,6 +247,12 @@ export type DiagnosticsOtelConfig = {
   sampleRate?: number;
   /** Metric export interval (ms). */
   flushIntervalMs?: number;
+  /** Opt-in MCP JSON-RPC trace-context canary. Defaults to disabled. */
+  mcp?: {
+    enabled?: boolean;
+    propagateTraceContext?: boolean;
+    captureBaggage?: boolean;
+  };
   /**
    * Opt-in raw content capture for OTEL span attributes.
    * Boolean `true` captures non-system message/tool content; the object form

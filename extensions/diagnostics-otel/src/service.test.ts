@@ -1446,6 +1446,55 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("exports MCP request spans with propagated remote trace context", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createTraceOnlyContext(OTEL_TEST_ENDPOINT);
+    await service.start(ctx);
+
+    emitTrustedDiagnosticEvent({
+      type: "mcp.request.completed",
+      method: "tools/call",
+      requestId: "request-1",
+      sessionKey: "session-key",
+      toolName: "probe",
+      transport: "streamable-http",
+      durationMs: 15,
+      trace: {
+        traceId: TRACE_ID,
+        spanId: CHILD_SPAN_ID,
+        parentSpanId: SPAN_ID,
+        traceFlags: "01",
+      },
+    });
+    await flushDiagnosticEvents();
+
+    const mcpCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "tools/call probe",
+    );
+    expect(mcpCall?.[1]).toMatchObject({
+      attributes: {
+        "mcp.method.name": "tools/call",
+        "network.transport": "streamable-http",
+        "jsonrpc.request.id": "request-1",
+        "mcp.session.id": "session-key",
+        "gen_ai.operation.name": "execute_tool",
+        "gen_ai.tool.name": "probe",
+      },
+      startTime: expect.any(Number),
+    });
+    expect(mcpCall?.[2]).toEqual({
+      spanContext: {
+        traceId: TRACE_ID,
+        spanId: SPAN_ID,
+        traceFlags: 1,
+        isRemote: true,
+      },
+    });
+    const mcpSpan = telemetryState.spans.find((span) => span.name === "tools/call probe");
+    expect(mcpSpan?.end).toHaveBeenCalledWith(expect.any(Number));
+    await service.stop?.(ctx);
+  });
+
   test("maps model call APIs to GenAI operation names and error type", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });

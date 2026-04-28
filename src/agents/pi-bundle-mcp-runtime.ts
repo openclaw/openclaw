@@ -12,6 +12,10 @@ import type {
 } from "@modelcontextprotocol/sdk/validation/types.js";
 import type { ErrorObject, ValidateFunction } from "ajv";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  createDiagnosticTraceContext,
+  formatDiagnosticTraceparent,
+} from "../infra/diagnostic-trace-context.js";
 import { logWarn } from "../logger.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
@@ -90,6 +94,36 @@ export function createBundleMcpJsonSchemaValidator(): jsonSchemaValidator {
       };
     },
   };
+}
+
+export function createBundleMcpCallToolRequest(params: {
+  toolName: string;
+  input: unknown;
+  cfg?: OpenClawConfig;
+}): { name: string; arguments: Record<string, unknown>; _meta?: Record<string, unknown> } {
+  const request: {
+    name: string;
+    arguments: Record<string, unknown>;
+    _meta?: Record<string, unknown>;
+  } = {
+    name: params.toolName,
+    arguments: isMcpConfigRecord(params.input) ? params.input : {},
+  };
+  const mcpOtel = params.cfg?.diagnostics?.otel?.mcp;
+  const shouldPropagate =
+    params.cfg?.diagnostics?.enabled !== false &&
+    params.cfg?.diagnostics?.otel?.enabled !== false &&
+    mcpOtel?.enabled === true &&
+    mcpOtel.propagateTraceContext !== false;
+  if (!shouldPropagate) {
+    return request;
+  }
+  const traceparent = formatDiagnosticTraceparent(createDiagnosticTraceContext());
+  if (!traceparent) {
+    return request;
+  }
+  request._meta = { ...request._meta, traceparent };
+  return request;
 }
 
 function connectWithTimeout(
@@ -355,10 +389,9 @@ export function createSessionMcpRuntime(params: {
       if (!session) {
         throw new Error(`bundle-mcp server "${serverName}" is not connected`);
       }
-      return (await session.client.callTool({
-        name: toolName,
-        arguments: isMcpConfigRecord(input) ? input : {},
-      })) as CallToolResult;
+      return (await session.client.callTool(
+        createBundleMcpCallToolRequest({ toolName, input, cfg: params.cfg }),
+      )) as CallToolResult;
     },
     async dispose() {
       if (disposed) {
