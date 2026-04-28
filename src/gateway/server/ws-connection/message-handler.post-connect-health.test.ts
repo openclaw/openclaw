@@ -200,7 +200,16 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     vi.useFakeTimers();
     const previousHandshakeTimeout = process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS;
     process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = "25";
-    resolveConnectAuthStateMock.mockReturnValue(new Promise(() => {}));
+    let resolveAuth:
+      | ((
+          value: Awaited<ReturnType<typeof import("./auth-context.js").resolveConnectAuthState>>,
+        ) => void)
+      | undefined;
+    resolveConnectAuthStateMock.mockReturnValue(
+      new Promise((resolve) => {
+        resolveAuth = resolve;
+      }),
+    );
 
     try {
       let onMessage: ((data: string) => void) | undefined;
@@ -216,6 +225,8 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       } as unknown as WebSocket;
       const close = vi.fn();
       const clearHandshakeTimer = vi.fn();
+      const send = vi.fn();
+      const setClient = vi.fn(() => true);
       const resolvedAuth: ResolvedGatewayAuth = {
         mode: "none",
         allowTailscale: false,
@@ -239,12 +250,12 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         extraHandlers: {},
         buildRequestContext: () => ({}) as GatewayRequestContext,
         refreshHealthSnapshot: vi.fn() as GatewayRequestContext["refreshHealthSnapshot"],
-        send: vi.fn(),
+        send,
         close,
         isClosed: () => false,
         clearHandshakeTimer,
         getClient: () => null,
-        setClient: vi.fn(() => true),
+        setClient,
         setHandshakeState: vi.fn(),
         setCloseCause: vi.fn(),
         setLastFrameMeta: vi.fn(),
@@ -278,6 +289,17 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       await vi.advanceTimersByTimeAsync(25);
 
       expect(close).toHaveBeenCalledWith(1008, "connect auth timeout");
+      resolveAuth?.({
+        authResult: { ok: true, method: "none" },
+        authOk: true,
+        authMethod: "none",
+        sharedAuthOk: false,
+        sharedAuthProvided: false,
+      });
+      await vi.runAllTimersAsync();
+
+      expect(setClient).not.toHaveBeenCalled();
+      expect(send).not.toHaveBeenCalled();
     } finally {
       if (previousHandshakeTimeout === undefined) {
         delete process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS;

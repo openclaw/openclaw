@@ -434,7 +434,9 @@ export function attachGatewayWsMessageHandler(params: {
         };
         const connectAuthStartedAt = Date.now();
         const connectAuthTimeoutMs = getPreauthHandshakeTimeoutMsFromEnv();
+        let connectAuthTimedOut = false;
         const connectAuthTimer = setTimeout(() => {
+          connectAuthTimedOut = true;
           clearConnectAuthTimer();
           if (isClosed() || getClient()) {
             return;
@@ -1306,12 +1308,14 @@ export function attachGatewayWsMessageHandler(params: {
         const instanceId = connectParams.client.instanceId;
         const presenceKey = shouldTrackPresence ? (device?.id ?? instanceId ?? connId) : undefined;
 
-        if (isClosed()) {
+        if (connectAuthTimedOut || isClosed()) {
           clearConnectAuthTimer();
-          setCloseCause("connect-aborted-before-register", {
-            ...clientMeta,
-            auth: authMethod,
-          });
+          if (!connectAuthTimedOut) {
+            setCloseCause("connect-aborted-before-register", {
+              ...clientMeta,
+              auth: authMethod,
+            });
+          }
           return;
         }
 
