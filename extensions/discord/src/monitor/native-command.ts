@@ -53,6 +53,7 @@ import {
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
+import { toDiscordFileBlob } from "../send.shared.js";
 import {
   normalizeDiscordAllowList,
   resolveDiscordAllowListMatch,
@@ -1083,6 +1084,7 @@ async function dispatchDiscordCommandInteraction(params: {
     await deliverDiscordInteractionReply({
       interaction,
       payload: pluginReply,
+      mediaMaxBytes: (discordConfig?.mediaMaxMb ?? 8) * 1024 * 1024,
       textLimit: resolveTextChunkLimit(cfg, "discord", accountId, {
         fallbackLimit: 2000,
       }),
@@ -1153,6 +1155,7 @@ async function dispatchDiscordCommandInteraction(params: {
         interaction,
         payload: statusReply,
         mediaLocalRoots,
+        mediaMaxBytes: (discordConfig?.mediaMaxMb ?? 8) * 1024 * 1024,
         textLimit: resolveTextChunkLimit(cfg, "discord", accountId, {
           fallbackLimit: 2000,
         }),
@@ -1219,6 +1222,7 @@ async function dispatchDiscordCommandInteraction(params: {
             interaction,
             payload,
             mediaLocalRoots,
+            mediaMaxBytes: (discordConfig?.mediaMaxMb ?? 8) * 1024 * 1024,
             textLimit: resolveTextChunkLimit(cfg, "discord", accountId, {
               fallbackLimit: 2000,
             }),
@@ -1304,6 +1308,7 @@ async function deliverDiscordInteractionReply(params: {
   interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
   payload: ReplyPayload;
   mediaLocalRoots?: readonly string[];
+  mediaMaxBytes: number;
   textLimit: number;
   maxLinesPerMessage?: number;
   preferFollowUp: boolean;
@@ -1323,7 +1328,7 @@ async function deliverDiscordInteractionReply(params: {
   let hasReplied = false;
   const sendMessage = async (
     content: string,
-    files?: { name: string; data: Buffer }[],
+    files?: { name: string; data: Blob | Uint8Array }[],
     components?: TopLevelComponents[],
   ) => {
     const payload =
@@ -1334,13 +1339,10 @@ async function deliverDiscordInteractionReply(params: {
             ...(params.responseEphemeral !== undefined
               ? { ephemeral: params.responseEphemeral }
               : {}),
-            files: files.map((file) => {
-              if (file.data instanceof Blob) {
-                return { name: file.name, data: file.data };
-              }
-              const arrayBuffer = Uint8Array.from(file.data).buffer;
-              return { name: file.name, data: new Blob([arrayBuffer]) };
-            }),
+            files: files.map((file) => ({
+              name: file.name,
+              data: toDiscordFileBlob(file.data),
+            })),
           }
         : {
             content,
@@ -1366,11 +1368,14 @@ async function deliverDiscordInteractionReply(params: {
     const media = await Promise.all(
       reply.mediaUrls.map(async (url) => {
         const loaded = await loadWebMedia(url, {
+          maxBytes: params.mediaMaxBytes,
           localRoots: params.mediaLocalRoots,
+          preserveWebp: true,
+          preserveAvif: true,
         });
         return {
           name: loaded.fileName ?? "upload",
-          data: loaded.buffer,
+          data: toDiscordFileBlob(loaded.buffer, loaded.contentType),
         };
       }),
     );

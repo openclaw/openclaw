@@ -6,6 +6,7 @@ export const FILE_TYPE_SNIFF_MAX_BYTES = 1024 * 1024;
 
 // Map common mimes to preferred file extensions.
 const EXT_BY_MIME: Record<string, string> = {
+  "image/apng": ".png",
   "image/heic": ".heic",
   "image/heif": ".heif",
   "image/jpeg": ".jpg",
@@ -49,6 +50,7 @@ const MIME_BY_EXT: Record<string, string> = {
   ...Object.fromEntries(Object.entries(EXT_BY_MIME).map(([mime, ext]) => [ext, mime])),
   // Additional extension aliases
   ".jpeg": "image/jpeg",
+  ".apng": "image/apng",
   ".js": "text/javascript",
   ".htm": "text/html",
   ".xml": "text/xml",

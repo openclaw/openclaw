@@ -338,13 +338,16 @@ export function stripUndefinedFields<T extends object>(value: T): T {
   return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as T;
 }
 
-export function toDiscordFileBlob(data: Blob | Uint8Array): Blob {
+export function toDiscordFileBlob(data: Blob | Uint8Array, contentType?: string): Blob {
   if (data instanceof Blob) {
+    if (!data.type && contentType) {
+      return new Blob([data], { type: contentType });
+    }
     return data;
   }
   const arrayBuffer = new ArrayBuffer(data.byteLength);
   new Uint8Array(arrayBuffer).set(data);
-  return new Blob([arrayBuffer]);
+  return new Blob([arrayBuffer], { type: contentType });
 }
 
 async function sendDiscordText(
@@ -422,10 +425,11 @@ async function sendDiscordMedia(
   silent?: boolean,
   maxChars?: number,
 ) {
-  const media = await loadWebMedia(
-    mediaUrl,
-    buildOutboundMediaLoadOptions({ maxBytes, mediaLocalRoots, mediaReadFile }),
-  );
+  const media = await loadWebMedia(mediaUrl, {
+    ...buildOutboundMediaLoadOptions({ maxBytes, mediaLocalRoots, mediaReadFile }),
+    preserveWebp: true,
+    preserveAvif: true,
+  });
   const requestedFileName = filename?.trim();
   const resolvedFileName =
     requestedFileName ||
@@ -438,7 +442,7 @@ async function sendDiscordMedia(
   const caption = chunks[0] ?? "";
   const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
   const flags = silent ? SUPPRESS_NOTIFICATIONS_FLAG : undefined;
-  const fileData = toDiscordFileBlob(media.buffer);
+  const fileData = toDiscordFileBlob(media.buffer, media.contentType);
   const captionComponents = resolveDiscordSendComponents({
     components,
     text: caption,

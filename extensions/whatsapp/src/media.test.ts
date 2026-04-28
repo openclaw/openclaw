@@ -300,6 +300,41 @@ describe("web media loading", () => {
     fetchMock.mockRestore();
   });
 
+  it("preserves animated PNG without flattening it to JPEG", async () => {
+    const pngChunk = (type: string, data = Buffer.alloc(0)) => {
+      const length = Buffer.alloc(4);
+      length.writeUInt32BE(data.length, 0);
+      return Buffer.concat([length, Buffer.from(type, "ascii"), data, Buffer.alloc(4)]);
+    };
+    const apng = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      pngChunk(
+        "IHDR",
+        Buffer.from([0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00]),
+      ),
+      pngChunk("acTL", Buffer.from([0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00])),
+      pngChunk("IDAT", Buffer.from([0x78, 0x9c, 0x63, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01])),
+      pngChunk("IEND"),
+    ]);
+
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+      ok: true,
+      body: true,
+      arrayBuffer: async () =>
+        apng.buffer.slice(apng.byteOffset, apng.byteOffset + apng.byteLength),
+      headers: { get: () => "image/png" },
+      status: 200,
+    } as unknown as Response);
+
+    const result = await loadWebMedia("https://example.com/animation.png", 1024 * 1024);
+
+    expect(result.kind).toBe("image");
+    expect(result.contentType).toBe("image/apng");
+    expect(result.buffer).toEqual(apng);
+
+    fetchMock.mockRestore();
+  });
+
   it("preserves PNG alpha when under the cap", async () => {
     const result = await loadWebMedia(alphaPngFile, 1024 * 1024);
 

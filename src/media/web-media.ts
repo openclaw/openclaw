@@ -10,6 +10,7 @@ import { fetchRemoteMedia } from "./fetch.js";
 import {
   convertHeicToJpeg,
   hasAlphaChannel,
+  isAnimatedImage,
   optimizeImageToPng,
   resizeToJpeg,
 } from "./image-ops.js";
@@ -55,6 +56,10 @@ type WebMediaOptions = {
   readFile?: (filePath: string) => Promise<Buffer>;
   /** Host-local fs-policy read piggyback; rejects plaintext-like document sends. */
   hostReadCapability?: boolean;
+  /** Preserve WebP format instead of converting to JPEG (Discord). */
+  preserveWebp?: boolean;
+  /** Preserve AVIF format instead of converting to JPEG (Discord). */
+  preserveAvif?: boolean;
 };
 
 async function resolveMediaStoreUriToPath(mediaUrl: string): Promise<string | null> {
@@ -214,6 +219,20 @@ function isHeicSource(opts: { contentType?: string; fileName?: string }): boolea
   return false;
 }
 
+function isPreservedRemoteImageHint(opts: {
+  url: string;
+  preserveWebp: boolean;
+  preserveAvif: boolean;
+}): boolean {
+  const ext = getFileExtension(opts.url);
+  return (
+    ext === ".gif" ||
+    ext === ".apng" ||
+    (ext === ".webp" && opts.preserveWebp) ||
+    (ext === ".avif" && opts.preserveAvif)
+  );
+}
+
 function assertHostReadMediaAllowed(params: {
   sniffedContentType?: string;
   contentType?: string;
@@ -358,6 +377,8 @@ async function loadWebMediaInternal(
   const {
     maxBytes,
     optimizeImages = true,
+    preserveWebp = false,
+    preserveAvif = false,
     ssrfPolicy,
     proxyUrl,
     fetchImpl,
@@ -423,7 +444,22 @@ async function loadWebMediaInternal(
     const cap = maxBytes !== undefined ? maxBytes : maxBytesForKind(params.kind ?? "document");
     if (params.kind === "image") {
       const isGif = params.contentType === "image/gif";
-      if (isGif || !optimizeImages) {
+      const isPng = params.contentType === "image/png" || params.contentType === "image/apng";
+      const isWebp = params.contentType === "image/webp";
+      const isAvif = params.contentType === "image/avif";
+      const isAnimated =
+        (isPng || isWebp) &&
+        isAnimatedImage(params.buffer, {
+          contentType: params.contentType,
+          fileName: params.fileName,
+        });
+      const skipOptimization =
+        isGif ||
+        isAnimated ||
+        (isWebp && preserveWebp) ||
+        (isAvif && preserveAvif) ||
+        !optimizeImages;
+      if (skipOptimization) {
         if (params.buffer.length > cap) {
           throw new Error(formatCapLimit(isGif ? "GIF" : "Media", cap, params.buffer.length));
         }
@@ -456,10 +492,15 @@ async function loadWebMediaInternal(
     // Enforce a download cap during fetch to avoid unbounded memory usage.
     // For optimized images, allow fetching larger payloads before compression.
     const defaultFetchCap = maxBytesForKind("document");
+    const preservedImageHint = isPreservedRemoteImageHint({
+      url: mediaUrl,
+      preserveWebp,
+      preserveAvif,
+    });
     const fetchCap =
       maxBytes === undefined
         ? defaultFetchCap
-        : optimizeImages
+        : optimizeImages && !preservedImageHint
           ? Math.max(maxBytes, defaultFetchCap)
           : maxBytes;
     const dispatcherPolicy: PinnedDispatcherPolicy | undefined = proxyUrl
