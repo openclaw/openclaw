@@ -20,6 +20,7 @@ import {
 } from "./zod-schema.core.js";
 import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
 import { ChannelsSchema } from "./zod-schema.providers.js";
+import { ProxyConfigSchema } from "./zod-schema.proxy.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 import {
   CommandsSchema,
@@ -766,6 +767,7 @@ export const OpenClawSchema = z
                 userHeader: z.string().min(1, "userHeader is required for trusted-proxy mode"),
                 requiredHeaders: z.array(z.string()).optional(),
                 allowUsers: z.array(z.string()).optional(),
+                allowLoopback: z.boolean().optional(),
               })
               .strict()
               .optional(),
@@ -1019,6 +1021,7 @@ export const OpenClawSchema = z
           .strict(),
       )
       .optional(),
+    proxy: ProxyConfigSchema,
   })
   .strict()
   .superRefine((cfg, ctx) => {

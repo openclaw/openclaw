@@ -456,6 +456,7 @@ OpenClaw uses the built-in model catalog. Add custom providers via `models.provi
   </Accordion>
   <Accordion title="Model catalog entries">
     - `models.providers.*.models`: explicit provider model catalog entries.
+    - `models.providers.*.models.*.input`: model input modalities. Use `["text"]` for text-only models and `["text", "image"]` for native image/vision models. Image attachments are only injected into agent turns when the selected model is marked image-capable.
     - `models.providers.*.models.*.contextWindow`: native model context window metadata. This overrides provider-level `contextWindow` for that model.
     - `models.providers.*.models.*.contextTokens`: optional runtime context cap. This overrides provider-level `contextTokens`; use it when you want a smaller effective context budget than the model's native `contextWindow`; `openclaw models list` shows both values when they differ.
     - `models.providers.*.models.*.compat.supportsDeveloperRole`: optional compatibility hint. For `api: "openai-completions"` with a non-empty non-native `baseUrl` (host not `api.openai.com`), OpenClaw forces this to `false` at runtime. Empty/omitted `baseUrl` keeps default OpenAI behavior.
@@ -471,6 +472,8 @@ OpenClaw uses the built-in model catalog. Add custom providers via `models.provi
     - `plugins.entries.amazon-bedrock.config.discovery.defaultMaxTokens`: fallback max output tokens for discovered models.
   </Accordion>
 </AccordionGroup>
+
+Interactive custom-provider onboarding infers image input for common vision model IDs such as GPT-4o, Claude, Gemini, Qwen-VL, LLaVA, Pixtral, InternVL, Mllama, MiniCPM-V, and GLM-4V, and skips the extra question for known text-only families. Unknown model IDs still prompt for image support. Non-interactive onboarding uses the same inference; pass `--custom-image-input` to force image-capable metadata or `--custom-text-input` to force text-only metadata.
 
 ### Provider examples
 

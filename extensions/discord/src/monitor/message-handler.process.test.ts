@@ -110,6 +110,8 @@ type DispatchInboundParams = {
       summary?: string;
       title?: string;
     }) => Promise<void> | void;
+    sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+    disableBlockStreaming?: boolean;
     suppressDefaultToolProgressMessages?: boolean;
     onCompactionStart?: () => Promise<void> | void;
     onCompactionEnd?: () => Promise<void> | void;
@@ -217,6 +219,30 @@ async function createBaseContext(
   return await createBaseDiscordMessageContext(...args);
 }
 
+async function createAutomaticSourceDeliveryContext(
+  overrides: Parameters<typeof createBaseDiscordMessageContext>[0] = {},
+): Promise<Awaited<ReturnType<typeof createBaseDiscordMessageContext>>> {
+  const cfg = (overrides.cfg ?? {}) as {
+    messages?: {
+      groupChat?: Record<string, unknown>;
+    } & Record<string, unknown>;
+  } & Record<string, unknown>;
+  return await createBaseContext({
+    ...overrides,
+    cfg: {
+      ...cfg,
+      messages: {
+        ...cfg.messages,
+        ackReaction: cfg.messages?.ackReaction ?? "👀",
+        groupChat: {
+          ...cfg.messages?.groupChat,
+          visibleReplies: "automatic",
+        },
+      },
+    },
+  });
+}
+
 function createDirectMessageContextOverrides(
   ...args: Parameters<typeof createDiscordDirectMessageContextOverrides>
 ): ReturnType<typeof createDiscordDirectMessageContextOverrides> {
@@ -312,6 +338,12 @@ function getLastDispatchCtx():
       }
     | undefined;
   return params?.ctx;
+}
+
+function getLastDispatchReplyOptions(): DispatchInboundParams["replyOptions"] | undefined {
+  const callArgs = dispatchInboundMessage.mock.calls.at(-1) as unknown[] | undefined;
+  const params = callArgs?.[0] as DispatchInboundParams | undefined;
+  return params?.replyOptions;
 }
 
 async function runProcessDiscordMessage(ctx: unknown): Promise<void> {
@@ -421,7 +453,7 @@ describe("processDiscordMessage ack reactions", () => {
   });
 
   it("sends ack reactions for mention-gated guild messages when mentioned", async () => {
-    const ctx = await createBaseContext({
+    const ctx = await createAutomaticSourceDeliveryContext({
       accountId: "ops",
       shouldRequireMention: true,
       effectiveWasMentioned: true,
@@ -443,7 +475,7 @@ describe("processDiscordMessage ack reactions", () => {
   });
 
   it("uses preflight-resolved messageChannelId when message.channelId is missing", async () => {
-    const ctx = await createBaseContext({
+    const ctx = await createAutomaticSourceDeliveryContext({
       message: {
         id: "m1",
         timestamp: new Date().toISOString(),
@@ -482,7 +514,7 @@ describe("processDiscordMessage ack reactions", () => {
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
 
-    const ctx = await createBaseContext();
+    const ctx = await createAutomaticSourceDeliveryContext();
 
     await runProcessDiscordMessage(ctx);
 
@@ -503,7 +535,7 @@ describe("processDiscordMessage ack reactions", () => {
       return createNoQueuedDispatchResult();
     });
 
-    const ctx = await createBaseContext();
+    const ctx = await createAutomaticSourceDeliveryContext();
 
     await processDiscordMessage(ctx as any);
 
@@ -525,7 +557,7 @@ describe("processDiscordMessage ack reactions", () => {
       return createNoQueuedDispatchResult();
     });
 
-    const ctx = await createBaseContext();
+    const ctx = await createAutomaticSourceDeliveryContext();
     const runPromise = processDiscordMessage(ctx as any);
 
     await vi.advanceTimersByTimeAsync(30_001);
@@ -547,7 +579,7 @@ describe("processDiscordMessage ack reactions", () => {
       return createNoQueuedDispatchResult();
     });
 
-    const ctx = await createBaseContext({
+    const ctx = await createAutomaticSourceDeliveryContext({
       cfg: {
         messages: {
           ackReaction: "👀",
@@ -573,7 +605,7 @@ describe("processDiscordMessage ack reactions", () => {
       return createNoQueuedDispatchResult();
     });
 
-    const ctx = await createBaseContext({
+    const ctx = await createAutomaticSourceDeliveryContext({
       cfg: {
         messages: {
           ackReaction: "👀",
@@ -601,7 +633,7 @@ describe("processDiscordMessage ack reactions", () => {
       return createNoQueuedDispatchResult();
     });
 
-    const ctx = await createBaseContext({
+    const ctx = await createAutomaticSourceDeliveryContext({
       cfg: {
         messages: {
           ackReaction: "👀",
@@ -630,7 +662,7 @@ describe("processDiscordMessage ack reactions", () => {
       throw new Error("aborted");
     });
 
-    const ctx = await createBaseContext({
+    const ctx = await createAutomaticSourceDeliveryContext({
       abortSignal: abortController.signal,
       cfg: {
         messages: {
@@ -651,7 +683,7 @@ describe("processDiscordMessage ack reactions", () => {
   });
 
   it("removes the plain ack reaction when status reactions are disabled and removeAckAfterReply is enabled", async () => {
-    const ctx = await createBaseContext({
+    const ctx = await createAutomaticSourceDeliveryContext({
       cfg: {
         messages: {
           ackReaction: "👀",
@@ -753,6 +785,85 @@ describe("processDiscordMessage session routing", () => {
     });
   });
 
+  it("marks always-on guild replies as message-tool-only and disables source streaming", async () => {
+    const ctx = await createBaseContext({
+      shouldRequireMention: false,
+      effectiveWasMentioned: false,
+      discordConfig: { streaming: "partial", blockStreaming: true },
+      route: BASE_CHANNEL_ROUTE,
+    });
+
+    await processDiscordMessage(ctx as any);
+
+    expect(getLastDispatchReplyOptions()).toMatchObject({
+      sourceReplyDeliveryMode: "message_tool_only",
+      disableBlockStreaming: true,
+    });
+    expect(createDiscordDraftStream).not.toHaveBeenCalled();
+  });
+
+  it("suppresses automatic status reactions for always-on guild replies", async () => {
+    const ctx = await createBaseContext({
+      shouldRequireMention: false,
+      effectiveWasMentioned: false,
+      ackReactionScope: "all",
+      cfg: {
+        messages: {
+          ackReaction: "👀",
+          ackReactionScope: "all",
+          statusReactions: {
+            timing: { debounceMs: 0 },
+          },
+        },
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+      },
+      route: BASE_CHANNEL_ROUTE,
+    });
+
+    await processDiscordMessage(ctx as any);
+
+    expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(sendMocks.reactMessageDiscord).not.toHaveBeenCalled();
+    expect(sendMocks.removeReactionDiscord).not.toHaveBeenCalled();
+  });
+
+  it("defaults guild replies to message-tool-only source delivery", async () => {
+    await processDiscordMessage(
+      (await createBaseContext({
+        shouldRequireMention: true,
+        effectiveWasMentioned: true,
+        route: BASE_CHANNEL_ROUTE,
+      })) as any,
+    );
+    expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
+
+    dispatchInboundMessage.mockClear();
+    await processDiscordMessage(
+      (await createBaseContext({
+        shouldRequireMention: true,
+        effectiveWasMentioned: true,
+        cfg: {
+          messages: {
+            groupChat: {
+              visibleReplies: "automatic",
+            },
+          },
+          session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+        },
+        route: BASE_CHANNEL_ROUTE,
+      })) as any,
+    );
+    expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("automatic");
+
+    dispatchInboundMessage.mockClear();
+    await processDiscordMessage(
+      (await createBaseContext({
+        ...createDirectMessageContextOverrides(),
+      })) as any,
+    );
+    expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBeUndefined();
+  });
+
   it("prefers bound session keys and sets MessageThreadId for bound thread messages", async () => {
     const threadBindings = createThreadBindingManager({
       cfg: {} as import("openclaw/plugin-sdk/config-types").OpenClawConfig,
@@ -830,7 +941,7 @@ describe("processDiscordMessage draft streaming", () => {
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
 
-    const ctx = await createBaseContext({
+    const ctx = await createAutomaticSourceDeliveryContext({
       discordConfig,
     });
 
@@ -838,7 +949,7 @@ describe("processDiscordMessage draft streaming", () => {
   }
 
   async function createBlockModeContext() {
-    return await createBaseContext({
+    return await createAutomaticSourceDeliveryContext({
       cfg: {
         messages: { ackReaction: "👀" },
         session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
@@ -882,7 +993,7 @@ describe("processDiscordMessage draft streaming", () => {
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
 
-    const ctx = await createBaseContext({
+    const ctx = await createAutomaticSourceDeliveryContext({
       cfg: {
         messages: { ackReaction: "👀" },
         session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
@@ -917,7 +1028,7 @@ describe("processDiscordMessage draft streaming", () => {
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
 
-    const ctx = await createBaseContext({
+    const ctx = await createAutomaticSourceDeliveryContext({
       discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
     });
 
@@ -937,7 +1048,7 @@ describe("processDiscordMessage draft streaming", () => {
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
 
-    const ctx = await createBaseContext({
+    const ctx = await createAutomaticSourceDeliveryContext({
       discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
     });
 
@@ -960,7 +1071,7 @@ describe("processDiscordMessage draft streaming", () => {
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
 
-    const ctx = await createBaseContext({
+    const ctx = await createAutomaticSourceDeliveryContext({
       discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
     });
 
@@ -989,7 +1100,9 @@ describe("processDiscordMessage draft streaming", () => {
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
 
-    const ctx = await createBaseContext({ discordConfig: { streamMode: "off" } });
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: { streamMode: "off" },
+    });
 
     await processDiscordMessage(ctx as any);
 
@@ -1030,7 +1143,7 @@ describe("processDiscordMessage draft streaming", () => {
       return createNoQueuedDispatchResult();
     });
 
-    const ctx = await createBaseContext({
+    const ctx = await createAutomaticSourceDeliveryContext({
       discordConfig: { streamMode: "partial" },
     });
 

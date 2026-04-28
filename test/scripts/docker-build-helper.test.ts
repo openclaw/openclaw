@@ -66,7 +66,9 @@ describe("docker build helper", () => {
     expect(liveBuild).toContain("docker image inspect");
     expect(liveBuild).toContain("docker pull");
     expect(liveBuild).toContain("Live-test image not available; building");
-    expect(liveCliBackend).toContain('"$ROOT_DIR/scripts/test-live-build-docker.sh"');
+    expect(liveCliBackend).toContain(
+      'OPENCLAW_LIVE_DOCKER_REPO_ROOT="$ROOT_DIR" "$TRUSTED_HARNESS_DIR/scripts/test-live-build-docker.sh"',
+    );
     expect(liveCliBackend).not.toContain(
       'echo "==> Reuse live-test image: $LIVE_IMAGE_NAME (OPENCLAW_SKIP_DOCKER_BUILD=1)"',
     );

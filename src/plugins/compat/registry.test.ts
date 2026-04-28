@@ -93,7 +93,7 @@ const knownDeprecatedSurfaceMarkers = [
   {
     code: "plugin-sdk-test-utils-alias",
     file: "src/plugin-sdk/test-utils.ts",
-    marker: "focused openclaw/plugin-sdk/* test subpaths",
+    marker: "focused `openclaw/plugin-sdk/*` test subpaths",
   },
   {
     code: "plugin-install-config-ledger",
@@ -128,7 +128,7 @@ const knownDeprecatedSurfaceMarkers = [
   {
     code: "plugin-sdk-testing-barrel",
     file: "src/plugin-sdk/testing.ts",
-    marker: "Broad legacy compatibility barrel for older plugin tests",
+    marker: "@deprecated Broad compatibility barrel",
   },
   {
     code: "channel-route-key-aliases",

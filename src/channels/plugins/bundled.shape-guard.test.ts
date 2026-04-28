@@ -913,12 +913,6 @@ describe("bundled channel entry shape guards", () => {
     expect(source.includes('from "./runtime.js"')).toBe(false);
   });
 
-  it("keeps nextcloud-talk's private SDK surface off the broad runtime barrel", () => {
-    const source = fs.readFileSync(path.resolve("src/plugin-sdk/nextcloud-talk.ts"), "utf8");
-
-    expect(source.includes('from "./runtime.js"')).toBe(false);
-  });
-
   it("keeps bundled doctor surfaces off the broad runtime barrel", () => {
     const offenders = [
       "extensions/discord/src/doctor.ts",

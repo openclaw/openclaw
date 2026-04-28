@@ -86,6 +86,8 @@ const MOCK_RELATIVE_MODULE_PATTERN =
 
 const RELATIVE_CORE_HINT =
   "Use a focused plugin-sdk test/runtime subpath instead of core internals.";
+const ROOT_TEST_SUPPORT_LOCAL_SRC_HINT =
+  "Move this helper under the extension's src/test-support tree or expose a narrow test-api/runtime-api surface instead of reaching into private src from package-root test-support.";
 
 // Tombstones for retired repo-only plugin helper bridge files. Keep this list so
 // deleted bridges fail loudly if they are recreated instead of using SDK subpaths.
@@ -203,6 +205,30 @@ function resolvesToRepoSrc(filePath: string, specifier: string): boolean {
   return repoRelative === "src" || repoRelative.startsWith("src/");
 }
 
+function getExtensionRootForFile(filePath: string): string | undefined {
+  const relativePath = path.relative(process.cwd(), filePath).replaceAll(path.sep, "/");
+  const match = /^extensions\/[^/]+(?:\/|$)/u.exec(relativePath);
+  return match ? path.resolve(process.cwd(), match[0]) : undefined;
+}
+
+function isRootExtensionTestSupportFile(filePath: string): boolean {
+  const relativePath = path.relative(process.cwd(), filePath).replaceAll(path.sep, "/");
+  return /^extensions\/[^/]+\/test-support(?:\.[cm]?[jt]sx?|\/)/u.test(relativePath);
+}
+
+function resolvesToExtensionLocalSrc(filePath: string, specifier: string): boolean {
+  if (!specifier.startsWith(".")) {
+    return false;
+  }
+  const extensionRoot = getExtensionRootForFile(filePath);
+  if (!extensionRoot) {
+    return false;
+  }
+  const resolved = path.resolve(path.dirname(filePath), specifier);
+  const localSrc = path.join(extensionRoot, "src");
+  return resolved === localSrc || resolved.startsWith(`${localSrc}${path.sep}`);
+}
+
 function collectRelativeCoreImportOffenders(
   filePath: string,
   content: string,
@@ -222,6 +248,34 @@ function collectRelativeCoreImportOffenders(
     offenders.push({
       file: filePath,
       hint: RELATIVE_CORE_HINT,
+      line: lineNumberForOffset(content, match.index ?? 0),
+      specifier,
+    });
+  }
+  return offenders;
+}
+
+function collectRootTestSupportLocalSrcImportOffenders(
+  filePath: string,
+  content: string,
+): Offender[] {
+  if (!isRootExtensionTestSupportFile(filePath)) {
+    return [];
+  }
+  const offenders: Offender[] = [];
+  const matches = [
+    ...content.matchAll(STATIC_RELATIVE_MODULE_PATTERN),
+    ...content.matchAll(DYNAMIC_RELATIVE_MODULE_PATTERN),
+    ...content.matchAll(MOCK_RELATIVE_MODULE_PATTERN),
+  ];
+  for (const match of matches) {
+    const specifier = match[1];
+    if (!specifier || !resolvesToExtensionLocalSrc(filePath, specifier)) {
+      continue;
+    }
+    offenders.push({
+      file: filePath,
+      hint: ROOT_TEST_SUPPORT_LOCAL_SRC_HINT,
       line: lineNumberForOffset(content, match.index ?? 0),
       specifier,
     });
@@ -272,6 +326,7 @@ function main() {
         includeDynamic: true,
       }),
     );
+    offenders.push(...collectRootTestSupportLocalSrcImportOffenders(file, content));
   }
 
   for (const file of pluginHelperFiles) {

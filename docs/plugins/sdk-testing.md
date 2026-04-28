@@ -45,6 +45,9 @@ plugins.
 
 Prefer the focused subpaths below for new plugin tests. The broad
 `openclaw/plugin-sdk/testing` barrel is legacy compatibility only.
+Repo guardrails reject new real imports from `plugin-sdk/testing` and
+`plugin-sdk/test-utils`; those names remain only as deprecated compatibility
+surfaces for external plugins and compatibility-record tests.
 
 ```typescript
 import {

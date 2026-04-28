@@ -11,6 +11,7 @@ type GatewayBenchCase = {
   env?: Record<string, string>;
   id: string;
   name: string;
+  pluginActivationOnStartup?: boolean;
   pluginCount?: number;
 };
 
@@ -129,6 +130,14 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
     id: "fiftyPlugins",
     name: "gateway, 50 manifest plugins",
     env: { OPENCLAW_SKIP_CHANNELS: "1" },
+    pluginCount: 50,
+    config: BASE_CONFIG,
+  },
+  {
+    id: "fiftyStartupLazyPlugins",
+    name: "gateway, 50 startup-lazy manifest plugins",
+    env: { OPENCLAW_SKIP_CHANNELS: "1" },
+    pluginActivationOnStartup: false,
     pluginCount: 50,
     config: BASE_CONFIG,
   },
@@ -362,7 +371,7 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function writePluginFixtures(root: string, count: number): string[] {
+function writePluginFixtures(root: string, count: number, activationOnStartup?: boolean): string[] {
   const files: string[] = [];
   const pluginsDir = path.join(root, "plugins");
   mkdirSync(pluginsDir, { recursive: true });
@@ -374,7 +383,17 @@ function writePluginFixtures(root: string, count: number): string[] {
     writeFileSync(entry, `module.exports = { id: ${JSON.stringify(id)}, register() {} };\n`);
     writeFileSync(
       path.join(pluginDir, "openclaw.plugin.json"),
-      `${JSON.stringify({ id, configSchema: { type: "object", additionalProperties: false } }, null, 2)}\n`,
+      `${JSON.stringify(
+        {
+          id,
+          ...(activationOnStartup === undefined
+            ? {}
+            : { activation: { onStartup: activationOnStartup } }),
+          configSchema: { type: "object", additionalProperties: false },
+        },
+        null,
+        2,
+      )}\n`,
     );
     files.push(entry);
   }
@@ -382,7 +401,9 @@ function writePluginFixtures(root: string, count: number): string[] {
 }
 
 function writeConfig(root: string, benchCase: GatewayBenchCase): string {
-  const pluginPaths = benchCase.pluginCount ? writePluginFixtures(root, benchCase.pluginCount) : [];
+  const pluginPaths = benchCase.pluginCount
+    ? writePluginFixtures(root, benchCase.pluginCount, benchCase.pluginActivationOnStartup)
+    : [];
   const config = {
     ...benchCase.config,
     plugins: {

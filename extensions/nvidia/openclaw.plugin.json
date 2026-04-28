@@ -1,5 +1,8 @@
 {
   "id": "nvidia",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["nvidia"],
   "modelIdNormalization": {

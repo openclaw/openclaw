@@ -61,10 +61,12 @@ openclaw onboard --non-interactive \
   --custom-model-id "foo-large" \
   --custom-api-key "$CUSTOM_API_KEY" \
   --secret-input-mode plaintext \
-  --custom-compatibility openai
+  --custom-compatibility openai \
+  --custom-image-input
 ```
 
 `--custom-api-key` is optional in non-interactive mode. If omitted, onboarding checks `CUSTOM_API_KEY`.
+OpenClaw marks common vision model IDs as image-capable automatically. Pass `--custom-image-input` for unknown custom vision IDs, or `--custom-text-input` to force text-only metadata.
 
 LM Studio also supports a provider-specific key flag in non-interactive mode:
 

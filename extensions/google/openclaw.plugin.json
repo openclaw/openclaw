@@ -1,5 +1,8 @@
 {
   "id": "google",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["google", "google-gemini-cli", "google-vertex"],
   "autoEnableWhenConfiguredProviders": ["google-gemini-cli"],

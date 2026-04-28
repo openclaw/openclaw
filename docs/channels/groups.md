@@ -16,6 +16,7 @@ Default behavior:
 
 - Groups are restricted (`groupPolicy: "allowlist"`).
 - Replies require a mention unless you explicitly disable mention gating.
+- Normal final replies in groups/channels are private by default. Visible room output uses the `message` tool.
 
 Translation: allowlisted senders can trigger OpenClaw by mentioning it.
 
@@ -34,6 +35,25 @@ groupPolicy? disabled -> drop
 groupPolicy? allowlist -> group allowed? no -> drop
 requireMention? yes -> mentioned? no -> store for context only
 otherwise -> reply
+```
+
+## Visible replies
+
+For group/channel rooms, OpenClaw defaults to `messages.groupChat.visibleReplies: "message_tool"`.
+That means the agent still processes the turn and can update memory/session state, but its normal final answer is not automatically posted back into the room. To speak visibly, the agent uses `message(action=send)`.
+
+This replaces the old pattern of forcing the model to answer `NO_REPLY` for most lurk-mode turns. In tool-only mode, doing nothing visible simply means not calling the message tool.
+
+To restore legacy automatic final replies for group/channel rooms:
+
+```json5
+{
+  messages: {
+    groupChat: {
+      visibleReplies: "automatic",
+    },
+  },
+}
 ```
 
 ## Context visibility and allowlists

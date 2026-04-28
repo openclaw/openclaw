@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
+import type { ConfigFileSnapshot, ModelDefinitionConfig, OpenClawConfig } from "../config/types.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { buildTestConfigSnapshot } from "./test-helpers.config-snapshots.js";
 
@@ -123,6 +123,23 @@ const validConfig = {
   },
 } as OpenClawConfig;
 
+function testModel(id: string, name: string): ModelDefinitionConfig {
+  return {
+    id,
+    name,
+    reasoning: false,
+    input: ["text"],
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+    contextWindow: 8192,
+    maxTokens: 4096,
+  };
+}
+
 function buildSnapshot(params: {
   valid: boolean;
   raw: string;
@@ -224,6 +241,123 @@ describe("gateway startup config recovery", () => {
     });
     expect(configMutate.replaceConfigFile).not.toHaveBeenCalled();
     expect(log.info).not.toHaveBeenCalled();
+  });
+
+  it("preserves empty model allowlist entries through startup auto-enable writes", async () => {
+    const sourceConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "dos-ai/dos-ai" },
+          models: {
+            "dos-ai/dos-ai": {},
+            "dos-ai/dos-auto": {},
+          },
+        },
+      },
+      gateway: { mode: "local" },
+      models: {
+        mode: "replace",
+        providers: {
+          "dos-ai": {
+            baseUrl: "https://dos.example.test/v1",
+            apiKey: "test-key",
+            api: "openai-completions",
+            models: [testModel("dos-ai", "DOS AI"), testModel("dos-auto", "DOS Auto")],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const autoEnabledConfig = {
+      ...sourceConfig,
+      channels: {
+        telegram: { enabled: true },
+      },
+    } as unknown as OpenClawConfig;
+    const initialSnapshot = {
+      ...buildTestConfigSnapshot({
+        path: configPath,
+        exists: true,
+        raw: `${JSON.stringify(sourceConfig)}\n`,
+        parsed: sourceConfig,
+        valid: true,
+        config: sourceConfig,
+        issues: [],
+        legacyIssues: [],
+      }),
+      sourceConfig,
+      resolved: sourceConfig,
+      runtimeConfig: sourceConfig,
+      config: sourceConfig,
+    } satisfies ConfigFileSnapshot;
+    const postWriteSnapshot = {
+      ...buildTestConfigSnapshot({
+        path: configPath,
+        exists: true,
+        raw: `${JSON.stringify(autoEnabledConfig)}\n`,
+        parsed: autoEnabledConfig,
+        valid: true,
+        config: autoEnabledConfig,
+        issues: [],
+        legacyIssues: [],
+      }),
+      sourceConfig: autoEnabledConfig,
+      resolved: autoEnabledConfig,
+      runtimeConfig: autoEnabledConfig,
+      config: autoEnabledConfig,
+    } satisfies ConfigFileSnapshot;
+    vi.mocked(configIo.readConfigFileSnapshotWithPluginMetadata)
+      .mockResolvedValueOnce({
+        snapshot: initialSnapshot,
+        pluginMetadataSnapshot,
+      })
+      .mockResolvedValueOnce({
+        snapshot: postWriteSnapshot,
+        pluginMetadataSnapshot,
+      });
+    applyPluginAutoEnable.mockReturnValueOnce({
+      config: autoEnabledConfig,
+      changes: ["Telegram configured, enabled automatically."],
+      autoEnabledReasons: {},
+    });
+    const log = { info: vi.fn(), warn: vi.fn() };
+
+    await expect(
+      loadGatewayStartupConfigSnapshot({
+        minimalTestGateway: false,
+        log,
+      }),
+    ).resolves.toEqual({
+      snapshot: postWriteSnapshot,
+      wroteConfig: true,
+      pluginMetadataSnapshot,
+    });
+
+    expect(applyPluginAutoEnable).toHaveBeenCalledWith({
+      config: sourceConfig,
+      env: process.env,
+      manifestRegistry: pluginManifestRegistry,
+    });
+    expect(configMutate.replaceConfigFile).toHaveBeenCalledWith({
+      nextConfig: expect.objectContaining({
+        agents: expect.objectContaining({
+          defaults: expect.objectContaining({
+            models: {
+              "dos-ai/dos-ai": {},
+              "dos-ai/dos-auto": {},
+            },
+          }),
+        }),
+      }),
+      afterWrite: { mode: "auto" },
+    });
+    expect(postWriteSnapshot.sourceConfig.agents?.defaults?.models).toEqual({
+      "dos-ai/dos-ai": {},
+      "dos-ai/dos-auto": {},
+    });
+    expect(postWriteSnapshot.config.agents?.defaults?.models).toEqual({
+      "dos-ai/dos-ai": {},
+      "dos-ai/dos-auto": {},
+    });
   });
 
   it("restores last-known-good config before startup validation", async () => {

@@ -97,7 +97,11 @@ import {
   resolveSkillsPromptForRun,
 } from "../skills.js";
 import { resolveSystemPromptOverride } from "../system-prompt-override.js";
-import { classifyCompactionReason, resolveCompactionFailureReason } from "./compact-reasons.js";
+import {
+  classifyCompactionReason,
+  formatUnknownCompactionReasonDetail,
+  resolveCompactionFailureReason,
+} from "./compact-reasons.js";
 import type { CompactEmbeddedPiSessionParams, CompactionMessageMetrics } from "./compact.types.js";
 import { dedupeDuplicateUserMessagesForCompaction } from "./compaction-duplicate-user-messages.js";
 import {
@@ -351,10 +355,14 @@ export async function compactEmbeddedPiSessionDirect(
   let thinkLevel: ThinkLevel = params.thinkLevel ?? "off";
   const attemptedThinking = new Set<ThinkLevel>();
   const fail = (reason: string): EmbeddedPiCompactResult => {
+    const failureReason = classifyCompactionReason(reason);
+    const detail =
+      failureReason === "unknown" ? formatUnknownCompactionReasonDetail(reason) : undefined;
+    const detailSuffix = detail ? ` detail=${detail}` : "";
     log.warn(
       `[compaction-diag] end runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
         `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
-        `attempt=${attempt} maxAttempts=${maxAttempts} outcome=failed reason=${classifyCompactionReason(reason)} ` +
+        `attempt=${attempt} maxAttempts=${maxAttempts} outcome=failed reason=${failureReason}${detailSuffix} ` +
         `durationMs=${Date.now() - startedAt}`,
     );
     return {
@@ -770,6 +778,7 @@ export async function compactEmbeddedPiSessionDirect(
           sourcePath: openClawReferences.sourcePath ?? undefined,
           ttsHint,
           promptMode,
+          sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
           acpEnabled: isAcpRuntimeSpawnAvailable({
             config: params.config,
             sandboxed: sandboxInfo?.enabled === true,

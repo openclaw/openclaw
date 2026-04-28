@@ -1,5 +1,8 @@
 {
   "id": "xiaomi",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["xiaomi"],
   "modelCatalog": {

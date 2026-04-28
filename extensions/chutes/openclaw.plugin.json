@@ -1,5 +1,8 @@
 {
   "id": "chutes",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["chutes"],
   "providerEndpoints": [

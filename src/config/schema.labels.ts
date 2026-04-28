@@ -609,6 +609,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.compaction.notifyUser": "Compaction Notify User",
   "agents.defaults.compaction.memoryFlush": "Compaction Memory Flush",
   "agents.defaults.compaction.memoryFlush.enabled": "Compaction Memory Flush Enabled",
+  "agents.defaults.compaction.memoryFlush.model": "Compaction Memory Flush Model Override",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens":
     "Compaction Memory Flush Soft Threshold",
   "agents.defaults.compaction.memoryFlush.forceFlushTranscriptBytes":
@@ -818,6 +819,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "messages.groupChat": "Group Chat Rules",
   "messages.groupChat.mentionPatterns": "Group Mention Patterns",
   "messages.groupChat.historyLimit": "Group History Limit",
+  "messages.groupChat.visibleReplies": "Group Visible Replies",
   "messages.queue": "Inbound Queue",
   "messages.queue.mode": "Queue Mode",
   "messages.queue.byChannel": "Queue Mode by Channel",

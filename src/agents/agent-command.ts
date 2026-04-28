@@ -25,6 +25,7 @@ import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
+import { createTrajectoryRuntimeRecorder } from "../trajectory/runtime.js";
 import { resolveMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentRuntimeConfig } from "./agent-runtime-config.js";
 import {
@@ -909,6 +910,16 @@ async function agentCommandInternal(
     let fallbackModel = model;
     const MAX_LIVE_SWITCH_RETRIES = 5;
     let liveSwitchRetries = 0;
+    const fallbackTrajectoryRecorder = createTrajectoryRuntimeRecorder({
+      cfg,
+      runId,
+      sessionId,
+      sessionKey,
+      sessionFile,
+      provider,
+      modelId: model,
+      workspaceDir,
+    });
     for (;;) {
       try {
         const spawnedBy = normalizedSpawned.spawnedBy ?? sessionEntry?.spawnedBy;
@@ -928,6 +939,9 @@ async function agentCommandInternal(
           runId,
           agentDir,
           fallbacksOverride: effectiveFallbacksOverride,
+          onFallbackStep: (step) => {
+            fallbackTrajectoryRecorder?.recordEvent("model.fallback_step", step);
+          },
           classifyResult: ({ provider, model, result }) =>
             classifyEmbeddedPiRunResultForModelFallback({
               provider,
@@ -1024,6 +1038,7 @@ async function agentCommandInternal(
                 },
               });
             }
+            await fallbackTrajectoryRecorder?.flush();
             throw new Error(
               `Exceeded maximum live model switch retries (${MAX_LIVE_SWITCH_RETRIES})`,
               { cause: err },
@@ -1048,6 +1063,7 @@ async function agentCommandInternal(
                 },
               });
             }
+            await fallbackTrajectoryRecorder?.flush();
             throw new Error(
               `Live model switch rejected: ${sanitizeForLog(err.provider)}/${sanitizeForLog(err.model)} is not in the agent allowlist`,
               { cause: err },
@@ -1094,9 +1110,11 @@ async function agentCommandInternal(
             },
           });
         }
+        await fallbackTrajectoryRecorder?.flush();
         throw err;
       }
     }
+    await fallbackTrajectoryRecorder?.flush();
 
     // Update token+model fields in the session store.
     if (sessionStore && sessionKey) {

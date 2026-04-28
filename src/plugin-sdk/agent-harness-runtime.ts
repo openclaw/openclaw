@@ -66,6 +66,12 @@ export { classifyEmbeddedPiRunResultForModelFallback } from "../agents/pi-embedd
 export { resolveEmbeddedAgentRuntime } from "../agents/pi-embedded-runner/runtime.js";
 export { resolveUserPath } from "../utils.js";
 export { callGatewayTool } from "../agents/tools/gateway.js";
+export type { NodeListNode } from "../agents/tools/nodes-utils.js";
+export {
+  listNodes,
+  resolveNodeIdFromList,
+  selectDefaultNodeFromList,
+} from "../agents/tools/nodes-utils.js";
 export { formatToolAggregate } from "../auto-reply/tool-meta.js";
 export { isMessagingTool, isMessagingToolSendAction } from "../agents/pi-embedded-messaging.js";
 export {

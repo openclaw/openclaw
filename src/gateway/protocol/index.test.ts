@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { TALK_TEST_PROVIDER_ID } from "../../test-utils/talk-test-provider.js";
 import {
   formatValidationErrors,
+  validateModelsListParams,
   validateTalkConfigResult,
   validateTalkRealtimeSessionParams,
   validateWakeParams,
@@ -173,5 +174,19 @@ describe("validateWakeParams", () => {
         anotherExtra: true,
       }),
     ).toBe(true);
+  });
+});
+
+describe("validateModelsListParams", () => {
+  it("accepts the supported model catalog views", () => {
+    expect(validateModelsListParams({})).toBe(true);
+    expect(validateModelsListParams({ view: "default" })).toBe(true);
+    expect(validateModelsListParams({ view: "configured" })).toBe(true);
+    expect(validateModelsListParams({ view: "all" })).toBe(true);
+  });
+
+  it("rejects unknown model catalog views and extra fields", () => {
+    expect(validateModelsListParams({ view: "available" })).toBe(false);
+    expect(validateModelsListParams({ view: "configured", provider: "minimax" })).toBe(false);
   });
 });

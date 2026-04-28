@@ -206,6 +206,12 @@ export async function processDiscordMessage(
   if (boundThreadId && typeof threadBindings.touchThread === "function") {
     threadBindings.touchThread({ threadId: boundThreadId });
   }
+  const sourceReplyDeliveryMode = isGuildMessage
+    ? cfg.messages?.groupChat?.visibleReplies === "automatic"
+      ? ("automatic" as const)
+      : ("message_tool_only" as const)
+    : undefined;
+  const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
   const ackReaction = resolveAckReaction(cfg, route.agentId, {
     channel: "discord",
     accountId,
@@ -226,7 +232,7 @@ export async function processDiscordMessage(
         shouldBypassMention,
       }),
     );
-  const shouldSendAckReaction = shouldAckReaction();
+  const shouldSendAckReaction = !sourceRepliesAreToolOnly && shouldAckReaction();
   const statusReactionsEnabled =
     shouldSendAckReaction && cfg.messages?.statusReactions?.enabled !== false;
   const feedbackRest = createDiscordRestClient({
@@ -607,7 +613,8 @@ export async function processDiscordMessage(
   const accountBlockStreamingEnabled =
     resolveChannelStreamingBlockEnabled(discordConfig) ??
     cfg.agents?.defaults?.blockStreamingDefault === "on";
-  const canStreamDraft = discordStreamMode !== "off" && !accountBlockStreamingEnabled;
+  const canStreamDraft =
+    !sourceRepliesAreToolOnly && discordStreamMode !== "off" && !accountBlockStreamingEnabled;
   const draftReplyToMessageId = () => replyReference.peek();
   const deliverChannelId = deliverTarget.startsWith("channel:")
     ? deliverTarget.slice("channel:".length)
@@ -954,11 +961,13 @@ export async function processDiscordMessage(
         ...replyOptions,
         abortSignal,
         skillFilter: channelConfig?.skills,
-        disableBlockStreaming:
-          disableBlockStreamingForDraft ??
-          (typeof resolvedBlockStreamingEnabled === "boolean"
-            ? !resolvedBlockStreamingEnabled
-            : undefined),
+        sourceReplyDeliveryMode,
+        disableBlockStreaming: sourceRepliesAreToolOnly
+          ? true
+          : (disableBlockStreamingForDraft ??
+            (typeof resolvedBlockStreamingEnabled === "boolean"
+              ? !resolvedBlockStreamingEnabled
+              : undefined)),
         onPartialReply: draftStream ? (payload) => updateDraftFromPartial(payload.text) : undefined,
         onAssistantMessageStart: draftStream
           ? () => {

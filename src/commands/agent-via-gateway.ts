@@ -158,7 +158,6 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
           bestEffortDeliver: opts.bestEffortDeliver,
           timeout: timeoutSeconds,
           lane: opts.lane,
-          cleanupBundleMcpOnRunEnd: true,
           extraSystemPrompt: opts.extraSystemPrompt,
           idempotencyKey,
         },
@@ -199,6 +198,7 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, d
     agentId: opts.agent,
     replyAccountId: opts.replyAccount,
     cleanupBundleMcpOnRunEnd: true,
+    cleanupCliLiveSessionOnRunEnd: true,
   };
   if (opts.local === true) {
     return await agentCommand(localOpts, runtime, deps);

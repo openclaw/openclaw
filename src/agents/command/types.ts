@@ -101,6 +101,8 @@ export type AgentCommandOpts = {
   workspaceDir?: SpawnedRunMetadata["workspaceDir"];
   /** Force bundled MCP teardown when a one-shot local run completes. */
   cleanupBundleMcpOnRunEnd?: boolean;
+  /** Force long-lived CLI live session teardown when a one-shot local run completes. */
+  cleanupCliLiveSessionOnRunEnd?: boolean;
   /** Internal local CLI callers can annotate result metadata before JSON/text output. */
   resultMetaOverrides?: AgentCommandResultMetaOverrides;
   /** Internal one-shot model probe mode: no tools, no workspace/chat prompt policy. */

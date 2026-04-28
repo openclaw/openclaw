@@ -605,7 +605,7 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
       });
     });
 
-    it("owns forward-compat codex mini models", () => {
+    it("does not claim unsupported codex mini models", () => {
       const provider = requireProviderContractProvider("openai-codex");
       const model = provider.resolveDynamicModel?.({
         provider: "openai-codex",
@@ -623,13 +623,7 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
         } as never,
       });
 
-      expect(model).toMatchObject({
-        id: "gpt-5.4-mini",
-        provider: "openai-codex",
-        api: "openai-codex-responses",
-        contextWindow: 272_000,
-        maxTokens: 128_000,
-      });
+      expect(model).toBeUndefined();
     });
 
     it("owns codex transport defaults", () => {

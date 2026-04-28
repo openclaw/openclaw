@@ -117,11 +117,7 @@ describe("agentCliCommand", () => {
       await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
 
       expect(callGateway).toHaveBeenCalledTimes(1);
-      expect(callGateway.mock.calls[0]?.[0]).toMatchObject({
-        params: {
-          cleanupBundleMcpOnRunEnd: true,
-        },
-      });
+      expect(callGateway.mock.calls[0]?.[0]?.params).not.toHaveProperty("cleanupBundleMcpOnRunEnd");
       expect(agentCommand).not.toHaveBeenCalled();
       expect(runtime.log).toHaveBeenCalledWith("hello");
     });
@@ -267,6 +263,7 @@ describe("agentCliCommand", () => {
       expect(agentCommand).toHaveBeenCalledTimes(1);
       expect(agentCommand.mock.calls[0]?.[0]).toMatchObject({
         cleanupBundleMcpOnRunEnd: true,
+        cleanupCliLiveSessionOnRunEnd: true,
       });
       expect(agentCommand.mock.calls[0]?.[0]).not.toHaveProperty("resultMetaOverrides");
       expect(runtime.log).toHaveBeenCalledWith("local");
@@ -283,6 +280,7 @@ describe("agentCliCommand", () => {
       expect(agentCommand).toHaveBeenCalledTimes(1);
       expect(agentCommand.mock.calls[0]?.[0]).toMatchObject({
         cleanupBundleMcpOnRunEnd: true,
+        cleanupCliLiveSessionOnRunEnd: true,
       });
     });
   });

@@ -288,7 +288,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
   </Accordion>
 
   <Accordion title="Models and usage">
-    - `models.list` returns the runtime-allowed model catalog.
+    - `models.list` returns the runtime-allowed model catalog. Pass `{ "view": "configured" }` for picker-sized configured models (`agents.defaults.models` first, then `models.providers.*.models`), or `{ "view": "all" }` for the full catalog.
     - `usage.status` returns provider usage windows/remaining quota summaries.
     - `usage.cost` returns aggregated cost usage summaries for a date range.
     - `doctor.memory.status` returns vector-memory / cached embedding readiness for the active default agent workspace. Pass `{ "probe": true }` or `{ "deep": true }` only when the caller explicitly wants a live embedding provider ping.
@@ -464,6 +464,14 @@ enumeration of `src/gateway/server-methods/*.ts`.
     the default agent workspace.
   - Config mode patches `skills.entries.<skillKey>` values such as `enabled`,
     `apiKey`, and `env`.
+
+### `models.list` views
+
+`models.list` accepts an optional `view` parameter:
+
+- Omitted or `"default"`: current runtime behavior. If `agents.defaults.models` is configured, the response is the allowed catalog; otherwise the response is the full Gateway catalog.
+- `"configured"`: picker-sized behavior. If `agents.defaults.models` is configured, it still wins. Otherwise the response uses explicit `models.providers.*.models` entries, falling back to the full catalog only when no configured model rows exist.
+- `"all"`: full Gateway catalog, bypassing `agents.defaults.models`. Use this for diagnostics and discovery UIs, not normal model pickers.
 
 ## Exec approvals
 

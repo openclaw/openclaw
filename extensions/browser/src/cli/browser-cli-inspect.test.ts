@@ -16,10 +16,9 @@ const gatewayMocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("openclaw/plugin-sdk/browser-node-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/browser-node-runtime")>(
-    "openclaw/plugin-sdk/browser-node-runtime",
-  );
+vi.mock("../sdk-node-runtime.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../sdk-node-runtime.js")>("../sdk-node-runtime.js");
   return {
     ...actual,
     callGatewayFromCli: gatewayMocks.callGatewayFromCli,

@@ -1,6 +1,7 @@
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { bundledDistPluginFile, bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
 import { listPluginSdkDistArtifacts } from "../scripts/lib/plugin-sdk-entries.mjs";
@@ -24,7 +25,6 @@ import {
   resolveMissingPackBuildHint,
 } from "../scripts/release-check.ts";
 import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "../src/infra/package-dist-inventory.ts";
-import { bundledDistPluginFile, bundledPluginFile } from "./helpers/bundled-plugin-paths.js";
 
 function makeItem(shortVersion: string, sparkleVersion: string): string {
   return `<item><title>${shortVersion}</title><sparkle:shortVersionString>${shortVersion}</sparkle:shortVersionString><sparkle:version>${sparkleVersion}</sparkle:version></item>`;
@@ -539,6 +539,7 @@ describe("collectMissingPackPaths", () => {
         "scripts/npm-runner.mjs",
         "scripts/preinstall-package-manager-warning.mjs",
         "scripts/postinstall-bundled-plugins.mjs",
+        "dist/task-registry-control.runtime.js",
         bundledDistPluginFile("diffs", "assets/viewer-runtime.js"),
         bundledDistPluginFile("matrix", "helper-api.js"),
         bundledDistPluginFile("matrix", "runtime-api.js"),
@@ -568,6 +569,7 @@ describe("collectMissingPackPaths", () => {
         "scripts/preinstall-package-manager-warning.mjs",
         "scripts/postinstall-bundled-plugins.mjs",
         "dist/plugin-sdk/root-alias.cjs",
+        "dist/task-registry-control.runtime.js",
         "dist/build-info.json",
         "dist/channel-catalog.json",
         PACKAGE_DIST_INVENTORY_RELATIVE_PATH,

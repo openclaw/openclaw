@@ -14,10 +14,14 @@ manual `CI` workflow with that target, and dispatches `OpenClaw Release Checks`
 for install smoke, package acceptance, Docker release-path suites, live/E2E,
 OpenWebUI, QA Lab parity, Matrix, and Telegram lanes. It can also run the
 post-publish `NPM Telegram Beta E2E` workflow when a published package spec is
-provided. The umbrella records the dispatched child run ids, and the final
-`Verify full validation` job re-checks the current child run conclusions. If a
-child workflow is rerun and turns green, rerun only the parent verifier job to
-refresh the umbrella result.
+provided. `release_profile=minimum|stable|full` controls the live/provider
+breadth passed into release checks: `minimum` keeps the fastest OpenAI/core
+release-critical lanes, `stable` adds the stable provider/backend set, and
+`full` runs the broad advisory provider/media matrix. The umbrella records the
+dispatched child run ids, and the final `Verify full validation` job re-checks
+the current child run conclusions and appends slowest-job tables for each child
+run. If a child workflow is rerun and turns green, rerun only the parent
+verifier job to refresh the umbrella result and timing summary.
 
 For recovery, `Full Release Validation` and `OpenClaw Release Checks` both
 accept `rerun_group`. Use `all` for a release candidate, `ci` for only the
@@ -33,12 +37,19 @@ runs it as named shards (`native-live-src-agents`,
 `native-live-src-gateway-backends`, `native-live-test`,
 `native-live-extensions-a-k`, `native-live-extensions-l-n`,
 `native-live-extensions-openai`, `native-live-extensions-o-z-other`,
-`native-live-extensions-xai`, and split media audio/music/video shards) through
-`scripts/test-live-shard.mjs` instead of one serial job. That keeps the same
-file coverage while making slow live provider failures easier to rerun and
-diagnose. The aggregate `native-live-extensions-o-z` and
-`native-live-extensions-media` shard names remain valid for manual one-shot
-reruns.
+`native-live-extensions-xai`, split media audio/video shards, and
+provider-filtered music shards) through `scripts/test-live-shard.mjs` instead
+of one serial job. That keeps the same file coverage while making slow live
+provider failures easier to rerun and diagnose. The aggregate
+`native-live-extensions-o-z`, `native-live-extensions-media`, and
+`native-live-extensions-media-music` shard names remain valid for manual
+one-shot reruns.
+
+`OpenClaw Release Checks` uses the trusted workflow ref to resolve the selected
+ref once into a `release-package-under-test` tarball, then passes that artifact
+to both the live/E2E release-path Docker workflow and the package acceptance
+shard. That keeps the package bytes consistent across release boxes and avoids
+repacking the same candidate in multiple child jobs.
 
 `Package Acceptance` is the side-run workflow for validating a package artifact
 without blocking the release workflow. It resolves one candidate from a

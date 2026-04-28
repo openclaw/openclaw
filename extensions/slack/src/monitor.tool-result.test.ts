@@ -173,6 +173,7 @@ describe("monitorSlackProvider tool results", () => {
     includeAckReactionConfig?: boolean;
     replyToMode?: "off" | "all" | "first";
     threadInheritParent?: boolean;
+    visibleReplies?: "automatic" | "message_tool";
   }) {
     const slackChannelConfig: Record<string, unknown> = {
       dm: { enabled: true, policy: "open", allowFrom: ["*"] },
@@ -187,8 +188,16 @@ describe("monitorSlackProvider tool results", () => {
             responsePrefix: "PFX",
             ackReaction: "👀",
             ackReactionScope: "group-mentions",
+            ...(params.visibleReplies
+              ? { groupChat: { visibleReplies: params.visibleReplies } }
+              : {}),
           }
-        : { responsePrefix: "PFX" },
+        : {
+            responsePrefix: "PFX",
+            ...(params?.visibleReplies
+              ? { groupChat: { visibleReplies: params.visibleReplies } }
+              : {}),
+          },
       channels: { slack: slackChannelConfig },
       ...(params?.bindings ? { bindings: params.bindings } : {}),
     };
@@ -488,6 +497,9 @@ describe("monitorSlackProvider tool results", () => {
 
   it("accepts channel messages without mention when channels.slack.requireMention is false", async () => {
     slackTestState.config = {
+      messages: {
+        groupChat: { visibleReplies: "automatic" },
+      },
       channels: {
         slack: {
           dm: { enabled: true, policy: "open", allowFrom: ["*"] },
@@ -523,6 +535,7 @@ describe("monitorSlackProvider tool results", () => {
       includeAckReactionConfig: true,
       groupPolicy: "open",
       replyToMode: "off",
+      visibleReplies: "automatic",
     });
     await runChannelThreadReplyEvent();
 

@@ -888,6 +888,38 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         unit: "1",
         description: "Diagnostic memory pressure events",
       });
+      const livenessWarningCounter = meter.createCounter("openclaw.liveness.warning", {
+        unit: "1",
+        description: "Diagnostic liveness warning events",
+      });
+      const livenessEventLoopDelayP99Histogram = meter.createHistogram(
+        "openclaw.liveness.event_loop_delay_p99_ms",
+        {
+          unit: "ms",
+          description: "P99 event-loop delay reported by diagnostic liveness warnings",
+        },
+      );
+      const livenessEventLoopDelayMaxHistogram = meter.createHistogram(
+        "openclaw.liveness.event_loop_delay_max_ms",
+        {
+          unit: "ms",
+          description: "Maximum event-loop delay reported by diagnostic liveness warnings",
+        },
+      );
+      const livenessEventLoopUtilizationHistogram = meter.createHistogram(
+        "openclaw.liveness.event_loop_utilization",
+        {
+          unit: "1",
+          description: "Event-loop utilization reported by diagnostic liveness warnings",
+        },
+      );
+      const livenessCpuCoreRatioHistogram = meter.createHistogram(
+        "openclaw.liveness.cpu_core_ratio",
+        {
+          unit: "1",
+          description: "CPU core ratio reported by diagnostic liveness warnings",
+        },
+      );
       const telemetryExporterCounter = meter.createCounter("openclaw.telemetry.exporter.events", {
         unit: "1",
         description: "Diagnostic telemetry exporter lifecycle and failure events",
@@ -2058,6 +2090,68 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         queueDepthHistogram.record(evt.queued, { "openclaw.channel": "heartbeat" });
       };
 
+      const recordLivenessWarning = (
+        evt: Extract<DiagnosticEventPayload, { type: "diagnostic.liveness.warning" }>,
+      ) => {
+        const reason = evt.reasons.join(":");
+        const attrs = {
+          "openclaw.liveness.reason": lowCardinalityAttr(reason, "unknown"),
+        };
+        livenessWarningCounter.add(1, attrs);
+        queueDepthHistogram.record(evt.queued, { "openclaw.channel": "liveness" });
+        if (evt.eventLoopDelayP99Ms !== undefined) {
+          livenessEventLoopDelayP99Histogram.record(evt.eventLoopDelayP99Ms, attrs);
+        }
+        if (evt.eventLoopDelayMaxMs !== undefined) {
+          livenessEventLoopDelayMaxHistogram.record(evt.eventLoopDelayMaxMs, attrs);
+        }
+        if (evt.eventLoopUtilization !== undefined) {
+          livenessEventLoopUtilizationHistogram.record(evt.eventLoopUtilization, attrs);
+        }
+        if (evt.cpuCoreRatio !== undefined) {
+          livenessCpuCoreRatioHistogram.record(evt.cpuCoreRatio, attrs);
+        }
+        if (!tracesEnabled) {
+          return;
+        }
+        const spanAttrs: Record<string, string | number> = {
+          ...attrs,
+          "openclaw.liveness.active": evt.active,
+          "openclaw.liveness.waiting": evt.waiting,
+          "openclaw.liveness.queued": evt.queued,
+          "openclaw.liveness.interval_ms": evt.intervalMs,
+          ...(evt.eventLoopDelayP99Ms !== undefined
+            ? { "openclaw.liveness.event_loop_delay_p99_ms": evt.eventLoopDelayP99Ms }
+            : {}),
+          ...(evt.eventLoopDelayMaxMs !== undefined
+            ? { "openclaw.liveness.event_loop_delay_max_ms": evt.eventLoopDelayMaxMs }
+            : {}),
+          ...(evt.eventLoopUtilization !== undefined
+            ? { "openclaw.liveness.event_loop_utilization": evt.eventLoopUtilization }
+            : {}),
+          ...(evt.cpuUserMs !== undefined
+            ? { "openclaw.liveness.cpu_user_ms": evt.cpuUserMs }
+            : {}),
+          ...(evt.cpuSystemMs !== undefined
+            ? { "openclaw.liveness.cpu_system_ms": evt.cpuSystemMs }
+            : {}),
+          ...(evt.cpuTotalMs !== undefined
+            ? { "openclaw.liveness.cpu_total_ms": evt.cpuTotalMs }
+            : {}),
+          ...(evt.cpuCoreRatio !== undefined
+            ? { "openclaw.liveness.cpu_core_ratio": evt.cpuCoreRatio }
+            : {}),
+        };
+        const span = spanWithDuration("openclaw.liveness.warning", spanAttrs, 0, {
+          endTimeMs: evt.ts,
+        });
+        span.setStatus({
+          code: SpanStatusCode.ERROR,
+          message: reason,
+        });
+        span.end(evt.ts);
+      };
+
       const recordTelemetryExporter = (
         evt: TelemetryExporterDiagnosticEvent,
         metadata: DiagnosticEventMetadata,
@@ -2129,6 +2223,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "diagnostic.heartbeat":
               recordHeartbeat(evt);
+              return;
+            case "diagnostic.liveness.warning":
+              recordLivenessWarning(evt);
               return;
             case "run.started":
               recordRunStarted(evt, metadata);

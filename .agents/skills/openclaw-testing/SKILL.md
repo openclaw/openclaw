@@ -123,13 +123,19 @@ gh workflow run full-release-validation.yml \
   --ref main \
   -f ref=<branch-or-sha> \
   -f provider=openai \
-  -f mode=both
+  -f mode=both \
+  -f release_profile=stable
 ```
 
 Run the workflow itself from the trusted current ref, normally `--ref main`;
 child workflows are dispatched from that same ref even when `ref` points at an
 older release branch or tag. Full Release Validation has no separate child
 workflow ref input; choose the trusted harness by choosing the workflow run ref.
+Use `release_profile=minimum|stable|full` to control live/provider breadth:
+`minimum` keeps the fastest OpenAI/core release-critical set, `stable` adds the
+stable provider/backend set, and `full` adds the broad advisory provider/media
+matrix. The parent verifier job appends slowest-job tables for child runs; rerun
+only that verifier after a child rerun turns green.
 
 If a full run is already active on a newer `origin/main`, prefer watching that
 run over dispatching a duplicate. If you accidentally dispatch a stale duplicate,
@@ -198,11 +204,15 @@ gh workflow run openclaw-release-checks.yml \
   -f ref=<branch-or-sha> \
   -f provider=openai \
   -f mode=both \
+  -f release_profile=stable \
   -f rerun_group=all
 ```
 
 Release-check rerun groups are `all`, `install-smoke`, `cross-os`, `live-e2e`,
 `package`, `qa`, `qa-parity`, and `qa-live`.
+`OpenClaw Release Checks` uses the trusted workflow ref to resolve the selected
+ref once as `release-package-under-test` and passes that artifact into both
+release-path Docker live/E2E checks and Package Acceptance.
 
 The release QA parity box is internally split into candidate and baseline lane
 jobs, followed by a report job that downloads both artifacts and runs
@@ -288,6 +298,8 @@ job:
 - `native-live-extensions-media`
 - `native-live-extensions-media-audio`
 - `native-live-extensions-media-music`
+- `native-live-extensions-media-music-google`
+- `native-live-extensions-media-music-minimax`
 - `native-live-extensions-media-video`
 
 Use `node scripts/test-live-shard.mjs <shard> --list` to see the exact files

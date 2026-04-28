@@ -67,6 +67,7 @@ describe("tsdown config", () => {
         "agents/model-catalog.runtime",
         "agents/models-config.runtime",
         "subagent-registry.runtime",
+        "task-registry-control.runtime",
         "agents/pi-model-discovery-runtime",
         "link-understanding/apply.runtime",
         "media-understanding/apply.runtime",

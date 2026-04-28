@@ -12,13 +12,8 @@ The plugin SDK is the typed contract between plugins and core. This page is the
 reference for **what to import** and **what you can register**.
 
 <Tip>
-  Looking for a how-to guide instead?
-
-- First plugin? Start with [Building plugins](/plugins/building-plugins).
-- Channel plugin? See [Channel plugins](/plugins/sdk-channel-plugins).
-- Provider plugin? See [Provider plugins](/plugins/sdk-provider-plugins).
-- Tool or lifecycle hook plugin? See [Plugin hooks](/plugins/hooks).
-  </Tip>
+Looking for a how-to guide instead? Start with [Building plugins](/plugins/building-plugins), use [Channel plugins](/plugins/sdk-channel-plugins) for channel plugins, [Provider plugins](/plugins/sdk-provider-plugins) for provider plugins, and [Plugin hooks](/plugins/hooks) for tool or lifecycle hook plugins.
+</Tip>
 
 ## Import convention
 
@@ -51,10 +46,10 @@ pattern for new plugins.
   barrels or add a narrow generic SDK contract when a need is truly
   cross-channel.
 
-A small set of bundled-plugin helper seams (`plugin-sdk/feishu`,
-`plugin-sdk/zalo`, `plugin-sdk/matrix*`, and similar) still appear in the
-generated export map. They exist for bundled-plugin maintenance only and are
-not recommended import paths for new third-party plugins.
+A small set of bundled-plugin helper seams still appear in the generated export
+map when they have tracked owner usage. They exist for bundled-plugin
+maintenance only and are not recommended import paths for new third-party
+plugins.
 </Warning>
 
 ## Subpath reference
@@ -273,6 +268,9 @@ AI CLI backend such as `codex-cli`.
   memory plugin's private layout.
 - `registerMemoryPromptSection`, `registerMemoryFlushPlan`, and
   `registerMemoryRuntime` are legacy-compatible exclusive memory-plugin APIs.
+- `MemoryFlushPlan.model` can pin the flush turn to an exact `provider/model`
+  reference, such as `ollama/qwen3:8b`, without inheriting the active fallback
+  chain.
 - `registerMemoryEmbeddingProvider` lets the active memory plugin register one
   or more embedding adapter ids (for example `openai`, `gemini`, or a custom
   plugin-defined id).
@@ -342,6 +340,9 @@ Facade-loaded bundled plugin public surfaces (`api.ts`, `runtime-api.ts`,
 `index.ts`, `setup-entry.ts`, and similar public entry files) prefer the
 active runtime config snapshot when OpenClaw is already running. If no runtime
 snapshot exists yet, they fall back to the resolved config file on disk.
+Packaged bundled plugin facades should be loaded through the OpenClaw SDK
+facade loaders; direct imports from `dist/extensions/...` bypass staged runtime
+dependency mirrors that packaged installs use for plugin-owned dependencies.
 
 Provider plugins can expose a narrow plugin-local contract barrel when a
 helper is intentionally provider-specific and does not belong in a generic SDK

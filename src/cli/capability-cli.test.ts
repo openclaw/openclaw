@@ -437,6 +437,26 @@ describe("capability cli", () => {
     expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
   });
 
+  it.each(["", "   ", "\n\t"])(
+    "rejects empty model run prompts before local dispatch (%j)",
+    async (prompt) => {
+      await expect(
+        runRegisteredCli({
+          register: registerCapabilityCli as (program: Command) => void,
+          argv: ["capability", "model", "run", "--prompt", prompt, "--json"],
+        }),
+      ).rejects.toThrow("exit 1");
+
+      expect(mocks.runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("--prompt cannot be empty or whitespace-only."),
+      );
+      expect(mocks.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+      expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+    },
+  );
+
   it("runs gateway model probes without chat-agent prompt policy or tools", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
@@ -453,6 +473,21 @@ describe("capability cli", () => {
         }),
       }),
     );
+  });
+
+  it("rejects empty model run prompts before gateway dispatch", async () => {
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "model", "run", "--prompt", " ", "--gateway", "--json"],
+      }),
+    ).rejects.toThrow("exit 1");
+
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("--prompt cannot be empty or whitespace-only."),
+    );
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
   });
 
   it("defaults tts status to gateway transport", async () => {

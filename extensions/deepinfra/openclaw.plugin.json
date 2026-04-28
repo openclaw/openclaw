@@ -1,5 +1,8 @@
 {
   "id": "deepinfra",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["deepinfra"],
   "providerEndpoints": [

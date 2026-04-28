@@ -5010,6 +5010,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         description:
                           "Enables pre-compaction memory flush before the runtime performs stronger history reduction near token limits. Keep enabled unless you intentionally disable memory side effects in constrained environments.",
                       },
+                      model: {
+                        type: "string",
+                        title: "Compaction Memory Flush Model Override",
+                        description:
+                          "Optional provider/model override used only for pre-compaction memory flush turns. Set this to a local model such as ollama/qwen3:8b when durable memory extraction should avoid the active session's paid model. The override is exact and does not inherit the active model fallback chain.",
+                      },
                       softThresholdTokens: {
                         type: "integer",
                         minimum: 0,
@@ -7207,6 +7213,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       type: "integer",
                       exclusiveMinimum: 0,
                       maximum: 9007199254740991,
+                    },
+                    visibleReplies: {
+                      type: "string",
+                      enum: ["automatic", "message_tool"],
                     },
                   },
                   additionalProperties: false,
@@ -18848,6 +18858,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "Maximum number of prior group messages loaded as context per turn for group sessions. Use higher values for richer continuity, or lower values for faster and cheaper responses.",
               },
+              visibleReplies: {
+                type: "string",
+                enum: ["automatic", "message_tool"],
+                title: "Group Visible Replies",
+                description:
+                  'Controls visible group/channel replies. "message_tool" keeps normal final replies private and requires message(action=send) for room output; "automatic" posts normal replies as before.',
+              },
             },
             additionalProperties: false,
             title: "Group Chat Rules",
@@ -22192,6 +22209,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       type: "string",
                     },
                   },
+                  allowLoopback: {
+                    type: "boolean",
+                  },
                 },
                 required: ["userHeader"],
                 additionalProperties: false,
@@ -23809,6 +23829,19 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
           },
           additionalProperties: false,
         },
+      },
+      proxy: {
+        type: "object",
+        properties: {
+          enabled: {
+            type: "boolean",
+          },
+          proxyUrl: {
+            type: "string",
+            format: "uri",
+          },
+        },
+        additionalProperties: false,
       },
     },
     required: ["commands"],
@@ -27030,6 +27063,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Enables pre-compaction memory flush before the runtime performs stronger history reduction near token limits. Keep enabled unless you intentionally disable memory side effects in constrained environments.",
       tags: ["advanced"],
     },
+    "agents.defaults.compaction.memoryFlush.model": {
+      label: "Compaction Memory Flush Model Override",
+      help: "Optional provider/model override used only for pre-compaction memory flush turns. Set this to a local model such as ollama/qwen3:8b when durable memory extraction should avoid the active session's paid model. The override is exact and does not inherit the active model fallback chain.",
+      tags: ["models"],
+    },
     "agents.defaults.compaction.memoryFlush.softThresholdTokens": {
       label: "Compaction Memory Flush Soft Threshold",
       help: "Threshold distance to compaction (in tokens) that triggers pre-compaction memory flush execution. Use earlier thresholds for safer persistence, or tighter thresholds for lower flush frequency.",
@@ -28023,6 +28061,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Maximum number of prior group messages loaded as context per turn for group sessions. Use higher values for richer continuity, or lower values for faster and cheaper responses.",
       tags: ["performance"],
     },
+    "messages.groupChat.visibleReplies": {
+      label: "Group Visible Replies",
+      help: 'Controls visible group/channel replies. "message_tool" keeps normal final replies private and requires message(action=send) for room output; "automatic" posts normal replies as before.',
+      tags: ["advanced"],
+    },
     "messages.queue": {
       label: "Inbound Queue",
       help: "Inbound message queue strategy used to buffer bursts before processing turns. Tune this for busy channels where sequential processing or batching behavior matters.",
@@ -28720,6 +28763,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       sensitive: true,
       tags: ["security", "auth"],
     },
+    "proxy.proxyUrl": {
+      sensitive: true,
+      tags: ["security"],
+    },
     "models.providers.*.models[].baseUrl": {
       tags: ["models", "url-secret"],
     },
@@ -28772,6 +28819,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.4.26",
+  version: "2026.4.27",
   generatedAt: "2026-03-22T21:17:33.302Z",
 };
