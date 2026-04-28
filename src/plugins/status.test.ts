@@ -23,6 +23,7 @@ let buildPluginDiagnosticsReport: typeof import("./status.js").buildPluginDiagno
 let buildPluginInspectReport: typeof import("./status.js").buildPluginInspectReport;
 let buildAllPluginInspectReports: typeof import("./status.js").buildAllPluginInspectReports;
 let buildPluginCompatibilityNotices: typeof import("./status.js").buildPluginCompatibilityNotices;
+let buildPluginCompatibilitySnapshotNotices: typeof import("./status.js").buildPluginCompatibilitySnapshotNotices;
 let buildPluginCompatibilityWarnings: typeof import("./status.js").buildPluginCompatibilityWarnings;
 let formatPluginCompatibilityNotice: typeof import("./status.js").formatPluginCompatibilityNotice;
 let summarizePluginCompatibility: typeof import("./status.js").summarizePluginCompatibility;
@@ -318,6 +319,7 @@ describe("plugin status reports", () => {
     ({
       buildAllPluginInspectReports,
       buildPluginCompatibilityNotices,
+      buildPluginCompatibilitySnapshotNotices,
       buildPluginDiagnosticsReport,
       buildPluginCompatibilityWarnings,
       buildPluginInspectReport,
@@ -477,6 +479,25 @@ describe("plugin status reports", () => {
 
   it("preserves raw config activation context when compatibility notices build their own report", () => {
     expectAutoEnabledDemoCompatibilityNoticesPreserveRawConfig();
+  });
+
+  it("builds snapshot compatibility notices from the metadata snapshot path", () => {
+    setPluginLoadResult({
+      plugins: [
+        createPluginRecord({
+          id: "hook-only",
+          name: "Hook Only",
+          hookCount: 1,
+        }),
+      ],
+      hooks: [createCustomHook({ pluginId: "hook-only", events: ["message"] })],
+    });
+
+    expect(buildPluginCompatibilitySnapshotNotices({ config: {} })).toEqual([
+      createCompatibilityNotice({ pluginId: "hook-only", code: "hook-only" }),
+    ]);
+    expectMetadataSnapshotLoaderCall({ config: {}, loadModules: false });
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
   it("applies the full bundled provider compat chain before loading plugins", () => {

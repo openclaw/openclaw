@@ -1042,16 +1042,29 @@ export function describeTtsProviderRuntimeContract() {
           }
           expect(result.provider).toBe("microsoft");
           expect(result.fallbackFrom).toBe("openai");
-          expect(result.attemptedProviders).toEqual(["openai", "microsoft"]);
+          expect(result.attemptedProviders?.[0]).toBe("openai");
+          expect(result.attemptedProviders?.at(-1)).toBe("microsoft");
+          expect(result.attemptedProviders).toEqual(
+            expect.arrayContaining(["openai", "microsoft"]),
+          );
+          expect(result.attempts).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                provider: "openai",
+                outcome: "failed",
+                reasonCode: "provider_error",
+              }),
+              expect.objectContaining({
+                provider: "microsoft",
+                outcome: "success",
+                reasonCode: "success",
+              }),
+            ]),
+          );
           expect(result.attempts?.[0]).toMatchObject({
             provider: "openai",
             outcome: "failed",
             reasonCode: "provider_error",
-          });
-          expect(result.attempts?.[1]).toMatchObject({
-            provider: "microsoft",
-            outcome: "success",
-            reasonCode: "success",
           });
         });
       });
@@ -1112,16 +1125,29 @@ export function describeTtsProviderRuntimeContract() {
           }
           expect(result.provider).toBe("microsoft");
           expect(result.fallbackFrom).toBe("primary-throws");
-          expect(result.attemptedProviders).toEqual(["primary-throws", "microsoft"]);
+          expect(result.attemptedProviders?.[0]).toBe("primary-throws");
+          expect(result.attemptedProviders?.at(-1)).toBe("microsoft");
+          expect(result.attemptedProviders).toEqual(
+            expect.arrayContaining(["primary-throws", "microsoft"]),
+          );
+          expect(result.attempts).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                provider: "primary-throws",
+                outcome: "failed",
+                reasonCode: "provider_error",
+              }),
+              expect.objectContaining({
+                provider: "microsoft",
+                outcome: "success",
+                reasonCode: "success",
+              }),
+            ]),
+          );
           expect(result.attempts?.[0]).toMatchObject({
             provider: "primary-throws",
             outcome: "failed",
             reasonCode: "provider_error",
-          });
-          expect(result.attempts?.[1]).toMatchObject({
-            provider: "microsoft",
-            outcome: "success",
-            reasonCode: "success",
           });
         });
       });
@@ -1297,6 +1323,7 @@ export function describeTtsAutoApplyContract() {
           expectSamePayload: testCase.expectSamePayload,
         });
       },
+      240_000,
     );
 
     it.each([

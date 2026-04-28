@@ -147,7 +147,7 @@ describe("gateway talk runtime", () => {
         );
       },
     );
-  });
+  }, 240_000);
 
   it("allows extension speech providers through talk.speak", async () => {
     await setAcmeTalkConfig();

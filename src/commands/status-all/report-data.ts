@@ -5,7 +5,7 @@ import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
 import { inspectPortUsage } from "../../infra/ports.js";
 import { readRestartSentinel } from "../../infra/restart-sentinel.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
-import { buildPluginCompatibilityNotices } from "../../plugins/status.js";
+import { buildPluginCompatibilitySnapshotNotices } from "../../plugins/status.js";
 import { buildStatusAllOverviewRows } from "../status-overview-rows.ts";
 import {
   buildStatusOverviewSurfaceFromOverview,
@@ -63,7 +63,7 @@ async function resolveStatusAllLocalDiagnosis(params: {
     };
     tailscaleHttpsUrl: string | null;
     skillStatus: ReturnType<typeof buildWorkspaceSkillStatus> | null;
-    pluginCompatibility: ReturnType<typeof buildPluginCompatibilityNotices>;
+    pluginCompatibility: ReturnType<typeof buildPluginCompatibilitySnapshotNotices>;
     channelsStatus: StatusScanOverviewResult["channelsStatus"];
     channelIssues: StatusScanOverviewResult["channelIssues"];
     gatewayReachable: boolean;
@@ -117,7 +117,7 @@ async function resolveStatusAllLocalDiagnosis(params: {
           }
         })()
       : null;
-  const pluginCompatibility = buildPluginCompatibilityNotices({ config: overview.cfg });
+  const pluginCompatibility = buildPluginCompatibilitySnapshotNotices({ config: overview.cfg });
 
   return {
     configPath,

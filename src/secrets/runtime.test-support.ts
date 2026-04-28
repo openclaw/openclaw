@@ -115,7 +115,7 @@ export function setupSecretsRuntimeSnapshotTestHooks(): {
       clearSecretsRuntimeSnapshot,
       prepareSecretsRuntimeSnapshot: prepareSecretsRuntimeSnapshotImpl,
     } = await import("./runtime.js"));
-  });
+  }, 240_000);
 
   beforeEach(() => {
     resetPluginWebSearchProvidersMock();

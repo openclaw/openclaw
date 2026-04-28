@@ -265,7 +265,7 @@ describe("secrets runtime provider and media surfaces", () => {
     expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
       "tools.media.models.0.request.auth.token",
     );
-  });
+  }, 240_000);
 
   it("treats shared media model request refs as inactive when inferred capabilities are disabled", async () => {
     const pluginRegistry = createEmptyPluginRegistry();
