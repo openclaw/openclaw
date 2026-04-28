@@ -1554,6 +1554,66 @@ describe("buildStatusMessage", () => {
     );
   });
 
+  it("includes transcript cache read and write tokens in the cost estimate", async () => {
+    await withTempHome(
+      async (dir) => {
+        const sessionId = "sess-cache-cost-transcript";
+        writeTranscriptUsageLog({
+          dir,
+          agentId: "main",
+          sessionId,
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 1000,
+            cacheWrite: 2000,
+            totalTokens: 3000,
+          },
+        });
+
+        const text = buildStatusMessage({
+          config: {
+            models: {
+              providers: {
+                anthropic: {
+                  models: [
+                    {
+                      id: "claude-opus-4-6",
+                      cost: {
+                        input: 0,
+                        output: 0,
+                        cacheRead: 1,
+                        cacheWrite: 2,
+                      },
+                    },
+                  ],
+                },
+              },
+            },
+          } as unknown as OpenClawConfig,
+          agent: {
+            model: "anthropic/claude-opus-4-6",
+            contextTokens: 32_000,
+          },
+          sessionEntry: {
+            sessionId,
+            updatedAt: 0,
+            totalTokens: 0,
+            contextTokens: 32_000,
+          },
+          sessionKey: "agent:main:main",
+          sessionScope: "per-sender",
+          queue: { mode: "collect", depth: 0 },
+          includeTranscriptUsage: true,
+          modelAuth: "api-key",
+        });
+
+        expect(normalizeTestText(text)).toContain("Cost: $0.0050");
+      },
+      { prefix: "openclaw-status-" },
+    );
+  });
+
   it("uses the same transcript usage fallback as sessions.list when a delivery mirror is last", async () => {
     await withTempHome(
       async (dir) => {
