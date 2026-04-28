@@ -151,6 +151,9 @@ export async function sendGoogleChatMessage(params: {
     body.text = text;
   }
   if (thread) {
+    if (!/^spaces\/[^/]+\/threads\/[^/]+$/.test(thread)) {
+      throw new Error(`Google Chat thread must be a thread resource name, got ${thread}`);
+    }
     body.thread = { name: thread };
   }
   if (attachments && attachments.length > 0) {

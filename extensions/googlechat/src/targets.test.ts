@@ -251,6 +251,23 @@ describe("sendGoogleChatMessage", () => {
     const [url] = fetchMock.mock.calls[0] ?? [];
     expect(String(url)).not.toContain("messageReplyOption=");
   });
+
+  it("rejects message resources passed as thread names", async () => {
+    const fetchMock = stubSuccessfulSend("spaces/AAA/messages/125");
+
+    await expect(
+      sendGoogleChatMessage({
+        account,
+        space: "spaces/AAA",
+        text: "hello",
+        thread: "spaces/AAA/messages/123",
+      }),
+    ).rejects.toThrow(
+      "Google Chat thread must be a thread resource name, got spaces/AAA/messages/123",
+    );
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });
 
 function mockTicket(payload: Record<string, unknown>) {
