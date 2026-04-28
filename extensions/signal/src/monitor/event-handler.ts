@@ -403,7 +403,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       const combinedText = entries
         .map((entry) => entry.bodyText)
         .filter(Boolean)
-        .join("\\n");
+        .join("\n");
       if (!combinedText.trim()) {
         return;
       }
@@ -579,14 +579,20 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       groupId,
     });
     const quoteText = normalizeOptionalString(dataMessage?.quote?.text) ?? "";
-    const { contextVisibilityMode, quoteSenderAllowed, visibleQuoteText, visibleQuoteSender } =
-      resolveSignalQuoteContext({
-        cfg: deps.cfg,
-        accountId: deps.accountId,
-        isGroup,
-        dataMessage,
-        effectiveGroupAllow,
-      });
+    const {
+      contextVisibilityMode,
+      quoteSenderAllowed,
+      visibleQuoteId,
+      visibleQuoteText,
+      visibleQuoteSender,
+      visibleQuoteIsQuote,
+    } = resolveSignalQuoteContext({
+      cfg: deps.cfg,
+      accountId: deps.accountId,
+      isGroup,
+      dataMessage,
+      effectiveGroupAllow,
+    });
     if (quoteText && !visibleQuoteText && isGroup) {
       logVerbose(
         `signal: drop quote context (mode=${contextVisibilityMode}, sender_allowed=${quoteSenderAllowed ? "yes" : "no"})`,
@@ -904,12 +910,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       mediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
       commandAuthorized,
       wasMentioned: effectiveWasMentioned,
-      replyToId: visibleQuoteText && dataMessage?.quote?.id != null
-        ? String(dataMessage.quote.id)
-        : undefined,
+      replyToId: visibleQuoteId,
       replyToBody: visibleQuoteText || undefined,
       replyToSender: visibleQuoteSender,
-      replyToIsQuote: visibleQuoteText ? true : undefined,
+      replyToIsQuote: visibleQuoteIsQuote,
     });
   };
 }
