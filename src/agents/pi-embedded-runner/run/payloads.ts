@@ -136,9 +136,6 @@ function resolveToolErrorWarningPolicy(params: {
 }): ToolErrorWarningPolicy {
   const normalizedToolName = normalizeOptionalLowercaseString(params.lastToolError.toolName) ?? "";
   const includeDetails = shouldIncludeToolErrorDetails(params);
-  if (params.suppressToolErrorWarnings) {
-    return { showWarning: false, includeDetails };
-  }
   if (isExecLikeToolName(params.lastToolError.toolName) && !includeDetails) {
     return { showWarning: false, includeDetails };
   }
@@ -155,6 +152,9 @@ function resolveToolErrorWarningPolicy(params: {
       showWarning: !params.hasUserFacingFailureAcknowledgement,
       includeDetails,
     };
+  }
+  if (params.suppressToolErrorWarnings) {
+    return { showWarning: false, includeDetails };
   }
   if (params.suppressToolErrors) {
     return { showWarning: false, includeDetails };

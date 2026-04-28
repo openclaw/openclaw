@@ -529,7 +529,7 @@ Periodic heartbeat runs.
 
 - `every`: duration string (ms/s/m/h). Default: `30m` (API-key auth) or `1h` (OAuth auth). Set to `0m` to disable.
 - `includeSystemPromptSection`: when false, omits the Heartbeat section from the system prompt and skips `HEARTBEAT.md` injection into bootstrap context. Default: `true`.
-- `suppressToolErrorWarnings`: when true, suppresses tool error warning payloads during heartbeat runs.
+- `suppressToolErrorWarnings`: when true, suppresses non-mutating tool error warning payloads during heartbeat runs. Unresolved mutating failures such as write, edit, and message sends remain visible unless the assistant explicitly acknowledges the failed action.
 - `timeoutSeconds`: maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to use `agents.defaults.timeoutSeconds`.
 - `directPolicy`: direct/DM delivery policy. `allow` (default) permits direct-target delivery. `block` suppresses direct-target delivery and emits `reason=dm-blocked`.
 - `lightContext`: when true, heartbeat runs use lightweight bootstrap context and keep only `HEARTBEAT.md` from workspace bootstrap files.

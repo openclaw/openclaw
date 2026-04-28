@@ -362,7 +362,7 @@ export type AgentDefaultsConfig = {
     includeSystemPromptSection?: boolean;
     /** Max chars allowed after HEARTBEAT_OK before delivery (default: 30). */
     ackMaxChars?: number;
-    /** Suppress tool error warning payloads during heartbeat runs. */
+    /** Suppress non-mutating tool error warning payloads during heartbeat runs. */
     suppressToolErrorWarnings?: boolean;
     /** Run timeout in seconds for heartbeat agent turns. */
     timeoutSeconds?: number;
