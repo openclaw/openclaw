@@ -5,7 +5,10 @@ import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-bu
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { resolveEffectiveCompactionReserveTokens } from "../../agents/pi-settings.js";
+import {
+  resolveCompactionReserveTokensFloor,
+  resolveEffectiveCompactionReserveTokens,
+} from "../../agents/pi-settings.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import {
   derivePromptTokens,
@@ -424,9 +427,7 @@ export async function runPreflightCompactionIfNeeded(params: {
   });
   const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
   const reserveTokensFloor =
-    memoryFlushPlan?.reserveTokensFloor ??
-    params.cfg.agents?.defaults?.compaction?.reserveTokensFloor ??
-    20_000;
+    memoryFlushPlan?.reserveTokensFloor ?? resolveCompactionReserveTokensFloor(params.cfg);
   const effectiveReserveTokens = resolveEffectiveCompactionReserveTokens({
     cfg: params.cfg,
     reserveTokensFloor,

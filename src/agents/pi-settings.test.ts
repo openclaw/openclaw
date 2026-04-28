@@ -414,6 +414,24 @@ describe("resolveEffectiveCompactionReserveTokens", () => {
     ).toBe(50_000);
   });
 
+  it("preserves an explicit caller-supplied zero floor", () => {
+    expect(
+      resolveEffectiveCompactionReserveTokens({
+        cfg: {
+          agents: {
+            defaults: {
+              compaction: {
+                reserveTokens: 100,
+                reserveTokensFloor: 99_999,
+              },
+            },
+          },
+        },
+        reserveTokensFloor: 0,
+      }),
+    ).toBe(100);
+  });
+
   it("treats missing cfg as reserveTokens = 0 and falls back to default floor", () => {
     expect(resolveEffectiveCompactionReserveTokens({})).toBe(
       DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR,
