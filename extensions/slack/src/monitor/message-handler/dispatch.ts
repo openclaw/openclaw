@@ -296,11 +296,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       await reactSlackMessage(message.channel, reactionMessageTs ?? "", toSlackEmojiName(emoji), {
         token: ctx.botToken,
         client: ctx.app.client,
-      }).catch((err) => {
-        if (formatErrorMessage(err).includes("already_reacted")) {
-          return;
-        }
-        throw err;
       });
     },
     removeReaction: async (emoji) => {
