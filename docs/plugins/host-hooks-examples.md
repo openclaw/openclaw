@@ -389,7 +389,7 @@ api.registerCommand({
   acceptsArgs: false,
   handler: async (ctx) => {
     if (!ctx.sessionKey) {
-      return { content: "This command must run inside a bound session." };
+      return { text: "This command must run inside a bound session." };
     }
     await api.enqueueNextTurnInjection({
       sessionKey: ctx.sessionKey,
@@ -398,7 +398,7 @@ api.registerCommand({
       idempotencyKey: `note-save:${ctx.sessionKey}`,
       ttlMs: 5 * 60_000, // 5 min
     });
-    return { content: "Saved.", continueAgent: false };
+    return { text: "Saved.", continueAgent: false };
   },
 });
 ```
@@ -976,7 +976,7 @@ api.registerCommand({
   acceptsArgs: true,
   requiredScopes: ["release.admin"],
   handler: async (ctx) => {
-    return { content: `release: ${ctx.args ?? "(no args)"}`, continueAgent: false };
+    return { text: `release: ${ctx.args ?? "(no args)"}`, continueAgent: false };
   },
 });
 ```
@@ -1028,7 +1028,7 @@ export default definePluginEntry({
       requiredScopes: ["release.read"],
       handler: async (ctx) => {
         const plan = await loadReleasePlan(ctx.args ?? "");
-        return { content: renderPlan(plan), continueAgent: false };
+        return { text: renderPlan(plan), continueAgent: false };
       },
     });
 
@@ -1040,10 +1040,10 @@ export default definePluginEntry({
       handler: async (ctx) => {
         const version = (ctx.args ?? "").trim();
         if (!ctx.sessionKey) {
-          return { content: "This command must run inside a bound session.", continueAgent: false };
+          return { text: "This command must run inside a bound session.", continueAgent: false };
         }
         if (!version) {
-          return { content: "Usage: /release-approve <version>", continueAgent: false };
+          return { text: "Usage: /release-approve <version>", continueAgent: false };
         }
         await api.enqueueNextTurnInjection({
           sessionKey: ctx.sessionKey,
@@ -1051,7 +1051,7 @@ export default definePluginEntry({
           placement: "prepend_context",
           idempotencyKey: `release-approve-${version}`,
         });
-        return { content: `Approved ${version}.`, continueAgent: true };
+        return { text: `Approved ${version}.`, continueAgent: true };
       },
     });
 
@@ -1062,14 +1062,14 @@ export default definePluginEntry({
       requiredScopes: ["release.admin"],
       handler: async (ctx) => {
         if (!ctx.sessionKey) {
-          return { content: "This command must run inside a bound session.", continueAgent: false };
+          return { text: "This command must run inside a bound session.", continueAgent: false };
         }
         await api.enqueueNextTurnInjection({
           sessionKey: ctx.sessionKey,
           text: `Operator initiated release rollback.`,
           placement: "prepend_context",
         });
-        return { content: "Rollback queued.", continueAgent: true };
+        return { text: "Rollback queued.", continueAgent: true };
       },
     });
   },
@@ -1112,7 +1112,7 @@ api.registerCommand({
   requiredScopes: ["release.admin"],
   handler: async (ctx) => {
     if (!ctx.sessionKey) {
-      return { content: "This command must run inside a bound session.", continueAgent: false };
+      return { text: "This command must run inside a bound session.", continueAgent: false };
     }
     await applyApprovalState(ctx.sessionKey, "approved"); // your helper
     await api.enqueueNextTurnInjection({
@@ -1120,7 +1120,7 @@ api.registerCommand({
       text: "Deployment approved. Proceed.",
       placement: "prepend_context",
     });
-    return { content: "Approved.", continueAgent: true };
+    return { text: "Approved.", continueAgent: true };
   },
 });
 ```
@@ -1602,8 +1602,10 @@ export default definePluginEntry({
 
 **Common pitfalls**
 
-- **Pick stable, scoped `id`s.** Job ownership is `(pluginId, sessionKey,
-jobId)` — duplicates within that triple are rejected.
+- **Pick stable, scoped `id`s.** Job ownership is `(pluginId, jobId)`;
+  include the session key in the job id when a plugin needs one scheduled job
+  per session. Duplicate job ids for the same plugin are rejected even when
+  their payloads target different sessions.
 - **Don't assume the cleanup callback fires on restart.**
   Restart-preserved jobs deliberately skip teardown. If you need
   deterministic teardown on restart, use `registerRuntimeLifecycle` with
@@ -1829,7 +1831,7 @@ export default definePluginEntry({
       handler: async (ctx) => {
         const version = (ctx.args ?? "").trim();
         if (!ctx.sessionKey) {
-          return { content: "This command must run inside a bound session.", continueAgent: false };
+          return { text: "This command must run inside a bound session.", continueAgent: false };
         }
         await api.enqueueNextTurnInjection({
           sessionKey: ctx.sessionKey,
@@ -1837,7 +1839,7 @@ export default definePluginEntry({
           placement: "prepend_context",
           idempotencyKey: `approve-${version || ctx.sessionKey}`,
         });
-        return { content: "Approved.", continueAgent: true };
+        return { text: "Approved.", continueAgent: true };
       },
     });
 
@@ -1848,14 +1850,14 @@ export default definePluginEntry({
       requiredScopes: ["release.admin"],
       handler: async (ctx) => {
         if (!ctx.sessionKey) {
-          return { content: "This command must run inside a bound session.", continueAgent: false };
+          return { text: "This command must run inside a bound session.", continueAgent: false };
         }
         await api.enqueueNextTurnInjection({
           sessionKey: ctx.sessionKey,
           text: `Operator denied deployment. Cancel and explain to user.`,
           placement: "prepend_context",
         });
-        return { content: "Denied.", continueAgent: true };
+        return { text: "Denied.", continueAgent: true };
       },
     });
 
@@ -2159,10 +2161,10 @@ export default definePluginEntry({
       handler: async (ctx) => {
         const step = (ctx.args ?? "").trim() as SetupStep;
         if (!step) {
-          return { content: "Usage: /setup-advance <provider|workspace|smoke-test>" };
+          return { text: "Usage: /setup-advance <provider|workspace|smoke-test>" };
         }
         // In production: read state, append, write back via sessions.pluginPatch
-        return { content: `Marked ${step} complete.`, continueAgent: false };
+        return { text: `Marked ${step} complete.`, continueAgent: false };
       },
     });
   },
