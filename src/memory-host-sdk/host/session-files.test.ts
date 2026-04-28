@@ -65,11 +65,12 @@ describe("listSessionFilesForAgent", () => {
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
     fsSync.mkdirSync(path.join(sessionsDir, "archive"), { recursive: true });
 
-    const included = ["active.jsonl"];
+    const included = ["active.jsonl", "active.checkpoint.test.jsonl"];
     const excluded = [
       "active.jsonl.bak.2026-02-16T22-28-33.000Z",
-      "active.checkpoint.test.jsonl",
-      "active.jsonl.checkpoint.2026-02-16T22-28-33.000Z",
+      "active.jsonl.reset.2026-02-16T22-26-33.000Z",
+      "active.jsonl.deleted.2026-02-16T22-27-33.000Z",
+      "active.checkpoint.123e4567-e89b-12d3-a456-426614174000.jsonl",
       "sessions.json",
       "notes.md",
     ];

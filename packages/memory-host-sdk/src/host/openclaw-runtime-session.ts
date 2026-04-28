@@ -8,6 +8,7 @@ export {
   isExecCompletionEvent,
   isHeartbeatUserMessage,
   isSessionArchiveArtifactName,
+  isPrimarySessionTranscriptFileName,
   isSilentReplyPayloadText,
   isUsageCountedSessionTranscriptFileName,
   onSessionTranscriptUpdate,

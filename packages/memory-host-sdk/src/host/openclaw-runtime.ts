@@ -51,6 +51,7 @@ export { resolveStateDir } from "../../../../src/config/paths.js";
 export {
   isCompactionCheckpointTranscriptFileName,
   isSessionArchiveArtifactName,
+  isPrimarySessionTranscriptFileName,
   isUsageCountedSessionTranscriptFileName,
   parseUsageCountedSessionIdFromFileName,
 } from "../../../../src/config/sessions/artifacts.js";

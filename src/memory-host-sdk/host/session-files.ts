@@ -243,7 +243,7 @@ export async function listSessionFilesForAgent(agentId: string): Promise<string[
     return entries
       .filter((entry) => entry.isFile())
       .map((entry) => entry.name)
-      .filter((name) => isPrimarySessionTranscriptFileName(name) && !name.includes(".checkpoint."))
+      .filter((name) => isPrimarySessionTranscriptFileName(name))
       .map((name) => path.join(dir, name));
   } catch {
     return [];

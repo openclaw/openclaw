@@ -12,6 +12,7 @@ import {
   isExecCompletionEvent,
   isHeartbeatUserMessage,
   isSessionArchiveArtifactName,
+  isPrimarySessionTranscriptFileName,
   isSilentReplyPayloadText,
   isUsageCountedSessionTranscriptFileName,
   resolveSessionTranscriptsDirForAgent,
@@ -243,7 +244,7 @@ export async function listSessionFilesForAgent(agentId: string): Promise<string[
     return entries
       .filter((entry) => entry.isFile())
       .map((entry) => entry.name)
-      .filter((name) => isUsageCountedSessionTranscriptFileName(name))
+      .filter((name) => isPrimarySessionTranscriptFileName(name))
       .map((name) => path.join(dir, name));
   } catch {
     return [];
