@@ -257,5 +257,5 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
     return `${prefix}${type}: ${info.message}`;
   }
 
-  return trimmed.length > 600 ? `${trimmed.slice(0, 600)}â€¦` : trimmed;
+  return trimmed.length > 600 ? `${trimmed.slice(0, 600)}\u2026` : trimmed;
 }

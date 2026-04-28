@@ -414,6 +414,12 @@ describe("formatRawAssistantErrorForUi", () => {
       "Authentication failed with an HTML 403 response from the provider. Re-authenticate and verify your provider account access.",
     );
   });
+
+  it("preserves a clean ellipsis when truncating fallback error text", () => {
+    const raw = "x".repeat(601);
+
+    expect(formatRawAssistantErrorForUi(raw)).toBe(`${"x".repeat(600)}\u2026`);
+  });
 });
 
 describe("raw API error payload helpers", () => {
