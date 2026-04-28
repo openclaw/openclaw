@@ -4,6 +4,7 @@ export const FIELD_LABELS: Record<string, string> = {
   meta: "Metadata",
   "meta.lastTouchedVersion": "Config Last Touched Version",
   "meta.lastTouchedAt": "Config Last Touched At",
+  instanceId: "Bench Instance ID",
   env: "Environment",
   "env.shellEnv": "Shell Environment Import",
   "env.shellEnv.enabled": "Shell Environment Import Enabled",

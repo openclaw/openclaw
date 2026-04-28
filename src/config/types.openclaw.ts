@@ -60,6 +60,13 @@ export type OpenClawConfig = {
     /** ISO timestamp when this config was last written. */
     lastTouchedAt?: string;
   };
+  /**
+   * Opaque identifier for the Bench instance this harness belongs to.
+   * When set, per-instance resources (wiki vaults, shard directories) are scoped to this id.
+   * When unset, single-user Tier A defaults apply (`~/.openclaw/wiki/main/`).
+   * Required on Tier B (personal local) and Tier C (cloud-hosted) deployments.
+   */
+  instanceId?: string;
   auth?: AuthConfig;
   accessGroups?: AccessGroupsConfig;
   acp?: AcpConfig;

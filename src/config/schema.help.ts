@@ -5,6 +5,8 @@ export const FIELD_HELP: Record<string, string> = {
   meta: "Metadata fields automatically maintained by OpenClaw to record write/version history for this config file. Keep these values system-managed and avoid manual edits unless debugging migration history.",
   "meta.lastTouchedVersion": "Auto-set when OpenClaw writes the config.",
   "meta.lastTouchedAt": "ISO timestamp of the last config write (auto-set).",
+  instanceId:
+    "Opaque identifier for the Bench instance this harness belongs to. When set, per-instance resources (wiki vaults, shard directories) are scoped to this id. When unset, single-user Tier A defaults apply (~/.openclaw/wiki/main/). Required on Tier B (personal local) and Tier C (cloud-hosted) deployments.",
   env: "Environment import and override settings used to supply runtime variables to the gateway process. Use this section to control shell-env loading and explicit variable injection behavior.",
   "env.shellEnv":
     "Shell environment import controls for loading variables from your login shell during startup. Keep this enabled when you depend on profile-defined secrets or PATH customizations.",

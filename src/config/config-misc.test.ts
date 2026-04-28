@@ -236,6 +236,28 @@ describe("$schema key in config (#14998)", () => {
     expect(result.success).toBe(false);
   });
 
+  it("accepts top-level instanceId (Phase D2.1)", () => {
+    const result = OpenClawSchema.safeParse({ instanceId: "acme-corp_01" });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.instanceId).toBe("acme-corp_01");
+    }
+  });
+
+  it("accepts config without instanceId (Tier A single-user default)", () => {
+    const result = OpenClawSchema.safeParse({});
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.instanceId).toBeUndefined();
+    }
+  });
+
+  it("rejects instanceId with path-traversal characters", () => {
+    expect(OpenClawSchema.safeParse({ instanceId: "../evil" }).success).toBe(false);
+    expect(OpenClawSchema.safeParse({ instanceId: "has/slash" }).success).toBe(false);
+    expect(OpenClawSchema.safeParse({ instanceId: "" }).success).toBe(false);
+  });
+
   it("accepts $schema during full config validation", () => {
     const result = validateConfigObject({
       $schema: "./schema.json",

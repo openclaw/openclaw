@@ -431,6 +431,15 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    instanceId: z
+      .string()
+      .min(1)
+      .max(128)
+      .regex(
+        /^[A-Za-z0-9_-]+$/,
+        "instanceId must match /^[A-Za-z0-9_-]+$/ (alphanumeric, underscore, hyphen; 1-128 chars).",
+      )
+      .optional(),
     env: z
       .object({
         shellEnv: z
