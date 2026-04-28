@@ -34,7 +34,6 @@ export function applyIlmuConfig(cfg: OpenClawConfig): OpenClawConfig {
       ...withProvider.agents,
       defaults: {
         ...withProvider.agents?.defaults,
-        reasoningDefault: withProvider.agents?.defaults?.reasoningDefault ?? "on",
         thinkingDefault: withProvider.agents?.defaults?.thinkingDefault ?? "medium",
       },
     },
