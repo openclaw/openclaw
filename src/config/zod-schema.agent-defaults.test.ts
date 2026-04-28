@@ -55,6 +55,17 @@ describe("agent defaults schema", () => {
     ).not.toThrow();
   });
 
+  it("accepts agents.defaults.agentRuntime", () => {
+    expect(() =>
+      AgentDefaultsSchema.parse({
+        agentRuntime: {
+          id: "claude-cli",
+          fallback: "none",
+        },
+      }),
+    ).not.toThrow();
+  });
+
   it("accepts experimental.localModelLean", () => {
     const result = AgentDefaultsSchema.parse({
       experimental: {
