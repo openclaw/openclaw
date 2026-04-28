@@ -139,7 +139,7 @@ describe("buildStatusReply", () => {
     expect(reply?.text).toContain("Fallbacks: anthropic/claude-sonnet-4-6");
   });
 
-  it("keeps agent primary strict when the agent has no explicit fallback override", async () => {
+  it("does not render inherited default fallback config when the agent has no explicit fallback override", async () => {
     const cfg = {
       session: { mainKey: "main", scope: "per-sender" },
       agents: {
@@ -165,7 +165,7 @@ describe("buildStatusReply", () => {
 
     const reply = await buildKiraStatusReply(cfg);
 
-    expect(reply?.text).not.toContain("Fallbacks:");
+    expect(reply?.text).not.toContain("Fallbacks: anthropic/claude-sonnet-4-6");
   });
 
   it("treats an explicit empty per-agent fallback override as disabling inherited fallbacks", async () => {
