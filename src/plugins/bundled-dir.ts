@@ -120,14 +120,20 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
       return resolvedOverride;
     }
     // Installed CLIs can inherit stale bundled-dir overrides from older shells
-    // or debug sessions. Prefer the package that owns argv[1] over a broken
+    // or debug sessions. Prefer trusted runtime package roots over a broken
     // override so bundled providers keep working in packaged installs.
     try {
       const argvPackageRoot = resolveOpenClawPackageRootSync({ argv1: process.argv[1] });
-      if (argvPackageRoot && !isSourceCheckoutRoot(argvPackageRoot)) {
-        const argvFallback = resolveBundledDirFromPackageRoot(argvPackageRoot, false);
-        if (argvFallback) {
-          return argvFallback;
+      const modulePackageRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
+      const packageRoots = [argvPackageRoot, modulePackageRoot].filter(
+        (entry, index, all): entry is string => Boolean(entry) && all.indexOf(entry) === index,
+      );
+      for (const packageRoot of packageRoots) {
+        if (!isSourceCheckoutRoot(packageRoot)) {
+          const fallback = resolveBundledDirFromPackageRoot(packageRoot, false);
+          if (fallback) {
+            return fallback;
+          }
         }
       }
     } catch {
@@ -140,10 +146,12 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
 
   try {
     const argvRoot = resolveOpenClawPackageRootSync({ argv1: process.argv[1] });
-    const cwdRoot = resolveOpenClawPackageRootSync({ cwd: process.cwd() });
+    const cwdRoot = preferSourceCheckout
+      ? resolveOpenClawPackageRootSync({ cwd: process.cwd() })
+      : null;
     const moduleRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
     const packageRoots = (
-      preferSourceCheckout ? [cwdRoot, argvRoot, moduleRoot] : [argvRoot, cwdRoot, moduleRoot]
+      preferSourceCheckout ? [cwdRoot, argvRoot, moduleRoot] : [argvRoot, moduleRoot]
     ).filter(
       (entry, index, all): entry is string => Boolean(entry) && all.indexOf(entry) === index,
     );

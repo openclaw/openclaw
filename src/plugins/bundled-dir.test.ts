@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -108,7 +109,7 @@ function expectResolvedBundledDirFromRoot(params: {
   expectResolvedBundledDir({
     cwd: params.cwd ?? params.repoRoot,
     expectedDir: path.join(params.repoRoot, params.expectedRelativeDir),
-    ...(params.argv1 ? { argv1: params.argv1 } : {}),
+    argv1: params.argv1 ?? path.join(params.repoRoot, "openclaw.mjs"),
     ...(params.bundledDirOverride ? { bundledDirOverride: params.bundledDirOverride } : {}),
     ...(params.vitest !== undefined ? { vitest: params.vitest } : {}),
     ...(params.execArgv ? { execArgv: params.execArgv } : {}),
@@ -294,6 +295,37 @@ describe("resolveBundledPluginsDir", () => {
     expect(bundledDir).toBeTruthy();
     expect(fs.existsSync(bundledDir ?? "")).toBe(true);
     expect(fs.readdirSync(bundledDir ?? "")).toEqual([]);
+  });
+
+  it("does not resolve bundled plugins from cwd when argv1 is not a package root", () => {
+    const cwdRepoRoot = createOpenClawRoot({
+      prefix: "openclaw-bundled-dir-untrusted-cwd-",
+      hasExtensions: true,
+      hasSrc: true,
+      hasGitCheckout: true,
+    });
+    fs.mkdirSync(path.join(cwdRepoRoot, "extensions", "memory-core"), { recursive: true });
+    fs.writeFileSync(
+      path.join(cwdRepoRoot, "extensions", "memory-core", "runtime-api.js"),
+      "export const marker = 'untrusted-cwd';\n",
+      "utf8",
+    );
+    const currentRepoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+    const expectedDir = path.join(currentRepoRoot, "extensions");
+
+    vi.spyOn(process, "cwd").mockReturnValue(cwdRepoRoot);
+    process.argv[1] = "/usr/bin/env";
+    process.execArgv.length = 0;
+    delete process.env.VITEST;
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+
+    const bundledDir = resolveBundledPluginsDir();
+
+    expect(fs.realpathSync(bundledDir ?? "")).toBe(fs.realpathSync(expectedDir));
+    expect(fs.realpathSync(bundledDir ?? "")).not.toBe(
+      fs.realpathSync(path.join(cwdRepoRoot, "extensions")),
+    );
   });
 
   it.each([
