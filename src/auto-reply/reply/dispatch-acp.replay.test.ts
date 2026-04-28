@@ -5,11 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AcpGatewayStore } from "../../acp/store/store.js";
 import { createProjectionRestartHarness } from "../../acp/test-harness/restart-harness.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
-import {
-  createAcpDispatchDeliveryCoordinator,
-  createAcpDispatchDeliveryState,
-} from "./dispatch-acp-delivery.js";
-import { __testing, AcpDurableProjectionService } from "./dispatch-acp-replay.js";
 import { createAcpTestConfig } from "./test-fixtures/acp-runtime.js";
 
 const routeMocks = vi.hoisted(() => ({
@@ -67,15 +62,24 @@ const zodMocks = vi.hoisted(() => {
   return { z };
 });
 
-vi.mock("./route-reply.js", () => ({
+// Some shared helpers import the real delivery stack before this file's test
+// doubles are installed. Reset before dynamically loading the replay modules so
+// restart-route assertions observe the mocked routeReply/TTS boundaries.
+vi.resetModules();
+
+vi.doMock("./route-reply.js", () => ({
   routeReply: (params: unknown) => routeMocks.routeReply(params),
 }));
 
-vi.mock("../../tts/tts.js", () => ({
+vi.doMock("../../tts/tts.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
 }));
 
-vi.mock("zod", () => zodMocks);
+vi.doMock("zod", () => zodMocks);
+
+const { createAcpDispatchDeliveryCoordinator, createAcpDispatchDeliveryState } =
+  await import("./dispatch-acp-delivery.js");
+const { __testing, AcpDurableProjectionService } = await import("./dispatch-acp-replay.js");
 
 const tempRoots: string[] = [];
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
