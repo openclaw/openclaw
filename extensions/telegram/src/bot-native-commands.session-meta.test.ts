@@ -813,7 +813,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expectUnauthorizedNewCommandBlocked(sendMessage);
   });
 
-  it("marks paired Telegram owners on native DM command contexts", async () => {
+  it("authorizes paired Telegram DMs without marking them as owners", async () => {
     const { handler } = registerAndResolveStatusHandler({
       cfg: {},
       allowFrom: [],
@@ -828,18 +828,13 @@ describe("registerTelegramNativeCommands — session metadata", () => {
           {
             ctx?: {
               CommandAuthorized?: boolean;
-              OwnerAllowFrom?: Array<string | number>;
             };
           },
         ]
       >
     )[0]?.[0];
-    expect(dispatchCall?.ctx).toEqual(
-      expect.objectContaining({
-        CommandAuthorized: true,
-        OwnerAllowFrom: ["200"],
-      }),
-    );
+    expect(dispatchCall?.ctx?.CommandAuthorized).toBe(true);
+    expect(dispatchCall?.ctx).not.toHaveProperty("OwnerAllowFrom");
   });
 
   it("routes Telegram native commands through bound topic sessions", async () => {

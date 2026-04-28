@@ -25,6 +25,7 @@ import type { HandleCommandsParams } from "./commands-types.js";
 
 const EXPORT_TRAJECTORY_DOCS_URL = "https://docs.openclaw.ai/tools/trajectory";
 const EXPORT_TRAJECTORY_EXEC_SCOPE_KEY = "chat:export-trajectory";
+const MAX_TRAJECTORY_EXPORT_ENCODED_REQUEST_CHARS = 8192;
 const EXPORT_TRAJECTORY_PRIVATE_ROUTE_UNAVAILABLE =
   "I couldn't find a private owner approval route for the trajectory export. Run /export-trajectory from an owner DM so the sensitive trajectory bundle is not posted in this chat.";
 const EXPORT_TRAJECTORY_PRIVATE_ROUTE_ACK =
@@ -61,7 +62,15 @@ export async function buildExportTrajectoryCommandReply(
     "export-trajectory",
     "trajectory",
   ]);
-  const request = buildTrajectoryExportExecRequest(params, args.outputPath);
+  if (args.error) {
+    return { text: args.error };
+  }
+  let request: TrajectoryExportExecRequest;
+  try {
+    request = buildTrajectoryExportExecRequest(params, args.outputPath);
+  } catch (error) {
+    return { text: `❌ Failed to prepare trajectory export request: ${formatErrorMessage(error)}` };
+  }
   if (params.isGroup) {
     const targets = await resolvedDeps.resolvePrivateTrajectoryTargets(params, request);
     if (targets.length === 0) {
@@ -109,6 +118,9 @@ export async function buildExportTrajectoryReply(
     "export-trajectory",
     "trajectory",
   ]);
+  if (args.error) {
+    return { text: args.error };
+  }
   const sessionTarget = resolveExportCommandSessionTarget(params);
   if (isReplyPayload(sessionTarget)) {
     return sessionTarget;
@@ -326,6 +338,9 @@ function buildTrajectoryExportExecRequest(
     request.agent = params.agentId;
   }
   const encodedRequest = Buffer.from(JSON.stringify(request), "utf8").toString("base64url");
+  if (encodedRequest.length > MAX_TRAJECTORY_EXPORT_ENCODED_REQUEST_CHARS) {
+    throw new Error("Encoded trajectory export request is too large");
+  }
   const argv = [
     "openclaw",
     "sessions",

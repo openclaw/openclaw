@@ -341,6 +341,30 @@ describe("buildExportTrajectoryCommandReply", () => {
     });
   });
 
+  it("rejects oversized output paths before requesting exec approval", async () => {
+    const { buildExportTrajectoryCommandReply } = await import("./commands-export-trajectory.js");
+    const { execCalls, deps } = createExecDeps();
+    const params = makeParams();
+    params.command.commandBodyNormalized = `/export-trajectory ${"a".repeat(513)}`;
+
+    const reply = await buildExportTrajectoryCommandReply(params, deps);
+
+    expect(reply.text).toContain("Output path is too long");
+    expect(execCalls).toHaveLength(0);
+  });
+
+  it("rejects oversized encoded export requests before requesting exec approval", async () => {
+    const { buildExportTrajectoryCommandReply } = await import("./commands-export-trajectory.js");
+    const { execCalls, deps } = createExecDeps();
+    const params = makeParams();
+    params.workspaceDir = `/${"workspace".repeat(1200)}`;
+
+    const reply = await buildExportTrajectoryCommandReply(params, deps);
+
+    expect(reply.text).toContain("Encoded trajectory export request is too large");
+    expect(execCalls).toHaveLength(0);
+  });
+
   it("routes group trajectory export approval privately", async () => {
     const { buildExportTrajectoryCommandReply } = await import("./commands-export-trajectory.js");
     const { execCalls, privateReplies, deps } = createExecDeps({
