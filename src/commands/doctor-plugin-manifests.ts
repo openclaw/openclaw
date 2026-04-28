@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
@@ -81,6 +82,7 @@ function buildLegacyManifestContractMigration(params: {
 }
 
 export function collectLegacyPluginManifestContractMigrations(params?: {
+  config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   manifestRoots?: string[];
   workspaceDir?: string;
@@ -114,6 +116,7 @@ export function collectLegacyPluginManifestContractMigrations(params?: {
 
   for (const plugin of loadPluginManifestRegistry({
     cache: false,
+    ...(params?.config ? { config: params.config } : {}),
     ...(params?.env ? { env: params.env } : {}),
     ...(params?.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   }).plugins) {
@@ -138,6 +141,7 @@ export function collectLegacyPluginManifestContractMigrations(params?: {
 }
 
 export async function maybeRepairLegacyPluginManifestContracts(params: {
+  config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   manifestRoots?: string[];
   workspaceDir?: string;
@@ -146,6 +150,7 @@ export async function maybeRepairLegacyPluginManifestContracts(params: {
   note?: typeof note;
 }): Promise<void> {
   const migrations = collectLegacyPluginManifestContractMigrations({
+    ...(params.config ? { config: params.config } : {}),
     ...(params.env ? { env: params.env } : {}),
     ...(params.manifestRoots ? { manifestRoots: params.manifestRoots } : {}),
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
