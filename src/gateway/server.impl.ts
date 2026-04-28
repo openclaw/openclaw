@@ -814,7 +814,6 @@ export async function startGatewayServer(
         cfgAtStart,
         channelManager,
         log,
-        pluginLookUpTable,
       }),
     );
 
@@ -1001,8 +1000,10 @@ export async function startGatewayServer(
       cron: runtimeState.cronState.cron,
       logCron,
       log,
+      pluginLookUpTable,
     });
     runtimeState.heartbeatRunner = activated.heartbeatRunner;
+    runtimeState.stopModelPricingRefresh = activated.stopModelPricingRefresh;
 
     const { startManagedGatewayConfigReloader } = await import("./server-reload-handlers.js");
     runtimeState.configReloader = startManagedGatewayConfigReloader({
