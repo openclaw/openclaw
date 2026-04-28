@@ -29,6 +29,7 @@ import {
 } from "../../../plugins/provider-runtime.js";
 import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
+import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
 import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import {
@@ -1863,6 +1864,15 @@ export async function runEmbeddedAttempt(
             log.debug(orphanRepairMessage);
           }
         }
+        if (!isRawModelRun) {
+          effectivePrompt = annotateInterSessionPromptText(effectivePrompt, params.inputProvenance);
+        }
+        const effectiveTranscriptPrompt =
+          params.transcriptPrompt === undefined
+            ? undefined
+            : isRawModelRun
+              ? params.transcriptPrompt
+              : annotateInterSessionPromptText(params.transcriptPrompt, params.inputProvenance);
         const transcriptLeafId =
           (sessionManager.getLeafEntry() as { id?: string } | null | undefined)?.id ?? null;
         const heartbeatSummary =
@@ -1883,7 +1893,7 @@ export async function runEmbeddedAttempt(
 
           const promptSubmission = resolveRuntimeContextPromptParts({
             effectivePrompt,
-            transcriptPrompt: params.transcriptPrompt,
+            transcriptPrompt: effectiveTranscriptPrompt,
           });
           const runtimeSystemContext = promptSubmission.runtimeSystemContext?.trim();
           if (promptSubmission.runtimeOnly && runtimeSystemContext) {

@@ -23,7 +23,10 @@ import {
 import { stripToolResultDetails } from "../../session-transcript-repair.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { normalizeAssistantReplayContent } from "../replay-history.js";
-import { resolveAttemptWorkspaceBootstrapRouting } from "./attempt-bootstrap-routing.js";
+import {
+  appendBootstrapFileToUserPromptPrefix,
+  resolveAttemptWorkspaceBootstrapRouting,
+} from "./attempt-bootstrap-routing.js";
 import { resolveAttemptBootstrapContext } from "./attempt.context-engine-helpers.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -165,6 +168,10 @@ export async function prepareAttemptBootstrapPromptContext(params: {
     bootstrapPromptWarning,
     workspaceNotes,
     shouldRecordCompletedBootstrapTurn,
-    userPromptPrefixText: bootstrapRouting.userPromptPrefixText,
+    userPromptPrefixText: appendBootstrapFileToUserPromptPrefix({
+      prefixText: bootstrapRouting.userPromptPrefixText,
+      bootstrapMode,
+      contextFiles: remappedContextFiles,
+    }),
   };
 }

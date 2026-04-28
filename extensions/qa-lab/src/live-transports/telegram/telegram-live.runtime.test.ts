@@ -165,6 +165,7 @@ describe("telegram live qa runtime", () => {
     expect(next.agents?.defaults?.skipBootstrap).toBe(true);
     expect(next.plugins?.allow).toContain("telegram");
     expect(next.plugins?.entries?.telegram).toEqual({ enabled: true });
+    expect(next.messages?.groupChat?.visibleReplies).toBe("automatic");
     expect(next.channels?.telegram).toEqual({
       enabled: true,
       defaultAccount: "sut",
