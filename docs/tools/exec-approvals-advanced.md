@@ -271,8 +271,8 @@ Generic model:
 Native approval clients auto-enable DM-first delivery when all of these are true:
 
 - the channel supports native approval delivery
-- approvers can be resolved from explicit `execApprovals.approvers` or that
-  channel's documented fallback sources
+- approvers can be resolved from explicit `execApprovals.approvers` or owner
+  identity such as `commands.ownerAllowFrom`
 - `channels.<channel>.execApprovals.enabled` is unset or `"auto"`
 
 Set `enabled: false` to disable a native approval client explicitly. Set `enabled: true` to force
@@ -295,7 +295,7 @@ Shared behavior:
 - when a native approval client auto-enables, the default native delivery target is approver DMs
 - for Discord and Telegram, only resolved approvers can approve or deny
 - Discord approvers can be explicit (`execApprovals.approvers`) or inferred from `commands.ownerAllowFrom`
-- Telegram approvers can be explicit (`execApprovals.approvers`) or inferred from existing owner config (`allowFrom`, plus direct-message `defaultTo` where supported)
+- Telegram approvers can be explicit (`execApprovals.approvers`) or inferred from `commands.ownerAllowFrom`
 - Slack approvers can be explicit (`execApprovals.approvers`) or inferred from `commands.ownerAllowFrom`
 - Slack native buttons preserve approval id kind, so `plugin:` ids can resolve plugin approvals
   without a second Slack-local fallback layer

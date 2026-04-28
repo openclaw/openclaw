@@ -121,7 +121,12 @@ describe("telegram exec approvals", () => {
       isTelegramExecApprovalClientEnabled({
         cfg: buildConfig(undefined, { allowFrom: ["123"] }),
       }),
-    ).toBe(true);
+    ).toBe(false);
+    expect(
+      isTelegramExecApprovalClientEnabled({
+        cfg: buildConfig(undefined, { defaultTo: 123 }),
+      }),
+    ).toBe(false);
     expect(
       isTelegramExecApprovalClientEnabled({
         cfg: buildConfig({ approvers: ["123"] }),
@@ -160,7 +165,7 @@ describe("telegram exec approvals", () => {
     expect(isTelegramExecApprovalApprover({ cfg, senderId: "67890" })).toBe(true);
   });
 
-  it("infers approvers from allowFrom and direct defaultTo", () => {
+  it("does not infer approvers from Telegram chat allowlists", () => {
     const cfg = buildConfig(
       { enabled: true },
       {
@@ -169,9 +174,10 @@ describe("telegram exec approvals", () => {
       },
     );
 
-    expect(getTelegramExecApprovalApprovers({ cfg })).toEqual(["12345", "67890"]);
-    expect(isTelegramExecApprovalApprover({ cfg, senderId: "12345" })).toBe(true);
-    expect(isTelegramExecApprovalApprover({ cfg, senderId: "67890" })).toBe(true);
+    expect(getTelegramExecApprovalApprovers({ cfg })).toEqual([]);
+    expect(isTelegramExecApprovalClientEnabled({ cfg })).toBe(false);
+    expect(isTelegramExecApprovalApprover({ cfg, senderId: "12345" })).toBe(false);
+    expect(isTelegramExecApprovalApprover({ cfg, senderId: "67890" })).toBe(false);
   });
 
   it("defaults target to dm", () => {
