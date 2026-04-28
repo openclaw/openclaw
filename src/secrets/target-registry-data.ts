@@ -34,17 +34,6 @@ function createPluginOpenClawConfigSecretTargetEntry(
   };
 }
 
-function createPluginSecretInputTargetEntry(
-  pluginId: string,
-  secretInputPath: PluginManifestSecretInputPath,
-): SecretTargetRegistryEntry {
-  return createPluginOpenClawConfigSecretTargetEntry(
-    pluginId,
-    secretInputPath.path,
-    secretInputPath.expected ?? "string",
-  );
-}
-
 function hasSensitiveConfigHint(
   plugin: PluginManifestRecord,
   configPath: WebProviderSecretConfig["configPath"],
@@ -99,7 +88,6 @@ function listBundledPluginConfigSecretTargetRegistryEntries(): SecretTargetRegis
   }
   return entries.toSorted((left, right) => left.id.localeCompare(right.id));
 }
-
 
 function listChannelSecretTargetRegistryEntries(): SecretTargetRegistryEntry[] {
   const entries: SecretTargetRegistryEntry[] = [];

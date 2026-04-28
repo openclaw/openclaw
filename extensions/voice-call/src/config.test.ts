@@ -304,9 +304,11 @@ describe("voice-call manifest SecretRefs", () => {
     };
 
     expect(manifest.configContracts?.secretInputs?.paths).toEqual([
+      { path: "allowFrom[]", expected: "string" },
       { path: "fromNumber", expected: "string" },
       { path: "toNumber", expected: "string" },
-      { path: "allowFrom[]", expected: "string" },
+      { path: "tts.providers.*.apiKey", expected: "string" },
+      { path: "twilio.authToken", expected: "string" },
     ]);
     expect(manifest.uiHints?.fromNumber?.sensitive).toBe(true);
     expect(manifest.uiHints?.toNumber?.sensitive).toBe(true);
