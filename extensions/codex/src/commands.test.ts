@@ -377,6 +377,7 @@ describe("codex command", () => {
     expect(request.text).toBe(
       [
         "OpenClaw diagnostics found an attached Codex runtime thread.",
+        "For the local Gateway support bundle, run: openclaw gateway diagnostics export",
         "Codex diagnostics can send this thread's feedback bundle to OpenAI servers.",
         "Thread: thread-123",
         "Note: tool loop repro",

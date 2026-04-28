@@ -767,6 +767,11 @@ available. The upload goes through Codex's normal feedback path to OpenAI
 servers; if Codex feedback is disabled in that app-server, the command returns
 the app-server error.
 
+This is separate from the existing Gateway diagnostics export. For a local,
+shareable OpenClaw support bundle, run `openclaw gateway diagnostics export`.
+The Codex step adds the native Codex thread id and optional OpenAI feedback
+upload when the active chat is attached to the Codex runtime.
+
 `/codex resume` writes the same sidecar binding file that the harness uses for
 normal turns. On the next message, OpenClaw resumes that Codex thread, passes the
 currently selected OpenClaw model into app-server, and keeps extended history
