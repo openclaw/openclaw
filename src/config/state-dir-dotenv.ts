@@ -6,7 +6,7 @@ import {
   isDangerousHostEnvVarName,
   normalizeEnvVarKey,
 } from "../infra/host-env-security.js";
-import { collectConfigServiceEnvVars } from "./config-env-vars.js";
+import { collectConfigEnvSecretRefVars, collectConfigServiceEnvVars } from "./config-env-vars.js";
 import { resolveStateDir } from "./paths.js";
 import type { OpenClawConfig } from "./types.js";
 
@@ -61,6 +61,7 @@ export function readStateDirDotEnvVars(
  * Precedence:
  * 1. state-dir `.env` file vars
  * 2. config service env vars
+ * 3. config env SecretRef values
  */
 export function collectDurableServiceEnvVars(params: {
   env: Record<string, string | undefined>;
@@ -69,5 +70,6 @@ export function collectDurableServiceEnvVars(params: {
   return {
     ...readStateDirDotEnvVars(params.env),
     ...collectConfigServiceEnvVars(params.config),
+    ...collectConfigEnvSecretRefVars(params.config, params.env),
   };
 }
