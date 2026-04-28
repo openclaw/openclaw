@@ -21,6 +21,8 @@ import {
 } from "../../pi-embedded-helpers.js";
 import type { ToolResultFormat } from "../../pi-embedded-subscribe.shared-types.js";
 import {
+  containsDowngradedToolCallText,
+  extractAssistantRawText,
   extractAssistantThinking,
   extractAssistantVisibleText,
   formatReasoningMessage,
@@ -66,6 +68,17 @@ const MUTATING_FAILURE_ERROR_WHILE_ACTION_PATTERN = new RegExp(
 const DID_NOT_FAIL_PATTERN = /\b(?:did not|didn't)\s+fail\b/u;
 const NEGATED_FAILURE_PATTERN = /\b(?:no|not|without)\s+(?:failures?|errors?)\b/u;
 
+// Short, future-action-phrased replies with no tool execution indicate the model
+// is stalling rather than performing real work. Keep these anchored so normal
+// prose that only mentions a placeholder phrase is not replaced by an error.
+const NON_EXECUTING_REPLY_PATTERNS = [
+  /^(?:ok(?:ay)?[,.! ]*)?(?:one sec(?:ond)?|give me (?:a )?(?:sec(?:ond)?|moment)|hold on)\b[^\n]{0,120}$/i,
+  /^(?:still planning to|working on it)\b[^\n]{0,120}$/i,
+  /^(?:let me (?:actually )?(?:check|do|look|read|run|test|open|inspect|verify|fetch|pull)\b|i(?:'|\u2019)ll (?:check|do|look|read|run|test|open|inspect|verify|fetch|pull)\b[^.!?\n]{0,60}\bnow\b)[^\n]{0,120}$/i,
+] as const;
+
+const NON_EXECUTING_REPLY_MAX_CHARS = 220;
+
 function isRecoverableToolError(error: string | undefined): boolean {
   const errorLower = normalizeOptionalLowercaseString(error) ?? "";
   return RECOVERABLE_TOOL_ERROR_KEYWORDS.some((keyword) => errorLower.includes(keyword));
@@ -90,6 +103,18 @@ function hasExplicitMutatingToolFailureAcknowledgement(text: string): boolean {
     MUTATING_FAILURE_FAILURE_THEN_ACTION_PATTERN.test(normalizedText) ||
     MUTATING_FAILURE_ERROR_WHILE_ACTION_PATTERN.test(normalizedText)
   );
+}
+
+function isLikelyNonExecutingPlaceholderReply(text: string): boolean {
+  const normalized = text.trim();
+  if (!normalized || normalized.length > NON_EXECUTING_REPLY_MAX_CHARS) {
+    return false;
+  }
+  const lineCount = normalized.split(/\r?\n/).filter(Boolean).length;
+  if (lineCount > 4) {
+    return false;
+  }
+  return NON_EXECUTING_REPLY_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
 function isVerboseToolDetailEnabled(level?: VerboseLevel): boolean {
@@ -282,6 +307,15 @@ export function buildEmbeddedRunPayloads(params: {
     ? extractAssistantVisibleText(params.lastAssistant)
     : "";
   const fallbackRawAnswerText = resolveRawAssistantAnswerText(params.lastAssistant);
+  const rawAssistantText = params.lastAssistant
+    ? extractAssistantRawText(params.lastAssistant)
+    : "";
+  const hadStructuredToolActivity =
+    params.toolMetas.length > 0 || params.didSendViaMessagingTool === true;
+  const downgradedToolCallDetected =
+    !lastAssistantErrored &&
+    !hadStructuredToolActivity &&
+    containsDowngradedToolCallText(rawAssistantText);
   const shouldSuppressRawErrorText = (text: string) => {
     if (!lastAssistantErrored) {
       return false;
@@ -362,32 +396,54 @@ export function buildEmbeddedRunPayloads(params: {
             : []
       ).filter((text) => !shouldSuppressRawErrorText(text));
 
+  const placeholderReplyDetected =
+    !lastAssistantErrored &&
+    !hadStructuredToolActivity &&
+    answerTexts.length > 0 &&
+    answerTexts.every((text) => isLikelyNonExecutingPlaceholderReply(text));
+
   let hasUserFacingAssistantReply = false;
   let hasUserFacingFailureAcknowledgement = false;
-  for (const text of answerTexts) {
-    const {
-      text: cleanedText,
-      mediaUrls,
-      audioAsVoice,
-      replyToId,
-      replyToTag,
-      replyToCurrent,
-    } = parseReplyDirectives(text);
-    if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) {
-      continue;
+  if (!downgradedToolCallDetected && !placeholderReplyDetected) {
+    for (const text of answerTexts) {
+      const {
+        text: cleanedText,
+        mediaUrls,
+        audioAsVoice,
+        replyToId,
+        replyToTag,
+        replyToCurrent,
+      } = parseReplyDirectives(text);
+      if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) {
+        continue;
+      }
+      replyItems.push({
+        text: cleanedText,
+        media: mediaUrls,
+        audioAsVoice,
+        replyToId,
+        replyToTag,
+        replyToCurrent,
+      });
+      hasUserFacingAssistantReply = true;
+      if (cleanedText && hasExplicitMutatingToolFailureAcknowledgement(cleanedText)) {
+        hasUserFacingFailureAcknowledgement = true;
+      }
     }
+  }
+
+  if (downgradedToolCallDetected) {
     replyItems.push({
-      text: cleanedText,
-      media: mediaUrls,
-      audioAsVoice,
-      replyToId,
-      replyToTag,
-      replyToCurrent,
+      text: "⚠️ The model emitted a text-form tool call instead of executing a real tool. No tool action was actually run. Please retry, or switch to a provider/model with reliable tool calling.",
+      isError: true,
     });
     hasUserFacingAssistantReply = true;
-    if (cleanedText && hasExplicitMutatingToolFailureAcknowledgement(cleanedText)) {
-      hasUserFacingFailureAcknowledgement = true;
-    }
+  } else if (placeholderReplyDetected) {
+    replyItems.push({
+      text: "⚠️ The agent returned a placeholder reply without starting any real tool work. Please retry, or switch to a provider/model with reliable tool execution.",
+      isError: true,
+    });
+    hasUserFacingAssistantReply = true;
   }
 
   if (params.lastToolError) {

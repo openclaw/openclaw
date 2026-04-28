@@ -6,7 +6,10 @@ import {
   parseAssistantTextSignature,
   type AssistantPhase,
 } from "../shared/chat-message-content.js";
-import { sanitizeAssistantVisibleText } from "../shared/text/assistant-visible-text.js";
+import {
+  sanitizeAssistantVisibleText,
+  stripDowngradedToolCallText,
+} from "../shared/text/assistant-visible-text.js";
 import { stripReasoningTagsFromText } from "../shared/text/reasoning-tags.js";
 import { sanitizeUserFacingText } from "./pi-embedded-helpers/sanitize-user-facing-text.js";
 import { formatToolDetail, resolveToolDisplay } from "./tool-display.js";
@@ -19,6 +22,42 @@ export { stripModelSpecialTokens } from "../shared/text/model-special-tokens.js"
 
 export function isAssistantMessage(msg: AgentMessage | undefined): msg is AssistantMessage {
   return msg?.role === "assistant";
+}
+
+/**
+ * Detect whether assistant text contains downgraded tool-call markers
+ * (e.g. `[Tool Call: read (ID: toolu_1)]`) as the primary content,
+ * indicating the model emitted a text-form tool invocation instead of
+ * a structured `tool_use` block. Normal prose that quotes these markers
+ * inline is excluded - only standalone tool-artifact payloads qualify.
+ */
+export function containsDowngradedToolCallText(text: string): boolean {
+  if (!text) {
+    return false;
+  }
+  const hasDowngradedToolMarkers =
+    /\[Tool Call:/i.test(text) ||
+    /\[Tool Result for ID/i.test(text) ||
+    /\[Historical context:/i.test(text);
+  if (!hasDowngradedToolMarkers) {
+    return false;
+  }
+
+  // Only treat standalone tool-artifact payloads as downgraded tool output.
+  // Normal assistant prose may legitimately quote these markers while explaining behavior.
+  return stripDowngradedToolCallText(text).length === 0;
+}
+
+/**
+ * Extract raw assistant text without any normalization or stripping.
+ */
+export function extractAssistantRawText(msg: AssistantMessage): string {
+  return (
+    extractTextFromChatContent(msg.content, {
+      joinWith: "\n",
+      normalizeText: (text) => text,
+    }) ?? ""
+  );
 }
 
 /**
