@@ -30,6 +30,7 @@ data class GatewayTlsParams(
   val expectedFingerprint: String?,
   val allowTOFU: Boolean,
   val stableId: String,
+  val disableTlsVerification: Boolean = false,
 )
 
 data class GatewayTlsConfig(
@@ -70,11 +71,12 @@ fun buildGatewayTlsConfig(
         chain: Array<X509Certificate>,
         authType: String,
       ) {
+        if (params.disableTlsVerification) return
         if (chain.isEmpty()) throw CertificateException("empty certificate chain")
         val fingerprint = sha256Hex(chain[0].encoded)
         if (expected != null) {
           if (fingerprint != expected) {
-            throw CertificateException("gateway TLS fingerprint mismatch")
+            throw CertificateException("gateway TLS fingerprint mismatch: expected $expected, got $fingerprint")
           }
           return
         }
@@ -91,8 +93,8 @@ fun buildGatewayTlsConfig(
   val context = SSLContext.getInstance("TLS")
   context.init(null, arrayOf(trustManager), SecureRandom())
   val verifier =
-    if (expected != null || params.allowTOFU) {
-      // When pinning, we intentionally ignore hostname mismatch (service discovery often yields IPs).
+    if (expected != null || params.allowTOFU || params.disableTlsVerification) {
+      // When pinning or disabling verification, we intentionally ignore hostname mismatch (service discovery often yields IPs).
       HostnameVerifier { _, _ -> true }
     } else {
       HttpsURLConnection.getDefaultHostnameVerifier()

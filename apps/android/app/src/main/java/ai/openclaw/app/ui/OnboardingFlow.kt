@@ -227,11 +227,15 @@ fun OnboardingFlow(
   var setupCode by rememberSaveable { mutableStateOf("") }
   var gatewayUrl by rememberSaveable { mutableStateOf("") }
   var gatewayPassword by rememberSaveable { mutableStateOf("") }
+  var gatewayBearerToken by rememberSaveable { mutableStateOf("") }
+  var gatewayBasicAuthUser by rememberSaveable { mutableStateOf("") }
+  var gatewayBasicAuthPassword by rememberSaveable { mutableStateOf("") }
   var gatewayInputMode by rememberSaveable { mutableStateOf(GatewayInputMode.SetupCode) }
   var gatewayAdvancedOpen by rememberSaveable { mutableStateOf(false) }
   var manualHost by rememberSaveable { mutableStateOf("10.0.2.2") }
   var manualPort by rememberSaveable { mutableStateOf("18789") }
   var manualTls by rememberSaveable { mutableStateOf(false) }
+  var manualDisableTlsVerification by rememberSaveable { mutableStateOf(false) }
   var gatewayError by rememberSaveable { mutableStateOf<String?>(null) }
   var attemptedConnect by rememberSaveable { mutableStateOf(false) }
   val canFinishOnboarding = canFinishOnboarding(isConnected = isConnected, isNodeConnected = isNodeConnected)
@@ -569,8 +573,12 @@ fun OnboardingFlow(
               manualHost = manualHost,
               manualPort = manualPort,
               manualTls = manualTls,
+              manualDisableTlsVerification = manualDisableTlsVerification,
               gatewayToken = persistedGatewayToken,
               gatewayPassword = gatewayPassword,
+              gatewayBearerToken = gatewayBearerToken,
+              gatewayBasicAuthUser = gatewayBasicAuthUser,
+              gatewayBasicAuthPassword = gatewayBasicAuthPassword,
               gatewayError = gatewayError,
               onScanQrClick = {
                 gatewayError = null
@@ -619,8 +627,12 @@ fun OnboardingFlow(
                 gatewayError = null
               },
               onManualTlsChange = { manualTls = it },
+              onManualDisableTlsVerificationChange = { manualDisableTlsVerification = it },
               onTokenChange = viewModel::setGatewayToken,
               onPasswordChange = { gatewayPassword = it },
+              onBearerTokenChange = { gatewayBearerToken = it },
+              onBasicAuthUserChange = { gatewayBasicAuthUser = it },
+              onBasicAuthPasswordChange = { gatewayBasicAuthPassword = it },
             )
           OnboardingStep.Permissions ->
             PermissionsStep(
@@ -914,6 +926,7 @@ fun OnboardingFlow(
                   viewModel.setManualHost(parsed.config.host)
                   viewModel.setManualPort(parsed.config.port)
                   viewModel.setManualTls(parsed.config.tls)
+                  viewModel.setManualDisableTlsVerification(manualDisableTlsVerification)
                   if (gatewayInputMode == GatewayInputMode.Manual) {
                     viewModel.setGatewayBootstrapToken("")
                   } else {
@@ -925,12 +938,18 @@ fun OnboardingFlow(
                   } else {
                     viewModel.setGatewayToken("")
                   }
+                  val bearerToken = gatewayBearerToken.trim()
+                  val basicUser = gatewayBasicAuthUser.trim()
+                  val basicPass = gatewayBasicAuthPassword.trim()
                   viewModel.setGatewayPassword(password)
                   viewModel.connect(
                     GatewayEndpoint.manual(host = parsed.config.host, port = parsed.config.port),
                     token = token.ifEmpty { null },
                     bootstrapToken = bootstrapToken,
                     password = password.ifEmpty { null },
+                    bearerToken = bearerToken.ifEmpty { null },
+                    basicAuthUser = basicUser.ifEmpty { null },
+                    basicAuthPassword = basicPass.ifEmpty { null },
                   )
                 },
                 modifier = Modifier.weight(1f).height(52.dp),
@@ -1059,8 +1078,12 @@ private fun GatewayStep(
   manualHost: String,
   manualPort: String,
   manualTls: Boolean,
+  manualDisableTlsVerification: Boolean,
   gatewayToken: String,
   gatewayPassword: String,
+  gatewayBearerToken: String,
+  gatewayBasicAuthUser: String,
+  gatewayBasicAuthPassword: String,
   gatewayError: String?,
   onScanQrClick: () -> Unit,
   onAdvancedOpenChange: (Boolean) -> Unit,
@@ -1069,8 +1092,12 @@ private fun GatewayStep(
   onManualHostChange: (String) -> Unit,
   onManualPortChange: (String) -> Unit,
   onManualTlsChange: (Boolean) -> Unit,
+  onManualDisableTlsVerificationChange: (Boolean) -> Unit,
   onTokenChange: (String) -> Unit,
   onPasswordChange: (String) -> Unit,
+  onBearerTokenChange: (String) -> Unit,
+  onBasicAuthUserChange: (String) -> Unit,
+  onBasicAuthPasswordChange: (String) -> Unit,
 ) {
   val resolvedEndpoint = remember(setupCode) { decodeGatewaySetupCode(setupCode)?.url?.let { parseGatewayEndpoint(it)?.displayUrl } }
   val manualResolvedEndpoint =
@@ -1226,6 +1253,33 @@ private fun GatewayStep(
                 onboardingSwitchColors(),
             )
           }
+          if (manualTls) {
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+              Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text("Disable TLS Verification", style = onboardingHeadlineStyle, color = onboardingText)
+                Text(
+                  "Skips TLS fingerprint checks. Use only for development.",
+                  style = onboardingCalloutStyle.copy(lineHeight = 18.sp),
+                  color = onboardingTextSecondary,
+                )
+              }
+              Switch(
+                checked = manualDisableTlsVerification,
+                onCheckedChange = onManualDisableTlsVerificationChange,
+                colors =
+                  SwitchDefaults.colors(
+                    checkedTrackColor = onboardingWarning,
+                    uncheckedTrackColor = onboardingBorderStrong,
+                    checkedThumbColor = Color.White,
+                    uncheckedThumbColor = Color.White,
+                  ),
+              )
+            }
+          }
 
           Text("TOKEN (OPTIONAL)", style = onboardingCaption1Style.copy(letterSpacing = 0.9.sp), color = onboardingTextSecondary)
           OutlinedTextField(
@@ -1249,6 +1303,48 @@ private fun GatewayStep(
           OutlinedTextField(
             value = gatewayPassword,
             onValueChange = onPasswordChange,
+            placeholder = { Text("password", color = onboardingTextTertiary, style = onboardingBodyStyle) },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
+            textStyle = onboardingBodyStyle.copy(color = onboardingText),
+            shape = RoundedCornerShape(14.dp),
+            colors =
+              onboardingTextFieldColors(),
+          )
+
+          Text("BEARER TOKEN (OPTIONAL)", style = onboardingCaption1Style.copy(letterSpacing = 0.9.sp), color = onboardingTextSecondary)
+          OutlinedTextField(
+            value = gatewayBearerToken,
+            onValueChange = onBearerTokenChange,
+            placeholder = { Text("bearer token", color = onboardingTextTertiary, style = onboardingBodyStyle) },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
+            textStyle = onboardingBodyStyle.copy(color = onboardingText),
+            shape = RoundedCornerShape(14.dp),
+            colors =
+              onboardingTextFieldColors(),
+          )
+
+          Text("BASIC-AUTH USER (OPTIONAL)", style = onboardingCaption1Style.copy(letterSpacing = 0.9.sp), color = onboardingTextSecondary)
+          OutlinedTextField(
+            value = gatewayBasicAuthUser,
+            onValueChange = onBasicAuthUserChange,
+            placeholder = { Text("username", color = onboardingTextTertiary, style = onboardingBodyStyle) },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
+            textStyle = onboardingBodyStyle.copy(color = onboardingText),
+            shape = RoundedCornerShape(14.dp),
+            colors =
+              onboardingTextFieldColors(),
+          )
+
+          Text("BASIC-AUTH PASSWORD (OPTIONAL)", style = onboardingCaption1Style.copy(letterSpacing = 0.9.sp), color = onboardingTextSecondary)
+          OutlinedTextField(
+            value = gatewayBasicAuthPassword,
+            onValueChange = onBasicAuthPasswordChange,
             placeholder = { Text("password", color = onboardingTextTertiary, style = onboardingBodyStyle) },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,

@@ -31,6 +31,9 @@ internal data class GatewayConnectConfig(
   val bootstrapToken: String,
   val token: String,
   val password: String,
+  val bearerToken: String = "",
+  val basicAuthUser: String = "",
+  val basicAuthPassword: String = "",
 )
 
 internal enum class GatewayEndpointValidationError {
@@ -72,6 +75,9 @@ internal fun resolveGatewayConnectConfig(
   fallbackBootstrapToken: String,
   fallbackToken: String,
   fallbackPassword: String,
+  fallbackBearerToken: String = "",
+  fallbackBasicAuthUser: String = "",
+  fallbackBasicAuthPassword: String = "",
 ): GatewayConnectConfig? {
   if (useSetupCode) {
     val setup = decodeGatewaySetupCode(setupCode) ?: return null
@@ -96,6 +102,9 @@ internal fun resolveGatewayConnectConfig(
       bootstrapToken = setupBootstrapToken,
       token = sharedToken,
       password = sharedPassword,
+      bearerToken = fallbackBearerToken.trim(),
+      basicAuthUser = fallbackBasicAuthUser.trim(),
+      basicAuthPassword = fallbackBasicAuthPassword.trim(),
     )
   }
 
@@ -118,6 +127,9 @@ internal fun resolveGatewayConnectConfig(
     bootstrapToken = if (preserveBootstrapToken) fallbackBootstrapToken.trim() else "",
     token = fallbackToken.trim(),
     password = fallbackPassword.trim(),
+    bearerToken = fallbackBearerToken.trim(),
+    basicAuthUser = fallbackBasicAuthUser.trim(),
+    basicAuthPassword = fallbackBasicAuthPassword.trim(),
   )
 }
 

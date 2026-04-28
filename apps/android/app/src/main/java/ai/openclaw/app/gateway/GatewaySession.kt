@@ -144,6 +144,9 @@ class GatewaySession(
     val token: String?,
     val bootstrapToken: String?,
     val password: String?,
+    val bearerToken: String?,
+    val basicAuthUser: String?,
+    val basicAuthPassword: String?,
     val options: GatewayConnectOptions,
     val tls: GatewayTlsParams?,
   )
@@ -164,10 +167,13 @@ class GatewaySession(
     token: String?,
     bootstrapToken: String?,
     password: String?,
+    bearerToken: String? = null,
+    basicAuthUser: String? = null,
+    basicAuthPassword: String? = null,
     options: GatewayConnectOptions,
     tls: GatewayTlsParams? = null,
   ) {
-    desired = DesiredConnection(endpoint, token, bootstrapToken, password, options, tls)
+    desired = DesiredConnection(endpoint, token, bootstrapToken, password, bearerToken, basicAuthUser, basicAuthPassword, options, tls)
     pendingDeviceTokenRetry = false
     deviceTokenRetryBudgetUsed = false
     reconnectPausedForAuthFailure = false
@@ -338,6 +344,9 @@ class GatewaySession(
     private val token: String?,
     private val bootstrapToken: String?,
     private val password: String?,
+    private val bearerToken: String?,
+    private val basicAuthUser: String?,
+    private val basicAuthPassword: String?,
     private val options: GatewayConnectOptions,
     private val tls: GatewayTlsParams?,
   ) {
@@ -353,7 +362,16 @@ class GatewaySession(
 
     suspend fun connect() {
       val url = buildGatewayWebSocketUrl(endpoint.host, endpoint.port, tls != null)
-      val request = Request.Builder().url(url).build()
+      val requestBuilder = Request.Builder().url(url)
+      bearerToken?.trim()?.takeIf { it.isNotEmpty() }?.let {
+        requestBuilder.addHeader("Authorization", "Bearer $it")
+      }
+      if (!basicAuthUser.isNullOrEmpty() && !basicAuthPassword.isNullOrEmpty()) {
+        val creds = "$basicAuthUser:$basicAuthPassword"
+        val basic = java.util.Base64.getEncoder().encodeToString(creds.toByteArray())
+        requestBuilder.addHeader("Authorization", "Basic $basic")
+      }
+      val request = requestBuilder.build()
       socket = client.newWebSocket(request, Listener())
       try {
         connectDeferred.await()
@@ -901,6 +919,9 @@ class GatewaySession(
           target.token,
           target.bootstrapToken,
           target.password,
+          target.bearerToken,
+          target.basicAuthUser,
+          target.basicAuthPassword,
           target.options,
           target.tls,
         )

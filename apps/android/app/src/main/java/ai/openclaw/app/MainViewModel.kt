@@ -98,6 +98,7 @@ class MainViewModel(
   val manualHost: StateFlow<String> = prefs.manualHost
   val manualPort: StateFlow<Int> = prefs.manualPort
   val manualTls: StateFlow<Boolean> = prefs.manualTls
+  val manualDisableTlsVerification: StateFlow<Boolean> = prefs.manualDisableTlsVerification
   val gatewayToken: StateFlow<String> = prefs.gatewayToken
   val gatewayBootstrapToken: StateFlow<String> = prefs.gatewayBootstrapToken
   val onboardingCompleted: StateFlow<Boolean> = prefs.onboardingCompleted
@@ -200,6 +201,10 @@ class MainViewModel(
 
   fun setManualTls(value: Boolean) {
     prefs.setManualTls(value)
+  }
+
+  fun setManualDisableTlsVerification(value: Boolean) {
+    prefs.setManualDisableTlsVerification(value)
   }
 
   fun setGatewayToken(value: String) {
@@ -312,6 +317,9 @@ class MainViewModel(
     token: String?,
     bootstrapToken: String?,
     password: String?,
+    bearerToken: String? = null,
+    basicAuthUser: String? = null,
+    basicAuthPassword: String? = null,
   ) {
     ensureRuntime().connect(
       endpoint,
@@ -319,6 +327,9 @@ class MainViewModel(
         token = token,
         bootstrapToken = bootstrapToken,
         password = password,
+        bearerToken = bearerToken,
+        basicAuthUser = basicAuthUser,
+        basicAuthPassword = basicAuthPassword,
       ),
     )
   }
