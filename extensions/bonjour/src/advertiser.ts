@@ -69,6 +69,7 @@ type ServiceStateTracker = {
 type ConsoleLogFn = (...args: unknown[]) => void;
 type UncaughtExceptionHandler = (error: unknown) => boolean;
 type UnhandledRejectionHandler = (reason: unknown) => boolean;
+type ProcessUnhandledRejectionListener = (reason: unknown, promise: Promise<unknown>) => void;
 type ExecBridge = (command: string, options?: unknown, callback?: unknown) => ChildProcess;
 type ExecOptionsRecord = Record<string, unknown> & { windowsHide?: boolean };
 
@@ -324,6 +325,25 @@ function installCiaoWindowsExecHidePatch(): () => void {
   };
 }
 
+function installCiaoUnhandledRejectionListener(handler: UnhandledRejectionHandler): () => void {
+  const hadOtherListeners = process.listenerCount("unhandledRejection") > 0;
+  const listener: ProcessUnhandledRejectionListener = (reason) => {
+    if (handler(reason)) {
+      return;
+    }
+    if (hadOtherListeners) {
+      return;
+    }
+    queueMicrotask(() => {
+      throw reason instanceof Error ? reason : new Error(String(reason));
+    });
+  };
+  process.on("unhandledRejection", listener);
+  return () => {
+    process.off("unhandledRejection", listener);
+  };
+}
+
 export async function startGatewayBonjourAdvertiser(
   opts: GatewayBonjourAdvertiseOpts,
   deps: BonjourAdvertiserDeps = {},
@@ -341,6 +361,7 @@ export async function startGatewayBonjourAdvertiser(
   let restoreConsoleLog: () => void = () => {};
   let requestCiaoRecovery: ((classification: CiaoProcessErrorClassification) => void) | undefined;
   let cleanupUnhandledRejection: (() => void) | undefined;
+  let cleanupDirectUnhandledRejection: (() => void) | undefined;
   let cleanupUncaughtException: (() => void) | undefined;
   let processHandlersCleaned = false;
 
@@ -349,6 +370,7 @@ export async function startGatewayBonjourAdvertiser(
       return;
     }
     processHandlersCleaned = true;
+    cleanupDirectUnhandledRejection?.();
     cleanupUncaughtException?.();
     cleanupUnhandledRejection?.();
   }
@@ -380,6 +402,7 @@ export async function startGatewayBonjourAdvertiser(
       }
       return true;
     };
+    cleanupDirectUnhandledRejection = installCiaoUnhandledRejectionListener(handleCiaoProcessError);
     cleanupUnhandledRejection = deps.registerUnhandledRejectionHandler?.(handleCiaoProcessError);
     cleanupUncaughtException = deps.registerUncaughtExceptionHandler?.(handleCiaoProcessError);
 
