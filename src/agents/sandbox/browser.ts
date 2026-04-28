@@ -126,10 +126,6 @@ function buildSandboxBrowserResolvedConfig(params: {
   };
 }
 
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import type { SandboxBrowserConfig, SandboxConfig } from "./types.js";
 
 async function ensureSandboxBrowserImage(image: string) {
