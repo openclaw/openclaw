@@ -379,6 +379,65 @@ describe("runCapability proxy fetch passthrough", () => {
     expect(modelAuth.resolveApiKeyForProvider).not.toHaveBeenCalled();
   });
 
+  it("uses synthetic local auth for trusted private-network audio without resolving provider credentials", async () => {
+    const modelAuth = await import("../agents/model-auth.js");
+
+    let seenApiKey: string | undefined;
+
+    await withAudioFixture("openclaw-audio-private-network-auth", async ({ ctx, media, cache }) => {
+      const providerRegistry = buildProviderRegistry({
+        openai: {
+          id: "openai",
+          capabilities: ["audio"],
+          transcribeAudio: async (req: AudioTranscriptionRequest) => {
+            seenApiKey = req.apiKey;
+            return { text: "ok", model: req.model };
+          },
+        },
+      });
+
+      const result = await runCapability({
+        capability: "audio",
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                apiKey: "actual-provider-key", // pragma: allowlist secret
+                models: [],
+              },
+            },
+          },
+          tools: {
+            media: {
+              audio: {
+                enabled: true,
+                request: {
+                  allowPrivateNetwork: true,
+                },
+                models: [
+                  {
+                    provider: "openai",
+                    model: "whisper-1",
+                    baseUrl: "http://10.10.10.129:8000/v1",
+                  },
+                ],
+              },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        ctx,
+        attachments: cache,
+        media,
+        providerRegistry,
+      });
+
+      expect(result.outputs[0]?.text).toBe("ok");
+    });
+
+    expect(seenApiKey).toBe(CUSTOM_LOCAL_AUTH_MARKER);
+    expect(modelAuth.resolveApiKeyForProvider).not.toHaveBeenCalled();
+  });
+
   it("keeps request auth attached and skips real provider credentials for loopback audio", async () => {
     const modelAuth = await import("../agents/model-auth.js");
 

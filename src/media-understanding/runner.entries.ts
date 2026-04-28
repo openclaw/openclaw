@@ -20,6 +20,7 @@ import type {
 } from "../config/types.tools.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
+import { isBlockedHostnameOrIp } from "../infra/net/ssrf.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runFfmpeg } from "../media/ffmpeg-exec.js";
 import { runExec } from "../process/exec.js";
@@ -43,6 +44,7 @@ import type {
   MediaUnderstandingModelDecision,
   MediaUnderstandingOutput,
   MediaUnderstandingProvider,
+  MediaUnderstandingProviderRequestTransportOverrides,
 } from "./types.js";
 import { estimateBase64Size, resolveVideoMaxBase64Bytes } from "./video.js";
 
@@ -417,6 +419,7 @@ async function resolveProviderExecutionAuth(params: {
   cfg: OpenClawConfig;
   entry: MediaUnderstandingModelConfig;
   baseUrl?: string;
+  request?: MediaUnderstandingProviderRequestTransportOverrides;
   agentDir?: string;
 }) {
   return {
@@ -424,9 +427,32 @@ async function resolveProviderExecutionAuth(params: {
   };
 }
 
-function resolveSyntheticLocalAudioExecutionKey(params: { baseUrl?: string }): string | undefined {
+function isTrustedPrivateAudioBaseUrl(params: {
+  baseUrl: string;
+  request?: MediaUnderstandingProviderRequestTransportOverrides;
+}): boolean {
+  if (params.request?.allowPrivateNetwork !== true) {
+    return false;
+  }
+  try {
+    return isBlockedHostnameOrIp(new URL(params.baseUrl).hostname);
+  } catch {
+    return false;
+  }
+}
+
+function resolveSyntheticLocalAudioExecutionKey(params: {
+  baseUrl?: string;
+  request?: MediaUnderstandingProviderRequestTransportOverrides;
+}): string | undefined {
   const baseUrl = params.baseUrl?.trim();
-  if (!baseUrl || !isLocalBaseUrl(baseUrl)) {
+  if (!baseUrl) {
+    return undefined;
+  }
+  if (
+    !isLocalBaseUrl(baseUrl) &&
+    !isTrustedPrivateAudioBaseUrl({ baseUrl, request: params.request })
+  ) {
     return undefined;
   }
   return CUSTOM_LOCAL_AUTH_MARKER;
@@ -437,6 +463,7 @@ async function resolveProviderExecutionApiKeys(params: {
   cfg: OpenClawConfig;
   entry: MediaUnderstandingModelConfig;
   baseUrl?: string;
+  request?: MediaUnderstandingProviderRequestTransportOverrides;
   agentDir?: string;
 }): Promise<string[]> {
   const syntheticLocalApiKey = resolveSyntheticLocalAudioExecutionKey(params);
@@ -494,6 +521,7 @@ async function resolveProviderExecutionContext(params: {
     cfg: params.cfg,
     entry: params.entry,
     baseUrl,
+    request,
     agentDir: params.agentDir,
   });
   const mergedHeaders = {

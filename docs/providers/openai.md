@@ -516,11 +516,13 @@ Legacy `plugins.entries.openai.config.personality` is still read as a compatibil
     For self-hosted OpenAI-compatible transcription endpoints (for example a
     local Whisper server), set `baseUrl` on the audio model entry. Loopback
     endpoints such as `http://127.0.0.1:8000/v1` can run without provider auth,
-    matching local OpenAI-compatible chat-completion providers. If the endpoint
-    is on a private address, explicitly opt in with
+    matching local OpenAI-compatible chat-completion providers. Trusted private
+    endpoints such as `http://10.10.10.129:8000/v1` can also run without
+    provider auth when you explicitly opt in with
     `tools.media.audio.request.allowPrivateNetwork`. Request-level auth can be
     used when the local endpoint expects a bearer or proxy token; the real
-    upstream OpenAI API key is not reused for a loopback audio `baseUrl`:
+    upstream OpenAI API key is not reused for local or trusted private-network
+    audio `baseUrl` values:
 
     ```json5
     {
