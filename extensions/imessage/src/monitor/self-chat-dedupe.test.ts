@@ -748,6 +748,41 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
     // With skipIdShortCircuit=false (default), ID mismatch causes early return false.
     expect(echoCache.has(scope, { text: "Cached reply", messageId: "123799" }, false)).toBe(false);
   });
+
+  it("drops self-chat echoes when reflected text carries attributed prefix bytes", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
+
+    const echoCache = createSentMessageCache();
+    const selfChatCache = createSelfChatCache();
+    const scope = "default:imessage:+15551234567";
+    echoCache.remember(scope, {
+      text: "Cached reply",
+      messageId: "p:0/GUID-echo",
+    });
+
+    vi.advanceTimersByTime(1000);
+
+    const decision = resolveIMessageInboundDecision(
+      createParams({
+        message: {
+          id: 123799,
+          sender: "+15551234567",
+          chat_identifier: "+15551234567",
+          destination_caller_id: "+15551234567",
+          text: "\u0093b\u0002Cached reply",
+          is_from_me: true,
+          is_group: false,
+        },
+        messageText: "\u0093b\u0002Cached reply",
+        bodyText: "\u0093b\u0002Cached reply",
+        echoCache,
+        selfChatCache,
+      }),
+    );
+
+    expect(decision).toEqual({ kind: "drop", reason: "agent echo in self-chat" });
+  });
 });
 
 describe("echo cache — text fallback for null-id inbound messages", () => {

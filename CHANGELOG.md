@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Channels/iMessage: normalize leading attributed-text, replacement, and control corruption bytes before sent-message echo-cache text matching, while ignoring all-prefix/all-control keys so echoed agent replies are deduped without suppressing intentional message body text. Carries forward #66169; covers #62191. Thanks @coder999999999 and @maguilar631697.
 - Agents/models: keep per-agent primary models strict when `fallbacks` is omitted, so probe-only custom providers are not tried as hidden fallback candidates unless the agent explicitly opts in. Fixes #73332. Thanks @haumanto.
 - Cron/Telegram: preserve explicit `:topic:` delivery targets over stale session-derived thread IDs when isolated cron announces to Telegram forum topics. Carries forward #59069; refs #49704 and #43808. Thanks @roytong9.
 - Build/runtime: write the runtime-postbuild stamp after `pnpm build` writes the build stamp, so the next CLI invocation does not re-sync runtime artifacts after a successful build. Fixes #73151. Thanks @bittoby.
