@@ -470,12 +470,20 @@ const NOOP_NOTIFY_CASES: NotifyNoopCase[] = [
     overrides: { messageProvider: "discord", currentChannelId: "channel-1" },
     shouldEmitEvent: true,
   }),
+  withLabel("internal webchat contexts emit no-op completion events by default", {
+    overrides: { messageProvider: "webchat", currentChannelId: "webchat:thread-1" },
+    shouldEmitEvent: true,
+  }),
   withLabel("provider labels without a delivery target skip no-op completion events", {
     overrides: { messageProvider: "discord" },
     shouldEmitEvent: false,
   }),
   withLabel("generic provider labels do not opt into no-op completion events", {
     overrides: { messageProvider: "openai", currentChannelId: "channel-1" },
+    shouldEmitEvent: false,
+  }),
+  withLabel("internal non-chat provider labels do not opt into no-op completion events", {
+    overrides: { messageProvider: "heartbeat", currentChannelId: "channel-1" },
     shouldEmitEvent: false,
   }),
   withLabel("explicitly disabling no-op completion overrides chat delivery defaults", {
