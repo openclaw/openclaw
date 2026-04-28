@@ -20,7 +20,7 @@ export {
   searchQaBusMessages,
   sendQaBusMessage,
   setQaChannelRuntime,
-} from "openclaw/plugin-sdk/qa-channel";
+} from "@openclaw/qa-channel/api.js";
 export type {
   QaBusAttachment,
   QaBusConversation,
@@ -39,4 +39,4 @@ export type {
   QaBusStateSnapshot,
   QaBusThread,
   QaBusWaitForInput,
-} from "openclaw/plugin-sdk/qa-channel";
+} from "./protocol.js";
