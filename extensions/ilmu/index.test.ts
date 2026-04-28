@@ -1,6 +1,8 @@
+import {
+  registerSingleProviderPlugin,
+  resolveProviderPluginChoice,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
-import { resolveProviderPluginChoice } from "../../src/plugins/provider-auth-choice.runtime.js";
-import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import ilmuPlugin from "./index.js";
 import { applyIlmuConfig } from "./onboard.js";
@@ -94,22 +96,19 @@ describe("ilmu provider plugin", () => {
     ]);
   });
 
-  it("seeds reasoning-on agent defaults during onboarding", () => {
+  it("seeds thinking-medium agent defaults during onboarding", () => {
     const cfg = applyIlmuConfig({} as never);
-    expect(cfg.agents?.defaults?.reasoningDefault).toBe("on");
     expect(cfg.agents?.defaults?.thinkingDefault).toBe("medium");
   });
 
-  it("preserves existing reasoning/thinking defaults when re-running onboarding", () => {
+  it("preserves existing thinking default when re-running onboarding", () => {
     const cfg = applyIlmuConfig({
       agents: {
         defaults: {
-          reasoningDefault: "off",
           thinkingDefault: "high",
         },
       },
     } as never);
-    expect(cfg.agents?.defaults?.reasoningDefault).toBe("off");
     expect(cfg.agents?.defaults?.thinkingDefault).toBe("high");
   });
 });
