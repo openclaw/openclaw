@@ -902,6 +902,50 @@ describe("GatewayClient connect auth payload", () => {
     }
   });
 
+  it("reports pre-hello 1000 closes when the reason is non-empty", async () => {
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      onConnectError,
+    });
+
+    try {
+      const { ws } = startClientAndConnect({ client });
+      ws.emitClose(1000, "restart requested");
+
+      await vi.waitFor(() =>
+        expect(onConnectError).toHaveBeenCalledWith(
+          expect.objectContaining({
+            message: "gateway closed (1000): restart requested",
+          }),
+        ),
+      );
+      expect(logErrorMock).toHaveBeenCalledWith(
+        expect.stringContaining("gateway connect failed: GatewayClientCloseError"),
+      );
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("continues to notify onClose for post-hello empty 1000 closes", () => {
+    const onClose = vi.fn();
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      onClose,
+      onConnectError,
+    });
+
+    const { ws, connect } = startClientAndConnect({ client });
+    emitHelloOk(ws, connect.id);
+    ws.emitClose(1000, "");
+
+    expect(onClose).toHaveBeenCalledWith(1000, "");
+    expect(onConnectError).not.toHaveBeenCalled();
+    client.stop();
+  });
+
   it("does not auto-reconnect on AUTH_TOKEN_MISSING connect failures", async () => {
     const onReconnectPaused = vi.fn();
     const client = new GatewayClient({

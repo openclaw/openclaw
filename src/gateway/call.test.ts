@@ -850,6 +850,49 @@ describe("callGateway error details", () => {
     expect(healthRequests).toBe(1);
   });
 
+  it("rejects pre-hello 1000 closes when the reason is non-empty", async () => {
+    startMode = "close";
+    closeCode = 1000;
+    closeReason = "going away";
+    setLocalLoopbackGatewayConfig();
+
+    await expect(callGateway({ method: "health" })).rejects.toThrow(
+      "gateway closed (1000 normal closure): going away",
+    );
+  });
+
+  it("rejects empty 1000 closes after hello starts request execution", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    class PostHelloCloseStubGatewayClient {
+      constructor(
+        private readonly opts: {
+          onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
+          onClose?: (code: number, reason: string) => void;
+        },
+      ) {}
+
+      async request() {
+        return await new Promise(() => {});
+      }
+
+      start() {
+        void this.opts.onHelloOk?.({ features: { methods: ["health"] } });
+        this.opts.onClose?.(1000, "");
+      }
+
+      stop() {}
+    }
+
+    __testing.setCreateGatewayClientForTests(
+      (opts) => new PostHelloCloseStubGatewayClient(opts as never) as never,
+    );
+
+    await expect(callGateway({ method: "health" })).rejects.toThrow(
+      "gateway closed (1000 normal closure): no close reason",
+    );
+  });
+
   it("includes connection details on timeout", async () => {
     startMode = "silent";
     setLocalLoopbackGatewayConfig();
