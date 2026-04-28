@@ -26,6 +26,8 @@ let watcherProcess: ChildProcess | null = null;
 let renewInterval: ReturnType<typeof setInterval> | null = null;
 let shuttingDown = false;
 let currentConfig: GmailHookRuntimeConfig | null = null;
+let restartBackoffMs = 5000;
+const MAX_RESTART_BACKOFF_MS = 60_000;
 
 /**
  * Check if gog binary is available
@@ -91,6 +93,10 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
     log.error(`gog process error: ${String(err)}`);
   });
 
+  child.on("spawn", () => {
+    restartBackoffMs = 5000;
+  });
+
   child.on("exit", (code, signal) => {
     if (shuttingDown) {
       return;
@@ -103,14 +109,16 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
       watcherProcess = null;
       return;
     }
-    log.warn(`gog exited (code=${code}, signal=${signal}); restarting in 5s`);
+    const backoff = restartBackoffMs;
+    log.warn(`gog exited (code=${code}, signal=${signal}); restarting in ${backoff}ms`);
     watcherProcess = null;
     setTimeout(() => {
       if (shuttingDown || !currentConfig) {
         return;
       }
       watcherProcess = spawnGogServe(currentConfig);
-    }, 5000);
+    }, backoff);
+    restartBackoffMs = Math.min(restartBackoffMs * 2, MAX_RESTART_BACKOFF_MS);
   });
 
   return child;

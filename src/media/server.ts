@@ -199,11 +199,13 @@ export function createMediaRequestHandler(ttlMs = DEFAULT_TTL_MS) {
   };
 }
 
-function startMediaCleanupInterval(ttlMs: number): void {
+function startMediaCleanupInterval(ttlMs: number): ReturnType<typeof setInterval> {
   // periodic cleanup
-  setInterval(() => {
+  const interval = setInterval(() => {
     void cleanOldMedia(ttlMs, { recursive: false });
-  }, ttlMs).unref();
+  }, ttlMs);
+  interval.unref();
+  return interval;
 }
 
 export async function startMediaServer(
@@ -212,11 +214,15 @@ export async function startMediaServer(
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<Server> {
   const server = createServer(createMediaRequestHandler(ttlMs));
-  startMediaCleanupInterval(ttlMs);
+  const cleanupInterval = startMediaCleanupInterval(ttlMs);
+  server.on("close", () => {
+    clearInterval(cleanupInterval);
+  });
   return await new Promise((resolve, reject) => {
     server.listen(port, "127.0.0.1");
     server.once("listening", () => resolve(server));
     server.once("error", (err) => {
+      clearInterval(cleanupInterval);
       runtime.error(danger(`Media server failed: ${String(err)}`));
       reject(err);
     });

@@ -9,7 +9,11 @@ export async function readLatestSubagentOutputWithRetryUsing<Outcome = unknown>(
   let waitedMs = 0;
   let result: string | undefined;
   while (waitedMs < maxWaitMs) {
-    result = await params.readSubagentOutput(params.sessionKey, params.outcome);
+    try {
+      result = await params.readSubagentOutput(params.sessionKey, params.outcome);
+    } catch {
+      result = undefined;
+    }
     if (result?.trim()) {
       return result;
     }

@@ -1867,6 +1867,7 @@ export function createConfigIO(
       const raw = deps.fs.readFileSync(configPath, "utf-8");
       const parsedRes = parseConfigJson5(raw, deps.json5);
       if (!parsedRes.ok) {
+        deps.logger.warn(`Config file at ${configPath} could not be parsed. Using empty config.`);
         return {};
       }
 
@@ -1892,7 +1893,10 @@ export function createConfigIO(
       return coerceConfig(
         stripShippedPluginInstallConfigRecords(legacyResolution.effectiveConfigRaw),
       );
-    } catch {
+    } catch (err) {
+      deps.logger.warn(
+        `Config file at ${configPath} failed to load: ${formatErrorMessage(err)}. Using empty config.`,
+      );
       return {};
     }
   }
