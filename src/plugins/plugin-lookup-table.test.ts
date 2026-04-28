@@ -16,7 +16,6 @@ vi.mock("../channels/config-presence.js", () => ({
       !Array.isArray(value) &&
       Object.keys(value).some((key) => key !== "enabled"),
     ),
-  listExplicitlyDisabledChannelIdsForConfig: () => [],
   listPotentialConfiguredChannelIds: (
     config: OpenClawConfig,
     env: NodeJS.ProcessEnv,
