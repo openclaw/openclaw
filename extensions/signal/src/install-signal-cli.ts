@@ -1,14 +1,22 @@
 import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
-import { request } from "node:https";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runPluginCommandWithTimeout } from "openclaw/plugin-sdk/run-command";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { CONFIG_DIR, extractArchive, resolveBrewExecutable } from "openclaw/plugin-sdk/setup-tools";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+
+// Match the bound used by the sibling skills installer (`skills-install-download.ts`)
+// so signal-cli archive downloads cannot exhaust local disk via an
+// unbounded redirect or content-length attacker. signal-cli release
+// archives are well under 50 MiB; cap at 256 MiB for headroom.
+const SIGNAL_CLI_DOWNLOAD_MAX_BYTES = 256 * 1024 * 1024;
+const SIGNAL_CLI_DOWNLOAD_TIMEOUT_MS = 5 * 60_000;
 
 export type ReleaseAsset = {
   name?: string;
@@ -94,29 +102,78 @@ export function pickAsset(
   return archives[0];
 }
 
-async function downloadToFile(url: string, dest: string, maxRedirects = 5): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const req = request(url, (res) => {
-      if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400) {
-        const location = res.headers.location;
-        if (!location || maxRedirects <= 0) {
-          reject(new Error("Redirect loop or missing Location header"));
-          return;
-        }
-        const redirectUrl = new URL(location, url).href;
-        resolve(downloadToFile(redirectUrl, dest, maxRedirects - 1));
-        return;
-      }
-      if (!res.statusCode || res.statusCode >= 400) {
-        reject(new Error(`HTTP ${res.statusCode ?? "?"} downloading file`));
-        return;
-      }
-      const out = createWriteStream(dest);
-      pipeline(res, out).then(resolve).catch(reject);
-    });
-    req.on("error", reject);
-    req.end();
+async function downloadToFile(url: string, dest: string): Promise<void> {
+  // SSRF-guarded download with a hard timeout, redirect/proxy support, and
+  // a download size cap. Replaces the previous raw `node:https` request which
+  // had none of these (#54153). The `fetchWithSsrFGuard` helper transparently
+  // honors HTTP_PROXY/HTTPS_PROXY env, validates redirect targets against the
+  // SSRF policy, and routes through the runtime dispatcher.
+  const { response, release } = await fetchWithSsrFGuard({
+    url,
+    timeoutMs: SIGNAL_CLI_DOWNLOAD_TIMEOUT_MS,
   });
+  try {
+    if (!response.ok || !response.body) {
+      throw new Error(`HTTP ${response.status} downloading file`);
+    }
+    const declaredLength = Number(response.headers.get("content-length") ?? "");
+    if (Number.isFinite(declaredLength) && declaredLength > SIGNAL_CLI_DOWNLOAD_MAX_BYTES) {
+      throw new Error(
+        `signal-cli archive exceeds the ${SIGNAL_CLI_DOWNLOAD_MAX_BYTES}-byte download cap (declared ${declaredLength}).`,
+      );
+    }
+    const out = createWriteStream(dest);
+    let received = 0;
+    const counter = new Readable({
+      read() {},
+    });
+    const reader = response.body.getReader();
+    // Always release the reader lock and cancel the underlying body, even on
+    // size-cap aborts or read-loop errors, so the connection is returned to
+    // the dispatcher and we do not leak a half-consumed stream (Greptile P1).
+    const releaseReader = async (cause?: Error) => {
+      try {
+        if (cause) {
+          await reader.cancel(cause).catch(() => {});
+        }
+      } finally {
+        try {
+          reader.releaseLock();
+        } catch {
+          // Already released — no-op.
+        }
+      }
+    };
+    void (async () => {
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) {
+            counter.push(null);
+            await releaseReader();
+            return;
+          }
+          received += value.byteLength;
+          if (received > SIGNAL_CLI_DOWNLOAD_MAX_BYTES) {
+            const capError = new Error(
+              `signal-cli archive exceeded the ${SIGNAL_CLI_DOWNLOAD_MAX_BYTES}-byte download cap mid-stream.`,
+            );
+            counter.destroy(capError);
+            await releaseReader(capError);
+            return;
+          }
+          counter.push(value);
+        }
+      } catch (err) {
+        const wrappedErr = err instanceof Error ? err : new Error(String(err));
+        counter.destroy(wrappedErr);
+        await releaseReader(wrappedErr);
+      }
+    })();
+    await pipeline(counter, out);
+  } finally {
+    await release();
+  }
 }
 
 async function findSignalCliBinary(root: string): Promise<string | null> {

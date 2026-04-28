@@ -17,6 +17,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/media: auto-enable provider plugins referenced by `agents.defaults.imageGenerationModel`, `videoGenerationModel`, and `musicGenerationModel` primary/fallback refs, so configured Google and MiniMax media providers do not stay disabled behind a restrictive plugin allowlist. Thanks @vincentkoc.
 - Memory-core/dreaming: retry managed dreaming cron registration after startup when the cron service is not reachable yet, so the scheduled Memory Dreaming Promotion sweep recovers without waiting for heartbeat traffic. Fixes #72841. Thanks @amknight.
 - Acpx/runtime: validate the runtime session mode at the `AcpxRuntime.ensureSession` wrapper boundary so callers that pass anything other than `persistent` or `oneshot` get a clear `ACP_INVALID_RUNTIME_OPTION` error instead of silently round-tripping through the encoded handle as a default `persistent` mode and later throwing `SessionResumeRequiredError`. Investigation context: #73071. (#73548) Thanks @amknight.
+- Channels/Signal: harden the `signal-cli` archive download to use `fetchWithSsrFGuard` with a 5-minute timeout, redirect/proxy passthrough, and a 256 MiB content-length and streamed-bytes cap, replacing the raw `node:https` request that lacked timeout, SSRF guard, and size limit. Fixes #54153. Thanks @juan-flores077.
 
 ## 2026.4.27
 
