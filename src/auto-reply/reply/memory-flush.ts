@@ -1,6 +1,10 @@
 import crypto from "node:crypto";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import {
+  MIN_PROMPT_BUDGET_RATIO,
+  MIN_PROMPT_BUDGET_TOKENS,
+} from "../../agents/pi-compaction-constants.js";
 import { parseNonNegativeByteSize } from "../../config/byte-size.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -37,6 +41,31 @@ function resolvePositiveTokenCount(value: number | undefined): number | undefine
     : undefined;
 }
 
+export function resolveMemoryFlushThresholdTokens(params: {
+  contextWindowTokens: number;
+  reserveTokensFloor: number;
+  softThresholdTokens: number;
+}): number {
+  const contextWindow = Math.max(1, Math.floor(params.contextWindowTokens));
+  const minPromptBudget = Math.min(
+    MIN_PROMPT_BUDGET_TOKENS,
+    Math.max(1, Math.floor(contextWindow * MIN_PROMPT_BUDGET_RATIO)),
+  );
+  const requestedReserve = Math.max(0, Math.floor(params.reserveTokensFloor));
+  const reserveTokens = Math.min(requestedReserve, Math.max(0, contextWindow - minPromptBudget));
+  const compactionThreshold = Math.max(1, contextWindow - reserveTokens);
+  const minFlushThreshold = Math.min(
+    MIN_PROMPT_BUDGET_TOKENS,
+    Math.max(1, Math.floor(compactionThreshold * MIN_PROMPT_BUDGET_RATIO)),
+  );
+  const requestedSoftThreshold = Math.max(0, Math.floor(params.softThresholdTokens));
+  const softThreshold = Math.min(
+    requestedSoftThreshold,
+    Math.max(0, compactionThreshold - minFlushThreshold),
+  );
+  return Math.max(minFlushThreshold, compactionThreshold - softThreshold);
+}
+
 function resolveMemoryFlushGateState<
   TEntry extends Pick<SessionEntry, "totalTokens" | "totalTokensFresh">,
 >(params: {
@@ -56,15 +85,7 @@ function resolveMemoryFlushGateState<
     return null;
   }
 
-  const contextWindow = Math.max(1, Math.floor(params.contextWindowTokens));
-  const softThreshold = Math.max(0, Math.floor(params.softThresholdTokens));
-  // Clamp reserve so the flush threshold stays positive even for small context windows.
-  const maxReserve = Math.max(0, contextWindow - softThreshold - 1);
-  const reserveTokens = Math.min(Math.max(0, Math.floor(params.reserveTokensFloor)), maxReserve);
-  const threshold = Math.max(0, contextWindow - reserveTokens - softThreshold);
-  if (threshold <= 0) {
-    return null;
-  }
+  const threshold = resolveMemoryFlushThresholdTokens(params);
 
   return { entry: params.entry, totalTokens, threshold };
 }

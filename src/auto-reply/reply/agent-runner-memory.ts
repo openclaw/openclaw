@@ -37,6 +37,7 @@ import {
   hasAlreadyFlushedForCurrentCompaction,
   resolveMaxActiveTranscriptBytes,
   resolveMemoryFlushContextWindowTokens,
+  resolveMemoryFlushThresholdTokens,
   shouldRunMemoryFlush,
   shouldRunPreflightCompaction,
 } from "./memory-flush.js";
@@ -476,12 +477,11 @@ export async function runPreflightCompactionIfNeeded(params: {
       ? projectedTokenCount
       : undefined;
 
-  const maxPreflightReserve = Math.max(0, contextWindowTokens - softThresholdTokens - 1);
-  const clampedPreflightReserve = Math.min(reserveTokensFloor, maxPreflightReserve);
-  const threshold = Math.max(
-    0,
-    contextWindowTokens - clampedPreflightReserve - softThresholdTokens,
-  );
+  const threshold = resolveMemoryFlushThresholdTokens({
+    contextWindowTokens,
+    reserveTokensFloor,
+    softThresholdTokens,
+  });
   logVerbose(
     `preflightCompaction check: sessionKey=${params.sessionKey} ` +
       `tokenCount=${tokenCountForCompaction ?? freshPersistedTokens ?? "undefined"} ` +
@@ -658,10 +658,11 @@ export async function runMemoryFlushIfNeeded(params: {
   const hasFreshPersistedPromptTokens =
     typeof persistedPromptTokens === "number" && entry?.totalTokensFresh === true;
 
-  const softTokens = memoryFlushPlan.softThresholdTokens;
-  const maxReserve = Math.max(0, contextWindowTokens - softTokens - 1);
-  const clampedReserve = Math.min(memoryFlushPlan.reserveTokensFloor, maxReserve);
-  const flushThreshold = Math.max(0, contextWindowTokens - clampedReserve - softTokens);
+  const flushThreshold = resolveMemoryFlushThresholdTokens({
+    contextWindowTokens,
+    reserveTokensFloor: memoryFlushPlan.reserveTokensFloor,
+    softThresholdTokens: memoryFlushPlan.softThresholdTokens,
+  });
 
   // When totals are stale/unknown, derive prompt + last output from transcript so memory
   // flush can still be evaluated against projected next-input size.

@@ -16,6 +16,7 @@ import {
 import {
   hasAlreadyFlushedForCurrentCompaction,
   resolveMemoryFlushContextWindowTokens,
+  resolveMemoryFlushThresholdTokens,
   shouldRunMemoryFlush,
   shouldRunPreflightCompaction,
 } from "./memory-flush.js";
@@ -295,19 +296,35 @@ describe("shouldRunMemoryFlush", () => {
 
   it("clamps reserveTokensFloor when it equals contextWindowTokens", () => {
     expect(
-      shouldRunMemoryFlush({
-        entry: { totalTokens: 180_000, totalTokensFresh: true, compactionCount: 0 },
+      resolveMemoryFlushThresholdTokens({
         contextWindowTokens: 200_000,
         reserveTokensFloor: 200_000,
         softThresholdTokens: 5_000,
       }),
-    ).toBe(true);
+    ).toBe(4_000);
+
+    expect(
+      shouldRunMemoryFlush({
+        entry: { totalTokens: 3_999, totalTokensFresh: true, compactionCount: 0 },
+        contextWindowTokens: 200_000,
+        reserveTokensFloor: 200_000,
+        softThresholdTokens: 5_000,
+      }),
+    ).toBe(false);
   });
 
   it("clamps reserveTokensFloor when it exceeds contextWindowTokens", () => {
     expect(
+      resolveMemoryFlushThresholdTokens({
+        contextWindowTokens: 200_000,
+        reserveTokensFloor: 300_000,
+        softThresholdTokens: 5_000,
+      }),
+    ).toBe(4_000);
+
+    expect(
       shouldRunMemoryFlush({
-        entry: { totalTokens: 180_000, totalTokensFresh: true, compactionCount: 0 },
+        entry: { totalTokens: 4_000, totalTokensFresh: true, compactionCount: 0 },
         contextWindowTokens: 200_000,
         reserveTokensFloor: 300_000,
         softThresholdTokens: 5_000,
@@ -317,10 +334,83 @@ describe("shouldRunMemoryFlush", () => {
 
   it("produces a positive threshold for small context windows", () => {
     expect(
-      shouldRunMemoryFlush({
-        entry: { totalTokens: 15_000, totalTokensFresh: true, compactionCount: 0 },
+      resolveMemoryFlushThresholdTokens({
         contextWindowTokens: 16_000,
         reserveTokensFloor: 20_000,
+        softThresholdTokens: 4_000,
+      }),
+    ).toBe(4_000);
+
+    expect(
+      shouldRunMemoryFlush({
+        entry: { totalTokens: 3_999, totalTokensFresh: true, compactionCount: 0 },
+        contextWindowTokens: 16_000,
+        reserveTokensFloor: 20_000,
+        softThresholdTokens: 4_000,
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldRunMemoryFlush({
+        entry: { totalTokens: 4_000, totalTokensFresh: true, compactionCount: 0 },
+        contextWindowTokens: 16_000,
+        reserveTokensFloor: 20_000,
+        softThresholdTokens: 4_000,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps the flush threshold meaningful when softThresholdTokens consumes headroom", () => {
+    expect(
+      resolveMemoryFlushThresholdTokens({
+        contextWindowTokens: 16_000,
+        reserveTokensFloor: 20_000,
+        softThresholdTokens: 20_000,
+      }),
+    ).toBe(4_000);
+
+    expect(
+      shouldRunMemoryFlush({
+        entry: { totalTokens: 3_999, totalTokensFresh: true, compactionCount: 0 },
+        contextWindowTokens: 16_000,
+        reserveTokensFloor: 20_000,
+        softThresholdTokens: 20_000,
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldRunMemoryFlush({
+        entry: { totalTokens: 4_000, totalTokensFresh: true, compactionCount: 0 },
+        contextWindowTokens: 16_000,
+        reserveTokensFloor: 20_000,
+        softThresholdTokens: 20_000,
+      }),
+    ).toBe(true);
+  });
+
+  it("preserves valid high reserveTokensFloor values below the context-aware cap", () => {
+    expect(
+      resolveMemoryFlushThresholdTokens({
+        contextWindowTokens: 128_000,
+        reserveTokensFloor: 110_000,
+        softThresholdTokens: 4_000,
+      }),
+    ).toBe(14_000);
+
+    expect(
+      shouldRunMemoryFlush({
+        entry: { totalTokens: 13_999, totalTokensFresh: true, compactionCount: 0 },
+        contextWindowTokens: 128_000,
+        reserveTokensFloor: 110_000,
+        softThresholdTokens: 4_000,
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldRunMemoryFlush({
+        entry: { totalTokens: 14_000, totalTokensFresh: true, compactionCount: 0 },
+        contextWindowTokens: 128_000,
+        reserveTokensFloor: 110_000,
         softThresholdTokens: 4_000,
       }),
     ).toBe(true);
