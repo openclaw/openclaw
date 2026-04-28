@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "../../infra/errors.js";
 import { isPluginJsonValue } from "../../plugins/host-hooks.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -252,7 +253,10 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, `plugin session action failed: ${String(error)}`),
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          `plugin session action failed: ${formatErrorMessage(error)}`,
+        ),
       );
     }
   },

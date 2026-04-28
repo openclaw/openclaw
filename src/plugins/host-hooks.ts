@@ -203,8 +203,6 @@ export type PluginAgentEventEmitResult =
 
 export type PluginSessionAttachmentFile = {
   path: string;
-  name?: string;
-  mime?: string;
 };
 
 export type PluginSessionAttachmentParams = {
@@ -235,7 +233,7 @@ export type PluginSessionTurnScheduleParams = PluginSessionTurnSchedule & {
   message: string;
   agentId?: string;
   deleteAfterRun?: boolean;
-  deliveryMode?: "none" | "announce" | "webhook";
+  deliveryMode?: "none" | "announce";
   name?: string;
 };
 
