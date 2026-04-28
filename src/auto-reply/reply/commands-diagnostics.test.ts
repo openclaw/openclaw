@@ -5,8 +5,13 @@ import { createPluginRegistry, type PluginRecord } from "../../plugins/registry.
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import type { PluginCommandContext } from "../../plugins/types.js";
 import type { MsgContext } from "../templating.js";
-import { handleDiagnosticsCommand } from "./commands-diagnostics.js";
+import { createDiagnosticsCommandHandler } from "./commands-diagnostics.js";
 import type { HandleCommandsParams } from "./commands-types.js";
+
+type ExecCall = {
+  defaults: unknown;
+  params: unknown;
+};
 
 function buildDiagnosticsParams(
   commandBodyNormalized: string,
@@ -148,12 +153,46 @@ function registerCodexDiagnosticsCommandForTest(
   return { calls, commandHandler };
 }
 
+function createDiagnosticsHandlerForTest() {
+  const execCalls: ExecCall[] = [];
+  const createExecTool = vi.fn((defaults: unknown) => ({
+    execute: vi.fn(async (_toolCallId: string, params: unknown) => {
+      execCalls.push({ defaults, params });
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: "Exec approval pending. Allowed decisions: allow-once, deny.",
+          },
+        ],
+        details: {
+          status: "approval-pending" as const,
+          approvalId: "approval-1",
+          approvalSlug: "diag-approval",
+          expiresAtMs: Date.now() + 60_000,
+          allowedDecisions: ["allow-once", "deny"] as const,
+          host: "gateway" as const,
+          command: "openclaw gateway diagnostics export --json",
+          cwd: "/tmp",
+        },
+      };
+    }),
+  }));
+  return {
+    execCalls,
+    handleDiagnosticsCommand: createDiagnosticsCommandHandler({
+      createExecTool: createExecTool as never,
+    }),
+  };
+}
+
 afterEach(() => {
   clearPluginCommands();
 });
 
 describe("diagnostics command", () => {
   it("shows the Gateway diagnostics preamble without Codex upload details by default", async () => {
+    const { execCalls, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
     const result = await handleDiagnosticsCommand(buildDiagnosticsParams("/diagnostics"), true);
 
     expect(result?.shouldContinue).toBe(false);
@@ -161,14 +200,28 @@ describe("diagnostics command", () => {
       "Diagnostics can include sensitive local logs and host-level runtime metadata.",
     );
     expect(result?.reply?.text).toContain("https://docs.openclaw.ai/gateway/diagnostics");
-    expect(result?.reply?.text).toContain("openclaw gateway diagnostics export");
-    expect(result?.reply?.text).toContain("this chat command only shows the command");
-    expect(result?.reply?.text).toContain("Do not approve diagnostics with an allow-all rule.");
+    expect(result?.reply?.text).toContain("openclaw gateway diagnostics export --json");
+    expect(result?.reply?.text).toContain("requested");
+    expect(result?.reply?.text).toContain("do not use allow-all");
+    expect(result?.reply?.text).toContain("Allowed decisions: allow-once, deny");
     expect(result?.reply?.text).not.toContain("OpenAI Codex harness");
+    expect(execCalls).toHaveLength(1);
+    expect(execCalls[0]?.defaults).toMatchObject({
+      host: "gateway",
+      security: "allowlist",
+      ask: "always",
+      trigger: "diagnostics",
+    });
+    expect(execCalls[0]?.params).toMatchObject({
+      command: "openclaw gateway diagnostics export --json",
+      security: "allowlist",
+      ask: "always",
+    });
   });
 
   it("offers the Codex feedback upload confirmation for Codex harness sessions", async () => {
     const { calls } = registerCodexDiagnosticsCommandForTest(async () => null);
+    const { handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
     const result = await handleDiagnosticsCommand(
       buildDiagnosticsParams("/diagnostics flaky tool call", {
         sessionEntry: {
@@ -186,6 +239,15 @@ describe("diagnostics command", () => {
     expect(calls[0]?.args).toBe("diagnostics flaky tool call");
     expect(calls[0]?.senderIsOwner).toBe(true);
     expect(calls[0]?.sessionFile).toBe("/tmp/session.jsonl");
+    expect(calls[0]?.diagnosticsSessions).toEqual([
+      expect.objectContaining({
+        agentHarnessId: "codex",
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        channel: "whatsapp",
+        accountId: "account-1",
+      }),
+    ]);
     expect(result?.reply?.text).toContain("OpenAI Codex harness:");
     expect(result?.reply?.text).toContain("To send: /diagnostics confirm abc123def456");
     expect(result?.reply?.text).not.toContain("/codex diagnostics confirm");
@@ -208,6 +270,7 @@ describe("diagnostics command", () => {
   });
 
   it("requires an owner for diagnostics", async () => {
+    const { handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
     const result = await handleDiagnosticsCommand(
       buildDiagnosticsParams("/diagnostics", {
         command: {
@@ -222,6 +285,7 @@ describe("diagnostics command", () => {
   });
 
   it("routes confirmations back to the Codex diagnostics handler without repeating the preamble", async () => {
+    const { handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
     const commandHandler = vi.fn(async (ctx: PluginCommandContext) => ({
       text: `confirmed ${ctx.args}`,
     }));
@@ -244,6 +308,7 @@ describe("diagnostics command", () => {
   });
 
   it("does not delegate diagnostics to a non-Codex plugin command", async () => {
+    const { handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
     const commandHandler = vi.fn(async () => ({ text: "wrong codex" }));
     registerPluginCommand(
       "third-party",

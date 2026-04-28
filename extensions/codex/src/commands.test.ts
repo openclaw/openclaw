@@ -380,7 +380,8 @@ describe("codex command", () => {
       [
         "Codex runtime thread detected.",
         "Codex diagnostics can send this thread's feedback bundle to OpenAI servers.",
-        "Thread: thread-123",
+        "Codex sessions:",
+        "- channel test, OpenClaw session session-1, Codex thread thread-123",
         "Note: tool loop repro",
         "Included: Codex logs and spawned Codex subthreads when available.",
         `To send: /codex diagnostics confirm ${token}`,
@@ -416,8 +417,10 @@ describe("codex command", () => {
       ),
     ).resolves.toEqual({
       text: [
-        "Codex diagnostics sent for thread thread-123.",
-        "Inspect locally: codex resume thread-123",
+        "Codex diagnostics sent to OpenAI servers:",
+        "- channel test, OpenClaw session session-1, Codex thread thread-123",
+        "Inspect locally:",
+        "- codex resume thread-123",
         "Included Codex logs and spawned Codex subthreads when available.",
       ].join("\n"),
     });
@@ -434,6 +437,101 @@ describe("codex command", () => {
           channel: "test",
         },
       },
+    );
+  });
+
+  it("uploads all Codex diagnostics sessions and reports their channel/thread breakdown", async () => {
+    const firstSessionFile = path.join(tempDir, "session-one.jsonl");
+    const secondSessionFile = path.join(tempDir, "session-two.jsonl");
+    await fs.writeFile(
+      `${firstSessionFile}.codex-app-server.json`,
+      JSON.stringify({ schemaVersion: 1, threadId: "thread-111", cwd: "/repo" }),
+    );
+    await fs.writeFile(
+      `${secondSessionFile}.codex-app-server.json`,
+      JSON.stringify({ schemaVersion: 1, threadId: "thread-222", cwd: "/repo" }),
+    );
+    const safeCodexControlRequest = vi.fn(async (_config, _method, requestParams) => ({
+      ok: true as const,
+      value: {
+        threadId:
+          requestParams && typeof requestParams === "object" && "threadId" in requestParams
+            ? requestParams.threadId
+            : undefined,
+      },
+    }));
+    const deps = createDeps({ safeCodexControlRequest });
+    const diagnosticsSessions = [
+      {
+        agentHarnessId: "codex",
+        sessionKey: "agent:main:whatsapp:one",
+        sessionId: "session-one",
+        sessionFile: firstSessionFile,
+        channel: "whatsapp",
+      },
+      {
+        agentHarnessId: "codex",
+        sessionKey: "agent:main:discord:two",
+        sessionId: "session-two",
+        sessionFile: secondSessionFile,
+        channel: "discord",
+      },
+    ];
+
+    const request = await handleCodexCommand(
+      createContext("diagnostics multi-session repro", firstSessionFile, {
+        senderId: "user-1",
+        channel: "whatsapp",
+        sessionKey: "agent:main:whatsapp:one",
+        sessionId: "session-one",
+        diagnosticsSessions,
+      }),
+      { deps },
+    );
+    const token = readDiagnosticsConfirmationToken(request);
+    expect(request.text).toContain("Codex runtime threads detected.");
+    expect(request.text).toContain(
+      "- channel whatsapp, OpenClaw session session-one, Codex thread thread-111",
+    );
+    expect(request.text).toContain(
+      "- channel discord, OpenClaw session session-two, Codex thread thread-222",
+    );
+    expect(safeCodexControlRequest).not.toHaveBeenCalled();
+
+    await expect(
+      handleCodexCommand(
+        createContext(`diagnostics confirm ${token}`, firstSessionFile, {
+          senderId: "user-1",
+          channel: "whatsapp",
+          sessionKey: "agent:main:whatsapp:one",
+          sessionId: "session-one",
+          diagnosticsSessions,
+        }),
+        { deps },
+      ),
+    ).resolves.toEqual({
+      text: [
+        "Codex diagnostics sent to OpenAI servers:",
+        "- channel whatsapp, OpenClaw session session-one, Codex thread thread-111",
+        "- channel discord, OpenClaw session session-two, Codex thread thread-222",
+        "Inspect locally:",
+        "- codex resume thread-111",
+        "- codex resume thread-222",
+        "Included Codex logs and spawned Codex subthreads when available.",
+      ].join("\n"),
+    });
+    expect(safeCodexControlRequest).toHaveBeenCalledTimes(2);
+    expect(safeCodexControlRequest).toHaveBeenNthCalledWith(
+      1,
+      undefined,
+      CODEX_CONTROL_METHODS.feedback,
+      expect.objectContaining({ threadId: "thread-111", includeLogs: true }),
+    );
+    expect(safeCodexControlRequest).toHaveBeenNthCalledWith(
+      2,
+      undefined,
+      CODEX_CONTROL_METHODS.feedback,
+      expect.objectContaining({ threadId: "thread-222", includeLogs: true }),
     );
   });
 
@@ -563,7 +661,7 @@ describe("codex command", () => {
 
     releaseFirstConfirmBindingRead();
     await expect(firstConfirm).resolves.toMatchObject({
-      text: expect.stringContaining("Codex diagnostics sent for thread thread-race."),
+      text: expect.stringContaining("Codex diagnostics sent to OpenAI servers:"),
     });
     expect(safeCodexControlRequest).toHaveBeenCalledTimes(1);
   });
@@ -644,7 +742,11 @@ describe("codex command", () => {
         { deps: createDeps() },
       ),
     ).resolves.toEqual({
-      text: "Codex diagnostics upload canceled.",
+      text: [
+        "Codex diagnostics upload canceled.",
+        "Codex sessions:",
+        "- channel test, Codex thread thread-confirm-scope",
+      ].join("\n"),
     });
   });
 
@@ -715,15 +817,17 @@ describe("codex command", () => {
       handleCodexCommand(createContext(`diagnostics confirm ${token}`, sessionFile), { deps }),
     ).resolves.toEqual({
       text: [
-        "Codex diagnostics sent for thread thread-cooldown.",
-        "Inspect locally: codex resume thread-cooldown",
+        "Codex diagnostics sent to OpenAI servers:",
+        "- channel test, Codex thread thread-cooldown",
+        "Inspect locally:",
+        "- codex resume thread-cooldown",
         "Included Codex logs and spawned Codex subthreads when available.",
       ].join("\n"),
     });
     await expect(
       handleCodexCommand(createContext("diagnostics again", sessionFile), { deps }),
     ).resolves.toEqual({
-      text: "Codex diagnostics were already sent for this thread recently. Try again in 60s.",
+      text: "Codex diagnostics were already sent for thread thread-cooldown recently. Try again in 60s.",
     });
     expect(safeCodexControlRequest).toHaveBeenCalledTimes(1);
   });
@@ -748,8 +852,10 @@ describe("codex command", () => {
       handleCodexCommand(createContext(`diagnostics confirm ${token}`, sessionFile), { deps }),
     ).resolves.toEqual({
       text: [
-        "Codex diagnostics sent for thread thread-global-1.",
-        "Inspect locally: codex resume thread-global-1",
+        "Codex diagnostics sent to OpenAI servers:",
+        "- channel test, Codex thread thread-global-1",
+        "Inspect locally:",
+        "- codex resume thread-global-1",
         "Included Codex logs and spawned Codex subthreads when available.",
       ].join("\n"),
     });
@@ -796,7 +902,7 @@ describe("codex command", () => {
         { deps },
       ),
     ).resolves.toMatchObject({
-      text: expect.stringContaining("Codex diagnostics sent for thread thread-scope-1."),
+      text: expect.stringContaining("Codex diagnostics sent to OpenAI servers:"),
     });
 
     await fs.writeFile(
@@ -820,7 +926,7 @@ describe("codex command", () => {
         { deps },
       ),
     ).resolves.toMatchObject({
-      text: expect.stringContaining("Codex diagnostics sent for thread thread-scope-2."),
+      text: expect.stringContaining("Codex diagnostics sent to OpenAI servers:"),
     });
 
     expect(safeCodexControlRequest).toHaveBeenCalledTimes(2);
@@ -854,7 +960,7 @@ describe("codex command", () => {
         { deps },
       ),
     ).resolves.toMatchObject({
-      text: expect.stringContaining("Codex diagnostics sent for thread thread-delimiter-1."),
+      text: expect.stringContaining("Codex diagnostics sent to OpenAI servers:"),
     });
 
     await fs.writeFile(
@@ -876,7 +982,7 @@ describe("codex command", () => {
         { deps },
       ),
     ).resolves.toMatchObject({
-      text: expect.stringContaining("Codex diagnostics sent for thread thread-delimiter-2."),
+      text: expect.stringContaining("Codex diagnostics sent to OpenAI servers:"),
     });
 
     expect(safeCodexControlRequest).toHaveBeenCalledTimes(2);
@@ -910,7 +1016,7 @@ describe("codex command", () => {
         { deps },
       ),
     ).resolves.toMatchObject({
-      text: expect.stringContaining("Codex diagnostics sent for thread thread-long-scope-1."),
+      text: expect.stringContaining("Codex diagnostics sent to OpenAI servers:"),
     });
 
     await fs.writeFile(
@@ -932,7 +1038,7 @@ describe("codex command", () => {
         { deps },
       ),
     ).resolves.toMatchObject({
-      text: expect.stringContaining("Codex diagnostics sent for thread thread-long-scope-2."),
+      text: expect.stringContaining("Codex diagnostics sent to OpenAI servers:"),
     });
 
     expect(safeCodexControlRequest).toHaveBeenCalledTimes(2);
@@ -951,15 +1057,17 @@ describe("codex command", () => {
     const deps = createDeps({ safeCodexControlRequest });
 
     const request = await handleCodexCommand(createContext("diagnostics", sessionFile), { deps });
-    expect(request.text).toContain("Thread: &lt;\uff20U123&gt;");
+    expect(request.text).toContain("Codex thread &lt;\uff20U123&gt;");
     expect(request.text).not.toContain("<@U123>");
     const token = readDiagnosticsConfirmationToken(request);
     await expect(
       handleCodexCommand(createContext(`diagnostics confirm ${token}`, sessionFile), { deps }),
     ).resolves.toEqual({
       text: [
-        "Could not send Codex diagnostics for thread &lt;\uff20U123&gt;: bad??? &lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09 \uff20here",
-        "Inspect locally: run codex resume and paste the thread id shown above",
+        "Could not send Codex diagnostics:",
+        "- channel test, Codex thread &lt;\uff20U123&gt;: bad??? &lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09 \uff20here",
+        "Inspect locally:",
+        "- run codex resume and paste the thread id shown above",
       ].join("\n"),
     });
   });
@@ -986,8 +1094,10 @@ describe("codex command", () => {
       }),
     ).resolves.toEqual({
       text: [
-        "Could not send Codex diagnostics for thread thread-retry: temporary outage",
-        "Inspect locally: codex resume thread-retry",
+        "Could not send Codex diagnostics:",
+        "- channel test, Codex thread thread-retry: temporary outage",
+        "Inspect locally:",
+        "- codex resume thread-retry",
       ].join("\n"),
     });
 
@@ -1001,8 +1111,10 @@ describe("codex command", () => {
       }),
     ).resolves.toEqual({
       text: [
-        "Codex diagnostics sent for thread thread-retry.",
-        "Inspect locally: codex resume thread-retry",
+        "Codex diagnostics sent to OpenAI servers:",
+        "- channel test, Codex thread thread-retry",
+        "Inspect locally:",
+        "- codex resume thread-retry",
         "Included Codex logs and spawned Codex subthreads when available.",
       ].join("\n"),
     });
@@ -1031,8 +1143,10 @@ describe("codex command", () => {
       handleCodexCommand(createContext(`diagnostics confirm ${token}`, sessionFile), { deps }),
     ).resolves.toEqual({
       text: [
-        "Codex diagnostics sent for thread thread-123'\uff40???; echo bad.",
-        "Inspect locally: run codex resume and paste the thread id shown above",
+        "Codex diagnostics sent to OpenAI servers:",
+        "- channel test, Codex thread thread-123'\uff40???; echo bad",
+        "Inspect locally:",
+        "- run codex resume and paste the thread id shown above",
         "Included Codex logs and spawned Codex subthreads when available.",
       ].join("\n"),
     });

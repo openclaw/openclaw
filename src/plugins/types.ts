@@ -1838,6 +1838,27 @@ export type OpenClawPluginGatewayMethod = {
 // Plugin Commands
 // =============================================================================
 
+export type PluginCommandDiagnosticsSession = {
+  /** Stable host session key when available. */
+  sessionKey?: string;
+  /** Ephemeral OpenClaw session id when available. */
+  sessionId?: string;
+  /** Transcript file for this OpenClaw session when available. */
+  sessionFile?: string;
+  /** Embedded agent harness selected for this session. */
+  agentHarnessId?: string;
+  /** Channel/provider for this session when available. */
+  channel?: string;
+  /** Provider channel id when available. */
+  channelId?: ChannelId;
+  /** Account id for multi-account channels when available. */
+  accountId?: string;
+  /** Thread/topic id when available. */
+  messageThreadId?: string | number;
+  /** Parent conversation id for thread-capable channels when available. */
+  threadParentId?: string;
+};
+
 /**
  * Context passed to plugin command handlers.
  */
@@ -1876,6 +1897,8 @@ export type PluginCommandContext = {
   messageThreadId?: string | number;
   /** Parent conversation id for thread-capable channels */
   threadParentId?: string;
+  /** Sensitive diagnostics-only session inventory for owner-gated commands. */
+  diagnosticsSessions?: PluginCommandDiagnosticsSession[];
   requestConversationBinding: (
     params?: PluginConversationBindingRequestParams,
   ) => Promise<PluginConversationBindingRequestResult>;
