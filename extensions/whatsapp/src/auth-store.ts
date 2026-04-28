@@ -306,6 +306,16 @@ type WebAuthDirOwnership =
   | { kind: "unsafe-owned" }
   | { kind: "external" };
 
+async function isLegacyWebAuthDir(authDir: string): Promise<boolean> {
+  const legacyAuthDir = path.resolve(resolveOAuthDir());
+  const resolvedAuthDir = path.resolve(authDir);
+  if (resolvedAuthDir !== legacyAuthDir) {
+    return false;
+  }
+  const stats = await fs.lstat(resolvedAuthDir).catch(() => null);
+  return stats?.isDirectory() === true && !stats.isSymbolicLink();
+}
+
 async function classifyWebAuthDirOwnership(authDir: string): Promise<WebAuthDirOwnership> {
   const whatsappAuthBase = path.resolve(resolveOAuthDir(), "whatsapp");
   const resolvedAuthDir = path.resolve(authDir);
@@ -347,6 +357,12 @@ export async function logoutWeb(params: {
     return false;
   }
   if (params.isLegacyAuthDir) {
+    if (!(await isLegacyWebAuthDir(resolvedAuthDir))) {
+      runtime.log(
+        info("Skipped WhatsApp Web credential cleanup outside the managed legacy auth directory."),
+      );
+      return false;
+    }
     await clearBaileysAuthFiles(resolvedAuthDir);
   } else {
     const ownership = await classifyWebAuthDirOwnership(resolvedAuthDir);
@@ -360,7 +376,10 @@ export async function logoutWeb(params: {
       );
       return false;
     } else {
-      await clearBaileysAuthFiles(resolvedAuthDir);
+      runtime.log(
+        info("Skipped WhatsApp Web credential cleanup outside the managed auth directory."),
+      );
+      return false;
     }
   }
   runtime.log(success("Cleared WhatsApp Web credentials."));

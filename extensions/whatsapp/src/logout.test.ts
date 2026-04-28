@@ -93,11 +93,11 @@ describe("web logout", () => {
   });
 
   it("keeps shared oauth.json when using legacy auth dir", async () => {
-    const credsDir = await createAuthCase({
-      "creds.json": "{}",
-      "oauth.json": '{"token":true}',
-      "session-abc.json": "{}",
-    });
+    const credsDir = path.join(fixtureRoot, "oauth");
+    await fsPromises.mkdir(credsDir, { recursive: true });
+    await fsPromises.writeFile(path.join(credsDir, "creds.json"), "{}", "utf-8");
+    await fsPromises.writeFile(path.join(credsDir, "oauth.json"), '{"token":true}', "utf-8");
+    await fsPromises.writeFile(path.join(credsDir, "session-abc.json"), "{}", "utf-8");
 
     const result = await logoutWeb({
       authDir: credsDir,
@@ -110,7 +110,7 @@ describe("web logout", () => {
     expect(fs.existsSync(path.join(credsDir, "session-abc.json"))).toBe(false);
   });
 
-  it("does not recursively delete custom auth directories outside the OpenClaw auth root", async () => {
+  it("does not delete custom auth directories outside the OpenClaw auth root", async () => {
     const authDir = await makeExternalCaseDir();
     await fsPromises.mkdir(path.join(authDir, "nested"));
     await fsPromises.writeFile(path.join(authDir, "creds.json"), "{}", "utf-8");
@@ -119,9 +119,9 @@ describe("web logout", () => {
     await fsPromises.writeFile(path.join(authDir, "nested", "session-abc.json"), "keep", "utf-8");
 
     const result = await logoutWeb({ authDir, runtime: runtime as never });
-    expect(result).toBe(true);
+    expect(result).toBe(false);
     expect(fs.existsSync(authDir)).toBe(true);
-    expect(fs.existsSync(path.join(authDir, "creds.json"))).toBe(false);
+    expect(fs.existsSync(path.join(authDir, "creds.json"))).toBe(true);
     expect(fs.existsSync(path.join(authDir, "oauth.json"))).toBe(true);
     expect(fs.existsSync(path.join(authDir, "notes.txt"))).toBe(true);
     expect(fs.existsSync(path.join(authDir, "nested", "session-abc.json"))).toBe(true);
