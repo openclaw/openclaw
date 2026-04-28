@@ -19,6 +19,7 @@ import {
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
+import { requestHeartbeatNow } from "openclaw/plugin-sdk/heartbeat-runtime";
 import {
   createInternalHookEvent,
   fireAndForgetHook,
@@ -26,7 +27,6 @@ import {
   triggerInternalHook,
 } from "openclaw/plugin-sdk/hook-runtime";
 import { runInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
-import { requestHeartbeatNow } from "openclaw/plugin-sdk/infra-runtime";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import {
   buildPendingHistoryContextFromMap,

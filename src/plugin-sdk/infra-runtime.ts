@@ -35,7 +35,6 @@ export * from "../infra/fs-safe.ts";
 export * from "../infra/heartbeat-events.ts";
 export * from "../infra/heartbeat-summary.ts";
 export * from "../infra/heartbeat-visibility.ts";
-export { requestHeartbeatNow } from "../infra/heartbeat-wake.ts";
 export * from "../infra/home-dir.js";
 export * from "../infra/http-body.js";
 export * from "../infra/json-files.js";
