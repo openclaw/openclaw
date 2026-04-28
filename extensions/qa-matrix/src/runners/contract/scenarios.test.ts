@@ -79,7 +79,21 @@ function matrixQaScenarioContext(): MatrixQaScenarioContext {
     topology: {
       defaultRoomId: "!main:matrix-qa.test",
       defaultRoomKey: "main",
-      rooms: [],
+      rooms: [
+        {
+          key: "main",
+          kind: "group",
+          memberRoles: ["driver", "observer", "sut"],
+          memberUserIds: [
+            "@driver:matrix-qa.test",
+            "@observer:matrix-qa.test",
+            "@sut:matrix-qa.test",
+          ],
+          name: "Main",
+          requireMention: true,
+          roomId: "!main:matrix-qa.test",
+        },
+      ],
     },
   };
 }
@@ -230,6 +244,12 @@ describe("matrix live qa scenarios", () => {
       "matrix-reaction-threaded",
       "matrix-reaction-not-a-reply",
       "matrix-reaction-redaction-observed",
+      "matrix-approval-exec-metadata-single-event",
+      "matrix-approval-exec-metadata-chunked",
+      "matrix-approval-plugin-metadata-single-event",
+      "matrix-approval-deny-reaction",
+      "matrix-approval-thread-target",
+      "matrix-approval-channel-target-both",
       "matrix-restart-resume",
       "matrix-post-restart-room-continue",
       "matrix-initial-catchup-then-incremental",
@@ -238,6 +258,14 @@ describe("matrix live qa scenarios", () => {
       "matrix-room-membership-loss",
       "matrix-homeserver-restart-resume",
       "matrix-mention-gating",
+      "matrix-allowbots-default-block",
+      "matrix-allowbots-true-unmentioned-open-room",
+      "matrix-allowbots-mentions-mentioned-room",
+      "matrix-allowbots-mentions-unmentioned-open-room-block",
+      "matrix-allowbots-mentions-dm-unmentioned",
+      "matrix-allowbots-room-override-blocks-account-true",
+      "matrix-allowbots-room-override-enables-account-off",
+      "matrix-allowbots-self-sender-ignored",
       "matrix-mxid-prefixed-command-block",
       "matrix-mention-metadata-spoof-block",
       "matrix-observer-allowlist-override",
@@ -319,8 +347,12 @@ describe("matrix live qa scenarios", () => {
       "matrix-thread-isolation",
       "matrix-top-level-reply-shape",
       "matrix-reaction-notification",
+      "matrix-approval-exec-metadata-single-event",
+      "matrix-approval-exec-metadata-chunked",
       "matrix-restart-resume",
       "matrix-mention-gating",
+      "matrix-allowbots-default-block",
+      "matrix-allowbots-mentions-mentioned-room",
       "matrix-allowlist-block",
       "matrix-e2ee-basic-reply",
     ]);
@@ -788,6 +820,134 @@ describe("matrix live qa scenarios", () => {
       body: expect.stringContaining("@sut:matrix-qa.test reply with only this exact marker:"),
       mentionUserIds: ["@sut:matrix-qa.test"],
       roomId: "!room:matrix-qa.test",
+    });
+  });
+
+  it("runs mentioned allowBots=mentions room traffic through the observer bot account", async () => {
+    const primeRoom = vi.fn().mockResolvedValue("observer-sync-start");
+    const sendTextMessage = vi.fn().mockResolvedValue("$observer-bot-trigger");
+    const waitForRoomEvent = vi.fn().mockImplementation(async () => ({
+      event: {
+        kind: "message",
+        roomId: "!main:matrix-qa.test",
+        eventId: "$sut-bot-reply",
+        sender: "@sut:matrix-qa.test",
+        type: "m.room.message",
+        body: String(sendTextMessage.mock.calls[0]?.[0]?.body).replace(
+          "@sut:matrix-qa.test reply with only this exact marker: ",
+          "",
+        ),
+      },
+      since: "observer-sync-next",
+    }));
+
+    createMatrixQaClient.mockReturnValue({
+      primeRoom,
+      sendTextMessage,
+      waitForRoomEvent,
+    });
+
+    const scenario = MATRIX_QA_SCENARIOS.find(
+      (entry) => entry.id === "matrix-allowbots-mentions-mentioned-room",
+    );
+    expect(scenario).toBeDefined();
+
+    await expect(runMatrixQaScenario(scenario!, matrixQaScenarioContext())).resolves.toMatchObject({
+      artifacts: {
+        actorUserId: "@observer:matrix-qa.test",
+        driverEventId: "$observer-bot-trigger",
+        reply: {
+          tokenMatched: true,
+        },
+      },
+    });
+
+    expect(createMatrixQaClient).toHaveBeenCalledWith({
+      accessToken: "observer-token",
+      baseUrl: "http://127.0.0.1:28008/",
+    });
+    expect(sendTextMessage).toHaveBeenCalledWith({
+      body: expect.stringContaining("@sut:matrix-qa.test reply with only this exact marker:"),
+      mentionUserIds: ["@sut:matrix-qa.test"],
+      roomId: "!main:matrix-qa.test",
+    });
+  });
+
+  it("blocks unmentioned allowBots=mentions room traffic even when the room is open", async () => {
+    const primeRoom = vi.fn().mockResolvedValue("observer-sync-start");
+    const sendTextMessage = vi.fn().mockResolvedValue("$observer-bot-unmentioned");
+    const waitForOptionalRoomEvent = vi.fn().mockResolvedValue({
+      matched: false,
+      since: "observer-sync-next",
+    });
+
+    createMatrixQaClient.mockReturnValue({
+      primeRoom,
+      sendTextMessage,
+      waitForOptionalRoomEvent,
+    });
+
+    const scenario = MATRIX_QA_SCENARIOS.find(
+      (entry) => entry.id === "matrix-allowbots-mentions-unmentioned-open-room-block",
+    );
+    expect(scenario).toBeDefined();
+
+    await expect(runMatrixQaScenario(scenario!, matrixQaScenarioContext())).resolves.toMatchObject({
+      artifacts: {
+        actorUserId: "@observer:matrix-qa.test",
+        driverEventId: "$observer-bot-unmentioned",
+      },
+    });
+
+    expect(sendTextMessage).toHaveBeenCalledWith({
+      body: expect.stringContaining("reply with only this exact marker:"),
+      roomId: "!main:matrix-qa.test",
+    });
+  });
+
+  it("uses the SUT account as the sender for the self-sender allowBots loop guard", async () => {
+    const primeRoom = vi.fn().mockResolvedValue("observer-sync-start");
+    const observerWaitForOptionalRoomEvent = vi.fn().mockResolvedValue({
+      matched: false,
+      since: "observer-sync-next",
+    });
+    const observerSendTextMessage = vi.fn();
+    const sutSendTextMessage = vi.fn().mockResolvedValue("$sut-self-trigger");
+
+    createMatrixQaClient
+      .mockReturnValueOnce({
+        sendTextMessage: sutSendTextMessage,
+      })
+      .mockReturnValueOnce({
+        primeRoom,
+        sendTextMessage: observerSendTextMessage,
+        waitForOptionalRoomEvent: observerWaitForOptionalRoomEvent,
+      });
+
+    const scenario = MATRIX_QA_SCENARIOS.find(
+      (entry) => entry.id === "matrix-allowbots-self-sender-ignored",
+    );
+    expect(scenario).toBeDefined();
+
+    await expect(runMatrixQaScenario(scenario!, matrixQaScenarioContext())).resolves.toMatchObject({
+      artifacts: {
+        actorUserId: "@sut:matrix-qa.test",
+        driverEventId: "$sut-self-trigger",
+      },
+    });
+
+    expect(createMatrixQaClient).toHaveBeenNthCalledWith(1, {
+      accessToken: "sut-token",
+      baseUrl: "http://127.0.0.1:28008/",
+    });
+    expect(createMatrixQaClient).toHaveBeenNthCalledWith(2, {
+      accessToken: "observer-token",
+      baseUrl: "http://127.0.0.1:28008/",
+    });
+    expect(observerSendTextMessage).not.toHaveBeenCalled();
+    expect(sutSendTextMessage).toHaveBeenCalledWith({
+      body: expect.stringContaining("reply with only this exact marker:"),
+      roomId: "!main:matrix-qa.test",
     });
   });
 

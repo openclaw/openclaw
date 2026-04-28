@@ -2,7 +2,8 @@
 // Keep lane names, commands, image kind, timeout, resources, and release chunks
 // here. Planning and execution live in separate modules.
 
-const BUNDLED_UPDATE_TIMEOUT_MS = 20 * 60 * 1000;
+const BUNDLED_UPDATE_NO_OUTPUT_TIMEOUT_MS = 4 * 60 * 1000;
+const BUNDLED_UPDATE_TIMEOUT_MS = 6 * 60 * 1000;
 export const DEFAULT_LIVE_RETRIES = 1;
 const LIVE_ACP_TIMEOUT_MS = 20 * 60 * 1000;
 const LIVE_CLI_TIMEOUT_MS = 20 * 60 * 1000;
@@ -22,6 +23,11 @@ export const LIVE_RETRY_PATTERNS = [
 const bundledChannelLaneCommand =
   "OPENCLAW_SKIP_DOCKER_BUILD=1 OPENCLAW_BUNDLED_CHANNEL_UPDATE_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_ROOT_OWNED_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_SETUP_ENTRY_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_LOAD_FAILURE_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_DISABLED_CONFIG_SCENARIO=0 pnpm test:docker:bundled-channel-deps";
 
+function liveDockerScriptCommand(script, envPrefix = "") {
+  const prefix = envPrefix ? `${envPrefix} ` : "";
+  return `${prefix}OPENCLAW_SKIP_DOCKER_BUILD=1 bash -c 'harness="\${OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR:-}"; if [ -z "$harness" ]; then if [ -d .release-harness/scripts ]; then harness=.release-harness; else harness=.; fi; fi; OPENCLAW_LIVE_DOCKER_REPO_ROOT="\${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}" bash "$harness/scripts/${script}"'`;
+}
+
 function lane(name, command, options = {}) {
   return {
     cacheKey: options.cacheKey,
@@ -32,10 +38,12 @@ function lane(name, command, options = {}) {
         : (options.e2eImageKind ?? (options.live ? undefined : "functional")),
     estimateSeconds: options.estimateSeconds,
     live: options.live === true,
+    noOutputTimeoutMs: options.noOutputTimeoutMs,
     name,
     retryPatterns: options.retryPatterns ?? [],
     retries: options.retries ?? 0,
     resources: options.resources ?? [],
+    stateScenario: options.stateScenario,
     timeoutMs: options.timeoutMs,
     weight: options.weight ?? 1,
   };
@@ -107,20 +115,37 @@ function bundledChannelScenarioLane(name, env, options = {}) {
   );
 }
 
-const bundledScenarioLanes = [
-  ...["telegram", "discord", "slack", "feishu", "memory-lancedb"].map((channel) =>
+const bundledChannelSmokeLanes = ["telegram", "discord", "slack", "feishu", "memory-lancedb"].map(
+  (channel) =>
     npmLane(
       `bundled-channel-${channel}`,
       `OPENCLAW_BUNDLED_CHANNELS=${channel} ${bundledChannelLaneCommand}`,
+      { stateScenario: "empty" },
     ),
+);
+
+const bundledChannelUpdateLanes = [
+  "telegram",
+  "discord",
+  "slack",
+  "feishu",
+  "memory-lancedb",
+  "acpx",
+].map((target) =>
+  bundledChannelScenarioLane(
+    `bundled-channel-update-${target}`,
+    `OPENCLAW_BUNDLED_CHANNEL_SCENARIOS=0 OPENCLAW_BUNDLED_CHANNEL_UPDATE_SCENARIO=1 OPENCLAW_BUNDLED_CHANNEL_UPDATE_TARGETS=${target} OPENCLAW_BUNDLED_CHANNEL_ROOT_OWNED_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_SETUP_ENTRY_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_LOAD_FAILURE_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_DISABLED_CONFIG_SCENARIO=0`,
+    {
+      noOutputTimeoutMs: BUNDLED_UPDATE_NO_OUTPUT_TIMEOUT_MS,
+      retryPatterns: LIVE_RETRY_PATTERNS,
+      retries: 1,
+      stateScenario: "empty",
+      timeoutMs: BUNDLED_UPDATE_TIMEOUT_MS,
+    },
   ),
-  ...["telegram", "discord", "slack", "feishu", "memory-lancedb", "acpx"].map((target) =>
-    bundledChannelScenarioLane(
-      `bundled-channel-update-${target}`,
-      `OPENCLAW_BUNDLED_CHANNEL_SCENARIOS=0 OPENCLAW_BUNDLED_CHANNEL_UPDATE_SCENARIO=1 OPENCLAW_BUNDLED_CHANNEL_UPDATE_TARGETS=${target} OPENCLAW_BUNDLED_CHANNEL_ROOT_OWNED_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_SETUP_ENTRY_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_LOAD_FAILURE_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_DISABLED_CONFIG_SCENARIO=0`,
-      { timeoutMs: BUNDLED_UPDATE_TIMEOUT_MS },
-    ),
-  ),
+);
+
+const bundledChannelContractLanes = [
   bundledChannelScenarioLane(
     "bundled-channel-root-owned",
     "OPENCLAW_BUNDLED_CHANNEL_SCENARIOS=0 OPENCLAW_BUNDLED_CHANNEL_UPDATE_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_ROOT_OWNED_SCENARIO=1 OPENCLAW_BUNDLED_CHANNEL_SETUP_ENTRY_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_LOAD_FAILURE_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_DISABLED_CONFIG_SCENARIO=0",
@@ -128,15 +153,24 @@ const bundledScenarioLanes = [
   bundledChannelScenarioLane(
     "bundled-channel-setup-entry",
     "OPENCLAW_BUNDLED_CHANNEL_SCENARIOS=0 OPENCLAW_BUNDLED_CHANNEL_UPDATE_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_ROOT_OWNED_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_SETUP_ENTRY_SCENARIO=1 OPENCLAW_BUNDLED_CHANNEL_LOAD_FAILURE_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_DISABLED_CONFIG_SCENARIO=0",
+    { stateScenario: "empty" },
   ),
   bundledChannelScenarioLane(
     "bundled-channel-load-failure",
     "OPENCLAW_BUNDLED_CHANNEL_SCENARIOS=0 OPENCLAW_BUNDLED_CHANNEL_UPDATE_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_ROOT_OWNED_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_SETUP_ENTRY_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_LOAD_FAILURE_SCENARIO=1 OPENCLAW_BUNDLED_CHANNEL_DISABLED_CONFIG_SCENARIO=0",
+    { stateScenario: "empty" },
   ),
   bundledChannelScenarioLane(
     "bundled-channel-disabled-config",
     "OPENCLAW_BUNDLED_CHANNEL_SCENARIOS=0 OPENCLAW_BUNDLED_CHANNEL_UPDATE_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_ROOT_OWNED_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_SETUP_ENTRY_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_LOAD_FAILURE_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_DISABLED_CONFIG_SCENARIO=1",
+    { stateScenario: "empty" },
   ),
+];
+
+const bundledScenarioLanes = [
+  ...bundledChannelSmokeLanes,
+  ...bundledChannelUpdateLanes,
+  ...bundledChannelContractLanes,
 ];
 
 const bundledPluginInstallUninstallLanes = Array.from(
@@ -148,25 +182,29 @@ const bundledPluginInstallUninstallLanes = Array.from(
       {
         estimateSeconds: 280,
         resources: ["npm"],
+        stateScenario: "empty",
         weight: 1,
       },
     ),
 );
 
 export const mainLanes = [
-  liveLane("live-models", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-models", {
+  liveLane("live-models", liveDockerScriptCommand("test-live-models-docker.sh"), {
     providers: ["claude-cli", "codex-cli", "google-gemini-cli"],
     timeoutMs: LIVE_PROFILE_TIMEOUT_MS,
     weight: 4,
   }),
-  liveLane("live-gateway", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-gateway", {
+  liveLane("live-gateway", liveDockerScriptCommand("test-live-gateway-models-docker.sh"), {
     providers: ["claude-cli", "codex-cli", "google-gemini-cli"],
     timeoutMs: LIVE_PROFILE_TIMEOUT_MS,
     weight: 4,
   }),
   liveLane(
     "live-cli-backend-claude",
-    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-cli-backend:claude",
+    liveDockerScriptCommand(
+      "test-live-cli-backend-docker.sh",
+      "OPENCLAW_LIVE_CLI_BACKEND_MODEL=claude-cli/claude-sonnet-4-6",
+    ),
     {
       cacheKey: "cli-backend-claude",
       provider: "claude-cli",
@@ -177,7 +215,10 @@ export const mainLanes = [
   ),
   liveLane(
     "live-cli-backend-gemini",
-    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-cli-backend:gemini",
+    liveDockerScriptCommand(
+      "test-live-cli-backend-docker.sh",
+      "OPENCLAW_LIVE_CLI_BACKEND_MODEL=google-gemini-cli/gemini-3-flash-preview",
+    ),
     {
       cacheKey: "cli-backend-gemini",
       provider: "google-gemini-cli",
@@ -191,17 +232,19 @@ export const mainLanes = [
     weight: 5,
   }),
   serviceLane("onboard", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:onboard", {
+    stateScenario: "empty",
     weight: 2,
   }),
   npmLane(
     "npm-onboard-channel-agent",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:npm-onboard-channel-agent",
-    { resources: ["service"], weight: 3 },
+    { resources: ["service"], stateScenario: "empty", weight: 3 },
   ),
   serviceLane("gateway-network", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:gateway-network"),
   serviceLane(
     "agents-delete-shared-workspace",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:agents-delete-shared-workspace",
+    { stateScenario: "empty" },
   ),
   serviceLane("mcp-channels", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:mcp-channels", {
     resources: ["npm"],
@@ -216,18 +259,21 @@ export const mainLanes = [
     { resources: ["npm"], weight: 3 },
   ),
   npmLane("doctor-switch", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:doctor-switch", {
+    stateScenario: "empty",
     weight: 3,
   }),
   npmLane(
     "update-channel-switch",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-channel-switch",
     {
+      stateScenario: "update-stable",
       timeoutMs: 30 * 60 * 1000,
       weight: 3,
     },
   ),
   lane("plugins", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugins", {
     resources: ["npm", "service"],
+    stateScenario: "empty",
     weight: 6,
   }),
   ...bundledPluginInstallUninstallLanes,
@@ -236,18 +282,21 @@ export const mainLanes = [
     "OPENCLAW_PLUGINS_E2E_CLAWHUB=0 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugins",
     {
       resources: ["npm", "service"],
+      stateScenario: "empty",
       weight: 6,
     },
   ),
   npmLane(
     "bundled-channel-deps-compat",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:bundled-channel-deps:fast",
-    { resources: ["service"], weight: 3 },
+    { resources: ["service"], stateScenario: "empty", weight: 3 },
   ),
   npmLane("plugin-update", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugin-update"),
   serviceLane("config-reload", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:config-reload"),
   ...bundledScenarioLanes,
-  lane("openai-image-auth", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openai-image-auth"),
+  lane("openai-image-auth", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openai-image-auth", {
+    stateScenario: "empty",
+  }),
   lane(
     "crestodian-first-run",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:crestodian-first-run",
@@ -263,11 +312,21 @@ export const tailLanes = [
   serviceLane(
     "openai-web-search-minimal",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openai-web-search-minimal",
-    { timeoutMs: 8 * 60 * 1000 },
+    { stateScenario: "empty", timeoutMs: 8 * 60 * 1000 },
   ),
+  liveLane("live-codex-harness", liveDockerScriptCommand("test-live-codex-harness-docker.sh"), {
+    cacheKey: "codex-harness",
+    provider: "codex-cli",
+    resources: ["npm"],
+    timeoutMs: LIVE_ACP_TIMEOUT_MS,
+    weight: 3,
+  }),
   liveLane(
-    "live-codex-harness",
-    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-codex-harness",
+    "live-codex-bind",
+    liveDockerScriptCommand(
+      "test-live-codex-harness-docker.sh",
+      "OPENCLAW_LIVE_CODEX_BIND=1 OPENCLAW_LIVE_CODEX_TEST_FILES=src/gateway/gateway-codex-bind.live.test.ts",
+    ),
     {
       cacheKey: "codex-harness",
       provider: "codex-cli",
@@ -276,16 +335,12 @@ export const tailLanes = [
       weight: 3,
     },
   ),
-  liveLane("live-codex-bind", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-codex-bind", {
-    cacheKey: "codex-harness",
-    provider: "codex-cli",
-    resources: ["npm"],
-    timeoutMs: LIVE_ACP_TIMEOUT_MS,
-    weight: 3,
-  }),
   liveLane(
     "live-cli-backend-codex",
-    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-cli-backend:codex",
+    liveDockerScriptCommand(
+      "test-live-cli-backend-docker.sh",
+      "OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/gpt-5.5",
+    ),
     {
       cacheKey: "cli-backend-codex",
       provider: "codex-cli",
@@ -296,7 +351,7 @@ export const tailLanes = [
   ),
   liveLane(
     "live-acp-bind-claude",
-    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-acp-bind:claude",
+    liveDockerScriptCommand("test-live-acp-bind-docker.sh", "OPENCLAW_LIVE_ACP_BIND_AGENT=claude"),
     {
       cacheKey: "acp-bind-claude",
       provider: "claude-cli",
@@ -307,7 +362,7 @@ export const tailLanes = [
   ),
   liveLane(
     "live-acp-bind-codex",
-    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-acp-bind:codex",
+    liveDockerScriptCommand("test-live-acp-bind-docker.sh", "OPENCLAW_LIVE_ACP_BIND_AGENT=codex"),
     {
       cacheKey: "acp-bind-codex",
       provider: "codex-cli",
@@ -318,7 +373,10 @@ export const tailLanes = [
   ),
   liveLane(
     "live-acp-bind-droid",
-    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-acp-bind:droid",
+    liveDockerScriptCommand(
+      "test-live-acp-bind-docker.sh",
+      "OPENCLAW_LIVE_ACP_BIND_AGENT=droid OPENCLAW_LIVE_ACP_BIND_REQUIRE_TRANSCRIPT=1",
+    ),
     {
       cacheKey: "acp-bind-droid",
       provider: "droid",
@@ -329,7 +387,7 @@ export const tailLanes = [
   ),
   liveLane(
     "live-acp-bind-gemini",
-    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-acp-bind:gemini",
+    liveDockerScriptCommand("test-live-acp-bind-docker.sh", "OPENCLAW_LIVE_ACP_BIND_AGENT=gemini"),
     {
       cacheKey: "acp-bind-gemini",
       provider: "google-gemini-cli",
@@ -340,7 +398,10 @@ export const tailLanes = [
   ),
   liveLane(
     "live-acp-bind-opencode",
-    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-acp-bind:opencode",
+    liveDockerScriptCommand(
+      "test-live-acp-bind-docker.sh",
+      "OPENCLAW_LIVE_ACP_BIND_AGENT=opencode OPENCLAW_LIVE_ACP_BIND_REQUIRE_TRANSCRIPT=1",
+    ),
     {
       cacheKey: "acp-bind-opencode",
       provider: "opencode",
@@ -354,6 +415,7 @@ export const tailLanes = [
 const releasePathPluginRuntimeLanes = [
   lane("plugins", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugins", {
     resources: ["npm", "service"],
+    stateScenario: "empty",
     weight: 6,
   }),
   ...bundledPluginInstallUninstallLanes,
@@ -368,15 +430,19 @@ const releasePathPluginRuntimeLanes = [
   serviceLane(
     "openai-web-search-minimal",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openai-web-search-minimal",
-    { timeoutMs: 8 * 60 * 1000 },
+    { stateScenario: "empty", timeoutMs: 8 * 60 * 1000 },
   ),
 ];
 
-const releasePathPluginRuntimeCoreLanes = [
+const releasePathPluginRuntimePluginLanes = [
   lane("plugins", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugins", {
     resources: ["npm", "service"],
+    stateScenario: "empty",
     weight: 6,
   }),
+];
+
+const releasePathPluginRuntimeServiceLanes = [
   serviceLane(
     "cron-mcp-cleanup",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:cron-mcp-cleanup",
@@ -388,8 +454,13 @@ const releasePathPluginRuntimeCoreLanes = [
   serviceLane(
     "openai-web-search-minimal",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openai-web-search-minimal",
-    { timeoutMs: 8 * 60 * 1000 },
+    { stateScenario: "empty", timeoutMs: 8 * 60 * 1000 },
   ),
+];
+
+const releasePathPluginRuntimeCoreLanes = [
+  ...releasePathPluginRuntimePluginLanes,
+  ...releasePathPluginRuntimeServiceLanes,
 ];
 
 const releasePathBundledChannelLanes = [
@@ -423,15 +494,17 @@ const releasePathPackageUpdateCoreLanes = [
   npmLane(
     "npm-onboard-channel-agent",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:npm-onboard-channel-agent",
-    { resources: ["service"], weight: 3 },
+    { resources: ["service"], stateScenario: "empty", weight: 3 },
   ),
   npmLane("doctor-switch", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:doctor-switch", {
+    stateScenario: "empty",
     weight: 3,
   }),
   npmLane(
     "update-channel-switch",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-channel-switch",
     {
+      stateScenario: "update-stable",
       timeoutMs: 30 * 60 * 1000,
       weight: 3,
     },
@@ -442,6 +515,7 @@ const primaryReleasePathChunks = {
   core: [
     lane("qr", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:qr"),
     serviceLane("onboard", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:onboard", {
+      stateScenario: "empty",
       weight: 2,
     }),
     serviceLane("gateway-network", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:gateway-network"),
@@ -462,10 +536,21 @@ const primaryReleasePathChunks = {
   "package-update-openai": releasePathPackageInstallOpenAiLanes,
   "package-update-anthropic": releasePathPackageInstallAnthropicLanes,
   "package-update-core": releasePathPackageUpdateCoreLanes,
-  "plugins-runtime-core": releasePathPluginRuntimeCoreLanes,
-  "plugins-runtime-install-a": bundledPluginInstallUninstallLanes.slice(0, 4),
-  "plugins-runtime-install-b": bundledPluginInstallUninstallLanes.slice(4),
-  "bundled-channels": releasePathBundledChannelLanes,
+  "plugins-runtime-plugins": releasePathPluginRuntimePluginLanes,
+  "plugins-runtime-services": releasePathPluginRuntimeServiceLanes,
+  "plugins-runtime-install-a": bundledPluginInstallUninstallLanes.slice(0, 2),
+  "plugins-runtime-install-b": bundledPluginInstallUninstallLanes.slice(2, 4),
+  "plugins-runtime-install-c": bundledPluginInstallUninstallLanes.slice(4, 6),
+  "plugins-runtime-install-d": bundledPluginInstallUninstallLanes.slice(6),
+  "bundled-channels-core": [releasePathBundledChannelLanes[0], ...bundledChannelSmokeLanes],
+  "bundled-channels-update-a": [bundledChannelUpdateLanes[0], bundledChannelUpdateLanes[4]],
+  "bundled-channels-update-discord": [bundledChannelUpdateLanes[1]],
+  "bundled-channels-update-b": [
+    bundledChannelUpdateLanes[2],
+    bundledChannelUpdateLanes[3],
+    bundledChannelUpdateLanes[5],
+  ],
+  "bundled-channels-contracts": bundledChannelContractLanes,
   openwebui: [],
 };
 
@@ -475,8 +560,15 @@ const legacyReleasePathChunks = {
     ...releasePathPackageInstallAnthropicLanes,
     ...releasePathPackageUpdateCoreLanes,
   ],
+  "plugins-runtime-core": releasePathPluginRuntimeCoreLanes,
   "plugins-runtime": releasePathPluginRuntimeLanes,
   "plugins-integrations": [...releasePathPluginRuntimeLanes, ...releasePathBundledChannelLanes],
+  "bundled-channels": releasePathBundledChannelLanes,
+  "bundled-channels-update-a-legacy": [
+    bundledChannelUpdateLanes[0],
+    bundledChannelUpdateLanes[1],
+    bundledChannelUpdateLanes[4],
+  ],
 };
 
 function openWebUILane() {
@@ -500,7 +592,8 @@ export function releasePathChunkLanes(chunk, options = {}) {
     return options.includeOpenWebUI ? [openWebUILane()] : [];
   }
   if (
-    (chunk !== "plugins-runtime-core" &&
+    (chunk !== "plugins-runtime-services" &&
+      chunk !== "plugins-runtime-core" &&
       chunk !== "plugins-runtime" &&
       chunk !== "plugins-integrations") ||
     !options.includeOpenWebUI

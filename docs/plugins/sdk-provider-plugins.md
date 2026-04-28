@@ -452,7 +452,7 @@ API key auth, and dynamic model resolution.
       | 27 | `classifyFailoverReason` | Provider-owned rate-limit/overload classification |
       | 28 | `isCacheTtlEligible` | Prompt cache TTL gating |
       | 29 | `buildMissingAuthMessage` | Custom missing-auth hint |
-      | 30 | `suppressBuiltInModel` | Hide stale upstream rows |
+      | 30 | `suppressBuiltInModel` | Deprecated. Runtime hook is no longer called; use manifest `modelCatalog.suppressions` |
       | 31 | `augmentModelCatalog` | Synthetic forward-compat rows |
       | 32 | `resolveThinkingProfile` | Model-specific `/think` option set |
       | 33 | `isBinaryThinking` | Binary thinking on/off compatibility |

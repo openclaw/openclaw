@@ -1,5 +1,5 @@
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { importFreshModule } from "../../../test/helpers/import-fresh.js";
 import { sendBlueBubblesAttachment } from "./attachments.js";
 import { editBlueBubblesMessage, setGroupIconBlueBubbles } from "./chat.js";
 import { resolveBlueBubblesMessageId } from "./monitor-reply-cache.js";

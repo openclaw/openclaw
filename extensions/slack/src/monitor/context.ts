@@ -1,4 +1,5 @@
 import type { App } from "@slack/bolt";
+import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import type {
   OpenClawConfig,
@@ -218,6 +219,7 @@ export function createSlackMonitorContext(params: {
       params.sessionScope,
       { From: from, ChatType: chatType, Provider: "slack" },
       params.mainKey,
+      resolveDefaultAgentId(params.cfg),
     );
   };
 

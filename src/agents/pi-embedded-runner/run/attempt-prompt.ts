@@ -69,7 +69,12 @@ export async function prepareAttemptBootstrapPromptContext(params: {
   toolsRaw: Array<{ name?: string }>;
   logWarn: (message: string) => void;
 }) {
-  const contextInjectionMode = resolveContextInjectionMode(params.attempt.config);
+  const isRawModelRun = params.attempt.modelRun === true || params.attempt.promptMode === "none";
+  // modelRun is a provider probe, not an agent turn. Keep AGENTS/BOOTSTRAP
+  // context out even when the gateway is exercising the embedded runtime.
+  const contextInjectionMode = isRawModelRun
+    ? "never"
+    : resolveContextInjectionMode(params.attempt.config);
   const bootstrapHasFileAccess =
     params.toolsEnabled && params.toolsRaw.some((tool) => tool.name === "read");
   const bootstrapRouting = await resolveAttemptWorkspaceBootstrapRouting({

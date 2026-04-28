@@ -212,6 +212,55 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
     );
   });
 
+  it("does not overwrite configured native Ollama params.thinking with implicit off", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const baseStreamFn = createOllamaStreamFn("http://ollama-host:11434");
+        const model = {
+          api: "ollama",
+          provider: "ollama",
+          id: "qwen3:32b",
+          contextWindow: 131072,
+          params: { thinking: "medium" },
+        };
+
+        const wrapped = createConfiguredOllamaCompatStreamWrapper({
+          provider: "ollama",
+          modelId: "qwen3:32b",
+          model,
+          streamFn: baseStreamFn,
+          thinkingLevel: "off",
+        } as never);
+        if (!wrapped) {
+          throw new Error("Expected wrapped Ollama stream function");
+        }
+
+        const stream = await Promise.resolve(
+          wrapped(
+            model as never,
+            {
+              messages: [{ role: "user", content: "hello" }],
+            } as never,
+            {} as never,
+          ),
+        );
+
+        await collectStreamEvents(stream);
+
+        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+        const requestBody = JSON.parse(requestInit.body) as { think?: string };
+        expect(requestBody.think).toBe("medium");
+      },
+    );
+  });
+
   it("forwards the native think effort on native Ollama chat requests when thinking is enabled", async () => {
     await withMockNdjsonFetch(
       [
@@ -1244,6 +1293,69 @@ describe("createOllamaStreamFn streaming events", () => {
         expect(types).toEqual(["start", "text_start", "text_delta", "error"]);
         const errorEvent = events.at(-1);
         expect(errorEvent?.type).toBe("error");
+      },
+    );
+  });
+
+  it("emits an error instead of accepting garbled Kimi visible text", async () => {
+    const garbled =
+      '$$"##"%#"##"####""$""""##""$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$' +
+      '#"$"$"""$""""#$"""$"""%"%###"""#%""""&"#"""$"""#"#""""%#""""&"#"""$"""$"""#%"""';
+    await withMockNdjsonFetch(
+      [
+        JSON.stringify({
+          model: "kimi-k2.5:cloud",
+          created_at: "t",
+          message: { role: "assistant", content: garbled },
+          done: false,
+        }),
+        '{"model":"kimi-k2.5:cloud","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":20,"eval_count":40}',
+      ],
+      async () => {
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+          model: { id: "kimi-k2.5:cloud", provider: "ollama" },
+        });
+        const events = await collectStreamEvents(stream);
+
+        const types = events.map((e) => e.type);
+        expect(types).toEqual(["start", "text_start", "text_delta", "error"]);
+        const errorEvent = events.at(-1);
+        expect(errorEvent).toMatchObject({
+          type: "error",
+          error: expect.objectContaining({
+            errorMessage: expect.stringContaining("garbled visible text"),
+          }),
+        });
+      },
+    );
+  });
+
+  it("does not reject punctuation-heavy text from unrelated Ollama models", async () => {
+    const punctuationHeavy =
+      '$$"##"%#"##"####""$""""##""$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$' +
+      '#"$"$"""$""""#$"""$"""%"%###"""#%""""&"#"""$"""#"#""""%#""""&"#"""$"""$"""#%"""';
+    await withMockNdjsonFetch(
+      [
+        JSON.stringify({
+          model: "qwen3:32b",
+          created_at: "t",
+          message: { role: "assistant", content: punctuationHeavy },
+          done: false,
+        }),
+        '{"model":"qwen3:32b","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":20,"eval_count":40}',
+      ],
+      async () => {
+        const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
+        const events = await collectStreamEvents(stream);
+
+        expect(events.map((e) => e.type)).toEqual([
+          "start",
+          "text_start",
+          "text_delta",
+          "text_end",
+          "done",
+        ]);
       },
     );
   });

@@ -8,6 +8,7 @@ import {
 import { sanitizeForLog, stripAnsi } from "../terminal/ansi.js";
 import { resolveConfiguredProviderFallback } from "./configured-provider-fallback.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
+import { findModelCatalogEntry } from "./model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import { normalizeStaticProviderModelId } from "./model-ref-shared.js";
@@ -164,6 +165,7 @@ function isConcreteOpenRouterFreeModelRef(ref: ModelRef): boolean {
 function resolveConfiguredOpenRouterCompatFreeRef(params: {
   cfg: OpenClawConfig;
   defaultProvider: string;
+  allowManifestNormalization?: boolean;
   allowPluginNormalization?: boolean;
 }): ModelRef | null {
   const configuredModels = params.cfg.agents?.defaults?.models ?? {};
@@ -172,6 +174,7 @@ function resolveConfiguredOpenRouterCompatFreeRef(params: {
       continue;
     }
     const parsed = parseModelRef(raw, params.defaultProvider, {
+      allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
     });
     if (parsed && isConcreteOpenRouterFreeModelRef(parsed)) {
@@ -189,6 +192,7 @@ function resolveConfiguredOpenRouterCompatFreeRef(params: {
       continue;
     }
     return normalizeModelRef("openrouter", modelId, {
+      allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
     });
   }
@@ -200,11 +204,13 @@ export function resolveConfiguredOpenRouterCompatAlias(params: {
   cfg?: OpenClawConfig;
   raw: string;
   defaultProvider: string;
+  allowManifestNormalization?: boolean;
   allowPluginNormalization?: boolean;
 }): ModelRef | null {
   const normalized = normalizeLowercaseStringOrEmpty(params.raw);
   if (normalized === "openrouter:auto") {
     return normalizeModelRef("openrouter", "auto", {
+      allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
     });
   }
@@ -214,6 +220,7 @@ export function resolveConfiguredOpenRouterCompatAlias(params: {
   return resolveConfiguredOpenRouterCompatFreeRef({
     cfg: params.cfg,
     defaultProvider: params.defaultProvider,
+    allowManifestNormalization: params.allowManifestNormalization,
     allowPluginNormalization: params.allowPluginNormalization,
   });
 }
@@ -222,12 +229,14 @@ export function parseModelRefWithCompatAlias(params: {
   cfg?: OpenClawConfig;
   raw: string;
   defaultProvider: string;
+  allowManifestNormalization?: boolean;
   allowPluginNormalization?: boolean;
 }): ModelRef | null {
   return (
     resolveConfiguredOpenRouterCompatAlias(params) ??
     resolveExactConfiguredProviderRef(params) ??
     parseModelRef(params.raw, params.defaultProvider, {
+      allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
     })
   );
@@ -236,6 +245,7 @@ export function parseModelRefWithCompatAlias(params: {
 function resolveExactConfiguredProviderRef(params: {
   cfg?: OpenClawConfig;
   raw: string;
+  allowManifestNormalization?: boolean;
   allowPluginNormalization?: boolean;
 }): ModelRef | null {
   const slash = params.raw.indexOf("/");
@@ -264,7 +274,9 @@ function resolveExactConfiguredProviderRef(params: {
   const provider = normalizeLowercaseStringOrEmpty(configuredProvider);
   return {
     provider,
-    model: normalizeStaticProviderModelId(provider, modelRaw.trim()),
+    model: normalizeStaticProviderModelId(provider, modelRaw.trim(), {
+      allowManifestNormalization: params.allowManifestNormalization,
+    }),
   };
 }
 
@@ -310,6 +322,7 @@ export function buildConfiguredAllowlistKeys(params: {
 export function buildModelAliasIndex(params: {
   cfg: OpenClawConfig;
   defaultProvider: string;
+  allowManifestNormalization?: boolean;
   allowPluginNormalization?: boolean;
 }): ModelAliasIndex {
   const byAlias = new Map<string, { alias: string; ref: ModelRef }>();
@@ -321,6 +334,7 @@ export function buildModelAliasIndex(params: {
       cfg: params.cfg,
       raw: keyRaw,
       defaultProvider: params.defaultProvider,
+      allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
     });
     if (!parsed) {
@@ -429,6 +443,7 @@ export function resolveModelRefFromString(params: {
   raw: string;
   defaultProvider: string;
   aliasIndex?: ModelAliasIndex;
+  allowManifestNormalization?: boolean;
   allowPluginNormalization?: boolean;
 }): { ref: ModelRef; alias?: string } | null {
   const { model } = splitTrailingAuthProfile(params.raw);
@@ -446,6 +461,7 @@ export function resolveModelRefFromString(params: {
     cfg: params.cfg,
     raw: model,
     defaultProvider: params.defaultProvider,
+    allowManifestNormalization: params.allowManifestNormalization,
     allowPluginNormalization: params.allowPluginNormalization,
   });
   if (!parsed) {
@@ -458,6 +474,7 @@ export function resolveConfiguredModelRef(params: {
   cfg: OpenClawConfig;
   defaultProvider: string;
   defaultModel: string;
+  allowManifestNormalization?: boolean;
   allowPluginNormalization?: boolean;
 }): ModelRef {
   const rawModel = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model) ?? "";
@@ -466,6 +483,7 @@ export function resolveConfiguredModelRef(params: {
     const aliasIndex = buildModelAliasIndex({
       cfg: params.cfg,
       defaultProvider: params.defaultProvider,
+      allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
     });
     if (!trimmed.includes("/")) {
@@ -473,6 +491,7 @@ export function resolveConfiguredModelRef(params: {
         cfg: params.cfg,
         raw: trimmed,
         defaultProvider: params.defaultProvider,
+        allowManifestNormalization: params.allowManifestNormalization,
         allowPluginNormalization: params.allowPluginNormalization,
       });
       if (openrouterCompatRef) {
@@ -506,6 +525,7 @@ export function resolveConfiguredModelRef(params: {
       raw: trimmed,
       defaultProvider: params.defaultProvider,
       aliasIndex,
+      allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
     });
     if (resolved) {
@@ -573,7 +593,18 @@ export function buildAllowedModelSetWithFallbacks(params: {
   }
 
   const allowedKeys = new Set<string>();
+  const allowedRefs: ModelRef[] = [];
   const syntheticCatalogEntries = new Map<string, ModelCatalogEntry>();
+  const addAllowedCatalogRef = (ref: ModelRef) => {
+    if (
+      !allowedRefs.some(
+        (existing) =>
+          modelKey(existing.provider, existing.model) === modelKey(ref.provider, ref.model),
+      )
+    ) {
+      allowedRefs.push(ref);
+    }
+  };
   const addAllowedModelRef = (raw: string) => {
     const trimmed = raw.trim();
     const defaultProvider = !trimmed.includes("/")
@@ -594,8 +625,12 @@ export function buildAllowedModelSetWithFallbacks(params: {
     }
     const key = modelKey(parsed.provider, parsed.model);
     allowedKeys.add(key);
+    addAllowedCatalogRef(parsed);
 
-    if (!catalogKeys.has(key) && !syntheticCatalogEntries.has(key)) {
+    if (
+      !findModelCatalogEntry(catalog, { provider: parsed.provider, modelId: parsed.model }) &&
+      !syntheticCatalogEntries.has(key)
+    ) {
       syntheticCatalogEntries.set(key, buildSyntheticAllowedCatalogEntry({ parsed, metadata }));
     }
   };
@@ -610,10 +645,18 @@ export function buildAllowedModelSetWithFallbacks(params: {
 
   if (defaultKey) {
     allowedKeys.add(defaultKey);
+    if (defaultRef) {
+      addAllowedCatalogRef(defaultRef);
+    }
   }
 
   const allowedCatalog = [
-    ...catalog.filter((entry) => allowedKeys.has(modelKey(entry.provider, entry.id))),
+    ...catalog.filter((entry) =>
+      allowedRefs.some(
+        (ref) =>
+          findModelCatalogEntry([entry], { provider: ref.provider, modelId: ref.model }) === entry,
+      ),
+    ),
     ...syntheticCatalogEntries.values(),
   ];
 
@@ -655,7 +698,12 @@ export function getModelRefStatusFromAllowedSet(params: {
   const key = modelKey(params.ref.provider, params.ref.model);
   return {
     key,
-    inCatalog: params.catalog.some((entry) => modelKey(entry.provider, entry.id) === key),
+    inCatalog: Boolean(
+      findModelCatalogEntry(params.catalog, {
+        provider: params.ref.provider,
+        modelId: params.ref.model,
+      }),
+    ),
     allowAny: params.allowed.allowAny,
     allowed: params.allowed.allowAny || params.allowed.allowedKeys.has(key),
   };

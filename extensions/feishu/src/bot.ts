@@ -44,10 +44,11 @@ import { finalizeFeishuMessageProcessing, tryRecordMessagePersistent } from "./d
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import { extractMentionTargets, isMentionForwardRequest } from "./mention.js";
 import {
+  hasExplicitFeishuGroupConfig,
+  isFeishuGroupAllowed,
+  resolveFeishuAllowlistMatch,
   resolveFeishuGroupConfig,
   resolveFeishuReplyPolicy,
-  resolveFeishuAllowlistMatch,
-  isFeishuGroupAllowed,
 } from "./policy.js";
 import { resolveFeishuReasoningPreviewEnabled } from "./reasoning-preview.js";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
@@ -554,23 +555,25 @@ export async function handleFeishuMessage(params: {
     const groupAllowFrom = feishuCfg?.groupAllowFrom ?? [];
     // DEBUG: log(`feishu[${account.accountId}]: groupPolicy=${groupPolicy}`);
 
-    // A group that is explicitly configured under `channels.feishu.groups.<chat_id>`
-    // is treated as admitted regardless of `groupAllowFrom`. The reporter case in
-    // #67687 only sets `groups.<chat_id>.requireMention=false` and leaves
-    // `groupAllowFrom` empty; with the schema-default `groupPolicy="allowlist"`,
-    // an empty allowlist would otherwise reject the group before any per-group
-    // `requireMention` override is evaluated.
-    const groupExplicitlyConfigured = groupConfig !== undefined;
+    // A group explicitly configured under `channels.feishu.groups.<chat_id>` is
+    // treated as admitted in allowlist mode even when `groupAllowFrom` is empty.
+    // Wildcard defaults still configure matching groups, but they are not an
+    // admission signal by themselves.
+    const groupExplicitlyConfigured = hasExplicitFeishuGroupConfig({
+      cfg: feishuCfg,
+      groupId: ctx.chatId,
+    });
 
     // Check if this GROUP is allowed (groupAllowFrom contains group IDs like oc_xxx, not user IDs)
     const groupAllowed =
-      groupExplicitlyConfigured ||
-      isFeishuGroupAllowed({
-        groupPolicy,
-        allowFrom: groupAllowFrom,
-        senderId: ctx.chatId, // Check group ID, not sender ID
-        senderName: undefined,
-      });
+      groupPolicy !== "disabled" &&
+      (groupExplicitlyConfigured ||
+        isFeishuGroupAllowed({
+          groupPolicy,
+          allowFrom: groupAllowFrom,
+          senderId: ctx.chatId, // Check group ID, not sender ID
+          senderName: undefined,
+        }));
 
     if (!groupAllowed) {
       log(

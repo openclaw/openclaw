@@ -123,7 +123,7 @@ export async function collectDoctorPreviewWarnings(params: {
     }
   }
 
-  if (hasPluginConfig || hasChannelConfig) {
+  if ((hasPluginConfig || hasChannelConfig) && params.cfg.plugins?.enabled !== false) {
     const {
       collectStalePluginConfigWarnings,
       isStalePluginAutoRepairBlocked,

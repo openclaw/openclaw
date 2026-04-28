@@ -72,6 +72,7 @@ import { log } from "./logger.js";
 import { resolveModelAsync } from "./model.js";
 import { createEmbeddedRunReplayState, observeReplayMetadata } from "./replay-state.js";
 import { handleAssistantFailover } from "./run/assistant-failover.js";
+import { forgetPromptBuildDrainCacheForRun } from "./run/attempt.prompt-helpers.js";
 import { createEmbeddedRunAuthController } from "./run/auth-controller.js";
 import { resolveAuthProfileFailureReason } from "./run/auth-profile-failure-policy.js";
 import { runEmbeddedAttemptWithBackend } from "./run/backend.js";
@@ -905,6 +906,7 @@ export async function runEmbeddedPiAgent(
                     reasoningLevel: params.reasoningLevel,
                     bashElevated: params.bashElevated,
                     extraSystemPrompt: params.extraSystemPrompt,
+                    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
                     ownerNumbers: params.ownerNumbers,
                   }),
                   ...(attempt.promptCache ? { promptCache: attempt.promptCache } : {}),
@@ -1057,6 +1059,7 @@ export async function runEmbeddedPiAgent(
                     reasoningLevel: params.reasoningLevel,
                     bashElevated: params.bashElevated,
                     extraSystemPrompt: params.extraSystemPrompt,
+                    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
                     ownerNumbers: params.ownerNumbers,
                   }),
                   ...(attempt.promptCache ? { promptCache: attempt.promptCache } : {}),
@@ -2086,13 +2089,15 @@ export async function runEmbeddedPiAgent(
             });
           }
           const replayInvalid = resolveReplayInvalidForAttempt(null);
-          const livenessState = resolveRunLivenessState({
-            payloadCount,
-            aborted,
-            timedOut,
-            attempt,
-            incompleteTurnText: null,
-          });
+          const livenessState = attempt.yieldDetected
+            ? "paused"
+            : resolveRunLivenessState({
+                payloadCount,
+                aborted,
+                timedOut,
+                attempt,
+                incompleteTurnText: null,
+              });
           const stopReason = resolveEmbeddedRunStopReason({
             clientToolCall: attempt.clientToolCall,
             yieldDetected: attempt.yieldDetected,
@@ -2101,6 +2106,8 @@ export async function runEmbeddedPiAgent(
           attempt.setTerminalLifecycleMeta?.({
             replayInvalid,
             livenessState,
+            stopReason,
+            yielded: attempt.yieldDetected === true,
           });
           return buildEmbeddedRunTerminalResult({
             attempt,
@@ -2131,6 +2138,7 @@ export async function runEmbeddedPiAgent(
           });
         }
       } finally {
+        forgetPromptBuildDrainCacheForRun(params.runId);
         await contextEngine.dispose?.();
         stopRuntimeAuthRefreshTimer();
         if (params.cleanupBundleMcpOnRunEnd === true) {

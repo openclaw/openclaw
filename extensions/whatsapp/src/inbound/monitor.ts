@@ -17,6 +17,7 @@ import { cacheInboundMessageMeta } from "../quoted-message.js";
 import { DEFAULT_RECONNECT_POLICY, computeBackoff, sleepWithAbort } from "../reconnect.js";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { createWaSocket, formatError, getStatusCode, waitForWaConnection } from "../session.js";
+import { resolveWhatsAppSocketTiming } from "../socket-timing.js";
 import { resolveJidToE164 } from "../text-runtime.js";
 import { checkInboundAccessControl } from "./access-control.js";
 import {
@@ -774,6 +775,7 @@ export async function attachWebInboxToSocket(
 export async function monitorWebInbox(options: MonitorWebInboxOptions) {
   const sock = await createWaSocket(false, options.verbose, {
     authDir: options.authDir,
+    ...resolveWhatsAppSocketTiming(options.cfg),
   });
   await waitForWaConnection(sock);
   return attachWebInboxToSocket({

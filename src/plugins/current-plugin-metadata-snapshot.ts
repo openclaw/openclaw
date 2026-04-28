@@ -17,9 +17,10 @@ function normalizeLoadPaths(config: OpenClawConfig | undefined): readonly string
 
 export function resolvePluginMetadataSnapshotConfigFingerprint(
   config: OpenClawConfig | undefined,
+  options: { policyHash?: string } = {},
 ): string {
   return JSON.stringify({
-    policyHash: resolveInstalledPluginIndexPolicyHash(config),
+    policyHash: options.policyHash ?? resolveInstalledPluginIndexPolicyHash(config),
     pluginLoadPaths: normalizeLoadPaths(config),
   });
 }
@@ -32,7 +33,11 @@ export function setCurrentPluginMetadataSnapshot(
 ): void {
   setCurrentPluginMetadataSnapshotState(
     snapshot,
-    snapshot ? resolvePluginMetadataSnapshotConfigFingerprint(options.config) : undefined,
+    snapshot
+      ? resolvePluginMetadataSnapshotConfigFingerprint(options.config, {
+          policyHash: snapshot.policyHash,
+        })
+      : undefined,
   );
 }
 

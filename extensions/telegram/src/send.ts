@@ -10,6 +10,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString, redactSensitiveText } from "openclaw/plugin-sdk/text-runtime";
 import { type ResolvedTelegramAccount, resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
+import { normalizeTelegramApiRoot } from "./api-root.js";
 import { buildTypingThreadParams } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { splitTelegramCaption } from "./caption.js";
@@ -262,15 +263,16 @@ function resolveTelegramClientOptions(
   const proxyUrl = normalizeOptionalString(account.config.proxy);
   const proxyFetch = proxyUrl ? makeProxyFetch(proxyUrl) : undefined;
   const apiRoot = normalizeOptionalString(account.config.apiRoot);
+  const normalizedApiRoot = apiRoot ? normalizeTelegramApiRoot(apiRoot) : undefined;
   const fetchImpl = resolveTelegramFetch(proxyFetch, {
     network: account.config.network,
   });
   const clientOptions =
-    fetchImpl || timeoutSeconds || apiRoot
+    fetchImpl || timeoutSeconds || normalizedApiRoot
       ? {
           ...(fetchImpl ? { fetch: asTelegramClientFetch(fetchImpl) } : {}),
           ...(timeoutSeconds ? { timeoutSeconds } : {}),
-          ...(apiRoot ? { apiRoot } : {}),
+          ...(normalizedApiRoot ? { apiRoot: normalizedApiRoot } : {}),
         }
       : undefined;
   if (cacheKey) {

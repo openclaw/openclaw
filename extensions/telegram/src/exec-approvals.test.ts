@@ -304,6 +304,83 @@ describe("telegram exec approvals", () => {
     ).toBe(false);
   });
 
+  it("scopes native exec approval handling to configured target accountIds", () => {
+    const cfg = {
+      ...buildMultiAccountTelegramConfig({}),
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "telegram", to: "123", accountId: "ops" }],
+        },
+      },
+    } as OpenClawConfig;
+    const request: TelegramExecApprovalRequest = {
+      id: "req-target-account",
+      request: {
+        command: "echo hi",
+        sessionKey: "agent:ops:main",
+      },
+      createdAtMs: 0,
+      expiresAtMs: 1000,
+    };
+
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId: "default",
+        request,
+      }),
+    ).toBe(false);
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId: "ops",
+        request,
+      }),
+    ).toBe(true);
+  });
+
+  it("preserves unscoped telegram targets when mixed with scoped target accountIds", () => {
+    const cfg = {
+      ...buildMultiAccountTelegramConfig({}),
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets: [
+            { channel: "telegram", to: "123" },
+            { channel: "telegram", to: "456", accountId: "ops" },
+          ],
+        },
+      },
+    } as OpenClawConfig;
+    const request: TelegramExecApprovalRequest = {
+      id: "req-mixed-target-account",
+      request: {
+        command: "echo hi",
+        sessionKey: "agent:ops:main",
+      },
+      createdAtMs: 0,
+      expiresAtMs: 1000,
+    };
+
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId: "default",
+        request,
+      }),
+    ).toBe(true);
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId: "ops",
+        request,
+      }),
+    ).toBe(true);
+  });
+
   it("ignores disabled telegram accounts when checking foreign-channel ambiguity", () => {
     const cfg = buildMultiAccountTelegramConfig({ opsOverrides: { enabled: false } });
     const request = makeForeignChannelApprovalRequest({ id: "req-6" });

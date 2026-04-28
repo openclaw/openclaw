@@ -493,6 +493,8 @@ export type AgentCompactionConfig = {
 export type AgentCompactionMemoryFlushConfig = {
   /** Enable the pre-compaction memory flush (default: true). */
   enabled?: boolean;
+  /** Optional provider/model override used only for pre-compaction memory flush turns. */
+  model?: string;
   /** Run the memory flush when context is within this many tokens of the compaction threshold. */
   softThresholdTokens?: number;
   /**
