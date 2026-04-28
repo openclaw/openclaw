@@ -3,6 +3,7 @@ import { captureEnv } from "../test-utils/env.js";
 import * as tailscale from "./tailscale.js";
 
 const {
+  buildTailscaleServeCommandArgs,
   ensureGoInstalled,
   ensureTailscaledInstalled,
   getTailnetHostname,
@@ -139,7 +140,7 @@ describe("tailscale helpers", () => {
       .mockRejectedValueOnce(new Error("permission denied"))
       .mockResolvedValueOnce({ stdout: "" });
 
-    await enableTailscaleServe(3000, false, exec as never);
+    await enableTailscaleServe({ port: 3000, tlsEnabled: false }, exec as never);
 
     const [firstCall, secondCall] = expectServeFallbackCommand({
       callArgs: ["serve", "--bg", "--yes", "3000"],
@@ -152,7 +153,7 @@ describe("tailscale helpers", () => {
   it("enableTailscaleServe does NOT use sudo if first attempt succeeds", async () => {
     const exec = vi.fn().mockResolvedValue({ stdout: "" });
 
-    await enableTailscaleServe(3000, false, exec as never);
+    await enableTailscaleServe({ port: 3000, tlsEnabled: false }, exec as never);
 
     expect(exec).toHaveBeenCalledTimes(1);
     expect(exec).toHaveBeenCalledWith(
@@ -217,7 +218,9 @@ describe("tailscale helpers", () => {
   it("enableTailscaleServe skips sudo on non-permission errors", async () => {
     const exec = vi.fn().mockRejectedValueOnce(new Error("boom"));
 
-    await expect(enableTailscaleServe(3000, false, exec as never)).rejects.toThrow("boom");
+    await expect(
+      enableTailscaleServe({ port: 3000, tlsEnabled: false }, exec as never),
+    ).rejects.toThrow("boom");
 
     expect(exec).toHaveBeenCalledTimes(1);
   });
@@ -231,8 +234,53 @@ describe("tailscale helpers", () => {
       .mockRejectedValueOnce(originalError)
       .mockRejectedValueOnce(new Error("sudo: a password is required"));
 
-    await expect(enableTailscaleServe(3000, false, exec as never)).rejects.toBe(originalError);
+    await expect(
+      enableTailscaleServe({ port: 3000, tlsEnabled: false }, exec as never),
+    ).rejects.toBe(originalError);
 
     expect(exec).toHaveBeenCalledTimes(2);
+  });
+
+  it("defaults to http backend when gateway tls is off", () => {
+    expect(buildTailscaleServeCommandArgs({ port: 3000, tlsEnabled: false })).toEqual({
+      args: ["serve", "--bg", "--yes", "3000"],
+      target: "3000",
+      backend: "http",
+    });
+  });
+
+  it("defaults to trusted https backend when gateway tls is on", () => {
+    expect(buildTailscaleServeCommandArgs({ port: 3000, tlsEnabled: true })).toEqual({
+      args: ["serve", "--bg", "--yes", "--https", "443", "https://127.0.0.1:3000"],
+      target: "https://127.0.0.1:3000",
+      backend: "https",
+    });
+  });
+
+  it("supports explicit insecure https backend and structured serve flags", () => {
+    expect(
+      buildTailscaleServeCommandArgs({
+        port: 18789,
+        tlsEnabled: true,
+        serveConfig: {
+          backend: "https-insecure",
+          httpsPort: 443,
+          service: "svc:openclaw",
+        },
+      }),
+    ).toEqual({
+      args: [
+        "serve",
+        "--bg",
+        "--yes",
+        "--service",
+        "svc:openclaw",
+        "--https",
+        "443",
+        "https+insecure://127.0.0.1:18789",
+      ],
+      target: "https+insecure://127.0.0.1:18789",
+      backend: "https-insecure",
+    });
   });
 });

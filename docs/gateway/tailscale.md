@@ -67,6 +67,30 @@ and use `gateway.auth.mode: "token"` or `"password"`.
 
 Open: `https://<magicdns>/` (or your configured `gateway.controlUi.basePath`)
 
+When `gateway.tailscale.serve.backend` is unset, OpenClaw uses these defaults:
+
+- `gateway.tls.enabled: false` -> `tailscale serve --bg --yes <port>`
+- `gateway.tls.enabled: true` -> `tailscale serve --bg --yes --https 443 https://127.0.0.1:<port>`
+
+Use `gateway.tailscale.serve` when you want to override that behavior explicitly:
+
+```json5
+{
+  gateway: {
+    bind: "loopback",
+    tls: { enabled: true },
+    tailscale: {
+      mode: "serve",
+      serve: {
+        backend: "https-insecure", // optional temporary override
+        httpsPort: 443,
+        service: "svc:openclaw",
+      },
+    },
+  },
+}
+```
+
 ### Tailnet-only (bind to Tailnet IP)
 
 Use this when you want the Gateway to listen directly on the Tailnet IP (no Serve/Funnel).
@@ -114,6 +138,12 @@ openclaw gateway --tailscale funnel --auth password
 
 - Tailscale Serve/Funnel requires the `tailscale` CLI to be installed and logged in.
 - `tailscale.mode: "funnel"` refuses to start unless auth mode is `password` to avoid public exposure.
+- `gateway.tailscale.serve.backend` accepts:
+  - `http`: reverse proxy to local HTTP on `127.0.0.1:<port>`
+  - `https`: reverse proxy to local HTTPS with normal certificate validation (default when gateway TLS is on)
+  - `https-insecure`: reverse proxy to local HTTPS while bypassing certificate validation
+- `gateway.tailscale.serve.service` maps to `tailscale serve --service <id>`.
+- `gateway.tailscale.serve.httpsPort` maps to `tailscale serve --https <port>`.
 - Set `gateway.tailscale.resetOnExit` if you want OpenClaw to undo `tailscale serve`
   or `tailscale funnel` configuration on shutdown.
 - `gateway.bind: "tailnet"` is a direct Tailnet bind (no HTTPS, no Serve/Funnel).

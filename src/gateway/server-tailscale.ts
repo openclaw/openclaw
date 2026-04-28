@@ -1,5 +1,7 @@
+import type { GatewayTailscaleConfig } from "../config/types.gateway.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
+  buildTailscaleServeCommandArgs,
   disableTailscaleFunnel,
   disableTailscaleServe,
   enableTailscaleFunnel,
@@ -9,6 +11,7 @@ import {
 
 export async function startGatewayTailscaleExposure(params: {
   tailscaleMode: "off" | "serve" | "funnel";
+  tailscaleConfig?: GatewayTailscaleConfig;
   resetOnExit?: boolean;
   port: number;
   tlsEnabled?: boolean;
@@ -21,16 +24,31 @@ export async function startGatewayTailscaleExposure(params: {
 
   try {
     if (params.tailscaleMode === "serve") {
-      await enableTailscaleServe(params.port, params.tlsEnabled ?? false);
+      await enableTailscaleServe({
+        port: params.port,
+        tlsEnabled: params.tlsEnabled ?? false,
+        serveConfig: params.tailscaleConfig?.serve,
+      });
     } else {
       await enableTailscaleFunnel(params.port);
     }
     const host = await getTailnetHostname().catch(() => null);
     if (host) {
       const uiPath = params.controlUiBasePath ? `${params.controlUiBasePath}/` : "/";
-      params.logTailscale.info(
-        `${params.tailscaleMode} enabled: https://${host}${uiPath} (WS via wss://${host})`,
-      );
+      if (params.tailscaleMode === "serve") {
+        const serveSummary = buildTailscaleServeCommandArgs({
+          port: params.port,
+          tlsEnabled: params.tlsEnabled ?? false,
+          serveConfig: params.tailscaleConfig?.serve,
+        });
+        params.logTailscale.info(
+          `${params.tailscaleMode} enabled: https://${host}${uiPath} -> ${serveSummary.target} (WS via wss://${host})`,
+        );
+      } else {
+        params.logTailscale.info(
+          `${params.tailscaleMode} enabled: https://${host}${uiPath} (WS via wss://${host})`,
+        );
+      }
     } else {
       params.logTailscale.info(`${params.tailscaleMode} enabled`);
     }

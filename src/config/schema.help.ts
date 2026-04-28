@@ -109,6 +109,14 @@ export const FIELD_HELP: Record<string, string> = {
     'Tailscale publish mode: "off", "serve", or "funnel" for private or public exposure paths. Use "serve" for tailnet-only access and "funnel" only when public internet reachability is required.',
   "gateway.tailscale.resetOnExit":
     "Resets Tailscale Serve/Funnel state on gateway exit to avoid stale published routes after shutdown. Keep enabled unless another controller manages publish lifecycle outside the gateway.",
+  "gateway.tailscale.serve":
+    "Structured Tailscale Serve backend targeting options for the gateway. Use this when you need trusted local HTTPS, a temporary insecure HTTPS override, custom Serve HTTPS ports, or named Tailscale Services without writing raw shell commands.",
+  "gateway.tailscale.serve.backend":
+    'Backend protocol for Tailscale Serve to reach on 127.0.0.1: "http", "https", or "https-insecure". When unset, OpenClaw defaults to plain HTTP when gateway TLS is off, and normal HTTPS certificate validation when gateway TLS is on.',
+  "gateway.tailscale.serve.httpsPort":
+    "Optional HTTPS listener port for Tailscale Serve. Leave unset for the Tailscale CLI default behavior, or set an explicit port such as 443 when you need stable generated argv or service-specific routing.",
+  "gateway.tailscale.serve.service":
+    'Optional Tailscale Service id passed as `--service` for Serve. Use values like "svc:openclaw" when routing the gateway through a named Tailscale Service.',
   "gateway.remote":
     "Remote gateway connection settings for direct or SSH transport when this instance proxies to another runtime host. Use remote mode only when split-host operation is intentionally configured.",
   "gateway.remote.transport":

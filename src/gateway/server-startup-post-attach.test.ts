@@ -892,6 +892,7 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
     isNixMode: false,
     broadcast: vi.fn(),
     tailscaleMode: "off",
+    tailscaleConfig: {},
     resetOnExit: false,
     controlUiBasePath: "/",
     logTailscale: {

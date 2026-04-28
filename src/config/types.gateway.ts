@@ -182,11 +182,24 @@ export type GatewayAuthRateLimitConfig = {
 
 export type GatewayTailscaleMode = "off" | "serve" | "funnel";
 
+export type GatewayTailscaleServeBackendMode = "http" | "https" | "https-insecure";
+
+export type GatewayTailscaleServeConfig = {
+  /** Backend protocol Tailscale Serve should proxy to on 127.0.0.1. */
+  backend?: GatewayTailscaleServeBackendMode;
+  /** Optional HTTPS listener port for `tailscale serve --https <port>`. */
+  httpsPort?: number;
+  /** Optional Tailscale Service id for `tailscale serve --service <id>`. */
+  service?: string;
+};
+
 export type GatewayTailscaleConfig = {
   /** Tailscale exposure mode for the Gateway control UI. */
   mode?: GatewayTailscaleMode;
   /** Reset serve/funnel configuration on shutdown. */
   resetOnExit?: boolean;
+  /** Structured Tailscale Serve backend targeting options. */
+  serve?: GatewayTailscaleServeConfig;
 };
 
 export type GatewayRemoteConfig = {

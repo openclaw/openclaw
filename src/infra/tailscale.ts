@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { formatCliCommand } from "../cli/command-format.js";
 import { promptYesNo } from "../cli/prompt.js";
+import type { GatewayTailscaleServeConfig } from "../config/types.gateway.js";
 import { danger, info, logVerbose, shouldLogVerbose, warn } from "../globals.js";
 import { runExec } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
@@ -395,19 +396,48 @@ export async function ensureFunnel(
 }
 
 export async function enableTailscaleServe(
-  port: number,
-  tlsBackend = false,
+  params: {
+    port: number;
+    tlsEnabled?: boolean;
+    serveConfig?: GatewayTailscaleServeConfig;
+  },
   exec: typeof runExec = runExec,
 ) {
   const tailscaleBin = await getTailscaleBinary();
-  const target = tlsBackend ? `https+insecure://127.0.0.1:${port}` : `${port}`;
-  const args = tlsBackend
-    ? ["serve", "--bg", "--yes", "--https", "443", target]
-    : ["serve", "--bg", "--yes", target];
+  const args = buildTailscaleServeCommandArgs(params).args;
   await execWithSudoFallback(exec, tailscaleBin, args, {
     maxBuffer: 200_000,
     timeoutMs: 15_000,
   });
+}
+
+export function buildTailscaleServeCommandArgs(params: {
+  port: number;
+  tlsEnabled?: boolean;
+  serveConfig?: GatewayTailscaleServeConfig;
+}): {
+  args: string[];
+  target: string;
+  backend: "http" | "https" | "https-insecure";
+} {
+  const backend = params.serveConfig?.backend ?? "http";
+  const httpsPort = params.serveConfig?.httpsPort;
+  const service = normalizeOptionalString(params.serveConfig?.service);
+  const target =
+    backend === "http"
+      ? `${params.port}`
+      : `${backend === "https" ? "https" : "https+insecure"}://127.0.0.1:${params.port}`;
+  const args = ["serve", "--bg", "--yes"];
+  if (service) {
+    args.push("--service", service);
+  }
+  if (httpsPort !== undefined) {
+    args.push("--https", `${httpsPort}`);
+  } else if (backend !== "http") {
+    args.push("--https", "443");
+  }
+  args.push(target);
+  return { args, target, backend };
 }
 
 export async function disableTailscaleServe(exec: typeof runExec = runExec) {

@@ -1414,6 +1414,7 @@ export async function startGatewayServer(
           startupStartedAt: opts.startupStartedAt,
           broadcast,
           tailscaleMode,
+          tailscaleConfig,
           resetOnExit: tailscaleConfig.resetOnExit ?? false,
           controlUiBasePath,
           logTailscale,

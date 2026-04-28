@@ -22760,6 +22760,49 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "Resets Tailscale Serve/Funnel state on gateway exit to avoid stale published routes after shutdown. Keep enabled unless another controller manages publish lifecycle outside the gateway.",
               },
+              serve: {
+                type: "object",
+                properties: {
+                  backend: {
+                    anyOf: [
+                      {
+                        type: "string",
+                        const: "http",
+                      },
+                      {
+                        type: "string",
+                        const: "https",
+                      },
+                      {
+                        type: "string",
+                        const: "https-insecure",
+                      },
+                    ],
+                    title: "Gateway Tailscale Serve Backend",
+                    description:
+                      'Backend protocol for Tailscale Serve to reach on 127.0.0.1: "http", "https", or "https-insecure". When unset, OpenClaw defaults to plain HTTP when gateway TLS is off, and normal HTTPS certificate validation when gateway TLS is on.',
+                  },
+                  httpsPort: {
+                    type: "integer",
+                    minimum: 1,
+                    maximum: 65535,
+                    title: "Gateway Tailscale Serve HTTPS Port",
+                    description:
+                      "Optional HTTPS listener port for Tailscale Serve. Leave unset for the Tailscale CLI default behavior, or set an explicit port such as 443 when you need stable generated argv or service-specific routing.",
+                  },
+                  service: {
+                    type: "string",
+                    minLength: 1,
+                    title: "Gateway Tailscale Serve Service",
+                    description:
+                      'Optional Tailscale Service id passed as `--service` for Serve. Use values like "svc:openclaw" when routing the gateway through a named Tailscale Service.',
+                  },
+                },
+                additionalProperties: false,
+                title: "Gateway Tailscale Serve",
+                description:
+                  "Structured Tailscale Serve backend targeting options for the gateway. Use this when you need trusted local HTTPS, a temporary insecure HTTPS override, custom Serve HTTPS ports, or named Tailscale Services without writing raw shell commands.",
+              },
             },
             additionalProperties: false,
             title: "Gateway Tailscale",
@@ -25087,6 +25130,26 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "gateway.tailscale.resetOnExit": {
       label: "Gateway Tailscale Reset on Exit",
       help: "Resets Tailscale Serve/Funnel state on gateway exit to avoid stale published routes after shutdown. Keep enabled unless another controller manages publish lifecycle outside the gateway.",
+      tags: ["network"],
+    },
+    "gateway.tailscale.serve": {
+      label: "Gateway Tailscale Serve",
+      help: "Structured Tailscale Serve backend targeting options for the gateway. Use this when you need trusted local HTTPS, a temporary insecure HTTPS override, custom Serve HTTPS ports, or named Tailscale Services without writing raw shell commands.",
+      tags: ["network"],
+    },
+    "gateway.tailscale.serve.backend": {
+      label: "Gateway Tailscale Serve Backend",
+      help: 'Backend protocol for Tailscale Serve to reach on 127.0.0.1: "http", "https", or "https-insecure". When unset, OpenClaw defaults to plain HTTP when gateway TLS is off, and normal HTTPS certificate validation when gateway TLS is on.',
+      tags: ["network"],
+    },
+    "gateway.tailscale.serve.httpsPort": {
+      label: "Gateway Tailscale Serve HTTPS Port",
+      help: "Optional HTTPS listener port for Tailscale Serve. Leave unset for the Tailscale CLI default behavior, or set an explicit port such as 443 when you need stable generated argv or service-specific routing.",
+      tags: ["network"],
+    },
+    "gateway.tailscale.serve.service": {
+      label: "Gateway Tailscale Serve Service",
+      help: 'Optional Tailscale Service id passed as `--service` for Serve. Use values like "svc:openclaw" when routing the gateway through a named Tailscale Service.',
       tags: ["network"],
     },
     "gateway.remote": {
