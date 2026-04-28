@@ -23,4 +23,8 @@ export {
   listMemoryFiles,
   normalizeExtraMemoryPaths,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+export {
+  listMemoryEmbeddingProviders,
+  registerMemoryEmbeddingProvider,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 export { getMemorySearchManager } from "./memory/index.js";

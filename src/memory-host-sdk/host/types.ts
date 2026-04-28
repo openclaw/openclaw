@@ -10,6 +10,19 @@ export type MemorySearchResult = {
   snippet: string;
   source: MemorySource;
   citation?: string;
+  /** Trusted runtime agent id that produced this hit. */
+  agentId?: string;
+  /** Snake-case tool output alias for agentId. */
+  agent_id?: string;
+  /** Canonical source path alias for path. */
+  sourcePath?: string;
+  /** Snake-case tool output alias for sourcePath. */
+  source_path?: string;
+  /** Snake-case tool output alias for startLine. */
+  start_line?: number;
+  /** Snake-case tool output alias for endLine. */
+  end_line?: number;
+  matchType?: "vector" | "keyword" | "hybrid" | "fts";
 };
 
 export type MemoryEmbeddingProbeResult = {

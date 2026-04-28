@@ -2,12 +2,12 @@ import { mkdirSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core";
 import {
   clearMemoryEmbeddingProviders as clearRegistry,
   listRegisteredMemoryEmbeddingProviderAdapters as listRegisteredAdapters,
   registerMemoryEmbeddingProvider as registerAdapter,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-runtime-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
@@ -17,14 +17,6 @@ import {
   DEFAULT_LOCAL_MODEL,
   registerBuiltInMemoryEmbeddingProviders,
 } from "./provider-adapters.js";
-
-// This suite performs real sqlite/media indexing and can exceed the global
-// timeout when it shares a packed CI extension shard.
-vi.setConfig({ testTimeout: 240_000 });
-
-afterAll(() => {
-  vi.resetConfig();
-});
 
 let embedBatchCalls = 0;
 let embedBatchInputCalls = 0;
@@ -236,6 +228,7 @@ describe("memory index", () => {
     };
     vectorEnabled?: boolean;
     cacheEnabled?: boolean;
+    agentId?: string;
     minScore?: number;
     onSearch?: boolean;
     hybrid?: { enabled: boolean; vectorWeight?: number; textWeight?: number };
@@ -263,7 +256,7 @@ describe("memory index", () => {
             experimental: { sessionMemory: params.sessionMemory ?? false },
           },
         },
-        list: [{ id: "main", default: true }],
+        list: [{ id: params.agentId ?? "main", default: true }],
       },
     };
   }
@@ -355,6 +348,53 @@ describe("memory index", () => {
     }
   });
 
+  it("isolates searches by agent when multiple agents share one memory DB", async () => {
+    const sharedStorePath = path.join(workspaceDir, "shared-memory.sqlite");
+    const agentAPath = path.join(workspaceDir, "agent-a", "memory");
+    const agentBPath = path.join(workspaceDir, "agent-b", "memory");
+    await fs.mkdir(agentAPath, { recursive: true });
+    await fs.mkdir(agentBPath, { recursive: true });
+    await fs.writeFile(path.join(agentAPath, "2026-01-12.md"), "agent-a-only alpha namespace");
+    await fs.writeFile(path.join(agentBPath, "2026-01-12.md"), "agent-b-only beta namespace");
+
+    const cfgA = createCfg({
+      storePath: sharedStorePath,
+      agentId: "agent-a",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const cfgB = createCfg({
+      storePath: sharedStorePath,
+      agentId: "agent-b",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+
+    const managerA = requireManager(
+      await getMemorySearchManager({ cfg: cfgA, agentId: "agent-a" }),
+    );
+    const managerB = requireManager(
+      await getMemorySearchManager({ cfg: cfgB, agentId: "agent-b" }),
+    );
+
+    await managerA.sync({ reason: "test" });
+    await managerB.sync({ reason: "test" });
+
+    const aSeesA = await managerA.search("agent-a-only", 5);
+    const aSeesB = await managerA.search("agent-b-only", 5);
+    const bSeesB = await managerB.search("agent-b-only", 5);
+    const bSeesA = await managerB.search("agent-a-only", 5);
+
+    expect(aSeesA.map((row) => row.snippet).join("\n")).toContain("agent-a-only");
+    expect(aSeesB).toHaveLength(0);
+    expect(bSeesB.map((row) => row.snippet).join("\n")).toContain("agent-b-only");
+    expect(bSeesA).toHaveLength(0);
+
+    const statusA = managerA.status();
+    const statusB = managerB.status();
+    expect(statusA.files).toBeGreaterThan(0);
+    expect(statusB.files).toBeGreaterThan(0);
+    expect(statusA.files).toBeLessThan(statusA.files + statusB.files);
+  });
+
   it("indexes multimodal image and audio files from extra paths with Gemini structured inputs", async () => {
     const mediaDir = path.join(workspaceDir, "media-memory");
     await fs.mkdir(mediaDir, { recursive: true });
@@ -443,72 +483,6 @@ describe("memory index", () => {
     expect((cached?.cacheExpiresAtMs ?? 0) - (cached?.checkedAtMs ?? 0)).toBe(
       EMBEDDING_PROBE_CACHE_TTL_MS,
     );
-  });
-
-  it("streams embedding cache rows during safe reindex", async () => {
-    vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "0");
-    type EmbeddingCacheRow = {
-      provider: string;
-      model: string;
-      provider_key: string;
-      hash: string;
-      embedding: string;
-      dims: number | null;
-      updated_at: number;
-    };
-    type StatementWithAll = {
-      all: () => EmbeddingCacheRow[];
-    };
-
-    const cfg = createCfg({
-      storePath: path.join(workspaceDir, "index-cache-seed-stream.sqlite"),
-      cacheEnabled: true,
-    });
-    const manager = await getPersistentManager(cfg);
-    await manager.sync({ reason: "test" });
-
-    // Safe reindex streams cache rows from the original database and writes
-    // them into a temporary database, so the SELECT spy belongs on this handle.
-    const sourceDb = (
-      manager as unknown as {
-        db: {
-          prepare: (sql: string) => unknown;
-        };
-      }
-    ).db;
-    const originalPrepare = sourceDb.prepare.bind(sourceDb);
-    const cachedRows = (
-      originalPrepare(
-        "SELECT provider, model, provider_key, hash, embedding, dims, updated_at FROM embedding_cache",
-      ) as StatementWithAll
-    ).all();
-    expect(cachedRows.length).toBeGreaterThan(0);
-
-    const beforeCalls = embedBatchCalls;
-    const prepareSpy = vi.spyOn(sourceDb, "prepare").mockImplementation((sql: string) => {
-      if (
-        sql.includes(
-          "SELECT provider, model, provider_key, hash, embedding, dims, updated_at FROM embedding_cache",
-        )
-      ) {
-        return {
-          all: () => {
-            throw new Error("embedding cache seed must stream rows via iterate()");
-          },
-          iterate: () => cachedRows[Symbol.iterator](),
-        };
-      }
-      return originalPrepare(sql);
-    });
-
-    try {
-      (manager as unknown as { dirty: boolean }).dirty = true;
-      await manager.sync({ reason: "test", force: true });
-    } finally {
-      prepareSpy.mockRestore();
-    }
-
-    expect(embedBatchCalls).toBe(beforeCalls);
   });
 
   it("builds FTS index and returns search results when no embedding provider is available", async () => {

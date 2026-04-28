@@ -66,7 +66,7 @@ export function collectMemoryStatusAggregate(params: {
   db: StatusAggregateDb;
   sources: Iterable<MemorySource>;
   sourceFilterSql?: string;
-  sourceFilterParams?: MemorySource[];
+  sourceFilterParams?: Array<string | MemorySource>;
 }): {
   files: number;
   chunks: number;

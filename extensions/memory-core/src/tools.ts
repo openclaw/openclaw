@@ -15,6 +15,7 @@ import {
   resolveMemoryCorePluginConfig,
   resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import { resolveMemorySearchScope } from "./memory-permissions.js";
 import { filterMemorySearchHitsBySessionVisibility } from "./session-search-visibility.js";
 import { recordShortTermRecalls } from "./short-term-promotion.js";
 import {
@@ -36,9 +37,24 @@ import {
 } from "./tools.shared.js";
 
 function buildRecallKey(
-  result: Pick<MemorySearchResult, "source" | "path" | "startLine" | "endLine">,
+  result: Pick<MemorySearchResult, "source" | "path" | "startLine" | "endLine" | "agent_id">,
 ): string {
-  return `${result.source}:${result.path}:${result.startLine}:${result.endLine}`;
+  return `${result.agent_id ?? ""}:${result.source}:${result.path}:${result.startLine}:${result.endLine}`;
+}
+
+function decorateMemorySearchProvenance(
+  result: MemorySearchResult,
+  agentId: string,
+): MemorySearchResult {
+  return {
+    ...result,
+    agentId,
+    agent_id: agentId,
+    sourcePath: result.sourcePath ?? result.path,
+    source_path: result.source_path ?? result.sourcePath ?? result.path,
+    start_line: result.start_line ?? result.startLine,
+    end_line: result.end_line ?? result.endLine,
+  };
 }
 
 function resolveRecallTrackingResults(
@@ -209,9 +225,23 @@ export function createMemorySearchTool(options: {
         const { resolveMemoryBackendConfig } = await loadMemoryToolRuntime();
         const shouldQueryMemory = requestedCorpus !== "wiki";
         const shouldQuerySupplements = requestedCorpus === "wiki" || requestedCorpus === "all";
-        const memory = shouldQueryMemory ? await getMemoryManagerContext({ cfg, agentId }) : null;
-        if (shouldQueryMemory && memory && "error" in memory && !shouldQuerySupplements) {
-          return jsonResult(buildMemorySearchUnavailableResult(memory.error));
+        const scope = resolveMemorySearchScope({ cfg, requesterAgentId: agentId });
+        const scopedMemories = shouldQueryMemory
+          ? await Promise.all(
+              scope.allowedAgentIds.map(async (scopedAgentId) => ({
+                agentId: scopedAgentId,
+                memory: await getMemoryManagerContext({ cfg, agentId: scopedAgentId }),
+              })),
+            )
+          : [];
+        const firstMemoryError = scopedMemories.find(({ memory }) => "error" in memory)?.memory;
+        if (
+          shouldQueryMemory &&
+          firstMemoryError &&
+          "error" in firstMemoryError &&
+          !shouldQuerySupplements
+        ) {
+          return jsonResult(buildMemorySearchUnavailableResult(firstMemoryError.error));
         }
         try {
           const citationsMode = resolveMemoryCitationsMode(cfg);
@@ -238,7 +268,7 @@ export function createMemorySearchTool(options: {
                 hits: number;
               }
             | undefined;
-          if (shouldQueryMemory && memory && !("error" in memory)) {
+          if (shouldQueryMemory) {
             const runtimeDebug: MemorySearchRuntimeDebug[] = [];
             const qmdSearchModeOverride = resolveActiveMemoryQmdSearchModeOverride(
               cfg,
@@ -250,65 +280,76 @@ export function createMemorySearchTool(options: {
                 : requestedCorpus === "memory"
                   ? (["memory"] as MemorySource[])
                   : undefined;
-            rawResults = await memory.manager.search(query, {
-              maxResults,
-              minScore,
-              sessionKey: options.agentSessionKey,
-              qmdSearchModeOverride,
-              onDebug: (debug) => {
-                runtimeDebug.push(debug);
-              },
-              ...(searchSources ? { sources: searchSources } : {}),
-            });
-            rawResults = await filterMemorySearchHitsBySessionVisibility({
-              cfg,
-              requesterSessionKey: options.agentSessionKey,
-              sandboxed: options.sandboxed === true,
-              hits: rawResults,
-            });
-            if (requestedCorpus === "sessions") {
-              rawResults = rawResults.filter((hit) => hit.source === "sessions");
-            } else if (requestedCorpus === "memory") {
-              rawResults = rawResults.filter((hit) => hit.source === "memory");
-            }
-            const status = memory.manager.status();
-            const decorated = decorateCitations(rawResults, includeCitations);
-            const resolved = resolveMemoryBackendConfig({ cfg, agentId });
-            const memoryResults =
-              status.backend === "qmd"
-                ? clampResultsByInjectedChars(decorated, resolved.qmd?.limits.maxInjectedChars)
-                : decorated;
-            surfacedMemoryResults = memoryResults.map((result) => ({
-              ...result,
-              corpus: "memory" as const,
-            }));
-            const sleepTimezone = resolveMemoryDeepDreamingConfig({
-              pluginConfig: resolveMemoryCorePluginConfig(cfg),
-              cfg,
-            }).timezone;
-            queueShortTermRecallTracking({
-              workspaceDir: status.workspaceDir,
-              query,
-              rawResults,
-              surfacedResults: memoryResults,
-              timezone: sleepTimezone,
-            });
-            provider = status.provider;
-            model = status.model;
-            fallback = status.fallback;
-            const latestDebug = runtimeDebug.at(-1);
-            searchMode = latestDebug?.effectiveMode;
-            searchDebug = {
-              backend: status.backend,
-              configuredMode: latestDebug?.configuredMode,
-              effectiveMode:
+            for (const scopedMemory of scopedMemories) {
+              if ("error" in scopedMemory.memory) {
+                continue;
+              }
+              let scopedRawResults = await scopedMemory.memory.manager.search(query, {
+                maxResults,
+                minScore,
+                sessionKey: options.agentSessionKey,
+                qmdSearchModeOverride,
+                onDebug: (debug) => {
+                  runtimeDebug.push(debug);
+                },
+                ...(searchSources ? { sources: searchSources } : {}),
+              });
+              scopedRawResults = scopedRawResults.map((result) =>
+                decorateMemorySearchProvenance(result, scopedMemory.agentId),
+              );
+              scopedRawResults = await filterMemorySearchHitsBySessionVisibility({
+                cfg,
+                requesterSessionKey: options.agentSessionKey,
+                sandboxed: options.sandboxed === true,
+                hits: scopedRawResults,
+              });
+              if (requestedCorpus === "sessions") {
+                scopedRawResults = scopedRawResults.filter((hit) => hit.source === "sessions");
+              } else if (requestedCorpus === "memory") {
+                scopedRawResults = scopedRawResults.filter((hit) => hit.source === "memory");
+              }
+              const status = scopedMemory.memory.manager.status();
+              const decorated = decorateCitations(scopedRawResults, includeCitations);
+              const resolved = resolveMemoryBackendConfig({ cfg, agentId: scopedMemory.agentId });
+              const memoryResults =
                 status.backend === "qmd"
-                  ? (latestDebug?.effectiveMode ?? latestDebug?.configuredMode)
-                  : "n/a",
-              fallback: latestDebug?.fallback,
-              searchMs: Math.max(0, Date.now() - searchStartedAt),
-              hits: rawResults.length,
-            };
+                  ? clampResultsByInjectedChars(decorated, resolved.qmd?.limits.maxInjectedChars)
+                  : decorated;
+              surfacedMemoryResults.push(
+                ...memoryResults.map((result) => ({
+                  ...result,
+                  corpus: "memory" as const,
+                })),
+              );
+              rawResults.push(...scopedRawResults);
+              const sleepTimezone = resolveMemoryDeepDreamingConfig({
+                pluginConfig: resolveMemoryCorePluginConfig(cfg),
+                cfg,
+              }).timezone;
+              queueShortTermRecallTracking({
+                workspaceDir: status.workspaceDir,
+                query,
+                rawResults: scopedRawResults,
+                surfacedResults: memoryResults,
+                timezone: sleepTimezone,
+              });
+              provider ??= status.provider;
+              model ??= status.model;
+              fallback ??= status.fallback;
+              const latestDebug = runtimeDebug.at(-1);
+              searchMode = latestDebug?.effectiveMode ?? searchMode;
+              searchDebug = {
+                backend: status.backend,
+                configuredMode: latestDebug?.configuredMode,
+                effectiveMode:
+                  status.backend === "qmd"
+                    ? (latestDebug?.effectiveMode ?? latestDebug?.configuredMode)
+                    : "n/a",
+                fallback: latestDebug?.fallback,
+                searchMs: Math.max(0, Date.now() - searchStartedAt),
+                hits: rawResults.length,
+              };
+            }
           }
           const supplementResults = shouldQuerySupplements
             ? await searchMemoryCorpusSupplements({
