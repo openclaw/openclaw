@@ -1,5 +1,9 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
+import {
+  parseOpenAiCompatibleImageResponse,
+  toImageDataUrl,
+} from "openclaw/plugin-sdk/image-generation";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -11,7 +15,6 @@ import {
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { LITELLM_BASE_URL } from "./onboard.js";
 
-const DEFAULT_OUTPUT_MIME = "image/png";
 const DEFAULT_SIZE = "1024x1024";
 const DEFAULT_LITELLM_IMAGE_MODEL = "gpt-image-2";
 const LITELLM_SUPPORTED_SIZES = [
@@ -80,10 +83,6 @@ function shouldAutoAllowPrivateLitellmEndpoint(baseUrl: string): boolean {
   } catch {
     return false;
   }
-}
-
-function toDataUrl(buffer: Buffer, mimeType: string): string {
-  return `data:${mimeType};base64,${buffer.toString("base64")}`;
 }
 
 type LitellmImageApiResponse = {
@@ -167,7 +166,7 @@ export function buildLitellmImageGenerationProvider(): ImageGenerationProvider {
             n: count,
             size,
             images: inputImages.map((image) => ({
-              image_url: toDataUrl(image.buffer, image.mimeType?.trim() || DEFAULT_OUTPUT_MIME),
+              image_url: toImageDataUrl(image),
             })),
           }
         : {
@@ -192,21 +191,7 @@ export function buildLitellmImageGenerationProvider(): ImageGenerationProvider {
         );
 
         const data = (await response.json()) as LitellmImageApiResponse;
-        const images = (data.data ?? [])
-          .map((entry, index) => {
-            if (!entry.b64_json) {
-              return null;
-            }
-            return Object.assign(
-              {
-                buffer: Buffer.from(entry.b64_json, `base64`),
-                mimeType: DEFAULT_OUTPUT_MIME,
-                fileName: `image-${index + 1}.png`,
-              },
-              entry.revised_prompt ? { revisedPrompt: entry.revised_prompt } : {},
-            );
-          })
-          .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+        const images = parseOpenAiCompatibleImageResponse(data);
 
         return {
           images,

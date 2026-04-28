@@ -2,6 +2,12 @@ name: CI
 
 on:
   workflow_dispatch:
+    inputs:
+      target_ref:
+        description: Optional branch, tag, or full commit SHA to validate instead of the workflow ref
+        required: false
+        default: ""
+        type: string
   push:
     branches: [main]
     paths-ignore:
@@ -30,6 +36,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     outputs:
+      checkout_sha: ${{ steps.checkout_ref.outputs.sha }}
       docs_only: ${{ steps.manifest.outputs.docs_only }}
       docs_changed: ${{ steps.manifest.outputs.docs_changed }}
       run_node: ${{ steps.manifest.outputs.run_node }}
@@ -66,10 +73,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.target_ref || github.sha }}
           fetch-depth: 1
           fetch-tags: false
           persist-credentials: false
           submodules: false
+
+      - name: Resolve checkout SHA
+        id: checkout_ref
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Ensure preflight base commit
         if: github.event_name != 'workflow_dispatch'
@@ -302,12 +314,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.target_ref || github.sha }}
           fetch-depth: 1
           fetch-tags: false
           persist-credentials: false
           submodules: false
 
       - name: Ensure security base commit
+        if: github.event_name != 'workflow_dispatch'
         uses: ./.github/actions/ensure-base-commit
         with:
           base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
@@ -391,6 +405,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.target_ref || github.sha }}
           fetch-depth: 1
           fetch-tags: false
           persist-credentials: false
@@ -453,7 +468,7 @@ jobs:
         shell: bash
         env:
           CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_sha }}
           CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -525,7 +540,7 @@ jobs:
           path: |
             dist/
             dist-runtime/
-          key: ${{ runner.os }}-dist-build-${{ github.sha }}
+          key: ${{ runner.os }}-dist-build-${{ needs.preflight.outputs.checkout_sha }}
 
       - name: Pack built runtime artifacts
         run: tar --posix -cf dist-runtime-build.tar.zst --use-compress-program zstdmt dist dist-runtime
@@ -654,7 +669,7 @@ jobs:
         shell: bash
         env:
           CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_sha }}
           CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -749,7 +764,7 @@ jobs:
         shell: bash
         env:
           CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_sha }}
           CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -852,7 +867,7 @@ jobs:
         shell: bash
         env:
           CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_sha }}
           CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -920,7 +935,7 @@ jobs:
         shell: bash
         env:
           CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_sha }}
           CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -1040,7 +1055,7 @@ jobs:
         shell: bash
         env:
           CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_sha }}
           CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -1120,7 +1135,7 @@ jobs:
         shell: bash
         env:
           CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_sha }}
           CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -1307,7 +1322,7 @@ jobs:
         shell: bash
         env:
           CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_sha }}
           CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -1439,7 +1454,7 @@ jobs:
         shell: bash
         env:
           CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_sha }}
           CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -1637,7 +1652,7 @@ jobs:
         shell: bash
         env:
           CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_sha }}
           CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -1700,6 +1715,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          ref: ${{ needs.preflight.outputs.checkout_sha }}
           persist-credentials: false
           submodules: false
 
@@ -1742,6 +1758,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          ref: ${{ needs.preflight.outputs.checkout_sha }}
           persist-credentials: false
           submodules: false
 
@@ -1846,6 +1863,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          ref: ${{ needs.preflight.outputs.checkout_sha }}
           persist-credentials: false
           submodules: false
 
@@ -1886,6 +1904,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          ref: ${{ needs.preflight.outputs.checkout_sha }}
           persist-credentials: false
           submodules: false
 
@@ -1986,7 +2005,7 @@ jobs:
         shell: bash
         env:
           CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_sha }}
           CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail

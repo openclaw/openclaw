@@ -72,10 +72,20 @@ RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/sto
     NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile
 
 # pnpm v10+ may append peer-resolution hashes to virtual-store folder names; do not hardcode `.pnpm/...`
-# paths. Fail fast here if the Matrix native binding did not materialize after install.
-RUN echo "==> Verifying critical native addons..." && \
+# paths. Matrix's native downloader can hit transient release CDN errors while
+# still exiting successfully, so retry the package downloader before failing.
+RUN set -eux; \
+    echo "==> Verifying critical native addons..."; \
+    for attempt in 1 2 3 4 5; do \
+      if find /app/node_modules -name "matrix-sdk-crypto*.node" 2>/dev/null | grep -q .; then \
+        exit 0; \
+      fi; \
+      echo "matrix-sdk-crypto native addon missing; retrying download (${attempt}/5)"; \
+      node /app/node_modules/@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js || true; \
+      sleep $((attempt * 2)); \
+    done; \
     find /app/node_modules -name "matrix-sdk-crypto*.node" 2>/dev/null | grep -q . || \
-    (echo "ERROR: matrix-sdk-crypto native addon missing (pnpm install may have silently failed on this arch)" >&2 && exit 1)
+      (echo "ERROR: matrix-sdk-crypto native addon missing after retries" >&2 && exit 1)
 
 COPY . .
 
@@ -146,11 +156,16 @@ LABEL org.opencontainers.image.source="https://github.com/openclaw/openclaw" \
 WORKDIR /app
 
 # Install runtime system utilities missing from bookworm-slim.
+# `ca-certificates` ships in `bookworm` (full) but not in `bookworm-slim`,
+# so it must be installed explicitly here. Without it `/etc/ssl/certs/`
+# stays empty and every HTTPS outbound dies at TLS handshake with
+# `error setting certificate file`.
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
     apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      procps hostname curl git lsof openssl
+      ca-certificates procps hostname curl git lsof openssl && \
+    update-ca-certificates
 
 RUN chown node:node /app
 
@@ -242,6 +257,11 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
 # Expose the CLI binary without requiring npm global writes as non-root.
 RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
  && chmod 755 /app/openclaw.mjs
+
+# Pre-create the default state dir so first-run Docker named volumes mounted
+# here inherit node ownership instead of starting as root-owned state.
+RUN install -d -m 0700 -o node -g node /home/node/.openclaw && \
+    stat -c '%U:%G %a' /home/node/.openclaw | grep -qx 'node:node 700'
 
 ENV NODE_ENV=production
 

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { clearPluginDiscoveryCache } from "./discovery.js";
 import { clearPluginManifestRegistryCache } from "./manifest-registry.js";
+import { refreshPluginRegistry } from "./plugin-registry.js";
 import { buildPluginRegistrySnapshotReport, buildPluginSnapshotReport } from "./status.js";
 import {
   createColdPluginConfig,
@@ -65,6 +66,59 @@ describe("buildPluginRegistrySnapshotReport", () => {
       source: fs.realpathSync(fixture.runtimeSource),
       status: "loaded",
     });
+    expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
+  });
+
+  it("replays persisted list metadata without importing plugin runtime", async () => {
+    const fixture = createColdPluginFixture({
+      rootDir: makeTempDir(),
+      pluginId: "persisted-demo",
+      packageName: "@example/openclaw-persisted-demo",
+      packageVersion: "2.0.0",
+      manifest: {
+        id: "persisted-demo",
+        name: "Persisted Demo",
+        description: "Persisted registry metadata",
+        providers: ["persisted-provider"],
+        commandAliases: [{ name: "persisted-demo" }],
+      },
+    });
+    const workspaceDir = makeTempDir();
+    const config = createColdPluginConfig(fixture.rootDir, fixture.pluginId);
+    const env = createColdPluginHermeticEnv(workspaceDir, {
+      bundledPluginsDir: makeTempDir(),
+      disablePersistedRegistry: false,
+    });
+
+    await refreshPluginRegistry({
+      config,
+      workspaceDir,
+      env,
+      reason: "manual",
+    });
+    expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
+
+    const report = buildPluginRegistrySnapshotReport({
+      config,
+      workspaceDir,
+      env,
+    });
+
+    expect(report.registrySource).toBe("persisted");
+    expect(report.plugins).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "persisted-demo",
+          name: "Persisted Demo",
+          description: "Persisted registry metadata",
+          version: "2.0.0",
+          providerIds: ["persisted-provider"],
+          commands: ["persisted-demo"],
+          source: fs.realpathSync(fixture.runtimeSource),
+          status: "loaded",
+        }),
+      ]),
+    );
     expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
   });
 

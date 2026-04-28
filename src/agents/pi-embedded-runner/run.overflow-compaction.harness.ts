@@ -22,6 +22,8 @@ type MockCompactionResult =
         firstKeptEntryId?: string;
         tokensBefore?: number;
         tokensAfter?: number;
+        sessionId?: string;
+        sessionFile?: string;
       };
       reason?: string;
     }
@@ -77,6 +79,19 @@ export const mockedResolveContextEngine = vi.fn(async () => mockedContextEngine)
 export const mockedBuildAgentRuntimePlan = vi.fn(() => ({}));
 export const mockedRunPostCompactionSideEffects = vi.fn(async () => {});
 export const mockedEnsureRuntimePluginsLoaded = vi.fn<(params?: unknown) => void>();
+export const mockedResolveModelAsync = vi.fn(async () => ({
+  model: {
+    id: "test-model",
+    provider: "anthropic",
+    contextWindow: 200000,
+    api: "messages",
+  },
+  error: null,
+  authStorage: {
+    setRuntimeApiKey: vi.fn(),
+  },
+  modelRegistry: {},
+}));
 export const mockedPrepareProviderRuntimeAuth = vi.fn(async () => undefined);
 export const mockedRunEmbeddedAttempt =
   vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
@@ -243,6 +258,20 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   });
 
   mockedEnsureRuntimePluginsLoaded.mockReset();
+  mockedResolveModelAsync.mockReset();
+  mockedResolveModelAsync.mockResolvedValue({
+    model: {
+      id: "test-model",
+      provider: "anthropic",
+      contextWindow: 200000,
+      api: "messages",
+    },
+    error: null,
+    authStorage: {
+      setRuntimeApiKey: vi.fn(),
+    },
+    modelRegistry: {},
+  });
   mockedPrepareProviderRuntimeAuth.mockReset();
   mockedPrepareProviderRuntimeAuth.mockResolvedValue(undefined);
   mockedRunEmbeddedAttempt.mockReset();
@@ -461,19 +490,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   }));
 
   vi.doMock("./model.js", () => ({
-    resolveModelAsync: vi.fn(async () => ({
-      model: {
-        id: "test-model",
-        provider: "anthropic",
-        contextWindow: 200000,
-        api: "messages",
-      },
-      error: null,
-      authStorage: {
-        setRuntimeApiKey: vi.fn(),
-      },
-      modelRegistry: {},
-    })),
+    resolveModelAsync: mockedResolveModelAsync,
   }));
 
   vi.doMock("../model-auth.js", () => ({

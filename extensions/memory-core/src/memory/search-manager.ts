@@ -92,10 +92,12 @@ export type MemorySearchManagerResult = {
   error?: string;
 };
 
+export type MemorySearchManagerPurpose = "default" | "status" | "cli";
+
 export async function getMemorySearchManager(params: {
   cfg: OpenClawConfig;
   agentId: string;
-  purpose?: "default" | "status";
+  purpose?: MemorySearchManagerPurpose;
 }): Promise<MemorySearchManagerResult> {
   const resolved = resolveMemoryBackendConfig(params);
   if (resolved.backend === "qmd" && resolved.qmd) {
@@ -103,12 +105,12 @@ export async function getMemorySearchManager(params: {
     const normalizedAgentId = normalizeAgentId(params.agentId);
     const runtimeConfig = resolveQmdManagerRuntimeConfig(params.cfg, normalizedAgentId);
     const { workspaceDir } = runtimeConfig;
-    const statusOnly = params.purpose === "status";
+    const transient = params.purpose === "status" || params.purpose === "cli";
     const scopeKey = buildQmdManagerScopeKey(normalizedAgentId);
     const identityKey = buildQmdManagerIdentityKey(normalizedAgentId, qmdResolved, runtimeConfig);
 
     const createPrimaryQmdManager = async (
-      mode: "full" | "status",
+      mode: "full" | "status" | "cli",
     ): Promise<Maybe<MemorySearchManager>> => {
       try {
         await fs.mkdir(workspaceDir, { recursive: true });
@@ -183,17 +185,19 @@ export async function getMemorySearchManager(params: {
       const cached = QMD_MANAGER_CACHE.get(scopeKey);
       const cachedMatchesIdentity = cached?.identityKey === identityKey;
       if (cachedMatchesIdentity) {
-        if (statusOnly) {
+        if (params.purpose === "status") {
           // Status callers often close the manager they receive. Wrap the live
           // full manager with a no-op close so health/status probes do not tear
           // down the active QMD manager for the process.
           return { manager: new BorrowedMemoryManager(cached.manager) };
         }
-        return { manager: cached.manager };
+        if (params.purpose !== "cli") {
+          return { manager: cached.manager };
+        }
       }
 
-      if (statusOnly) {
-        const manager = await createPrimaryQmdManager("status");
+      if (transient) {
+        const manager = await createPrimaryQmdManager(params.purpose === "cli" ? "cli" : "status");
         return manager ? { manager } : await getBuiltinMemorySearchManager(params);
       }
 
@@ -236,7 +240,7 @@ export async function getMemorySearchManager(params: {
 async function getBuiltinMemorySearchManager(params: {
   cfg: OpenClawConfig;
   agentId: string;
-  purpose?: "default" | "status";
+  purpose?: MemorySearchManagerPurpose;
 }): Promise<MemorySearchManagerResult> {
   try {
     const { MemoryIndexManager } = await loadManagerRuntime();
@@ -284,6 +288,10 @@ class BorrowedMemoryManager implements MemorySearchManager {
 
   async probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult> {
     return await this.inner.probeEmbeddingAvailability();
+  }
+
+  getCachedEmbeddingAvailability(): MemoryEmbeddingProbeResult | null {
+    return this.inner.getCachedEmbeddingAvailability?.() ?? null;
   }
 
   async probeVectorAvailability() {
@@ -426,6 +434,14 @@ class FallbackMemoryManager implements MemorySearchManager {
       return await fallback.probeEmbeddingAvailability();
     }
     return { ok: false, error: this.lastError ?? "memory embeddings unavailable" };
+  }
+
+  getCachedEmbeddingAvailability(): MemoryEmbeddingProbeResult | null {
+    this.ensureOpen();
+    if (!this.primaryFailed) {
+      return this.deps.primary.getCachedEmbeddingAvailability?.() ?? null;
+    }
+    return this.fallback?.getCachedEmbeddingAvailability?.() ?? null;
   }
 
   async probeVectorAvailability() {

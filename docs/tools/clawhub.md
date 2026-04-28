@@ -70,6 +70,13 @@ Site: [clawhub.ai](https://clawhub.ai)
     openclaw plugins install openclaw-codex-app-server
     ```
 
+    Use `npm:<package>` when you want npm-only resolution without a
+    ClawHub lookup:
+
+    ```bash
+    openclaw plugins install npm:openclaw-codex-app-server
+    ```
+
     Plugin installs validate advertised `pluginApi` and
     `minGatewayVersion` compatibility before archive install runs, so
     incompatible hosts fail closed early instead of partially installing
@@ -200,7 +207,28 @@ publish/sync.
     clawhub search "query"
     ```
 
+    Searches skills. For plugin/package discovery, use `clawhub package explore`.
+
     - `--limit <n>` — max results.
+
+  </Accordion>
+  <Accordion title="Browse / inspect plugins">
+    ```bash
+    clawhub package explore --family code-plugin
+    clawhub package explore "episodic-claw" --family code-plugin
+    clawhub package inspect episodic-claw
+    ```
+
+    `package explore` and `package inspect` are the ClawHub CLI surfaces for plugin/package discovery and metadata inspection. Native OpenClaw installs still use `openclaw plugins install clawhub:<package>`.
+
+    Options:
+
+    - `--family skill|code-plugin|bundle-plugin` — filter package family.
+    - `--official` — show only official packages.
+    - `--executes-code` — show only packages that execute code.
+    - `--version <version>` / `--tag <tag>` — inspect a specific package version.
+    - `--versions`, `--files`, `--file <path>` — inspect package history and files.
+    - `--json` — machine-readable output.
 
   </Accordion>
   <Accordion title="Install / update / list">
@@ -277,6 +305,13 @@ publish/sync.
   <Tab title="Search">
     ```bash
     clawhub search "postgres backups"
+    ```
+  </Tab>
+  <Tab title="Find a plugin">
+    ```bash
+    clawhub package explore --family code-plugin
+    clawhub package explore "memory" --family code-plugin
+    clawhub package inspect episodic-claw
     ```
   </Tab>
   <Tab title="Install">

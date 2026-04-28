@@ -1,6 +1,6 @@
 import type { Bot } from "grammy";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../../test/helpers/import-fresh.js";
 import { __testing, createTelegramDraftStream } from "./draft-stream.js";
 
 type TelegramDraftStreamParams = Parameters<typeof createTelegramDraftStream>[0];
@@ -151,6 +151,9 @@ describe("createTelegramDraftStream", () => {
     expect(api.editMessageText).not.toHaveBeenCalled();
     await stream.clear();
 
+    expect(api.sendMessageDraft).toHaveBeenLastCalledWith(123, expect.any(Number), "", {
+      message_thread_id: 42,
+    });
     expect(api.deleteMessage).not.toHaveBeenCalled();
   });
 

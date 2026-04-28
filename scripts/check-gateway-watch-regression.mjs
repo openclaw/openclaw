@@ -352,10 +352,14 @@ function readProcessTreeCpuMs(rootPid) {
   return totalCpuMs;
 }
 
+export function hasGatewayReadyLog(text) {
+  return /\[gateway\] (?:http server listening|ready \()/.test(text);
+}
+
 async function waitForGatewayReady(readText, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (/\[gateway\] ready \(/.test(readText())) {
+    if (hasGatewayReadyLog(readText())) {
       return true;
     }
     await sleep(100);

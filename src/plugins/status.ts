@@ -1,5 +1,5 @@
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOpenClawVersionBase } from "../config/version.js";
 import { listImportedBundledPluginFacadeIds } from "../plugin-sdk/facade-runtime.js";
@@ -12,6 +12,7 @@ import {
 } from "./bundled-compat.js";
 import type { PluginCompatCode } from "./compat/registry.js";
 import { normalizePluginsConfig } from "./config-state.js";
+import { resolveEffectivePluginIds } from "./effective-plugin-ids.js";
 import {
   buildPluginShapeSummary,
   type PluginCapabilityEntry,
@@ -149,6 +150,7 @@ function resolveReportedPluginVersion(
 
 type PluginReportParams = {
   config?: OpenClawConfig;
+  effectiveOnly?: boolean;
   workspaceDir?: string;
   /** Use an explicit env when plugin roots should resolve independently from process.env. */
   env?: NodeJS.ProcessEnv;
@@ -175,6 +177,7 @@ function buildPluginRecordFromInstalledIndex(
     rootDir: plugin.rootDir,
     origin: plugin.origin,
     enabled: plugin.enabled,
+    syntheticAuthRefs: [...(plugin.syntheticAuthRefs ?? manifest?.syntheticAuthRefs ?? [])],
     status: plugin.enabled ? "loaded" : "disabled",
     toolNames: [],
     hookNames: [],
@@ -190,6 +193,7 @@ function buildPluginRecordFromInstalledIndex(
     musicGenerationProviderIds: [],
     webFetchProviderIds: [],
     webSearchProviderIds: [],
+    migrationProviderIds: [],
     memoryEmbeddingProviderIds: [],
     agentHarnessIds: [],
     gatewayMethods: [],
@@ -207,7 +211,7 @@ function buildPluginRecordFromInstalledIndex(
 export function buildPluginRegistrySnapshotReport(
   params?: PluginReportParams,
 ): PluginRegistryStatusReport {
-  const config = params?.config ?? loadConfig();
+  const config = params?.config ?? getRuntimeConfig();
   const result = loadPluginRegistrySnapshotWithMetadata({
     config,
     env: params?.env,
@@ -238,7 +242,7 @@ function buildPluginReport(
   loadModules: boolean,
 ): PluginStatusReport {
   const baseContext = resolvePluginRuntimeLoadContext({
-    config: params?.config ?? loadConfig(),
+    config: params?.config ?? getRuntimeConfig(),
     env: params?.env,
     logger: params?.logger,
     workspaceDir: params?.workspaceDir,
@@ -273,6 +277,14 @@ function buildPluginReport(
     config: effectiveConfig,
     pluginIds: bundledProviderIds,
   });
+  const onlyPluginIds =
+    params?.effectiveOnly === true
+      ? resolveEffectivePluginIds({
+          config: rawConfig,
+          workspaceDir,
+          env: params?.env ?? process.env,
+        })
+      : undefined;
 
   const registry = loadModules
     ? loadOpenClawPlugins(
@@ -284,6 +296,7 @@ function buildPluginReport(
           loadModules,
           activate: false,
           cache: false,
+          onlyPluginIds,
         }),
       )
     : loadPluginMetadataRegistrySnapshot({
@@ -293,6 +306,7 @@ function buildPluginReport(
         env: params?.env,
         logger: params?.logger,
         loadModules: false,
+        onlyPluginIds,
       });
   const importedPluginIds = new Set([
     ...(loadModules
@@ -332,7 +346,7 @@ export function buildPluginInspectReport(params: {
   logger?: PluginLogger;
   report?: PluginStatusReport;
 }): PluginInspectReport | null {
-  const rawConfig = params.config ?? loadConfig();
+  const rawConfig = params.config ?? getRuntimeConfig();
   const config = resolvePluginRuntimeLoadContext({
     config: rawConfig,
     env: params.env,
@@ -462,7 +476,7 @@ export function buildAllPluginInspectReports(params?: {
   logger?: PluginLogger;
   report?: PluginStatusReport;
 }): PluginInspectReport[] {
-  const rawConfig = params?.config ?? loadConfig();
+  const rawConfig = params?.config ?? getRuntimeConfig();
   const report =
     params?.report ??
     buildPluginDiagnosticsReport({

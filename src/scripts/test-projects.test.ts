@@ -74,6 +74,11 @@ const {
     args: string[],
     cwd?: string,
     listChangedPaths?: (baseRef: string, cwd: string) => string[],
+    options?: {
+      cwd?: string;
+      env?: NodeJS.ProcessEnv;
+      broad?: boolean;
+    },
   ) => string[] | null;
   resolveChangedTestTargetPlan: (
     changedPaths: string[],
@@ -436,11 +441,11 @@ describe("test-projects args", () => {
   });
 
   it("routes acp targets to the acp config", () => {
-    expect(buildVitestRunPlans(["src/acp/control-plane/manager.test.ts"])).toEqual([
+    expect(buildVitestRunPlans(["src/acp/control-plane/runtime-cache.test.ts"])).toEqual([
       {
         config: "test/vitest/vitest.acp.config.ts",
         forwardedArgs: [],
-        includePatterns: ["src/acp/control-plane/manager.test.ts"],
+        includePatterns: ["src/acp/control-plane/runtime-cache.test.ts"],
         watchMode: false,
       },
     ]);
@@ -785,7 +790,7 @@ describe("test-projects args", () => {
   });
 
   it("widens top-level test helpers to sibling repo tests under contracts", () => {
-    expect(buildVitestRunPlans(["test/helpers/temp-home.ts"])).toEqual([
+    expect(buildVitestRunPlans(["test/helpers/temp-dir.ts"])).toEqual([
       {
         config: "test/vitest/vitest.tooling.config.ts",
         forwardedArgs: [],
@@ -904,13 +909,21 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it("keeps extension-facing core contract changes focused by default", () => {
+  it("routes extension-facing core contract changes and supports broad extension opt-in", () => {
     const changedPaths = ["src/plugin-sdk/core.ts"];
     const plans = buildVitestRunPlans(["--changed=origin/main"], process.cwd(), () => changedPaths);
+    const targetArgs = resolveChangedTargetArgs(
+      ["--changed=origin/main"],
+      process.cwd(),
+      () => changedPaths,
+    );
 
+    expect(targetArgs).toEqual(["src/plugin-sdk/core.test.ts"]);
     expect(
-      resolveChangedTargetArgs(["--changed=origin/main"], process.cwd(), () => changedPaths),
-    ).toEqual(["src/plugin-sdk/core.test.ts"]);
+      resolveChangedTargetArgs(["--changed=origin/main"], process.cwd(), () => changedPaths, {
+        env: { OPENCLAW_TEST_CHANGED_BROAD: "1" },
+      }),
+    ).toEqual(["src/plugin-sdk/core.test.ts", "extensions"]);
     expect(plans[0]).toEqual({
       config: "test/vitest/vitest.plugin-sdk.config.ts",
       forwardedArgs: [],

@@ -76,6 +76,9 @@ and provider plugins have dedicated guides linked above.
       "id": "my-plugin",
       "name": "My Plugin",
       "description": "Adds a custom tool to OpenClaw",
+      "activation": {
+        "onStartup": true
+      },
       "configSchema": {
         "type": "object",
         "additionalProperties": false
@@ -84,7 +87,9 @@ and provider plugins have dedicated guides linked above.
     ```
     </CodeGroup>
 
-    Every plugin needs a manifest, even with no config. See
+    Every plugin needs a manifest, even with no config, and every plugin should
+    declare `activation.onStartup` intentionally. Runtime-registered tools need
+    startup import, so this example sets it to `true`. See
     [Manifest](/plugins/manifest) for the full schema. The canonical ClawHub
     publish snippets live in `docs/snippets/plugin-publish/`.
 
@@ -243,6 +248,7 @@ Users enable optional tools in config:
 ```
 
 - Tool names must not clash with core tools (conflicts are skipped)
+- Tools with malformed registration objects, including missing `parameters`, are skipped and reported in plugin diagnostics instead of breaking agent runs
 - Use `optional: true` for tools with side effects or extra binary requirements
 - Users can enable all tools from a plugin by adding the plugin id to `tools.allow`
 
@@ -288,7 +294,7 @@ surfaces, not as the default pattern for new third-party plugins.
 <Check>Tests pass (`pnpm test -- <bundled-plugin-root>/my-plugin/`)</Check>
 <Check>`pnpm check` passes (in-repo plugins)</Check>
 
-## Beta Release Testing
+## Beta release testing
 
 1. Watch for GitHub release tags on [openclaw/openclaw](https://github.com/openclaw/openclaw/releases) and subscribe via `Watch` > `Releases`. Beta tags look like `v2026.3.N-beta.1`. You can also turn on notifications for the official OpenClaw X account [@openclaw](https://x.com/openclaw) for release announcements.
 2. Test your plugin against the beta tag as soon as it appears. The window before stable is typically only a few hours.

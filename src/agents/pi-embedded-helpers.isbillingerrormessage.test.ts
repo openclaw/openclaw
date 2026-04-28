@@ -733,9 +733,9 @@ describe("classifyFailoverReason", () => {
     ).toBeNull();
   });
 
-  it("classifies OpenAI Responses unknown-no-details message as unknown", () => {
+  it("classifies OpenAI Responses unknown-no-details message distinctly", () => {
     const message = "Unknown error (no error details in response)";
-    expect(classifyFailoverReason(message)).toBe("unknown");
+    expect(classifyFailoverReason(message)).toBe("no_error_details");
     expect(isFailoverErrorMessage(message)).toBe(true);
   });
 
@@ -1374,6 +1374,16 @@ describe("classifyProviderRuntimeFailureKind", () => {
     expect(
       classifyProviderRuntimeFailureKind("401 input item ID does not belong to this connection"),
     ).toBe("replay_invalid");
+  });
+
+  it("splits ambiguous provider runtime failures instead of collapsing to unknown", () => {
+    expect(classifyProviderRuntimeFailureKind({})).toBe("empty_response");
+    expect(classifyProviderRuntimeFailureKind("Unknown error (no error details in response)")).toBe(
+      "no_error_details",
+    );
+    expect(classifyProviderRuntimeFailureKind("provider sent a strange opaque failure")).toBe(
+      "unclassified",
+    );
   });
 
   it("does not classify generic config errors that mention proxy settings as proxy failures", () => {

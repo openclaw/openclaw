@@ -1,7 +1,7 @@
 import type { Bot } from "grammy";
 import {
-  clearFinalizableDraftMessage,
   createFinalizableDraftStreamControlsForState,
+  takeMessageIdAfterStop,
 } from "openclaw/plugin-sdk/channel-lifecycle";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
@@ -380,23 +380,32 @@ export function createTelegramDraftStream(params: {
   });
 
   const clear = async () => {
-    await clearFinalizableDraftMessage({
+    const messageId = await takeMessageIdAfterStop({
       stopForClear,
       readMessageId: () => streamMessageId,
       clearMessageId: () => {
         streamMessageId = undefined;
       },
-      isValidMessageId: (value): value is number =>
-        typeof value === "number" && Number.isFinite(value),
-      deleteMessage: async (messageId) => {
-        await params.api.deleteMessage(chatId, messageId);
-      },
-      onDeleteSuccess: (messageId) => {
-        params.log?.(`telegram stream preview deleted (chat=${chatId}, message=${messageId})`);
-      },
-      warn: params.warn,
-      warnPrefix: "telegram stream preview cleanup failed",
     });
+    if (typeof messageId === "number" && Number.isFinite(messageId)) {
+      try {
+        await params.api.deleteMessage(chatId, messageId);
+        params.log?.(`telegram stream preview deleted (chat=${chatId}, message=${messageId})`);
+      } catch (err) {
+        params.warn?.(`telegram stream preview cleanup failed: ${formatErrorMessage(err)}`);
+      }
+      return;
+    }
+    if (previewTransport !== "draft" || resolvedDraftApi == null || streamDraftId == null) {
+      return;
+    }
+    const clearDraftId = streamDraftId;
+    streamDraftId = undefined;
+    try {
+      await resolvedDraftApi(chatId, clearDraftId, "", threadParams);
+    } catch (err) {
+      params.warn?.(`telegram stream preview cleanup failed: ${formatErrorMessage(err)}`);
+    }
   };
 
   const discard = async () => {

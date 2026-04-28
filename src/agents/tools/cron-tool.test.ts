@@ -15,6 +15,12 @@ vi.mock("../agent-scope.js", async () => {
 import { createCronTool } from "./cron-tool.js";
 
 describe("cron tool", () => {
+  type SchemaLike = {
+    anyOf?: Array<{ type?: string }>;
+    description?: string;
+    properties?: Record<string, SchemaLike>;
+  };
+
   type TestDelivery = {
     mode?: string;
     channel?: string;
@@ -143,6 +149,18 @@ describe("cron tool", () => {
     expect(tool.description).toContain(
       "Do not emulate scheduling with exec sleep or process polling.",
     );
+  });
+
+  it("advertises delivery threadId in the tool schema", () => {
+    const tool = createTestCronTool();
+    const parameters = tool.parameters as SchemaLike;
+    const jobThreadId = parameters.properties?.job?.properties?.delivery?.properties?.threadId;
+    const patchThreadId = parameters.properties?.patch?.properties?.delivery?.properties?.threadId;
+
+    for (const threadId of [jobThreadId, patchThreadId]) {
+      expect(threadId?.description).toContain("Thread/topic id");
+      expect(threadId?.anyOf?.map((entry) => entry.type)).toEqual(["string", "number"]);
+    }
   });
 
   it.each([
@@ -426,6 +444,62 @@ describe("cron tool", () => {
       mode: "announce",
       channel: "telegram",
       to: "-1001234567890:topic:99",
+    });
+  });
+
+  it("preserves telegram direct-chat thread ids when inferring delivery", async () => {
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-telegram-direct-thread",
+        agentSessionKey: "agent:main:telegram:direct:123456789:thread:123456789:99",
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "123456789",
+      threadId: "99",
+    });
+  });
+
+  it("preserves telegram account ids with direct-chat thread inference", async () => {
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-telegram-account-direct-thread",
+        agentSessionKey: "agent:main:telegram:bot-a:direct:123456789:thread:123456789:99",
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "123456789",
+      accountId: "bot-a",
+      threadId: "99",
+    });
+  });
+
+  it("preserves legacy telegram dm thread ids when inferring delivery", async () => {
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-telegram-dm-thread",
+        agentSessionKey: "agent:main:telegram:dm:123456789:thread:123456789:99",
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "123456789",
+      threadId: "99",
+    });
+  });
+
+  it("drops mismatched telegram direct-chat thread ids when inferring delivery", async () => {
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-telegram-mismatched-direct-thread",
+        agentSessionKey: "agent:main:telegram:direct:123456789:thread:987654321:99",
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "123456789",
     });
   });
 

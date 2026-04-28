@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
   onAgentEvent: vi.fn(() => noop),
   getAgentRunContext: vi.fn(() => undefined),
-  loadConfig: vi.fn(() => ({
+  getRuntimeConfig: vi.fn(() => ({
     agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
     session: { mainKey: "main", scope: "per-sender" as const },
   })),
@@ -51,7 +51,7 @@ vi.mock("../infra/agent-events.js", () => ({
 
 vi.mock("../config/config.js", () => {
   return {
-    loadConfig: mocks.loadConfig,
+    getRuntimeConfig: mocks.getRuntimeConfig,
   };
 });
 
@@ -118,7 +118,7 @@ describe("subagent registry seam flow", () => {
     vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
     mocks.onAgentEvent.mockReturnValue(noop);
     mocks.getAgentRunContext.mockReturnValue(undefined);
-    mocks.loadConfig.mockReturnValue({
+    mocks.getRuntimeConfig.mockReturnValue({
       agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
       session: { mainKey: "main", scope: "per-sender" as const },
     });

@@ -450,6 +450,7 @@ export function createNestedNpmInstallEnv(env = process.env) {
 export function createBundledRuntimeDependencyInstallEnv(env = process.env) {
   return {
     ...createNestedNpmInstallEnv(env),
+    npm_config_dry_run: "false",
     npm_config_legacy_peer_deps: "true",
     npm_config_package_lock: "false",
     npm_config_save: "false",
@@ -817,6 +818,7 @@ export function runBundledPluginPostinstall(params = {}) {
       encoding: "utf8",
       env: npmRunner.env ?? installEnv,
       stdio: "pipe",
+      windowsHide: true,
       shell: npmRunner.shell,
       windowsVerbatimArguments: npmRunner.windowsVerbatimArguments,
     });

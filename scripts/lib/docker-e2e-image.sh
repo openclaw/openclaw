@@ -49,13 +49,19 @@ docker_e2e_build_or_reuse() {
     echo "Reusing Docker image: $image_name"
     if ! docker image inspect "$image_name" >/dev/null 2>&1; then
       echo "Docker image not found locally; pulling: $image_name"
-      if ! docker pull "$image_name"; then
+      if docker pull "$image_name"; then
+        return 0
+      fi
+      if docker_build_on_missing_enabled; then
+        echo "Docker image not available; building because OPENCLAW_DOCKER_BUILD_ON_MISSING/OPENCLAW_TESTBOX allows fallback."
+      else
         echo "Docker image not found: $image_name" >&2
         echo "Build it first or unset OPENCLAW_SKIP_DOCKER_BUILD." >&2
         return 1
       fi
+    else
+      return 0
     fi
-    return 0
   fi
 
   echo "Building Docker image: $image_name"

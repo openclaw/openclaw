@@ -957,7 +957,7 @@ export async function runAgentTurnWithFallback(params: {
       const onToolResult = params.opts?.onToolResult;
       const outcomePlan = buildAgentRuntimeOutcomePlan();
       const fallbackResult = await runWithModelFallback<EmbeddedAgentRunResult>({
-        ...resolveModelFallbackOptions(params.followupRun.run),
+        ...resolveModelFallbackOptions(effectiveRun, runtimeConfig),
         runId,
         classifyResult: async ({ result, provider, model }) => {
           const classification = outcomePlan.classifyRunResult({
@@ -1057,6 +1057,7 @@ export async function runAgentTurnWithFallback(params: {
                   timeoutMs: params.followupRun.run.timeoutMs,
                   runId,
                   extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
+                  silentReplyPromptMode: params.followupRun.run.silentReplyPromptMode,
                   extraSystemPromptStatic: params.followupRun.run.extraSystemPromptStatic,
                   ownerNumbers: params.followupRun.run.ownerNumbers,
                   cliSessionId: cliSessionBinding?.sessionId,
@@ -1181,6 +1182,7 @@ export async function runAgentTurnWithFallback(params: {
                 prompt: params.commandBody,
                 transcriptPrompt: params.transcriptCommandBody,
                 extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
+                silentReplyPromptMode: params.followupRun.run.silentReplyPromptMode,
                 toolResultFormat: (() => {
                   const channel = resolveMessageChannel(
                     params.sessionCtx.Surface,

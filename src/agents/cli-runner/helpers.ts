@@ -27,6 +27,7 @@ import { detectRuntimeShell } from "../shell-utils.js";
 import { stripSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";
 import { buildSystemPromptParams } from "../system-prompt-params.js";
 import { buildAgentSystemPrompt } from "../system-prompt.js";
+import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 import { sanitizeImageBlocks } from "../tool-images.js";
 import { formatTomlConfigOverride } from "./toml-inline.js";
 export { buildCliSupervisorScopeKey, resolveCliNoOutputTimeoutMs } from "./reliability.js";
@@ -69,6 +70,7 @@ export function buildSystemPrompt(params: {
   config?: OpenClawConfig;
   defaultThinkLevel?: ThinkLevel;
   extraSystemPrompt?: string;
+  silentReplyPromptMode?: SilentReplyPromptMode;
   ownerNumbers?: string[];
   heartbeatPrompt?: string;
   docsPath?: string;
@@ -107,6 +109,7 @@ export function buildSystemPrompt(params: {
     workspaceDir: params.workspaceDir,
     defaultThinkLevel: params.defaultThinkLevel,
     extraSystemPrompt: params.extraSystemPrompt,
+    silentReplyPromptMode: params.silentReplyPromptMode,
     ownerNumbers: params.ownerNumbers,
     ownerDisplay: ownerDisplay.ownerDisplay,
     ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,

@@ -6,8 +6,17 @@ import { collectDurableServiceEnvVars } from "../config/state-dir-dotenv.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import { resolveGatewayStateDir } from "../daemon/paths.js";
-import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
+import {
+  OPENCLAW_WRAPPER_ENV_KEY,
+  resolveGatewayProgramArguments,
+  resolveOpenClawWrapperPath,
+} from "../daemon/program-args.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
+import {
+  formatManagedServiceEnvKeys,
+  readManagedServiceEnvKeysFromEnvironment,
+  writeManagedServiceEnvKeysToEnvironment,
+} from "../daemon/service-managed-env.js";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
@@ -28,8 +37,6 @@ export type GatewayInstallPlan = {
   workingDirectory?: string;
   environment: Record<string, string | undefined>;
 };
-
-const MANAGED_SERVICE_ENV_KEYS_VAR = "OPENCLAW_SERVICE_MANAGED_ENV_KEYS";
 
 let daemonInstallAuthProfileSourceRuntimePromise:
   | Promise<typeof import("./daemon-install-auth-profiles-source.runtime.js")>
@@ -143,39 +150,6 @@ function mergeServicePath(
   return segments.length > 0 ? segments.join(path.delimiter) : undefined;
 }
 
-function readManagedServiceEnvKeys(
-  existingEnvironment: Record<string, string | undefined> | undefined,
-): Set<string> {
-  if (!existingEnvironment) {
-    return new Set();
-  }
-  for (const [rawKey, rawValue] of Object.entries(existingEnvironment)) {
-    const key = normalizeEnvVarKey(rawKey, { portable: true });
-    if (!key || key.toUpperCase() !== MANAGED_SERVICE_ENV_KEYS_VAR) {
-      continue;
-    }
-    return new Set(
-      rawValue?.split(",").flatMap((value) => {
-        const normalized = normalizeEnvVarKey(value, { portable: true });
-        return normalized ? [normalized.toUpperCase()] : [];
-      }) ?? [],
-    );
-  }
-  return new Set();
-}
-
-function formatManagedServiceEnvKeys(
-  managedEnvironment: Record<string, string | undefined>,
-): string | undefined {
-  const keys = Object.keys(managedEnvironment)
-    .flatMap((key) => {
-      const normalized = normalizeEnvVarKey(key, { portable: true });
-      return normalized ? [normalized.toUpperCase()] : [];
-    })
-    .toSorted();
-  return keys.length > 0 ? keys.join(",") : undefined;
-}
-
 function collectPreservedExistingServiceEnvVars(
   existingEnvironment: Record<string, string | undefined> | undefined,
   managedServiceEnvKeys: Set<string>,
@@ -235,24 +209,27 @@ async function buildGatewayInstallEnvironment(params: {
   serviceEnvironment: Record<string, string | undefined>;
   existingEnvironment?: Record<string, string | undefined>;
 }): Promise<Record<string, string | undefined>> {
-  const managedEnvironment: Record<string, string | undefined> = {
-    ...collectDurableServiceEnvVars({
-      env: params.env,
-      config: params.config,
-    }),
-    ...(await collectAuthProfileServiceEnvVars({
-      env: params.env,
-      authStore: params.authStore,
-      warn: params.warn,
-    })),
-  };
+  const durableEnvironment = collectDurableServiceEnvVars({
+    env: params.env,
+    config: params.config,
+  });
+  const authProfileEnvironment = await collectAuthProfileServiceEnvVars({
+    env: params.env,
+    authStore: params.authStore,
+    warn: params.warn,
+  });
   const environment: Record<string, string | undefined> = {
     ...collectPreservedExistingServiceEnvVars(
       params.existingEnvironment,
-      readManagedServiceEnvKeys(params.existingEnvironment),
+      readManagedServiceEnvKeysFromEnvironment(params.existingEnvironment),
     ),
-    ...managedEnvironment,
+    ...durableEnvironment,
+    ...authProfileEnvironment,
   };
+  const managedServiceEnvKeys = formatManagedServiceEnvKeys(durableEnvironment, {
+    omitKeys: Object.keys(params.serviceEnvironment),
+  });
+  writeManagedServiceEnvKeysToEnvironment(environment, managedServiceEnvKeys);
   Object.assign(environment, params.serviceEnvironment);
   const mergedPath = mergeServicePath(
     params.serviceEnvironment.PATH,
@@ -261,10 +238,6 @@ async function buildGatewayInstallEnvironment(params: {
   );
   if (mergedPath) {
     environment.PATH = mergedPath;
-  }
-  const managedServiceEnvKeys = formatManagedServiceEnvKeys(managedEnvironment);
-  if (managedServiceEnvKeys) {
-    environment[MANAGED_SERVICE_ENV_KEYS_VAR] = managedServiceEnvKeys;
   }
   return environment;
 }
@@ -276,6 +249,7 @@ export async function buildGatewayInstallPlan(params: {
   existingEnvironment?: Record<string, string | undefined>;
   devMode?: boolean;
   nodePath?: string;
+  wrapperPath?: string;
   platform?: NodeJS.Platform;
   warn?: DaemonInstallWarnFn;
   /** Full config to extract env vars from (env vars + inline env keys). */
@@ -289,11 +263,18 @@ export async function buildGatewayInstallPlan(params: {
     devMode: params.devMode,
     nodePath: params.nodePath,
   });
+  const wrapperPath = await resolveOpenClawWrapperPath(
+    params.wrapperPath ?? params.env[OPENCLAW_WRAPPER_ENV_KEY],
+  );
+  const serviceInputEnv: Record<string, string | undefined> = wrapperPath
+    ? { ...params.env, [OPENCLAW_WRAPPER_ENV_KEY]: wrapperPath }
+    : params.env;
   const { programArguments, workingDirectory } = await resolveGatewayProgramArguments({
     port: params.port,
     dev: devMode,
     runtime: params.runtime,
     nodePath,
+    wrapperPath,
   });
   await emitDaemonInstallRuntimeWarning({
     env: params.env,
@@ -303,11 +284,11 @@ export async function buildGatewayInstallPlan(params: {
     title: "Gateway runtime",
   });
   const serviceEnvironment = buildServiceEnvironment({
-    env: params.env,
+    env: serviceInputEnv,
     port: params.port,
     launchdLabel:
       platform === "darwin"
-        ? resolveGatewayLaunchAgentLabel(params.env.OPENCLAW_PROFILE)
+        ? resolveGatewayLaunchAgentLabel(serviceInputEnv.OPENCLAW_PROFILE)
         : undefined,
     platform,
     extraPathDirs: resolveDaemonNodeBinDir(nodePath),
@@ -317,12 +298,12 @@ export async function buildGatewayInstallPlan(params: {
   return {
     programArguments,
     workingDirectory: resolveGatewayInstallWorkingDirectory({
-      env: params.env,
+      env: serviceInputEnv,
       platform,
       workingDirectory,
     }),
     environment: await buildGatewayInstallEnvironment({
-      env: params.env,
+      env: serviceInputEnv,
       config: params.config,
       authStore: params.authStore,
       warn: params.warn,
