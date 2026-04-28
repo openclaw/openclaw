@@ -67,6 +67,15 @@ function targetIncludesThreadSuffix(params: {
   return isDelimitedThreadSuffix(params.target.slice(params.base.length), params.threadId);
 }
 
+function targetEndsWithThreadSuffix(target: string, threadId: string): boolean {
+  const trimmed = target.trim();
+  return (
+    trimmed.endsWith(`#${threadId}`) ||
+    trimmed.endsWith(`:${threadId}`) ||
+    trimmed.endsWith(`:topic:${threadId}`)
+  );
+}
+
 type NormalizedSilentReplyText = {
   text: string | undefined;
   strippedTrailingSilentToken: boolean;
@@ -142,7 +151,9 @@ export function matchesMessagingToolDeliveryTarget(
       target: target.to.trim(),
       base: delivery.to.trim(),
       threadId: deliveryThreadId,
-    })
+    }) ||
+    (targetEndsWithThreadSuffix(target.to, deliveryThreadId) &&
+      targetEndsWithThreadSuffix(delivery.to, deliveryThreadId))
   );
 }
 

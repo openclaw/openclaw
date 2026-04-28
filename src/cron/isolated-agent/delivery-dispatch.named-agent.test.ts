@@ -88,6 +88,15 @@ describe("matchesMessagingToolDeliveryTarget", () => {
     ).toBe(true);
   });
 
+  it("matches exact threaded target ids when both to values include the thread suffix", () => {
+    expect(
+      matchesMessagingToolDeliveryTarget(
+        { provider: "topicchat", to: "room#42" },
+        { channel: "topicchat", to: "room#42", threadId: 42 },
+      ),
+    ).toBe(true);
+  });
+
   it("does not match thread ids by substring inside the target", () => {
     expect(
       matchesMessagingToolDeliveryTarget(
