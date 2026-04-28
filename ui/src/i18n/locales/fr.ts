@@ -727,6 +727,7 @@ export const fr: TranslationMap = {
     uk: "Українська (ukrainien)",
     id: "Bahasa Indonesia (indonésien)",
     pl: "Polski (polonais)",
+    sv: "Suédois (Svenska)",
     th: "ไทย (thaï)",
   },
   cron: {

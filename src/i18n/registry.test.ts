@@ -47,6 +47,7 @@ describeWhenUiI18nPresent("ui i18n locale registry", () => {
 
     expect(localeRegistry.SUPPORTED_LOCALES).toEqual([
       "en",
+      "sv",
       "zh-CN",
       "zh-TW",
       "pt-BR",
@@ -71,6 +72,7 @@ describeWhenUiI18nPresent("ui i18n locale registry", () => {
     expect(localeRegistry.resolveNavigatorLocale("es-ES")).toBe("es");
     expect(localeRegistry.resolveNavigatorLocale("es-MX")).toBe("es");
     expect(localeRegistry.resolveNavigatorLocale("pt-PT")).toBe("pt-BR");
+    expect(localeRegistry.resolveNavigatorLocale("sv-SE")).toBe("sv");
     expect(localeRegistry.resolveNavigatorLocale("zh-HK")).toBe("zh-TW");
     expect(localeRegistry.resolveNavigatorLocale("en-US")).toBe("en");
     expect(localeRegistry.resolveNavigatorLocale("ja-JP")).toBe("ja-JP");
@@ -85,10 +87,11 @@ describeWhenUiI18nPresent("ui i18n locale registry", () => {
 
   it("loads lazy locale translations from the registry", async () => {
     const localeRegistry = getRegistry();
-    const [de, es, ptBR, zhCN, th, en] = await Promise.all([
+    const [de, es, ptBR, sv, zhCN, th, en] = await Promise.all([
       localeRegistry.loadLazyLocaleTranslation("de"),
       localeRegistry.loadLazyLocaleTranslation("es"),
       localeRegistry.loadLazyLocaleTranslation("pt-BR"),
+      localeRegistry.loadLazyLocaleTranslation("sv"),
       localeRegistry.loadLazyLocaleTranslation("zh-CN"),
       localeRegistry.loadLazyLocaleTranslation("th"),
       localeRegistry.loadLazyLocaleTranslation("en"),
@@ -98,6 +101,7 @@ describeWhenUiI18nPresent("ui i18n locale registry", () => {
     expect(getNestedTranslation(es, "common", "health")).toBe("Estado");
     expect(getNestedTranslation(es, "languages", "de")).toBe("Deutsch (Alemán)");
     expect(getNestedTranslation(ptBR, "languages", "es")).toBe("Español (Espanhol)");
+    expect(getNestedTranslation(sv, "languages", "sv")).toBe("Swedish (Svenska)");
     expect(getNestedTranslation(zhCN, "common", "health")).toBe("\u5065\u5eb7\u72b6\u51b5");
     expect(getNestedTranslation(th, "languages", "en")).toBeTruthy();
     expect(en).toBeNull();
