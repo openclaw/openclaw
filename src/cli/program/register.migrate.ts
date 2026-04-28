@@ -59,7 +59,7 @@ export function registerMigrateCommand(program: Command) {
           dryRun: Boolean(opts.dryRun),
           yes: Boolean(opts.yes),
           backupOutput: opts.backupOutput as string | undefined,
-          noBackup: opts.backup === false,
+          noBackup: Boolean(opts.noBackup),
           force: Boolean(opts.force),
           json: Boolean(opts.json),
         });
@@ -108,7 +108,7 @@ export function registerMigrateCommand(program: Command) {
           overwrite: Boolean(opts.overwrite),
           yes: Boolean(opts.yes),
           backupOutput: opts.backupOutput as string | undefined,
-          noBackup: opts.backup === false,
+          noBackup: Boolean(opts.noBackup),
           force: Boolean(opts.force),
           json: Boolean(opts.json),
         });
