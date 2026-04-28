@@ -16,6 +16,7 @@ export {
   abortEmbeddedPiRun,
   compactEmbeddedAgentSession,
   compactEmbeddedPiSession,
+  getActiveEmbeddedRunCount,
   isEmbeddedAgentRunActive,
   isEmbeddedAgentRunStreaming,
   isEmbeddedPiRunActive,

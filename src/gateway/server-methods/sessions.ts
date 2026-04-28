@@ -4,10 +4,10 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
-  abortEmbeddedPiRun,
-  isEmbeddedPiRunActive,
-  waitForEmbeddedPiRunEnd,
-} from "../../agents/pi-embedded-runner/runs.js";
+  abortEmbeddedAgentRun,
+  isEmbeddedAgentRunActive,
+  waitForEmbeddedAgentRunEnd,
+} from "../../agents/embedded-runner.js";
 import { compactEmbeddedPiSession } from "../../agents/pi-embedded.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { normalizeReasoningLevel, normalizeThinkLevel } from "../../auto-reply/thinking.js";
@@ -409,7 +409,7 @@ async function interruptSessionRunIfActive(params: {
   });
   const hasEmbeddedRun =
     typeof params.sessionId === "string" && params.sessionId
-      ? isEmbeddedPiRunActive(params.sessionId)
+      ? isEmbeddedAgentRunActive(params.sessionId)
       : false;
 
   if (!hasTrackedRun && !hasEmbeddedRun) {
@@ -449,13 +449,13 @@ async function interruptSessionRunIfActive(params: {
   }
 
   if (hasEmbeddedRun && params.sessionId) {
-    abortEmbeddedPiRun(params.sessionId);
+    abortEmbeddedAgentRun(params.sessionId);
   }
 
   clearSessionQueues([params.requestedKey, params.canonicalKey, params.sessionId]);
 
   if (hasEmbeddedRun && params.sessionId) {
-    const ended = await waitForEmbeddedPiRunEnd(params.sessionId, 15_000);
+    const ended = await waitForEmbeddedAgentRunEnd(params.sessionId, 15_000);
     if (!ended) {
       return {
         interrupted: true,

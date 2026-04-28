@@ -8,12 +8,19 @@ const MODEL = {
   id: "gpt-5.4",
   name: "GPT-5.4",
   api: "openai-responses",
+  baseUrl: "https://api.openai.test/v1",
+  cost: {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+  },
   provider: "openai",
   input: "chat",
   maxTokens: 4096,
   contextWindow: 128_000,
   reasoning: true,
-} as ProviderRuntimeModel;
+} as unknown as ProviderRuntimeModel;
 
 const EMPTY_AUTH_STORE: AuthProfileStore = {
   version: 1,
@@ -40,21 +47,23 @@ function createDeps(options?: {
   const authStore = options?.authStore ?? EMPTY_AUTH_STORE;
   return {
     buildAgentRuntimeAuthPlan: vi.fn(() => ({
+      authProfileProviderForAuth: "openai-codex",
       forwardedAuthProfileId: options?.forwardedAuthProfileId,
+      providerForAuth: "codex",
     })),
     createEmptyAuthProfileStore: vi.fn(() => EMPTY_AUTH_STORE),
     ensureAuthProfileStore: vi.fn(() => authStore),
-    ensureOpenClawModelsJson: vi.fn(async () => {}),
-    resolveAuthProfileEligibility: vi.fn(() => ({ eligible: true })),
+    ensureOpenClawModelsJson: vi.fn(async () => ({ agentDir: "/tmp/agent", wrote: false })),
+    resolveAuthProfileEligibility: vi.fn(() => ({ eligible: true, reasonCode: "ok" as const })),
     resolveAuthProfileOrder: vi.fn(() => options?.profileOrder ?? []),
     resolveEffectiveRuntimeModel: vi.fn(() => ({
-      ctxInfo: { tokens: 128_000, source: "model", raw: 128_000 },
+      ctxInfo: { tokens: 128_000, source: "model" as const },
       effectiveModel: MODEL,
     })),
     resolveModelAsync: vi.fn(async () => ({
       model: MODEL,
-      authStorage: { kind: "auth-storage" },
-      modelRegistry: { kind: "model-registry" },
+      authStorage: { kind: "auth-storage" } as never,
+      modelRegistry: { kind: "model-registry" } as never,
     })),
     resolveProviderAuthProfileId: vi.fn(() => options?.providerPreferredProfileId),
     resolveProviderIdForAuth: vi.fn((provider: string) => provider),

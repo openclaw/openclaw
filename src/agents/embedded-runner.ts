@@ -1,6 +1,7 @@
 export {
   abortEmbeddedAgentRun,
   compactEmbeddedAgentSession,
+  getActiveEmbeddedRunCount,
   isEmbeddedAgentRunActive,
   isEmbeddedAgentRunStreaming,
   queueEmbeddedAgentMessage,
