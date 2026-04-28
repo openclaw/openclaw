@@ -202,6 +202,9 @@ export async function resolveWhatsAppCommandAuthorized(params: {
     : undefined;
   const senderIsConfiguredAdmin =
     isGroup && groupAdmin ? policy.isConfiguredGroupAdmin(groupId, groupSender) : false;
+  const senderIsConfiguredOwner = isGroup
+    ? policy.isDmSenderAllowed(policy.dmAllowFrom, groupSender)
+    : false;
 
   const storeAllowFrom =
     isGroup || !policy.shouldReadStorePairingApprovals
@@ -230,12 +233,15 @@ export async function resolveWhatsAppCommandAuthorized(params: {
     },
   });
 
-  // Only enable admin-only group commands when the group config declares an admin.
-  if (isGroup && groupAdmin && !senderIsConfiguredAdmin) {
+  if (isGroup && groupAdmin && policy.groupPolicy === "disabled") {
     return false;
   }
   if (senderIsConfiguredAdmin && policy.groupPolicy !== "disabled") {
     return true;
+  }
+  // Admin-scoped groups still need owner operational commands to keep working.
+  if (isGroup && groupAdmin && !senderIsConfiguredOwner) {
+    return false;
   }
 
   return access.commandAuthorized;
