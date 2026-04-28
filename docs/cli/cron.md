@@ -40,7 +40,7 @@ Isolated `cron add` jobs default to `--announce` delivery. Use `--no-deliver` to
 </Note>
 
 <Note>
-Feishu/Lark announce delivery requires an explicit target (`--to`), for example `--channel feishu --to "chat:oc_group_chat"` or `--channel feishu --to "user:ou_xxx"`.
+Feishu/Lark announce delivery requires an explicit target (`--to`) or a session-derived chat target, for example `--channel feishu --to "chat:oc_group_chat"` or `--channel feishu --to "user:ou_xxx"`.
 </Note>
 
 ### Delivery ownership

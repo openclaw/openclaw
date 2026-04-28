@@ -423,13 +423,26 @@ describe("applyJobPatch", () => {
     expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
   });
 
-  it("rejects Feishu announce delivery without target", () => {
+  it("allows unrelated updates to legacy Feishu announce delivery without target", () => {
     const job = createIsolatedAgentTurnJob("job-feishu-no-target", {
       mode: "announce",
       channel: "feishu",
     });
 
-    expect(() => applyJobPatch(job, { enabled: true })).toThrow(
+    expect(() => applyJobPatch(job, { enabled: false })).not.toThrow();
+    expect(job.enabled).toBe(false);
+  });
+
+  it("rejects Feishu announce delivery updates without target", () => {
+    const job = createIsolatedAgentTurnJob("job-feishu-no-target", {
+      mode: "announce",
+      channel: "telegram",
+      to: "123",
+    });
+
+    expect(() =>
+      applyJobPatch(job, { delivery: { mode: "announce", channel: "feishu", to: "" } }),
+    ).toThrow(
       "cron feishu/lark announce delivery requires delivery.to (chatId|user:openId|chat:chatId)",
     );
   });
@@ -442,6 +455,21 @@ describe("applyJobPatch", () => {
     });
 
     expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
+  });
+
+  it("accepts Lark announce delivery with deterministic session target", () => {
+    const job = createIsolatedAgentTurnJob(
+      "job-lark-session-target",
+      {
+        mode: "announce",
+        channel: "lark",
+      },
+      { sessionTarget: "session:agent:main:lark:chat:oc_group_chat" },
+    );
+
+    expect(() =>
+      applyJobPatch(job, { delivery: { mode: "announce", channel: "lark" } }),
+    ).not.toThrow();
   });
 });
 
@@ -695,6 +723,37 @@ describe("createJob delivery defaults", () => {
       delivery: { mode: "none" },
     });
     expect(job.delivery).toEqual({ mode: "none" });
+  });
+
+  it("rejects Feishu announce delivery without explicit or deterministic target", () => {
+    const state = createMockState(now);
+    expect(() =>
+      createJob(state, {
+        name: "isolated-feishu-no-target",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "hello" },
+        delivery: { mode: "announce", channel: "feishu" },
+      }),
+    ).toThrow(
+      "cron feishu/lark announce delivery requires delivery.to (chatId|user:openId|chat:chatId)",
+    );
+  });
+
+  it("accepts Feishu announce delivery with a deterministic session-derived target", () => {
+    const state = createMockState(now);
+    const job = createJob(state, {
+      name: "isolated-feishu-session-target",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "session:agent:main:feishu:group:oc_group_chat",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "hello" },
+      delivery: { mode: "announce", channel: "feishu" },
+    });
+    expect(job.delivery).toEqual({ mode: "announce", channel: "feishu" });
   });
 
   it("does not set delivery for main systemEvent jobs without explicit delivery", () => {
