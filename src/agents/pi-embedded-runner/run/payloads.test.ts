@@ -292,6 +292,29 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
+  it("propagates isReasoning on the reasoning payload so downstream pickers can filter it", () => {
+    const payloads = buildPayloads({
+      reasoningLevel: "on",
+      thinkingLevel: "high",
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          { type: "thinking", thinking: "Let me work this through step by step." },
+          { type: "text", text: "Final answer." },
+        ],
+      } as AssistantMessage,
+    });
+
+    const reasoningPayload = payloads.find((p) => p.isReasoning === true);
+    expect(reasoningPayload, "expected reasoning payload to carry isReasoning=true").toBeDefined();
+    expect(reasoningPayload?.text).toContain("Let me work this through step by step.");
+
+    const visiblePayload = payloads.find((p) => p.text === "Final answer.");
+    expect(visiblePayload).toBeDefined();
+    expect(visiblePayload?.isReasoning).toBeFalsy();
+  });
+
   it("suppresses native reasoning payloads when thinking is disabled", () => {
     const payloads = buildPayloads({
       reasoningLevel: "on",

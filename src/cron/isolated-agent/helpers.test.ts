@@ -32,6 +32,28 @@ describe("pickSummaryFromPayloads", () => {
     ];
     expect(pickSummaryFromPayloads(payloads)).toBe("normal text");
   });
+
+  it("skips reasoning payloads in the primary pass", () => {
+    const payloads = [
+      { text: "Final answer is 42." },
+      { text: "Let me think — actually it should be 42 because…", isReasoning: true },
+    ];
+    expect(pickSummaryFromPayloads(payloads)).toBe("Final answer is 42.");
+  });
+
+  it("skips reasoning even when it is the last payload", () => {
+    const payloads = [
+      { text: "The deploy succeeded." },
+      { text: "Reasoning trace ...", isReasoning: true },
+      { text: "Reasoning trace continued ...", isReasoning: true },
+    ];
+    expect(pickSummaryFromPayloads(payloads)).toBe("The deploy succeeded.");
+  });
+
+  it("falls back to reasoning text only when no real text exists", () => {
+    const payloads = [{ text: "Reasoning only", isReasoning: true }];
+    expect(pickSummaryFromPayloads(payloads)).toBe("Reasoning only");
+  });
 });
 
 describe("pickLastNonEmptyTextFromPayloads", () => {
@@ -55,6 +77,19 @@ describe("pickLastNonEmptyTextFromPayloads", () => {
       { text: "bad", isError: true },
     ];
     expect(pickLastNonEmptyTextFromPayloads(payloads)).toBe("good");
+  });
+
+  it("skips reasoning payloads", () => {
+    const payloads = [
+      { text: "user-visible answer" },
+      { text: "internal thinking", isReasoning: true },
+    ];
+    expect(pickLastNonEmptyTextFromPayloads(payloads)).toBe("user-visible answer");
+  });
+
+  it("falls back to reasoning text when nothing else is available", () => {
+    const payloads = [{ text: "internal thinking", isReasoning: true }];
+    expect(pickLastNonEmptyTextFromPayloads(payloads)).toBe("internal thinking");
   });
 });
 

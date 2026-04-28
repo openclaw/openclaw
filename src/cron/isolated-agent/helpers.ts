@@ -138,14 +138,23 @@ export function pickSummaryFromOutput(text: string | undefined) {
   return clean.length > limit ? `${truncateUtf16Safe(clean, limit)}…` : clean;
 }
 
-export function pickSummaryFromPayloads(
-  payloads: Array<{ text?: string | undefined; isError?: boolean }>,
-) {
+// Skip reasoning blocks first, then errors, so cron-announce summary text never
+// leaks model thinking/reasoning content into channel deliveries
+// (Matrix/Feishu) or duplicates the visible reply with a reasoning twin.
+// Fall back to the raw payload list if neither pass produces text. Fixes #73186.
+type SummaryPayload = {
+  text?: string | undefined;
+  isError?: boolean;
+  isReasoning?: boolean;
+};
+
+export function pickSummaryFromPayloads(payloads: SummaryPayload[]) {
   for (let i = payloads.length - 1; i >= 0; i--) {
-    if (payloads[i]?.isError) {
+    const p = payloads[i];
+    if (p?.isError || p?.isReasoning) {
       continue;
     }
-    const summary = pickSummaryFromOutput(payloads[i]?.text);
+    const summary = pickSummaryFromOutput(p?.text);
     if (summary) {
       return summary;
     }
@@ -159,14 +168,13 @@ export function pickSummaryFromPayloads(
   return undefined;
 }
 
-export function pickLastNonEmptyTextFromPayloads(
-  payloads: Array<{ text?: string | undefined; isError?: boolean }>,
-) {
+export function pickLastNonEmptyTextFromPayloads(payloads: SummaryPayload[]) {
   for (let i = payloads.length - 1; i >= 0; i--) {
-    if (payloads[i]?.isError) {
+    const p = payloads[i];
+    if (p?.isError || p?.isReasoning) {
       continue;
     }
-    const clean = (payloads[i]?.text ?? "").trim();
+    const clean = (p?.text ?? "").trim();
     if (clean) {
       return clean;
     }
