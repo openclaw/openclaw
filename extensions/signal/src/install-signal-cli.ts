@@ -116,6 +116,7 @@ async function downloadToFile(url: string, dest: string, maxRedirects = 5): Prom
   const { response, release } = await fetchWithSsrFGuard({
     url,
     maxRedirects,
+    requireHttps: true,
     capture: false,
     auditContext: "signal-cli-install-archive",
   });
