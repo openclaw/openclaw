@@ -100,4 +100,104 @@ describe("readSubagentOutput", () => {
       "Mapped the code path.",
     );
   });
+
+  it("does not announce raw tool output captured between auto-compaction and the next assistant turn", async () => {
+    const deps = installOutputDeps({
+      messages: [
+        {
+          role: "assistant",
+          stopReason: "toolUse",
+          content: [
+            { type: "text", text: "" },
+            { type: "toolCall", id: "call-find", name: "exec", arguments: {} },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-find",
+          toolName: "exec",
+          content: [
+            {
+              type: "text",
+              text: "/root/.openclaw/agents/main/sessions/a.jsonl\n/root/.openclaw/agents/main/sessions/b.jsonl",
+            },
+          ],
+          details: { status: "completed", exitCode: 0 },
+        },
+        {
+          role: "system",
+          content: [{ type: "text", text: "Compaction" }],
+          __openclaw: { kind: "compaction" },
+        },
+        {
+          role: "user",
+          content: [{ type: "text", text: "[Subagent Task]: continue" }],
+        },
+      ],
+    });
+
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
+    expect(deps.readLatestAssistantReply).not.toHaveBeenCalled();
+  });
+
+  it("returns the post-compaction final answer instead of pre-compaction raw tool output", async () => {
+    installOutputDeps({
+      messages: [
+        {
+          role: "toolResult",
+          toolCallId: "call-find",
+          toolName: "exec",
+          content: [{ type: "text", text: "/root/.openclaw/agents/main/sessions/a.jsonl" }],
+          details: { status: "completed", exitCode: 0 },
+        },
+        {
+          role: "system",
+          content: [{ type: "text", text: "Compaction" }],
+          __openclaw: { kind: "compaction" },
+        },
+        {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "Deep search done. Found two candidates..." }],
+        },
+      ],
+    });
+
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBe(
+      "Deep search done. Found two candidates...",
+    );
+  });
+
+  it("emits partial-progress message when subagent times out after compaction", async () => {
+    installOutputDeps({
+      messages: [
+        {
+          role: "assistant",
+          stopReason: "toolUse",
+          content: [
+            { type: "text", text: "" },
+            { type: "toolCall", id: "call-find", name: "exec", arguments: {} },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-find",
+          toolName: "exec",
+          content: [{ type: "text", text: "/root/.openclaw/agents/main/sessions/a.jsonl" }],
+          details: { status: "completed", exitCode: 0 },
+        },
+        {
+          role: "system",
+          content: [{ type: "text", text: "Compaction" }],
+          __openclaw: { kind: "compaction" },
+        },
+      ],
+    });
+
+    const reply = await readSubagentOutput("agent:main:subagent:child", {
+      status: "timeout",
+    });
+    expect(reply).toContain("Partial progress");
+    expect(reply).not.toContain("/root/.openclaw/agents/main/sessions/a.jsonl");
+  });
 });
