@@ -704,6 +704,13 @@ describe("host-hook fixture plugin contract", () => {
             }) as never,
         });
         api.registerSessionAction({
+          id: "error-shaped-success",
+          handler: () =>
+            ({
+              error: "must declare ok false",
+            }) as never,
+        });
+        api.registerSessionAction({
           id: "bad-error-details",
           handler: () => ({
             ok: false,
@@ -796,6 +803,20 @@ describe("host-hook fixture plugin contract", () => {
       error: {
         code: "INVALID_REQUEST",
         message: "plugin session action ok must be a boolean",
+      },
+    });
+    await expect(
+      callPluginSessionActionForTest({
+        body: {
+          pluginId: "session-action-validation-fixture",
+          actionId: "error-shaped-success",
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "plugin session action failure fields require ok=false",
       },
     });
     await expect(

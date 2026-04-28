@@ -146,13 +146,10 @@ describe("plugin host workflow helpers", () => {
     ]);
   });
 
-  it("removes in-flight scheduled turns when the owning plugin generation is stale", async () => {
+  it("does not create scheduled turns when the owning plugin generation is already stale", async () => {
     mocks.callGatewayTool.mockImplementation(async (method) => {
       if (method === "cron.add") {
         return { id: "stale-job" };
-      }
-      if (method === "cron.remove") {
-        return { ok: true };
       }
       return undefined;
     });
@@ -171,11 +168,35 @@ describe("plugin host workflow helpers", () => {
       }),
     ).resolves.toBeUndefined();
     expect(listPluginSessionSchedulerJobs("scheduler-fixture")).toEqual([]);
-    expect(mocks.callGatewayTool).toHaveBeenCalledWith(
-      "cron.remove",
-      {},
-      { id: "stale-job" },
-      { scopes: ["operator.admin"] },
-    );
+    expect(mocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("fails stale scheduled-turn rollback when cron cleanup fails", async () => {
+    let shouldCommit = true;
+    mocks.callGatewayTool.mockImplementation(async (method) => {
+      if (method === "cron.add") {
+        shouldCommit = false;
+        return { id: "stale-job" };
+      }
+      if (method === "cron.remove") {
+        throw new Error("cron remove failed");
+      }
+      return undefined;
+    });
+
+    await expect(
+      schedulePluginSessionTurn({
+        pluginId: "scheduler-fixture",
+        pluginName: "Scheduler Fixture",
+        origin: "bundled",
+        shouldCommit: () => shouldCommit,
+        schedule: {
+          sessionKey: "agent:main:main",
+          message: "wake",
+          delayMs: 1_000,
+        },
+      }),
+    ).rejects.toThrow("failed to remove stale scheduled session turn: stale-job");
+    expect(listPluginSessionSchedulerJobs("scheduler-fixture")).toEqual([]);
   });
 });
