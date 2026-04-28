@@ -1,5 +1,8 @@
 {
   "id": "xai",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["xai"],
   "providerDiscoveryEntry": "./provider-discovery.ts",

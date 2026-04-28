@@ -1,5 +1,5 @@
 import "./lifecycle.test-support.js";
-import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/testing";
+import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { FeishuConfigSchema } from "./config-schema.js";

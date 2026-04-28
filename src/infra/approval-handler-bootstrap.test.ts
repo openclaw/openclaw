@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeChannel } from "../plugins/runtime/runtime-channel.js";
 import { startChannelApprovalHandlerBootstrap } from "./approval-handler-bootstrap.js";
 import { createApprovalNativeRuntimeAdapterStubs } from "./approval-handler.test-helpers.js";
+import { ExecApprovalChannelRuntimeTerminalStartError } from "./exec-approval-channel-runtime.js";
 
 const { createChannelApprovalHandlerFromCapability } = vi.hoisted(() => ({
   createChannelApprovalHandlerFromCapability: vi.fn(),
@@ -226,6 +227,45 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     expect(stop).toHaveBeenCalledTimes(1);
     expect(logger.error).toHaveBeenCalledWith(
       "failed to start native approval handler: Error: boom",
+    );
+
+    await cleanup();
+  });
+
+  it("does not retry terminal native approval startup failures", async () => {
+    vi.useFakeTimers();
+    const channelRuntime = createRuntimeChannel();
+    const terminalError = new ExecApprovalChannelRuntimeTerminalStartError({
+      code: 1008,
+      reason: "pairing required",
+      detailCode: "PAIRING_REQUIRED",
+    });
+    const start = vi.fn().mockRejectedValue(terminalError);
+    const stop = vi.fn().mockResolvedValue(undefined);
+    const logger = {
+      error: vi.fn(),
+      warn: vi.fn(),
+      info: vi.fn(),
+      debug: vi.fn(),
+      child: vi.fn(),
+      isEnabled: vi.fn().mockReturnValue(true),
+      isVerboseEnabled: vi.fn().mockReturnValue(false),
+      verbose: vi.fn(),
+    };
+    createChannelApprovalHandlerFromCapability.mockResolvedValue({ start, stop });
+
+    const cleanup = await startTestBootstrap({ channelRuntime, logger });
+
+    registerApprovalContext(channelRuntime);
+    await flushTransitions();
+    await vi.advanceTimersByTimeAsync(3_000);
+    await flushTransitions();
+
+    expect(createChannelApprovalHandlerFromCapability).toHaveBeenCalledTimes(1);
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(logger.error).toHaveBeenCalledWith(
+      `native approval handler disabled: ${String(terminalError)}`,
     );
 
     await cleanup();

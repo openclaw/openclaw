@@ -1,14 +1,16 @@
-import { registerProviderPlugin, requireRegisteredProvider } from "openclaw/plugin-sdk/testing";
-import { beforeEach, describe, it, vi } from "vitest";
+import {
+  registerProviderPlugin,
+  requireRegisteredProvider,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   expectAugmentedCodexCatalog,
-  expectedAugmentedOpenaiCodexCatalogEntriesWithGpt55,
-  expectCodexBuiltInSuppression,
+  expectedOpenaiPluginCodexCatalogEntriesWithGpt55,
   expectCodexMissingAuthHint,
   importProviderRuntimeCatalogModule,
   loadBundledPluginPublicSurface,
-} from "../../../test/helpers/plugins/provider-catalog.js";
-import type { ProviderPlugin } from "../../../test/helpers/plugins/provider-catalog.js";
+} from "openclaw/plugin-sdk/provider-test-contracts";
+import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-test-contracts";
+import { beforeEach, describe, it, vi } from "vitest";
 
 const PROVIDER_CATALOG_CONTRACT_TIMEOUT_MS = 300_000;
 
@@ -46,17 +48,6 @@ vi.mock("openclaw/plugin-sdk/provider-catalog-runtime", async () => {
       }
       return supplemental;
     },
-    resolveProviderBuiltInModelSuppression: (params: {
-      context: Parameters<NonNullable<ProviderPlugin["suppressBuiltInModel"]>>[0];
-    }) => {
-      for (const provider of resolveCatalogHookProviders(params)) {
-        const result = provider.suppressBuiltInModel?.(params.context);
-        if (result?.suppress) {
-          return result;
-        }
-      }
-      return undefined;
-    },
     resolveOwningPluginIdsForProvider: (params: unknown) =>
       resolveOwningPluginIdsForProviderMock(params as never),
     resolveCatalogHookProviderPluginIds: (params: unknown) =>
@@ -83,15 +74,11 @@ export function describeOpenAIProviderCatalogContract() {
       })
     ).providers;
     const openaiProvider = requireRegisteredProvider(openaiProviders, "openai", "provider");
-    const {
-      augmentModelCatalogWithProviderPlugins,
-      resetProviderRuntimeHookCacheForTest,
-      resolveProviderBuiltInModelSuppression,
-    } = await importProviderRuntimeCatalogModule();
+    const { augmentModelCatalogWithProviderPlugins, resetProviderRuntimeHookCacheForTest } =
+      await importProviderRuntimeCatalogModule();
     return {
       augmentModelCatalogWithProviderPlugins,
       resetProviderRuntimeHookCacheForTest,
-      resolveProviderBuiltInModelSuppression,
       openaiProviders,
       openaiProvider,
     };
@@ -138,16 +125,11 @@ export function describeOpenAIProviderCatalogContract() {
         );
       });
 
-      it("keeps built-in model suppression wired through the provider runtime", async () => {
-        const { resolveProviderBuiltInModelSuppression } = await contractDepsPromise;
-        expectCodexBuiltInSuppression(resolveProviderBuiltInModelSuppression);
-      });
-
       it("keeps bundled model augmentation wired through the provider runtime", async () => {
         const { augmentModelCatalogWithProviderPlugins } = await contractDepsPromise;
         await expectAugmentedCodexCatalog(
           augmentModelCatalogWithProviderPlugins,
-          expectedAugmentedOpenaiCodexCatalogEntriesWithGpt55,
+          expectedOpenaiPluginCodexCatalogEntriesWithGpt55,
         );
       });
     },

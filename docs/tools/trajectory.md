@@ -64,6 +64,7 @@ Runtime events include:
 - `trace.metadata`
 - `context.compiled`
 - `prompt.submitted`
+- `model.fallback_step`, including the source model, next model, failure reason/detail, chain position, and whether fallback advanced, succeeded, or exhausted the chain
 - `model.completed`
 - `trace.artifacts`
 - `session.ended`

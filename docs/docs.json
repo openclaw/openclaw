@@ -1084,6 +1084,7 @@
                   "channels/wechat",
                   "channels/qqbot",
                   "channels/feishu",
+                  "channels/yuanbao",
                   "channels/zalo",
                   "channels/zalouser"
                 ]
@@ -1185,6 +1186,7 @@
                   "plugins/webhooks",
                   "plugins/voice-call",
                   "plugins/memory-wiki",
+                  "plugins/memory-lancedb",
                   "plugins/message-presentation",
                   "plugins/skill-workshop",
                   "plugins/zalouser",
@@ -1330,6 +1332,7 @@
                   "providers/cloudflare-ai-gateway",
                   "providers/comfy",
                   "providers/deepgram",
+                  "providers/deepinfra",
                   "providers/deepseek",
                   "providers/elevenlabs",
                   "providers/fal",
@@ -1519,6 +1522,7 @@
               {
                 "group": "Security",
                 "pages": [
+                  "security/network-proxy",
                   "security/formal-verification",
                   "security/THREAT-MODEL-ATLAS",
                   "security/CONTRIBUTING-THREAT-MODEL"

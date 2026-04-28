@@ -1,4 +1,4 @@
-import { useFrozenTime, useRealTime } from "openclaw/plugin-sdk/testing";
+import { useFrozenTime, useRealTime } from "openclaw/plugin-sdk/test-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const harness = await import("./bot.create-telegram-bot.test-harness.js");

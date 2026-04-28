@@ -1,5 +1,5 @@
+import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/channel-contract-testing";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
-import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.useRealTimers();
 const [
@@ -90,9 +90,9 @@ describe("signal createSignalEventHandler inbound context", () => {
     }
     expectInboundContextContract(contextWithBody);
     // Sender should appear as prefix in group messages (no redundant [from:] suffix)
-    expect(String(contextWithBody.Body ?? "")).toContain("Alice");
-    expect(String(contextWithBody.Body ?? "")).toMatch(/Alice.*:/);
-    expect(String(contextWithBody.Body ?? "")).not.toContain("[from:");
+    expect(contextWithBody.Body ?? "").toContain("Alice");
+    expect(contextWithBody.Body ?? "").toMatch(/Alice.*:/);
+    expect(contextWithBody.Body ?? "").not.toContain("[from:");
   });
 
   it("normalizes direct chat To/OriginatingTo targets to canonical Signal ids", async () => {

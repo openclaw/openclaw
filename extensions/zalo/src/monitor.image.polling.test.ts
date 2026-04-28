@@ -1,4 +1,4 @@
-import { createRuntimeEnv } from "openclaw/plugin-sdk/testing";
+import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import {
   createImageLifecycleCore,
@@ -6,14 +6,14 @@ import {
   createLifecycleMonitorSetup,
   expectImageLifecycleDelivery,
   settleAsyncWork,
-} from "../test-support/lifecycle-test-support.js";
+} from "./test-support/lifecycle-test-support.js";
 import {
   getUpdatesMock,
   getZaloRuntimeMock,
   loadCachedLifecycleMonitorModule,
   resetLifecycleTestState,
   sendMessageMock,
-} from "../test-support/monitor-mocks-test-support.js";
+} from "./test-support/monitor-mocks-test-support.js";
 
 describe("Zalo polling image handling", () => {
   const {

@@ -1,17 +1,17 @@
 import {
+  expectStopPendingUntilAbort,
+  startAccountAndTrackLifecycle,
+  waitForStartedMocks,
+} from "openclaw/plugin-sdk/channel-test-helpers";
+import {
   createPluginSetupWizardAdapter,
   createPluginSetupWizardStatus,
   createTestWizardPrompter,
   promptSetupWizardAllowFrom,
   runSetupWizardConfigure,
-  type WizardPrompter,
-} from "openclaw/plugin-sdk/testing";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  expectStopPendingUntilAbort,
-  startAccountAndTrackLifecycle,
-  waitForStartedMocks,
-} from "../../../test/helpers/plugins/start-account-lifecycle.js";
 import {
   listIrcAccountIds,
   resolveDefaultIrcAccountId,

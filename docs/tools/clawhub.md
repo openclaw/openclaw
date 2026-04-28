@@ -150,11 +150,13 @@ abuse without blocking legitimate contributors.
     - Report reasons are required and recorded.
     - Each user can have up to 20 active reports at a time.
     - Skills with more than 3 unique reports are auto-hidden by default.
+
   </Accordion>
   <Accordion title="Moderation">
     - Moderators can view hidden skills, unhide them, delete them, or ban users.
     - Abusing the report feature can result in account bans.
     - Interested in becoming a moderator? Ask in the OpenClaw Discord and contact a moderator or maintainer.
+
   </Accordion>
 </AccordionGroup>
 
@@ -382,6 +384,7 @@ plugin loading paths.
     - Each publish creates a new **semver** `SkillVersion`.
     - Tags (like `latest`) point to a version; moving tags lets you roll back.
     - Changelogs are attached per version and can be empty when syncing or publishing updates.
+
   </Accordion>
   <Accordion title="Local changes vs registry versions">
     Updates compare the local skill contents to registry versions using a
@@ -398,6 +401,7 @@ plugin loading paths.
   <Accordion title="Storage and lockfile">
     - Installed skills are recorded in `.clawhub/lock.json` under your workdir.
     - Auth tokens are stored in the ClawHub CLI config file (override via `CLAWHUB_CONFIG_PATH`).
+
   </Accordion>
   <Accordion title="Telemetry (install counts)">
     When you run `clawhub sync` while logged in, the CLI sends a minimal

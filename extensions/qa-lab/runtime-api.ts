@@ -1,6 +1,7 @@
 export {
   buildQaTarget,
   callGatewayFromCli,
+  type Command,
   createQaBusThread,
   defaultQaRuntimeModelForMode,
   definePluginEntry,
@@ -36,6 +37,5 @@ export {
   searchQaBusMessages,
   sendQaBusMessage,
   setQaChannelRuntime,
-  type Command,
 } from "./src/runtime-api.js";
 export { startQaLiveLaneGateway } from "./src/live-transports/shared/live-gateway.runtime.js";

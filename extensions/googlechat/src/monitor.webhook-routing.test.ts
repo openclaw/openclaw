@@ -2,9 +2,9 @@ import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
 import {
   createEmptyPluginRegistry,
-  createMockServerResponse,
   setActivePluginRegistry,
-} from "openclaw/plugin-sdk/testing";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";

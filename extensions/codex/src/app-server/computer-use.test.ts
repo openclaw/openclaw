@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ensureCodexComputerUse,
@@ -7,8 +10,13 @@ import {
 } from "./computer-use.js";
 
 describe("Codex Computer Use setup", () => {
+  const cleanupPaths: string[] = [];
+
   afterEach(() => {
     vi.useRealTimers();
+    for (const cleanupPath of cleanupPaths.splice(0)) {
+      fs.rmSync(cleanupPath, { recursive: true, force: true });
+    }
   });
 
   it("stays disabled until configured", async () => {
@@ -246,6 +254,69 @@ describe("Codex Computer Use setup", () => {
     expect(request).toHaveBeenCalledWith("experimentalFeature/enablement/set", {
       enablement: { plugins: true },
     });
+    expect(request).not.toHaveBeenCalledWith("marketplace/add", expect.anything());
+    expect(request).toHaveBeenCalledWith("plugin/install", {
+      marketplacePath: "/marketplaces/desktop-tools/.agents/plugins/marketplace.json",
+      pluginName: "computer-use",
+    });
+  });
+
+  it("auto-registers the bundled Codex app marketplace during auto-install", async () => {
+    const bundledMarketplacePath = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-codex-bundled-marketplace-"),
+    );
+    cleanupPaths.push(bundledMarketplacePath);
+    const request = createBundledMarketplaceComputerUseRequest(bundledMarketplacePath);
+
+    await expect(
+      ensureCodexComputerUse({
+        pluginConfig: {
+          computerUse: {
+            enabled: true,
+            autoInstall: true,
+          },
+        },
+        request,
+        defaultBundledMarketplacePath: bundledMarketplacePath,
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        ready: true,
+        reason: "ready",
+        marketplaceName: "openai-bundled",
+        message: "Computer Use is ready.",
+      }),
+    );
+    expect(request).toHaveBeenCalledWith("marketplace/add", {
+      source: bundledMarketplacePath,
+    });
+    expect(request).toHaveBeenCalledWith("plugin/install", {
+      marketplacePath: `${bundledMarketplacePath}/.agents/plugins/marketplace.json`,
+      pluginName: "computer-use",
+    });
+  });
+
+  it("allows auto-install from a configured local marketplace path", async () => {
+    const request = createComputerUseRequest({ installed: false });
+
+    await expect(
+      ensureCodexComputerUse({
+        pluginConfig: {
+          computerUse: {
+            enabled: true,
+            autoInstall: true,
+            marketplacePath: "/marketplaces/desktop-tools/.agents/plugins/marketplace.json",
+          },
+        },
+        request,
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        ready: true,
+        reason: "ready",
+        message: "Computer Use is ready.",
+      }),
+    );
     expect(request).not.toHaveBeenCalledWith("marketplace/add", expect.anything());
     expect(request).toHaveBeenCalledWith("plugin/install", {
       marketplacePath: "/marketplaces/desktop-tools/.agents/plugins/marketplace.json",
@@ -576,6 +647,87 @@ function createMultiMarketplaceComputerUseRequest(): CodexComputerUseRequest {
         marketplacePath: "/marketplaces/openai-curated/.agents/plugins/marketplace.json",
         pluginName: "computer-use",
       });
+      installed = true;
+      return { authPolicy: "ON_INSTALL", appsNeedingAuth: [] };
+    }
+    if (method === "config/mcpServer/reload") {
+      return undefined;
+    }
+    if (method === "mcpServerStatus/list") {
+      return {
+        data: installed
+          ? [
+              {
+                name: "computer-use",
+                tools: {
+                  list_apps: {
+                    name: "list_apps",
+                    inputSchema: { type: "object" },
+                  },
+                },
+                resources: [],
+                resourceTemplates: [],
+                authStatus: "unsupported",
+              },
+            ]
+          : [],
+        nextCursor: null,
+      };
+    }
+    throw new Error(`unexpected request ${method}`);
+  }) as CodexComputerUseRequest;
+}
+
+function createBundledMarketplaceComputerUseRequest(
+  bundledMarketplacePath: string,
+): CodexComputerUseRequest {
+  let registered = false;
+  let installed = false;
+  return vi.fn(async (method: string, requestParams?: unknown) => {
+    if (method === "experimentalFeature/enablement/set") {
+      return { enablement: { plugins: true } };
+    }
+    if (method === "marketplace/add") {
+      expect(requestParams).toEqual({
+        source: bundledMarketplacePath,
+      });
+      registered = true;
+      return {
+        marketplaceName: "openai-bundled",
+        installedRoot: bundledMarketplacePath,
+        alreadyAdded: false,
+      };
+    }
+    if (method === "plugin/list") {
+      return {
+        marketplaces: registered
+          ? [
+              {
+                name: "openai-bundled",
+                path: `${bundledMarketplacePath}/.agents/plugins/marketplace.json`,
+                interface: null,
+                plugins: [pluginSummary(installed, "openai-bundled")],
+              },
+            ]
+          : [],
+        marketplaceLoadErrors: [],
+        featuredPluginIds: [],
+      };
+    }
+    if (method === "plugin/read") {
+      return {
+        plugin: {
+          marketplaceName: "openai-bundled",
+          marketplacePath: `${bundledMarketplacePath}/.agents/plugins/marketplace.json`,
+          summary: pluginSummary(installed, "openai-bundled"),
+          description: "Control desktop apps.",
+          skills: [],
+          apps: [],
+          mcpServers: ["computer-use"],
+        },
+      };
+    }
+    if (method === "plugin/install") {
       installed = true;
       return { authPolicy: "ON_INSTALL", appsNeedingAuth: [] };
     }

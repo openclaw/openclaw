@@ -9,9 +9,7 @@ const COMPAT_CONFIG_API_FILES = new Set([
   "src/config/io.ts",
   "src/config/mutate.ts",
   "src/memory-host-sdk/runtime-core.ts",
-  "src/plugin-sdk/browser-config-runtime.ts",
   "src/plugin-sdk/config-runtime.ts",
-  "src/plugin-sdk/memory-core.ts",
   "src/plugin-sdk/memory-core-host-runtime-core.ts",
   "src/plugins/compat/registry.ts",
   "src/plugins/contracts/config-boundary-guard.test.ts",
@@ -224,7 +222,7 @@ export function collectDeprecatedInternalConfigApiViolations({
     const guards = [
       {
         pattern:
-          /\b(?:import|export)\s+(?:type\s+)?\{[^}]*\bloadConfig\b[^}]*\}\s+from\s+["']openclaw\/plugin-sdk\/(?:browser-config-runtime|config-runtime|memory-core-host-runtime-core)["']/,
+          /\b(?:import|export)\s+(?:type\s+)?\{[^}]*\bloadConfig\b[^}]*\}\s+from\s+["']openclaw\/plugin-sdk\/(?:config-runtime|memory-core-host-runtime-core)["']/,
         replacement:
           "use getRuntimeConfig(), runtime.config.current(), or pass the already loaded config",
       },
@@ -280,13 +278,13 @@ export function collectDeprecatedInternalConfigApiViolations({
     const guards = [
       {
         pattern:
-          /\b(?:import|export)\s+(?:type\s+)?\{[\s\S]*?\b(?:loadConfig|writeConfigFile)\b[\s\S]*?\}\s+from\s+["']openclaw\/plugin-sdk\/(?:browser-config-runtime|config-runtime|memory-core-host-runtime-core|memory-core)["']/,
+          /\b(?:import|export)\s+(?:type\s+)?\{[\s\S]*?\b(?:loadConfig|writeConfigFile)\b[\s\S]*?\}\s+from\s+["']openclaw\/plugin-sdk\/(?:config-runtime|memory-core-host-runtime-core)["']/,
         replacement:
           "use getRuntimeConfig(), runtime.config.current(), or mutation helpers with afterWrite",
       },
       {
         pattern:
-          /ReturnType<typeof import\(["']openclaw\/plugin-sdk\/(?:browser-config-runtime|config-runtime|memory-core-host-runtime-core|memory-core)["']\)\.(?:loadConfig|writeConfigFile)>/,
+          /ReturnType<typeof import\(["']openclaw\/plugin-sdk\/(?:config-runtime|memory-core-host-runtime-core)["']\)\.(?:loadConfig|writeConfigFile)>/,
         replacement: "use OpenClawConfig or the explicit mutation helper type",
       },
     ];

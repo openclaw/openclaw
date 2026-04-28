@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { describeControlFailure } from "./capabilities.js";
 import type { CodexAppServerClient } from "./client.js";
 import {
@@ -59,6 +60,7 @@ export type CodexComputerUseSetupParams = {
   timeoutMs?: number;
   signal?: AbortSignal;
   forceEnable?: boolean;
+  defaultBundledMarketplacePath?: string;
 };
 
 type MarketplaceRef =
@@ -90,6 +92,8 @@ type PluginInspection =
 
 const CURATED_MARKETPLACE_POLL_INTERVAL_MS = 2_000;
 const COMPUTER_USE_MARKETPLACE_NAME_PRIORITY = ["openai-bundled", "openai-curated", "local"];
+const DEFAULT_CODEX_BUNDLED_MARKETPLACE_PATH =
+  "/Applications/Codex.app/Contents/Resources/plugins/openai-bundled";
 
 export async function readCodexComputerUseStatus(
   params: CodexComputerUseSetupParams = {},
@@ -176,6 +180,7 @@ async function inspectCodexComputerUse(params: {
   signal?: AbortSignal;
   config: ResolvedCodexComputerUseConfig;
   installPlugin: boolean;
+  defaultBundledMarketplacePath?: string;
 }): Promise<CodexComputerUseStatus> {
   const request = createComputerUseRequest(params);
   if (params.installPlugin) {
@@ -192,6 +197,7 @@ async function inspectCodexComputerUse(params: {
     config: params.config,
     allowAdd: params.installPlugin,
     signal: params.signal,
+    defaultBundledMarketplacePath: params.defaultBundledMarketplacePath,
   });
   if (!marketplace.marketplace) {
     return unavailableStatus(
@@ -320,6 +326,7 @@ async function resolveMarketplaceRef(params: {
   config: ResolvedCodexComputerUseConfig;
   allowAdd: boolean;
   signal?: AbortSignal;
+  defaultBundledMarketplacePath?: string;
 }): Promise<MarketplaceResolution> {
   let preferredMarketplaceName = params.config.marketplaceName;
   if (params.config.marketplaceSource && params.allowAdd) {
@@ -336,16 +343,19 @@ async function resolveMarketplaceRef(params: {
     return { marketplace };
   }
 
-  let candidates: MarketplaceRef[] = [];
+  let candidates = await listComputerUseMarketplaceCandidates(params.request, params.config);
+  if (candidates.length === 0 && shouldAddBundledComputerUseMarketplace(params)) {
+    const bundledMarketplacePath =
+      params.defaultBundledMarketplacePath ?? DEFAULT_CODEX_BUNDLED_MARKETPLACE_PATH;
+    const added = await params.request<v2.MarketplaceAddResponse>("marketplace/add", {
+      source: bundledMarketplacePath,
+    } satisfies v2.MarketplaceAddParams);
+    preferredMarketplaceName ??= added.marketplaceName;
+    candidates = await listComputerUseMarketplaceCandidates(params.request, params.config);
+  }
+
   const waitUntil = marketplaceDiscoveryWaitUntil(params);
   while (candidates.length === 0) {
-    const listed = await params.request<v2.PluginListResponse>("plugin/list", {
-      cwds: [],
-    } satisfies v2.PluginListParams);
-    candidates = findComputerUseMarketplaces(listed, params.config.pluginName);
-    if (candidates.length > 0) {
-      break;
-    }
     if (Date.now() >= waitUntil) {
       break;
     }
@@ -353,6 +363,7 @@ async function resolveMarketplaceRef(params: {
       Math.min(CURATED_MARKETPLACE_POLL_INTERVAL_MS, waitUntil - Date.now()),
       params.signal,
     );
+    candidates = await listComputerUseMarketplaceCandidates(params.request, params.config);
   }
 
   if (preferredMarketplaceName) {
@@ -383,16 +394,42 @@ async function resolveMarketplaceRef(params: {
   return marketplace ? { marketplace } : {};
 }
 
+async function listComputerUseMarketplaceCandidates(
+  request: CodexComputerUseRequest,
+  config: ResolvedCodexComputerUseConfig,
+): Promise<MarketplaceRef[]> {
+  const listed = await request<v2.PluginListResponse>("plugin/list", {
+    cwds: [],
+  } satisfies v2.PluginListParams);
+  return findComputerUseMarketplaces(listed, config.pluginName);
+}
+
 function blockUnsafeAutoInstallStatus(
   config: ResolvedCodexComputerUseConfig,
 ): CodexComputerUseStatus | undefined {
-  if (!config.marketplaceSource && !config.marketplacePath) {
+  if (!config.marketplaceSource) {
     return undefined;
   }
   return unavailableStatus(
     config,
     "auto_install_blocked",
-    "Computer Use auto-install only uses marketplaces Codex app-server has already discovered. Run /codex computer-use install to install from a configured marketplace source or path.",
+    "Computer Use auto-install only uses marketplaces Codex app-server has already discovered. Run /codex computer-use install to install from a configured marketplace source.",
+  );
+}
+
+function shouldAddBundledComputerUseMarketplace(params: {
+  config: ResolvedCodexComputerUseConfig;
+  allowAdd: boolean;
+  defaultBundledMarketplacePath?: string;
+}): boolean {
+  const bundledMarketplacePath =
+    params.defaultBundledMarketplacePath ?? DEFAULT_CODEX_BUNDLED_MARKETPLACE_PATH;
+  return (
+    params.allowAdd &&
+    !params.config.marketplaceSource &&
+    !params.config.marketplacePath &&
+    !params.config.marketplaceName &&
+    existsSync(bundledMarketplacePath)
   );
 }
 

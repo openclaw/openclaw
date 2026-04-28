@@ -80,7 +80,12 @@ type BonjourAdvertiserDeps = {
 
 const WATCHDOG_INTERVAL_MS = 5_000;
 const REPAIR_DEBOUNCE_MS = 30_000;
-const STUCK_ANNOUNCING_MS = 8_000;
+// Real-world LAN announce phase typically takes 12-13s on Mac/iOS networks. The
+// previous 8s threshold was triggering false-positive teardowns on every gateway
+// restart in such environments. 20s gives healthy networks plenty of room while
+// still catching genuinely stuck advertisers (announce that never completes).
+// See https://github.com/openclaw/openclaw/issues/72481
+const STUCK_ANNOUNCING_MS = 20_000;
 const MAX_CONSECUTIVE_RESTARTS = 3;
 const BONJOUR_ANNOUNCED_STATE = "announced";
 const CIAO_SELF_PROBE_RETRY_FRAGMENT =
@@ -359,6 +364,13 @@ export async function startGatewayBonjourAdvertiser(
 
       if (classification.kind === "cancellation") {
         logger.debug(`bonjour: ignoring unhandled ciao rejection: ${classification.formatted}`);
+      } else if (classification.kind === "interface-enumeration-failure") {
+        // Restricted sandboxes can refuse os.networkInterfaces(); mDNS cannot
+        // function without it, so surface a single warning and skip recovery.
+        // Recovery would just re-enter the same failing syscall.
+        logger.warn(
+          `bonjour: disabling mDNS — networkInterfaces() unavailable in this environment: ${classification.formatted}`,
+        );
       } else {
         const label =
           classification.kind === "netmask-assertion" ? "netmask assertion" : "interface assertion";

@@ -1,4 +1,4 @@
-import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/testing";
+import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import * as dedup from "./dedup.js";

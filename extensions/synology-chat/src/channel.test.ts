@@ -1,4 +1,4 @@
-import { createPluginSetupWizardStatus } from "openclaw/plugin-sdk/testing";
+import { createPluginSetupWizardStatus } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedSynologyChatAccount } from "./types.js";
 

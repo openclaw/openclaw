@@ -81,3 +81,19 @@ docker_e2e_build_or_reuse() {
   build_args+=(-t "$image_name" -f "$dockerfile" "$context")
   docker_build_run "$label-build" "${build_args[@]}"
 }
+
+docker_e2e_test_state_shell_b64() {
+  local label="${1:?missing test-state label}"
+  local scenario="${2:-empty}"
+  node "$ROOT_DIR/scripts/lib/openclaw-test-state.mjs" shell \
+    --label "$label" \
+    --scenario "$scenario" \
+    | base64 \
+    | tr -d '\n'
+}
+
+docker_e2e_test_state_function_b64() {
+  node "$ROOT_DIR/scripts/lib/openclaw-test-state.mjs" shell-function \
+    | base64 \
+    | tr -d '\n'
+}

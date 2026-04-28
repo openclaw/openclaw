@@ -3,7 +3,6 @@
 export {
   augmentModelCatalogWithProviderPlugins,
   resetProviderRuntimeHookCacheForTest,
-  resolveProviderBuiltInModelSuppression,
 } from "../plugins/provider-runtime.js";
 export {
   resolveCatalogHookProviderPluginIds,

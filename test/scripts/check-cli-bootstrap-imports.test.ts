@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   collectCliBootstrapExternalImportErrors,
+  collectGatewayRunChunkBudgetErrors,
   listStaticImportSpecifiers,
 } from "../../scripts/check-cli-bootstrap-imports.mjs";
 
@@ -20,6 +21,20 @@ function writeFixture(root: string, relativePath: string, source: string): void 
   const target = join(root, relativePath);
   mkdirSync(dirname(target), { recursive: true });
   writeFileSync(target, source, "utf8");
+}
+
+function writeGatewayRunChunk(root: string, source = ""): void {
+  writeFixture(root, "dist/string-coerce.js", "export const normalize = true;");
+  writeFixture(
+    root,
+    "dist/run-gateway.js",
+    [
+      'import "./string-coerce.js";',
+      "const GATEWAY_RUN_VALUE_KEYS = [];",
+      "function addGatewayRunCommand(cmd) { return cmd; }",
+      source,
+    ].join("\n"),
+  );
 }
 
 afterEach(() => {
@@ -53,8 +68,10 @@ describe("check-cli-bootstrap-imports", () => {
       `import "../light.js";\nexport async function run() { return import("tslog"); }\n`,
     );
     writeFixture(root, "dist/light.js", `import path from "node:path";\nvoid path;\n`);
+    writeGatewayRunChunk(root);
 
     expect(collectCliBootstrapExternalImportErrors({ rootDir: root })).toEqual([]);
+    expect(collectGatewayRunChunkBudgetErrors({ rootDir: root })).toEqual([]);
   });
 
   it("reports external packages in the static bootstrap graph", () => {
@@ -62,9 +79,52 @@ describe("check-cli-bootstrap-imports", () => {
     writeFixture(root, "dist/entry.js", `import "./cli/run-main.js";\n`);
     writeFixture(root, "dist/cli/run-main.js", `import "../heavy.js";\n`);
     writeFixture(root, "dist/heavy.js", `import { Logger } from "tslog";\nvoid Logger;\n`);
+    writeGatewayRunChunk(root);
 
     expect(collectCliBootstrapExternalImportErrors({ rootDir: root })).toEqual([
       'CLI bootstrap static graph imports external package "tslog" from dist/heavy.js.',
+    ]);
+  });
+
+  it("reports missing gateway run chunk", () => {
+    const root = makeTempRoot();
+
+    expect(collectGatewayRunChunkBudgetErrors({ rootDir: root })).toEqual([
+      "CLI bootstrap import guard could not find the bundled gateway run chunk. Run pnpm build first.",
+    ]);
+  });
+
+  it("reports cold static imports in the gateway run chunk", () => {
+    const root = makeTempRoot();
+    writeGatewayRunChunk(root, 'import "./restart-sentinel-abc123.js";');
+    writeFixture(root, "dist/restart-sentinel-abc123.js", "export const sentinel = true;");
+
+    expect(collectGatewayRunChunkBudgetErrors({ rootDir: root })).toEqual([
+      'Gateway run chunk dist/run-gateway.js static graph imports cold path "./restart-sentinel-abc123.js" from dist/run-gateway.js.',
+    ]);
+  });
+
+  it("reports transitive cold static imports from the gateway run chunk graph", () => {
+    const root = makeTempRoot();
+    writeGatewayRunChunk(root, 'import "./gateway-bridge.js";');
+    writeFixture(root, "dist/gateway-bridge.js", 'import "./server-close-abc123.js";');
+    writeFixture(root, "dist/server-close-abc123.js", "export const close = true;");
+
+    expect(collectGatewayRunChunkBudgetErrors({ rootDir: root })).toEqual([
+      'Gateway run chunk dist/run-gateway.js static graph imports cold path "./server-close-abc123.js" from dist/gateway-bridge.js.',
+    ]);
+  });
+
+  it("reports oversized gateway run chunks", () => {
+    const root = makeTempRoot();
+    writeGatewayRunChunk(root, "x".repeat(10));
+
+    expect(
+      collectGatewayRunChunkBudgetErrors({ rootDir: root, gatewayRunChunkMaxBytes: 50 }),
+    ).toEqual([
+      expect.stringMatching(
+        /^Gateway run chunk dist\/run-gateway\.js is \d+ bytes, above budget 50 bytes\.$/,
+      ),
     ]);
   });
 });

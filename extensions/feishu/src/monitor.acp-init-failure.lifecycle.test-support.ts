@@ -1,5 +1,5 @@
 import "./lifecycle.test-support.js";
-import { createRuntimeEnv } from "openclaw/plugin-sdk/testing";
+import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import {

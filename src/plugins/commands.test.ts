@@ -413,6 +413,25 @@ describe("registerPluginCommand", () => {
     });
   });
 
+  it("keeps reserved command bypass scoped to the primary command name", () => {
+    const result = registerPluginCommand(
+      "bundled-plugin",
+      createVoiceCommand({
+        name: "status",
+        nativeNames: {
+          telegram: "help",
+        },
+      }),
+      { allowReservedCommandNames: true },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      error:
+        'Native command alias "telegram" invalid: Command name "help" is reserved by a built-in command',
+    });
+  });
+
   it("shares plugin commands across duplicate module instances", async () => {
     const first = await importCommandsModule(`first-${Date.now()}`);
     const second = await importCommandsModule(`second-${Date.now()}`);

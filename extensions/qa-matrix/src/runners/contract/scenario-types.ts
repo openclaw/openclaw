@@ -17,6 +17,16 @@ export type MatrixQaCanaryArtifact = {
 
 export type MatrixQaScenarioArtifacts = {
   accepted?: MatrixQaScenarioArtifacts;
+  approval?: MatrixQaObservedEvent["approval"] & {
+    eventId: string;
+    roomId: string;
+  };
+  approvals?: Array<
+    MatrixQaObservedEvent["approval"] & {
+      eventId: string;
+      roomId: string;
+    }
+  >;
   attachments?: Array<{
     eventId: string;
     filename?: string;

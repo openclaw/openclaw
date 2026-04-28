@@ -3,6 +3,10 @@ import {
   resolveOpenClawAgentDir,
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import {
+  registerProviderPlugin,
+  requireRegisteredProvider,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   DEFAULT_LIVE_MUSIC_MODELS,
@@ -16,11 +20,9 @@ import {
   parseCsvFilter,
   parseProviderModelMap,
   redactLiveApiKey,
-  registerProviderPlugin,
-  requireRegisteredProvider,
   resolveConfiguredLiveMusicModels,
   resolveLiveMusicAuthStore,
-} from "openclaw/plugin-sdk/testing";
+} from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import googlePlugin from "./google/index.js";
 import minimaxPlugin from "./minimax/index.js";

@@ -24,6 +24,7 @@ Run `openclaw cron --help` for the full command surface. See [Cron jobs](/automa
     - `isolated` creates a fresh transcript and session id for each run.
     - `current` binds to the active session at creation time.
     - `session:<id>` pins to an explicit persistent session key.
+
   </Accordion>
   <Accordion title="Isolated session semantics">
     Isolated runs reset ambient conversation context. Channel and group routing, send/queue policy, elevation, origin, and ACP runtime binding are reset for the new run. Safe preferences and explicit user-selected model or auth overrides can carry across runs.
@@ -83,6 +84,8 @@ Recurring jobs use exponential retry backoff after consecutive errors: 30s, 1m, 
 
 Skipped runs are tracked separately from execution errors. They do not affect retry backoff, but `openclaw cron edit <job-id> --failure-alert-include-skipped` can opt failure alerts into repeated skipped-run notifications.
 
+For isolated jobs that target a local configured model provider, cron runs a lightweight provider preflight before starting the agent turn. Loopback, private-network, and `.local` `api: "ollama"` providers are probed at `/api/tags`; local OpenAI-compatible providers such as vLLM, SGLang, and LM Studio are probed at `/models`. If the endpoint is unreachable, the run is recorded as `skipped` and retried on a later schedule; matching dead endpoints are cached for 5 minutes to avoid many jobs hammering the same local server.
+
 Note: cron job definitions live in `jobs.json`, while pending runtime state lives in `jobs-state.json`. If `jobs.json` is edited externally, the Gateway reloads changed schedules and clears stale pending slots; formatting-only rewrites do not clear the pending slot.
 
 ### Manual runs
@@ -98,7 +101,7 @@ Note: cron job definitions live in `jobs.json`, while pending runtime state live
 `cron add|edit --model <ref>` selects an allowed model for the job.
 
 <Warning>
-If the model is not allowed, cron warns and falls back to the job's agent or default model selection.
+If the model is not allowed or cannot be resolved, cron fails the run with an explicit validation error instead of falling back to the job's agent or default model selection.
 </Warning>
 
 Cron `--model` is a **job primary**, not a chat-session `/model` override. That means:
@@ -178,6 +181,12 @@ Announce to a specific channel:
 
 ```bash
 openclaw cron edit <job-id> --announce --channel slack --to "channel:C1234567890"
+```
+
+Announce to a Telegram forum topic:
+
+```bash
+openclaw cron edit <job-id> --announce --channel telegram --to "-1001234567890" --thread-id 42
 ```
 
 Create an isolated job with lightweight bootstrap context:

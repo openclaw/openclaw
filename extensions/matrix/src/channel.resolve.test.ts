@@ -1,4 +1,4 @@
-import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/testing";
+import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveMatrixTargetsMock = vi.hoisted(() => vi.fn(async () => []));
