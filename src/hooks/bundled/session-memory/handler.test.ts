@@ -1175,6 +1175,70 @@ describe("session-memory hook", () => {
     expect(body).toContain("tail-marker");
   }, 30_000);
 
+  it("restores rollback content via realpath when redirect symlink is retargeted between write and drain (Codex P1)", async () => {
+    // Codex P1 on PR #38162: when sessionSaveRedirectPath points at a
+    // symlink and the symlink is retargeted (or removed) between the
+    // inline write and the post-hook drain, restoration via the lexical
+    // writeRelativePath would land in the wrong file while the original
+    // overwritten target keeps the transcript. The fix uses
+    // writtenFilePath (realpath captured right after write) for
+    // restoration so the same bytes we overwrote get restored.
+    const tempDir = await createCaseWorkspace("redirect-retargeted-symlink");
+    const quarantine = path.join(tempDir, "quarantine");
+    const realA = path.join(tempDir, "realA");
+    const realB = path.join(tempDir, "realB");
+    await fs.mkdir(quarantine, { recursive: true });
+    await fs.mkdir(realA, { recursive: true });
+    await fs.mkdir(realB, { recursive: true });
+    const sessionsDir = path.join(tempDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "test-session.jsonl",
+      content: createMockSessionContent([{ role: "user", content: "transcript" }]),
+    });
+    // Initial state: linkPath -> realA/redirected.md, which contains
+    // "original-A". realB/redirected.md is unrelated and should never be
+    // touched by rollback.
+    const linkPath = path.join(quarantine, "redirected.md");
+    const targetA = path.join(realA, "redirected.md");
+    const targetB = path.join(realB, "redirected.md");
+    await fs.writeFile(targetA, "original-A");
+    await fs.writeFile(targetB, "original-B-untouched");
+    try {
+      await fs.symlink(targetA, linkPath);
+    } catch (err) {
+      console.warn("skipping retargeted-symlink test: fs.symlink failed", err);
+      return;
+    }
+    const event = createHookEvent("command", "new", "agent:main:main", {
+      cfg: { agents: { defaults: { workspace: tempDir } } } satisfies OpenClawConfig,
+      previousSessionEntry: { sessionId: "s1", sessionFile },
+    });
+    event.context.sessionSaveRedirectPath = linkPath;
+    // The post-hook RETARGETS the symlink (link now points at realB),
+    // THEN sets blockSessionSave. A naive rollback would write through
+    // the new symlink target (realB) instead of the realA file we
+    // actually overwrote.
+    event.postHookActions ??= [];
+    event.postHookActions.push(async () => {
+      await fs.unlink(linkPath);
+      await fs.symlink(targetB, linkPath);
+      event.context.blockSessionSave = true;
+    });
+    await handler(event);
+    await drainPostHookActions(event);
+    // The fix: rollback writes through writtenFilePath (realpath at
+    // write time) = targetA, restoring "original-A".
+    // Without the fix: rollback writes through writeRelativePath, which
+    // resolves to the (now-retargeted) symlink, clobbering targetB with
+    // "original-A".
+    const aContent = await fs.readFile(targetA, "utf-8").catch(() => null);
+    const bContent = await fs.readFile(targetB, "utf-8").catch(() => null);
+    expect(aContent).toBe("original-A"); // realA: restored to original
+    expect(bContent).toBe("original-B-untouched"); // realB: never written
+  });
+
   it("aborts the handler when pre-existing snapshot read fails with a non-ENOENT error (Codex P2)", async () => {
     // The pre-write snapshot used to swallow every fs.readFile error, so an
     // existing target that was writable but not readable (EACCES, EROFS,

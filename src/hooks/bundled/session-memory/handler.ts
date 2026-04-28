@@ -853,14 +853,37 @@ const saveSessionToMemory: HookHandler = async (event) => {
             // Restore prior content rather than deleting — the file existed
             // before our write and may belong to a previous session or contain
             // historical data (common with fixed redirect quarantine paths).
+            //
+            // Codex P1 on PR #38162 ("Restore redirected rollback via
+            // resolved file path"): for redirected writes we MUST restore
+            // through the realpath captured immediately after the inline
+            // write — NOT the lexical writeRelativePath. If the redirect
+            // target was a symlink and the link gets retargeted, removed,
+            // or replaced between our write and the post-hook drain,
+            // writing through writeRelativePath would land in the wrong
+            // file (or recreate a missing link) while the original
+            // overwritten target would keep the transcript. That breaks
+            // the handler's "no persistence anywhere" guarantee for
+            // blockSessionSave on symlink-backed redirects.
+            //
+            // writtenFilePath was realpath()'d at line ~776 right after
+            // the successful write, so it points at the actual file we
+            // overwrote on disk. Convert it to a workspace-relative path
+            // so writeFileWithinRoot's containment check still applies
+            // (it was in-workspace at write time, by construction).
+            const restoreRoot = isRedirected ? canonicalWorkspace : memoryDir;
+            const restoreRelative = isRedirected
+              ? path.relative(canonicalWorkspace, writtenFilePath)
+              : filename;
             await writeFileWithinRoot({
-              rootDir: isRedirected ? canonicalWorkspace : memoryDir,
-              relativePath: isRedirected ? writeRelativePath : filename,
+              rootDir: restoreRoot,
+              relativePath: restoreRelative,
               data: preExistingContent,
               encoding: "utf-8",
             });
             log.debug("Session save retracted — pre-existing content restored", {
               redirected: isRedirected,
+              restoredAt: sanitizePathForLog(writtenFilePath),
             });
           } else {
             await fs.unlink(writtenFilePath);
