@@ -21,6 +21,7 @@ import { isCliProvider } from "../model-selection.js";
 import { prepareSessionManagerForRun } from "../pi-embedded-runner/session-manager-init.js";
 import { runEmbeddedPiAgent, type EmbeddedPiRunResult } from "../pi-embedded.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
+import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import { buildWorkspaceSkillSnapshot } from "../skills.js";
 import { buildUsageWithNoCost } from "../stream-message-shared.js";
 import {
@@ -120,7 +121,9 @@ async function persistTextTurnTranscript(
     .access(sessionFile)
     .then(() => true)
     .catch(() => false);
-  const sessionManager = SessionManager.open(sessionFile);
+  const sessionManager = guardSessionManager(SessionManager.open(sessionFile), {
+    agentId: params.sessionAgentId,
+  });
   await prepareSessionManagerForRun({
     sessionManager,
     sessionFile,

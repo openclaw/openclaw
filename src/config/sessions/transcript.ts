@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
+import { guardSessionManager } from "../../agents/session-tool-result-guard-wrapper.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { extractAssistantVisibleText } from "../../shared/chat-message-content.js";
@@ -276,7 +277,10 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
     ...(explicitIdempotencyKey ? { idempotencyKey: explicitIdempotencyKey } : {}),
   } as Parameters<SessionManager["appendMessage"]>[0];
   const { SessionManager } = await loadPiCodingAgentModule();
-  const sessionManager = SessionManager.open(sessionFile);
+  const sessionManager = guardSessionManager(SessionManager.open(sessionFile), {
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+  });
   const messageId = sessionManager.appendMessage(message);
 
   switch (params.updateMode ?? "inline") {
