@@ -202,7 +202,7 @@ describe("resolveBundledPluginsDir", () => {
       },
     ],
     [
-      "prefers source extensions under vitest to avoid stale staged plugins",
+      "does not prefer source extensions from VITEST alone",
       {
         prefix: "openclaw-bundled-dir-vitest-",
         hasExtensions: true,
@@ -210,7 +210,7 @@ describe("resolveBundledPluginsDir", () => {
         hasDistExtensions: true,
       },
       {
-        expectedRelativeDir: "extensions",
+        expectedRelativeDir: path.join("dist-runtime", "extensions"),
         vitest: "true",
       },
     ],
@@ -248,6 +248,8 @@ describe("resolveBundledPluginsDir", () => {
       seedBundledPluginTree(repoRoot, path.join("dist-runtime", "extensions"));
     } else if (expectation.expectedRelativeDir === path.join("dist", "extensions")) {
       seedBundledPluginTree(repoRoot, path.join("dist", "extensions"));
+    } else if (expectation.expectedRelativeDir === "extensions") {
+      seedBundledPluginTree(repoRoot, "extensions");
     }
     expectResolvedBundledDirFromRoot({
       repoRoot,
@@ -270,6 +272,7 @@ describe("resolveBundledPluginsDir", () => {
     fs.mkdirSync(path.join(repoRoot, "dist-runtime", "extensions", "discord"), {
       recursive: true,
     });
+    seedBundledPluginTree(repoRoot, "extensions");
 
     expectResolvedBundledDirFromRoot({
       repoRoot,
@@ -328,6 +331,30 @@ describe("resolveBundledPluginsDir", () => {
 
     expect(() => resolveBundledPluginsDir()).toThrow(
       "OPENCLAW_BUNDLED_PLUGINS_DIR must resolve under a trusted bundled plugin root",
+    );
+  });
+
+  it("does not let VITEST add cwd to bundled plugin resolution candidates", () => {
+    const cwdRepoRoot = createOpenClawRoot({
+      prefix: "openclaw-bundled-dir-vitest-cwd-",
+      hasExtensions: true,
+      hasSrc: true,
+      hasGitCheckout: true,
+    });
+    seedBundledPluginTree(cwdRepoRoot, "extensions", "memory-core");
+
+    vi.spyOn(process, "cwd").mockReturnValue(cwdRepoRoot);
+    process.argv[1] = "/usr/bin/env";
+    process.execArgv.length = 0;
+    process.env.VITEST = "true";
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+
+    const bundledDir = resolveBundledPluginsDir();
+
+    expect(bundledDir).toBeDefined();
+    expect(fs.realpathSync(bundledDir!)).not.toBe(
+      fs.realpathSync(path.join(cwdRepoRoot, "extensions")),
     );
   });
 

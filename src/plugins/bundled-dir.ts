@@ -130,7 +130,8 @@ function resolveBundledDirFromPackageRoot(
   const sourceExtensionsDir = path.join(packageRoot, "extensions");
   const builtExtensionsDir = path.join(packageRoot, "dist", "extensions");
   const sourceCheckout = isSourceCheckoutRoot(packageRoot);
-  if (preferSourceCheckout && fs.existsSync(sourceExtensionsDir)) {
+  const hasUsableSourceTree = sourceCheckout && hasUsableBundledPluginTree(sourceExtensionsDir);
+  if (preferSourceCheckout && hasUsableSourceTree) {
     return sourceExtensionsDir;
   }
   // Local source checkouts stage a runtime-complete bundled plugin tree under
@@ -149,7 +150,7 @@ function resolveBundledDirFromPackageRoot(
   if (hasUsableBuiltTree) {
     return builtExtensionsDir;
   }
-  if (sourceCheckout && fs.existsSync(sourceExtensionsDir)) {
+  if (hasUsableSourceTree) {
     return sourceExtensionsDir;
   }
   return undefined;
@@ -183,17 +184,12 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
     return undefined;
   }
 
-  const preferSourceCheckout = Boolean(env.VITEST) || runningSourceTypeScriptProcess();
+  const preferSourceCheckout = runningSourceTypeScriptProcess();
 
   try {
     const argvRoot = resolveOpenClawPackageRootSync({ argv1: process.argv[1] });
-    const cwdRoot = preferSourceCheckout
-      ? resolveOpenClawPackageRootSync({ cwd: process.cwd() })
-      : null;
     const moduleRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
-    const packageRoots = (
-      preferSourceCheckout ? [cwdRoot, argvRoot, moduleRoot] : [argvRoot, moduleRoot]
-    ).filter(
+    const packageRoots = [argvRoot, moduleRoot].filter(
       (entry, index, all): entry is string => Boolean(entry) && all.indexOf(entry) === index,
     );
     for (const packageRoot of packageRoots) {
