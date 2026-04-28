@@ -54,7 +54,14 @@ export function setFallbackGatewayContextResolver(
   resolveContext: () => GatewayRequestContext | undefined,
 ): void {
   const fallbackGatewayContextState = getFallbackGatewayContextState();
+  fallbackGatewayContextState.context = undefined;
   fallbackGatewayContextState.resolveContext = resolveContext;
+}
+
+export function clearFallbackGatewayContext(): void {
+  const fallbackGatewayContextState = getFallbackGatewayContextState();
+  fallbackGatewayContextState.context = undefined;
+  fallbackGatewayContextState.resolveContext = undefined;
 }
 
 function getFallbackGatewayContext(): GatewayRequestContext | undefined {
