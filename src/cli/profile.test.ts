@@ -1,5 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveLaunchAgentPlistPath } from "../daemon/launchd.js";
 import { formatCliCommand } from "./command-format.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
 
@@ -197,6 +198,66 @@ describe("applyCliProfileEnv", () => {
     expect(env.OPENCLAW_CONFIG_PATH).toBe(
       path.join(resolvedHome, ".openclaw-work", "openclaw.json"),
     );
+  });
+
+  it("clears conflicting OpenClaw-managed OPENCLAW_LAUNCHD_LABEL so --profile resolves correct plist", () => {
+    const env: Record<string, string | undefined> = {
+      HOME: "/Users/test",
+      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.batch",
+    };
+    applyCliProfileEnv({
+      profile: "interactive",
+      env,
+      homedir: () => "/home/peter",
+    });
+    expect(env.OPENCLAW_PROFILE).toBe("interactive");
+    expect(env.OPENCLAW_LAUNCHD_LABEL).toBeUndefined();
+    expect(resolveLaunchAgentPlistPath(env)).toBe(
+      "/Users/test/Library/LaunchAgents/ai.openclaw.interactive.plist",
+    );
+  });
+
+  it("preserves OPENCLAW_LAUNCHD_LABEL that matches the target profile", () => {
+    const env: Record<string, string | undefined> = {
+      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.work",
+    };
+    applyCliProfileEnv({
+      profile: "work",
+      env,
+      homedir: () => "/home/peter",
+    });
+    expect(env.OPENCLAW_PROFILE).toBe("work");
+    expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.work");
+  });
+
+  it("preserves custom OPENCLAW_LAUNCHD_LABEL overrides that do not match the profile-derived label", () => {
+    const env: Record<string, string | undefined> = {
+      OPENCLAW_LAUNCHD_LABEL: "com.custom.openclaw",
+    };
+    applyCliProfileEnv({
+      profile: "ops",
+      env,
+      homedir: () => "/home/peter",
+    });
+    expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("com.custom.openclaw");
+  });
+
+  it("leaves empty OPENCLAW_LAUNCHD_LABEL for launchd resolution fallback", () => {
+    const env: Record<string, string | undefined> = {
+      OPENCLAW_LAUNCHD_LABEL: "   ",
+    };
+    applyCliProfileEnv({
+      profile: "ops",
+      env,
+      homedir: () => "/home/peter",
+    });
+    expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("   ");
+  });
+
+  it("does not set OPENCLAW_LAUNCHD_LABEL when it was absent", () => {
+    const env: Record<string, string | undefined> = {};
+    applyCliProfileEnv({ profile: "ops", env });
+    expect(env.OPENCLAW_LAUNCHD_LABEL).toBeUndefined();
   });
 });
 
