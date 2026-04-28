@@ -37,6 +37,18 @@ type PendingRequest = {
   timer?: NodeJS.Timeout;
 };
 
+export function formatIMessageRpcProtocolError(line: string, detail: string): Error {
+  const normalized = line.toLowerCase();
+  const permissionDenied =
+    normalized.includes("permissiondenied") || normalized.includes("authorization denied");
+  if (permissionDenied) {
+    return new Error(
+      `imsg rpc permission denied: ${line}. Grant Full Disk Access to OpenClaw and the process that runs imsg, then restart the gateway.`,
+    );
+  }
+  return new Error(`imsg rpc emitted non-JSON output: ${line} (${detail})`);
+}
+
 export class IMessageRpcClient {
   private readonly cliPath: string;
   private readonly dbPath?: string;
@@ -63,7 +75,7 @@ export class IMessageRpcClient {
     if (this.child) {
       return;
     }
-    const args = ["rpc"];
+    const args = ["rpc", "--json"];
     if (this.dbPath) {
       args.push("--db", this.dbPath);
     }
@@ -178,7 +190,9 @@ export class IMessageRpcClient {
       parsed = JSON.parse(line) as IMessageRpcResponse<unknown>;
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
-      this.runtime?.error?.(`imsg rpc: failed to parse ${line}: ${detail}`);
+      const protocolError = formatIMessageRpcProtocolError(line, detail);
+      this.runtime?.error?.(`imsg rpc: ${protocolError.message}`);
+      this.failAll(protocolError);
       return;
     }
 
