@@ -50,7 +50,13 @@ const CASES: GuidanceCase[] = [
   {
     file: "skills/coding-agent/SKILL.md",
     required: ["OPENCLAW_STATE_DIR"],
-    forbidden: ["NEVER start Codex in ~/.openclaw/"],
+    forbidden: [
+      "NEVER start Codex in ~/.openclaw/",
+      "--yolo",
+      "codex --yolo",
+      "claude --permission-mode bypassPermissions",
+      "--print --permission-mode bypassPermissions",
+    ],
   },
 ];
 

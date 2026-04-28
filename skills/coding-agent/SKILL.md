@@ -1,6 +1,6 @@
 ---
 name: coding-agent
-description: 'Delegate coding tasks to Codex, Claude Code, OpenCode, or Pi agents via immediate background processes. Use when: (1) building or creating features/apps, (2) reviewing PRs in a temp clone/worktree, (3) refactoring large codebases, (4) iterative coding that needs file exploration. NOT for: simple one-line fixes (just edit), reading code (use read tool), thread-bound ACP harness requests in chat (use sessions_spawn with runtime:"acp"), or any work in ~/clawd workspace (never spawn agents here). All coding-agent runs start with background:true immediately. Claude Code: use --print --permission-mode bypassPermissions (no PTY). Codex/Pi/OpenCode: pty:true required. Completion notification must use openclaw message send, not system event/heartbeat.'
+description: 'Delegate coding tasks to Codex, Claude Code, OpenCode, or Pi agents via immediate background processes. Use when: (1) building or creating features/apps, (2) reviewing PRs in a temp clone/worktree, (3) refactoring large codebases, (4) iterative coding that needs file exploration. NOT for: simple one-line fixes (just edit), reading code (use read tool), thread-bound ACP harness requests in chat (use sessions_spawn with runtime:"acp"), or any work in ~/clawd workspace (never spawn agents here). All coding-agent runs start with background:true immediately. Codex/Pi/OpenCode: pty:true required. Claude Code: use --print without permission bypass flags. Completion notification must use openclaw message send, not system event/heartbeat.'
 metadata:
   {
     "openclaw":
@@ -43,16 +43,18 @@ For **Codex, Pi, and OpenCode**, PTY is required:
 bash pty:true background:true command:"codex exec 'Your prompt'"
 ```
 
-For **Claude Code** (`claude` CLI), use `--print --permission-mode bypassPermissions` instead.
+For **Claude Code** (`claude` CLI), use `--print`.
 Do not use PTY for Claude Code here.
 
 ```bash
 # Correct for Claude Code
-bash background:true command:"claude --permission-mode bypassPermissions --print 'Your task'"
+bash background:true command:"claude --print 'Your task'"
 
-# Wrong for Claude Code (PTY, wrong flags, no background)
+# Wrong for Claude Code (PTY, permission bypass, no background)
 bash pty:true command:"claude --dangerously-skip-permissions 'task'"
 ```
+
+Do not pass permission-bypass flags from this skill. If a worker blocks on permissions, report that back to the user instead of disabling approvals or sandboxing.
 
 ### Bash Tool Parameters
 
@@ -195,7 +197,8 @@ Reuse this same notify-route injection block in every example below; only the ta
 | --------------- | ---------------------------------------- |
 | `exec "prompt"` | One-shot execution inside the worker CLI |
 | `--full-auto`   | Sandboxed but auto-approves in workspace |
-| `--yolo`        | No sandbox, no approvals                 |
+
+Do not use Codex's no-sandbox/no-approval mode from this skill. It disables sandboxing and approvals, which is inappropriate for delegated background work.
 
 ### Building/Creating
 
@@ -203,8 +206,8 @@ Reuse this same notify-route injection block in every example below; only the ta
 # Always background immediately
 bash pty:true workdir:~/project background:true command:"codex exec --full-auto 'Build a dark mode toggle'"
 
-# More autonomy
-bash pty:true workdir:~/project background:true command:"codex --yolo 'Refactor the auth module'"
+# More involved tasks still use the sandboxed exec path
+bash pty:true workdir:~/project background:true command:"codex exec --full-auto 'Refactor the auth module'"
 ```
 
 ### Reviewing PRs
@@ -244,7 +247,7 @@ process action:log sessionId:XXX
 ## Claude Code
 
 ```bash
-bash workdir:~/project background:true command:"claude --permission-mode bypassPermissions --print 'Your task'"
+bash workdir:~/project background:true command:"claude --print 'Your task'"
 ```
 
 ---
@@ -278,8 +281,8 @@ bash pty:true workdir:~/project background:true command:"pi --provider openai --
 git worktree add -b fix/issue-78 /tmp/issue-78 main
 git worktree add -b fix/issue-99 /tmp/issue-99 main
 
-bash pty:true workdir:/tmp/issue-78 background:true command:"pnpm install && codex --yolo 'Fix issue #78: <description>. Commit and push after review. Send the completion message with openclaw message send using the provided notify route.'"
-bash pty:true workdir:/tmp/issue-99 background:true command:"pnpm install && codex --yolo 'Fix issue #99 from the approved ticket summary. Implement only the in-scope edits. Send the completion message with openclaw message send using the provided notify route.'"
+bash pty:true workdir:/tmp/issue-78 background:true command:"pnpm install && codex exec --full-auto 'Fix issue #78: <description>. Commit and push after review. Send the completion message with openclaw message send using the provided notify route.'"
+bash pty:true workdir:/tmp/issue-99 background:true command:"pnpm install && codex exec --full-auto 'Fix issue #99 from the approved ticket summary. Implement only the in-scope edits. Send the completion message with openclaw message send using the provided notify route.'"
 
 process action:list
 process action:log sessionId:XXX
@@ -291,7 +294,7 @@ process action:log sessionId:XXX
 
 1. **Use the right execution mode per agent**:
    - Codex/Pi/OpenCode: `pty:true`
-   - Claude Code: `--print --permission-mode bypassPermissions` (no PTY required)
+   - Claude Code: `--print` (no PTY required)
 2. **Respect tool choice** - if user asks for Codex, use Codex.
    - Orchestrator mode: do NOT hand-code patches yourself.
    - If an agent fails/hangs, respawn it or ask the user for direction, but don't silently take over.
@@ -300,9 +303,10 @@ process action:log sessionId:XXX
 5. **--full-auto for building** - auto-approves changes
 6. **vanilla for reviewing** - no special flags needed
 7. **Parallel is OK** - run many Codex processes at once for batch work
-8. **NEVER start Codex inside your OpenClaw state directory** (`$OPENCLAW_STATE_DIR`, default `~/.openclaw`) - it'll read your soul docs and get weird ideas about the org chart!
-9. **NEVER checkout branches in ~/Projects/openclaw/** - that's the LIVE OpenClaw instance!
-10. **Always inject the Completion Prompt Snippet** into the worker prompt before spawning. The simplified examples below omit it for brevity — never spawn a worker without it.
+8. **No permission bypass flags** - do not use Codex no-sandbox/no-approval shortcuts, Claude `--dangerously-skip-permissions`, or Claude `--permission-mode bypassPermissions` in this skill.
+9. **NEVER start Codex inside your OpenClaw state directory** (`$OPENCLAW_STATE_DIR`, default `~/.openclaw`) - it'll read your soul docs and get weird ideas about the org chart!
+10. **NEVER checkout branches in ~/Projects/openclaw/** - that's the LIVE OpenClaw instance!
+11. **Always inject the Completion Prompt Snippet** into the worker prompt before spawning. The simplified examples below omit it for brevity — never spawn a worker without it.
 
 ---
 
@@ -330,7 +334,7 @@ This prevents the user from seeing only a missing reply and having no idea what 
    - Do not use the foreground one-shot path in this skill.
 2. **Use the right execution mode per agent.**
    - Codex/Pi/OpenCode: `pty:true`
-   - Claude Code: `--print --permission-mode bypassPermissions`
+   - Claude Code: `--print`
 3. **Respect tool choice.**
    - If the user asked for Codex, use Codex.
    - Orchestrator mode: do not hand-code the patch yourself instead of using the requested coding agent.
