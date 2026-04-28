@@ -1626,6 +1626,50 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
+  it("forwards session.key (canonical) into message_sending ctx and never falls back to policyKey", async () => {
+    // Contract test for OutboundSessionContext.key semantics:
+    // session.key MUST reach plugins via ctx.sessionKey, even when a
+    // different session.policyKey is also present. Delivery must not hand
+    // the policy key to plugins that correlate against agent_end.
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "message_sending",
+    );
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "matrix" as const,
+      messageId: "mx-3",
+      roomId: "!room",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: { deliveryMode: "direct", sendText },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room",
+      payloads: [{ text: "hi" }],
+      session: {
+        key: "agent:tank:main",
+        policyKey: "agent:tank:discord:tank:direct:1594",
+      },
+    });
+
+    expect(hookMocks.runner.runMessageSending).toHaveBeenCalledTimes(1);
+    expect(hookMocks.runner.runMessageSending).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({ sessionKey: "agent:tank:main" }),
+    );
+  });
+
   it("omits sessionKey from the message_sending hook context when session is absent", async () => {
     hookMocks.runner.hasHooks.mockImplementation(
       (hookName?: string) => hookName === "message_sending",
