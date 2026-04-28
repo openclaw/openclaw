@@ -13,6 +13,7 @@ import {
   inlineChannelPluginEntryFactorySource,
   makeTempDir,
   resetPluginLoaderTestStateForTest,
+  useBundledPluginsFixtureDir,
   useNoBundledPlugins,
   writePlugin,
 } from "./loader.test-fixtures.js";
@@ -246,7 +247,7 @@ module.exports = {
     const fullMarker = path.join(pluginDir, "full-loaded.txt");
 
     fs.mkdirSync(pluginDir, { recursive: true });
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledRoot;
+    useBundledPluginsFixtureDir(bundledRoot);
 
     fs.writeFileSync(
       path.join(pluginDir, "package.json"),
@@ -314,7 +315,7 @@ module.exports = {
     const cliMarker = path.join(pluginDir, "cli-loaded.txt");
 
     fs.mkdirSync(pluginDir, { recursive: true });
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledRoot;
+    useBundledPluginsFixtureDir(bundledRoot);
 
     fs.writeFileSync(
       path.join(pluginDir, "package.json"),
@@ -398,7 +399,7 @@ module.exports = {
     const fullMarker = path.join(pluginDir, "full-loaded.txt");
 
     fs.mkdirSync(pluginDir, { recursive: true });
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledRoot;
+    useBundledPluginsFixtureDir(bundledRoot);
 
     fs.writeFileSync(
       path.join(pluginDir, "package.json"),
