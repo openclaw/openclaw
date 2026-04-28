@@ -1,6 +1,11 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import process from "node:process";
+import { getRuntimeConfig } from "../config/config.js";
+import {
+  runProxyValidation,
+  type ProxyValidationResult,
+} from "../infra/net/proxy/proxy-validation.js";
 import { ensureDebugProxyCa } from "../proxy-capture/ca.js";
 import { buildDebugProxyCoverageReport } from "../proxy-capture/coverage.js";
 import { resolveDebugProxySettings, applyDebugProxyEnv } from "../proxy-capture/env.js";
@@ -112,6 +117,46 @@ export async function runDebugProxyRunCommand(opts: {
   } finally {
     await server.stop();
     getDebugProxyCaptureStore(settings.dbPath, settings.blobDir).endSession(sessionId);
+  }
+}
+
+function formatProxyValidationText(result: ProxyValidationResult): string {
+  const lines = [
+    `Proxy validation: ${result.ok ? "passed" : "failed"}`,
+    `Effective proxy: ${result.config.proxyUrl ?? "not configured"} (${result.config.source})`,
+  ];
+  for (const error of result.config.errors) {
+    lines.push(`- ERROR: ${error}`);
+  }
+  for (const check of result.checks) {
+    const status = check.status === undefined ? "" : ` status=${check.status}`;
+    const error = check.error ? ` error=${check.error}` : "";
+    lines.push(`- ${check.ok ? "PASS" : "FAIL"} ${check.kind} ${check.url}${status}${error}`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+export async function runProxyValidateCommand(opts: {
+  json?: boolean;
+  proxyUrl?: string;
+  allowedUrls?: string[];
+  deniedUrls?: string[];
+  timeoutMs?: number;
+}) {
+  const config = getRuntimeConfig();
+  const result = await runProxyValidation({
+    config: config?.proxy,
+    env: process.env,
+    proxyUrlOverride: opts.proxyUrl,
+    allowedUrls: opts.allowedUrls,
+    deniedUrls: opts.deniedUrls,
+    timeoutMs: opts.timeoutMs,
+  });
+  process.stdout.write(
+    opts.json === true ? `${JSON.stringify(result, null, 2)}\n` : formatProxyValidationText(result),
+  );
+  if (!result.ok) {
+    process.exitCode = 1;
   }
 }
 

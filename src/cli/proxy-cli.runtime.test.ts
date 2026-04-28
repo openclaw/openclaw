@@ -4,10 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { serverStopSpy, spawnMock } = vi.hoisted(() => ({
-  serverStopSpy: vi.fn(async () => undefined),
-  spawnMock: vi.fn(),
-}));
+const { getRuntimeConfigMock, runProxyValidationMock, serverStopSpy, spawnMock } = vi.hoisted(
+  () => ({
+    getRuntimeConfigMock: vi.fn(),
+    runProxyValidationMock: vi.fn(),
+    serverStopSpy: vi.fn(async () => undefined),
+    spawnMock: vi.fn(),
+  }),
+);
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -22,6 +26,14 @@ vi.mock("../proxy-capture/proxy-server.js", () => ({
     proxyUrl: "http://127.0.0.1:7799",
     stop: serverStopSpy,
   })),
+}));
+
+vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: getRuntimeConfigMock,
+}));
+
+vi.mock("../infra/net/proxy/proxy-validation.js", () => ({
+  runProxyValidation: runProxyValidationMock,
 }));
 
 describe("proxy cli runtime", () => {
@@ -42,6 +54,33 @@ describe("proxy cli runtime", () => {
     process.env.OPENCLAW_DEBUG_PROXY_CERT_DIR = path.join(tempDir, "certs");
     delete process.env.OPENCLAW_DEBUG_PROXY_ENABLED;
     delete process.env.OPENCLAW_DEBUG_PROXY_SESSION_ID;
+    getRuntimeConfigMock.mockReset();
+    getRuntimeConfigMock.mockReturnValue({
+      proxy: {
+        enabled: true,
+        proxyUrl: "http://config-proxy.example:3128",
+      },
+    });
+    runProxyValidationMock.mockReset();
+    runProxyValidationMock.mockResolvedValue({
+      ok: true,
+      config: {
+        enabled: true,
+        proxyUrl: "http://config-proxy.example:3128",
+        source: "config",
+        errors: [],
+      },
+      checks: [
+        {
+          kind: "allowed",
+          url: "https://example.com/",
+          ok: true,
+          status: 200,
+        },
+      ],
+    });
+    process.exitCode = undefined;
+    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     serverStopSpy.mockClear();
     spawnMock.mockReset();
   });
@@ -49,7 +88,9 @@ describe("proxy cli runtime", () => {
   afterEach(async () => {
     const { closeDebugProxyCaptureStore } = await import("../proxy-capture/store.sqlite.js");
     closeDebugProxyCaptureStore();
+    vi.restoreAllMocks();
     vi.resetModules();
+    process.exitCode = undefined;
     for (const key of envKeys) {
       const value = savedEnv[key];
       if (value == null) {
@@ -59,6 +100,68 @@ describe("proxy cli runtime", () => {
       }
     }
     rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("prints proxy validation text and leaves exit code unset on success", async () => {
+    const { runProxyValidateCommand } = await import("./proxy-cli.runtime.js");
+
+    await runProxyValidateCommand({
+      proxyUrl: "http://override.example:3128",
+      allowedUrls: ["https://allowed.example/"],
+      deniedUrls: ["http://127.0.0.1/"],
+      timeoutMs: 1234,
+    });
+
+    expect(getRuntimeConfigMock).toHaveBeenCalledOnce();
+    expect(runProxyValidationMock).toHaveBeenCalledWith({
+      config: {
+        enabled: true,
+        proxyUrl: "http://config-proxy.example:3128",
+      },
+      env: process.env,
+      proxyUrlOverride: "http://override.example:3128",
+      allowedUrls: ["https://allowed.example/"],
+      deniedUrls: ["http://127.0.0.1/"],
+      timeoutMs: 1234,
+    });
+    expect(process.stdout.write).toHaveBeenCalledWith(
+      "Proxy validation: passed\n" +
+        "Effective proxy: http://config-proxy.example:3128 (config)\n" +
+        "- PASS allowed https://example.com/ status=200\n",
+    );
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("prints proxy validation JSON and sets exit code on failure", async () => {
+    runProxyValidationMock.mockResolvedValueOnce({
+      ok: false,
+      config: {
+        enabled: true,
+        source: "missing",
+        errors: ["proxy validation requires proxy.proxyUrl or OPENCLAW_PROXY_URL"],
+      },
+      checks: [],
+    });
+    const { runProxyValidateCommand } = await import("./proxy-cli.runtime.js");
+
+    await runProxyValidateCommand({ json: true });
+
+    expect(process.stdout.write).toHaveBeenCalledWith(
+      `${JSON.stringify(
+        {
+          ok: false,
+          config: {
+            enabled: true,
+            source: "missing",
+            errors: ["proxy validation requires proxy.proxyUrl or OPENCLAW_PROXY_URL"],
+          },
+          checks: [],
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    expect(process.exitCode).toBe(1);
   });
 
   it("stops the proxy server and ends the session when child spawn fails", async () => {

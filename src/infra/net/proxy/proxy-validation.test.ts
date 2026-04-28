@@ -1,0 +1,150 @@
+import { describe, expect, it, vi } from "vitest";
+import {
+  DEFAULT_PROXY_VALIDATION_ALLOWED_URLS,
+  DEFAULT_PROXY_VALIDATION_DENIED_URLS,
+  resolveProxyValidationConfig,
+  runProxyValidation,
+} from "./proxy-validation.js";
+
+describe("proxy validation", () => {
+  it("resolves proxy URL overrides before config and OPENCLAW_PROXY_URL", () => {
+    const result = resolveProxyValidationConfig({
+      proxyUrlOverride: "http://override-proxy.example:3128",
+      config: {
+        enabled: true,
+        proxyUrl: "http://config-proxy.example:3128",
+      },
+      env: {
+        OPENCLAW_PROXY_URL: "http://env-proxy.example:3128",
+      },
+    });
+
+    expect(result).toEqual({
+      enabled: true,
+      proxyUrl: "http://override-proxy.example:3128",
+      source: "override",
+      errors: [],
+    });
+  });
+
+  it("resolves config proxy URLs before OPENCLAW_PROXY_URL", () => {
+    const result = resolveProxyValidationConfig({
+      config: {
+        enabled: true,
+        proxyUrl: "http://config-proxy.example:3128",
+      },
+      env: {
+        OPENCLAW_PROXY_URL: "http://env-proxy.example:3128",
+      },
+    });
+
+    expect(result).toEqual({
+      enabled: true,
+      proxyUrl: "http://config-proxy.example:3128",
+      source: "config",
+      errors: [],
+    });
+  });
+
+  it("uses OPENCLAW_PROXY_URL when enabled config has no URL", () => {
+    const result = resolveProxyValidationConfig({
+      config: { enabled: true },
+      env: {
+        OPENCLAW_PROXY_URL: "http://env-proxy.example:3128",
+      },
+    });
+
+    expect(result).toEqual({
+      enabled: true,
+      proxyUrl: "http://env-proxy.example:3128",
+      source: "env",
+      errors: [],
+    });
+  });
+
+  it("reports missing URL when proxy validation is enabled without an effective URL", () => {
+    const result = resolveProxyValidationConfig({
+      config: { enabled: true },
+      env: {},
+    });
+
+    expect(result.enabled).toBe(true);
+    expect(result.proxyUrl).toBeUndefined();
+    expect(result.source).toBe("missing");
+    expect(result.errors).toEqual([
+      "proxy validation requires proxy.proxyUrl or OPENCLAW_PROXY_URL",
+    ]);
+  });
+
+  it("rejects non-http proxy URLs", () => {
+    const result = resolveProxyValidationConfig({
+      config: {
+        enabled: true,
+        proxyUrl: "https://proxy.example:3128",
+      },
+      env: {},
+    });
+
+    expect(result.errors).toEqual(["proxy URL must use http://"]);
+  });
+
+  it("checks default allowed and denied destinations through the proxy", async () => {
+    const fetchCheck = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, status: 200 })
+      .mockRejectedValueOnce(new Error("loopback blocked"))
+      .mockRejectedValueOnce(new Error("metadata blocked"));
+
+    const result = await runProxyValidation({
+      config: {
+        enabled: true,
+        proxyUrl: "http://127.0.0.1:3128",
+      },
+      env: {},
+      fetchCheck,
+    });
+
+    expect(fetchCheck).toHaveBeenCalledTimes(3);
+    expect(fetchCheck).toHaveBeenNthCalledWith(1, {
+      proxyUrl: "http://127.0.0.1:3128",
+      targetUrl: DEFAULT_PROXY_VALIDATION_ALLOWED_URLS[0],
+      timeoutMs: 5000,
+    });
+    expect(result.ok).toBe(true);
+    expect(result.checks.map((check) => [check.kind, check.url, check.ok])).toEqual([
+      ["allowed", DEFAULT_PROXY_VALIDATION_ALLOWED_URLS[0], true],
+      ["denied", DEFAULT_PROXY_VALIDATION_DENIED_URLS[0], true],
+      ["denied", DEFAULT_PROXY_VALIDATION_DENIED_URLS[1], true],
+    ]);
+  });
+
+  it("fails validation when a denied destination succeeds", async () => {
+    const result = await runProxyValidation({
+      config: {
+        enabled: true,
+        proxyUrl: "http://127.0.0.1:3128",
+      },
+      env: {},
+      allowedUrls: ["https://example.com/"],
+      deniedUrls: ["http://127.0.0.1/"],
+      fetchCheck: vi.fn().mockResolvedValue({ ok: true, status: 200 }),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.checks).toEqual([
+      {
+        kind: "allowed",
+        url: "https://example.com/",
+        ok: true,
+        status: 200,
+      },
+      {
+        kind: "denied",
+        url: "http://127.0.0.1/",
+        ok: false,
+        status: 200,
+        error: "Denied destination was reachable through the proxy",
+      },
+    ]);
+  });
+});

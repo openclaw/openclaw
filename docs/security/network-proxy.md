@@ -136,6 +136,36 @@ If your cloud provider or network platform documents additional metadata hosts o
 Validate the proxy from the same host, container, or service account that runs OpenClaw:
 
 ```bash
+openclaw proxy validate --proxy-url http://127.0.0.1:3128
+```
+
+By default, when no custom destinations are provided, the command checks that `https://example.com/` succeeds and that loopback and metadata-style destinations such as `http://127.0.0.1/` and `http://169.254.169.254/` fail at the proxy. Use `--allowed-url` and `--denied-url` to test deployment-specific expectations. On validation failure, the command exits with code 1.
+
+Use `--json` for automation. The JSON output contains the overall result, the effective proxy config source, any config errors, and each destination check:
+
+```json
+{
+  "ok": true,
+  "config": {
+    "enabled": true,
+    "proxyUrl": "http://127.0.0.1:3128",
+    "source": "override",
+    "errors": []
+  },
+  "checks": [
+    {
+      "kind": "allowed",
+      "url": "https://example.com/",
+      "ok": true,
+      "status": 200
+    }
+  ]
+}
+```
+
+You can also validate manually with `curl`:
+
+```bash
 curl -x http://127.0.0.1:3128 https://example.com/
 curl -x http://127.0.0.1:3128 http://127.0.0.1/
 curl -x http://127.0.0.1:3128 http://169.254.169.254/
