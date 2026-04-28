@@ -11,6 +11,8 @@ export function registerProviderStreamForModel<TApi extends Api>(params: {
   agentDir?: string;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  sessionId?: string;
+  sessionKey?: string;
 }): StreamFn | undefined {
   const streamFn =
     resolveProviderStreamFn({
@@ -25,6 +27,8 @@ export function registerProviderStreamForModel<TApi extends Api>(params: {
         provider: params.model.provider,
         modelId: params.model.id,
         model: params.model,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
       },
     }) ??
     createTransportAwareStreamFnForModel(params.model, {

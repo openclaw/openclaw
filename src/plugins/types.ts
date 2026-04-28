@@ -839,6 +839,29 @@ export type ProviderCreateStreamFnContext = {
   provider: string;
   modelId: string;
   model: ProviderRuntimeModel;
+  /**
+   * OpenClaw conversation session id (the `<uuid>.jsonl` filename under the
+   * agent's `sessions/` directory). Stable across all turns of a single
+   * conversation; differs across distinct conversations of the same agent.
+   *
+   * Provider plugins that need per-conversation state (CLI session resumption,
+   * billing buckets, MCP routing, prompt-cache scoping, audit trails) should
+   * key on this rather than on `agentDir` alone.
+   *
+   * `undefined` for one-off code paths that do not run inside an embedded
+   * session (image generation, simple completions).
+   */
+  sessionId?: string;
+  /**
+   * OpenClaw semantic session key — encodes channel/group/sender routing
+   * (e.g. `telegram:dm:+34xxx` or `telegram:group:abc:user:def`). Prefer this
+   * over `sessionId` when present: it remains stable across session resets
+   * for the same logical conversation, whereas `sessionId` rotates on reset.
+   *
+   * `undefined` for one-off code paths and for runs without an established
+   * messaging context.
+   */
+  sessionKey?: string;
 };
 
 /**

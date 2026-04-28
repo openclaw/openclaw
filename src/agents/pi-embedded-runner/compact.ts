@@ -239,12 +239,16 @@ function resolveCompactionProviderStream(params: {
   config?: OpenClawConfig;
   agentDir: string;
   effectiveWorkspace: string;
+  sessionId?: string;
+  sessionKey?: string;
 }) {
   return registerProviderStreamForModel({
     model: params.effectiveModel,
     cfg: params.config,
     agentDir: params.agentDir,
     workspaceDir: params.effectiveWorkspace,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
   });
 }
 
@@ -894,6 +898,8 @@ export async function compactEmbeddedPiSessionDirect(
         config: params.config,
         agentDir,
         effectiveWorkspace,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
       });
       const shouldUseWebSocketTransport = shouldUseOpenAIWebSocketTransport({
         provider,
