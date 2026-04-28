@@ -1,5 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveLaunchAgentPlistPath } from "../daemon/launchd.js";
 import { formatCliCommand } from "./command-format.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
 
@@ -201,6 +202,7 @@ describe("applyCliProfileEnv", () => {
 
   it("clears conflicting OpenClaw-managed OPENCLAW_LAUNCHD_LABEL so --profile resolves correct plist", () => {
     const env: Record<string, string | undefined> = {
+      HOME: "/Users/test",
       OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.batch",
     };
     applyCliProfileEnv({
@@ -210,6 +212,9 @@ describe("applyCliProfileEnv", () => {
     });
     expect(env.OPENCLAW_PROFILE).toBe("interactive");
     expect(env.OPENCLAW_LAUNCHD_LABEL).toBeUndefined();
+    expect(resolveLaunchAgentPlistPath(env)).toBe(
+      "/Users/test/Library/LaunchAgents/ai.openclaw.interactive.plist",
+    );
   });
 
   it("preserves OPENCLAW_LAUNCHD_LABEL that matches the target profile", () => {
@@ -225,7 +230,7 @@ describe("applyCliProfileEnv", () => {
     expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.work");
   });
 
-  it("clears custom OPENCLAW_LAUNCHD_LABEL that does not match the profile-derived label", () => {
+  it("preserves custom OPENCLAW_LAUNCHD_LABEL overrides that do not match the profile-derived label", () => {
     const env: Record<string, string | undefined> = {
       OPENCLAW_LAUNCHD_LABEL: "com.custom.openclaw",
     };

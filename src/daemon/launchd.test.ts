@@ -953,6 +953,15 @@ describe("resolveLaunchAgentPlistPath", () => {
       expected: "/Users/test/Library/LaunchAgents/com.custom.label.plist",
     },
     {
+      name: "keeps explicit custom labels as gateway status plist overrides",
+      env: {
+        HOME: "/Users/test",
+        OPENCLAW_PROFILE: "interactive",
+        OPENCLAW_LAUNCHD_LABEL: "com.operator.gateway",
+      },
+      expected: "/Users/test/Library/LaunchAgents/com.operator.gateway.plist",
+    },
+    {
       name: "trims whitespace from OPENCLAW_LAUNCHD_LABEL",
       env: {
         HOME: "/Users/test",
