@@ -7,7 +7,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runAgentHarnessBeforeAgentFinalizeHook } from "../../agents/harness/lifecycle-hook-helpers.js";
 import { updateSessionStore } from "../../config/sessions.js";
-import { APPROVALS_SCOPE, READ_SCOPE } from "../../gateway/operator-scopes.js";
+import { APPROVALS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../../gateway/operator-scopes.js";
 import { pluginHostHookHandlers } from "../../gateway/server-methods/plugin-host-hooks.js";
 import type { GatewayClient, RespondFn } from "../../gateway/server-methods/types.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
@@ -137,7 +137,7 @@ describe("advanced workflow plugin contract fixtures", () => {
     const seenEvents: unknown[] = [];
 
     await withSessionStore(async ({ storePath }) => {
-      const { config, registry } = createPluginRegistryFixture();
+      const { config, registry } = createPluginRegistryFixture({ session: { store: storePath } });
       registerTestPlugin({
         registry,
         config,
@@ -339,7 +339,7 @@ describe("advanced workflow plugin contract fixtures", () => {
   it("blocks a mutating tool from trusted policy state before normal hooks run", async () => {
     await withSessionStore(async ({ storePath }) => {
       const normalHookCalls: string[] = [];
-      const { config, registry } = createPluginRegistryFixture();
+      const { config, registry } = createPluginRegistryFixture({ session: { store: storePath } });
       registerTestPlugin({
         registry,
         config,
@@ -532,6 +532,7 @@ describe("advanced workflow plugin contract fixtures", () => {
             actionId: "send-artifact",
             sessionKey: "agent:main:main",
           },
+          scopes: [WRITE_SCOPE],
         }),
       ).resolves.toMatchObject({
         ok: true,
